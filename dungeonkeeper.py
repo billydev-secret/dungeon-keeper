@@ -3,19 +3,35 @@ import datetime
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
+import logging
 
 # ==============================
 # Configuration
 # ==============================
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
-GUILD_ID = os.getenv("GUILD_ID")
-SPOILER_REQUIRED_CHANNELS = os.getenv("SPOILER_REQUIRED_CHANNELS")
+
+def parse_id_set(value: str | None) -> set[int]:
+    if not value:
+        return set()
+    # supports "1,2,3" (with optional spaces/newlines)
+    parts = [p.strip() for p in value.replace("\n", ",").split(",")]
+    return {int(p) for p in parts if p}
+
+GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+SPOILER_REQUIRED_CHANNELS = parse_id_set(os.getenv("SPOILER_REQUIRED_CHANNELS"))
 
 DEBUG = True  # Set False to go global
 
 # Roles that bypass spoiler enforcement
 BYPASS_ROLE_IDS = set()
+
+logging.basicConfig(
+    level=logging.INFO,
+)
+
+log = logging.getLogger("accord")  # your bot namespace
+
 
 # ==============================
 # Intents
@@ -51,8 +67,9 @@ bot = Bot()
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    print("------")
+    log.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    log.info("------")
+    log.info(f"In Guild {GUILD_ID} (Guarding: {SPOILER_REQUIRED_CHANNELS})")
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -77,8 +94,8 @@ async def on_message(message: discord.Message):
                 try:
                     await message.delete()
                     await message.channel.send(
-                        f"{message.author.mention} — 🚨 Images in this channel must be marked as spoiler.",
-                        delete_after=15
+                        f"Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler.",
+                        delete_after=5,
                     )
                 except discord.Forbidden:
                     pass
