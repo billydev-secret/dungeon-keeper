@@ -20,7 +20,6 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MOD_CHANNEL_ID = int(os.environ["MOD_CHANNEL_ID"])
-MONITORED_CHANNEL_IDS: set[int] = set()
 
 MODEL = "gpt-5-nano"
 BIGMODEL = "gpt-5.2-2025-12-11"
@@ -98,7 +97,6 @@ class UserMsg(NamedTuple):
 # ==============================
 @bot.event
 async def on_ready():
-    # load_monitored_channels()
     log.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
     log.info(f"In Guild {GUILD_ID} (Guarding: {SPOILER_REQUIRED_CHANNELS})")
     log.info("------")
@@ -160,18 +158,6 @@ def extract_json_object(s: str):
             return None
 
     return None
-
-def load_monitored_channels() -> None:
-    global MONITORED_CHANNEL_IDS
-    if MONITOR_FILE.exists():
-        data = json.loads(MONITOR_FILE.read_text(encoding="utf-8"))
-        MONITORED_CHANNEL_IDS = set(int(x) for x in data.get("channel_ids", []))
-
-def save_monitored_channels() -> None:
-    MONITOR_FILE.write_text(
-        json.dumps({"channel_ids": sorted(MONITORED_CHANNEL_IDS)}, indent=2),
-        encoding="utf-8"
-    )
 
 def is_mod(interaction: discord.Interaction) -> bool:
     perms = interaction.user.guild_permissions
@@ -298,7 +284,6 @@ async def collect_user_messages(
     hours: int = 168,
     max_msgs: int = 200,
     per_channel_limit: int = 300,
-    use_monitored_channels: bool = False,
 ) -> tuple[list[UserMsg], dict]:
     """
     Collect recent messages by `member` across a set of channels.
@@ -307,16 +292,7 @@ async def collect_user_messages(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     # Choose channels to scan
-    channels: list[discord.TextChannel] = []
-    if use_monitored_channels:
-        for cid in sorted(MONITORED_CHANNEL_IDS):
-            log.info("Scanning:", ch.name)
-
-            ch = guild.get_channel(cid)
-            if isinstance(ch, discord.TextChannel):
-                channels.append(ch)
-    else:
-        channels = list(guild.text_channels)
+    channels = list(guild.text_channels)
 
     found: list[UserMsg] = []
     scanned_channels = 0
@@ -461,116 +437,6 @@ def build_transcript(lines):
         out.append(line)
         total += len(line)
     return "\n".join(out)
-@bot.tree.command(
-    name="daily_digest",
-    description="Post a Daily Highlights digest for this channel (manual trigger).",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
-)
-@app_commands.describe(hours="How many hours back to summarize (default 24).")
-async def daily_digest(interaction: discord.Interaction, hours: int = 24):
-    DAILY_DIGEST_PROMPT = f"""
-        You are writing a “Daily Highlights” recap for users to remember the previous day fondly
-
-        Channel: #{channel_name}
-        Window: last {hours} hours
-        Top posters (approx counts): {author_counts}
-
-        Write in Markdown with these sections:
-
-        ## 🌿 Daily Highlights (5–10 bullets)
-        - Short, specific, concrete.
-
-        ## 🧠 What people were into (3–6 bullets)
-
-        ## 🤝 Shout-outs (3–6 bullets)
-        - Credit helpful, kind, or funny contributions.
-
-        ## 📌 Coming up / next steps (0–5 bullets)
-        - Only include items explicitly mentioned.
-
-        ## 🎭 Vibe check (1–2 sentences)
-        - Overall tone. If venting happened, acknowledge gently without spotlighting individuals.
-
-        Constraints:
-        - Do not invent details. If unsure, say “insufficient data.”
-        - No moderation language, no callouts.
-        - Avoid quoting >12 words; paraphrase.
-        """
-
-    await interaction.response.defer(ephemeral=True)
-
-    channel = interaction.channel
-    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-        await interaction.followup.send("This command only works in text channels/threads.", ephemeral=True)
-        return
-
-    after_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-    lines = []
-    author_counter = Counter()
-    count = 0
-
-    try:
-        async for msg in channel.history(limit=None, after=after_dt, oldest_first=True):
-            if msg.author.bot or msg.webhook_id is not None:
-                continue
-            if not msg.content:
-                continue
-
-            content = msg.content.replace("\n", " ").strip()
-            if not content:
-                continue
-
-            author_counter[msg.author.display_name] += 1
-            content = content[:MAX_CHARS_PER_MSG]
-            lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.display_name}: {content}")
-
-            count += 1
-            if count >= MAX_MESSAGES:
-                break
-
-    except discord.Forbidden:
-        await interaction.followup.send(
-            "I can’t read this channel’s history. Please grant me **View Channel** + **Read Message History** here.",
-            ephemeral=True
-        )
-        return
-
-    if not lines:
-        await interaction.followup.send(f"No messages found in the last {hours}h.", ephemeral=True)
-        return
-
-    transcript = build_transcript(lines)
-
-    top_authors = author_counter.most_common(8)
-    author_counts = ", ".join([f"{name} ({n})" for name, n in top_authors]) or "none"
-
-    prompt = DAILY_DIGEST_PROMPT.format(
-        channel_name=getattr(channel, "name", "thread"),
-        hours=hours,
-        author_counts=author_counts
-    )
-
-    resp = await asyncio.to_thread(
-        client.chat.completions.create,
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": "You write accurate, warm community digests."},
-            {"role": "user", "content": prompt + "\n\nTRANSCRIPT:\n" + transcript},
-        ],
-        temperature=0.3,
-    )
-    digest = resp.choices[0].message.content.strip()
-
-    # Post to mod channel
-    mod_channel = interaction.guild.get_channel(MOD_CHANNEL_ID) if interaction.guild else None
-    if not mod_channel:
-        await interaction.followup.send("Mod channel not found (check MOD_CHANNEL_ID).", ephemeral=True)
-        return
-
-    await mod_channel.send(f"**Daily Digest — {channel.mention} (last {hours}h)**\n\n{digest}")
-    await interaction.followup.send("Posted the daily digest to the mod channel ✅", ephemeral=True)
-
 @bot.tree.command(name="summarize", 
     description="Summarize this channel over a time window.", 
     guild=discord.Object(id=GUILD_ID) if DEBUG else None
@@ -719,15 +585,13 @@ async def inactive_role(
 @app_commands.describe(
     member="User to review",
     hours="How many hours back (default 168 = 7 days)",
-    max_msgs="Max messages to include (default 200)",
-    use_monitored="If true, only scan monitored channels (recommended)"
+    max_msgs="Max messages to include (default 200)"
 )
 async def user_review(
     interaction: discord.Interaction,
     member: discord.Member,
     hours: app_commands.Range[int, 1, 720] = 168,
     max_msgs: app_commands.Range[int, 20, 500] = 200,
-    use_monitored: bool = False
 ):
     if not is_mod(interaction):
         await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
@@ -746,7 +610,6 @@ async def user_review(
         hours=hours,
         max_msgs=max_msgs,
         per_channel_limit=400,
-        use_monitored_channels=use_monitored,
     )
 
     if not items:
@@ -773,9 +636,6 @@ async def user_review(
     )
 
     await mod_channel.send(f"```markdown\n{summary}\n```")
-
-    # Helper to safely fetch transcript lines
-    lines = transcript.splitlines()
 
     def build_quote_block(index_list, label):
         blocks = []
