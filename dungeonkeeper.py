@@ -4,6 +4,7 @@ import discord
 import logging
 import os
 import json
+import sqlite3
 
 from typing import NamedTuple
 from collections import Counter
@@ -11,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from discord import app_commands
 from dotenv import load_dotenv
 from openai import OpenAI
+from pathlib import Path
 
 
 # ==============================
@@ -19,7 +21,7 @@ from openai import OpenAI
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MOD_CHANNEL_ID = int(os.environ["MOD_CHANNEL_ID"])
+DB_PATH = Path(__file__).with_name("dungeonkeeper.db")
 
 MODEL = "gpt-5-nano"
 BIGMODEL = "gpt-5.2-2025-12-11"
@@ -35,13 +37,119 @@ def parse_id_set(value: str | None) -> set[int]:
     parts = [p.strip() for p in value.replace("\n", ",").split(",")]
     return {int(p) for p in parts if p}
 
+def parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+def open_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_config_db() -> None:
+    bootstrap = {
+        "mod_channel_id": os.getenv("MOD_CHANNEL_ID", "0"),
+        "debug": "1" if parse_bool(os.getenv("DEBUG"), default=True) else "0",
+    }
+    bootstrap_sets = {
+        "spoiler_required_channels": parse_id_set(os.getenv("SPOILER_REQUIRED_CHANNELS")),
+        "bypass_role_ids": parse_id_set(os.getenv("BYPASS_ROLE_IDS")),
+    }
+
+    with open_db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS config_ids (
+                bucket TEXT NOT NULL,
+                value INTEGER NOT NULL,
+                PRIMARY KEY (bucket, value)
+            )
+            """
+        )
+
+        for key, value in bootstrap.items():
+            existing = conn.execute(
+                "SELECT value FROM config WHERE key = ?",
+                (key,),
+            ).fetchone()
+            if existing and existing["value"] != value:
+                log.warning(
+                    "Config override from env for %s: db=%s env=%s",
+                    key,
+                    existing["value"],
+                    value,
+                )
+            conn.execute(
+                """
+                INSERT INTO config (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (key, value),
+            )
+
+        for bucket, values in bootstrap_sets.items():
+            existing_rows = conn.execute(
+                "SELECT value FROM config_ids WHERE bucket = ? ORDER BY value",
+                (bucket,),
+            ).fetchall()
+            existing_values = {int(row["value"]) for row in existing_rows}
+            if existing_values and existing_values != values:
+                log.warning(
+                    "Config override from env for %s: db=%s env=%s",
+                    bucket,
+                    sorted(existing_values),
+                    sorted(values),
+                )
+            conn.execute(
+                "DELETE FROM config_ids WHERE bucket = ?",
+                (bucket,),
+            )
+            conn.executemany(
+                "INSERT INTO config_ids (bucket, value) VALUES (?, ?)",
+                [(bucket, value) for value in sorted(values)],
+            )
+
+def get_config_value(conn: sqlite3.Connection, key: str, default: str) -> str:
+    row = conn.execute(
+        "SELECT value FROM config WHERE key = ?",
+        (key,),
+    ).fetchone()
+    return row["value"] if row else default
+
+def get_config_id_set(conn: sqlite3.Connection, bucket: str) -> set[int]:
+    rows = conn.execute(
+        "SELECT value FROM config_ids WHERE bucket = ? ORDER BY value",
+        (bucket,),
+    ).fetchall()
+    return {int(row["value"]) for row in rows}
+
+def load_runtime_config() -> dict:
+    with open_db() as conn:
+        return {
+            "mod_channel_id": int(get_config_value(conn, "mod_channel_id", "0")),
+            "debug": parse_bool(get_config_value(conn, "debug", "1"), default=True),
+            "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
+            "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
+        }
+
+init_config_db()
+runtime_config = load_runtime_config()
+
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
-SPOILER_REQUIRED_CHANNELS = parse_id_set(os.getenv("SPOILER_REQUIRED_CHANNELS"))
-
-DEBUG = True  # Set False to go global
-
-# Roles that bypass spoiler enforcement
-BYPASS_ROLE_IDS = set()
+MOD_CHANNEL_ID = runtime_config["mod_channel_id"]
+SPOILER_REQUIRED_CHANNELS = runtime_config["spoiler_required_channels"]
+DEBUG = runtime_config["debug"]
+BYPASS_ROLE_IDS = runtime_config["bypass_role_ids"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -665,4 +773,5 @@ async def user_review(
 # Run
 # ==============================
 
-bot.run(TOKEN)
+if __name__ == "__main__":
+    bot.run(TOKEN)
