@@ -157,7 +157,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-log = logging.getLogger("accord")  # your bot namespace
+log = logging.getLogger("Dungeon Keeper")  # your bot namespace
 
 
 # ==============================
