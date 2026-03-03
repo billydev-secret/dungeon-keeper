@@ -5,26 +5,65 @@ import logging
 import os
 import json
 import sqlite3
+import time
 
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from discord import app_commands
 from dotenv import load_dotenv
 from openai import OpenAI
 from pathlib import Path
+from xp_system import (
+    DEFAULT_XP_SETTINGS,
+    MessageXpContext,
+    PairState,
+    XP_SOURCE_IMAGE_REACT,
+    XP_SOURCE_REPLY,
+    XP_SOURCE_TEXT,
+    XP_SOURCE_VOICE,
+    apply_xp_award,
+    calculate_message_xp,
+    completed_voice_intervals,
+    count_xp_events,
+    delete_voice_session,
+    get_oldest_xp_event_timestamp,
+    has_any_member_xp,
+    has_any_xp_events,
+    get_member_xp_state,
+    get_xp_leaderboard,
+    get_user_xp_standing,
+    get_voice_session,
+    init_xp_tables,
+    is_channel_xp_eligible,
+    is_message_processed,
+    list_voice_sessions,
+    mark_message_processed,
+    normalize_message_content,
+    record_xp_event,
+    set_voice_session,
+    update_pair_state,
+)
 
 
 # ==============================
 # Configuration
 # ==============================
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.DEBUG,
+)
+
+log = logging.getLogger("Dungeon Keeper")
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DB_PATH = Path(__file__).with_name("dungeonkeeper.db")
 
 MODEL = "gpt-5-nano"
 BIGMODEL = "gpt-5.2-2025-12-11"
+XP_SETTINGS = DEFAULT_XP_SETTINGS
 
 MAX_MESSAGES = 400           # hard cap on messages pulled
 MAX_CHARS_PER_MSG = 240      # truncate each message
@@ -43,19 +82,39 @@ def parse_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 def open_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30, isolation_level=None)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 def init_config_db() -> None:
-    bootstrap = {
-        "mod_channel_id": os.getenv("MOD_CHANNEL_ID", "0"),
-        "debug": "1" if parse_bool(os.getenv("DEBUG"), default=True) else "0",
-    }
-    bootstrap_sets = {
-        "spoiler_required_channels": parse_id_set(os.getenv("SPOILER_REQUIRED_CHANNELS")),
-        "bypass_role_ids": parse_id_set(os.getenv("BYPASS_ROLE_IDS")),
-    }
+    bootstrap: dict[str, str] = {}
+    bootstrap_sets: dict[str, set[int]] = {}
+
+    mod_channel_id = os.getenv("MOD_CHANNEL_ID")
+    if mod_channel_id is not None:
+        bootstrap["mod_channel_id"] = mod_channel_id
+
+    debug_env = os.getenv("DEBUG")
+    if debug_env is not None:
+        bootstrap["debug"] = "1" if parse_bool(debug_env, default=True) else "0"
+
+    level_5_role_id = os.getenv("XP_LEVEL_5_ROLE_ID")
+    if level_5_role_id is not None:
+        bootstrap["xp_level_5_role_id"] = level_5_role_id
+
+    spoiler_channels = os.getenv("SPOILER_REQUIRED_CHANNELS")
+    if spoiler_channels is not None:
+        bootstrap_sets["spoiler_required_channels"] = parse_id_set(spoiler_channels)
+
+    bypass_role_ids = os.getenv("BYPASS_ROLE_IDS")
+    if bypass_role_ids is not None:
+        bootstrap_sets["bypass_role_ids"] = parse_id_set(bypass_role_ids)
+
+    xp_excluded_channels = os.getenv("XP_EXCLUDED_CHANNEL_IDS")
+    if xp_excluded_channels is not None:
+        bootstrap_sets["xp_excluded_channel_ids"] = parse_id_set(xp_excluded_channels)
 
     with open_db() as conn:
         conn.execute(
@@ -133,31 +192,50 @@ def get_config_id_set(conn: sqlite3.Connection, bucket: str) -> set[int]:
     ).fetchall()
     return {int(row["value"]) for row in rows}
 
+
+def add_config_id_value(bucket: str, value: int) -> set[int]:
+    with open_db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
+            (bucket, value),
+        )
+        return get_config_id_set(conn, bucket)
+
+
+def remove_config_id_value(bucket: str, value: int) -> set[int]:
+    with open_db() as conn:
+        conn.execute(
+            "DELETE FROM config_ids WHERE bucket = ? AND value = ?",
+            (bucket, value),
+        )
+        return get_config_id_set(conn, bucket)
+
 def load_runtime_config() -> dict:
     with open_db() as conn:
         return {
             "mod_channel_id": int(get_config_value(conn, "mod_channel_id", "0")),
             "debug": parse_bool(get_config_value(conn, "debug", "1"), default=True),
+            "xp_level_5_role_id": int(get_config_value(conn, "xp_level_5_role_id", "0")),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
+            "xp_excluded_channel_ids": get_config_id_set(conn, "xp_excluded_channel_ids"),
         }
 
 init_config_db()
 runtime_config = load_runtime_config()
+
+with open_db() as conn:
+    init_xp_tables(conn)
 
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 MOD_CHANNEL_ID = runtime_config["mod_channel_id"]
 SPOILER_REQUIRED_CHANNELS = runtime_config["spoiler_required_channels"]
 DEBUG = runtime_config["debug"]
 BYPASS_ROLE_IDS = runtime_config["bypass_role_ids"]
+XP_EXCLUDED_CHANNEL_IDS = runtime_config["xp_excluded_channel_ids"]
+LEVEL_5_ROLE_ID = runtime_config["xp_level_5_role_id"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
-
-logging.basicConfig(
-    level=logging.INFO,
-)
-
-log = logging.getLogger("Dungeon Keeper")  # your bot namespace
 
 
 # ==============================
@@ -174,6 +252,8 @@ class Bot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+        self.xp_pair_states: dict[int, PairState] = {}
+        self.voice_xp_task: asyncio.Task | None = None
 
     async def setup_hook(self):
         if DEBUG:
@@ -183,6 +263,9 @@ class Bot(discord.Client):
         else:
             await self.tree.sync()
             print("Synced commands globally.")
+
+        if self.voice_xp_task is None:
+            self.voice_xp_task = asyncio.create_task(voice_xp_loop())
 
 bot = Bot()
 
@@ -207,42 +290,334 @@ class UserMsg(NamedTuple):
 async def on_ready():
     log.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
     log.info(f"In Guild {GUILD_ID} (Guarding: {SPOILER_REQUIRED_CHANNELS})")
+    log.debug("XP excluded channels: %s", sorted(XP_EXCLUDED_CHANNEL_IDS))
+    if GUILD_ID:
+        with open_db() as conn:
+            log.debug("XP event rows for guild %s: %s", GUILD_ID, count_xp_events(conn, GUILD_ID))
     log.info("------")
 
 @bot.event
 async def on_message(message: discord.Message):
-
-    if message.author.bot:
+    if message.author.bot or not message.guild:
         return
 
-    if message.channel.id not in SPOILER_REQUIRED_CHANNELS:
+    if await enforce_spoiler_requirement(message):
         return
 
-    if any(role.id in BYPASS_ROLE_IDS for role in message.author.roles):
-        return
-
-    if not message.attachments:
-        return
-
-    for attachment in message.attachments:
-        filename = attachment.filename.lower()
-
-        if filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
-            if not attachment.is_spoiler():
-                try:
-                    log.info(f"Deleting message {message.author}: {message.content}")
-                    await message.delete()
-                    await message.channel.send(
-                        f"Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler.",
-                        delete_after=5,
-                    )
-                except discord.Forbidden:
-                    pass
-                return
+    await award_message_xp(message)
 
 # ==============================
 # Logic
 # ==============================
+def channel_is_xp_allowed(channel) -> bool:
+    channel_id = getattr(channel, "id", None)
+    if channel_id is None:
+        return False
+    parent_id = getattr(channel, "parent_id", None)
+    return is_channel_xp_eligible(channel_id, parent_id, XP_EXCLUDED_CHANNEL_IDS)
+
+
+async def enforce_spoiler_requirement(message: discord.Message) -> bool:
+    if message.channel.id not in SPOILER_REQUIRED_CHANNELS:
+        return False
+
+    if not isinstance(message.author, discord.Member):
+        return False
+
+    if any(role.id in BYPASS_ROLE_IDS for role in message.author.roles):
+        return False
+
+    if not message.attachments:
+        return False
+
+    for attachment in message.attachments:
+        filename = attachment.filename.lower()
+        if not filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+            continue
+        if attachment.is_spoiler():
+            continue
+
+        try:
+            log.info("Deleting spoilerless image from %s: %s", message.author, message.content)
+            await message.delete()
+            await message.channel.send(
+                "Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler.",
+                delete_after=5,
+            )
+        except discord.Forbidden:
+            pass
+        return True
+
+    return False
+
+
+async def resolve_reply_target(message: discord.Message) -> discord.Message | None:
+    if not message.reference:
+        return None
+
+    if isinstance(message.reference.resolved, discord.Message):
+        return message.reference.resolved
+
+    if not message.reference.message_id:
+        return None
+
+    ref_channel = message.guild.get_channel(message.reference.channel_id) if message.guild else None
+    if ref_channel is None and hasattr(message.channel, "fetch_message"):
+        ref_channel = message.channel
+
+    if ref_channel is None or not hasattr(ref_channel, "fetch_message"):
+        return None
+
+    try:
+        return await ref_channel.fetch_message(message.reference.message_id)
+    except (discord.NotFound, discord.Forbidden):
+        return None
+
+
+async def maybe_grant_level_role(member: discord.Member, new_level: int) -> None:
+    if LEVEL_5_ROLE_ID <= 0 or new_level < XP_SETTINGS.role_grant_level:
+        return
+
+    role = member.guild.get_role(LEVEL_5_ROLE_ID)
+    if role is None:
+        log.warning("Level %s reward role %s was not found.", XP_SETTINGS.role_grant_level, LEVEL_5_ROLE_ID)
+        return
+
+    if role in member.roles:
+        return
+
+    try:
+        await member.add_roles(role, reason=f"Reached level {XP_SETTINGS.role_grant_level}")
+    except discord.Forbidden:
+        log.warning("Missing permission to grant level reward role %s to %s.", role.id, member)
+
+
+async def award_message_xp(message: discord.Message) -> None:
+    if not message.guild or not isinstance(message.author, discord.Member):
+        return
+
+    if not channel_is_xp_allowed(message.channel):
+        log.debug("XP skipped for %s in #%s: channel excluded.", message.author.id, getattr(message.channel, "id", "unknown"))
+        return
+
+    reply_target = await resolve_reply_target(message)
+    is_reply_to_human = bool(
+        reply_target
+        and not reply_target.author.bot
+        and reply_target.author.id != message.author.id
+    )
+
+    now_ts = message.created_at.timestamp() if message.created_at else time.time()
+    normalized_content = normalize_message_content(message.content)
+    pair_state = bot.xp_pair_states.get(message.channel.id)
+    next_pair_state, pair_streak = update_pair_state(pair_state, message.author.id)
+    bot.xp_pair_states[message.channel.id] = next_pair_state
+
+    with open_db() as conn:
+        state = get_member_xp_state(conn, message.guild.id, message.author.id)
+        is_duplicate = bool(normalized_content) and normalized_content == state.last_message_norm
+        breakdown = calculate_message_xp(
+            MessageXpContext(
+                content=message.content,
+                seconds_since_last_message=None if state.last_message_at is None else now_ts - state.last_message_at,
+                is_duplicate=is_duplicate,
+                is_reply_to_human=is_reply_to_human,
+                pair_streak=pair_streak,
+            ),
+            XP_SETTINGS,
+        )
+        award = apply_xp_award(
+            conn,
+            message.guild.id,
+            message.author.id,
+            breakdown.awarded_xp,
+            message_timestamp=now_ts,
+            message_norm=breakdown.normalized_content,
+            settings=XP_SETTINGS,
+        )
+        reply_award = 0.0
+        if breakdown.reply_bonus_xp > 0:
+            reply_award = round(
+                breakdown.reply_bonus_xp
+                * breakdown.cooldown_multiplier
+                * breakdown.duplicate_multiplier
+                * breakdown.pair_multiplier,
+                2,
+            )
+        text_award = round(max(0.0, award.awarded_xp - reply_award), 2)
+        record_xp_event(
+            conn,
+            message.guild.id,
+            message.author.id,
+            XP_SOURCE_TEXT,
+            text_award,
+            now_ts,
+        )
+        record_xp_event(
+            conn,
+            message.guild.id,
+            message.author.id,
+            XP_SOURCE_REPLY,
+            reply_award,
+            now_ts,
+        )
+        mark_message_processed(
+            conn,
+            message.guild.id,
+            message.id,
+            message.channel.id,
+            message.author.id,
+            now_ts,
+        )
+
+    if award.awarded_xp <= 0:
+        log.debug(
+            "XP skipped for %s in #%s: zero award (words=%s duplicate=%s cooldown=%.2f pair=%.2f reply_bonus=%.2f).",
+            message.author.id,
+            getattr(message.channel, "id", "unknown"),
+            breakdown.qualified_words,
+            is_duplicate,
+            breakdown.cooldown_multiplier,
+            breakdown.pair_multiplier,
+            breakdown.reply_bonus_xp,
+        )
+        return
+
+    log.debug(
+        "Awarded %.2f text XP to %s in #%s (words=%s total=%.2f level=%s).",
+        award.awarded_xp,
+        message.author.id,
+        getattr(message.channel, "id", "unknown"),
+        breakdown.qualified_words,
+        award.total_xp,
+        award.new_level,
+    )
+
+    if award.new_level >= XP_SETTINGS.role_grant_level:
+        await maybe_grant_level_role(message.author, award.new_level)
+
+
+def is_qualifying_voice_channel(channel: discord.VoiceChannel) -> bool:
+    afk_channel = channel.guild.afk_channel
+    if afk_channel and channel.id == afk_channel.id:
+        return False
+
+    human_count = sum(1 for member in channel.members if not member.bot)
+    return human_count >= XP_SETTINGS.voice_min_humans
+
+
+async def process_voice_xp_tick() -> None:
+    role_grant_members: dict[tuple[int, int], discord.Member] = {}
+    active_members: set[tuple[int, int]] = set()
+    now_ts = time.time()
+
+    with open_db() as conn:
+        for guild in bot.guilds:
+            for channel in guild.voice_channels:
+                human_members = [member for member in channel.members if not member.bot]
+                if not human_members:
+                    continue
+
+                qualifies = is_qualifying_voice_channel(channel)
+                for member in human_members:
+                    active_members.add((guild.id, member.id))
+                    session = get_voice_session(conn, guild.id, member.id)
+
+                    if session is None or session.channel_id != channel.id:
+                        set_voice_session(
+                            conn,
+                            guild.id,
+                            member.id,
+                            channel.id,
+                            session_started_at=now_ts,
+                            qualified_since=now_ts if qualifies else None,
+                            awarded_intervals=0,
+                        )
+                        continue
+
+                    if not qualifies:
+                        if session.qualified_since is not None or session.awarded_intervals != 0:
+                            set_voice_session(
+                                conn,
+                                guild.id,
+                                member.id,
+                                channel.id,
+                                session_started_at=now_ts,
+                                qualified_since=None,
+                                awarded_intervals=0,
+                            )
+                        continue
+
+                    if session.qualified_since is None:
+                        set_voice_session(
+                            conn,
+                            guild.id,
+                            member.id,
+                            channel.id,
+                            session_started_at=now_ts,
+                            qualified_since=now_ts,
+                            awarded_intervals=0,
+                        )
+                        continue
+
+                    intervals_due = completed_voice_intervals(session, now_ts, XP_SETTINGS)
+                    if intervals_due <= 0:
+                        continue
+
+                    set_voice_session(
+                        conn,
+                        guild.id,
+                        member.id,
+                        channel.id,
+                        session_started_at=session.session_started_at,
+                        qualified_since=session.qualified_since,
+                        awarded_intervals=session.awarded_intervals + intervals_due,
+                    )
+                    award = apply_xp_award(
+                        conn,
+                        guild.id,
+                        member.id,
+                        intervals_due * XP_SETTINGS.voice_award_xp,
+                        event_source=XP_SOURCE_VOICE,
+                        event_timestamp=now_ts,
+                        settings=XP_SETTINGS,
+                    )
+                    if award.awarded_xp > 0:
+                        log.debug(
+                            "Awarded %.2f voice XP to %s in voice channel %s (total=%.2f level=%s).",
+                            award.awarded_xp,
+                            member.id,
+                            channel.id,
+                            award.total_xp,
+                            award.new_level,
+                        )
+                    if award.new_level >= XP_SETTINGS.role_grant_level:
+                        role_grant_members[(guild.id, member.id)] = member
+
+        for session in list_voice_sessions(conn):
+            if (session.guild_id, session.user_id) not in active_members:
+                delete_voice_session(conn, session.guild_id, session.user_id)
+
+    for member in role_grant_members.values():
+        await maybe_grant_level_role(member, XP_SETTINGS.role_grant_level)
+
+
+async def voice_xp_loop() -> None:
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+        try:
+            await process_voice_xp_tick()
+        except asyncio.CancelledError:
+            raise
+        except sqlite3.OperationalError:
+            log.exception("Voice XP tick hit a SQLite operational error.")
+        except Exception:
+            log.exception("Voice XP tick failed.")
+
+        await asyncio.sleep(XP_SETTINGS.voice_poll_seconds)
+
+
 def extract_json_object(s: str):
     """
     Best-effort extraction of a JSON object from model output.
@@ -270,6 +645,109 @@ def extract_json_object(s: str):
 def is_mod(interaction: discord.Interaction) -> bool:
     perms = interaction.user.guild_permissions
     return perms.manage_guild or perms.administrator
+
+
+def get_xp_config_target_channel(interaction: discord.Interaction):
+    channel = interaction.channel
+    if isinstance(channel, (discord.TextChannel, discord.Thread)):
+        return channel
+    return None
+
+
+def iter_backfill_channels(guild: discord.Guild) -> list:
+    channels = list(guild.text_channels)
+    active_thread_ids = {thread.id for thread in guild.threads}
+    for thread in guild.threads:
+        if thread.id not in active_thread_ids:
+            continue
+        channels.append(thread)
+    return channels
+
+
+def resolve_leaderboard_timescale(timescale: str) -> tuple[str, str, discord.Color, float | None]:
+    now_ts = time.time()
+    mapping = {
+        "hour": ("Hourly", "Last 60 minutes", discord.Color.dark_teal(), now_ts - 60 * 60),
+        "day": ("Daily", "Last 24 hours", discord.Color.blue(), now_ts - 24 * 60 * 60),
+        "week": ("Weekly", "Last 7 days", discord.Color.teal(), now_ts - 7 * 24 * 60 * 60),
+        "month": ("Monthly", "Last 30 days", discord.Color.orange(), now_ts - 30 * 24 * 60 * 60),
+        "year": ("Yearly", "Last 365 days", discord.Color.brand_green(), now_ts - 365 * 24 * 60 * 60),
+        "alltime": ("All-Time", "Since tracking began", discord.Color.gold(), None),
+    }
+    return mapping[timescale]
+
+
+def format_xp_leaderboard_lines(
+    guild: discord.Guild | None,
+    entries,
+    empty_text: str,
+    user_line: str,
+) -> str:
+    if not entries:
+        return f"{empty_text}\n\n{user_line}"
+
+    rank_icons = ["🥇", "🥈", "🥉", "4.", "5."]
+    lines = []
+    for idx, entry in enumerate(entries, start=1):
+        member = guild.get_member(entry.user_id) if guild else None
+        label = member.mention if member else f"<@{entry.user_id}>"
+        rank = rank_icons[idx - 1] if idx <= len(rank_icons) else f"{idx}."
+        lines.append(f"{rank} {label}\n`{entry.xp:.2f} XP`")
+
+    lines.append("")
+    lines.append(user_line)
+    return "\n".join(lines)
+
+
+def build_xp_leaderboard_embed(
+    guild: discord.Guild,
+    caller: discord.Member,
+    window_name: str,
+    subtitle: str,
+    color: discord.Color,
+    cutoff: float | None,
+) -> discord.Embed:
+    embed = discord.Embed(
+        title=f"{window_name} XP Leaders",
+        description=subtitle,
+        color=color,
+    )
+
+    source_specs = [
+        ("Text", "💬", XP_SOURCE_TEXT, "No text XP yet."),
+        ("Replies", "↩️", XP_SOURCE_REPLY, "No reply XP yet."),
+        ("Voice", "🎙️", XP_SOURCE_VOICE, "No voice XP yet."),
+        ("Image Reacts", "🖼️", XP_SOURCE_IMAGE_REACT, "No image react XP yet."),
+    ]
+
+    with open_db() as conn:
+        for field_name, icon, source_key, empty_text in source_specs:
+            entries = get_xp_leaderboard(
+                conn,
+                guild.id,
+                source_key,
+                since_ts=cutoff,
+                limit=5,
+            )
+            standing = get_user_xp_standing(
+                conn,
+                guild.id,
+                source_key,
+                caller.id,
+                since_ts=cutoff,
+            )
+            if standing.rank is None:
+                user_line = f"Your standing: {caller.mention} has no tracked XP here."
+            else:
+                user_line = f"Your standing: #{standing.rank} {caller.mention} with `{standing.xp:.2f} XP`"
+            embed.add_field(
+                name=f"{icon} {field_name}",
+                value=format_xp_leaderboard_lines(guild, entries, empty_text, user_line),
+                inline=True,
+            )
+
+    embed.set_footer(text="Top 5 by XP source with your standing")
+    return embed
 
 async def llm_user_review(member: discord.Member, transcript: str, stats: dict):
     prompt = f"""
@@ -545,6 +1023,284 @@ def build_transcript(lines):
         out.append(line)
         total += len(line)
     return "\n".join(out)
+
+
+@bot.tree.command(
+    name="xp_backfill_history",
+    description="Backfill historical message XP into the guild database.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(days="How many days back to scan. Use 0 for all available history.")
+async def xp_backfill_history(
+    interaction: discord.Interaction,
+    days: app_commands.Range[int, 0, 3650] = 0,
+):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    if not guild:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    now_dt = datetime.now(timezone.utc)
+    after_dt = None if days == 0 else now_dt - timedelta(days=days)
+    granted_members: dict[int, discord.Member] = {}
+    backfill_user_state: dict[int, tuple[float, str]] = {}
+    pair_states: dict[int, PairState] = {}
+    stats = {
+        "channels_scanned": 0,
+        "messages_seen": 0,
+        "messages_processed": 0,
+        "messages_skipped_processed": 0,
+        "messages_awarded": 0,
+        "xp_awarded": 0.0,
+    }
+
+    with open_db() as conn:
+        cutoff_ts = get_oldest_xp_event_timestamp(conn, guild.id, (XP_SOURCE_TEXT, XP_SOURCE_REPLY))
+        before_dt = datetime.fromtimestamp(cutoff_ts, tz=timezone.utc) if cutoff_ts is not None else None
+
+        if after_dt and before_dt and after_dt >= before_dt:
+            await interaction.followup.send(
+                "Nothing to backfill. The selected window is already covered by tracked text/reply XP events.",
+                ephemeral=True,
+            )
+            return
+
+        me = guild.me or guild.get_member(guild.client.user.id)
+        for channel in iter_backfill_channels(guild):
+            if not channel_is_xp_allowed(channel):
+                continue
+
+            if me and not channel.permissions_for(me).read_message_history:
+                continue
+
+            stats["channels_scanned"] += 1
+            channel_pair_state = pair_states.get(channel.id)
+
+            try:
+                async for message in channel.history(limit=None, after=after_dt, before=before_dt, oldest_first=True):
+                    stats["messages_seen"] += 1
+
+                    if not message.guild or message.author.bot:
+                        continue
+
+                    if is_message_processed(conn, guild.id, message.id):
+                        stats["messages_skipped_processed"] += 1
+                        continue
+
+                    reply_target = await resolve_reply_target(message)
+                    is_reply_to_human = bool(
+                        reply_target
+                        and not reply_target.author.bot
+                        and reply_target.author.id != message.author.id
+                    )
+
+                    now_ts = message.created_at.timestamp() if message.created_at else time.time()
+                    normalized_content = normalize_message_content(message.content)
+                    channel_pair_state, pair_streak = update_pair_state(channel_pair_state, message.author.id)
+                    pair_states[channel.id] = channel_pair_state
+
+                    prior_ts = None
+                    prior_norm = None
+                    if message.author.id in backfill_user_state:
+                        prior_ts, prior_norm = backfill_user_state[message.author.id]
+
+                    breakdown = calculate_message_xp(
+                        MessageXpContext(
+                            content=message.content,
+                            seconds_since_last_message=None if prior_ts is None else now_ts - prior_ts,
+                            is_duplicate=bool(normalized_content) and normalized_content == prior_norm,
+                            is_reply_to_human=is_reply_to_human,
+                            pair_streak=pair_streak,
+                        ),
+                        XP_SETTINGS,
+                    )
+
+                    award = apply_xp_award(
+                        conn,
+                        guild.id,
+                        message.author.id,
+                        breakdown.awarded_xp,
+                        settings=XP_SETTINGS,
+                    )
+
+                    reply_award = 0.0
+                    if breakdown.reply_bonus_xp > 0:
+                        reply_award = round(
+                            breakdown.reply_bonus_xp
+                            * breakdown.cooldown_multiplier
+                            * breakdown.duplicate_multiplier
+                            * breakdown.pair_multiplier,
+                            2,
+                        )
+                    text_award = round(max(0.0, award.awarded_xp - reply_award), 2)
+                    record_xp_event(conn, guild.id, message.author.id, XP_SOURCE_TEXT, text_award, now_ts)
+                    record_xp_event(conn, guild.id, message.author.id, XP_SOURCE_REPLY, reply_award, now_ts)
+                    mark_message_processed(
+                        conn,
+                        guild.id,
+                        message.id,
+                        message.channel.id,
+                        message.author.id,
+                        now_ts,
+                    )
+
+                    backfill_user_state[message.author.id] = (now_ts, normalized_content)
+                    stats["messages_processed"] += 1
+                    if award.awarded_xp > 0:
+                        stats["messages_awarded"] += 1
+                        stats["xp_awarded"] += award.awarded_xp
+                        member = message.author if isinstance(message.author, discord.Member) else guild.get_member(message.author.id)
+                        if member and award.new_level >= XP_SETTINGS.role_grant_level:
+                            granted_members[member.id] = member
+            except discord.Forbidden:
+                continue
+
+    for member in granted_members.values():
+        await maybe_grant_level_role(member, XP_SETTINGS.role_grant_level)
+
+    window_label = "all available history" if days == 0 else f"last {days} days"
+    cutoff_note = ""
+    if cutoff_ts is not None:
+        cutoff_note = "\nSkipped messages on or after the earliest tracked live text/reply XP to avoid double counting."
+
+    await interaction.followup.send(
+        (
+            f"Backfill complete for {window_label}.\n"
+            f"Channels scanned: {stats['channels_scanned']}\n"
+            f"Messages seen: {stats['messages_seen']}\n"
+            f"Messages processed: {stats['messages_processed']}\n"
+            f"Already processed: {stats['messages_skipped_processed']}\n"
+            f"Messages awarding XP: {stats['messages_awarded']}\n"
+            f"XP added: {stats['xp_awarded']:.2f}"
+            f"{cutoff_note}"
+        ),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_exclude_here",
+    description="Disable XP gain in this channel or thread.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def xp_exclude_here(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    channel = get_xp_config_target_channel(interaction)
+    if channel is None:
+        await interaction.response.send_message("This command only works in text channels or threads.", ephemeral=True)
+        return
+
+    global XP_EXCLUDED_CHANNEL_IDS
+    XP_EXCLUDED_CHANNEL_IDS = add_config_id_value("xp_excluded_channel_ids", channel.id)
+    await interaction.response.send_message(
+        f"XP excluded for {channel.mention}. Excluded channel IDs: {sorted(XP_EXCLUDED_CHANNEL_IDS)}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_include_here",
+    description="Re-enable XP gain in this channel or thread.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def xp_include_here(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    channel = get_xp_config_target_channel(interaction)
+    if channel is None:
+        await interaction.response.send_message("This command only works in text channels or threads.", ephemeral=True)
+        return
+
+    global XP_EXCLUDED_CHANNEL_IDS
+    XP_EXCLUDED_CHANNEL_IDS = remove_config_id_value("xp_excluded_channel_ids", channel.id)
+    await interaction.response.send_message(
+        f"XP enabled for {channel.mention}. Excluded channel IDs: {sorted(XP_EXCLUDED_CHANNEL_IDS)}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_excluded_channels",
+    description="List channels and threads where XP is currently disabled.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def xp_excluded_channels(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    if not XP_EXCLUDED_CHANNEL_IDS:
+        await interaction.response.send_message("XP is currently enabled in all channels.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    labels = []
+    for channel_id in sorted(XP_EXCLUDED_CHANNEL_IDS):
+        channel = guild.get_channel(channel_id) if guild else None
+        labels.append(channel.mention if channel else f"`{channel_id}`")
+
+    await interaction.response.send_message(
+        "XP excluded in: " + ", ".join(labels),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_leaderboards",
+    description="Show top 5 XP earners for a selected timescale, plus your standing.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(timescale="Choose the leaderboard window.")
+async def xp_leaderboards(
+    interaction: discord.Interaction,
+    timescale: Literal["hour", "day", "week", "month", "year", "alltime"] = "alltime",
+):
+    guild = interaction.guild
+    if not guild:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+    caller = interaction.user if isinstance(interaction.user, discord.Member) else guild.get_member(interaction.user.id)
+    window_name, subtitle, color, cutoff = resolve_leaderboard_timescale(timescale)
+
+    with open_db() as conn:
+        if not has_any_xp_events(conn, guild.id):
+            description = (
+                "Existing XP totals predate the event ledger. New text and voice XP will appear here going forward."
+                if has_any_member_xp(conn, guild.id)
+                else "No XP recorded yet."
+            )
+            embed = discord.Embed(
+                title="XP Leaderboards",
+                description=description,
+                color=discord.Color.blurple(),
+            )
+            embed.add_field(name="💬 Text", value="No tracked text XP yet.", inline=True)
+            embed.add_field(name="↩️ Replies", value="No tracked reply XP yet.", inline=True)
+            embed.add_field(name="🎙️ Voice", value="No tracked voice XP yet.", inline=True)
+            embed.add_field(name="🖼️ Image Reacts", value="No tracked image react XP yet.", inline=True)
+            embed.set_footer(text="Top 5 by XP source and time window")
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+    if caller is None:
+        await interaction.response.send_message("Could not resolve your member record in this guild.", ephemeral=True)
+        return
+
+    embed = build_xp_leaderboard_embed(guild, caller, window_name, subtitle, color, cutoff)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 @bot.tree.command(name="summarize", 
     description="Summarize this channel over a time window.", 
     guild=discord.Object(id=GUILD_ID) if DEBUG else None
