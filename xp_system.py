@@ -18,6 +18,7 @@ STRIP_CHARS = " \t\r\n`*_~|<>[](){}\"'“”‘’.,!?;:;/\\"
 class XpSettings:
     message_word_xp: float = 0.25
     reply_bonus_xp: float = 1.0
+    image_reaction_received_xp: float = 0.5
     cooldown_thresholds_seconds: tuple[int, int, int] = (10, 30, 60)
     cooldown_multipliers: tuple[float, float, float] = (0.35, 0.6, 0.85)
     duplicate_multiplier: float = 0.2
@@ -27,6 +28,7 @@ class XpSettings:
     voice_interval_seconds: int = 600
     voice_min_humans: int = 3
     voice_poll_seconds: int = 30
+    manual_grant_xp: float = 20.0
     level_step_xp: float = 100.0
     role_grant_level: int = 5
 
@@ -36,6 +38,7 @@ XP_SOURCE_TEXT = "text"
 XP_SOURCE_REPLY = "reply"
 XP_SOURCE_VOICE = "voice"
 XP_SOURCE_IMAGE_REACT = "image_react"
+XP_SOURCE_GRANT = "grant"
 
 
 @dataclass(frozen=True)

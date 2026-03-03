@@ -7,7 +7,7 @@ import json
 import sqlite3
 import time
 
-from typing import Literal, NamedTuple
+from typing import Literal, NamedTuple, TypeAlias
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from discord import app_commands
@@ -18,6 +18,7 @@ from xp_system import (
     DEFAULT_XP_SETTINGS,
     MessageXpContext,
     PairState,
+    XP_SOURCE_GRANT,
     XP_SOURCE_IMAGE_REACT,
     XP_SOURCE_REPLY,
     XP_SOURCE_TEXT,
@@ -64,6 +65,7 @@ DB_PATH = Path(__file__).with_name("dungeonkeeper.db")
 MODEL = "gpt-5-nano"
 BIGMODEL = "gpt-5.2-2025-12-11"
 XP_SETTINGS = DEFAULT_XP_SETTINGS
+GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
 MAX_MESSAGES = 400           # hard cap on messages pulled
 MAX_CHARS_PER_MSG = 240      # truncate each message
@@ -104,6 +106,10 @@ def init_config_db() -> None:
     if level_5_role_id is not None:
         bootstrap["xp_level_5_role_id"] = level_5_role_id
 
+    level_5_log_channel_id = os.getenv("XP_LEVEL_5_LOG_CHANNEL_ID")
+    if level_5_log_channel_id is not None:
+        bootstrap["xp_level_5_log_channel_id"] = level_5_log_channel_id
+
     spoiler_channels = os.getenv("SPOILER_REQUIRED_CHANNELS")
     if spoiler_channels is not None:
         bootstrap_sets["spoiler_required_channels"] = parse_id_set(spoiler_channels)
@@ -111,6 +117,10 @@ def init_config_db() -> None:
     bypass_role_ids = os.getenv("BYPASS_ROLE_IDS")
     if bypass_role_ids is not None:
         bootstrap_sets["bypass_role_ids"] = parse_id_set(bypass_role_ids)
+
+    xp_grant_allowed_user_ids = os.getenv("XP_GRANT_ALLOWED_USER_IDS")
+    if xp_grant_allowed_user_ids is not None:
+        bootstrap_sets["xp_grant_allowed_user_ids"] = parse_id_set(xp_grant_allowed_user_ids)
 
     xp_excluded_channels = os.getenv("XP_EXCLUDED_CHANNEL_IDS")
     if xp_excluded_channels is not None:
@@ -210,14 +220,30 @@ def remove_config_id_value(bucket: str, value: int) -> set[int]:
         )
         return get_config_id_set(conn, bucket)
 
-def load_runtime_config() -> dict:
+
+def set_config_value(key: str, value: str) -> str:
+    with open_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO config (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        return get_config_value(conn, key, value)
+
+
+def load_runtime_config() -> dict[str, object]:
     with open_db() as conn:
         return {
             "mod_channel_id": int(get_config_value(conn, "mod_channel_id", "0")),
             "debug": parse_bool(get_config_value(conn, "debug", "1"), default=True),
             "xp_level_5_role_id": int(get_config_value(conn, "xp_level_5_role_id", "0")),
+            "xp_level_5_log_channel_id": int(get_config_value(conn, "xp_level_5_log_channel_id", "0")),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
+            "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
             "xp_excluded_channel_ids": get_config_id_set(conn, "xp_excluded_channel_ids"),
         }
 
@@ -232,8 +258,10 @@ MOD_CHANNEL_ID = runtime_config["mod_channel_id"]
 SPOILER_REQUIRED_CHANNELS = runtime_config["spoiler_required_channels"]
 DEBUG = runtime_config["debug"]
 BYPASS_ROLE_IDS = runtime_config["bypass_role_ids"]
+XP_GRANT_ALLOWED_USER_IDS = runtime_config["xp_grant_allowed_user_ids"]
 XP_EXCLUDED_CHANNEL_IDS = runtime_config["xp_excluded_channel_ids"]
 LEVEL_5_ROLE_ID = runtime_config["xp_level_5_role_id"]
+LEVEL_5_LOG_CHANNEL_ID = runtime_config["xp_level_5_log_channel_id"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -288,6 +316,10 @@ class UserMsg(NamedTuple):
 # ==============================
 @bot.event
 async def on_ready():
+    if bot.user is None:
+        log.warning("Bot user was not available during on_ready.")
+        return
+
     log.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
     log.info(f"In Guild {GUILD_ID} (Guarding: {SPOILER_REQUIRED_CHANNELS})")
     log.debug("XP excluded channels: %s", sorted(XP_EXCLUDED_CHANNEL_IDS))
@@ -306,15 +338,52 @@ async def on_message(message: discord.Message):
 
     await award_message_xp(message)
 
+
+@bot.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    await award_image_reaction_xp(payload)
+
 # ==============================
 # Logic
 # ==============================
-def channel_is_xp_allowed(channel) -> bool:
+def channel_is_xp_allowed(channel: GuildTextLike) -> bool:
     channel_id = getattr(channel, "id", None)
     if channel_id is None:
         return False
     parent_id = getattr(channel, "parent_id", None)
     return is_channel_xp_eligible(channel_id, parent_id, XP_EXCLUDED_CHANNEL_IDS)
+
+
+def get_interaction_member(interaction: discord.Interaction) -> discord.Member | None:
+    user = interaction.user
+    if isinstance(user, discord.Member):
+        return user
+    guild = interaction.guild
+    if guild is None:
+        return None
+    return guild.get_member(user.id)
+
+
+def get_bot_member(guild: discord.Guild) -> discord.Member | None:
+    if guild.me is not None:
+        return guild.me
+
+    bot_user = guild.client.user
+    if bot_user is None:
+        return None
+
+    return guild.get_member(bot_user.id)
+
+
+def attachment_is_image(attachment: discord.Attachment) -> bool:
+    if attachment.content_type and attachment.content_type.startswith("image/"):
+        return True
+    filename = attachment.filename.lower()
+    return filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"))
+
+
+def message_has_qualifying_image(message: discord.Message) -> bool:
+    return any(attachment_is_image(attachment) for attachment in message.attachments)
 
 
 async def enforce_spoiler_requirement(message: discord.Message) -> bool:
@@ -362,10 +431,10 @@ async def resolve_reply_target(message: discord.Message) -> discord.Message | No
         return None
 
     ref_channel = message.guild.get_channel(message.reference.channel_id) if message.guild else None
-    if ref_channel is None and hasattr(message.channel, "fetch_message"):
+    if ref_channel is None and isinstance(message.channel, (discord.TextChannel, discord.Thread)):
         ref_channel = message.channel
 
-    if ref_channel is None or not hasattr(ref_channel, "fetch_message"):
+    if not isinstance(ref_channel, (discord.TextChannel, discord.Thread)):
         return None
 
     try:
@@ -390,6 +459,60 @@ async def maybe_grant_level_role(member: discord.Member, new_level: int) -> None
         await member.add_roles(role, reason=f"Reached level {XP_SETTINGS.role_grant_level}")
     except discord.Forbidden:
         log.warning("Missing permission to grant level reward role %s to %s.", role.id, member)
+
+
+def get_guild_channel_or_thread(guild: discord.Guild, channel_id: int) -> GuildTextLike | None:
+    resolver = getattr(guild, "get_channel_or_thread", None)
+    if callable(resolver):
+        channel = resolver(channel_id)
+        if isinstance(channel, (discord.TextChannel, discord.Thread)):
+            return channel
+        return None
+
+    channel = guild.get_channel(channel_id)
+    if isinstance(channel, discord.TextChannel):
+        return channel
+
+    thread = guild.get_thread(channel_id)
+    if isinstance(thread, discord.Thread):
+        return thread
+
+    return None
+
+
+async def maybe_log_level_5(member: discord.Member, total_xp: float) -> None:
+    if LEVEL_5_LOG_CHANNEL_ID <= 0:
+        return
+
+    channel = get_guild_channel_or_thread(member.guild, LEVEL_5_LOG_CHANNEL_ID)
+    if channel is None:
+        log.warning(
+            "Level %s log channel %s was not found.",
+            XP_SETTINGS.role_grant_level,
+            LEVEL_5_LOG_CHANNEL_ID,
+        )
+        return
+
+    reward_role = member.guild.get_role(LEVEL_5_ROLE_ID) if LEVEL_5_ROLE_ID > 0 else None
+    embed = discord.Embed(
+        title=f"Level {XP_SETTINGS.role_grant_level} reached",
+        description=f"{member.mention} just reached level {XP_SETTINGS.role_grant_level}.",
+        color=discord.Color.gold(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    embed.add_field(name="Total XP", value=f"{total_xp:.2f}", inline=True)
+    if reward_role is not None:
+        embed.add_field(name="Reward Role", value=reward_role.mention, inline=True)
+    embed.set_thumbnail(url=member.display_avatar.url)
+
+    try:
+        await channel.send(embed=embed)
+    except discord.Forbidden:
+        log.warning(
+            "Missing permission to send level %s announcements in channel %s.",
+            XP_SETTINGS.role_grant_level,
+            LEVEL_5_LOG_CHANNEL_ID,
+        )
 
 
 async def award_message_xp(message: discord.Message) -> None:
@@ -495,6 +618,67 @@ async def award_message_xp(message: discord.Message) -> None:
 
     if award.new_level >= XP_SETTINGS.role_grant_level:
         await maybe_grant_level_role(message.author, award.new_level)
+        if award.role_grant_due:
+            await maybe_log_level_5(message.author, award.total_xp)
+
+
+async def award_image_reaction_xp(payload: discord.RawReactionActionEvent) -> None:
+    bot_user = bot.user
+    if payload.guild_id is None or bot_user is None or payload.user_id == bot_user.id:
+        return
+
+    guild = bot.get_guild(payload.guild_id)
+    if guild is None:
+        return
+
+    channel = get_guild_channel_or_thread(guild, payload.channel_id)
+    if channel is None or not channel_is_xp_allowed(channel):
+        return
+
+    member = guild.get_member(payload.user_id)
+    if member is not None and member.bot:
+        return
+
+    try:
+        message = await channel.fetch_message(payload.message_id)
+    except (discord.Forbidden, discord.NotFound):
+        return
+
+    if not isinstance(message.author, discord.Member):
+        author = guild.get_member(message.author.id)
+        if author is None:
+            return
+    else:
+        author = message.author
+
+    if author.bot or author.id == payload.user_id:
+        return
+
+    if not message_has_qualifying_image(message):
+        return
+
+    with open_db() as conn:
+        award = apply_xp_award(
+            conn,
+            guild.id,
+            author.id,
+            XP_SETTINGS.image_reaction_received_xp,
+            event_source=XP_SOURCE_IMAGE_REACT,
+            settings=XP_SETTINGS,
+        )
+
+    log.debug(
+        "Awarded %.2f image reaction XP to %s for message %s from reaction by %s.",
+        award.awarded_xp,
+        author.id,
+        message.id,
+        payload.user_id,
+    )
+
+    if award.new_level >= XP_SETTINGS.role_grant_level:
+        await maybe_grant_level_role(author, award.new_level)
+        if award.role_grant_due:
+            await maybe_log_level_5(author, award.total_xp)
 
 
 def is_qualifying_voice_channel(channel: discord.VoiceChannel) -> bool:
@@ -508,6 +692,7 @@ def is_qualifying_voice_channel(channel: discord.VoiceChannel) -> bool:
 
 async def process_voice_xp_tick() -> None:
     role_grant_members: dict[tuple[int, int], discord.Member] = {}
+    level_5_log_members: dict[tuple[int, int], tuple[discord.Member, float]] = {}
     active_members: set[tuple[int, int]] = set()
     now_ts = time.time()
 
@@ -593,6 +778,8 @@ async def process_voice_xp_tick() -> None:
                         )
                     if award.new_level >= XP_SETTINGS.role_grant_level:
                         role_grant_members[(guild.id, member.id)] = member
+                        if award.role_grant_due:
+                            level_5_log_members[(guild.id, member.id)] = (member, award.total_xp)
 
         for session in list_voice_sessions(conn):
             if (session.guild_id, session.user_id) not in active_members:
@@ -600,6 +787,9 @@ async def process_voice_xp_tick() -> None:
 
     for member in role_grant_members.values():
         await maybe_grant_level_role(member, XP_SETTINGS.role_grant_level)
+
+    for member, total_xp in level_5_log_members.values():
+        await maybe_log_level_5(member, total_xp)
 
 
 async def voice_xp_loop() -> None:
@@ -621,7 +811,7 @@ async def voice_xp_loop() -> None:
 def extract_json_object(s: str):
     """
     Best-effort extraction of a JSON object from model output.
-    Handles cases where the model wraps JSON in markdown or extra text.
+    Handles cases where the model wraps JSON in Markdown or extra text.
     """
     s = s.strip()
 
@@ -643,19 +833,28 @@ def extract_json_object(s: str):
     return None
 
 def is_mod(interaction: discord.Interaction) -> bool:
-    perms = interaction.user.guild_permissions
+    member = get_interaction_member(interaction)
+    if member is None:
+        return False
+    perms = member.guild_permissions
     return perms.manage_guild or perms.administrator
 
 
-def get_xp_config_target_channel(interaction: discord.Interaction):
+def can_use_xp_grant(interaction: discord.Interaction) -> bool:
+    if is_mod(interaction):
+        return True
+    return interaction.user.id in XP_GRANT_ALLOWED_USER_IDS
+
+
+def get_xp_config_target_channel(interaction: discord.Interaction) -> GuildTextLike | None:
     channel = interaction.channel
     if isinstance(channel, (discord.TextChannel, discord.Thread)):
         return channel
     return None
 
 
-def iter_backfill_channels(guild: discord.Guild) -> list:
-    channels = list(guild.text_channels)
+def iter_backfill_channels(guild: discord.Guild) -> list[GuildTextLike]:
+    channels: list[GuildTextLike] = list(guild.text_channels)
     active_thread_ids = {thread.id for thread in guild.threads}
     for thread in guild.threads:
         if thread.id not in active_thread_ids:
@@ -893,7 +1092,7 @@ async def collect_user_messages(
         scanned_channels += 1
 
         # Skip channels the bot can't read history for
-        me = guild.me or guild.get_member(guild.client.user.id)  # best-effort
+        me = get_bot_member(guild)
         if me and not ch.permissions_for(me).read_message_history:
             skipped_no_access += 1
             continue
@@ -929,7 +1128,7 @@ async def collect_user_messages(
                     elif ref.message_id:
                         try:
                             ref_channel = guild.get_channel(ref.channel_id)
-                            if ref_channel:
+                            if isinstance(ref_channel, discord.TextChannel):
                                 fetched = await ref_channel.fetch_message(ref.message_id)
                                 reply_to = fetched.author.display_name
                                 if fetched.content:
@@ -999,7 +1198,7 @@ def format_user_transcript(items: list[UserMsg]) -> str:
 
     return build_transcript(lines)
 
-async def send_markdown(channel, text):
+async def send_markdown(channel: discord.TextChannel | discord.Thread, text: str) -> None:
     MAX = 1800
     chunks = []
 
@@ -1014,7 +1213,7 @@ async def send_markdown(channel, text):
 # ==============================
 # Slash Commands
 # ==============================
-def build_transcript(lines):
+def build_transcript(lines: list[str]) -> str:
     out = []
     total = 0
     for line in lines:
@@ -1071,7 +1270,7 @@ async def xp_backfill_history(
             )
             return
 
-        me = guild.me or guild.get_member(guild.client.user.id)
+        me = get_bot_member(guild)
         for channel in iter_backfill_channels(guild):
             if not channel_is_xp_allowed(channel):
                 continue
@@ -1180,6 +1379,141 @@ async def xp_backfill_history(
             f"XP added: {stats['xp_awarded']:.2f}"
             f"{cutoff_note}"
         ),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_give",
+    description="Give a member 20 XP.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(member="Member to receive the XP.")
+async def xp_give(interaction: discord.Interaction, member: discord.Member):
+    if not can_use_xp_grant(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    if not guild:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+
+    if member.bot:
+        await interaction.response.send_message("Bots cannot receive XP grants.", ephemeral=True)
+        return
+
+    if member.id == interaction.user.id:
+        await interaction.response.send_message("You can't grant XP to yourself.", ephemeral=True)
+        return
+
+    now_ts = time.time()
+    with open_db() as conn:
+        award = apply_xp_award(
+            conn,
+            guild.id,
+            member.id,
+            XP_SETTINGS.manual_grant_xp,
+            event_source=XP_SOURCE_GRANT,
+            event_timestamp=now_ts,
+            settings=XP_SETTINGS,
+        )
+
+    if award.new_level >= XP_SETTINGS.role_grant_level:
+        await maybe_grant_level_role(member, award.new_level)
+        if award.role_grant_due:
+            await maybe_log_level_5(member, award.total_xp)
+
+    await interaction.response.send_message(
+        f"{interaction.user.mention} granted {XP_SETTINGS.manual_grant_xp:.0f} XP to {member.mention}. "
+        f"They now have {award.total_xp:.2f} XP and are level {award.new_level}.",
+        ephemeral=False,
+    )
+
+
+@bot.tree.command(
+    name="xp_give_allow",
+    description="Allow a user to use /xp_give.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(member="User to add to the /xp_give allowlist.")
+async def xp_give_allow(interaction: discord.Interaction, member: discord.Member):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    global XP_GRANT_ALLOWED_USER_IDS
+    XP_GRANT_ALLOWED_USER_IDS = add_config_id_value("xp_grant_allowed_user_ids", member.id)
+    await interaction.response.send_message(
+        f"{member.mention} can now use /xp_give. Allowed user IDs: {sorted(XP_GRANT_ALLOWED_USER_IDS)}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_give_disallow",
+    description="Remove a user from /xp_give access.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(member="User to remove from the /xp_give allowlist.")
+async def xp_give_disallow(interaction: discord.Interaction, member: discord.Member):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    global XP_GRANT_ALLOWED_USER_IDS
+    XP_GRANT_ALLOWED_USER_IDS = remove_config_id_value("xp_grant_allowed_user_ids", member.id)
+    await interaction.response.send_message(
+        f"{member.mention} can no longer use /xp_give. Allowed user IDs: {sorted(XP_GRANT_ALLOWED_USER_IDS)}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_give_allowed",
+    description="List users allowed to use /xp_give.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def xp_give_allowed(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    if not XP_GRANT_ALLOWED_USER_IDS:
+        await interaction.response.send_message("No regular users are currently allowed to use /xp_give.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    labels = []
+    for user_id in sorted(XP_GRANT_ALLOWED_USER_IDS):
+        member = guild.get_member(user_id) if guild else None
+        labels.append(member.mention if member else f"`{user_id}`")
+
+    await interaction.response.send_message(
+        "Users allowed to use /xp_give: " + ", ".join(labels),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_set_level5_log_here",
+    description="Send level 5 XP announcements to this channel or thread.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def xp_set_level5_log_here(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    channel = get_xp_config_target_channel(interaction)
+    if channel is None:
+        await interaction.response.send_message("This command only works in text channels or threads.", ephemeral=True)
+        return
+
+    global LEVEL_5_LOG_CHANNEL_ID
+    LEVEL_5_LOG_CHANNEL_ID = int(set_config_value("xp_level_5_log_channel_id", str(channel.id)))
+    await interaction.response.send_message(
+        f"Level {XP_SETTINGS.role_grant_level} announcements will be posted in {channel.mention}.",
         ephemeral=True,
     )
 
@@ -1339,7 +1673,7 @@ async def summarize(interaction: discord.Interaction, hours: int = 24):
     transcript = build_transcript(lines)
     summary = await llm_summarize(channel.name, transcript, hours)
 
-    mod_channel = interaction.guild.get_channel(MOD_CHANNEL_ID) if interaction.guild else None
+    mod_channel = get_guild_channel_or_thread(interaction.guild, MOD_CHANNEL_ID) if interaction.guild else None
     if mod_channel:
         await mod_channel.send(f"Summary requested by {interaction.user.mention} for {channel.mention}:")
         await send_markdown(mod_channel, summary)
@@ -1388,8 +1722,8 @@ async def inactive_role(
     role: discord.Role,
     days: app_commands.Range[int, 1, 60] = 7
 ):
-
-    if not interaction.user.guild_permissions.manage_roles:
+    member = get_interaction_member(interaction)
+    if member is None or not member.guild_permissions.manage_roles:
         await interaction.response.send_message(
             "You do not have permission to use this command.",
             ephemeral=True
@@ -1399,13 +1733,22 @@ async def inactive_role(
     await interaction.response.defer()
 
     guild = interaction.guild
+    if guild is None:
+        await interaction.followup.send("This command only works in a server.", ephemeral=True)
+        return
+
+    me = get_bot_member(guild)
+    if me is None:
+        await interaction.followup.send("Bot member context is unavailable right now.", ephemeral=True)
+        return
+
     cutoff = discord.utils.utcnow() - datetime.timedelta(days=days)
 
     role_members = set(role.members)
     active_members = set()
 
     for channel in guild.text_channels:
-        if not channel.permissions_for(guild.me).read_message_history:
+        if not channel.permissions_for(me).read_message_history:
             continue
 
         try:
@@ -1491,7 +1834,10 @@ async def user_review(
     poor_indices = analysis.get("poor_indices", [])
     good_indices = analysis.get("good_indices", [])
 
-    mod_channel = guild.get_channel(MOD_CHANNEL_ID)
+    mod_channel = get_guild_channel_or_thread(guild, MOD_CHANNEL_ID)
+    if mod_channel is None:
+        await interaction.followup.send("Mod channel is not configured as a text channel or thread.", ephemeral=True)
+        return
 
     await mod_channel.send(
         f"**User Review — {member.mention}**\n"

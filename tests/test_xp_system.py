@@ -4,6 +4,7 @@ import unittest
 from xp_system import (
     DEFAULT_XP_SETTINGS,
     MessageXpContext,
+    XP_SOURCE_GRANT,
     XP_SOURCE_REPLY,
     XP_SOURCE_TEXT,
     XP_SOURCE_VOICE,
@@ -155,6 +156,25 @@ class XpSystemTests(unittest.TestCase):
 
         self.assertEqual((standing.rank, standing.xp), (3, 12.0))
         self.assertEqual((missing.rank, missing.xp), (None, 0.0))
+
+    def test_manual_grant_source_records_event(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_xp_tables(conn)
+
+        award = apply_xp_award(
+            conn,
+            guild_id=1,
+            user_id=50,
+            xp_delta=DEFAULT_XP_SETTINGS.manual_grant_xp,
+            event_source=XP_SOURCE_GRANT,
+            event_timestamp=500.0,
+            settings=DEFAULT_XP_SETTINGS,
+        )
+        board = get_xp_leaderboard(conn, guild_id=1, source=XP_SOURCE_GRANT, limit=5)
+
+        self.assertEqual(award.awarded_xp, DEFAULT_XP_SETTINGS.manual_grant_xp)
+        self.assertEqual([(entry.user_id, entry.xp) for entry in board], [(50, DEFAULT_XP_SETTINGS.manual_grant_xp)])
 
 
 if __name__ == "__main__":
