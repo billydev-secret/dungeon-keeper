@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+import discord
 import re
 import sqlite3
+import statistics
 import time
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from discord import app_commands
+from typing import Literal
+
+from app_context import AppContext
+from post_monitoring import message_has_qualifying_image
 
 
 URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
@@ -29,7 +38,8 @@ class XpSettings:
     voice_min_humans: int = 3
     voice_poll_seconds: int = 30
     manual_grant_xp: float = 20.0
-    level_step_xp: float = 100.0
+    level_base_xp: float = 100.0
+    level_growth_factor: float = 1.15
     role_grant_level: int = 5
 
 
@@ -83,6 +93,13 @@ class AwardResult:
 class LeaderboardEntry:
     user_id: int
     xp: float
+
+
+@dataclass(frozen=True)
+class XpDistributionStats:
+    member_count: int
+    median_xp: float
+    stddev_xp: float
 
 
 @dataclass(frozen=True)
@@ -196,10 +213,35 @@ def calculate_message_xp(
     )
 
 
+def xp_required_for_level(level: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> float:
+    if level <= 1:
+        return 0.0
+
+    threshold = 0.0
+    increment = settings.level_base_xp
+    growth = max(1.0, settings.level_growth_factor)
+    for _ in range(2, level + 1):
+        threshold = round(threshold + increment, 2)
+        increment *= growth
+
+    return threshold
+
+
 def level_for_xp(total_xp: float, settings: XpSettings = DEFAULT_XP_SETTINGS) -> int:
     if total_xp <= 0:
         return 1
-    return int(total_xp // settings.level_step_xp) + 1
+
+    level = 1
+    threshold = 0.0
+    increment = settings.level_base_xp
+    growth = max(1.0, settings.level_growth_factor)
+
+    while total_xp >= round(threshold + increment, 2):
+        threshold = round(threshold + increment, 2)
+        increment *= growth
+        level += 1
+
+    return level
 
 
 def role_grant_due(previous_level: int, new_level: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> bool:
@@ -266,10 +308,15 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
     )
 
 
-def get_member_xp_state(conn: sqlite3.Connection, guild_id: int, user_id: int) -> MemberXpState:
+def get_member_xp_state(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    settings: XpSettings = DEFAULT_XP_SETTINGS,
+) -> MemberXpState:
     row = conn.execute(
         """
-        SELECT total_xp, level, last_message_at, last_message_norm
+        SELECT total_xp, last_message_at, last_message_norm
         FROM member_xp
         WHERE guild_id = ? AND user_id = ?
         """,
@@ -278,9 +325,10 @@ def get_member_xp_state(conn: sqlite3.Connection, guild_id: int, user_id: int) -
     if not row:
         return MemberXpState(total_xp=0.0, level=1, last_message_at=None, last_message_norm=None)
 
+    total_xp = float(row["total_xp"])
     return MemberXpState(
-        total_xp=float(row["total_xp"]),
-        level=int(row["level"]),
+        total_xp=total_xp,
+        level=level_for_xp(total_xp, settings),
         last_message_at=row["last_message_at"],
         last_message_norm=row["last_message_norm"],
     )
@@ -298,7 +346,7 @@ def apply_xp_award(
     event_timestamp: float | None = None,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
 ) -> AwardResult:
-    state = get_member_xp_state(conn, guild_id, user_id)
+    state = get_member_xp_state(conn, guild_id, user_id, settings)
     old_level = state.level
     new_total_xp = round(state.total_xp + max(0.0, xp_delta), 2)
     new_level = level_for_xp(new_total_xp, settings)
@@ -550,6 +598,39 @@ def get_xp_leaderboard(
         )
         for row in rows
     ]
+
+
+def get_xp_distribution_stats(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    source: str,
+    *,
+    since_ts: float | None = None,
+) -> XpDistributionStats:
+    params: list[object] = [guild_id, source]
+    where = "guild_id = ? AND source = ?"
+    if since_ts is not None:
+        where += " AND created_at >= ?"
+        params.append(since_ts)
+
+    rows = conn.execute(
+        f"""
+        SELECT ROUND(SUM(amount), 2) AS xp
+        FROM xp_events
+        WHERE {where}
+        GROUP BY user_id
+        """,
+        params,
+    ).fetchall()
+    values = [float(row["xp"]) for row in rows]
+    if not values:
+        return XpDistributionStats(member_count=0, median_xp=0.0, stddev_xp=0.0)
+
+    return XpDistributionStats(
+        member_count=len(values),
+        median_xp=round(float(statistics.median(values)), 2),
+        stddev_xp=round(float(statistics.pstdev(values)), 2),
+    )
 
 
 def get_user_xp_standing(

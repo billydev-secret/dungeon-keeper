@@ -10,6 +10,7 @@ from xp_system import (
     XP_SOURCE_VOICE,
     apply_xp_award,
     calculate_message_xp,
+    get_xp_distribution_stats,
     get_oldest_xp_event_timestamp,
     get_member_xp_state,
     get_xp_leaderboard,
@@ -17,9 +18,11 @@ from xp_system import (
     init_xp_tables,
     is_message_processed,
     is_channel_xp_eligible,
+    level_for_xp,
     mark_message_processed,
     qualified_words,
     record_xp_event,
+    xp_required_for_level,
 )
 
 
@@ -49,12 +52,13 @@ class XpSystemTests(unittest.TestCase):
         conn.row_factory = sqlite3.Row
         init_xp_tables(conn)
 
-        first = apply_xp_award(conn, guild_id=1, user_id=42, xp_delta=399.0, settings=DEFAULT_XP_SETTINGS)
+        level_5_threshold = xp_required_for_level(DEFAULT_XP_SETTINGS.role_grant_level, DEFAULT_XP_SETTINGS)
+        first = apply_xp_award(conn, guild_id=1, user_id=42, xp_delta=level_5_threshold - 0.01, settings=DEFAULT_XP_SETTINGS)
         second = apply_xp_award(
             conn,
             guild_id=1,
             user_id=42,
-            xp_delta=1.0,
+            xp_delta=0.01,
             message_timestamp=123.0,
             message_norm="alpha beta",
             settings=DEFAULT_XP_SETTINGS,
@@ -65,10 +69,39 @@ class XpSystemTests(unittest.TestCase):
         self.assertFalse(first.role_grant_due)
         self.assertEqual(second.new_level, 5)
         self.assertTrue(second.role_grant_due)
-        self.assertEqual(state.total_xp, 400.0)
+        self.assertEqual(state.total_xp, level_5_threshold)
         self.assertEqual(state.level, 5)
         self.assertEqual(state.last_message_at, 123.0)
         self.assertEqual(state.last_message_norm, "alpha beta")
+
+    def test_level_for_xp_uses_exponential_thresholds(self):
+        level_4_threshold = xp_required_for_level(4, DEFAULT_XP_SETTINGS)
+        level_5_threshold = xp_required_for_level(5, DEFAULT_XP_SETTINGS)
+
+        self.assertEqual(level_for_xp(level_4_threshold - 0.01, DEFAULT_XP_SETTINGS), 3)
+        self.assertEqual(level_for_xp(level_4_threshold, DEFAULT_XP_SETTINGS), 4)
+        self.assertEqual(level_for_xp(level_5_threshold - 0.01, DEFAULT_XP_SETTINGS), 4)
+        self.assertEqual(level_for_xp(level_5_threshold, DEFAULT_XP_SETTINGS), 5)
+
+    def test_get_member_xp_state_recalculates_cached_level_from_total_xp(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_xp_tables(conn)
+
+        conn.execute(
+            """
+            INSERT INTO member_xp (guild_id, user_id, total_xp, level, last_message_at, last_message_norm)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (1, 42, xp_required_for_level(5, DEFAULT_XP_SETTINGS), 2, 123.0, "alpha"),
+        )
+
+        state = get_member_xp_state(conn, guild_id=1, user_id=42, settings=DEFAULT_XP_SETTINGS)
+
+        self.assertEqual(state.level, 5)
+        self.assertEqual(state.total_xp, xp_required_for_level(5, DEFAULT_XP_SETTINGS))
+        self.assertEqual(state.last_message_at, 123.0)
+        self.assertEqual(state.last_message_norm, "alpha")
 
     def test_channel_xp_is_enabled_by_default_and_blocked_when_excluded(self):
         self.assertTrue(is_channel_xp_eligible(channel_id=10, parent_id=None, excluded_channel_ids=set()))
@@ -116,6 +149,22 @@ class XpSystemTests(unittest.TestCase):
         self.assertEqual([(entry.user_id, entry.xp) for entry in all_time_text], [(10, 50.0), (11, 20.0)])
         self.assertEqual([(entry.user_id, entry.xp) for entry in recent_text], [(11, 20.0)])
         self.assertEqual([(entry.user_id, entry.xp) for entry in reply_board], [(12, 7.5)])
+
+    def test_xp_distribution_stats_report_member_count_median_and_stddev(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_xp_tables(conn)
+
+        record_xp_event(conn, guild_id=1, user_id=10, source=XP_SOURCE_TEXT, amount=10.0, created_at=100.0)
+        record_xp_event(conn, guild_id=1, user_id=11, source=XP_SOURCE_TEXT, amount=20.0, created_at=100.0)
+        record_xp_event(conn, guild_id=1, user_id=12, source=XP_SOURCE_TEXT, amount=30.0, created_at=100.0)
+        record_xp_event(conn, guild_id=1, user_id=12, source=XP_SOURCE_TEXT, amount=10.0, created_at=150.0)
+
+        stats = get_xp_distribution_stats(conn, guild_id=1, source=XP_SOURCE_TEXT)
+        recent_stats = get_xp_distribution_stats(conn, guild_id=1, source=XP_SOURCE_TEXT, since_ts=125.0)
+
+        self.assertEqual((stats.member_count, stats.median_xp, stats.stddev_xp), (3, 20.0, 12.47))
+        self.assertEqual((recent_stats.member_count, recent_stats.median_xp, recent_stats.stddev_xp), (1, 10.0, 0.0))
 
     def test_processed_message_tracking_is_idempotent(self):
         conn = sqlite3.connect(":memory:")

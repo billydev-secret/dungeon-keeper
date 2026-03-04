@@ -1,20 +1,21 @@
 import asyncio
-import datetime
 import discord
 import logging
 import os
-import json
 import sqlite3
 import time
 
-from typing import Literal, NamedTuple, TypeAlias
-from collections import Counter
+from typing import Literal, TypeAlias
 from datetime import datetime, timedelta, timezone
 from discord import app_commands
 from dotenv import load_dotenv
 from openai import OpenAI
 from pathlib import Path
+from types import SimpleNamespace
+from post_monitoring import message_has_qualifying_image, enforce_spoiler_requirement
+from reports import register_reports
 from xp_system import (
+    AwardResult,
     DEFAULT_XP_SETTINGS,
     MessageXpContext,
     PairState,
@@ -28,6 +29,7 @@ from xp_system import (
     completed_voice_intervals,
     count_xp_events,
     delete_voice_session,
+    get_xp_distribution_stats,
     get_oldest_xp_event_timestamp,
     has_any_member_xp,
     has_any_xp_events,
@@ -109,6 +111,10 @@ def init_config_db() -> None:
     level_5_log_channel_id = os.getenv("XP_LEVEL_5_LOG_CHANNEL_ID")
     if level_5_log_channel_id is not None:
         bootstrap["xp_level_5_log_channel_id"] = level_5_log_channel_id
+
+    level_up_log_channel_id = os.getenv("XP_LEVEL_UP_LOG_CHANNEL_ID")
+    if level_up_log_channel_id is not None:
+        bootstrap["xp_level_up_log_channel_id"] = level_up_log_channel_id
 
     spoiler_channels = os.getenv("SPOILER_REQUIRED_CHANNELS")
     if spoiler_channels is not None:
@@ -241,6 +247,7 @@ def load_runtime_config() -> dict[str, object]:
             "debug": parse_bool(get_config_value(conn, "debug", "1"), default=True),
             "xp_level_5_role_id": int(get_config_value(conn, "xp_level_5_role_id", "0")),
             "xp_level_5_log_channel_id": int(get_config_value(conn, "xp_level_5_log_channel_id", "0")),
+            "xp_level_up_log_channel_id": int(get_config_value(conn, "xp_level_up_log_channel_id", "0")),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
             "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
@@ -262,6 +269,7 @@ XP_GRANT_ALLOWED_USER_IDS = runtime_config["xp_grant_allowed_user_ids"]
 XP_EXCLUDED_CHANNEL_IDS = runtime_config["xp_excluded_channel_ids"]
 LEVEL_5_ROLE_ID = runtime_config["xp_level_5_role_id"]
 LEVEL_5_LOG_CHANNEL_ID = runtime_config["xp_level_5_log_channel_id"]
+LEVEL_UP_LOG_CHANNEL_ID = runtime_config["xp_level_up_log_channel_id"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -298,20 +306,6 @@ class Bot(discord.Client):
 bot = Bot()
 
 # ==============================
-# User Classes
-# ==============================
-class UserMsg(NamedTuple):
-    created_at: datetime
-    channel_id: int
-    channel_mention: str
-    jump_url: str
-    content: str
-    mentions: list[str]
-    reply_to: str | None
-    reply_content: str | None
-
-
-# ==============================
 # Events
 # ==============================
 @bot.event
@@ -333,7 +327,12 @@ async def on_message(message: discord.Message):
     if message.author.bot or not message.guild:
         return
 
-    if await enforce_spoiler_requirement(message):
+    if await enforce_spoiler_requirement(
+        message,
+        spoiler_required_channels=SPOILER_REQUIRED_CHANNELS,
+        bypass_role_ids=BYPASS_ROLE_IDS,
+        log=log,
+    ):
         return
 
     await award_message_xp(message)
@@ -373,51 +372,6 @@ def get_bot_member(guild: discord.Guild) -> discord.Member | None:
         return None
 
     return guild.get_member(bot_user.id)
-
-
-def attachment_is_image(attachment: discord.Attachment) -> bool:
-    if attachment.content_type and attachment.content_type.startswith("image/"):
-        return True
-    filename = attachment.filename.lower()
-    return filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"))
-
-
-def message_has_qualifying_image(message: discord.Message) -> bool:
-    return any(attachment_is_image(attachment) for attachment in message.attachments)
-
-
-async def enforce_spoiler_requirement(message: discord.Message) -> bool:
-    if message.channel.id not in SPOILER_REQUIRED_CHANNELS:
-        return False
-
-    if not isinstance(message.author, discord.Member):
-        return False
-
-    if any(role.id in BYPASS_ROLE_IDS for role in message.author.roles):
-        return False
-
-    if not message.attachments:
-        return False
-
-    for attachment in message.attachments:
-        filename = attachment.filename.lower()
-        if not filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
-            continue
-        if attachment.is_spoiler():
-            continue
-
-        try:
-            log.info("Deleting spoilerless image from %s: %s", message.author, message.content)
-            await message.delete()
-            await message.channel.send(
-                "Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler.",
-                delete_after=5,
-            )
-        except discord.Forbidden:
-            pass
-        return True
-
-    return False
 
 
 async def resolve_reply_target(message: discord.Message) -> discord.Message | None:
@@ -515,6 +469,46 @@ async def maybe_log_level_5(member: discord.Member, total_xp: float) -> None:
         )
 
 
+async def maybe_log_level_ups(member: discord.Member, old_level: int, new_level: int, total_xp: float) -> None:
+    if LEVEL_UP_LOG_CHANNEL_ID <= 0 or new_level <= old_level:
+        return
+
+    channel = get_guild_channel_or_thread(member.guild, LEVEL_UP_LOG_CHANNEL_ID)
+    if channel is None:
+        log.warning("Level-up log channel %s was not found.", LEVEL_UP_LOG_CHANNEL_ID)
+        return
+
+    skip_special_level = LEVEL_UP_LOG_CHANNEL_ID == LEVEL_5_LOG_CHANNEL_ID
+    for level in range(old_level + 1, new_level + 1):
+        if skip_special_level and level == XP_SETTINGS.role_grant_level:
+            continue
+
+        embed = discord.Embed(
+            title=f"Level {level} reached",
+            description=f"{member.mention} leveled up to level {level}.",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Total XP", value=f"{total_xp:.2f}", inline=True)
+        embed.set_thumbnail(url=member.display_avatar.url)
+
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            log.warning("Missing permission to send level-up announcements in channel %s.", LEVEL_UP_LOG_CHANNEL_ID)
+            return
+
+
+async def handle_level_progress(member: discord.Member, award: AwardResult) -> None:
+    if award.new_level >= XP_SETTINGS.role_grant_level:
+        await maybe_grant_level_role(member, award.new_level)
+
+    if award.new_level > award.old_level:
+        await maybe_log_level_ups(member, award.old_level, award.new_level, award.total_xp)
+        if award.role_grant_due:
+            await maybe_log_level_5(member, award.total_xp)
+
+
 async def award_message_xp(message: discord.Message) -> None:
     if not message.guild or not isinstance(message.author, discord.Member):
         return
@@ -537,7 +531,7 @@ async def award_message_xp(message: discord.Message) -> None:
     bot.xp_pair_states[message.channel.id] = next_pair_state
 
     with open_db() as conn:
-        state = get_member_xp_state(conn, message.guild.id, message.author.id)
+        state = get_member_xp_state(conn, message.guild.id, message.author.id, XP_SETTINGS)
         is_duplicate = bool(normalized_content) and normalized_content == state.last_message_norm
         breakdown = calculate_message_xp(
             MessageXpContext(
@@ -616,10 +610,7 @@ async def award_message_xp(message: discord.Message) -> None:
         award.new_level,
     )
 
-    if award.new_level >= XP_SETTINGS.role_grant_level:
-        await maybe_grant_level_role(message.author, award.new_level)
-        if award.role_grant_due:
-            await maybe_log_level_5(message.author, award.total_xp)
+    await handle_level_progress(message.author, award)
 
 
 async def award_image_reaction_xp(payload: discord.RawReactionActionEvent) -> None:
@@ -675,10 +666,7 @@ async def award_image_reaction_xp(payload: discord.RawReactionActionEvent) -> No
         payload.user_id,
     )
 
-    if award.new_level >= XP_SETTINGS.role_grant_level:
-        await maybe_grant_level_role(author, award.new_level)
-        if award.role_grant_due:
-            await maybe_log_level_5(author, award.total_xp)
+    await handle_level_progress(author, award)
 
 
 def is_qualifying_voice_channel(channel: discord.VoiceChannel) -> bool:
@@ -691,8 +679,7 @@ def is_qualifying_voice_channel(channel: discord.VoiceChannel) -> bool:
 
 
 async def process_voice_xp_tick() -> None:
-    role_grant_members: dict[tuple[int, int], discord.Member] = {}
-    level_5_log_members: dict[tuple[int, int], tuple[discord.Member, float]] = {}
+    leveled_members: dict[tuple[int, int], tuple[discord.Member, AwardResult]] = {}
     active_members: set[tuple[int, int]] = set()
     now_ts = time.time()
 
@@ -776,20 +763,14 @@ async def process_voice_xp_tick() -> None:
                             award.total_xp,
                             award.new_level,
                         )
-                    if award.new_level >= XP_SETTINGS.role_grant_level:
-                        role_grant_members[(guild.id, member.id)] = member
-                        if award.role_grant_due:
-                            level_5_log_members[(guild.id, member.id)] = (member, award.total_xp)
+                        leveled_members[(guild.id, member.id)] = (member, award)
 
         for session in list_voice_sessions(conn):
             if (session.guild_id, session.user_id) not in active_members:
                 delete_voice_session(conn, session.guild_id, session.user_id)
 
-    for member in role_grant_members.values():
-        await maybe_grant_level_role(member, XP_SETTINGS.role_grant_level)
-
-    for member, total_xp in level_5_log_members.values():
-        await maybe_log_level_5(member, total_xp)
+    for member, award in leveled_members.values():
+        await handle_level_progress(member, award)
 
 
 async def voice_xp_loop() -> None:
@@ -808,29 +789,6 @@ async def voice_xp_loop() -> None:
         await asyncio.sleep(XP_SETTINGS.voice_poll_seconds)
 
 
-def extract_json_object(s: str):
-    """
-    Best-effort extraction of a JSON object from model output.
-    Handles cases where the model wraps JSON in Markdown or extra text.
-    """
-    s = s.strip()
-
-    # Direct parse attempt
-    try:
-        return json.loads(s)
-    except Exception:
-        pass
-
-    # Try extracting the first {...} block
-    start = s.find("{")
-    end = s.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        try:
-            return json.loads(s[start:end + 1])
-        except Exception:
-            return None
-
-    return None
 
 def is_mod(interaction: discord.Interaction) -> bool:
     member = get_interaction_member(interaction)
@@ -879,14 +837,15 @@ def resolve_leaderboard_timescale(timescale: str) -> tuple[str, str, discord.Col
 def format_xp_leaderboard_lines(
     guild: discord.Guild | None,
     entries,
+    stats_line: str,
     empty_text: str,
     user_line: str,
 ) -> str:
     if not entries:
-        return f"{empty_text}\n\n{user_line}"
+        return f"{stats_line}\n\n{empty_text}\n\n{user_line}"
 
     rank_icons = ["🥇", "🥈", "🥉", "4.", "5."]
-    lines = []
+    lines = [stats_line, ""]
     for idx, entry in enumerate(entries, start=1):
         member = guild.get_member(entry.user_id) if guild else None
         label = member.mention if member else f"<@{entry.user_id}>"
@@ -896,6 +855,15 @@ def format_xp_leaderboard_lines(
     lines.append("")
     lines.append(user_line)
     return "\n".join(lines)
+
+
+def format_xp_distribution_summary(member_count: int, median_xp: float, stddev_xp: float) -> str:
+    return (
+        "**Distribution**\n"
+        f"Members: **{member_count}**\n"
+        f"Median: `{median_xp:.2f} XP`\n"
+        f"Std Dev: `{stddev_xp:.2f} XP`"
+    )
 
 
 def build_xp_leaderboard_embed(
@@ -928,6 +896,12 @@ def build_xp_leaderboard_embed(
                 since_ts=cutoff,
                 limit=5,
             )
+            distribution = get_xp_distribution_stats(
+                conn,
+                guild.id,
+                source_key,
+                since_ts=cutoff,
+            )
             standing = get_user_xp_standing(
                 conn,
                 guild.id,
@@ -935,294 +909,23 @@ def build_xp_leaderboard_embed(
                 caller.id,
                 since_ts=cutoff,
             )
+            stats_line = format_xp_distribution_summary(
+                distribution.member_count,
+                distribution.median_xp,
+                distribution.stddev_xp,
+            )
             if standing.rank is None:
                 user_line = f"Your standing: {caller.mention} has no tracked XP here."
             else:
                 user_line = f"Your standing: #{standing.rank} {caller.mention} with `{standing.xp:.2f} XP`"
             embed.add_field(
                 name=f"{icon} {field_name}",
-                value=format_xp_leaderboard_lines(guild, entries, empty_text, user_line),
+                value=format_xp_leaderboard_lines(guild, entries, stats_line, empty_text, user_line),
                 inline=True,
             )
 
     embed.set_footer(text="Top 5 by XP source with your standing")
     return embed
-
-async def llm_user_review(member: discord.Member, transcript: str, stats: dict):
-    prompt = f"""
-        You are helping moderators review a user for promotion.
-
-        User: {member} (id {member.id})
-        Window: last {stats['hours']} hours
-        Messages included: {stats['found']}
-        Channels posted in: {stats['unique_channels_posted']}
-
-        You will receive a transcript where each message line is numbered.
-
-        Your job:
-        1. Write a promotion candidate report
-
-        Write a concise MOD-ONLY report in Markdown:
-            ## Activity snapshot
-            - posting frequency (based on transcript), breadth of channels, consistency
-
-            ## Themes & participation style
-            - what they talk about, how they engage (questions, support, jokes, etc.)
-
-            ## Consent / BDSM rules & boundaries (if applicable)
-            - flag any patterns that suggest consent issues, coercion, DM pressure, boundary pushing, unsafe framing
-            - be careful: consensual flirting and kink discussion is allowed
-            - if there’s insufficient evidence, say so
-
-            ## Tone & community fit
-            - respectful? supportive? chronic conflict? chronic negativity? (only if supported)
-
-            ## Recommendation
-            - “Looks good for promotion” / “Needs mod check-in” / “Insufficient data”
-            - 1–2 sentences why
-
-        2. Identify up to:
-           - 5 messages that indicate poor conduct around consent and boundary respect. Let's look for negative sentament as well.
-           - 5 messages that demonstrate positive conduct
-
-        Return ONLY valid JSON in this format:
-
-        {{
-          "summary": "markdown summary",
-          "poor_indices": [3, 18],
-          "good_indices": [5, 7, 22]
-        }}
-
-        Rules:
-        - Only select messages that truly stand out.
-        - If none exist, return empty arrays.
-        - Do not invent anything.
-        """
-
-    numbered_lines = []
-    for idx, line in enumerate(transcript.splitlines(), start=1):
-        numbered_lines.append(f"{idx}. {line}")
-    numbered_transcript = "\n".join(numbered_lines)
-
-    resp = await asyncio.to_thread(
-        client.chat.completions.create,
-        model=BIGMODEL,
-        messages=[
-            {"role": "system", "content": "You are a careful moderation analyst. Output valid JSON only."},
-            {"role": "user", "content": prompt + "\n\nTRANSCRIPT:\n" + numbered_transcript},
-        ],
-        temperature=0.2,
-    )
-
-    raw = resp.choices[0].message.content.strip()
-    data = extract_json_object(raw)
-    return data
-
-async def llm_summarize(channel_name: str, transcript: str, hours: int) -> str:
-    SUMMARY_PROMPT = f"""
-        You are summarizing a Discord channel for moderators.
-
-        Channel: #{channel_name}
-        Time window: last {hours} hours
-
-        Output in Markdown with these sections:
-
-        ## Themes (3–6 bullets)
-        ## Notable moments (bullets)
-        ## Participation
-        - Activity level: low/medium/high
-        - Top participants (approx counts if possible)
-        - Threading pattern: (few long threads / many short exchanges)
-
-        ## Tone & climate
-        - Overall vibe (1–2 sentences)
-        - Venting present? (yes/no + neutral note)
-        - If negativity appears: classify as normal venting vs targeted negativity vs repeated downer framing
-
-        ## Potential friction / discomfort (ranked)
-        For each item: category tag, confidence 0–1, and suggested soft mod action.
-        Only include if supported by transcript.
-
-        ## Action items / follow-ups
-        Only list explicit decisions or asks. If none, say “None observed.”
-
-        Rules:
-        - Do not moralize; keep neutral.
-        - Do not invent facts; if unsure, say “insufficient data.”
-        - No long quotes; paraphrase.
-        """
-
-    resp = await asyncio.to_thread(
-        client.chat.completions.create,
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": "You are a helpful, careful moderation summarizer."},
-            {"role": "user", "content": SUMMARY_PROMPT + "\n\nTRANSCRIPT:\n" + transcript},
-        ],
-        temperature=0.2,
-    )
-    return resp.choices[0].message.content.strip()
-
-async def collect_user_messages(
-    guild: discord.Guild,
-    member: discord.Member,
-    hours: int = 168,
-    max_msgs: int = 200,
-    per_channel_limit: int = 300,
-) -> tuple[list[UserMsg], dict]:
-    """
-    Collect recent messages by `member` across a set of channels.
-    Returns (messages, stats). No persistence.
-    """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-    # Choose channels to scan
-    channels = list(guild.text_channels)
-
-    found: list[UserMsg] = []
-    scanned_channels = 0
-    skipped_no_access = 0
-    scanned_msgs_total = 0
-    per_channel_hits = Counter()
-
-    for ch in channels:
-        if len(found) >= max_msgs:
-            break
-
-        scanned_channels += 1
-
-        # Skip channels the bot can't read history for
-        me = get_bot_member(guild)
-        if me and not ch.permissions_for(me).read_message_history:
-            skipped_no_access += 1
-            continue
-
-        try:
-            async for msg in ch.history(limit=per_channel_limit, after=cutoff, oldest_first=False):
-                scanned_msgs_total += 1
-                if msg.author.id != member.id:
-                    continue
-                if not msg.content:
-                    continue
-
-                content = msg.content.replace("\n", " ").strip()
-                if not content:
-                    continue
-
-                jump = f"https://discord.com/channels/{guild.id}/{ch.id}/{msg.id}"
-                mentions = [m.display_name for m in msg.mentions]
-
-                reply_to = None
-                reply_content = None
-
-                if msg.reference:
-                    ref = msg.reference
-
-                    # If cached
-                    if isinstance(ref.resolved, discord.Message):
-                        reply_to = ref.resolved.author.display_name
-                        if ref.resolved.content:
-                            reply_content = ref.resolved.content[:120]
-
-                    # If not cached, fetch manually
-                    elif ref.message_id:
-                        try:
-                            ref_channel = guild.get_channel(ref.channel_id)
-                            if isinstance(ref_channel, discord.TextChannel):
-                                fetched = await ref_channel.fetch_message(ref.message_id)
-                                reply_to = fetched.author.display_name
-                                if fetched.content:
-                                    reply_content = fetched.content[:120]
-                        except (discord.NotFound, discord.Forbidden):
-                            pass
-
-                found.append(
-                    UserMsg(
-                        created_at=msg.created_at,
-                        channel_id=ch.id,
-                        channel_mention=ch.mention,
-                        jump_url=jump,
-                        content=content[:MAX_CHARS_PER_MSG],
-                        mentions=mentions,
-                        reply_to=reply_to,
-                        reply_content=reply_content,
-                    )
-                )
-                per_channel_hits[ch.id] += 1
-
-                if len(found) >= max_msgs:
-                    break
-
-        except discord.Forbidden:
-            skipped_no_access += 1
-            continue
-
-    # Sort chronologically for the transcript
-    found.sort(key=lambda m: m.created_at)
-
-    stats = {
-        "hours": hours,
-        "max_msgs": max_msgs,
-        "found": len(found),
-        "scanned_channels": scanned_channels,
-        "skipped_no_access": skipped_no_access,
-        "scanned_msgs_total": scanned_msgs_total,
-        "unique_channels_posted": len({m.channel_id for m in found}),
-        "top_channels": per_channel_hits.most_common(5),
-        "cutoff": cutoff,
-    }
-    return found, stats
-
-def format_user_transcript(items: list[UserMsg]) -> str:
-    lines = []
-
-    for m in items:
-        ts = m.created_at.strftime("%Y-%m-%d %H:%M")
-
-        meta_parts = []
-
-        if m.reply_to:
-            meta_parts.append(f"reply_to={m.reply_to}")
-
-        if m.reply_content:
-            meta_parts.append(f"reply_excerpt='{m.reply_content}'")
-
-        if m.mentions:
-            meta_parts.append(f"mentions={','.join(m.mentions)}")
-
-        meta = f" ({' | '.join(meta_parts)})" if meta_parts else ""
-
-        lines.append(
-            f"[{ts}] {m.channel_mention}{meta}: {m.content}"
-        )
-
-    return build_transcript(lines)
-
-async def send_markdown(channel: discord.TextChannel | discord.Thread, text: str) -> None:
-    MAX = 1800
-    chunks = []
-
-    while text:
-        chunk = text[:MAX]
-        text = text[MAX:]
-        chunks.append(chunk)
-
-    for c in chunks:
-        await channel.send(f"```markdown\n{c}\n```")
-
-# ==============================
-# Slash Commands
-# ==============================
-def build_transcript(lines: list[str]) -> str:
-    out = []
-    total = 0
-    for line in lines:
-        if total + len(line) > MAX_TOTAL_CHARS:
-            break
-        out.append(line)
-        total += len(line)
-    return "\n".join(out)
-
 
 @bot.tree.command(
     name="xp_backfill_history",
@@ -1419,10 +1122,7 @@ async def xp_give(interaction: discord.Interaction, member: discord.Member):
             settings=XP_SETTINGS,
         )
 
-    if award.new_level >= XP_SETTINGS.role_grant_level:
-        await maybe_grant_level_role(member, award.new_level)
-        if award.role_grant_due:
-            await maybe_log_level_5(member, award.total_xp)
+    await handle_level_progress(member, award)
 
     await interaction.response.send_message(
         f"{interaction.user.mention} granted {XP_SETTINGS.manual_grant_xp:.0f} XP to {member.mention}. "
@@ -1491,6 +1191,29 @@ async def xp_give_allowed(interaction: discord.Interaction):
 
     await interaction.response.send_message(
         "Users allowed to use /xp_give: " + ", ".join(labels),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="xp_set_levelup_log_here",
+    description="Send level-up announcements to this channel or thread.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def xp_set_levelup_log_here(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    channel = get_xp_config_target_channel(interaction)
+    if channel is None:
+        await interaction.response.send_message("This command only works in text channels or threads.", ephemeral=True)
+        return
+
+    global LEVEL_UP_LOG_CHANNEL_ID
+    LEVEL_UP_LOG_CHANNEL_ID = int(set_config_value("xp_level_up_log_channel_id", str(channel.id)))
+    await interaction.response.send_message(
+        f"Level-up announcements will be posted in {channel.mention}.",
         ephemeral=True,
     )
 
@@ -1635,245 +1358,22 @@ async def xp_leaderboards(
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="summarize", 
-    description="Summarize this channel over a time window.", 
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+report_ctx = SimpleNamespace(
+    guild_id=GUILD_ID,
+    debug=DEBUG,
+    client=client,
+    model=MODEL,
+    bigmodel=BIGMODEL,
+    mod_channel_id=MOD_CHANNEL_ID,
+    get_bot_member=get_bot_member,
+    get_guild_channel_or_thread=get_guild_channel_or_thread,
+    get_interaction_member=get_interaction_member,
+    is_mod=is_mod,
 )
-@app_commands.describe(hours="How many hours back to summarize (e.g., 24, 72).")
-async def summarize(interaction: discord.Interaction, hours: int = 24):
-    await interaction.response.defer(ephemeral=True)
-
-    channel = interaction.channel
-    if not isinstance(channel, discord.TextChannel):
-        await interaction.followup.send("This command only works in text channels.", ephemeral=True)
-        return
-
-    after_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-    lines = []
-    count = 0
-    async for msg in channel.history(limit=None, after=after_dt, oldest_first=True):
-        if msg.author.bot:
-            continue
-        if not msg.content:
-            continue
-        content = msg.content.replace("\n", " ").strip()
-        if not content:
-            continue
-        content = content[:MAX_CHARS_PER_MSG]
-        lines.append(f"[{msg.created_at.strftime('%Y-%m-%d %H:%M')}] {msg.author.display_name}: {content}")
-        count += 1
-        if count >= MAX_MESSAGES:
-            break
-
-    if not lines:
-        await interaction.followup.send(f"No messages found in the last {hours}h.", ephemeral=True)
-        return
-
-    transcript = build_transcript(lines)
-    summary = await llm_summarize(channel.name, transcript, hours)
-
-    mod_channel = get_guild_channel_or_thread(interaction.guild, MOD_CHANNEL_ID) if interaction.guild else None
-    if mod_channel:
-        await mod_channel.send(f"Summary requested by {interaction.user.mention} for {channel.mention}:")
-        await send_markdown(mod_channel, summary)
-        await interaction.followup.send("Posted summary to the mod channel.", ephemeral=True)
-    else:
-        await interaction.followup.send(f"```markdown\n{summary}\n```", ephemeral=True)
-
-
-@bot.tree.command(
-    name="listrole",
-    description="List all members in a role",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
-)
-@app_commands.describe(role="The role to inspect")
-async def listrole(interaction: discord.Interaction, role: discord.Role):
-
-    members = role.members
-
-    if not members:
-        await interaction.response.send_message(
-            f"No members found in **{role.name}**.",
-            ephemeral=True
-        )
-        return
-
-    output = "\n".join(member.display_name for member in members)
-
-    if len(output) > 1900:
-        output = output[:1900] + "\n... (truncated)"
-
-    await interaction.response.send_message(
-        f"**Members in {role.name}:**\n{output}"
-    )
-
-@bot.tree.command(
-    name="inactive_role",
-    description="Report inactivity for a role",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
-)
-@app_commands.describe(
-    role="Role to analyze",
-    days="Number of days to check (default 7)"
-)
-async def inactive_role(
-    interaction: discord.Interaction,
-    role: discord.Role,
-    days: app_commands.Range[int, 1, 60] = 7
-):
-    member = get_interaction_member(interaction)
-    if member is None or not member.guild_permissions.manage_roles:
-        await interaction.response.send_message(
-            "You do not have permission to use this command.",
-            ephemeral=True
-        )
-        return
-
-    await interaction.response.defer()
-
-    guild = interaction.guild
-    if guild is None:
-        await interaction.followup.send("This command only works in a server.", ephemeral=True)
-        return
-
-    me = get_bot_member(guild)
-    if me is None:
-        await interaction.followup.send("Bot member context is unavailable right now.", ephemeral=True)
-        return
-
-    cutoff = discord.utils.utcnow() - datetime.timedelta(days=days)
-
-    role_members = set(role.members)
-    active_members = set()
-
-    for channel in guild.text_channels:
-        if not channel.permissions_for(me).read_message_history:
-            continue
-
-        try:
-            async for message in channel.history(after=cutoff, limit=None):
-                if message.author in role_members:
-                    active_members.add(message.author)
-
-                if active_members == role_members:
-                    break
-        except discord.Forbidden:
-            continue
-
-    inactive_members = role_members - active_members
-
-    total = len(role_members)
-    inactive_count = len(inactive_members)
-    percent = (inactive_count / total * 100) if total else 0
-
-    summary = (
-        f"**Role Activity Report — {role.name} ({days} days)**\n"
-        f"Total Members: {total}\n"
-        f"Inactive: {inactive_count} ({percent:.1f}%)\n"
-        f"----------------------------------\n"
-    )
-
-    if inactive_members:
-        names = "\n".join(m.display_name for m in inactive_members)
-        if len(names) > 1800:
-            names = names[:1800] + "\n... (truncated)"
-        summary += "\n**Inactive Members:**\n" + names
-    else:
-        summary += "\nAll members active in this period."
-
-    await interaction.followup.send(summary)
-
-@bot.tree.command(
-    name="user_review",
-    description="Review a user's recent message history (for promotions/mod check-ins).",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
-)
-@app_commands.describe(
-    member="User to review",
-    hours="How many hours back (default 168 = 7 days)",
-    max_msgs="Max messages to include (default 200)"
-)
-async def user_review(
-    interaction: discord.Interaction,
-    member: discord.Member,
-    hours: app_commands.Range[int, 1, 720] = 168,
-    max_msgs: app_commands.Range[int, 20, 500] = 200,
-):
-    if not is_mod(interaction):
-        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    guild = interaction.guild
-    if not guild:
-        await interaction.followup.send("Guild context missing.", ephemeral=True)
-        return
-
-    items, stats = await collect_user_messages(
-        guild=guild,
-        member=member,
-        hours=hours,
-        max_msgs=max_msgs,
-        per_channel_limit=400,
-    )
-
-    if not items:
-        await interaction.followup.send("No messages found in that window (or I lack access).", ephemeral=True)
-        return
-    
-    transcript = format_user_transcript(items)
-    analysis = await llm_user_review(member, transcript, stats)
-
-    if not analysis:
-        await interaction.followup.send("LLM analysis failed.", ephemeral=True)
-        return
-
-    summary = analysis.get("summary", "No summary provided.")
-    poor_indices = analysis.get("poor_indices", [])
-    good_indices = analysis.get("good_indices", [])
-
-    mod_channel = get_guild_channel_or_thread(guild, MOD_CHANNEL_ID)
-    if mod_channel is None:
-        await interaction.followup.send("Mod channel is not configured as a text channel or thread.", ephemeral=True)
-        return
-
-    await mod_channel.send(
-        f"**User Review — {member.mention}**\n"
-        f"Window: last {hours}h | Messages: {stats['found']} | Channels: {stats['unique_channels_posted']}\n"
-        f"Requested by {interaction.user.mention}"
-    )
-
-    await mod_channel.send(f"```markdown\n{summary}\n```")
-
-    def build_quote_block(index_list, label):
-        blocks = []
-        blocks.append(f"**{label}") 
-        for i in index_list:
-            if 1 <= i <= len(items):
-                msg = items[i - 1]
-                snippet = msg.content if len(msg.content) < 400 else msg.content[:400] + "…"
-                blocks.append(
-                    f"**{msg.channel_mention} [{msg.created_at.strftime('%Y-%m-%d %H:%M')}]**\n"
-                    f"> {snippet}\n"
-                )
-        return blocks
-
-    poor_blocks = build_quote_block(poor_indices, "⚠️ Needs Review")
-    good_blocks = build_quote_block(good_indices, "✅ Positive Conduct")
-
-    if poor_blocks:
-        await mod_channel.send("\n\n".join(poor_blocks))
-
-    if good_blocks:
-        await mod_channel.send("\n\n".join(good_blocks))
-
-    await interaction.followup.send("Posted user review to the mod channel ✅", ephemeral=True)
+register_reports(bot, report_ctx)
 
 # ==============================
 # Run
 # ==============================
-
 if __name__ == "__main__":
     bot.run(TOKEN)

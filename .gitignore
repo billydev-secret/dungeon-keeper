@@ -1,3 +1,2 @@
-request_channels.json
-consent_data.json
 .env
+dungeonkeeper.db*
