@@ -72,6 +72,14 @@ def init_config_db(db_path: Path, log: logging.Logger) -> None:
     if level_up_log_channel_id is not None:
         bootstrap["xp_level_up_log_channel_id"] = level_up_log_channel_id
 
+    greeter_role_id = os.getenv("GREETER_ROLE_ID")
+    if greeter_role_id is not None:
+        bootstrap["greeter_role_id"] = greeter_role_id
+
+    denizen_role_id = os.getenv("DENIZEN_ROLE_ID")
+    if denizen_role_id is not None:
+        bootstrap["denizen_role_id"] = denizen_role_id
+
     spoiler_channels = os.getenv("SPOILER_REQUIRED_CHANNELS")
     if spoiler_channels is not None:
         bootstrap_sets["spoiler_required_channels"] = parse_id_set(spoiler_channels)
@@ -143,6 +151,8 @@ def load_runtime_config(db_path: Path) -> dict[str, object]:
             "xp_level_5_role_id": int(get_config_value(conn, "xp_level_5_role_id", "0")),
             "xp_level_5_log_channel_id": int(get_config_value(conn, "xp_level_5_log_channel_id", "0")),
             "xp_level_up_log_channel_id": int(get_config_value(conn, "xp_level_up_log_channel_id", "0")),
+            "greeter_role_id": int(get_config_value(conn, "greeter_role_id", "0")),
+            "denizen_role_id": int(get_config_value(conn, "denizen_role_id", "0")),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
             "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
@@ -191,6 +201,8 @@ class AppContext:
     level_5_role_id: int
     level_5_log_channel_id: int
     level_up_log_channel_id: int
+    greeter_role_id: int
+    denizen_role_id: int
     xp_pair_states: dict[int, object] = field(default_factory=dict)
 
     def open_db(self) -> sqlite3.Connection:

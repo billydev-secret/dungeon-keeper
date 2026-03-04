@@ -118,6 +118,14 @@ def init_config_db() -> None:
     if level_up_log_channel_id is not None:
         bootstrap["xp_level_up_log_channel_id"] = level_up_log_channel_id
 
+    greeter_role_id = os.getenv("GREETER_ROLE_ID")
+    if greeter_role_id is not None:
+        bootstrap["greeter_role_id"] = greeter_role_id
+
+    denizen_role_id = os.getenv("DENIZEN_ROLE_ID")
+    if denizen_role_id is not None:
+        bootstrap["denizen_role_id"] = denizen_role_id
+
     spoiler_channels = os.getenv("SPOILER_REQUIRED_CHANNELS")
     if spoiler_channels is not None:
         bootstrap_sets["spoiler_required_channels"] = parse_id_set(spoiler_channels)
@@ -250,6 +258,8 @@ def load_runtime_config() -> dict[str, object]:
             "xp_level_5_role_id": int(get_config_value(conn, "xp_level_5_role_id", "0")),
             "xp_level_5_log_channel_id": int(get_config_value(conn, "xp_level_5_log_channel_id", "0")),
             "xp_level_up_log_channel_id": int(get_config_value(conn, "xp_level_up_log_channel_id", "0")),
+            "greeter_role_id": int(get_config_value(conn, "greeter_role_id", "0")),
+            "denizen_role_id": int(get_config_value(conn, "denizen_role_id", "0")),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
             "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
@@ -272,6 +282,8 @@ XP_EXCLUDED_CHANNEL_IDS = runtime_config["xp_excluded_channel_ids"]
 LEVEL_5_ROLE_ID = runtime_config["xp_level_5_role_id"]
 LEVEL_5_LOG_CHANNEL_ID = runtime_config["xp_level_5_log_channel_id"]
 LEVEL_UP_LOG_CHANNEL_ID = runtime_config["xp_level_up_log_channel_id"]
+GREETER_ROLE_ID = runtime_config["greeter_role_id"]
+DENIZEN_ROLE_ID = runtime_config["denizen_role_id"]
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -836,6 +848,17 @@ def is_mod(interaction: discord.Interaction) -> bool:
     return perms.manage_guild or perms.administrator
 
 
+def can_grant_denizen(interaction: discord.Interaction) -> bool:
+    if is_mod(interaction):
+        return True
+
+    member = get_interaction_member(interaction)
+    if member is None or GREETER_ROLE_ID <= 0:
+        return False
+
+    return any(role.id == GREETER_ROLE_ID for role in member.roles)
+
+
 def can_use_xp_grant(interaction: discord.Interaction) -> bool:
     if is_mod(interaction):
         return True
@@ -1120,6 +1143,119 @@ async def xp_backfill_history(
             f"XP added: {stats['xp_awarded']:.2f}"
             f"{cutoff_note}"
         ),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="grant_denizen",
+    description="Grant the Denizen role to a member.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(member="Member to receive the Denizen role.")
+async def grant_denizen(interaction: discord.Interaction, member: discord.Member):
+    if not can_grant_denizen(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+
+    actor = get_interaction_member(interaction)
+    if member.bot:
+        await interaction.response.send_message("Bots can't receive the Denizen role.", ephemeral=True)
+        return
+
+    if actor is not None and member.id == actor.id and not is_mod(interaction):
+        await interaction.response.send_message("You can't grant the Denizen role to yourself.", ephemeral=True)
+        return
+
+    if DENIZEN_ROLE_ID <= 0:
+        await interaction.response.send_message("The Denizen role is not configured yet.", ephemeral=True)
+        return
+
+    denizen_role = guild.get_role(DENIZEN_ROLE_ID)
+    if denizen_role is None:
+        await interaction.response.send_message("The configured Denizen role no longer exists.", ephemeral=True)
+        return
+
+    if denizen_role in member.roles:
+        await interaction.response.send_message(f"{member.mention} already has {denizen_role.mention}.", ephemeral=True)
+        return
+
+    bot_member = get_bot_member(guild)
+    if bot_member is None:
+        await interaction.response.send_message("Bot member context is unavailable right now.", ephemeral=True)
+        return
+
+    if not bot_member.guild_permissions.manage_roles:
+        await interaction.response.send_message("I need the Manage Roles permission to do that.", ephemeral=True)
+        return
+
+    if denizen_role >= bot_member.top_role:
+        await interaction.response.send_message(
+            f"I can't grant {denizen_role.mention} because it is above my highest role.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await member.add_roles(denizen_role, reason=f"Granted by {interaction.user} via /grant_denizen")
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            f"I couldn't grant {denizen_role.mention}. Check my role hierarchy and permissions.",
+            ephemeral=True,
+        )
+        return
+
+    log.info(
+        "%s granted %s to %s.",
+        format_user_for_log(actor, interaction.user.id),
+        denizen_role.name,
+        format_user_for_log(member),
+    )
+    await interaction.response.send_message(
+        f"{member.mention} has been granted {denizen_role.mention}.",
+        ephemeral=False,
+    )
+
+
+@bot.tree.command(
+    name="set_greeter_role",
+    description="Set which role can use /grant_denizen.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(role="Role allowed to grant Denizen.")
+async def set_greeter_role(interaction: discord.Interaction, role: discord.Role):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    global GREETER_ROLE_ID
+    GREETER_ROLE_ID = int(set_config_value("greeter_role_id", str(role.id)))
+    await interaction.response.send_message(
+        f"Members with {role.mention} can now use /grant_denizen.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="set_denizen_role",
+    description="Set which role /grant_denizen will assign.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(role="Role to grant with /grant_denizen.")
+async def set_denizen_role(interaction: discord.Interaction, role: discord.Role):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    global DENIZEN_ROLE_ID
+    DENIZEN_ROLE_ID = int(set_config_value("denizen_role_id", str(role.id)))
+    await interaction.response.send_message(
+        f"/grant_denizen will now assign {role.mention}.",
         ephemeral=True,
     )
 
