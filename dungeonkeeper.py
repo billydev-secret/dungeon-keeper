@@ -387,6 +387,27 @@ def get_bot_member(guild: discord.Guild) -> discord.Member | None:
     return guild.get_member(bot_user.id)
 
 
+def format_user_for_log(user: discord.abc.User | discord.Member | None = None, user_id: int | None = None) -> str:
+    if user is not None:
+        resolved_id = getattr(user, "id", user_id)
+        display_name = getattr(user, "display_name", None)
+        username = getattr(user, "name", None)
+        if display_name and username and display_name != username:
+            return f"{display_name} [{username}] ({resolved_id})"
+        label = display_name or username or str(user)
+        return f"{label} ({resolved_id})" if resolved_id is not None else label
+
+    if user_id is None:
+        return "unknown user"
+
+    return f"user {user_id}"
+
+
+def resolve_user_for_log(guild: discord.Guild | None, user_id: int) -> str:
+    member = guild.get_member(user_id) if guild is not None else None
+    return format_user_for_log(member, user_id)
+
+
 async def resolve_reply_target(message: discord.Message) -> discord.Message | None:
     if not message.reference:
         return None
@@ -527,7 +548,11 @@ async def award_message_xp(message: discord.Message) -> None:
         return
 
     if not channel_is_xp_allowed(message.channel):
-        log.debug("XP skipped for %s in #%s: channel excluded.", message.author.id, getattr(message.channel, "id", "unknown"))
+        log.debug(
+            "XP skipped for %s in #%s: channel excluded.",
+            format_user_for_log(message.author),
+            getattr(message.channel, "id", "unknown"),
+        )
         return
 
     reply_target = await resolve_reply_target(message)
@@ -603,7 +628,7 @@ async def award_message_xp(message: discord.Message) -> None:
     if award.awarded_xp <= 0:
         log.debug(
             "XP skipped for %s in #%s: zero award (words=%s duplicate=%s cooldown=%.2f pair=%.2f reply_bonus=%.2f).",
-            message.author.id,
+            format_user_for_log(message.author),
             getattr(message.channel, "id", "unknown"),
             breakdown.qualified_words,
             is_duplicate,
@@ -616,7 +641,7 @@ async def award_message_xp(message: discord.Message) -> None:
     log.debug(
         "Awarded %.2f text XP to %s in #%s (words=%s total=%.2f level=%s).",
         award.awarded_xp,
-        message.author.id,
+        format_user_for_log(message.author),
         getattr(message.channel, "id", "unknown"),
         breakdown.qualified_words,
         award.total_xp,
@@ -674,9 +699,9 @@ async def award_image_reaction_xp(payload: discord.RawReactionActionEvent) -> No
     log.debug(
         "Awarded %.2f image reaction XP to %s for message %s from reaction by %s.",
         award.awarded_xp,
-        author.id,
+        format_user_for_log(author),
         message.id,
-        payload.user_id,
+        resolve_user_for_log(guild, payload.user_id),
     )
 
     await handle_level_progress(author, award)
@@ -771,7 +796,7 @@ async def process_voice_xp_tick() -> None:
                         log.debug(
                             "Awarded %.2f voice XP to %s in voice channel %s (total=%.2f level=%s).",
                             award.awarded_xp,
-                            member.id,
+                            format_user_for_log(member),
                             channel.id,
                             award.total_xp,
                             award.new_level,
