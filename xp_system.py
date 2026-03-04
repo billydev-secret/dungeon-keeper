@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import discord
+import math
 import re
 import sqlite3
 import statistics
@@ -38,8 +39,7 @@ class XpSettings:
     voice_min_humans: int = 3
     voice_poll_seconds: int = 30
     manual_grant_xp: float = 20.0
-    level_base_xp: float = 100.0
-    level_growth_factor: float = 1.15
+    level_curve_factor: float = 4.0
     role_grant_level: int = 5
 
 
@@ -124,6 +124,14 @@ class PairState:
     last_author_id: int | None = None
     active_pair: tuple[int, int] | None = None
     alternating_streak: int = 0
+
+
+@dataclass(frozen=True)
+class MemberActivity:
+    user_id: int
+    channel_id: int
+    message_id: int
+    created_at: float
 
 
 def is_channel_xp_eligible(channel_id: int, parent_id: int | None, excluded_channel_ids: set[int]) -> bool:
@@ -217,31 +225,16 @@ def xp_required_for_level(level: int, settings: XpSettings = DEFAULT_XP_SETTINGS
     if level <= 1:
         return 0.0
 
-    threshold = 0.0
-    increment = settings.level_base_xp
-    growth = max(1.0, settings.level_growth_factor)
-    for _ in range(2, level + 1):
-        threshold = round(threshold + increment, 2)
-        increment *= growth
-
-    return threshold
+    factor = max(0.01, settings.level_curve_factor)
+    return round(factor * ((level - 1) ** 2), 2)
 
 
 def level_for_xp(total_xp: float, settings: XpSettings = DEFAULT_XP_SETTINGS) -> int:
     if total_xp <= 0:
         return 1
 
-    level = 1
-    threshold = 0.0
-    increment = settings.level_base_xp
-    growth = max(1.0, settings.level_growth_factor)
-
-    while total_xp >= round(threshold + increment, 2):
-        threshold = round(threshold + increment, 2)
-        increment *= growth
-        level += 1
-
-    return level
+    factor = max(0.01, settings.level_curve_factor)
+    return int(math.sqrt(total_xp / factor)) + 1
 
 
 def role_grant_due(previous_level: int, new_level: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> bool:
@@ -303,6 +296,18 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
             created_at REAL NOT NULL,
             processed_at REAL NOT NULL,
             PRIMARY KEY (guild_id, message_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS member_activity (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            last_channel_id INTEGER NOT NULL,
+            last_message_id INTEGER NOT NULL,
+            last_message_at REAL NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
         )
         """
     )
@@ -452,6 +457,62 @@ def mark_message_processed(
         """,
         (guild_id, message_id, channel_id, user_id, created_at, time.time()),
     )
+
+
+def record_member_activity(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    channel_id: int,
+    message_id: int,
+    created_at: float,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO member_activity (
+            guild_id,
+            user_id,
+            last_channel_id,
+            last_message_id,
+            last_message_at
+        )
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET
+            last_channel_id = excluded.last_channel_id,
+            last_message_id = excluded.last_message_id,
+            last_message_at = excluded.last_message_at
+        WHERE excluded.last_message_at >= member_activity.last_message_at
+        """,
+        (guild_id, user_id, channel_id, message_id, created_at),
+    )
+
+
+def get_member_last_activity_map(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_ids: list[int],
+) -> dict[int, MemberActivity]:
+    if not user_ids:
+        return {}
+
+    placeholders = ", ".join("?" for _ in user_ids)
+    rows = conn.execute(
+        f"""
+        SELECT user_id, last_channel_id, last_message_id, last_message_at
+        FROM member_activity
+        WHERE guild_id = ? AND user_id IN ({placeholders})
+        """,
+        [guild_id, *user_ids],
+    ).fetchall()
+    return {
+        int(row["user_id"]): MemberActivity(
+            user_id=int(row["user_id"]),
+            channel_id=int(row["last_channel_id"]),
+            message_id=int(row["last_message_id"]),
+            created_at=float(row["last_message_at"]),
+        )
+        for row in rows
+    }
 
 
 def update_pair_state(state: PairState | None, author_id: int) -> tuple[PairState, int]:

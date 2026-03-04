@@ -10,6 +10,7 @@ from xp_system import (
     XP_SOURCE_VOICE,
     apply_xp_award,
     calculate_message_xp,
+    get_member_last_activity_map,
     get_xp_distribution_stats,
     get_oldest_xp_event_timestamp,
     get_member_xp_state,
@@ -21,6 +22,7 @@ from xp_system import (
     level_for_xp,
     mark_message_processed,
     qualified_words,
+    record_member_activity,
     record_xp_event,
     xp_required_for_level,
 )
@@ -74,10 +76,12 @@ class XpSystemTests(unittest.TestCase):
         self.assertEqual(state.last_message_at, 123.0)
         self.assertEqual(state.last_message_norm, "alpha beta")
 
-    def test_level_for_xp_uses_exponential_thresholds(self):
+    def test_level_for_xp_uses_sqrt_thresholds(self):
         level_4_threshold = xp_required_for_level(4, DEFAULT_XP_SETTINGS)
         level_5_threshold = xp_required_for_level(5, DEFAULT_XP_SETTINGS)
 
+        self.assertEqual(level_4_threshold, 36.0)
+        self.assertEqual(level_5_threshold, 64.0)
         self.assertEqual(level_for_xp(level_4_threshold - 0.01, DEFAULT_XP_SETTINGS), 3)
         self.assertEqual(level_for_xp(level_4_threshold, DEFAULT_XP_SETTINGS), 4)
         self.assertEqual(level_for_xp(level_5_threshold - 0.01, DEFAULT_XP_SETTINGS), 4)
@@ -177,6 +181,22 @@ class XpSystemTests(unittest.TestCase):
 
         self.assertTrue(is_message_processed(conn, guild_id=1, message_id=123))
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM processed_messages").fetchone()[0], 1)
+
+    def test_member_activity_keeps_latest_message_per_member(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        init_xp_tables(conn)
+
+        record_member_activity(conn, guild_id=1, user_id=10, channel_id=100, message_id=1000, created_at=200.0)
+        record_member_activity(conn, guild_id=1, user_id=10, channel_id=101, message_id=1001, created_at=150.0)
+        record_member_activity(conn, guild_id=1, user_id=10, channel_id=102, message_id=1002, created_at=300.0)
+        record_member_activity(conn, guild_id=1, user_id=11, channel_id=103, message_id=1003, created_at=250.0)
+
+        activities = get_member_last_activity_map(conn, guild_id=1, user_ids=[10, 11, 12])
+
+        self.assertEqual(sorted(activities.keys()), [10, 11])
+        self.assertEqual((activities[10].channel_id, activities[10].message_id, activities[10].created_at), (102, 1002, 300.0))
+        self.assertEqual((activities[11].channel_id, activities[11].message_id, activities[11].created_at), (103, 1003, 250.0))
 
     def test_oldest_xp_event_timestamp_filters_by_source(self):
         conn = sqlite3.connect(":memory:")

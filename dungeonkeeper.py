@@ -34,6 +34,7 @@ from xp_system import (
     has_any_member_xp,
     has_any_xp_events,
     get_member_xp_state,
+    get_member_last_activity_map,
     get_xp_leaderboard,
     get_user_xp_standing,
     get_voice_session,
@@ -44,6 +45,7 @@ from xp_system import (
     mark_message_processed,
     normalize_message_content,
     record_xp_event,
+    record_member_activity,
     set_voice_session,
     update_pair_state,
 )
@@ -334,6 +336,17 @@ async def on_message(message: discord.Message):
         log=log,
     ):
         return
+
+    message_ts = message.created_at.timestamp() if message.created_at else time.time()
+    with open_db() as conn:
+        record_member_activity(
+            conn,
+            message.guild.id,
+            message.author.id,
+            message.channel.id,
+            message.id,
+            message_ts,
+        )
 
     await award_message_xp(message)
 
@@ -1365,9 +1378,11 @@ report_ctx = SimpleNamespace(
     model=MODEL,
     bigmodel=BIGMODEL,
     mod_channel_id=MOD_CHANNEL_ID,
+    open_db=open_db,
     get_bot_member=get_bot_member,
     get_guild_channel_or_thread=get_guild_channel_or_thread,
     get_interaction_member=get_interaction_member,
+    get_member_last_activity_map=get_member_last_activity_map,
     is_mod=is_mod,
 )
 register_reports(bot, report_ctx)

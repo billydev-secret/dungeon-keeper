@@ -267,6 +267,17 @@ async def send_markdown(channel: discord.TextChannel | discord.Thread, text: str
         await channel.send(f"```markdown\n{chunk}\n```")
 
 
+def format_member_activity_line(member: discord.Member, activity) -> str:
+    if activity is None:
+        return f"{member.display_name} - no recorded message yet"
+
+    created_at = int(activity.created_at)
+    return (
+        f"{member.display_name} - last seen <t:{created_at}:R> "
+        f"(<t:{created_at}:f>) in <#{activity.channel_id}>"
+    )
+
+
 def register_reports(bot: discord.Client, ctx) -> None:
     @bot.tree.command(name="summarize", description="Summarize this channel over a time window.", guild=discord.Object(id=ctx.guild_id) if ctx.debug else None)
     @app_commands.describe(hours="How many hours back to summarize (e.g., 24, 72).")
@@ -328,27 +339,18 @@ def register_reports(bot: discord.Client, ctx) -> None:
         if guild is None:
             await interaction.followup.send("This command only works in a server.", ephemeral=True)
             return
-        me = ctx.get_bot_member(guild)
-        if me is None:
-            await interaction.followup.send("Bot member context is unavailable right now.", ephemeral=True)
-            return
-
         cutoff = discord.utils.utcnow() - datetime.timedelta(days=days)
-        role_members = set(role.members)
-        active_members = set()
-        for channel in guild.text_channels:
-            if not channel.permissions_for(me).read_message_history:
-                continue
-            try:
-                async for message in channel.history(after=cutoff, limit=None):
-                    if message.author in role_members:
-                        active_members.add(message.author)
-                    if active_members == role_members:
-                        break
-            except discord.Forbidden:
-                continue
+        cutoff_ts = cutoff.timestamp()
+        role_members = sorted(role.members, key=lambda current: current.display_name.lower())
+        role_member_ids = [current.id for current in role_members]
+        with ctx.open_db() as conn:
+            activities = ctx.get_member_last_activity_map(conn, guild.id, role_member_ids)
 
-        inactive_members = role_members - active_members
+        inactive_members = [
+            current
+            for current in role_members
+            if activities.get(current.id) is None or activities[current.id].created_at < cutoff_ts
+        ]
         total = len(role_members)
         inactive_count = len(inactive_members)
         percent = (inactive_count / total * 100) if total else 0
@@ -356,15 +358,18 @@ def register_reports(bot: discord.Client, ctx) -> None:
             f"**Role Activity Report — {role.name} ({days} days)**\n"
             f"Total Members: {total}\n"
             f"Inactive: {inactive_count} ({percent:.1f}%)\n"
+            f"Tracking Coverage: {len(activities)}/{total}\n"
             f"----------------------------------\n"
         )
         if inactive_members:
-            names = "\n".join(m.display_name for m in inactive_members)
-            if len(names) > 1800:
-                names = names[:1800] + "\n... (truncated)"
-            summary += "\n**Inactive Members:**\n" + names
+            block = "\n".join(format_member_activity_line(current, activities.get(current.id)) for current in inactive_members)
+            if len(block) > 1800:
+                block = block[:1800] + "\n... (truncated)"
+            summary += "\n**Inactive Members:**\n" + block
         else:
             summary += "\nAll members active in this period."
+        if any(current.id not in activities for current in inactive_members):
+            summary += "\n\nSome members have no recorded message yet because activity tracking starts after this version is deployed."
         await interaction.followup.send(summary)
 
     @bot.tree.command(name="user_review", description="Review a user's recent message history (for promotions/mod check-ins).", guild=discord.Object(id=ctx.guild_id) if ctx.debug else None)
