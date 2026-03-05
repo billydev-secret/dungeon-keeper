@@ -2,6 +2,7 @@ import asyncio
 import discord
 import logging
 import os
+import re
 import sqlite3
 import time
 
@@ -75,15 +76,25 @@ MAX_MESSAGES = 400           # hard cap on messages pulled
 MAX_CHARS_PER_MSG = 240      # truncate each message
 MAX_TOTAL_CHARS = 40_000     # cap payload size to the model
 
-AUTO_DELETE_AGE_SECONDS: dict[str, int] = {
-    "30days": 30 * 24 * 60 * 60,
-    "2hours": 2 * 60 * 60,
-    "15minutes": 15 * 60,
+AUTO_DELETE_RUN_KEYWORDS: dict[str, str] = {
+    "once": "once",
+    "now": "once",
+    "manual": "once",
+    "off": "off",
+    "disable": "off",
+    "none": "off",
 }
-AUTO_DELETE_INTERVAL_SECONDS: dict[str, int] = {
+AUTO_DELETE_NAMED_INTERVALS: dict[str, int] = {
     "hourly": 60 * 60,
     "daily": 24 * 60 * 60,
+    "weekly": 7 * 24 * 60 * 60,
 }
+AUTO_DELETE_DURATION_RE = re.compile(
+    r"(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)",
+    re.IGNORECASE,
+)
+AUTO_DELETE_MIN_AGE_SECONDS = 60
+AUTO_DELETE_MIN_INTERVAL_SECONDS = 60
 AUTO_DELETE_POLL_SECONDS = 60
 AUTO_DELETE_DELETE_PAUSE_SECONDS = 0.35
 
@@ -1029,6 +1040,87 @@ def list_auto_delete_rules() -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def list_auto_delete_rules_for_guild(guild_id: int) -> list[sqlite3.Row]:
+    with open_db() as conn:
+        return conn.execute(
+            """
+            SELECT guild_id, channel_id, max_age_seconds, interval_seconds, last_run_ts
+            FROM auto_delete_rules
+            WHERE guild_id = ?
+            ORDER BY channel_id
+            """,
+            (guild_id,),
+        ).fetchall()
+
+
+def format_duration_seconds(seconds: int) -> str:
+    if seconds <= 0:
+        return "0s"
+    units = (
+        (24 * 60 * 60, "day"),
+        (60 * 60, "hour"),
+        (60, "minute"),
+    )
+    for unit_seconds, unit_label in units:
+        if seconds % unit_seconds == 0:
+            amount = seconds // unit_seconds
+            suffix = "" if amount == 1 else "s"
+            return f"{amount} {unit_label}{suffix}"
+    return f"{seconds} seconds"
+
+
+def parse_duration_seconds(value: str) -> int | None:
+    text = value.strip().lower()
+    if not text:
+        return None
+    if text in AUTO_DELETE_NAMED_INTERVALS:
+        return AUTO_DELETE_NAMED_INTERVALS[text]
+
+    total = 0
+    cursor = 0
+    for match in AUTO_DELETE_DURATION_RE.finditer(text):
+        separator = text[cursor:match.start()]
+        if separator.strip():
+            return None
+
+        amount = int(match.group(1))
+        unit = match.group(2).lower()
+        if unit.startswith("w"):
+            multiplier = 7 * 24 * 60 * 60
+        elif unit.startswith("d"):
+            multiplier = 24 * 60 * 60
+        elif unit.startswith("h"):
+            multiplier = 60 * 60
+        elif unit.startswith("m"):
+            multiplier = 60
+        else:
+            multiplier = 1
+        total += amount * multiplier
+        cursor = match.end()
+
+    if cursor == 0:
+        return None
+
+    if text[cursor:].strip():
+        return None
+
+    return total if total > 0 else None
+
+
+async def send_ephemeral_text_chunks(interaction: discord.Interaction, text: str, chunk_size: int = 1900) -> None:
+    remaining = text
+    while remaining:
+        if len(remaining) <= chunk_size:
+            await interaction.followup.send(remaining, ephemeral=True)
+            return
+        split_at = remaining.rfind("\n", 0, chunk_size + 1)
+        if split_at <= 0:
+            split_at = chunk_size
+        chunk = remaining[:split_at]
+        remaining = remaining[split_at:].lstrip("\n")
+        await interaction.followup.send(chunk, ephemeral=True)
+
+
 async def delete_messages_older_than(
     channel: GuildTextLike,
     cutoff: datetime,
@@ -1189,7 +1281,8 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
                     ("/xp_give_allowed", "List users allowed to use /xp_give."),
                     ("/xp_set_levelup_log_here", "Set the per-level-up log channel."),
                     ("/xp_set_level5_log_here", "Set the special level 5 log channel."),
-                    ("/auto_delete", "Delete old posts here and optionally schedule hourly/daily cleanup."),
+                    ("/auto_delete", "Delete old posts and optionally schedule cleanup with custom intervals."),
+                    ("/auto_delete_configs", "List active auto-delete schedules for this server."),
                     ("/xp_exclude_here", "Disable XP gain in this channel."),
                     ("/xp_include_here", "Re-enable XP gain in this channel."),
                     ("/xp_excluded_channels", "List channels where XP is disabled."),
@@ -1707,13 +1800,13 @@ async def xp_set_level5_log_here(interaction: discord.Interaction):
     guild=discord.Object(id=GUILD_ID) if DEBUG else None
 )
 @app_commands.describe(
-    del_age="Delete posts older than this age.",
-    run="Run once now, schedule hourly/daily, or turn scheduled cleanup off for this channel.",
+    del_age="Delete posts older than this duration (examples: 30d, 2h, 15m, 1h30m).",
+    run="Run once, disable schedule, or set interval (examples: once, off, 1h, 30m, 1d).",
 )
 async def auto_delete(
     interaction: discord.Interaction,
-    del_age: Literal["30days", "2hours", "15minutes"] = "30days",
-    run: Literal["once", "hourly", "daily", "off"] = "once",
+    del_age: str = "30d",
+    run: str = "once",
 ):
     if not is_mod(interaction):
         await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
@@ -1740,9 +1833,41 @@ async def auto_delete(
         )
         return
 
+    age_seconds = parse_duration_seconds(del_age)
+    if age_seconds is None:
+        await interaction.response.send_message(
+            "Invalid `del_age`. Use durations like `30d`, `2h`, `15m`, or `1h30m`.",
+            ephemeral=True,
+        )
+        return
+    if age_seconds < AUTO_DELETE_MIN_AGE_SECONDS:
+        await interaction.response.send_message(
+            f"`del_age` must be at least {format_duration_seconds(AUTO_DELETE_MIN_AGE_SECONDS)}.",
+            ephemeral=True,
+        )
+        return
+
+    run_token = run.strip().lower()
+    schedule_mode = AUTO_DELETE_RUN_KEYWORDS.get(run_token)
+    interval_seconds: int | None = None
+    if schedule_mode is None:
+        interval_seconds = parse_duration_seconds(run_token)
+        if interval_seconds is None:
+            await interaction.response.send_message(
+                "Invalid `run`. Use `once`, `off`, or a duration like `30m`, `1h`, `1d`.",
+                ephemeral=True,
+            )
+            return
+        if interval_seconds < AUTO_DELETE_MIN_INTERVAL_SECONDS:
+            await interaction.response.send_message(
+                f"`run` interval must be at least {format_duration_seconds(AUTO_DELETE_MIN_INTERVAL_SECONDS)}.",
+                ephemeral=True,
+            )
+            return
+        schedule_mode = "schedule"
+
     await interaction.response.defer(ephemeral=True, thinking=True)
 
-    age_seconds = AUTO_DELETE_AGE_SECONDS[del_age]
     cutoff = discord.utils.utcnow() - timedelta(seconds=age_seconds)
     actor = get_interaction_member(interaction)
     reason = f"Auto-delete requested by {format_user_for_log(actor, interaction.user.id)}"
@@ -1761,8 +1886,7 @@ async def auto_delete(
         return
 
     schedule_status = "Recurring cleanup unchanged."
-    if run in AUTO_DELETE_INTERVAL_SECONDS:
-        interval_seconds = AUTO_DELETE_INTERVAL_SECONDS[run]
+    if schedule_mode == "schedule" and interval_seconds is not None:
         upsert_auto_delete_rule(
             guild.id,
             channel.id,
@@ -1770,8 +1894,11 @@ async def auto_delete(
             interval_seconds,
             last_run_ts=time.time(),
         )
-        schedule_status = f"Recurring cleanup enabled: `{run}` (age `{del_age}`)."
-    elif run == "off":
+        schedule_status = (
+            f"Recurring cleanup enabled: every `{format_duration_seconds(interval_seconds)}` "
+            f"(age `{format_duration_seconds(age_seconds)}`)."
+        )
+    elif schedule_mode == "off":
         removed = remove_auto_delete_rule(guild.id, channel.id)
         schedule_status = (
             "Recurring cleanup disabled for this channel."
@@ -1784,22 +1911,72 @@ async def auto_delete(
         format_user_for_log(actor, interaction.user.id),
         channel.mention,
         channel.id,
-        del_age,
+        age_seconds,
         deleted,
         scanned,
         skipped_pinned,
         failed,
-        run,
+        run_token,
     )
 
     await interaction.followup.send(
         (
-            f"Deleted **{deleted}** messages older than `{del_age}` in {channel.mention}.\n"
+            f"Deleted **{deleted}** messages older than `{format_duration_seconds(age_seconds)}` in {channel.mention}.\n"
             f"Scanned: `{scanned}` | Pinned skipped: `{skipped_pinned}` | Failed: `{failed}`\n"
             f"{schedule_status}"
         ),
         ephemeral=True,
     )
+
+
+@bot.tree.command(
+    name="auto_delete_configs",
+    description="List active auto-delete schedules for this server.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def auto_delete_configs(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+
+    rules = list_auto_delete_rules_for_guild(guild.id)
+    if not rules:
+        await interaction.response.send_message("No active auto-delete schedules are configured in this server.", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    lines = [f"**Active Auto-Delete Schedules ({len(rules)})**", ""]
+    for index, rule in enumerate(rules, start=1):
+        channel_id = int(rule["channel_id"])
+        channel = get_guild_channel_or_thread(guild, channel_id)
+        channel_label = channel.mention if channel is not None else f"<#{channel_id}> (missing)"
+
+        age_seconds = int(rule["max_age_seconds"])
+        interval_seconds = int(rule["interval_seconds"])
+        age_label = format_duration_seconds(age_seconds)
+        interval_label = format_duration_seconds(interval_seconds)
+
+        last_run_ts = float(rule["last_run_ts"])
+        if last_run_ts > 0:
+            last_run_display = f"<t:{int(last_run_ts)}:R>"
+            next_run_ts = int(last_run_ts + interval_seconds)
+            next_run_display = f"<t:{next_run_ts}:R>"
+        else:
+            last_run_display = "never"
+            next_run_display = "as soon as the scheduler runs"
+
+        lines.append(
+            f"{index}. {channel_label} | age `{age_label}` | every `{interval_label}`\n"
+            f"Last run: {last_run_display} | Next run: {next_run_display}"
+        )
+
+    await send_ephemeral_text_chunks(interaction, "\n\n".join(lines))
 
 
 @bot.tree.command(
