@@ -266,9 +266,22 @@ class Bot(discord.Client):
 
     async def setup_hook(self):
         if DEBUG:
-            guild = discord.Object(id=GUILD_ID)
-            await self.tree.sync(guild=guild)
-            print("Synced commands to development guild.")
+            if GUILD_ID <= 0:
+                log.warning("DEBUG is enabled but guild_id=%s is invalid; falling back to global sync.", GUILD_ID)
+                await self.tree.sync()
+                print("Synced commands globally (fallback).")
+            else:
+                guild = discord.Object(id=GUILD_ID)
+                try:
+                    await self.tree.sync(guild=guild)
+                    print("Synced commands to development guild.")
+                except discord.Forbidden:
+                    log.warning(
+                        "Guild command sync failed for guild_id=%s (Missing Access). Falling back to global sync.",
+                        GUILD_ID,
+                    )
+                    await self.tree.sync()
+                    print("Synced commands globally (fallback).")
         else:
             await self.tree.sync()
             print("Synced commands globally.")
