@@ -1220,7 +1220,7 @@ def format_help_lines(command_specs: list[tuple[str, str]]) -> str:
 def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
     embed = discord.Embed(
         title="Dungeon Keeper Help",
-        description="Available slash commands for this bot.",
+        description="Command guide for this server. Use the examples as templates and change the values.",
         color=discord.Color.blurple(),
     )
 
@@ -1228,8 +1228,8 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
         name="General",
         value=format_help_lines(
             [
-                ("/help", "Show this help message."),
-                ("/xp_leaderboards", "Show XP leaderboards and your standing."),
+                ("/help", "Show this guide."),
+                ("/xp_leaderboards timescale:week", "View top XP and your rank for a time window."),
             ]
         ),
         inline=False,
@@ -1240,7 +1240,7 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
             name="Greeter",
             value=format_help_lines(
                 [
-                    ("/grant_denizen", "Grant the configured Denizen role to a member."),
+                    ("/grant_denizen member:@user", "Give the configured Denizen role to one member."),
                 ]
             ),
             inline=False,
@@ -1251,7 +1251,7 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
             name="XP Grant",
             value=format_help_lines(
                 [
-                    ("/xp_give", "Give a member 20 XP."),
+                    ("/xp_give member:@user", "Give 20 XP manually to one member."),
                 ]
             ),
             inline=False,
@@ -1262,10 +1262,10 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
             name="Moderation",
             value=format_help_lines(
                 [
-                    ("/summarize", "Summarize the current channel for moderators."),
-                    ("/listrole", "List all members in a role."),
-                    ("/inactive_role", "Report inactivity for a role."),
-                    ("/user_review", "Review a member's recent activity for moderators."),
+                    ("/summarize hours:24", "AI summary of this channel for the last N hours."),
+                    ("/listrole role:@Role", "List members who currently have a role."),
+                    ("/inactive_role role:@Role days:7", "Show role members inactive in the last N days."),
+                    ("/user_review member:@user hours:168", "Review a member's recent posts for mod decisions."),
                 ]
             ),
             inline=False,
@@ -1274,25 +1274,33 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
             name="Configuration",
             value=format_help_lines(
                 [
-                    ("/set_greeter_role", "Set which role can use /grant_denizen."),
-                    ("/set_denizen_role", "Set which role /grant_denizen assigns."),
-                    ("/xp_give_allow", "Allow a user to use /xp_give."),
-                    ("/xp_give_disallow", "Remove a user from /xp_give access."),
-                    ("/xp_give_allowed", "List users allowed to use /xp_give."),
-                    ("/xp_set_levelup_log_here", "Set the per-level-up log channel."),
-                    ("/xp_set_level5_log_here", "Set the special level 5 log channel."),
-                    ("/auto_delete", "Delete old posts and optionally schedule cleanup with custom intervals."),
-                    ("/auto_delete_configs", "List active auto-delete schedules for this server."),
-                    ("/xp_exclude_here", "Disable XP gain in this channel."),
-                    ("/xp_include_here", "Re-enable XP gain in this channel."),
-                    ("/xp_excluded_channels", "List channels where XP is disabled."),
-                    ("/xp_backfill_history", "Backfill historical message XP."),
+                    ("/set_greeter_role role:@Role", "Choose who can run /grant_denizen."),
+                    ("/set_denizen_role role:@Role", "Choose which role /grant_denizen gives."),
+                    ("/xp_give_allow member:@user", "Allow a member to run /xp_give."),
+                    ("/xp_give_disallow member:@user", "Remove /xp_give access from a member."),
+                    ("/xp_give_allowed", "Show current /xp_give allowlist."),
+                    ("/xp_set_levelup_log_here", "Run in a channel/thread to receive all level-up posts."),
+                    ("/xp_set_level5_log_here", "Run in a channel/thread for level 5 alerts."),
+                    ("/auto_delete del_age:30d run:1d", "Delete old posts now and schedule repeats."),
+                    ("/auto_delete_configs", "List active auto-delete schedules in this server."),
+                    ("/xp_exclude_here", "Disable XP gain in this channel/thread."),
+                    ("/xp_include_here", "Re-enable XP gain in this channel/thread."),
+                    ("/xp_excluded_channels", "List channels/threads where XP is off."),
+                    ("/xp_backfill_history days:30", "Import historical message XP for the last N days."),
                 ]
             ),
             inline=False,
         )
+        embed.add_field(
+            name="Auto-Delete Notes",
+            value=(
+                "`del_age` accepts values like `15m`, `2h`, `30d`, `1h30m`.\n"
+                "`run` accepts `once`, `off`, or a duration like `30m`, `1h`, `1d`."
+            ),
+            inline=False,
+        )
 
-    embed.set_footer(text="Slash commands also show descriptions in Discord's command picker.")
+    embed.set_footer(text="Tip: Discord command prompts show parameter hints while you type.")
     return embed
 
 
@@ -1360,7 +1368,7 @@ def build_xp_leaderboard_embed(
 
 @bot.tree.command(
     name="help",
-    description="Show available bot commands.",
+    description="Show command guide and examples.",
     guild=discord.Object(id=GUILD_ID) if DEBUG else None
 )
 async def help_command(interaction: discord.Interaction):
