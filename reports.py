@@ -267,6 +267,13 @@ async def send_markdown(channel: discord.TextChannel | discord.Thread, text: str
         await channel.send(f"```markdown\n{chunk}\n```")
 
 
+async def send_ephemeral_markdown(interaction: discord.Interaction, text: str) -> None:
+    while text:
+        chunk = text[:1800]
+        text = text[1800:]
+        await interaction.followup.send(f"```markdown\n{chunk}\n```", ephemeral=True)
+
+
 def format_member_activity_line(member: discord.Member, activity) -> str:
     if activity is None:
         return f"{member.display_name} - no recorded message yet"
@@ -307,13 +314,7 @@ def register_reports(bot: discord.Client, ctx) -> None:
             return
 
         summary = await llm_summarize(ctx, channel.name, build_transcript(lines), hours)
-        mod_channel = ctx.get_guild_channel_or_thread(interaction.guild, ctx.mod_channel_id) if interaction.guild else None
-        if mod_channel:
-            await mod_channel.send(f"Summary requested by {interaction.user.mention} for {channel.mention}:")
-            await send_markdown(mod_channel, summary)
-            await interaction.followup.send("Posted summary to the mod channel.", ephemeral=True)
-            return
-        await interaction.followup.send(f"```markdown\n{summary}\n```", ephemeral=True)
+        await send_ephemeral_markdown(interaction, summary)
 
     @bot.tree.command(name="listrole", description="List all members in a role", guild=discord.Object(id=ctx.guild_id) if ctx.debug else None)
     @app_commands.describe(role="The role to inspect")
@@ -324,7 +325,7 @@ def register_reports(bot: discord.Client, ctx) -> None:
         output = "\n".join(member.display_name for member in role.members)
         if len(output) > 1900:
             output = output[:1900] + "\n... (truncated)"
-        await interaction.response.send_message(f"**Members in {role.name}:**\n{output}")
+        await interaction.response.send_message(f"**Members in {role.name}:**\n{output}", ephemeral=True)
 
     @bot.tree.command(name="inactive_role", description="Report inactivity for a role", guild=discord.Object(id=ctx.guild_id) if ctx.debug else None)
     @app_commands.describe(role="Role to analyze", days="Number of days to check (default 7)")
@@ -333,7 +334,7 @@ def register_reports(bot: discord.Client, ctx) -> None:
         if member is None or not member.guild_permissions.manage_roles:
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
             return
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         guild = interaction.guild
         if guild is None:
@@ -370,7 +371,7 @@ def register_reports(bot: discord.Client, ctx) -> None:
             summary += "\nAll members active in this period."
         if any(current.id not in activities for current in inactive_members):
             summary += "\n\nSome members have no recorded message yet because activity tracking starts after this version is deployed."
-        await interaction.followup.send(summary)
+        await interaction.followup.send(summary, ephemeral=True)
 
     @bot.tree.command(name="user_review", description="Review a user's recent message history (for promotions/mod check-ins).", guild=discord.Object(id=ctx.guild_id) if ctx.debug else None)
     @app_commands.describe(member="User to review", hours="How many hours back (default 168 = 7 days)", max_msgs="Max messages to include (default 200)")
@@ -395,17 +396,16 @@ def register_reports(bot: discord.Client, ctx) -> None:
             await interaction.followup.send("LLM analysis failed.", ephemeral=True)
             return
 
-        mod_channel = ctx.get_guild_channel_or_thread(guild, ctx.mod_channel_id)
-        if mod_channel is None:
-            await interaction.followup.send("Mod channel is not configured as a text channel or thread.", ephemeral=True)
-            return
-
-        await mod_channel.send(
-            f"**User Review — {member.mention}**\n"
-            f"Window: last {hours}h | Messages: {stats['found']} | Channels: {stats['unique_channels_posted']}\n"
-            f"Requested by {interaction.user.mention}"
+        await interaction.followup.send(
+            (
+                f"**User Review - {member.mention}**\n"
+                f"Window: last {hours}h | Messages: {stats['found']} | Channels: {stats['unique_channels_posted']}\n"
+                f"Requested by {interaction.user.mention}"
+            ),
+            ephemeral=True,
         )
-        await mod_channel.send(f"```markdown\n{analysis.get('summary', 'No summary provided.')}\n```")
+
+        await send_ephemeral_markdown(interaction, analysis.get("summary", "No summary provided."))
 
         def build_quote_block(index_list, label):
             blocks = [f"**{label}"]
@@ -419,8 +419,6 @@ def register_reports(bot: discord.Client, ctx) -> None:
         poor_blocks = build_quote_block(analysis.get("poor_indices", []), "⚠️ Needs Review")
         good_blocks = build_quote_block(analysis.get("good_indices", []), "✅ Positive Conduct")
         if poor_blocks:
-            await mod_channel.send("\n\n".join(poor_blocks))
+            await send_ephemeral_markdown(interaction, "\n\n".join(poor_blocks))
         if good_blocks:
-            await mod_channel.send("\n\n".join(good_blocks))
-
-        await interaction.followup.send("Posted user review to the mod channel ✅", ephemeral=True)
+            await send_ephemeral_markdown(interaction, "\n\n".join(good_blocks))

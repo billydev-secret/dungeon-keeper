@@ -927,6 +927,87 @@ def format_xp_distribution_summary(member_count: int, median_xp: float, stddev_x
     )
 
 
+def format_help_lines(command_specs: list[tuple[str, str]]) -> str:
+    return "\n".join(f"`{name}` - {description}" for name, description in command_specs)
+
+
+def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
+    embed = discord.Embed(
+        title="Dungeon Keeper Help",
+        description="Available slash commands for this bot.",
+        color=discord.Color.blurple(),
+    )
+
+    embed.add_field(
+        name="General",
+        value=format_help_lines(
+            [
+                ("/help", "Show this help message."),
+                ("/xp_leaderboards", "Show XP leaderboards and your standing."),
+            ]
+        ),
+        inline=False,
+    )
+
+    if can_grant_denizen(interaction):
+        embed.add_field(
+            name="Greeter",
+            value=format_help_lines(
+                [
+                    ("/grant_denizen", "Grant the configured Denizen role to a member."),
+                ]
+            ),
+            inline=False,
+        )
+
+    if can_use_xp_grant(interaction):
+        embed.add_field(
+            name="XP Grant",
+            value=format_help_lines(
+                [
+                    ("/xp_give", "Give a member 20 XP."),
+                ]
+            ),
+            inline=False,
+        )
+
+    if is_mod(interaction):
+        embed.add_field(
+            name="Moderation",
+            value=format_help_lines(
+                [
+                    ("/summarize", "Summarize the current channel for moderators."),
+                    ("/listrole", "List all members in a role."),
+                    ("/inactive_role", "Report inactivity for a role."),
+                    ("/user_review", "Review a member's recent activity for moderators."),
+                ]
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Configuration",
+            value=format_help_lines(
+                [
+                    ("/set_greeter_role", "Set which role can use /grant_denizen."),
+                    ("/set_denizen_role", "Set which role /grant_denizen assigns."),
+                    ("/xp_give_allow", "Allow a user to use /xp_give."),
+                    ("/xp_give_disallow", "Remove a user from /xp_give access."),
+                    ("/xp_give_allowed", "List users allowed to use /xp_give."),
+                    ("/xp_set_levelup_log_here", "Set the per-level-up log channel."),
+                    ("/xp_set_level5_log_here", "Set the special level 5 log channel."),
+                    ("/xp_exclude_here", "Disable XP gain in this channel."),
+                    ("/xp_include_here", "Re-enable XP gain in this channel."),
+                    ("/xp_excluded_channels", "List channels where XP is disabled."),
+                    ("/xp_backfill_history", "Backfill historical message XP."),
+                ]
+            ),
+            inline=False,
+        )
+
+    embed.set_footer(text="Slash commands also show descriptions in Discord's command picker.")
+    return embed
+
+
 def build_xp_leaderboard_embed(
     guild: discord.Guild,
     caller: discord.Member,
@@ -987,6 +1068,16 @@ def build_xp_leaderboard_embed(
 
     embed.set_footer(text="Top 5 by XP source with your standing")
     return embed
+
+
+@bot.tree.command(
+    name="help",
+    description="Show available bot commands.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def help_command(interaction: discord.Interaction):
+    await interaction.response.send_message(embed=build_help_embed(interaction), ephemeral=True)
+
 
 @bot.tree.command(
     name="xp_backfill_history",
