@@ -340,7 +340,7 @@ def register_reports(bot: discord.Client, ctx) -> None:
         if guild is None:
             await interaction.followup.send("This command only works in a server.", ephemeral=True)
             return
-        cutoff = discord.utils.utcnow() - datetime.timedelta(days=days)
+        cutoff = discord.utils.utcnow() - timedelta(days=days)
         cutoff_ts = cutoff.timestamp()
         role_members = sorted(role.members, key=lambda current: current.display_name.lower())
         role_member_ids = [current.id for current in role_members]
