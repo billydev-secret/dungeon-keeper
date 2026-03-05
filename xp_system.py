@@ -1,21 +1,11 @@
 from __future__ import annotations
 
-import asyncio
-import discord
 import math
 import re
 import sqlite3
 import statistics
 import time
-
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from discord import app_commands
-from typing import Literal
-
-from app_context import AppContext
-from post_monitoring import message_has_qualifying_image
-
 
 URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 CUSTOM_EMOJI_RE = re.compile(r"<a?:[A-Za-z0-9_]+:\d+>$")
@@ -587,7 +577,8 @@ def update_pair_state(state: PairState | None, author_id: int) -> tuple[PairStat
     if author_id == state.last_author_id:
         return PairState(last_author_id=author_id), 0
 
-    pair = tuple(sorted((author_id, state.last_author_id)))
+    first_id, second_id = sorted((author_id, state.last_author_id))
+    pair = (first_id, second_id)
     if state.active_pair == pair:
         streak = state.alternating_streak + 1
     else:

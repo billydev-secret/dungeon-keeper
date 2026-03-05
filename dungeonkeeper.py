@@ -1,56 +1,56 @@
 import asyncio
-import discord
 import logging
 import os
 import re
 import sqlite3
 import time
-
-from typing import Literal, TypeAlias
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Literal, TypeAlias, TypedDict, cast
+
+import discord
 from discord import app_commands
 from dotenv import load_dotenv
 from openai import OpenAI
-from pathlib import Path
-from types import SimpleNamespace
-from post_monitoring import message_has_qualifying_image, enforce_spoiler_requirement
+
+from post_monitoring import enforce_spoiler_requirement, message_has_qualifying_image
 from reports import register_reports
 from xp_system import (
-    AwardResult,
     DEFAULT_XP_SETTINGS,
-    MessageXpContext,
-    PairState,
     XP_SOURCE_GRANT,
     XP_SOURCE_IMAGE_REACT,
     XP_SOURCE_REPLY,
     XP_SOURCE_TEXT,
     XP_SOURCE_VOICE,
+    AwardResult,
+    MessageXpContext,
+    PairState,
     apply_xp_award,
     calculate_message_xp,
     completed_voice_intervals,
     count_xp_events,
     delete_voice_session,
-    get_xp_distribution_stats,
-    get_oldest_xp_event_timestamp,
-    has_any_member_xp,
-    has_any_xp_events,
-    get_member_xp_state,
     get_member_last_activity_map,
-    get_xp_leaderboard,
+    get_member_xp_state,
+    get_oldest_xp_event_timestamp,
     get_user_xp_standing,
     get_voice_session,
+    get_xp_distribution_stats,
+    get_xp_leaderboard,
+    has_any_member_xp,
+    has_any_xp_events,
     init_xp_tables,
     is_channel_xp_eligible,
     is_message_processed,
     list_voice_sessions,
     mark_message_processed,
     normalize_message_content,
-    record_xp_event,
     record_member_activity,
+    record_xp_event,
     set_voice_session,
     update_pair_state,
 )
-
 
 # ==============================
 # Configuration
@@ -71,6 +71,21 @@ MODEL = "gpt-5-nano"
 BIGMODEL = "gpt-5.2-2025-12-11"
 XP_SETTINGS = DEFAULT_XP_SETTINGS
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
+
+
+class RuntimeConfig(TypedDict):
+    guild_id: int
+    mod_channel_id: int
+    debug: bool
+    xp_level_5_role_id: int
+    xp_level_5_log_channel_id: int
+    xp_level_up_log_channel_id: int
+    greeter_role_id: int
+    denizen_role_id: int
+    spoiler_required_channels: set[int]
+    bypass_role_ids: set[int]
+    xp_grant_allowed_user_ids: set[int]
+    xp_excluded_channel_ids: set[int]
 
 MAX_MESSAGES = 400           # hard cap on messages pulled
 MAX_CHARS_PER_MSG = 240      # truncate each message
@@ -98,13 +113,6 @@ AUTO_DELETE_MIN_INTERVAL_SECONDS = 60
 AUTO_DELETE_POLL_SECONDS = 60
 AUTO_DELETE_DELETE_PAUSE_SECONDS = 0.35
 
-def parse_id_set(value: str | None) -> set[int]:
-    if not value:
-        return set()
-    # supports "1,2,3" (with optional spaces/newlines)
-    parts = [p.strip() for p in value.replace("\n", ",").split(",")]
-    return {int(p) for p in parts if p}
-
 def parse_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
@@ -118,53 +126,6 @@ def open_db() -> sqlite3.Connection:
     return conn
 
 def init_config_db() -> None:
-    bootstrap: dict[str, str] = {}
-    bootstrap_sets: dict[str, set[int]] = {}
-
-    mod_channel_id = os.getenv("MOD_CHANNEL_ID")
-    if mod_channel_id is not None:
-        bootstrap["mod_channel_id"] = mod_channel_id
-
-    debug_env = os.getenv("DEBUG")
-    if debug_env is not None:
-        bootstrap["debug"] = "1" if parse_bool(debug_env, default=True) else "0"
-
-    level_5_role_id = os.getenv("XP_LEVEL_5_ROLE_ID")
-    if level_5_role_id is not None:
-        bootstrap["xp_level_5_role_id"] = level_5_role_id
-
-    level_5_log_channel_id = os.getenv("XP_LEVEL_5_LOG_CHANNEL_ID")
-    if level_5_log_channel_id is not None:
-        bootstrap["xp_level_5_log_channel_id"] = level_5_log_channel_id
-
-    level_up_log_channel_id = os.getenv("XP_LEVEL_UP_LOG_CHANNEL_ID")
-    if level_up_log_channel_id is not None:
-        bootstrap["xp_level_up_log_channel_id"] = level_up_log_channel_id
-
-    greeter_role_id = os.getenv("GREETER_ROLE_ID")
-    if greeter_role_id is not None:
-        bootstrap["greeter_role_id"] = greeter_role_id
-
-    denizen_role_id = os.getenv("DENIZEN_ROLE_ID")
-    if denizen_role_id is not None:
-        bootstrap["denizen_role_id"] = denizen_role_id
-
-    spoiler_channels = os.getenv("SPOILER_REQUIRED_CHANNELS")
-    if spoiler_channels is not None:
-        bootstrap_sets["spoiler_required_channels"] = parse_id_set(spoiler_channels)
-
-    bypass_role_ids = os.getenv("BYPASS_ROLE_IDS")
-    if bypass_role_ids is not None:
-        bootstrap_sets["bypass_role_ids"] = parse_id_set(bypass_role_ids)
-
-    xp_grant_allowed_user_ids = os.getenv("XP_GRANT_ALLOWED_USER_IDS")
-    if xp_grant_allowed_user_ids is not None:
-        bootstrap_sets["xp_grant_allowed_user_ids"] = parse_id_set(xp_grant_allowed_user_ids)
-
-    xp_excluded_channels = os.getenv("XP_EXCLUDED_CHANNEL_IDS")
-    if xp_excluded_channels is not None:
-        bootstrap_sets["xp_excluded_channel_ids"] = parse_id_set(xp_excluded_channels)
-
     with open_db() as conn:
         conn.execute(
             """
@@ -183,49 +144,6 @@ def init_config_db() -> None:
             )
             """
         )
-
-        for key, value in bootstrap.items():
-            existing = conn.execute(
-                "SELECT value FROM config WHERE key = ?",
-                (key,),
-            ).fetchone()
-            if existing and existing["value"] != value:
-                log.warning(
-                    "Config override from env for %s: db=%s env=%s",
-                    key,
-                    existing["value"],
-                    value,
-                )
-            conn.execute(
-                """
-                INSERT INTO config (key, value)
-                VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                (key, value),
-            )
-
-        for bucket, values in bootstrap_sets.items():
-            existing_rows = conn.execute(
-                "SELECT value FROM config_ids WHERE bucket = ? ORDER BY value",
-                (bucket,),
-            ).fetchall()
-            existing_values = {int(row["value"]) for row in existing_rows}
-            if existing_values and existing_values != values:
-                log.warning(
-                    "Config override from env for %s: db=%s env=%s",
-                    bucket,
-                    sorted(existing_values),
-                    sorted(values),
-                )
-            conn.execute(
-                "DELETE FROM config_ids WHERE bucket = ?",
-                (bucket,),
-            )
-            conn.executemany(
-                "INSERT INTO config_ids (bucket, value) VALUES (?, ?)",
-                [(bucket, value) for value in sorted(values)],
-            )
 
 def get_config_value(conn: sqlite3.Connection, key: str, default: str) -> str:
     row = conn.execute(
@@ -288,9 +206,10 @@ def init_auto_delete_tables(conn: sqlite3.Connection) -> None:
     )
 
 
-def load_runtime_config() -> dict[str, object]:
+def load_runtime_config() -> RuntimeConfig:
     with open_db() as conn:
         return {
+            "guild_id": int(get_config_value(conn, "guild_id", "0")),
             "mod_channel_id": int(get_config_value(conn, "mod_channel_id", "0")),
             "debug": parse_bool(get_config_value(conn, "debug", "1"), default=True),
             "xp_level_5_role_id": int(get_config_value(conn, "xp_level_5_role_id", "0")),
@@ -305,13 +224,13 @@ def load_runtime_config() -> dict[str, object]:
         }
 
 init_config_db()
-runtime_config = load_runtime_config()
+runtime_config: RuntimeConfig = load_runtime_config()
 
 with open_db() as conn:
     init_xp_tables(conn)
     init_auto_delete_tables(conn)
 
-GUILD_ID = int(os.getenv("GUILD_ID", "0"))
+GUILD_ID = runtime_config["guild_id"]
 MOD_CHANNEL_ID = runtime_config["mod_channel_id"]
 SPOILER_REQUIRED_CHANNELS = runtime_config["spoiler_required_channels"]
 DEBUG = runtime_config["debug"]
@@ -472,7 +391,11 @@ async def resolve_reply_target(message: discord.Message) -> discord.Message | No
     if not message.reference.message_id:
         return None
 
-    ref_channel = message.guild.get_channel(message.reference.channel_id) if message.guild else None
+    ref_channel: GuildTextLike | None = None
+    if message.guild is not None and message.reference.channel_id is not None:
+        candidate_channel = message.guild.get_channel(message.reference.channel_id)
+        if isinstance(candidate_channel, discord.TextChannel):
+            ref_channel = candidate_channel
     if ref_channel is None and isinstance(message.channel, (discord.TextChannel, discord.Thread)):
         ref_channel = message.channel
 
@@ -601,11 +524,15 @@ async def award_message_xp(message: discord.Message) -> None:
     if not message.guild or not isinstance(message.author, discord.Member):
         return
 
-    if not channel_is_xp_allowed(message.channel):
+    channel = message.channel
+    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+        return
+
+    if not channel_is_xp_allowed(channel):
         log.debug(
             "XP skipped for %s in #%s: channel excluded.",
             format_user_for_log(message.author),
-            getattr(message.channel, "id", "unknown"),
+            getattr(channel, "id", "unknown"),
         )
         return
 
@@ -618,9 +545,9 @@ async def award_message_xp(message: discord.Message) -> None:
 
     now_ts = message.created_at.timestamp() if message.created_at else time.time()
     normalized_content = normalize_message_content(message.content)
-    pair_state = bot.xp_pair_states.get(message.channel.id)
+    pair_state = bot.xp_pair_states.get(channel.id)
     next_pair_state, pair_streak = update_pair_state(pair_state, message.author.id)
-    bot.xp_pair_states[message.channel.id] = next_pair_state
+    bot.xp_pair_states[channel.id] = next_pair_state
 
     with open_db() as conn:
         state = get_member_xp_state(conn, message.guild.id, message.author.id, XP_SETTINGS)
@@ -1142,10 +1069,10 @@ async def delete_messages_older_than(
         if now_monotonic < next_delete_at:
             await asyncio.sleep(next_delete_at - now_monotonic)
         try:
+            delete_call = cast(Any, message.delete)
             try:
-                await message.delete(reason=reason)
+                await delete_call(reason=reason)
             except TypeError:
-                # Some gateway/library paths yield PartialMessage without a `reason` kwarg.
                 await message.delete()
             deleted += 1
             next_delete_at = time.monotonic() + AUTO_DELETE_DELETE_PAUSE_SECONDS
@@ -2124,4 +2051,6 @@ register_reports(bot, report_ctx)
 # Run
 # ==============================
 if __name__ == "__main__":
+    if not TOKEN:
+        raise RuntimeError("DISCORD_TOKEN is not set.")
     bot.run(TOKEN)

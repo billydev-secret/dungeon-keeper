@@ -1,24 +1,30 @@
 from __future__ import annotations
 
 import asyncio
-import discord
 import logging
-import os
 import sqlite3
-
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable, TypeAlias
+from typing import Any, Callable, Coroutine, TypeAlias, TypedDict
 
+import discord
 
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
 
-def parse_id_set(value: str | None) -> set[int]:
-    if not value:
-        return set()
-    parts = [p.strip() for p in value.replace("\n", ",").split(",")]
-    return {int(p) for p in parts if p}
+class RuntimeConfig(TypedDict):
+    guild_id: int
+    mod_channel_id: int
+    debug: bool
+    xp_level_5_role_id: int
+    xp_level_5_log_channel_id: int
+    xp_level_up_log_channel_id: int
+    greeter_role_id: int
+    denizen_role_id: int
+    spoiler_required_channels: set[int]
+    bypass_role_ids: set[int]
+    xp_grant_allowed_user_ids: set[int]
+    xp_excluded_channel_ids: set[int]
 
 
 def parse_bool(value: str | None, default: bool = False) -> bool:
@@ -48,54 +54,7 @@ def get_config_id_set(conn: sqlite3.Connection, bucket: str) -> set[int]:
     return {int(row["value"]) for row in rows}
 
 
-def init_config_db(db_path: Path, log: logging.Logger) -> None:
-    bootstrap: dict[str, str] = {}
-    bootstrap_sets: dict[str, set[int]] = {}
-
-    mod_channel_id = os.getenv("MOD_CHANNEL_ID")
-    if mod_channel_id is not None:
-        bootstrap["mod_channel_id"] = mod_channel_id
-
-    debug_env = os.getenv("DEBUG")
-    if debug_env is not None:
-        bootstrap["debug"] = "1" if parse_bool(debug_env, default=True) else "0"
-
-    level_5_role_id = os.getenv("XP_LEVEL_5_ROLE_ID")
-    if level_5_role_id is not None:
-        bootstrap["xp_level_5_role_id"] = level_5_role_id
-
-    level_5_log_channel_id = os.getenv("XP_LEVEL_5_LOG_CHANNEL_ID")
-    if level_5_log_channel_id is not None:
-        bootstrap["xp_level_5_log_channel_id"] = level_5_log_channel_id
-
-    level_up_log_channel_id = os.getenv("XP_LEVEL_UP_LOG_CHANNEL_ID")
-    if level_up_log_channel_id is not None:
-        bootstrap["xp_level_up_log_channel_id"] = level_up_log_channel_id
-
-    greeter_role_id = os.getenv("GREETER_ROLE_ID")
-    if greeter_role_id is not None:
-        bootstrap["greeter_role_id"] = greeter_role_id
-
-    denizen_role_id = os.getenv("DENIZEN_ROLE_ID")
-    if denizen_role_id is not None:
-        bootstrap["denizen_role_id"] = denizen_role_id
-
-    spoiler_channels = os.getenv("SPOILER_REQUIRED_CHANNELS")
-    if spoiler_channels is not None:
-        bootstrap_sets["spoiler_required_channels"] = parse_id_set(spoiler_channels)
-
-    bypass_role_ids = os.getenv("BYPASS_ROLE_IDS")
-    if bypass_role_ids is not None:
-        bootstrap_sets["bypass_role_ids"] = parse_id_set(bypass_role_ids)
-
-    xp_grant_allowed_user_ids = os.getenv("XP_GRANT_ALLOWED_USER_IDS")
-    if xp_grant_allowed_user_ids is not None:
-        bootstrap_sets["xp_grant_allowed_user_ids"] = parse_id_set(xp_grant_allowed_user_ids)
-
-    xp_excluded_channels = os.getenv("XP_EXCLUDED_CHANNEL_IDS")
-    if xp_excluded_channels is not None:
-        bootstrap_sets["xp_excluded_channel_ids"] = parse_id_set(xp_excluded_channels)
-
+def init_config_db(db_path: Path, _log: logging.Logger) -> None:
     with open_db(db_path) as conn:
         conn.execute(
             """
@@ -115,37 +74,11 @@ def init_config_db(db_path: Path, log: logging.Logger) -> None:
             """
         )
 
-        for key, value in bootstrap.items():
-            existing = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
-            if existing and existing["value"] != value:
-                log.warning("Config override from env for %s: db=%s env=%s", key, existing["value"], value)
-            conn.execute(
-                """
-                INSERT INTO config (key, value)
-                VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                (key, value),
-            )
 
-        for bucket, values in bootstrap_sets.items():
-            existing_rows = conn.execute(
-                "SELECT value FROM config_ids WHERE bucket = ? ORDER BY value",
-                (bucket,),
-            ).fetchall()
-            existing_values = {int(row["value"]) for row in existing_rows}
-            if existing_values and existing_values != values:
-                log.warning("Config override from env for %s: db=%s env=%s", bucket, sorted(existing_values), sorted(values))
-            conn.execute("DELETE FROM config_ids WHERE bucket = ?", (bucket,))
-            conn.executemany(
-                "INSERT INTO config_ids (bucket, value) VALUES (?, ?)",
-                [(bucket, value) for value in sorted(values)],
-            )
-
-
-def load_runtime_config(db_path: Path) -> dict[str, object]:
+def load_runtime_config(db_path: Path) -> RuntimeConfig:
     with open_db(db_path) as conn:
         return {
+            "guild_id": int(get_config_value(conn, "guild_id", "0")),
             "mod_channel_id": int(get_config_value(conn, "mod_channel_id", "0")),
             "debug": parse_bool(get_config_value(conn, "debug", "1"), default=True),
             "xp_level_5_role_id": int(get_config_value(conn, "xp_level_5_role_id", "0")),
@@ -166,8 +99,8 @@ class Bot(discord.Client):
         self.tree = discord.app_commands.CommandTree(self)
         self.debug = debug
         self.guild_id = guild_id
-        self.startup_task_factories: list[Callable[[], Awaitable[None]]] = []
-        self.startup_tasks: list[asyncio.Task] = []
+        self.startup_task_factories: list[Callable[[], Coroutine[Any, Any, None]]] = []
+        self.startup_tasks: list[asyncio.Task[None]] = []
 
     async def setup_hook(self) -> None:
         if self.debug:

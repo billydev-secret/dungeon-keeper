@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
-import discord
 import json
-
 from collections import Counter
 from datetime import datetime, timedelta, timezone
-from discord import app_commands
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
+import discord
+from discord import app_commands
 
 MAX_MESSAGES = 400
 MAX_CHARS_PER_MSG = 240
@@ -28,10 +26,12 @@ class UserMsg(NamedTuple):
     reply_content: str | None
 
 
-def extract_json_object(s: str):
+def extract_json_object(s: str) -> dict[str, Any] | None:
     s = s.strip()
     try:
-        return json.loads(s)
+        parsed = json.loads(s)
+        if isinstance(parsed, dict):
+            return cast(dict[str, Any], parsed)
     except Exception:
         pass
 
@@ -39,7 +39,9 @@ def extract_json_object(s: str):
     end = s.rfind("}")
     if start != -1 and end != -1 and end > start:
         try:
-            return json.loads(s[start:end + 1])
+            parsed = json.loads(s[start:end + 1])
+            if isinstance(parsed, dict):
+                return cast(dict[str, Any], parsed)
         except Exception:
             return None
     return None
@@ -56,7 +58,12 @@ def build_transcript(lines: list[str]) -> str:
     return "\n".join(out)
 
 
-async def llm_user_review(ctx, member: discord.Member, transcript: str, stats: dict):
+async def llm_user_review(
+    ctx,
+    member: discord.Member,
+    transcript: str,
+    stats: dict[str, object],
+) -> dict[str, Any] | None:
     prompt = f"""
         You are helping moderators review a user for promotion.
 
@@ -164,16 +171,26 @@ async def llm_summarize(ctx, channel_name: str, transcript: str, hours: int) -> 
         ],
         temperature=0.2,
     )
-    return resp.choices[0].message.content.strip()
+    content = resp.choices[0].message.content
+    if not isinstance(content, str):
+        return ""
+    return content.strip()
 
 
-async def collect_user_messages(ctx, guild: discord.Guild, member: discord.Member, hours: int = 168, max_msgs: int = 200, per_channel_limit: int = 300) -> tuple[list[UserMsg], dict]:
+async def collect_user_messages(
+    ctx,
+    guild: discord.Guild,
+    member: discord.Member,
+    hours: int = 168,
+    max_msgs: int = 200,
+    per_channel_limit: int = 300,
+) -> tuple[list[UserMsg], dict[str, object]]:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     found: list[UserMsg] = []
     scanned_channels = 0
     skipped_no_access = 0
     scanned_msgs_total = 0
-    per_channel_hits = Counter()
+    per_channel_hits: Counter[int] = Counter()
 
     for ch in guild.text_channels:
         if len(found) >= max_msgs:
@@ -316,7 +333,7 @@ def format_member_activity_line(member: discord.Member, activity) -> str:
     )
 
 
-def register_reports(bot: discord.Client, ctx) -> None:
+def register_reports(bot, ctx) -> None:
     @bot.tree.command(name="summarize", description="Summarize this channel over a time window.", guild=discord.Object(id=ctx.guild_id) if ctx.debug else None)
     @app_commands.describe(hours="How many hours back to summarize (e.g., 24, 72).")
     async def summarize(interaction: discord.Interaction, hours: int = 24):

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import discord
 import logging
+
+import discord
 
 
 def attachment_is_image(attachment: discord.Attachment) -> bool:
