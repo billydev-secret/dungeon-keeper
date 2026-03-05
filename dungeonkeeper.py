@@ -85,6 +85,7 @@ AUTO_DELETE_INTERVAL_SECONDS: dict[str, int] = {
     "daily": 24 * 60 * 60,
 }
 AUTO_DELETE_POLL_SECONDS = 60
+AUTO_DELETE_DELETE_PAUSE_SECONDS = 0.35
 
 def parse_id_set(value: str | None) -> set[int]:
     if not value:
@@ -1038,15 +1039,24 @@ async def delete_messages_older_than(
     deleted = 0
     skipped_pinned = 0
     failed = 0
+    next_delete_at = 0.0
 
     async for message in channel.history(limit=None, before=cutoff, oldest_first=True):
         scanned += 1
         if message.pinned:
             skipped_pinned += 1
             continue
+        now_monotonic = time.monotonic()
+        if now_monotonic < next_delete_at:
+            await asyncio.sleep(next_delete_at - now_monotonic)
         try:
-            await message.delete(reason=reason)
+            try:
+                await message.delete(reason=reason)
+            except TypeError:
+                # Some gateway/library paths yield PartialMessage without a `reason` kwarg.
+                await message.delete()
             deleted += 1
+            next_delete_at = time.monotonic() + AUTO_DELETE_DELETE_PAUSE_SECONDS
         except discord.Forbidden:
             failed += 1
             break
