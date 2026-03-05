@@ -75,6 +75,17 @@ MAX_MESSAGES = 400           # hard cap on messages pulled
 MAX_CHARS_PER_MSG = 240      # truncate each message
 MAX_TOTAL_CHARS = 40_000     # cap payload size to the model
 
+AUTO_DELETE_AGE_SECONDS: dict[str, int] = {
+    "30days": 30 * 24 * 60 * 60,
+    "2hours": 2 * 60 * 60,
+    "15minutes": 15 * 60,
+}
+AUTO_DELETE_INTERVAL_SECONDS: dict[str, int] = {
+    "hourly": 60 * 60,
+    "daily": 24 * 60 * 60,
+}
+AUTO_DELETE_POLL_SECONDS = 60
+
 def parse_id_set(value: str | None) -> set[int]:
     if not value:
         return set()
@@ -250,6 +261,21 @@ def set_config_value(key: str, value: str) -> str:
         return get_config_value(conn, key, value)
 
 
+def init_auto_delete_tables(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auto_delete_rules (
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            max_age_seconds INTEGER NOT NULL,
+            interval_seconds INTEGER NOT NULL,
+            last_run_ts REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+        """
+    )
+
+
 def load_runtime_config() -> dict[str, object]:
     with open_db() as conn:
         return {
@@ -271,6 +297,7 @@ runtime_config = load_runtime_config()
 
 with open_db() as conn:
     init_xp_tables(conn)
+    init_auto_delete_tables(conn)
 
 GUILD_ID = int(os.getenv("GUILD_ID", "0"))
 MOD_CHANNEL_ID = runtime_config["mod_channel_id"]
@@ -304,6 +331,7 @@ class Bot(discord.Client):
         self.tree = app_commands.CommandTree(self)
         self.xp_pair_states: dict[int, PairState] = {}
         self.voice_xp_task: asyncio.Task | None = None
+        self.auto_delete_task: asyncio.Task | None = None
 
     async def setup_hook(self):
         if DEBUG:
@@ -316,6 +344,8 @@ class Bot(discord.Client):
 
         if self.voice_xp_task is None:
             self.voice_xp_task = asyncio.create_task(voice_xp_loop())
+        if self.auto_delete_task is None:
+            self.auto_delete_task = asyncio.create_task(auto_delete_loop())
 
 bot = Bot()
 
@@ -839,6 +869,75 @@ async def voice_xp_loop() -> None:
         await asyncio.sleep(XP_SETTINGS.voice_poll_seconds)
 
 
+async def process_auto_delete_tick() -> None:
+    now_ts = time.time()
+    rules = list_auto_delete_rules()
+    if not rules:
+        return
+
+    for rule in rules:
+        guild_id = int(rule["guild_id"])
+        channel_id = int(rule["channel_id"])
+        max_age_seconds = int(rule["max_age_seconds"])
+        interval_seconds = int(rule["interval_seconds"])
+        last_run_ts = float(rule["last_run_ts"])
+        if now_ts - last_run_ts < interval_seconds:
+            continue
+
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            log.warning("Auto-delete skipped: guild %s is unavailable for channel %s.", guild_id, channel_id)
+            touch_auto_delete_rule_run(guild_id, channel_id, now_ts)
+            continue
+
+        channel = get_guild_channel_or_thread(guild, channel_id)
+        if channel is None:
+            log.warning("Auto-delete removed stale rule for missing channel %s in guild %s.", channel_id, guild_id)
+            remove_auto_delete_rule(guild_id, channel_id)
+            continue
+
+        cutoff = discord.utils.utcnow() - timedelta(seconds=max_age_seconds)
+        interval_label = "hourly" if interval_seconds <= 60 * 60 else "daily"
+        try:
+            scanned, deleted, skipped_pinned, failed = await delete_messages_older_than(
+                channel,
+                cutoff,
+                reason=f"Scheduled auto-delete ({interval_label})",
+            )
+            log.info(
+                "Auto-delete ran in %s (%s): deleted=%s scanned=%s pinned=%s failed=%s age>%ss.",
+                channel.mention,
+                channel.id,
+                deleted,
+                scanned,
+                skipped_pinned,
+                failed,
+                max_age_seconds,
+            )
+        except discord.Forbidden:
+            log.warning("Auto-delete missing permissions in %s (%s).", channel.mention, channel.id)
+        except Exception:
+            log.exception("Auto-delete failed in channel %s for guild %s.", channel_id, guild_id)
+        finally:
+            touch_auto_delete_rule_run(guild_id, channel_id, now_ts)
+
+
+async def auto_delete_loop() -> None:
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+        try:
+            await process_auto_delete_tick()
+        except asyncio.CancelledError:
+            raise
+        except sqlite3.OperationalError:
+            log.exception("Auto-delete tick hit a SQLite operational error.")
+        except Exception:
+            log.exception("Auto-delete tick failed.")
+
+        await asyncio.sleep(AUTO_DELETE_POLL_SECONDS)
+
+
 
 def is_mod(interaction: discord.Interaction) -> bool:
     member = get_interaction_member(interaction)
@@ -870,6 +969,91 @@ def get_xp_config_target_channel(interaction: discord.Interaction) -> GuildTextL
     if isinstance(channel, (discord.TextChannel, discord.Thread)):
         return channel
     return None
+
+
+def upsert_auto_delete_rule(
+    guild_id: int,
+    channel_id: int,
+    max_age_seconds: int,
+    interval_seconds: int,
+    *,
+    last_run_ts: float | None = None,
+) -> None:
+    run_ts = time.time() if last_run_ts is None else last_run_ts
+    with open_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO auto_delete_rules (
+                guild_id,
+                channel_id,
+                max_age_seconds,
+                interval_seconds,
+                last_run_ts
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(guild_id, channel_id) DO UPDATE SET
+                max_age_seconds = excluded.max_age_seconds,
+                interval_seconds = excluded.interval_seconds,
+                last_run_ts = excluded.last_run_ts
+            """,
+            (guild_id, channel_id, max_age_seconds, interval_seconds, run_ts),
+        )
+
+
+def remove_auto_delete_rule(guild_id: int, channel_id: int) -> bool:
+    with open_db() as conn:
+        cursor = conn.execute(
+            "DELETE FROM auto_delete_rules WHERE guild_id = ? AND channel_id = ?",
+            (guild_id, channel_id),
+        )
+        return cursor.rowcount > 0
+
+
+def touch_auto_delete_rule_run(guild_id: int, channel_id: int, run_ts: float) -> None:
+    with open_db() as conn:
+        conn.execute(
+            "UPDATE auto_delete_rules SET last_run_ts = ? WHERE guild_id = ? AND channel_id = ?",
+            (run_ts, guild_id, channel_id),
+        )
+
+
+def list_auto_delete_rules() -> list[sqlite3.Row]:
+    with open_db() as conn:
+        return conn.execute(
+            """
+            SELECT guild_id, channel_id, max_age_seconds, interval_seconds, last_run_ts
+            FROM auto_delete_rules
+            ORDER BY guild_id, channel_id
+            """
+        ).fetchall()
+
+
+async def delete_messages_older_than(
+    channel: GuildTextLike,
+    cutoff: datetime,
+    *,
+    reason: str,
+) -> tuple[int, int, int, int]:
+    scanned = 0
+    deleted = 0
+    skipped_pinned = 0
+    failed = 0
+
+    async for message in channel.history(limit=None, before=cutoff, oldest_first=True):
+        scanned += 1
+        if message.pinned:
+            skipped_pinned += 1
+            continue
+        try:
+            await message.delete(reason=reason)
+            deleted += 1
+        except discord.Forbidden:
+            failed += 1
+            break
+        except discord.HTTPException:
+            failed += 1
+
+    return scanned, deleted, skipped_pinned, failed
 
 
 def iter_backfill_channels(guild: discord.Guild) -> list[GuildTextLike]:
@@ -995,6 +1179,7 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
                     ("/xp_give_allowed", "List users allowed to use /xp_give."),
                     ("/xp_set_levelup_log_here", "Set the per-level-up log channel."),
                     ("/xp_set_level5_log_here", "Set the special level 5 log channel."),
+                    ("/auto_delete", "Delete old posts here and optionally schedule hourly/daily cleanup."),
                     ("/xp_exclude_here", "Disable XP gain in this channel."),
                     ("/xp_include_here", "Re-enable XP gain in this channel."),
                     ("/xp_excluded_channels", "List channels where XP is disabled."),
@@ -1502,6 +1687,107 @@ async def xp_set_level5_log_here(interaction: discord.Interaction):
     LEVEL_5_LOG_CHANNEL_ID = int(set_config_value("xp_level_5_log_channel_id", str(channel.id)))
     await interaction.response.send_message(
         f"Level {XP_SETTINGS.role_grant_level} announcements will be posted in {channel.mention}.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="auto_delete",
+    description="Delete old posts here and optionally schedule recurring cleanup.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+@app_commands.describe(
+    del_age="Delete posts older than this age.",
+    run="Run once now, schedule hourly/daily, or turn scheduled cleanup off for this channel.",
+)
+async def auto_delete(
+    interaction: discord.Interaction,
+    del_age: Literal["30days", "2hours", "15minutes"] = "30days",
+    run: Literal["once", "hourly", "daily", "off"] = "once",
+):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        return
+
+    channel = get_xp_config_target_channel(interaction)
+    if channel is None:
+        await interaction.response.send_message("This command only works in text channels or threads.", ephemeral=True)
+        return
+
+    bot_member = get_bot_member(guild)
+    if bot_member is None:
+        await interaction.response.send_message("Bot member context is unavailable right now.", ephemeral=True)
+        return
+    if not channel.permissions_for(bot_member).manage_messages:
+        await interaction.response.send_message(
+            "I need the Manage Messages permission in this channel to delete posts.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.defer(ephemeral=True, thinking=True)
+
+    age_seconds = AUTO_DELETE_AGE_SECONDS[del_age]
+    cutoff = discord.utils.utcnow() - timedelta(seconds=age_seconds)
+    actor = get_interaction_member(interaction)
+    reason = f"Auto-delete requested by {format_user_for_log(actor, interaction.user.id)}"
+
+    try:
+        scanned, deleted, skipped_pinned, failed = await delete_messages_older_than(
+            channel,
+            cutoff,
+            reason=reason,
+        )
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "I couldn't delete messages in this channel due to missing permissions.",
+            ephemeral=True,
+        )
+        return
+
+    schedule_status = "Recurring cleanup unchanged."
+    if run in AUTO_DELETE_INTERVAL_SECONDS:
+        interval_seconds = AUTO_DELETE_INTERVAL_SECONDS[run]
+        upsert_auto_delete_rule(
+            guild.id,
+            channel.id,
+            age_seconds,
+            interval_seconds,
+            last_run_ts=time.time(),
+        )
+        schedule_status = f"Recurring cleanup enabled: `{run}` (age `{del_age}`)."
+    elif run == "off":
+        removed = remove_auto_delete_rule(guild.id, channel.id)
+        schedule_status = (
+            "Recurring cleanup disabled for this channel."
+            if removed
+            else "No recurring cleanup rule was set for this channel."
+        )
+
+    log.info(
+        "Auto-delete run by %s in %s (%s): age=%s deleted=%s scanned=%s pinned=%s failed=%s schedule=%s.",
+        format_user_for_log(actor, interaction.user.id),
+        channel.mention,
+        channel.id,
+        del_age,
+        deleted,
+        scanned,
+        skipped_pinned,
+        failed,
+        run,
+    )
+
+    await interaction.followup.send(
+        (
+            f"Deleted **{deleted}** messages older than `{del_age}` in {channel.mention}.\n"
+            f"Scanned: `{scanned}` | Pinned skipped: `{skipped_pinned}` | Failed: `{failed}`\n"
+            f"{schedule_status}"
+        ),
         ephemeral=True,
     )
 

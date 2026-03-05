@@ -495,24 +495,89 @@ def get_member_last_activity_map(
     if not user_ids:
         return {}
 
-    placeholders = ", ".join("?" for _ in user_ids)
-    rows = conn.execute(
-        f"""
-        SELECT user_id, last_channel_id, last_message_id, last_message_at
-        FROM member_activity
-        WHERE guild_id = ? AND user_id IN ({placeholders})
-        """,
-        [guild_id, *user_ids],
-    ).fetchall()
-    return {
-        int(row["user_id"]): MemberActivity(
-            user_id=int(row["user_id"]),
-            channel_id=int(row["last_channel_id"]),
-            message_id=int(row["last_message_id"]),
-            created_at=float(row["last_message_at"]),
-        )
-        for row in rows
-    }
+    def batched_ids(values: list[int], batch_size: int = 800) -> list[list[int]]:
+        return [values[i:i + batch_size] for i in range(0, len(values), batch_size)]
+
+    activity_map: dict[int, MemberActivity] = {}
+
+    # Primary source: explicit member activity table.
+    for batch in batched_ids(user_ids):
+        placeholders = ", ".join("?" for _ in batch)
+        rows = conn.execute(
+            f"""
+            SELECT user_id, last_channel_id, last_message_id, last_message_at
+            FROM member_activity
+            WHERE guild_id = ? AND user_id IN ({placeholders})
+            """,
+            [guild_id, *batch],
+        ).fetchall()
+        for row in rows:
+            activity_map[int(row["user_id"])] = MemberActivity(
+                user_id=int(row["user_id"]),
+                channel_id=int(row["last_channel_id"]),
+                message_id=int(row["last_message_id"]),
+                created_at=float(row["last_message_at"]),
+            )
+
+    missing_ids = [user_id for user_id in user_ids if user_id not in activity_map]
+
+    # Fallback: processed message ledger (historical coverage before member_activity existed).
+    if missing_ids:
+        for batch in batched_ids(missing_ids):
+            placeholders = ", ".join("?" for _ in batch)
+            rows = conn.execute(
+                f"""
+                SELECT pm.user_id, pm.channel_id, pm.message_id, pm.created_at
+                FROM processed_messages pm
+                INNER JOIN (
+                    SELECT user_id, MAX(created_at) AS max_created_at
+                    FROM processed_messages
+                    WHERE guild_id = ? AND user_id IN ({placeholders})
+                    GROUP BY user_id
+                ) latest
+                    ON latest.user_id = pm.user_id
+                   AND latest.max_created_at = pm.created_at
+                WHERE pm.guild_id = ? AND pm.user_id IN ({placeholders})
+                """,
+                [guild_id, *batch, guild_id, *batch],
+            ).fetchall()
+            for row in rows:
+                user_id = int(row["user_id"])
+                if user_id in activity_map:
+                    continue
+                activity_map[user_id] = MemberActivity(
+                    user_id=user_id,
+                    channel_id=int(row["channel_id"]),
+                    message_id=int(row["message_id"]),
+                    created_at=float(row["created_at"]),
+                )
+
+    missing_ids = [user_id for user_id in user_ids if user_id not in activity_map]
+
+    # Last fallback: member_xp timestamp only (channel/message unknown).
+    if missing_ids:
+        for batch in batched_ids(missing_ids):
+            placeholders = ", ".join("?" for _ in batch)
+            rows = conn.execute(
+                f"""
+                SELECT user_id, last_message_at
+                FROM member_xp
+                WHERE guild_id = ? AND user_id IN ({placeholders}) AND last_message_at IS NOT NULL
+                """,
+                [guild_id, *batch],
+            ).fetchall()
+            for row in rows:
+                user_id = int(row["user_id"])
+                if user_id in activity_map:
+                    continue
+                activity_map[user_id] = MemberActivity(
+                    user_id=user_id,
+                    channel_id=0,
+                    message_id=0,
+                    created_at=float(row["last_message_at"]),
+                )
+
+    return activity_map
 
 
 def update_pair_state(state: PairState | None, author_id: int) -> tuple[PairState, int]:

@@ -14,6 +14,7 @@ from typing import NamedTuple
 MAX_MESSAGES = 400
 MAX_CHARS_PER_MSG = 240
 MAX_TOTAL_CHARS = 40_000
+SAFE_TEXT_CHUNK = 1900
 
 
 class UserMsg(NamedTuple):
@@ -274,11 +275,41 @@ async def send_ephemeral_markdown(interaction: discord.Interaction, text: str) -
         await interaction.followup.send(f"```markdown\n{chunk}\n```", ephemeral=True)
 
 
+def chunk_text(text: str, limit: int = SAFE_TEXT_CHUNK) -> list[str]:
+    if not text:
+        return [""]
+
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+
+        split_at = remaining.rfind("\n", 0, limit + 1)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+
+    return chunks
+
+
+async def send_ephemeral_text(interaction: discord.Interaction, text: str) -> None:
+    for chunk in chunk_text(text):
+        await interaction.followup.send(chunk, ephemeral=True)
+
+
 def format_member_activity_line(member: discord.Member, activity) -> str:
     if activity is None:
         return f"{member.display_name} - no recorded message yet"
 
     created_at = int(activity.created_at)
+    if getattr(activity, "channel_id", 0) <= 0:
+        return (
+            f"{member.display_name} - last seen <t:{created_at}:R> "
+            f"(<t:{created_at}:f>)"
+        )
     return (
         f"{member.display_name} - last seen <t:{created_at}:R> "
         f"(<t:{created_at}:f>) in <#{activity.channel_id}>"
@@ -364,14 +395,12 @@ def register_reports(bot: discord.Client, ctx) -> None:
         )
         if inactive_members:
             block = "\n".join(format_member_activity_line(current, activities.get(current.id)) for current in inactive_members)
-            if len(block) > 1800:
-                block = block[:1800] + "\n... (truncated)"
             summary += "\n**Inactive Members:**\n" + block
         else:
             summary += "\nAll members active in this period."
         if any(current.id not in activities for current in inactive_members):
             summary += "\n\nSome members have no recorded message yet because activity tracking starts after this version is deployed."
-        await interaction.followup.send(summary, ephemeral=True)
+        await send_ephemeral_text(interaction, summary)
 
     @bot.tree.command(name="user_review", description="Review a user's recent message history (for promotions/mod check-ins).", guild=discord.Object(id=ctx.guild_id) if ctx.debug else None)
     @app_commands.describe(member="User to review", hours="How many hours back (default 168 = 7 days)", max_msgs="Max messages to include (default 200)")
