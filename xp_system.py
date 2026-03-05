@@ -29,7 +29,7 @@ class XpSettings:
     voice_min_humans: int = 3
     voice_poll_seconds: int = 30
     manual_grant_xp: float = 20.0
-    level_curve_factor: float = 4.0
+    level_curve_factor: float = 5.2
     role_grant_level: int = 5
 
 
