@@ -1928,6 +1928,78 @@ async def auto_delete_configs(interaction: discord.Interaction):
 
 
 @bot.tree.command(
+    name="spoiler_guard_add_here",
+    description="Enable spoiler guard in this channel or thread.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def spoiler_guard_add_here(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    channel = get_xp_config_target_channel(interaction)
+    if channel is None:
+        await interaction.response.send_message("This command only works in text channels or threads.", ephemeral=True)
+        return
+
+    global SPOILER_REQUIRED_CHANNELS
+    SPOILER_REQUIRED_CHANNELS = add_config_id_value("spoiler_required_channels", channel.id)
+    await interaction.response.send_message(
+        f"Spoiler guard enabled for {channel.mention}. Guarded channel IDs: {sorted(SPOILER_REQUIRED_CHANNELS)}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="spoiler_guard_remove_here",
+    description="Disable spoiler guard in this channel or thread.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def spoiler_guard_remove_here(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    channel = get_xp_config_target_channel(interaction)
+    if channel is None:
+        await interaction.response.send_message("This command only works in text channels or threads.", ephemeral=True)
+        return
+
+    global SPOILER_REQUIRED_CHANNELS
+    SPOILER_REQUIRED_CHANNELS = remove_config_id_value("spoiler_required_channels", channel.id)
+    await interaction.response.send_message(
+        f"Spoiler guard disabled for {channel.mention}. Guarded channel IDs: {sorted(SPOILER_REQUIRED_CHANNELS)}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="spoiler_guarded_channels",
+    description="List channels and threads currently protected by spoiler guard.",
+    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+)
+async def spoiler_guarded_channels(interaction: discord.Interaction):
+    if not is_mod(interaction):
+        await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+        return
+
+    if not SPOILER_REQUIRED_CHANNELS:
+        await interaction.response.send_message("Spoiler guard is currently disabled in all channels.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    labels = []
+    for channel_id in sorted(SPOILER_REQUIRED_CHANNELS):
+        channel = get_guild_channel_or_thread(guild, channel_id) if guild else None
+        labels.append(channel.mention if channel else f"`{channel_id}`")
+
+    await interaction.response.send_message(
+        "Spoiler guard enabled in: " + ", ".join(labels),
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
     name="xp_exclude_here",
     description="Disable XP gain in this channel or thread.",
     guild=discord.Object(id=GUILD_ID) if DEBUG else None
