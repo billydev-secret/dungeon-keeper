@@ -58,6 +58,8 @@ load_dotenv()
 
 logging.basicConfig(
     level=logging.DEBUG,
+    format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
 log = logging.getLogger("Dungeon Keeper")
@@ -1400,6 +1402,9 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
                     ("/xp_set_level5_log_here", "Run in a channel/thread for level 5 alerts."),
                     ("/auto_delete del_age:30d run:1d", "Delete old posts now and schedule repeats."),
                     ("/auto_delete_configs", "List active auto-delete schedules in this server."),
+                    ("/spoiler_guard_add_here", "Enable spoiler guard in this channel/thread."),
+                    ("/spoiler_guard_remove_here", "Disable spoiler guard in this channel/thread."),
+                    ("/spoiler_guarded_channels", "List channels/threads with spoiler guard enabled."),
                     ("/xp_exclude_here", "Disable XP gain in this channel/thread."),
                     ("/xp_include_here", "Re-enable XP gain in this channel/thread."),
                     ("/xp_excluded_channels", "List channels/threads where XP is off."),
@@ -1412,7 +1417,8 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
             name="Auto-Delete Notes",
             value=(
                 "`del_age` accepts values like `15m`, `2h`, `30d`, `1h30m`.\n"
-                "`run` accepts `once`, `off`, or a duration like `30m`, `1h`, `1d`."
+                "`run` accepts `once`, `off`, or a duration like `30m`, `1h`, `1d`.\n"
+                "Recurring runs delete tracked messages posted after the rule is enabled."
             ),
             inline=False,
         )
@@ -1485,7 +1491,7 @@ def build_xp_leaderboard_embed(
 
 @bot.tree.command(
     name="help",
-    description="Show command guide and examples."
+    description="Show command reference and examples."
 )
 async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=build_help_embed(interaction), ephemeral=True)
@@ -1493,7 +1499,7 @@ async def help_command(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="xp_backfill_history",
-    description="Backfill historical message XP into the guild database."
+    description="Backfill message XP history into the database."
 )
 @app_commands.describe(days="How many days back to scan. Use 0 for all available history.")
 async def xp_backfill_history(
@@ -1725,7 +1731,7 @@ async def grant_denizen(interaction: discord.Interaction, member: discord.Member
 
 @bot.tree.command(
     name="set_greeter_role",
-    description="Set which role can use /grant_denizen."
+    description="Set the role allowed to run /grant_denizen."
 )
 @app_commands.describe(role="Role allowed to grant Denizen.")
 async def set_greeter_role(interaction: discord.Interaction, role: discord.Role):
@@ -1743,7 +1749,7 @@ async def set_greeter_role(interaction: discord.Interaction, role: discord.Role)
 
 @bot.tree.command(
     name="set_denizen_role",
-    description="Set which role /grant_denizen will assign."
+    description="Set the role that /grant_denizen assigns."
 )
 @app_commands.describe(role="Role to grant with /grant_denizen.")
 async def set_denizen_role(interaction: discord.Interaction, role: discord.Role):
@@ -1910,7 +1916,7 @@ async def xp_set_level5_log_here(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="auto_delete",
-    description="Delete old posts here and optionally schedule recurring cleanup."
+    description="Delete old posts now and optionally schedule recurring cleanup."
 )
 @app_commands.describe(
     del_age="Delete posts older than this duration (examples: 30d, 2h, 15m, 1h30m).",
@@ -2044,7 +2050,7 @@ async def auto_delete(
 
 @bot.tree.command(
     name="auto_delete_configs",
-    description="List active auto-delete schedules for this server."
+    description="List auto-delete schedules configured for this server."
 )
 async def auto_delete_configs(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -2137,7 +2143,7 @@ async def spoiler_guard_remove_here(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="spoiler_guarded_channels",
-    description="List channels and threads currently protected by spoiler guard."
+    description="List channels and threads where spoiler guard is enabled."
 )
 async def spoiler_guarded_channels(interaction: discord.Interaction):
     if not is_mod(interaction):

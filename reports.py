@@ -50,7 +50,7 @@ def format_member_activity_line(member: discord.Member, activity) -> str:
 
 
 def register_reports(bot, ctx) -> None:
-    @bot.tree.command(name="listrole", description="List all members in a role")
+    @bot.tree.command(name="listrole", description="List members who currently have a role.")
     @app_commands.describe(role="The role to inspect")
     async def listrole(interaction: discord.Interaction, role: discord.Role):
         if not role.members:
@@ -61,7 +61,7 @@ def register_reports(bot, ctx) -> None:
             output = output[:1900] + "\n... (truncated)"
         await interaction.response.send_message(f"**Members in {role.name}:**\n{output}", ephemeral=True)
 
-    @bot.tree.command(name="inactive_role", description="Report inactivity for a role")
+    @bot.tree.command(name="inactive_role", description="Report role members inactive for N days.")
     @app_commands.describe(role="Role to analyze", days="Number of days to check (default 7)")
     async def inactive_role(interaction: discord.Interaction, role: discord.Role, days: app_commands.Range[int, 1, 60] = 7):
         member = ctx.get_interaction_member(interaction)
