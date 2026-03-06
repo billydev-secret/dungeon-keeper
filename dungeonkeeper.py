@@ -12,7 +12,6 @@ from typing import Any, Literal, TypeAlias, TypedDict, cast
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
-from openai import OpenAI
 
 from post_monitoring import enforce_spoiler_requirement, message_has_qualifying_image
 from reports import register_reports
@@ -64,11 +63,8 @@ logging.basicConfig(
 log = logging.getLogger("Dungeon Keeper")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DB_PATH = Path(__file__).with_name("dungeonkeeper.db")
 
-MODEL = "gpt-5-nano"
-BIGMODEL = "gpt-5.2-2025-12-11"
 XP_SETTINGS = DEFAULT_XP_SETTINGS
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
@@ -204,6 +200,23 @@ def init_auto_delete_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auto_delete_messages (
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (guild_id, channel_id, message_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_auto_delete_messages_due
+        ON auto_delete_messages (guild_id, channel_id, created_at)
+        """
+    )
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -242,9 +255,6 @@ LEVEL_5_LOG_CHANNEL_ID = runtime_config["xp_level_5_log_channel_id"]
 LEVEL_UP_LOG_CHANNEL_ID = runtime_config["xp_level_up_log_channel_id"]
 GREETER_ROLE_ID = runtime_config["greeter_role_id"]
 DENIZEN_ROLE_ID = runtime_config["denizen_role_id"]
-
-client = OpenAI(api_key=OPENAI_API_KEY)
-
 
 # ==============================
 # Intents
@@ -330,7 +340,6 @@ async def on_ready():
     if GUILD_ID:
         with open_db() as conn:
             log.debug("XP event rows for guild %s: %s", GUILD_ID, count_xp_events(conn, GUILD_ID))
-    log.info("------")
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -355,6 +364,14 @@ async def on_message(message: discord.Message):
             message.id,
             message_ts,
         )
+        if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+            track_auto_delete_message(
+                conn,
+                message.guild.id,
+                message.channel.id,
+                message.id,
+                message_ts,
+            )
 
     await award_message_xp(message)
 
@@ -362,6 +379,20 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     await award_image_reaction_xp(payload)
+
+
+@bot.event
+async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+    if payload.guild_id is None:
+        return
+    remove_tracked_auto_delete_message(payload.guild_id, payload.channel_id, payload.message_id)
+
+
+@bot.event
+async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent):
+    if payload.guild_id is None:
+        return
+    remove_tracked_auto_delete_messages(payload.guild_id, payload.channel_id, payload.message_ids)
 
 # ==============================
 # Logic
@@ -870,21 +901,21 @@ async def process_auto_delete_tick() -> None:
             remove_auto_delete_rule(guild_id, channel_id)
             continue
 
-        cutoff = discord.utils.utcnow() - timedelta(seconds=max_age_seconds)
+        cutoff_ts = now_ts - max_age_seconds
         interval_label = "hourly" if interval_seconds <= 60 * 60 else "daily"
         try:
-            scanned, deleted, skipped_pinned, failed = await delete_messages_older_than(
+            queued, deleted, failed = await delete_tracked_messages_older_than(
+                guild_id,
                 channel,
-                cutoff,
+                cutoff_ts,
                 reason=f"Scheduled auto-delete ({interval_label})",
             )
             log.info(
-                "Auto-delete ran in %s (%s): deleted=%s scanned=%s pinned=%s failed=%s age>%ss.",
+                "Auto-delete ran in %s (%s): deleted=%s queued=%s failed=%s age>%ss.",
                 channel.mention,
                 channel.id,
                 deleted,
-                scanned,
-                skipped_pinned,
+                queued,
                 failed,
                 max_age_seconds,
             )
@@ -980,6 +1011,10 @@ def remove_auto_delete_rule(guild_id: int, channel_id: int) -> bool:
             "DELETE FROM auto_delete_rules WHERE guild_id = ? AND channel_id = ?",
             (guild_id, channel_id),
         )
+        conn.execute(
+            "DELETE FROM auto_delete_messages WHERE guild_id = ? AND channel_id = ?",
+            (guild_id, channel_id),
+        )
         return cursor.rowcount > 0
 
 
@@ -1013,6 +1048,129 @@ def list_auto_delete_rules_for_guild(guild_id: int) -> list[sqlite3.Row]:
             """,
             (guild_id,),
         ).fetchall()
+
+
+def auto_delete_rule_exists(conn: sqlite3.Connection, guild_id: int, channel_id: int) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM auto_delete_rules
+        WHERE guild_id = ? AND channel_id = ?
+        LIMIT 1
+        """,
+        (guild_id, channel_id),
+    ).fetchone()
+    return row is not None
+
+
+def track_auto_delete_message(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    created_at: float,
+) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO auto_delete_messages (guild_id, channel_id, message_id, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (guild_id, channel_id, message_id, created_at),
+    )
+
+
+def remove_tracked_auto_delete_message(guild_id: int, channel_id: int, message_id: int) -> None:
+    with open_db() as conn:
+        conn.execute(
+            """
+            DELETE FROM auto_delete_messages
+            WHERE guild_id = ? AND channel_id = ? AND message_id = ?
+            """,
+            (guild_id, channel_id, message_id),
+        )
+
+
+def remove_tracked_auto_delete_messages(
+    guild_id: int,
+    channel_id: int,
+    message_ids: set[int],
+) -> None:
+    if not message_ids:
+        return
+    with open_db() as conn:
+        conn.executemany(
+            """
+            DELETE FROM auto_delete_messages
+            WHERE guild_id = ? AND channel_id = ? AND message_id = ?
+            """,
+            [(guild_id, channel_id, message_id) for message_id in message_ids],
+        )
+
+
+def pop_due_auto_delete_message_ids(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    cutoff_ts: float,
+    *,
+    limit: int = 500,
+) -> list[int]:
+    rows = conn.execute(
+        """
+        SELECT message_id
+        FROM auto_delete_messages
+        WHERE guild_id = ? AND channel_id = ? AND created_at <= ?
+        ORDER BY created_at, message_id
+        LIMIT ?
+        """,
+        (guild_id, channel_id, cutoff_ts, limit),
+    ).fetchall()
+    return [int(row["message_id"]) for row in rows]
+
+
+async def delete_tracked_messages_older_than(
+    guild_id: int,
+    channel: GuildTextLike,
+    cutoff_ts: float,
+    *,
+    reason: str,
+) -> tuple[int, int, int]:
+    queued = 0
+    deleted = 0
+    failed = 0
+    next_delete_at = 0.0
+
+    with open_db() as conn:
+        message_ids = pop_due_auto_delete_message_ids(conn, guild_id, channel.id, cutoff_ts)
+
+    if not message_ids:
+        return queued, deleted, failed
+
+    for message_id in message_ids:
+        queued += 1
+        now_monotonic = time.monotonic()
+        if now_monotonic < next_delete_at:
+            await asyncio.sleep(next_delete_at - now_monotonic)
+
+        partial = channel.get_partial_message(message_id)
+        try:
+            delete_call = cast(Any, partial.delete)
+            try:
+                await delete_call(reason=reason)
+            except TypeError:
+                await partial.delete()
+            deleted += 1
+            remove_tracked_auto_delete_message(guild_id, channel.id, message_id)
+            next_delete_at = time.monotonic() + AUTO_DELETE_DELETE_PAUSE_SECONDS
+        except discord.NotFound:
+            remove_tracked_auto_delete_message(guild_id, channel.id, message_id)
+        except discord.Forbidden:
+            failed += 1
+            break
+        except discord.HTTPException:
+            failed += 1
+
+    return queued, deleted, failed
 
 
 def format_duration_seconds(seconds: int) -> str:
@@ -1224,10 +1382,8 @@ def build_help_embed(interaction: discord.Interaction) -> discord.Embed:
             name="Moderation",
             value=format_help_lines(
                 [
-                    ("/summarize hours:24", "AI summary of this channel for the last N hours."),
                     ("/listrole role:@Role", "List members who currently have a role."),
                     ("/inactive_role role:@Role days:7", "Show role members inactive in the last N days."),
-                    ("/user_review member:@user hours:168", "Review a member's recent posts for mod decisions."),
                 ]
             ),
             inline=False,
@@ -2141,9 +2297,6 @@ async def xp_leaderboards(
 report_ctx = SimpleNamespace(
     guild_id=GUILD_ID,
     debug=DEBUG,
-    client=client,
-    model=MODEL,
-    bigmodel=BIGMODEL,
     mod_channel_id=MOD_CHANNEL_ID,
     open_db=open_db,
     get_bot_member=get_bot_member,
