@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import logging
 import os
 import re
@@ -275,24 +275,23 @@ class Bot(discord.Client):
         self.auto_delete_task: asyncio.Task | None = None
 
     async def setup_hook(self):
-        if DEBUG:
-            if GUILD_ID <= 0:
-                log.warning("DEBUG is enabled but guild_id=%s is invalid; falling back to global sync.", GUILD_ID)
+        if DEBUG and GUILD_ID > 0:
+            guild = discord.Object(id=GUILD_ID)
+            try:
+                self.tree.clear_commands(guild=guild)
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                print("Synced commands to development guild.")
+            except discord.Forbidden:
+                log.warning(
+                    "Guild command sync failed for guild_id=%s (Missing Access). Falling back to global sync.",
+                    GUILD_ID,
+                )
                 await self.tree.sync()
                 print("Synced commands globally (fallback).")
-            else:
-                guild = discord.Object(id=GUILD_ID)
-                try:
-                    await self.tree.sync(guild=guild)
-                    print("Synced commands to development guild.")
-                except discord.Forbidden:
-                    log.warning(
-                        "Guild command sync failed for guild_id=%s (Missing Access). Falling back to global sync.",
-                        GUILD_ID,
-                    )
-                    await self.tree.sync()
-                    print("Synced commands globally (fallback).")
         else:
+            if DEBUG and GUILD_ID <= 0:
+                log.warning("DEBUG is enabled but guild_id=%s is invalid; falling back to global sync.", GUILD_ID)
             await self.tree.sync()
             print("Synced commands globally.")
 
@@ -1311,7 +1310,7 @@ def format_xp_leaderboard_lines(
     if not entries:
         return f"{stats_line}\n\n{empty_text}\n\n{user_line}"
 
-    rank_icons = ["🥇", "🥈", "🥉", "4.", "5."]
+    rank_icons = ["ðŸ¥‡", "ðŸ¥ˆ", "ðŸ¥‰", "4.", "5."]
     lines = [stats_line, ""]
     for idx, entry in enumerate(entries, start=1):
         member = guild.get_member(entry.user_id) if guild else None
@@ -1437,10 +1436,10 @@ def build_xp_leaderboard_embed(
     )
 
     source_specs = [
-        ("Text", "💬", XP_SOURCE_TEXT, "No text XP yet."),
-        ("Replies", "↩️", XP_SOURCE_REPLY, "No reply XP yet."),
-        ("Voice", "🎙️", XP_SOURCE_VOICE, "No voice XP yet."),
-        ("Image Reacts", "🖼️", XP_SOURCE_IMAGE_REACT, "No image react XP yet."),
+        ("Text", "ðŸ’¬", XP_SOURCE_TEXT, "No text XP yet."),
+        ("Replies", "â†©ï¸", XP_SOURCE_REPLY, "No reply XP yet."),
+        ("Voice", "ðŸŽ™ï¸", XP_SOURCE_VOICE, "No voice XP yet."),
+        ("Image Reacts", "ðŸ–¼ï¸", XP_SOURCE_IMAGE_REACT, "No image react XP yet."),
     ]
 
     with open_db() as conn:
@@ -1486,8 +1485,7 @@ def build_xp_leaderboard_embed(
 
 @bot.tree.command(
     name="help",
-    description="Show command guide and examples.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Show command guide and examples."
 )
 async def help_command(interaction: discord.Interaction):
     await interaction.response.send_message(embed=build_help_embed(interaction), ephemeral=True)
@@ -1495,8 +1493,7 @@ async def help_command(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="xp_backfill_history",
-    description="Backfill historical message XP into the guild database.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Backfill historical message XP into the guild database."
 )
 @app_commands.describe(days="How many days back to scan. Use 0 for all available history.")
 async def xp_backfill_history(
@@ -1654,8 +1651,7 @@ async def xp_backfill_history(
 
 @bot.tree.command(
     name="grant_denizen",
-    description="Grant the Denizen role to a member.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Grant the Denizen role to a member."
 )
 @app_commands.describe(member="Member to receive the Denizen role.")
 async def grant_denizen(interaction: discord.Interaction, member: discord.Member):
@@ -1729,8 +1725,7 @@ async def grant_denizen(interaction: discord.Interaction, member: discord.Member
 
 @bot.tree.command(
     name="set_greeter_role",
-    description="Set which role can use /grant_denizen.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Set which role can use /grant_denizen."
 )
 @app_commands.describe(role="Role allowed to grant Denizen.")
 async def set_greeter_role(interaction: discord.Interaction, role: discord.Role):
@@ -1748,8 +1743,7 @@ async def set_greeter_role(interaction: discord.Interaction, role: discord.Role)
 
 @bot.tree.command(
     name="set_denizen_role",
-    description="Set which role /grant_denizen will assign.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Set which role /grant_denizen will assign."
 )
 @app_commands.describe(role="Role to grant with /grant_denizen.")
 async def set_denizen_role(interaction: discord.Interaction, role: discord.Role):
@@ -1767,8 +1761,7 @@ async def set_denizen_role(interaction: discord.Interaction, role: discord.Role)
 
 @bot.tree.command(
     name="xp_give",
-    description="Give a member 20 XP.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Give a member 20 XP."
 )
 @app_commands.describe(member="Member to receive the XP.")
 async def xp_give(interaction: discord.Interaction, member: discord.Member):
@@ -1812,8 +1805,7 @@ async def xp_give(interaction: discord.Interaction, member: discord.Member):
 
 @bot.tree.command(
     name="xp_give_allow",
-    description="Allow a user to use /xp_give.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Allow a user to use /xp_give."
 )
 @app_commands.describe(member="User to add to the /xp_give allowlist.")
 async def xp_give_allow(interaction: discord.Interaction, member: discord.Member):
@@ -1831,8 +1823,7 @@ async def xp_give_allow(interaction: discord.Interaction, member: discord.Member
 
 @bot.tree.command(
     name="xp_give_disallow",
-    description="Remove a user from /xp_give access.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Remove a user from /xp_give access."
 )
 @app_commands.describe(member="User to remove from the /xp_give allowlist.")
 async def xp_give_disallow(interaction: discord.Interaction, member: discord.Member):
@@ -1850,8 +1841,7 @@ async def xp_give_disallow(interaction: discord.Interaction, member: discord.Mem
 
 @bot.tree.command(
     name="xp_give_allowed",
-    description="List users allowed to use /xp_give.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="List users allowed to use /xp_give."
 )
 async def xp_give_allowed(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -1876,8 +1866,7 @@ async def xp_give_allowed(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="xp_set_levelup_log_here",
-    description="Send level-up announcements to this channel or thread.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Send level-up announcements to this channel or thread."
 )
 async def xp_set_levelup_log_here(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -1899,8 +1888,7 @@ async def xp_set_levelup_log_here(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="xp_set_level5_log_here",
-    description="Send level 5 XP announcements to this channel or thread.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Send level 5 XP announcements to this channel or thread."
 )
 async def xp_set_level5_log_here(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -1922,8 +1910,7 @@ async def xp_set_level5_log_here(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="auto_delete",
-    description="Delete old posts here and optionally schedule recurring cleanup.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Delete old posts here and optionally schedule recurring cleanup."
 )
 @app_commands.describe(
     del_age="Delete posts older than this duration (examples: 30d, 2h, 15m, 1h30m).",
@@ -2057,8 +2044,7 @@ async def auto_delete(
 
 @bot.tree.command(
     name="auto_delete_configs",
-    description="List active auto-delete schedules for this server.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="List active auto-delete schedules for this server."
 )
 async def auto_delete_configs(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -2107,8 +2093,7 @@ async def auto_delete_configs(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="spoiler_guard_add_here",
-    description="Enable spoiler guard in this channel or thread.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Enable spoiler guard in this channel or thread."
 )
 async def spoiler_guard_add_here(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -2130,8 +2115,7 @@ async def spoiler_guard_add_here(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="spoiler_guard_remove_here",
-    description="Disable spoiler guard in this channel or thread.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Disable spoiler guard in this channel or thread."
 )
 async def spoiler_guard_remove_here(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -2153,8 +2137,7 @@ async def spoiler_guard_remove_here(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="spoiler_guarded_channels",
-    description="List channels and threads currently protected by spoiler guard.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="List channels and threads currently protected by spoiler guard."
 )
 async def spoiler_guarded_channels(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -2179,8 +2162,7 @@ async def spoiler_guarded_channels(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="xp_exclude_here",
-    description="Disable XP gain in this channel or thread.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Disable XP gain in this channel or thread."
 )
 async def xp_exclude_here(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -2202,8 +2184,7 @@ async def xp_exclude_here(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="xp_include_here",
-    description="Re-enable XP gain in this channel or thread.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Re-enable XP gain in this channel or thread."
 )
 async def xp_include_here(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -2225,8 +2206,7 @@ async def xp_include_here(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="xp_excluded_channels",
-    description="List channels and threads where XP is currently disabled.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="List channels and threads where XP is currently disabled."
 )
 async def xp_excluded_channels(interaction: discord.Interaction):
     if not is_mod(interaction):
@@ -2251,8 +2231,7 @@ async def xp_excluded_channels(interaction: discord.Interaction):
 
 @bot.tree.command(
     name="xp_leaderboards",
-    description="Show top 5 XP earners for a selected timescale, plus your standing.",
-    guild=discord.Object(id=GUILD_ID) if DEBUG else None
+    description="Show top 5 XP earners for a selected timescale, plus your standing."
 )
 @app_commands.describe(timescale="Choose the leaderboard window.")
 async def xp_leaderboards(
@@ -2278,10 +2257,10 @@ async def xp_leaderboards(
                 description=description,
                 color=discord.Color.blurple(),
             )
-            embed.add_field(name="💬 Text", value="No tracked text XP yet.", inline=True)
-            embed.add_field(name="↩️ Replies", value="No tracked reply XP yet.", inline=True)
-            embed.add_field(name="🎙️ Voice", value="No tracked voice XP yet.", inline=True)
-            embed.add_field(name="🖼️ Image Reacts", value="No tracked image react XP yet.", inline=True)
+            embed.add_field(name="ðŸ’¬ Text", value="No tracked text XP yet.", inline=True)
+            embed.add_field(name="â†©ï¸ Replies", value="No tracked reply XP yet.", inline=True)
+            embed.add_field(name="ðŸŽ™ï¸ Voice", value="No tracked voice XP yet.", inline=True)
+            embed.add_field(name="ðŸ–¼ï¸ Image Reacts", value="No tracked image react XP yet.", inline=True)
             embed.set_footer(text="Top 5 by XP source and time window")
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
@@ -2314,3 +2293,4 @@ if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("DISCORD_TOKEN is not set.")
     bot.run(TOKEN)
+
