@@ -293,6 +293,28 @@ class Bot(discord.Client):
 
 bot = Bot()
 
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+    if isinstance(error, app_commands.CommandNotFound):
+        missing_name = getattr(error, "name", "unknown")
+        log.warning(
+            "Received unknown slash command '%s' in guild %s (user %s). This is usually stale command registration.",
+            missing_name,
+            interaction.guild_id,
+            interaction.user.id,
+        )
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "That command is out of date on this server. Please try again in a moment.",
+                ephemeral=True,
+            )
+        return
+
+    log.exception("Unhandled app command error: %s", error)
+    if not interaction.response.is_done():
+        await interaction.response.send_message("Command failed. Please try again.", ephemeral=True)
+
 # ==============================
 # Events
 # ==============================
