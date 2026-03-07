@@ -60,9 +60,10 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    force=True,
 )
 
-log = logging.getLogger("Dungeon Keeper")
+log = logging.getLogger("dungeonkeeper.bot")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 DB_PATH = Path(__file__).with_name("dungeonkeeper.db")
@@ -2298,5 +2299,5 @@ register_reports(bot, report_ctx)
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("DISCORD_TOKEN is not set.")
-    bot.run(TOKEN)
+    bot.run(TOKEN, log_handler=None)
 
