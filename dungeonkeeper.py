@@ -338,6 +338,14 @@ async def on_ready():
 
     log.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
     log.info(f"In Guild {GUILD_ID} (Guarding: {SPOILER_REQUIRED_CHANNELS})")
+    log.info(
+        "XP config loaded: level-%s role=%s level-up-log=%s level-%s-log=%s.",
+        XP_SETTINGS.role_grant_level,
+        LEVEL_5_ROLE_ID,
+        LEVEL_UP_LOG_CHANNEL_ID,
+        XP_SETTINGS.role_grant_level,
+        LEVEL_5_LOG_CHANNEL_ID,
+    )
     log.debug("XP excluded channels: %s", sorted(XP_EXCLUDED_CHANNEL_IDS))
     if GUILD_ID:
         with open_db() as conn:
@@ -477,7 +485,21 @@ async def resolve_reply_target(message: discord.Message) -> discord.Message | No
 
 
 async def maybe_grant_level_role(member: discord.Member, new_level: int) -> None:
-    if LEVEL_5_ROLE_ID <= 0 or new_level < XP_SETTINGS.role_grant_level:
+    if LEVEL_5_ROLE_ID <= 0:
+        log.debug(
+            "Skipping level %s role grant for %s: reward role is not configured.",
+            XP_SETTINGS.role_grant_level,
+            format_user_for_log(member),
+        )
+        return
+
+    if new_level < XP_SETTINGS.role_grant_level:
+        log.debug(
+            "Skipping level %s role grant for %s: member level is %s.",
+            XP_SETTINGS.role_grant_level,
+            format_user_for_log(member),
+            new_level,
+        )
         return
 
     role = member.guild.get_role(LEVEL_5_ROLE_ID)
@@ -486,10 +508,22 @@ async def maybe_grant_level_role(member: discord.Member, new_level: int) -> None
         return
 
     if role in member.roles:
+        log.debug(
+            "Skipping level %s role grant for %s: role %s is already assigned.",
+            XP_SETTINGS.role_grant_level,
+            format_user_for_log(member),
+            role.id,
+        )
         return
 
     try:
         await member.add_roles(role, reason=f"Reached level {XP_SETTINGS.role_grant_level}")
+        log.info(
+            "Granted level %s reward role %s to %s.",
+            XP_SETTINGS.role_grant_level,
+            role.id,
+            format_user_for_log(member),
+        )
     except discord.Forbidden:
         log.warning("Missing permission to grant level reward role %s to %s.", role.id, member)
 
@@ -515,6 +549,11 @@ def get_guild_channel_or_thread(guild: discord.Guild, channel_id: int) -> GuildT
 
 async def maybe_log_level_5(member: discord.Member, total_xp: float) -> None:
     if LEVEL_5_LOG_CHANNEL_ID <= 0:
+        log.debug(
+            "Skipping level %s announcement for %s: level-5 log channel is not configured.",
+            XP_SETTINGS.role_grant_level,
+            format_user_for_log(member),
+        )
         return
 
     channel = get_guild_channel_or_thread(member.guild, LEVEL_5_LOG_CHANNEL_ID)
@@ -538,18 +577,51 @@ async def maybe_log_level_5(member: discord.Member, total_xp: float) -> None:
         embed.add_field(name="Reward Role", value=reward_role.mention, inline=True)
     embed.set_thumbnail(url=member.display_avatar.url)
 
+    log.info(
+        "Attempting level %s announcement for %s in channel %s (total_xp=%.2f).",
+        XP_SETTINGS.role_grant_level,
+        format_user_for_log(member),
+        LEVEL_5_LOG_CHANNEL_ID,
+        total_xp,
+    )
     try:
         await channel.send(embed=embed)
+        log.info(
+            "Sent level %s announcement for %s to channel %s.",
+            XP_SETTINGS.role_grant_level,
+            format_user_for_log(member),
+            LEVEL_5_LOG_CHANNEL_ID,
+        )
     except discord.Forbidden:
         log.warning(
             "Missing permission to send level %s announcements in channel %s.",
             XP_SETTINGS.role_grant_level,
             LEVEL_5_LOG_CHANNEL_ID,
         )
+    except discord.HTTPException:
+        log.exception(
+            "Discord API error while sending level %s announcement in channel %s for %s.",
+            XP_SETTINGS.role_grant_level,
+            LEVEL_5_LOG_CHANNEL_ID,
+            format_user_for_log(member),
+        )
 
 
 async def maybe_log_level_ups(member: discord.Member, old_level: int, new_level: int, total_xp: float) -> None:
-    if LEVEL_UP_LOG_CHANNEL_ID <= 0 or new_level <= old_level:
+    if LEVEL_UP_LOG_CHANNEL_ID <= 0:
+        log.debug(
+            "Skipping level-up announcements for %s: level-up log channel is not configured.",
+            format_user_for_log(member),
+        )
+        return
+
+    if new_level <= old_level:
+        log.debug(
+            "Skipping level-up announcements for %s: no level change (%s -> %s).",
+            format_user_for_log(member),
+            old_level,
+            new_level,
+        )
         return
 
     channel = get_guild_channel_or_thread(member.guild, LEVEL_UP_LOG_CHANNEL_ID)
@@ -560,6 +632,11 @@ async def maybe_log_level_ups(member: discord.Member, old_level: int, new_level:
     skip_special_level = LEVEL_UP_LOG_CHANNEL_ID == LEVEL_5_LOG_CHANNEL_ID
     for level in range(old_level + 1, new_level + 1):
         if skip_special_level and level == XP_SETTINGS.role_grant_level:
+            log.debug(
+                "Skipping level %s in general level-up channel because it matches the dedicated level-%s channel.",
+                level,
+                XP_SETTINGS.role_grant_level,
+            )
             continue
 
         embed = discord.Embed(
@@ -573,19 +650,64 @@ async def maybe_log_level_ups(member: discord.Member, old_level: int, new_level:
 
         try:
             await channel.send(embed=embed)
+            log.debug(
+                "Sent level-up announcement for %s at level %s to channel %s.",
+                format_user_for_log(member),
+                level,
+                LEVEL_UP_LOG_CHANNEL_ID,
+            )
         except discord.Forbidden:
             log.warning("Missing permission to send level-up announcements in channel %s.", LEVEL_UP_LOG_CHANNEL_ID)
             return
+        except discord.HTTPException:
+            log.exception(
+                "Discord API error while sending level-up announcement in channel %s for %s.",
+                LEVEL_UP_LOG_CHANNEL_ID,
+                format_user_for_log(member),
+            )
+            return
 
 
-async def handle_level_progress(member: discord.Member, award: AwardResult) -> None:
+async def handle_level_progress(member: discord.Member, award: AwardResult, source: str = "unknown") -> None:
+    log.debug(
+        "Level progress check (source=%s) for %s: old_level=%s new_level=%s total_xp=%.2f role_grant_due=%s "
+        "(role_id=%s levelup_log_channel=%s level5_log_channel=%s).",
+        source,
+        format_user_for_log(member),
+        award.old_level,
+        award.new_level,
+        award.total_xp,
+        award.role_grant_due,
+        LEVEL_5_ROLE_ID,
+        LEVEL_UP_LOG_CHANNEL_ID,
+        LEVEL_5_LOG_CHANNEL_ID,
+    )
+
     if award.new_level >= XP_SETTINGS.role_grant_level:
         await maybe_grant_level_role(member, award.new_level)
 
     if award.new_level > award.old_level:
         await maybe_log_level_ups(member, award.old_level, award.new_level, award.total_xp)
         if award.role_grant_due:
+            log.info(
+                "Level %s trigger fired for %s from source=%s (old_level=%s new_level=%s total_xp=%.2f).",
+                XP_SETTINGS.role_grant_level,
+                format_user_for_log(member),
+                source,
+                award.old_level,
+                award.new_level,
+                award.total_xp,
+            )
             await maybe_log_level_5(member, award.total_xp)
+        else:
+            log.debug(
+                "No level %s trigger for %s from source=%s (old_level=%s new_level=%s).",
+                XP_SETTINGS.role_grant_level,
+                format_user_for_log(member),
+                source,
+                award.old_level,
+                award.new_level,
+            )
 
 
 async def award_message_xp(message: discord.Message) -> None:
@@ -697,7 +819,7 @@ async def award_message_xp(message: discord.Message) -> None:
         award.new_level,
     )
 
-    await handle_level_progress(message.author, award)
+    await handle_level_progress(message.author, award, source="text_message")
 
 
 async def award_image_reaction_xp(payload: discord.RawReactionActionEvent) -> None:
@@ -753,7 +875,7 @@ async def award_image_reaction_xp(payload: discord.RawReactionActionEvent) -> No
         resolve_user_for_log(guild, payload.user_id),
     )
 
-    await handle_level_progress(author, award)
+    await handle_level_progress(author, award, source="image_reaction")
 
 
 def is_qualifying_voice_channel(channel: discord.VoiceChannel) -> bool:
@@ -857,7 +979,7 @@ async def process_voice_xp_tick() -> None:
                 delete_voice_session(conn, session.guild_id, session.user_id)
 
     for member, award in leveled_members.values():
-        await handle_level_progress(member, award)
+        await handle_level_progress(member, award, source="voice_tick")
 
 
 async def voice_xp_loop() -> None:
@@ -1801,7 +1923,7 @@ async def xp_give(interaction: discord.Interaction, member: discord.Member):
             settings=XP_SETTINGS,
         )
 
-    await handle_level_progress(member, award)
+    await handle_level_progress(member, award, source="manual_grant")
 
     await interaction.response.send_message(
         f"{interaction.user.mention} granted {XP_SETTINGS.manual_grant_xp:.0f} XP to {member.mention}. "
@@ -1887,6 +2009,12 @@ async def xp_set_levelup_log_here(interaction: discord.Interaction):
 
     global LEVEL_UP_LOG_CHANNEL_ID
     LEVEL_UP_LOG_CHANNEL_ID = int(set_config_value("xp_level_up_log_channel_id", str(channel.id)))
+    log.info(
+        "%s set level-up log channel to %s in guild %s.",
+        format_user_for_log(get_interaction_member(interaction), interaction.user.id),
+        channel.id,
+        interaction.guild_id,
+    )
     await interaction.response.send_message(
         f"Level-up announcements will be posted in {channel.mention}.",
         ephemeral=True,
@@ -1909,6 +2037,13 @@ async def xp_set_level5_log_here(interaction: discord.Interaction):
 
     global LEVEL_5_LOG_CHANNEL_ID
     LEVEL_5_LOG_CHANNEL_ID = int(set_config_value("xp_level_5_log_channel_id", str(channel.id)))
+    log.info(
+        "%s set level-%s log channel to %s in guild %s.",
+        format_user_for_log(get_interaction_member(interaction), interaction.user.id),
+        XP_SETTINGS.role_grant_level,
+        channel.id,
+        interaction.guild_id,
+    )
     await interaction.response.send_message(
         f"Level {XP_SETTINGS.role_grant_level} announcements will be posted in {channel.mention}.",
         ephemeral=True,
