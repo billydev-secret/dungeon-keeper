@@ -50,7 +50,17 @@ async def enforce_spoiler_requirement(
                 delete_after=5,
             )
         except discord.Forbidden:
-            pass
+            log.warning(
+                "Missing permission to delete spoilerless image in channel %s from user %s",
+                message.channel.id,
+                message.author.id,
+            )
+        except discord.HTTPException as e:
+            log.error(
+                "Failed to enforce spoiler requirement in channel %s: %s",
+                message.channel.id,
+                e,
+            )
         return True
 
     return False

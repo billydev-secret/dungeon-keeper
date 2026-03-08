@@ -55,7 +55,9 @@ class XpSystemTests(unittest.TestCase):
         init_xp_tables(conn)
 
         level_5_threshold = xp_required_for_level(DEFAULT_XP_SETTINGS.role_grant_level, DEFAULT_XP_SETTINGS)
-        first = apply_xp_award(conn, guild_id=1, user_id=42, xp_delta=level_5_threshold - 0.01, settings=DEFAULT_XP_SETTINGS)
+        first = apply_xp_award(
+            conn, guild_id=1, user_id=42, xp_delta=level_5_threshold - 0.01, settings=DEFAULT_XP_SETTINGS
+        )
         second = apply_xp_award(
             conn,
             guild_id=1,
@@ -195,8 +197,12 @@ class XpSystemTests(unittest.TestCase):
         activities = get_member_last_activity_map(conn, guild_id=1, user_ids=[10, 11, 12])
 
         self.assertEqual(sorted(activities.keys()), [10, 11])
-        self.assertEqual((activities[10].channel_id, activities[10].message_id, activities[10].created_at), (102, 1002, 300.0))
-        self.assertEqual((activities[11].channel_id, activities[11].message_id, activities[11].created_at), (103, 1003, 250.0))
+        self.assertEqual(
+            (activities[10].channel_id, activities[10].message_id, activities[10].created_at), (102, 1002, 300.0)
+        )
+        self.assertEqual(
+            (activities[11].channel_id, activities[11].message_id, activities[11].created_at), (103, 1003, 250.0)
+        )
 
     def test_oldest_xp_event_timestamp_filters_by_source(self):
         conn = sqlite3.connect(":memory:")
@@ -208,7 +214,9 @@ class XpSystemTests(unittest.TestCase):
         record_xp_event(conn, guild_id=1, user_id=1, source=XP_SOURCE_REPLY, amount=5.0, created_at=100.0)
 
         self.assertEqual(get_oldest_xp_event_timestamp(conn, guild_id=1), 100.0)
-        self.assertEqual(get_oldest_xp_event_timestamp(conn, guild_id=1, sources=(XP_SOURCE_TEXT, XP_SOURCE_REPLY)), 100.0)
+        self.assertEqual(
+            get_oldest_xp_event_timestamp(conn, guild_id=1, sources=(XP_SOURCE_TEXT, XP_SOURCE_REPLY)), 100.0
+        )
         self.assertEqual(get_oldest_xp_event_timestamp(conn, guild_id=1, sources=(XP_SOURCE_VOICE,)), 300.0)
 
     def test_user_xp_standing_reports_rank_and_missing_user(self):

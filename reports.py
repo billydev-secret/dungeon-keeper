@@ -1,9 +1,13 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
+
+if TYPE_CHECKING:
+    from app_context import AppContext, Bot
 
 SAFE_TEXT_CHUNK = 1900
 
@@ -49,7 +53,7 @@ def format_member_activity_line(member: discord.Member, activity) -> str:
     )
 
 
-def register_reports(bot, ctx) -> None:
+def register_reports(bot: Bot, ctx: AppContext) -> None:
     @bot.tree.command(name="listrole", description="List members who currently have a role.")
     @app_commands.describe(role="The role to inspect")
     async def listrole(interaction: discord.Interaction, role: discord.Role):
@@ -63,7 +67,9 @@ def register_reports(bot, ctx) -> None:
 
     @bot.tree.command(name="inactive_role", description="Report role members inactive for N days.")
     @app_commands.describe(role="Role to analyze", days="Number of days to check (default 7)")
-    async def inactive_role(interaction: discord.Interaction, role: discord.Role, days: app_commands.Range[int, 1, 60] = 7):
+    async def inactive_role(
+        interaction: discord.Interaction, role: discord.Role, days: app_commands.Range[int, 1, 60] = 7
+    ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
@@ -97,11 +103,17 @@ def register_reports(bot, ctx) -> None:
             f"----------------------------------\n"
         )
         if inactive_members:
-            block = "\n".join(format_member_activity_line(current, activities.get(current.id)) for current in inactive_members)
+            block = "\n".join(
+                format_member_activity_line(current, activities.get(current.id))
+                for current in inactive_members
+            )
             summary += "\n**Inactive Members:**\n" + block
         else:
             summary += "\nAll members active in this period."
         if any(current.id not in activities for current in inactive_members):
-            summary += "\n\nSome members have no recorded message yet because activity tracking starts after this version is deployed."
+            summary += (
+                "\n\nSome members have no recorded message yet because activity tracking "
+                "starts after this version is deployed."
+            )
         await send_ephemeral_text(interaction, summary)
 

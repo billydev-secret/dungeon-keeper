@@ -493,14 +493,12 @@ def get_member_last_activity_map(
     # Primary source: explicit member activity table.
     for batch in batched_ids(user_ids):
         placeholders = ", ".join("?" for _ in batch)
-        rows = conn.execute(
-            f"""
+        query = """
             SELECT user_id, last_channel_id, last_message_id, last_message_at
             FROM member_activity
-            WHERE guild_id = ? AND user_id IN ({placeholders})
-            """,
-            [guild_id, *batch],
-        ).fetchall()
+            WHERE guild_id = ? AND user_id IN ({})
+            """.format(placeholders)
+        rows = conn.execute(query, [guild_id, *batch]).fetchall()
         for row in rows:
             activity_map[int(row["user_id"])] = MemberActivity(
                 user_id=int(row["user_id"]),
@@ -515,22 +513,20 @@ def get_member_last_activity_map(
     if missing_ids:
         for batch in batched_ids(missing_ids):
             placeholders = ", ".join("?" for _ in batch)
-            rows = conn.execute(
-                f"""
+            query = """
                 SELECT pm.user_id, pm.channel_id, pm.message_id, pm.created_at
                 FROM processed_messages pm
                 INNER JOIN (
                     SELECT user_id, MAX(created_at) AS max_created_at
                     FROM processed_messages
-                    WHERE guild_id = ? AND user_id IN ({placeholders})
+                    WHERE guild_id = ? AND user_id IN ({})
                     GROUP BY user_id
                 ) latest
                     ON latest.user_id = pm.user_id
                    AND latest.max_created_at = pm.created_at
-                WHERE pm.guild_id = ? AND pm.user_id IN ({placeholders})
-                """,
-                [guild_id, *batch, guild_id, *batch],
-            ).fetchall()
+                WHERE pm.guild_id = ? AND pm.user_id IN ({})
+                """.format(placeholders, placeholders)
+            rows = conn.execute(query, [guild_id, *batch, guild_id, *batch]).fetchall()
             for row in rows:
                 user_id = int(row["user_id"])
                 if user_id in activity_map:
@@ -548,14 +544,12 @@ def get_member_last_activity_map(
     if missing_ids:
         for batch in batched_ids(missing_ids):
             placeholders = ", ".join("?" for _ in batch)
-            rows = conn.execute(
-                f"""
+            query = """
                 SELECT user_id, last_message_at
                 FROM member_xp
-                WHERE guild_id = ? AND user_id IN ({placeholders}) AND last_message_at IS NOT NULL
-                """,
-                [guild_id, *batch],
-            ).fetchall()
+                WHERE guild_id = ? AND user_id IN ({}) AND last_message_at IS NOT NULL
+                """.format(placeholders)
+            rows = conn.execute(query, [guild_id, *batch]).fetchall()
             for row in rows:
                 user_id = int(row["user_id"])
                 if user_id in activity_map:
@@ -690,23 +684,21 @@ def get_xp_leaderboard(
     limit: int = 5,
 ) -> list[LeaderboardEntry]:
     params: list[object] = [guild_id, source]
-    where = "guild_id = ? AND source = ?"
+    where_clause = "guild_id = ? AND source = ?"
     if since_ts is not None:
-        where += " AND created_at >= ?"
+        where_clause += " AND created_at >= ?"
         params.append(since_ts)
     params.append(limit)
 
-    rows = conn.execute(
-        f"""
+    query = """
         SELECT user_id, ROUND(SUM(amount), 2) AS xp
         FROM xp_events
-        WHERE {where}
+        WHERE {}
         GROUP BY user_id
         ORDER BY xp DESC, user_id ASC
         LIMIT ?
-        """,
-        params,
-    ).fetchall()
+        """.format(where_clause)
+    rows = conn.execute(query, params).fetchall()
 
     return [
         LeaderboardEntry(
@@ -725,20 +717,18 @@ def get_xp_distribution_stats(
     since_ts: float | None = None,
 ) -> XpDistributionStats:
     params: list[object] = [guild_id, source]
-    where = "guild_id = ? AND source = ?"
+    where_clause = "guild_id = ? AND source = ?"
     if since_ts is not None:
-        where += " AND created_at >= ?"
+        where_clause += " AND created_at >= ?"
         params.append(since_ts)
 
-    rows = conn.execute(
-        f"""
+    query = """
         SELECT ROUND(SUM(amount), 2) AS xp
         FROM xp_events
-        WHERE {where}
+        WHERE {}
         GROUP BY user_id
-        """,
-        params,
-    ).fetchall()
+        """.format(where_clause)
+    rows = conn.execute(query, params).fetchall()
     values = [float(row["xp"]) for row in rows]
     if not values:
         return XpDistributionStats(member_count=0, median_xp=0.0, stddev_xp=0.0)
@@ -759,21 +749,19 @@ def get_user_xp_standing(
     since_ts: float | None = None,
 ) -> UserXpStanding:
     params: list[object] = [guild_id, source]
-    where = "guild_id = ? AND source = ?"
+    where_clause = "guild_id = ? AND source = ?"
     if since_ts is not None:
-        where += " AND created_at >= ?"
+        where_clause += " AND created_at >= ?"
         params.append(since_ts)
 
-    rows = conn.execute(
-        f"""
+    query = """
         SELECT user_id, ROUND(SUM(amount), 2) AS xp
         FROM xp_events
-        WHERE {where}
+        WHERE {}
         GROUP BY user_id
         ORDER BY xp DESC, user_id ASC
-        """,
-        params,
-    ).fetchall()
+        """.format(where_clause)
+    rows = conn.execute(query, params).fetchall()
 
     for idx, row in enumerate(rows, start=1):
         if int(row["user_id"]) == user_id:
@@ -834,21 +822,19 @@ def get_oldest_xp_event_timestamp(
     sources: tuple[str, ...] | None = None,
 ) -> float | None:
     params: list[object] = [guild_id]
-    where = "guild_id = ?"
+    where_clause = "guild_id = ?"
 
     if sources:
         placeholders = ", ".join("?" for _ in sources)
-        where += f" AND source IN ({placeholders})"
+        where_clause += " AND source IN ({})".format(placeholders)
         params.extend(sources)
 
-    row = conn.execute(
-        f"""
+    query = """
         SELECT MIN(created_at)
         FROM xp_events
-        WHERE {where}
-        """,
-        params,
-    ).fetchone()
+        WHERE {}
+        """.format(where_clause)
+    row = conn.execute(query, params).fetchone()
     if not row or row[0] is None:
         return None
     return float(row[0])

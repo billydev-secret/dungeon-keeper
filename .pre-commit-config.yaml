@@ -1,0 +1,21 @@
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff
+        entry: ./.venv/Scripts/python.exe -m ruff check .
+        language: system
+        pass_filenames: false
+      - id: mypy
+        name: mypy
+        entry: ./.venv/Scripts/python.exe -m mypy
+        language: system
+        pass_filenames: false
+      - id: pytest
+        name: pytest
+        entry: ./.venv/Scripts/python.exe -m pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true
