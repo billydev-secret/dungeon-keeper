@@ -14,6 +14,18 @@ from db_utils import get_config_id_set, get_config_value, open_db, parse_bool
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
 
+def _parse_int_config(raw_value: str, *, key: str, default: int = 0) -> int:
+    """Parse integer config values safely with fallback."""
+    normalized = raw_value.strip()
+    if not normalized:
+        return default
+    try:
+        return int(normalized)
+    except ValueError:
+        print(f"WARNING: invalid integer config for {key}: {raw_value!r}; using {default}.")
+        return default
+
+
 class RuntimeConfig(TypedDict):
     guild_id: int
     mod_channel_id: int
@@ -32,14 +44,22 @@ class RuntimeConfig(TypedDict):
 def load_runtime_config(db_path: Path) -> RuntimeConfig:
     with open_db(db_path) as conn:
         return {
-            "guild_id": int(get_config_value(conn, "guild_id", "0")),
-            "mod_channel_id": int(get_config_value(conn, "mod_channel_id", "0")),
+            "guild_id": _parse_int_config(get_config_value(conn, "guild_id", "0"), key="guild_id"),
+            "mod_channel_id": _parse_int_config(get_config_value(conn, "mod_channel_id", "0"),
+                                                key="mod_channel_id"),
             "debug": parse_bool(get_config_value(conn, "debug", "1"), default=True),
-            "xp_level_5_role_id": int(get_config_value(conn, "xp_level_5_role_id", "0")),
-            "xp_level_5_log_channel_id": int(get_config_value(conn, "xp_level_5_log_channel_id", "0")),
-            "xp_level_up_log_channel_id": int(get_config_value(conn, "xp_level_up_log_channel_id", "0")),
-            "greeter_role_id": int(get_config_value(conn, "greeter_role_id", "0")),
-            "denizen_role_id": int(get_config_value(conn, "denizen_role_id", "0")),
+            "xp_level_5_role_id": _parse_int_config(get_config_value(conn, "xp_level_5_role_id", "0"),
+                                                    key="xp_level_5_role_id"),
+            "xp_level_5_log_channel_id": _parse_int_config(
+                get_config_value(conn, "xp_level_5_log_channel_id", "0"), key="xp_level_5_log_channel_id"
+            ),
+            "xp_level_up_log_channel_id": _parse_int_config(
+                get_config_value(conn, "xp_level_up_log_channel_id", "0"), key="xp_level_up_log_channel_id"
+            ),
+            "greeter_role_id": _parse_int_config(get_config_value(conn, "greeter_role_id", "0"),
+                                                 key="greeter_role_id"),
+            "denizen_role_id": _parse_int_config(get_config_value(conn, "denizen_role_id", "0"),
+                                                 key="denizen_role_id"),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
             "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
@@ -52,18 +72,28 @@ class Bot(discord.Client):
         super().__init__(intents=intents)
         self.tree = discord.app_commands.CommandTree(self)
         self.debug = debug
-        self.guild_id = guild_id
+        self.guild_id = _parse_int_config(str(guild_id), key="guild_id")
         self.startup_task_factories: list[Callable[[], Coroutine[Any, Any, None]]] = []
         self.startup_tasks: list[asyncio.Task[None]] = []
 
     async def setup_hook(self) -> None:
         if self.debug:
-            guild = discord.Object(id=self.guild_id)
-            await self.tree.sync(guild=guild)
-            print("Synced commands to development guild.")
+            if self.guild_id <= 0:
+                print("WARNING: debug=True but guild_id is not configured; skipping guild command sync.")
+            else:
+                guild = discord.Object(id=self.guild_id)
+                try:
+                    synced = await self.tree.sync(guild=guild)
+                    print(f"Synced {len(synced)} commands to development guild {self.guild_id}.")
+                except discord.Forbidden as exc:
+                    print(
+                        "WARNING: missing access while syncing commands to "
+                        f"guild {self.guild_id}: {exc}. Ensure the bot is in this guild and has applications.commands "
+                        f"scope."
+                    )
         else:
-            await self.tree.sync()
-            print("Synced commands globally.")
+            synced = await self.tree.sync()
+            print(f"Synced {len(synced)} commands globally.")
 
         for factory in self.startup_task_factories:
             self.startup_tasks.append(asyncio.create_task(factory()))
@@ -93,7 +123,8 @@ class AppContext:
 
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
-            conn.execute("INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)", (bucket, value))
+            conn.execute("INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)", (bucket,
+                                                                                            value))
             return get_config_id_set(conn, bucket)
 
     def remove_config_id_value(self, bucket: str, value: int) -> set[int]:
