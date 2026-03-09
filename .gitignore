@@ -1,6 +1,11 @@
 .env
-dungeonkeeper.db*
+dungeonkeeper.db
+dungeonkeeper.db-wal
+dungeonkeeper.db-shm
+*.db-wal
+*.db-shm
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
 __pycache__/
+.venv/
