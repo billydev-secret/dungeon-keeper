@@ -82,8 +82,8 @@ class XpSystemTests(unittest.TestCase):
         level_4_threshold = xp_required_for_level(4, DEFAULT_XP_SETTINGS)
         level_5_threshold = xp_required_for_level(5, DEFAULT_XP_SETTINGS)
 
-        self.assertEqual(level_4_threshold, 46.8)
-        self.assertEqual(level_5_threshold, 83.2)
+        self.assertEqual(level_4_threshold, 70.2)
+        self.assertEqual(level_5_threshold, 124.8)
         self.assertEqual(level_for_xp(level_4_threshold - 0.01, DEFAULT_XP_SETTINGS), 3)
         self.assertEqual(level_for_xp(level_4_threshold, DEFAULT_XP_SETTINGS), 4)
         self.assertEqual(level_for_xp(level_5_threshold - 0.01, DEFAULT_XP_SETTINGS), 4)
