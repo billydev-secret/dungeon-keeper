@@ -22,7 +22,7 @@ def _parse_int_config(raw_value: str, *, key: str, default: int = 0) -> int:
     try:
         return int(normalized)
     except ValueError:
-        print(f"WARNING: invalid integer config for {key}: {raw_value!r}; using {default}.")
+        logging.warning("Invalid integer config for %s: %r; using %s.", key, raw_value, default)
         return default
 
 
@@ -39,9 +39,15 @@ class RuntimeConfig(TypedDict):
     bypass_role_ids: set[int]
     xp_grant_allowed_user_ids: set[int]
     xp_excluded_channel_ids: set[int]
+    welcome_channel_id: int
+    welcome_message: str
+    leave_channel_id: int
+    leave_message: str
 
 
 def load_runtime_config(db_path: Path) -> RuntimeConfig:
+    from services.welcome_service import DEFAULT_LEAVE_MESSAGE, DEFAULT_WELCOME_MESSAGE
+
     with open_db(db_path) as conn:
         return {
             "guild_id": _parse_int_config(get_config_value(conn, "guild_id", "0"), key="guild_id"),
@@ -64,6 +70,14 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
             "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
             "xp_excluded_channel_ids": get_config_id_set(conn, "xp_excluded_channel_ids"),
+            "welcome_channel_id": _parse_int_config(
+                get_config_value(conn, "welcome_channel_id", "0"), key="welcome_channel_id"
+            ),
+            "welcome_message": get_config_value(conn, "welcome_message", DEFAULT_WELCOME_MESSAGE),
+            "leave_channel_id": _parse_int_config(
+                get_config_value(conn, "leave_channel_id", "0"), key="leave_channel_id"
+            ),
+            "leave_message": get_config_value(conn, "leave_message", DEFAULT_LEAVE_MESSAGE),
         }
 
 
@@ -116,6 +130,10 @@ class AppContext:
     level_up_log_channel_id: int
     greeter_role_id: int
     denizen_role_id: int
+    welcome_channel_id: int
+    welcome_message: str
+    leave_channel_id: int
+    leave_message: str
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
 
     def open_db(self) -> sqlite3.Connection:

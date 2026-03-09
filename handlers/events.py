@@ -11,6 +11,7 @@ from discord import app_commands
 from post_monitoring import enforce_spoiler_requirement
 from services.auto_delete_service import auto_delete_rule_exists, track_auto_delete_message
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
+from services.welcome_service import build_leave_embed, build_welcome_embed
 from services.xp_service import handle_level_progress
 from xp_system import DEFAULT_XP_SETTINGS, count_xp_events, record_member_activity
 
@@ -122,6 +123,34 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         remove_tracked_auto_delete_message(
             ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
         )
+
+    @bot.event
+    async def on_member_join(member: discord.Member) -> None:
+        if ctx.welcome_channel_id <= 0:
+            return
+        channel = member.guild.get_channel(ctx.welcome_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            await channel.send(embed=build_welcome_embed(member, ctx.welcome_message))
+        except discord.Forbidden:
+            log.warning("Missing permission to send welcome message in channel %s.", ctx.welcome_channel_id)
+        except discord.HTTPException as exc:
+            log.error("Failed to send welcome message: %s", exc)
+
+    @bot.event
+    async def on_member_remove(member: discord.Member) -> None:
+        if ctx.leave_channel_id <= 0:
+            return
+        channel = member.guild.get_channel(ctx.leave_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        try:
+            await channel.send(embed=build_leave_embed(member, ctx.leave_message))
+        except discord.Forbidden:
+            log.warning("Missing permission to send leave message in channel %s.", ctx.leave_channel_id)
+        except discord.HTTPException as exc:
+            log.error("Failed to send leave message: %s", exc)
 
     @bot.event
     async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent):

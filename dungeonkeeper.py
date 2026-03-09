@@ -6,10 +6,12 @@ import discord
 from dotenv import load_dotenv
 
 from app_context import AppContext, Bot, load_runtime_config
+from commands.activity_commands import register_activity_commands
 from commands.auto_delete_commands import register_auto_delete_commands
 from commands.denizen_commands import register_denizen_commands
 from commands.mod_commands import register_mod_commands
 from commands.spoiler_commands import register_spoiler_commands
+from commands.welcome_commands import register_welcome_commands
 from commands.xp_commands import register_xp_commands
 from db_utils import init_config_db, open_db
 from handlers.events import register_events
@@ -72,17 +74,23 @@ ctx = AppContext(
     level_up_log_channel_id=_cfg["xp_level_up_log_channel_id"],
     greeter_role_id=_cfg["greeter_role_id"],
     denizen_role_id=_cfg["denizen_role_id"],
+    welcome_channel_id=_cfg["welcome_channel_id"],
+    welcome_message=_cfg["welcome_message"],
+    leave_channel_id=_cfg["leave_channel_id"],
+    leave_message=_cfg["leave_message"],
 )
 
 # ==============================
 # Event handlers + commands
 # ==============================
 register_events(bot, ctx)
+register_activity_commands(bot, ctx)
 register_xp_commands(bot, ctx)
 register_denizen_commands(bot, ctx)
 register_spoiler_commands(bot, ctx)
 register_auto_delete_commands(bot, ctx)
 register_mod_commands(bot, ctx)
+register_welcome_commands(bot, ctx)
 register_reports(bot, ctx)
 
 # ==============================

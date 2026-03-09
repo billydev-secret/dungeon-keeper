@@ -26,6 +26,7 @@ def _build_help_embed(ctx: AppContext, interaction: discord.Interaction) -> disc
             [
                 ("/help", "Show this guide."),
                 ("/xp_leaderboards timescale:week", "View top XP and your rank for a time window."),
+                ("/activity resolution:day", "Message activity chart for the server or a member."),
             ]
         ),
         inline=False,
@@ -80,6 +81,14 @@ def _build_help_embed(ctx: AppContext, interaction: discord.Interaction) -> disc
                     ("/xp_include_here", "Re-enable XP gain in this channel/thread."),
                     ("/xp_excluded_channels", "List channels/threads where XP is off."),
                     ("/xp_backfill_history days:30", "Import historical message XP for the last N days."),
+                    ("/welcome_set_here", "Send welcome messages in this channel."),
+                    ("/welcome_disable", "Disable welcome messages."),
+                    ("/welcome_set_message message:text", "Set the welcome message template."),
+                    ("/welcome_preview", "Preview the welcome message."),
+                    ("/leave_set_here", "Send leave messages in this channel."),
+                    ("/leave_disable", "Disable leave messages."),
+                    ("/leave_set_message message:text", "Set the leave message template."),
+                    ("/leave_preview", "Preview the leave message."),
                 ]
             ),
             inline=False,
