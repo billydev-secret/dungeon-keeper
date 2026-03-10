@@ -129,11 +129,18 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         for watcher_id in watchers:
             try:
                 watcher = bot.get_user(watcher_id) or await bot.fetch_user(watcher_id)
+            except discord.HTTPException as exc:
+                log.warning(
+                    "Could not fetch watcher (id=%s) while relaying post from %s: %s",
+                    watcher_id, message.author.display_name, exc,
+                )
+                continue
+            try:
                 await watcher.send(embed=embed)
             except (discord.Forbidden, discord.HTTPException) as exc:
                 log.warning(
                     "Could not DM watcher %s for watched user %s: %s",
-                    watcher_id, message.author.id, exc,
+                    watcher.display_name, message.author.display_name, exc,
                 )
 
     @bot.event
