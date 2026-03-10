@@ -135,6 +135,7 @@ class AppContext:
     leave_channel_id: int
     leave_message: str
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
+    watched_users: dict[int, set[int]] = field(default_factory=dict)
 
     def open_db(self) -> sqlite3.Connection:
         return open_db(self.db_path)

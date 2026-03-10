@@ -11,6 +11,7 @@ from commands.auto_delete_commands import register_auto_delete_commands
 from commands.denizen_commands import register_denizen_commands
 from commands.mod_commands import register_mod_commands
 from commands.spoiler_commands import register_spoiler_commands
+from commands.watch_commands import init_watch_tables, load_watched_users, register_watch_commands
 from commands.welcome_commands import register_welcome_commands
 from commands.xp_commands import register_xp_commands
 from db_utils import init_config_db, open_db
@@ -46,6 +47,7 @@ init_config_db(DB_PATH)
 with open_db(DB_PATH) as _conn:
     init_xp_tables(_conn)
     init_auto_delete_tables(_conn)
+    init_watch_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -81,6 +83,12 @@ ctx = AppContext(
 )
 
 # ==============================
+# Populate runtime state from DB
+# ==============================
+with open_db(DB_PATH) as _conn:
+    ctx.watched_users = load_watched_users(_conn, _cfg["guild_id"])
+
+# ==============================
 # Event handlers + commands
 # ==============================
 register_events(bot, ctx)
@@ -92,6 +100,7 @@ register_auto_delete_commands(bot, ctx)
 register_mod_commands(bot, ctx)
 register_welcome_commands(bot, ctx)
 register_reports(bot, ctx)
+register_watch_commands(bot, ctx)
 
 # ==============================
 # Background tasks

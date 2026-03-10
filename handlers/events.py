@@ -96,6 +96,46 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 level_5_log_channel_id=ctx.level_5_log_channel_id,
             )
 
+        if message.author.id in ctx.watched_users:
+            await _dm_watchers(message)
+
+    async def _dm_watchers(message: discord.Message) -> None:
+        watchers = list(ctx.watched_users.get(message.author.id, set()))
+        if not watchers:
+            return
+
+        channel_name = getattr(message.channel, "name", str(message.channel.id))
+        guild_name = message.guild.name if message.guild else "Unknown Server"
+
+        embed = discord.Embed(
+            description=message.content or "*[no text content]*",
+            color=discord.Color.gold(),
+            timestamp=message.created_at,
+        )
+        embed.set_author(
+            name=f"{message.author.display_name} (@{message.author.name})",
+            icon_url=message.author.display_avatar.url,
+        )
+        embed.add_field(name="Server", value=guild_name, inline=True)
+        embed.add_field(name="Channel", value=f"#{channel_name}", inline=True)
+        if message.attachments:
+            embed.add_field(
+                name="Attachments",
+                value="\n".join(a.url for a in message.attachments),
+                inline=False,
+            )
+        embed.add_field(name="Jump to message", value=f"[View]({message.jump_url})", inline=False)
+
+        for watcher_id in watchers:
+            try:
+                watcher = bot.get_user(watcher_id) or await bot.fetch_user(watcher_id)
+                await watcher.send(embed=embed)
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning(
+                    "Could not DM watcher %s for watched user %s: %s",
+                    watcher_id, message.author.id, exc,
+                )
+
     @bot.event
     async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
         result = await award_image_reaction_xp(
