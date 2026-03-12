@@ -108,6 +108,7 @@ class Bot(discord.Client):
             else:
                 guild = discord.Object(id=self.guild_id)
                 try:
+                    self.tree.copy_global_to(guild=guild)
                     synced = await self.tree.sync(guild=guild)
                     print(f"Synced {len(synced)} commands to development guild {self.guild_id}.")
                 except discord.Forbidden as exc:
