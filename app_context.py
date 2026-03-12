@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,11 +50,21 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
     from services.welcome_service import DEFAULT_LEAVE_MESSAGE, DEFAULT_WELCOME_MESSAGE
 
     with open_db(db_path) as conn:
+        guild_id = _parse_int_config(get_config_value(conn, "guild_id", "0"), key="guild_id")
+        if guild_id == 0:
+            guild_id = _parse_int_config(os.environ.get("GUILD_ID", "0"), key="GUILD_ID")
+
+        db_debug = get_config_value(conn, "debug", "")
+        if db_debug:
+            debug = parse_bool(db_debug, default=True)
+        else:
+            debug = parse_bool(os.environ.get("DEBUG", "1"), default=True)
+
         return {
-            "guild_id": _parse_int_config(get_config_value(conn, "guild_id", "0"), key="guild_id"),
+            "guild_id": guild_id,
+            "debug": debug,
             "mod_channel_id": _parse_int_config(get_config_value(conn, "mod_channel_id", "0"),
                                                 key="mod_channel_id"),
-            "debug": parse_bool(get_config_value(conn, "debug", "1"), default=True),
             "xp_level_5_role_id": _parse_int_config(get_config_value(conn, "xp_level_5_role_id", "0"),
                                                     key="xp_level_5_role_id"),
             "xp_level_5_log_channel_id": _parse_int_config(
