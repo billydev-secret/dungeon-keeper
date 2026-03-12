@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import discord
 from discord import app_commands
@@ -10,6 +10,7 @@ from discord import app_commands
 from services.activity_graphs import (
     _WINDOW_LABELS,
     query_message_activity,
+    query_message_histogram,
     render_activity_chart,
 )
 
@@ -28,7 +29,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
     )
     async def activity(
         interaction: discord.Interaction,
-        resolution: Literal["hour", "day", "week", "month"] = "day",
+        resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
         member: discord.Member | None = None,
     ) -> None:
         guild = interaction.guild
@@ -47,13 +48,19 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         else:
             title = f"{guild.name} — Activity ({window_label})"
 
+        user_id = member.id if member is not None else None
         with ctx.open_db() as conn:
-            labels, msg_counts, member_counts = query_message_activity(
-                conn,
-                guild.id,
-                resolution,
-                user_id=member.id if member is not None else None,
-            )
+            if resolution in ("hour_of_day", "day_of_week"):
+                labels, msg_counts = query_message_histogram(
+                    conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution), user_id=user_id
+                )
+                member_counts: list[int] = []
+                show_members = False
+            else:
+                labels, msg_counts, member_counts = query_message_activity(
+                    conn, guild.id, resolution, user_id=user_id
+                )
+                show_members = member is None
 
         if not any(c > 0 for c in msg_counts):
             await interaction.followup.send(
@@ -68,7 +75,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             member_counts,
             title=title,
             resolution=resolution,
-            show_members=(member is None),
+            show_members=show_members,
         )
 
         await interaction.followup.send(

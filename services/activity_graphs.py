@@ -12,7 +12,14 @@ import matplotlib.ticker as ticker
 
 matplotlib.use("Agg")
 
-Resolution = Literal["hour", "day", "week", "month"]
+Resolution = Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"]
+
+_DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+_HOD_LABELS = [
+    "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am",
+    "8am", "9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm",
+    "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
+]
 
 # Discord dark theme palette
 _BG = "#2f3136"
@@ -109,6 +116,8 @@ _WINDOW_LABELS = {
     "day": "Last 30 Days",
     "week": "Last 12 Weeks",
     "month": "Last 12 Months",
+    "hour_of_day": "By Hour of Day",
+    "day_of_week": "By Day of Week",
 }
 
 
@@ -161,6 +170,48 @@ def query_message_activity(
     member_counts = [members_by_key.get(key, 0) for key, _ in bucket_sequence]
 
     return labels, msg_counts, member_counts
+
+
+def query_message_histogram(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Literal["hour_of_day", "day_of_week"],
+    *,
+    user_id: int | None = None,
+) -> tuple[list[str], list[int]]:
+    """
+    Aggregate message counts by hour-of-day (0-23) or day-of-week (0=Sun..6=Sat)
+    across all recorded history.
+
+    Returns (labels, message_counts).
+    """
+    if resolution == "hour_of_day":
+        expr = "CAST(strftime('%H', datetime(created_at, 'unixepoch')) AS INTEGER)"
+        labels = _HOD_LABELS
+        n = 24
+    else:
+        expr = "CAST(strftime('%w', datetime(created_at, 'unixepoch')) AS INTEGER)"
+        labels = _DOW_LABELS
+        n = 7
+
+    params: list[object] = [guild_id]
+    where = "guild_id = ?"
+    if user_id is not None:
+        where += " AND user_id = ?"
+        params.append(user_id)
+
+    rows = conn.execute(
+        f"""
+        SELECT {expr} AS bucket, COUNT(*) AS msg_count
+        FROM processed_messages
+        WHERE {where}
+        GROUP BY bucket
+        """,
+        params,
+    ).fetchall()
+
+    counts_by_bucket = {int(row[0]): int(row[1]) for row in rows}
+    return labels, [counts_by_bucket.get(i, 0) for i in range(n)]
 
 
 # ---------------------------------------------------------------------------
