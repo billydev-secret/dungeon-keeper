@@ -57,6 +57,7 @@ def _build_help_embed(ctx: AppContext, interaction: discord.Interaction) -> disc
                 [
                     ("/listrole role:@Role", "List members who currently have a role."),
                     ("/inactive_role role:@Role days:7", "Show role members inactive in the last N days."),
+                    ("/report_inactive time_period:7d", "Show all server members inactive for a given period."),
                 ]
             ),
             inline=False,
