@@ -275,6 +275,8 @@ def register_denizen_commands(bot: Bot, ctx: AppContext) -> None:
         log_attr="denizen_log_channel_id",
         role_config_key="denizen_role_id",
         log_config_key="denizen_log_channel_id",
+        message_attr="denizen_grant_message",
+        message_config_key="denizen_grant_message",
         can_grant=ctx.can_grant_denizen,
     )
 

@@ -79,6 +79,7 @@ def _make_ctx(**kwargs) -> MagicMock:
     ctx.get_interaction_member = MagicMock(return_value=actor)
     ctx.denizen_role_id = kwargs.get("denizen_role_id", 0)
     ctx.denizen_log_channel_id = kwargs.get("denizen_log_channel_id", 0)
+    ctx.denizen_grant_message = kwargs.get("denizen_grant_message", "")
     ctx.nsfw_role_id = kwargs.get("nsfw_role_id", 0)
     ctx.nsfw_log_channel_id = kwargs.get("nsfw_log_channel_id", 0)
     ctx.veteran_role_id = kwargs.get("veteran_role_id", 0)

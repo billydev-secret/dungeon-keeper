@@ -37,6 +37,7 @@ class RuntimeConfig(TypedDict):
     greeter_role_id: int
     denizen_role_id: int
     denizen_log_channel_id: int
+    denizen_grant_message: str
     nsfw_role_id: int
     nsfw_log_channel_id: int
     nsfw_grant_message: str
@@ -87,6 +88,7 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
             "denizen_log_channel_id": _parse_int_config(
                 get_config_value(conn, "denizen_log_channel_id", "0"), key="denizen_log_channel_id"
             ),
+            "denizen_grant_message": get_config_value(conn, "denizen_grant_message", ""),
             "nsfw_role_id": _parse_int_config(get_config_value(conn, "nsfw_role_id", "0"), key="nsfw_role_id"),
             "nsfw_log_channel_id": _parse_int_config(
                 get_config_value(conn, "nsfw_log_channel_id", "0"), key="nsfw_log_channel_id"
@@ -166,6 +168,7 @@ class AppContext:
     greeter_role_id: int
     denizen_role_id: int
     denizen_log_channel_id: int
+    denizen_grant_message: str
     nsfw_role_id: int
     nsfw_log_channel_id: int
     nsfw_grant_message: str

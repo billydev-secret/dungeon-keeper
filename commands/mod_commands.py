@@ -81,6 +81,7 @@ def _build_help_embed(ctx: AppContext, interaction: discord.Interaction) -> disc
                     ("/set_denizen_role role:@Role", "Role assigned by /grant_denizen."),
                     ("/set_denizen_log_here", "Log Denizen grants here."),
                     ("/denizen_log_disable", "Stop logging Denizen grants."),
+                    ("/set_denizen_message", "Set the message posted on Denizen grant (opens editor)."),
                     ("/set_nsfw_role role:@Role", "Role assigned by /grant_nsfw."),
                     ("/set_nsfw_log_here", "Log NSFW grants here."),
                     ("/nsfw_log_disable", "Stop logging NSFW grants."),

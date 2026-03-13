@@ -77,6 +77,7 @@ ctx = AppContext(
     greeter_role_id=_cfg["greeter_role_id"],
     denizen_role_id=_cfg["denizen_role_id"],
     denizen_log_channel_id=_cfg["denizen_log_channel_id"],
+    denizen_grant_message=_cfg["denizen_grant_message"],
     nsfw_role_id=_cfg["nsfw_role_id"],
     nsfw_log_channel_id=_cfg["nsfw_log_channel_id"],
     nsfw_grant_message=_cfg["nsfw_grant_message"],
