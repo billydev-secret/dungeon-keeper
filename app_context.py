@@ -37,12 +37,15 @@ class RuntimeConfig(TypedDict):
     greeter_role_id: int
     denizen_role_id: int
     denizen_log_channel_id: int
+    denizen_announce_channel_id: int
     denizen_grant_message: str
     nsfw_role_id: int
     nsfw_log_channel_id: int
+    nsfw_announce_channel_id: int
     nsfw_grant_message: str
     veteran_role_id: int
     veteran_log_channel_id: int
+    veteran_announce_channel_id: int
     veteran_grant_message: str
     spoiler_required_channels: set[int]
     bypass_role_ids: set[int]
@@ -89,16 +92,25 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
                 get_config_value(conn, "denizen_log_channel_id", "0"), key="denizen_log_channel_id"
             ),
             "denizen_grant_message": get_config_value(conn, "denizen_grant_message", ""),
+            "denizen_announce_channel_id": _parse_int_config(
+                get_config_value(conn, "denizen_announce_channel_id", "0"), key="denizen_announce_channel_id"
+            ),
             "nsfw_role_id": _parse_int_config(get_config_value(conn, "nsfw_role_id", "0"), key="nsfw_role_id"),
             "nsfw_log_channel_id": _parse_int_config(
                 get_config_value(conn, "nsfw_log_channel_id", "0"), key="nsfw_log_channel_id"
             ),
             "nsfw_grant_message": get_config_value(conn, "nsfw_grant_message", ""),
+            "nsfw_announce_channel_id": _parse_int_config(
+                get_config_value(conn, "nsfw_announce_channel_id", "0"), key="nsfw_announce_channel_id"
+            ),
             "veteran_role_id": _parse_int_config(get_config_value(conn, "veteran_role_id", "0"), key="veteran_role_id"),
             "veteran_log_channel_id": _parse_int_config(
                 get_config_value(conn, "veteran_log_channel_id", "0"), key="veteran_log_channel_id"
             ),
             "veteran_grant_message": get_config_value(conn, "veteran_grant_message", ""),
+            "veteran_announce_channel_id": _parse_int_config(
+                get_config_value(conn, "veteran_announce_channel_id", "0"), key="veteran_announce_channel_id"
+            ),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
             "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
@@ -168,12 +180,15 @@ class AppContext:
     greeter_role_id: int
     denizen_role_id: int
     denizen_log_channel_id: int
+    denizen_announce_channel_id: int
     denizen_grant_message: str
     nsfw_role_id: int
     nsfw_log_channel_id: int
+    nsfw_announce_channel_id: int
     nsfw_grant_message: str
     veteran_role_id: int
     veteran_log_channel_id: int
+    veteran_announce_channel_id: int
     veteran_grant_message: str
     welcome_channel_id: int
     welcome_message: str

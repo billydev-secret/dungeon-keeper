@@ -69,6 +69,7 @@ async def _execute_grant(
     member: discord.Member,
     role_id: int,
     log_channel_id: int,
+    announce_channel_id: int,
     grant_message: str,
     ctx: AppContext,
 ) -> None:
@@ -138,14 +139,19 @@ async def _execute_grant(
         f"{member.mention} has been granted {role.mention}.", ephemeral=False
     )
 
+    if announce_channel_id > 0 and grant_message:
+        announce_channel = guild.get_channel(announce_channel_id)
+        if isinstance(announce_channel, discord.TextChannel):
+            await announce_channel.send(
+                _resolve_grant_message(grant_message, member, role, actor, interaction)
+            )
+
     if log_channel_id > 0:
         log_channel = guild.get_channel(log_channel_id)
         if isinstance(log_channel, discord.TextChannel):
-            if grant_message:
-                msg = _resolve_grant_message(grant_message, member, role, actor, interaction)
-            else:
-                msg = f"{member.mention} was granted {role.mention} by {interaction.user.mention}."
-            await log_channel.send(msg)
+            await log_channel.send(
+                f"{member.mention} was granted {role.mention} by {interaction.user.mention}."
+            )
 
 
 def _register_grant_message_command(
@@ -180,8 +186,10 @@ def _make_set_role_commands(
     grant_name: str,
     role_attr: str,
     log_attr: str,
+    announce_attr: str,
     role_config_key: str,
     log_config_key: str,
+    announce_config_key: str,
     message_attr: str | None = None,
     message_config_key: str | None = None,
     can_grant,
@@ -201,6 +209,7 @@ def _make_set_role_commands(
             interaction, member,
             role_id=getattr(ctx, role_attr),
             log_channel_id=getattr(ctx, log_attr),
+            announce_channel_id=getattr(ctx, announce_attr),
             grant_message=getattr(ctx, message_attr) if message_attr else "",
             ctx=ctx,
         )
@@ -244,6 +253,33 @@ def _make_set_role_commands(
             f"/grant_{grant_name} logging disabled.", ephemeral=True
         )
 
+    desc = f"Post /grant_{grant_name} messages in this channel."
+    @bot.tree.command(name=f"set_{grant_name}_announce_here", description=desc)
+    async def set_announce_cmd(interaction: discord.Interaction):
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        setattr(ctx, announce_attr, interaction.channel_id)
+        ctx.set_config_value(announce_config_key, str(interaction.channel_id))
+        await interaction.response.send_message(
+            f"/grant_{grant_name} messages will be posted in this channel.", ephemeral=True
+        )
+
+    @bot.tree.command(name=f"{grant_name}_announce_disable", description=f"Stop posting /grant_{grant_name} messages.")
+    async def disable_announce_cmd(interaction: discord.Interaction):
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        setattr(ctx, announce_attr, 0)
+        ctx.set_config_value(announce_config_key, "0")
+        await interaction.response.send_message(
+            f"/grant_{grant_name} announce channel disabled.", ephemeral=True
+        )
+
     if message_attr and message_config_key:
         _register_grant_message_command(
             bot, ctx,
@@ -273,8 +309,10 @@ def register_denizen_commands(bot: Bot, ctx: AppContext) -> None:
         grant_name="denizen",
         role_attr="denizen_role_id",
         log_attr="denizen_log_channel_id",
+        announce_attr="denizen_announce_channel_id",
         role_config_key="denizen_role_id",
         log_config_key="denizen_log_channel_id",
+        announce_config_key="denizen_announce_channel_id",
         message_attr="denizen_grant_message",
         message_config_key="denizen_grant_message",
         can_grant=ctx.can_grant_denizen,
@@ -285,8 +323,10 @@ def register_denizen_commands(bot: Bot, ctx: AppContext) -> None:
         grant_name="nsfw",
         role_attr="nsfw_role_id",
         log_attr="nsfw_log_channel_id",
+        announce_attr="nsfw_announce_channel_id",
         role_config_key="nsfw_role_id",
         log_config_key="nsfw_log_channel_id",
+        announce_config_key="nsfw_announce_channel_id",
         message_attr="nsfw_grant_message",
         message_config_key="nsfw_grant_message",
         can_grant=ctx.can_grant_denizen,
@@ -297,8 +337,10 @@ def register_denizen_commands(bot: Bot, ctx: AppContext) -> None:
         grant_name="veteran",
         role_attr="veteran_role_id",
         log_attr="veteran_log_channel_id",
+        announce_attr="veteran_announce_channel_id",
         role_config_key="veteran_role_id",
         log_config_key="veteran_log_channel_id",
+        announce_config_key="veteran_announce_channel_id",
         message_attr="veteran_grant_message",
         message_config_key="veteran_grant_message",
         can_grant=ctx.can_grant_denizen,
