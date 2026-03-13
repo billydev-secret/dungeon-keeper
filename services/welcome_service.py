@@ -31,7 +31,8 @@ def build_welcome_embed(member: discord.Member, message_template: str) -> discor
         color=discord.Color.blurple(),
     )
     embed.set_author(name=f"Welcome, {member.display_name}!", icon_url=member.display_avatar.url)
-    embed.set_thumbnail(url=member.display_avatar.url)
+    if member.guild.icon:
+        embed.set_thumbnail(url=member.guild.icon.url)
     member_count = member.guild.member_count or 0
     embed.set_footer(text=f"Member #{member_count} · {member.guild.name}")
     return embed
