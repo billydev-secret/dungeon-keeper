@@ -78,6 +78,11 @@ def _make_ctx(**kwargs) -> MagicMock:
     actor.id = kwargs.get("actor_id", 100)
     ctx.get_interaction_member = MagicMock(return_value=actor)
     ctx.denizen_role_id = kwargs.get("denizen_role_id", 0)
+    ctx.denizen_log_channel_id = kwargs.get("denizen_log_channel_id", 0)
+    ctx.nsfw_role_id = kwargs.get("nsfw_role_id", 0)
+    ctx.nsfw_log_channel_id = kwargs.get("nsfw_log_channel_id", 0)
+    ctx.veteran_role_id = kwargs.get("veteran_role_id", 0)
+    ctx.veteran_log_channel_id = kwargs.get("veteran_log_channel_id", 0)
     ctx.greeter_role_id = kwargs.get("greeter_role_id", 0)
     ctx.spoiler_required_channels = kwargs.get("spoiler_required_channels", set())
     ctx.xp_excluded_channel_ids = kwargs.get("xp_excluded_channel_ids", set())
@@ -562,21 +567,21 @@ class HelpCommandTests(unittest.TestCase):
         embed = self._run_help(is_mod=False, can_grant=False, can_xp=False)
         field_names = [f.name for f in embed.fields]
         self.assertIn("General", field_names)
-        self.assertNotIn("Moderation", field_names)
-        self.assertNotIn("Configuration", field_names)
+        self.assertNotIn("Reports", field_names)
+        self.assertNotIn("Role Grant Config", field_names)
 
     def test_mod_sees_full_help(self):
         embed = self._run_help(is_mod=True, can_grant=True, can_xp=True)
         field_names = [f.name for f in embed.fields]
         self.assertIn("General", field_names)
-        self.assertIn("Moderation", field_names)
-        self.assertIn("Configuration", field_names)
+        self.assertIn("Reports", field_names)
+        self.assertIn("Role Grant Config", field_names)
 
     def test_greeter_sees_greeter_section(self):
         embed = self._run_help(is_mod=False, can_grant=True, can_xp=False)
         field_names = [f.name for f in embed.fields]
-        self.assertIn("Greeter", field_names)
-        self.assertNotIn("Moderation", field_names)
+        self.assertIn("Role Grants", field_names)
+        self.assertNotIn("Reports", field_names)
 
     def test_help_always_ephemeral(self):
         cap = _CommandCapture()

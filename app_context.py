@@ -36,6 +36,11 @@ class RuntimeConfig(TypedDict):
     xp_level_up_log_channel_id: int
     greeter_role_id: int
     denizen_role_id: int
+    denizen_log_channel_id: int
+    nsfw_role_id: int
+    nsfw_log_channel_id: int
+    veteran_role_id: int
+    veteran_log_channel_id: int
     spoiler_required_channels: set[int]
     bypass_role_ids: set[int]
     xp_grant_allowed_user_ids: set[int]
@@ -77,6 +82,17 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
                                                  key="greeter_role_id"),
             "denizen_role_id": _parse_int_config(get_config_value(conn, "denizen_role_id", "0"),
                                                  key="denizen_role_id"),
+            "denizen_log_channel_id": _parse_int_config(
+                get_config_value(conn, "denizen_log_channel_id", "0"), key="denizen_log_channel_id"
+            ),
+            "nsfw_role_id": _parse_int_config(get_config_value(conn, "nsfw_role_id", "0"), key="nsfw_role_id"),
+            "nsfw_log_channel_id": _parse_int_config(
+                get_config_value(conn, "nsfw_log_channel_id", "0"), key="nsfw_log_channel_id"
+            ),
+            "veteran_role_id": _parse_int_config(get_config_value(conn, "veteran_role_id", "0"), key="veteran_role_id"),
+            "veteran_log_channel_id": _parse_int_config(
+                get_config_value(conn, "veteran_log_channel_id", "0"), key="veteran_log_channel_id"
+            ),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
             "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
@@ -111,6 +127,9 @@ class Bot(discord.Client):
                     self.tree.copy_global_to(guild=guild)
                     synced = await self.tree.sync(guild=guild)
                     print(f"Synced {len(synced)} commands to development guild {self.guild_id}.")
+                    # Clear any stale global commands so they don't appear alongside guild commands.
+                    await self.tree.sync()
+                    print("Cleared global commands (debug mode).")
                 except discord.Forbidden as exc:
                     print(
                         "WARNING: missing access while syncing commands to "
@@ -142,6 +161,11 @@ class AppContext:
     level_up_log_channel_id: int
     greeter_role_id: int
     denizen_role_id: int
+    denizen_log_channel_id: int
+    nsfw_role_id: int
+    nsfw_log_channel_id: int
+    veteran_role_id: int
+    veteran_log_channel_id: int
     welcome_channel_id: int
     welcome_message: str
     leave_channel_id: int
