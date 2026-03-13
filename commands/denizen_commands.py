@@ -39,6 +39,31 @@ def _resolve_grant_message(
     )
 
 
+class _GrantMessageModal(discord.ui.Modal, title="Set Grant Message"):
+    message: discord.ui.TextInput = discord.ui.TextInput(
+        label="Message template",
+        placeholder=_GRANT_PLACEHOLDER_SHORT,
+        style=discord.TextStyle.paragraph,
+        max_length=1000,
+        required=True,
+    )
+
+    def __init__(self, *, ctx: AppContext, message_attr: str, message_config_key: str, grant_name: str, current: str) -> None:  # noqa: E501
+        super().__init__(title=f"Set {grant_name.title()} Grant Message")
+        self._ctx = ctx
+        self._message_attr = message_attr
+        self._message_config_key = message_config_key
+        self._grant_name = grant_name
+        self.message.default = current
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        setattr(self._ctx, self._message_attr, self.message.value)
+        self._ctx.set_config_value(self._message_config_key, self.message.value)
+        await interaction.response.send_message(
+            f"/grant_{self._grant_name} message updated.", ephemeral=True
+        )
+
+
 async def _execute_grant(
     interaction: discord.Interaction,
     member: discord.Member,
@@ -131,26 +156,6 @@ def _register_grant_message_command(
     message_attr: str,
     message_config_key: str,
 ) -> None:
-    class _GrantMessageModal(discord.ui.Modal, title=f"Set {grant_name.title()} Grant Message"):
-        message: discord.ui.TextInput = discord.ui.TextInput(
-            label="Message template",
-            placeholder=_GRANT_PLACEHOLDER_SHORT,
-            style=discord.TextStyle.paragraph,
-            max_length=1000,
-            required=True,
-        )
-
-        def __init__(self_modal, current: str) -> None:
-            super().__init__()
-            self_modal.message.default = current
-
-        async def on_submit(self_modal, interaction: discord.Interaction) -> None:
-            setattr(ctx, message_attr, self_modal.message.value)
-            ctx.set_config_value(message_config_key, self_modal.message.value)
-            await interaction.response.send_message(
-                f"/grant_{grant_name} message updated.", ephemeral=True
-            )
-
     @bot.tree.command(name=f"set_{grant_name}_message", description=f"Set the message posted on /grant_{grant_name}.")
     async def set_message_cmd(interaction: discord.Interaction):
         if not ctx.is_mod(interaction):
@@ -159,7 +164,13 @@ def _register_grant_message_command(
             )
             return
         current = getattr(ctx, message_attr, "")
-        await interaction.response.send_modal(_GrantMessageModal(current))
+        await interaction.response.send_modal(_GrantMessageModal(
+            ctx=ctx,
+            message_attr=message_attr,
+            message_config_key=message_config_key,
+            grant_name=grant_name,
+            current=current,
+        ))
 
 
 def _make_set_role_commands(
