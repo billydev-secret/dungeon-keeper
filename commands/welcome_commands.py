@@ -5,10 +5,8 @@ import logging
 from typing import TYPE_CHECKING
 
 import discord
-from discord import app_commands
 
 from services.welcome_service import (
-    PLACEHOLDER_HELP,
     build_leave_embed,
     build_welcome_embed,
 )
@@ -17,6 +15,50 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.welcome")
+
+_PLACEHOLDER_SHORT = "Placeholders: {member} {member_name} {member_id} {server} {member_count}"
+
+
+class _WelcomeMessageModal(discord.ui.Modal, title="Set Welcome Message"):
+    message: discord.ui.TextInput = discord.ui.TextInput(
+        label="Message template",
+        placeholder=_PLACEHOLDER_SHORT,
+        style=discord.TextStyle.paragraph,
+        max_length=1000,
+        required=True,
+    )
+
+    def __init__(self, ctx: AppContext, current: str) -> None:
+        super().__init__()
+        self.ctx = ctx
+        self.message.default = current
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        self.ctx.welcome_message = self.ctx.set_config_value("welcome_message", self.message.value)
+        await interaction.response.send_message(
+            "Welcome message updated. Use `/welcome_preview` to see how it looks.", ephemeral=True
+        )
+
+
+class _LeaveMessageModal(discord.ui.Modal, title="Set Leave Message"):
+    message: discord.ui.TextInput = discord.ui.TextInput(
+        label="Message template",
+        placeholder=_PLACEHOLDER_SHORT,
+        style=discord.TextStyle.paragraph,
+        max_length=1000,
+        required=True,
+    )
+
+    def __init__(self, ctx: AppContext, current: str) -> None:
+        super().__init__()
+        self.ctx = ctx
+        self.message.default = current
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        self.ctx.leave_message = self.ctx.set_config_value("leave_message", self.message.value)
+        await interaction.response.send_message(
+            "Leave message updated. Use `/leave_preview` to see how it looks.", ephemeral=True
+        )
 
 
 def register_welcome_commands(bot: "Bot", ctx: "AppContext") -> None:
@@ -63,18 +105,13 @@ def register_welcome_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="welcome_set_message",
         description="Set the welcome message template.",
     )
-    @app_commands.describe(message=f"Template text. {PLACEHOLDER_HELP}")
-    async def welcome_set_message(interaction: discord.Interaction, message: str) -> None:
+    async def welcome_set_message(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
-
-        ctx.welcome_message = ctx.set_config_value("welcome_message", message)
-        await interaction.response.send_message(
-            "Welcome message updated. Use `/welcome_preview` to see how it looks.", ephemeral=True
-        )
+        await interaction.response.send_modal(_WelcomeMessageModal(ctx, ctx.welcome_message))
 
     @bot.tree.command(
         name="welcome_preview",
@@ -144,18 +181,13 @@ def register_welcome_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="leave_set_message",
         description="Set the leave message template.",
     )
-    @app_commands.describe(message=f"Template text. {PLACEHOLDER_HELP}")
-    async def leave_set_message(interaction: discord.Interaction, message: str) -> None:
+    async def leave_set_message(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
-
-        ctx.leave_message = ctx.set_config_value("leave_message", message)
-        await interaction.response.send_message(
-            "Leave message updated. Use `/leave_preview` to see how it looks.", ephemeral=True
-        )
+        await interaction.response.send_modal(_LeaveMessageModal(ctx, ctx.leave_message))
 
     @bot.tree.command(
         name="leave_preview",
