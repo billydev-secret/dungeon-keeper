@@ -560,34 +560,33 @@ class XpConfigCommandSuccessTests(unittest.TestCase):
 
 
 class HelpCommandTests(unittest.TestCase):
-    def _run_help(self, *, is_mod: bool, can_grant: bool, can_xp: bool) -> discord.Embed:
+    def _run_help(self, *, is_mod: bool, can_grant: bool, can_xp: bool) -> list[str]:
+        """Return the list of section names shown in the help dropdown."""
         cap = _CommandCapture()
         ctx = _make_ctx(is_mod=is_mod, can_grant_denizen=can_grant, can_use_xp_grant=can_xp)
         register_mod_commands(cap.bot, ctx)
         ix = _make_interaction()
         _run(cap.get("help")(ix))
         ix.response.send_message.assert_awaited_once()
-        return ix.response.send_message.call_args[1]["embed"]
+        view = ix.response.send_message.call_args[1]["view"]
+        return [opt.label for opt in view.select.options]
 
     def test_general_user_sees_limited_help(self):
-        embed = self._run_help(is_mod=False, can_grant=False, can_xp=False)
-        field_names = [f.name for f in embed.fields]
-        self.assertIn("General", field_names)
-        self.assertNotIn("Reports", field_names)
-        self.assertNotIn("Role Grant Config", field_names)
+        sections = self._run_help(is_mod=False, can_grant=False, can_xp=False)
+        self.assertIn("General", sections)
+        self.assertNotIn("Reports", sections)
+        self.assertNotIn("Role Grant Config", sections)
 
     def test_mod_sees_full_help(self):
-        embed = self._run_help(is_mod=True, can_grant=True, can_xp=True)
-        field_names = [f.name for f in embed.fields]
-        self.assertIn("General", field_names)
-        self.assertIn("Reports", field_names)
-        self.assertIn("Role Grant Config", field_names)
+        sections = self._run_help(is_mod=True, can_grant=True, can_xp=True)
+        self.assertIn("General", sections)
+        self.assertIn("Reports", sections)
+        self.assertIn("Role Grant Config", sections)
 
     def test_greeter_sees_greeter_section(self):
-        embed = self._run_help(is_mod=False, can_grant=True, can_xp=False)
-        field_names = [f.name for f in embed.fields]
-        self.assertIn("Role Grants", field_names)
-        self.assertNotIn("Reports", field_names)
+        sections = self._run_help(is_mod=False, can_grant=True, can_xp=False)
+        self.assertIn("Role Grants", sections)
+        self.assertNotIn("Reports", sections)
 
     def test_help_always_ephemeral(self):
         cap = _CommandCapture()

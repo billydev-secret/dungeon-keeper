@@ -119,6 +119,52 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             )
         await send_ephemeral_text(interaction, summary)
 
+    @bot.tree.command(
+        name="oldest_sfw_members",
+        description="Show members without spicy access who have the oldest last messages.",
+    )
+    @app_commands.describe(count="How many members to show (default 10)")
+    async def oldest_sfw_members(
+        interaction: discord.Interaction,
+        count: app_commands.Range[int, 1, 50] = 10,
+    ):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_roles:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        nsfw_role = guild.get_role(ctx.nsfw_role_id) if ctx.nsfw_role_id else None
+        sfw_members = [
+            m for m in guild.members
+            if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
+        ]
+        sfw_member_ids = [m.id for m in sfw_members]
+
+        with ctx.open_db() as conn:
+            activities = ctx.get_member_last_activity_map(conn, guild.id, sfw_member_ids)
+
+        sorted_members = sorted(
+            sfw_members,
+            key=lambda m: activities[m.id].created_at if m.id in activities else 0,
+        )
+        top = sorted_members[:count]
+
+        nsfw_role_label = nsfw_role.name if nsfw_role else "spicy role (not configured)"
+        header = (
+            f"**Oldest SFW Members (no {nsfw_role_label}) — top {count}**\n"
+            f"Total without spicy access: {len(sfw_members)}\n"
+            f"----------------------------------\n"
+        )
+        block = "\n".join(format_member_activity_line(m, activities.get(m.id)) for m in top)
+        await send_ephemeral_text(interaction, header + block)
+
     @bot.tree.command(name="report_inactive", description="Show all server members inactive for a given period.")
     @app_commands.describe(time_period="How long without a message counts as inactive, e.g. 7d, 2h, 30m")
     async def report_inactive(interaction: discord.Interaction, time_period: str):
