@@ -5,6 +5,7 @@ import asyncio
 import logging
 import sqlite3
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -401,9 +402,101 @@ async def process_auto_delete_tick(
         touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
 
 
+async def _scan_and_delete_channel_history(
+    channel: GuildTextLike,
+    cutoff: datetime,
+    *,
+    reason: str,
+) -> tuple[int, int]:
+    """Scan channel history and delete unpinned messages older than cutoff datetime."""
+    deleted = 0
+    failed = 0
+    next_delete_at = 0.0
+
+    async for message in channel.history(limit=None, before=cutoff, oldest_first=True):
+        if message.pinned:
+            continue
+        now_monotonic = time.monotonic()
+        if now_monotonic < next_delete_at:
+            await asyncio.sleep(next_delete_at - now_monotonic)
+        try:
+            delete_call = cast(Any, message.delete)
+            try:
+                await delete_call(reason=reason)
+            except TypeError:
+                await message.delete()
+            deleted += 1
+            next_delete_at = time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
+        except discord.NotFound:
+            pass
+        except discord.Forbidden:
+            failed += 1
+            break
+        except discord.HTTPException:
+            failed += 1
+
+    return deleted, failed
+
+
+async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
+    """On startup, scan every auto-delete channel for messages that should already be gone."""
+    from datetime import timedelta
+
+    from utils import get_guild_channel_or_thread
+
+    rules = list_auto_delete_rules(db_path)
+    if not rules:
+        return
+
+    now_ts = time.time()
+    for rule in rules:
+        guild_id = int(rule["guild_id"])
+        channel_id = int(rule["channel_id"])
+        max_age_seconds = int(rule["max_age_seconds"])
+
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            continue
+
+        channel = get_guild_channel_or_thread(guild, channel_id)
+        if channel is None:
+            log.warning(
+                "Auto-delete startup: channel %s not found in guild %s; skipping.",
+                channel_id,
+                guild_id,
+            )
+            continue
+
+        cutoff = discord.utils.utcnow() - timedelta(seconds=max_age_seconds)
+        try:
+            deleted, failed = await _scan_and_delete_channel_history(
+                channel, cutoff, reason="Auto-delete startup catchup"
+            )
+            if deleted > 0 or failed > 0:
+                log.info(
+                    "Auto-delete startup #%s (guild %s): deleted=%s failed=%s",
+                    channel_id,
+                    guild_id,
+                    deleted,
+                    failed,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Auto-delete startup failed for guild=%s channel=%s",
+                guild_id,
+                channel_id,
+            )
+
+        touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
+
+
 async def auto_delete_loop(bot: discord.Client, db_path: Path) -> None:
     """Background task that periodically processes auto-delete rules."""
     await bot.wait_until_ready()
+
+    await run_startup_auto_delete(bot, db_path)
 
     while not bot.is_closed():
         try:

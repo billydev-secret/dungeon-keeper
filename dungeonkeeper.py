@@ -9,6 +9,7 @@ from app_context import AppContext, Bot, load_runtime_config
 from commands.activity_commands import register_activity_commands
 from commands.auto_delete_commands import register_auto_delete_commands
 from commands.denizen_commands import register_denizen_commands
+from commands.inactivity_prune_commands import register_inactivity_prune_commands
 from commands.mod_commands import register_mod_commands
 from commands.spoiler_commands import register_spoiler_commands
 from commands.watch_commands import init_watch_tables, load_watched_users, register_watch_commands
@@ -18,6 +19,7 @@ from db_utils import init_config_db, open_db
 from handlers.events import register_events
 from reports import register_reports
 from services.auto_delete_service import auto_delete_loop, init_auto_delete_tables
+from services.inactivity_prune_service import inactivity_prune_loop, init_inactivity_prune_tables
 from services.voice_xp_service import voice_xp_loop
 from services.xp_service import handle_level_progress
 from xp_system import init_xp_tables
@@ -48,6 +50,7 @@ with open_db(DB_PATH) as _conn:
     init_xp_tables(_conn)
     init_auto_delete_tables(_conn)
     init_watch_tables(_conn)
+    init_inactivity_prune_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -108,6 +111,7 @@ register_xp_commands(bot, ctx)
 register_denizen_commands(bot, ctx)
 register_spoiler_commands(bot, ctx)
 register_auto_delete_commands(bot, ctx)
+register_inactivity_prune_commands(bot, ctx)
 register_mod_commands(bot, ctx)
 register_welcome_commands(bot, ctx)
 register_reports(bot, ctx)
@@ -132,6 +136,10 @@ bot.startup_task_factories.append(
 
 bot.startup_task_factories.append(
     lambda: auto_delete_loop(bot, DB_PATH)
+)
+
+bot.startup_task_factories.append(
+    lambda: inactivity_prune_loop(bot, DB_PATH)
 )
 
 # ==============================

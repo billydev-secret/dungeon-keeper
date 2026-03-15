@@ -128,7 +128,7 @@ class OnMessageTests(unittest.TestCase):
         mock_spoiler.return_value = True
         msg = _make_message()
         _run(self.on_message(msg))
-        mock_activity.assert_not_called()
+        mock_activity.assert_called_once()
         mock_award.assert_not_called()
 
     @patch("handlers.events.handle_level_progress", new_callable=AsyncMock)

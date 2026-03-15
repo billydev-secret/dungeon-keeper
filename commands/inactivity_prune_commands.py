@@ -1,0 +1,185 @@
+"""Inactivity prune slash commands."""
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import discord
+from discord import app_commands
+
+from services.inactivity_prune_service import (
+    add_prune_exception,
+    get_prune_exception_ids,
+    get_prune_rule,
+    remove_prune_exception,
+    remove_prune_rule,
+    run_prune_for_guild,
+    upsert_prune_rule,
+)
+
+if TYPE_CHECKING:
+    from app_context import AppContext, Bot
+
+
+def register_inactivity_prune_commands(bot: Bot, ctx: AppContext) -> None:
+
+    @bot.tree.command(
+        name="inactivity_prune_setup",
+        description="Remove a role from members inactive for N days. Runs daily at midnight UTC.",
+    )
+    @app_commands.describe(
+        role="Role to remove from inactive members.",
+        days="Days of inactivity before the role is removed.",
+    )
+    async def inactivity_prune_setup(
+        interaction: discord.Interaction,
+        role: discord.Role,
+        days: app_commands.Range[int, 1, 365],
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        upsert_prune_rule(ctx.db_path, guild.id, role.id, days)
+        await interaction.response.send_message(
+            f"Inactivity prune configured: **@{role.name}** will be removed from members "
+            f"inactive for **{days} day(s)**. Runs daily at midnight UTC.",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="inactivity_prune_disable",
+        description="Disable the inactivity prune for this server.",
+    )
+    async def inactivity_prune_disable(interaction: discord.Interaction) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        removed = remove_prune_rule(ctx.db_path, guild.id)
+        if removed:
+            await interaction.response.send_message("Inactivity prune disabled.", ephemeral=True)
+        else:
+            await interaction.response.send_message("No inactivity prune rule was configured.", ephemeral=True)
+
+    @bot.tree.command(
+        name="inactivity_prune_status",
+        description="Show the current inactivity prune configuration.",
+    )
+    async def inactivity_prune_status(interaction: discord.Interaction) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        rule = get_prune_rule(ctx.db_path, guild.id)
+        if rule is None:
+            await interaction.response.send_message("No inactivity prune rule is configured.", ephemeral=True)
+            return
+
+        role = guild.get_role(int(rule["role_id"]))
+        role_label = f"@{role.name}" if role else f"<deleted role {rule['role_id']}>"
+        days = int(rule["inactivity_days"])
+
+        exception_ids = get_prune_exception_ids(ctx.db_path, guild.id)
+        exception_mentions = []
+        for uid in sorted(exception_ids):
+            member = guild.get_member(uid)
+            exception_mentions.append(member.display_name if member else f"<user {uid}>")
+
+        exempt_block = ", ".join(exception_mentions) if exception_mentions else "none"
+        await interaction.response.send_message(
+            f"**Inactivity Prune Config**\n"
+            f"Role: **{role_label}**\n"
+            f"Inactivity threshold: **{days} day(s)**\n"
+            f"Schedule: daily at midnight UTC\n"
+            f"Exemptions: {exempt_block}",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="inactivity_prune_exempt",
+        description="Exempt a member from inactivity pruning.",
+    )
+    @app_commands.describe(member="Member to exempt.")
+    async def inactivity_prune_exempt(
+        interaction: discord.Interaction,
+        member: discord.Member,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        add_prune_exception(ctx.db_path, guild.id, member.id)
+        await interaction.response.send_message(
+            f"**{member.display_name}** is now exempt from inactivity pruning.", ephemeral=True
+        )
+
+    @bot.tree.command(
+        name="inactivity_prune_unexempt",
+        description="Remove a member's inactivity prune exemption.",
+    )
+    @app_commands.describe(member="Member to remove from the exemption list.")
+    async def inactivity_prune_unexempt(
+        interaction: discord.Interaction,
+        member: discord.Member,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        removed = remove_prune_exception(ctx.db_path, guild.id, member.id)
+        if removed:
+            await interaction.response.send_message(
+                f"**{member.display_name}** is no longer exempt from inactivity pruning.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"**{member.display_name}** was not on the exemption list.", ephemeral=True
+            )
+
+    @bot.tree.command(
+        name="inactivity_prune_run",
+        description="Run the inactivity prune immediately (mod only).",
+    )
+    async def inactivity_prune_run(interaction: discord.Interaction) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        rule = get_prune_rule(ctx.db_path, guild.id)
+        if rule is None:
+            await interaction.response.send_message("No inactivity prune rule is configured.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        await run_prune_for_guild(
+            ctx.bot,
+            ctx.db_path,
+            guild.id,
+            int(rule["role_id"]),
+            int(rule["inactivity_days"]),
+        )
+        await interaction.followup.send("Inactivity prune completed.", ephemeral=True)

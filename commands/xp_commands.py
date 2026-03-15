@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 
 from services.xp_service import handle_level_progress, maybe_grant_level_role
-from utils import get_bot_member, resolve_reply_target
+from utils import get_bot_member
 from xp_system import (
     DEFAULT_XP_SETTINGS,
     XP_SOURCE_GRANT,
@@ -20,7 +20,6 @@ from xp_system import (
     MessageXpContext,
     apply_xp_award,
     calculate_message_xp,
-    get_oldest_xp_event_timestamp,
     get_user_xp_standing,
     get_xp_distribution_stats,
     get_xp_leaderboard,
@@ -30,6 +29,7 @@ from xp_system import (
     is_message_processed,
     mark_message_processed,
     normalize_message_content,
+    record_member_activity,
     record_xp_event,
     update_pair_state,
 )
@@ -39,10 +39,36 @@ if TYPE_CHECKING:
     from xp_system import PairState
 
 
-def _iter_backfill_channels(guild: discord.Guild) -> list[discord.TextChannel | discord.Thread]:
-    channels: list[discord.TextChannel | discord.Thread] = list(guild.text_channels)
+async def _collect_backfill_channels(
+    guild: discord.Guild,
+    me: discord.Member | None,
+) -> list[discord.TextChannel | discord.Thread]:
+    """Return all text channels plus active and archived threads the bot can read."""
+    channels: list[discord.TextChannel | discord.Thread] = []
+    seen_ids: set[int] = set()
+
+    for channel in guild.text_channels:
+        channels.append(channel)
+        seen_ids.add(channel.id)
+
     for thread in guild.threads:
-        channels.append(thread)
+        if thread.id not in seen_ids:
+            channels.append(thread)
+            seen_ids.add(thread.id)
+
+    for text_channel in guild.text_channels:
+        if me and not text_channel.permissions_for(me).read_message_history:
+            continue
+        try:
+            async for archived_thread in text_channel.archived_threads(limit=None):
+                if archived_thread.id not in seen_ids:
+                    channels.append(archived_thread)
+                    seen_ids.add(archived_thread.id)
+        except discord.Forbidden:
+            pass
+        except discord.HTTPException:
+            pass
+
     return channels
 
 
@@ -414,7 +440,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="xp_backfill_history",
-        description="Backfill message XP history into the database.",
+        description="Scan message history to fill gaps in XP and activity tracking.",
     )
     @app_commands.describe(days="How many days back to scan. Use 0 for all available history.")
     async def xp_backfill_history(
@@ -448,21 +474,11 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             "xp_awarded": 0.0,
         }
 
+        me = get_bot_member(guild)
+        all_channels = await _collect_backfill_channels(guild, me)
+
         with ctx.open_db() as conn:
-            cutoff_ts = get_oldest_xp_event_timestamp(conn, guild.id, (XP_SOURCE_TEXT, XP_SOURCE_REPLY))
-            before_dt = (
-                datetime.fromtimestamp(cutoff_ts, tz=timezone.utc) if cutoff_ts is not None else None
-            )
-
-            if after_dt and before_dt and after_dt >= before_dt:
-                await interaction.followup.send(
-                    "Nothing to backfill. The selected window is already covered by tracked text/reply XP events.",
-                    ephemeral=True,
-                )
-                return
-
-            me = get_bot_member(guild)
-            for channel in _iter_backfill_channels(guild):
+            for channel in all_channels:
                 channel_id: int | None = getattr(channel, "id", None)
                 parent_id = getattr(channel, "parent_id", None)
                 if channel_id is None or not is_channel_xp_eligible(channel_id, parent_id, ctx.xp_excluded_channel_ids):
@@ -476,7 +492,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
                 try:
                     async for message in channel.history(
-                        limit=None, after=after_dt, before=before_dt, oldest_first=True
+                        limit=None, after=after_dt, oldest_first=True
                     ):
                         stats["messages_seen"] += 1
 
@@ -487,11 +503,17 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                             stats["messages_skipped_processed"] += 1
                             continue
 
-                        reply_target = await resolve_reply_target(message)
+                        # Use the pre-resolved reference if available; never fetch
+                        # during backfill to avoid per-message API calls at scale.
+                        resolved_ref = (
+                            message.reference.resolved
+                            if message.reference and isinstance(message.reference.resolved, discord.Message)
+                            else None
+                        )
                         is_reply_to_human = bool(
-                            reply_target
-                            and not reply_target.author.bot
-                            and reply_target.author.id != message.author.id
+                            resolved_ref
+                            and not resolved_ref.author.bot
+                            and resolved_ref.author.id != message.author.id
                         )
 
                         now_ts = message.created_at.timestamp() if message.created_at else time.time()
@@ -547,6 +569,14 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                             message.author.id,
                             now_ts,
                         )
+                        record_member_activity(
+                            conn,
+                            guild.id,
+                            message.author.id,
+                            message.channel.id,
+                            message.id,
+                            now_ts,
+                        )
 
                         backfill_user_state[message.author.id] = (now_ts, normalized_content)
                         stats["messages_processed"] += 1
@@ -567,13 +597,6 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             await maybe_grant_level_role(m, DEFAULT_XP_SETTINGS.role_grant_level, ctx.level_5_role_id)
 
         window_label = "all available history" if days == 0 else f"last {days} days"
-        cutoff_note = ""
-        if cutoff_ts is not None:
-            cutoff_note = (
-                "\nSkipped messages on or after the earliest tracked live text/reply XP "
-                "to avoid double counting."
-            )
-
         await interaction.followup.send(
             (
                 f"Backfill complete for {window_label}.\n"
@@ -583,7 +606,6 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                 f"Already processed: {stats['messages_skipped_processed']}\n"
                 f"Messages awarding XP: {stats['messages_awarded']}\n"
                 f"XP added: {stats['xp_awarded']:.2f}"
-                f"{cutoff_note}"
             ),
             ephemeral=True,
         )

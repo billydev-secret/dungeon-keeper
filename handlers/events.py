@@ -52,15 +52,14 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if message.author.bot or not message.guild:
             return
 
-        if await enforce_spoiler_requirement(
+        message_ts = message.created_at.timestamp() if message.created_at else time.time()
+        spoiler_deleted = await enforce_spoiler_requirement(
             message,
             spoiler_required_channels=ctx.spoiler_required_channels,
             bypass_role_ids=ctx.bypass_role_ids,
             log=log,
-        ):
-            return
+        )
 
-        message_ts = message.created_at.timestamp() if message.created_at else time.time()
         with ctx.open_db() as conn:
             record_member_activity(
                 conn,
@@ -70,7 +69,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 message.id,
                 message_ts,
             )
-            if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+            if not spoiler_deleted and auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
                 track_auto_delete_message(
                     conn,
                     message.guild.id,
@@ -78,6 +77,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     message.id,
                     message_ts,
                 )
+
+        if spoiler_deleted:
+            return
 
         result = await award_message_xp(
             message,
@@ -171,6 +173,15 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
         )
 
+    async def _dm_admin_permission_warning(guild: discord.Guild, message: str) -> None:
+        owner = guild.owner
+        if owner is None:
+            return
+        try:
+            await owner.send(f"⚠️ **{guild.name}** — {message}")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
     @bot.event
     async def on_member_join(member: discord.Member) -> None:
         if ctx.welcome_channel_id <= 0:
@@ -182,6 +193,10 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             await channel.send(embed=build_welcome_embed(member, ctx.welcome_message))
         except discord.Forbidden:
             log.warning("Missing permission to send welcome message in channel %s.", ctx.welcome_channel_id)
+            await _dm_admin_permission_warning(
+                member.guild,
+                f"Missing permission to send welcome messages in <#{ctx.welcome_channel_id}>.",
+            )
         except discord.HTTPException as exc:
             log.error("Failed to send welcome message: %s", exc)
 
@@ -196,6 +211,10 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             await channel.send(embed=build_leave_embed(member, ctx.leave_message))
         except discord.Forbidden:
             log.warning("Missing permission to send leave message in channel %s.", ctx.leave_channel_id)
+            await _dm_admin_permission_warning(
+                member.guild,
+                f"Missing permission to send leave messages in <#{ctx.leave_channel_id}>.",
+            )
         except discord.HTTPException as exc:
             log.error("Failed to send leave message: %s", exc)
 

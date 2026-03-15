@@ -22,6 +22,8 @@ class AutoDeleteSettings:
     poll_seconds: int = 60
     # Pause between individual message deletions (seconds)
     delete_pause_seconds: float = 0.35
+    # Pause between bulk role/permission modifications (seconds)
+    role_modify_pause_seconds: float = 0.25
 
 
 def _default_run_keywords() -> dict[str, str]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import discord
@@ -74,6 +75,214 @@ async def _send_ephemeral_text_chunks(
         chunk = remaining[:split_at]
         remaining = remaining[split_at:].lstrip("\n")
         await interaction.followup.send(chunk, ephemeral=True)
+
+
+# ---------------------------------------------------------------------------
+# Config panel — embed, select, modal, view
+# ---------------------------------------------------------------------------
+
+
+def _build_config_embed(rules: list[Any], guild: discord.Guild) -> discord.Embed:
+    embed = discord.Embed(
+        title="🗑️  Auto-Delete Schedules",
+        color=discord.Color.from_str("#992D22"),
+    )
+    lines: list[str] = []
+    for i, rule in enumerate(rules, 1):
+        channel_id = int(rule["channel_id"])
+        channel = get_guild_channel_or_thread(guild, channel_id)
+        channel_label = channel.mention if channel is not None else f"<#{channel_id}> (missing)"
+        age_label = format_duration_seconds(int(rule["max_age_seconds"]))
+        interval_label = format_duration_seconds(int(rule["interval_seconds"]))
+        last_run_ts = float(rule["last_run_ts"])
+        if last_run_ts > 0:
+            next_run_ts = int(last_run_ts + int(rule["interval_seconds"]))
+            timing = f"last <t:{int(last_run_ts)}:R> · next <t:{next_run_ts}:R>"
+        else:
+            timing = "not yet run"
+        lines.append(
+            f"`{i}.` {channel_label}  |  age `{age_label}`  |  every `{interval_label}`\n"
+            f"\u3000{timing}"
+        )
+    embed.description = "\n\n".join(lines)
+    embed.set_footer(text="Select a schedule below to edit or remove it.")
+    return embed
+
+
+class _RuleSelect(discord.ui.Select):
+    def __init__(self, rules: list[Any], guild: discord.Guild, invoker_id: int):
+        self.invoker_id = invoker_id
+        options: list[discord.SelectOption] = []
+        for i, rule in enumerate(rules):
+            channel_id = int(rule["channel_id"])
+            channel = get_guild_channel_or_thread(guild, channel_id)
+            label = (channel.name if channel is not None else f"#{channel_id}")[:100]
+            age_label = format_duration_seconds(int(rule["max_age_seconds"]))
+            interval_label = format_duration_seconds(int(rule["interval_seconds"]))
+            options.append(discord.SelectOption(
+                label=label,
+                value=str(i),
+                description=f"age {age_label} · every {interval_label}"[:100],
+                emoji="🗑️",
+            ))
+        super().__init__(placeholder="Choose a schedule to manage…", options=options)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.defer()
+            return
+        view: _AutoDeleteConfigView = self.view  # type: ignore[assignment]
+        view.selected_index = int(self.values[0])
+        view.edit_btn.disabled = False
+        view.remove_btn.disabled = False
+        await interaction.response.edit_message(view=view)
+
+
+class _EditAutoDeleteModal(discord.ui.Modal, title="Edit Auto-Delete Schedule"):
+    def __init__(
+        self,
+        rule: Any,
+        db_path: Path,
+        guild_id: int,
+        guild: discord.Guild,
+        original_interaction: discord.Interaction,
+        invoker_id: int,
+    ):
+        super().__init__()
+        self._rule = rule
+        self._db_path = db_path
+        self._guild_id = guild_id
+        self._guild = guild
+        self._original = original_interaction
+        self._invoker_id = invoker_id
+
+        self.del_age: discord.ui.TextInput = discord.ui.TextInput(
+            label="Delete age",
+            placeholder="e.g. 30d, 2h, 15m",
+            max_length=20,
+            default=format_duration_seconds(int(rule["max_age_seconds"])),
+        )
+        self.run_interval: discord.ui.TextInput = discord.ui.TextInput(
+            label="Run interval (or 'off' to disable schedule)",
+            placeholder="e.g. 1d, 12h, 30m, off",
+            max_length=20,
+            default=format_duration_seconds(int(rule["interval_seconds"])),
+        )
+        self.add_item(self.del_age)
+        self.add_item(self.run_interval)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        age_seconds = parse_duration_seconds(self.del_age.value.strip())
+        if age_seconds is None or age_seconds < AUTO_DELETE_SETTINGS.min_age_seconds:
+            await interaction.response.send_message(
+                f"Invalid delete age. Must be at least "
+                f"`{format_duration_seconds(AUTO_DELETE_SETTINGS.min_age_seconds)}`.",
+                ephemeral=True,
+            )
+            return
+
+        run_token = self.run_interval.value.strip().lower()
+        if AUTO_DELETE_KEYWORDS.run_keywords.get(run_token) == "off":
+            remove_auto_delete_rule(self._db_path, self._guild_id, int(self._rule["channel_id"]))
+            await interaction.response.defer()
+            await _refresh_config_panel(self._original, self._db_path, self._guild_id, self._guild, self._invoker_id)
+            return
+
+        interval_seconds = parse_duration_seconds(run_token)
+        if interval_seconds is None or interval_seconds < AUTO_DELETE_SETTINGS.min_interval_seconds:
+            await interaction.response.send_message(
+                "Invalid interval. Use a duration like `1d`, `12h`, `30m`, or `off` to disable.",
+                ephemeral=True,
+            )
+            return
+
+        upsert_auto_delete_rule(
+            self._db_path,
+            self._guild_id,
+            int(self._rule["channel_id"]),
+            age_seconds,
+            interval_seconds,
+        )
+        await interaction.response.defer()
+        await _refresh_config_panel(self._original, self._db_path, self._guild_id, self._guild, self._invoker_id)
+
+
+class _AutoDeleteConfigView(discord.ui.View):
+    def __init__(
+        self,
+        rules: list[Any],
+        guild: discord.Guild,
+        invoker_id: int,
+        db_path: Path,
+        guild_id: int,
+        original_interaction: discord.Interaction,
+    ):
+        super().__init__(timeout=120)
+        self.rules = rules
+        self.guild = guild
+        self.invoker_id = invoker_id
+        self.db_path = db_path
+        self.guild_id = guild_id
+        self.original_interaction = original_interaction
+        self.selected_index: int | None = None
+
+        self.rule_select = _RuleSelect(rules, guild, invoker_id)
+        self.add_item(self.rule_select)
+
+        self.edit_btn: discord.ui.Button = discord.ui.Button(
+            label="Edit", style=discord.ButtonStyle.primary, disabled=True, row=1
+        )
+        self.edit_btn.callback = self._on_edit  # type: ignore[method-assign]
+        self.add_item(self.edit_btn)
+
+        self.remove_btn: discord.ui.Button = discord.ui.Button(
+            label="Remove", style=discord.ButtonStyle.danger, disabled=True, row=1
+        )
+        self.remove_btn.callback = self._on_remove  # type: ignore[method-assign]
+        self.add_item(self.remove_btn)
+
+    async def _on_edit(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.invoker_id or self.selected_index is None:
+            await interaction.response.defer()
+            return
+        modal = _EditAutoDeleteModal(
+            self.rules[self.selected_index],
+            self.db_path,
+            self.guild_id,
+            self.guild,
+            self.original_interaction,
+            self.invoker_id,
+        )
+        await interaction.response.send_modal(modal)
+
+    async def _on_remove(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.invoker_id or self.selected_index is None:
+            await interaction.response.defer()
+            return
+        rule = self.rules[self.selected_index]
+        remove_auto_delete_rule(self.db_path, self.guild_id, int(rule["channel_id"]))
+        await interaction.response.defer()
+        await _refresh_config_panel(
+            self.original_interaction, self.db_path, self.guild_id, self.guild, self.invoker_id
+        )
+
+
+async def _refresh_config_panel(
+    original_interaction: discord.Interaction,
+    db_path: Path,
+    guild_id: int,
+    guild: discord.Guild,
+    invoker_id: int,
+) -> None:
+    rules = list_auto_delete_rules_for_guild(db_path, guild_id)
+    if rules:
+        embed = _build_config_embed(rules, guild)
+        view = _AutoDeleteConfigView(rules, guild, invoker_id, db_path, guild_id, original_interaction)
+        await original_interaction.edit_original_response(embed=embed, view=view)
+    else:
+        await original_interaction.edit_original_response(
+            content="No active auto-delete schedules remaining.", embed=None, view=None
+        )
 
 
 def register_auto_delete_commands(bot: Bot, ctx: AppContext) -> None:
@@ -206,7 +415,7 @@ def register_auto_delete_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="auto_delete_configs",
-        description="List auto-delete schedules configured for this server.",
+        description="List and manage auto-delete schedules for this server.",
     )
     async def auto_delete_configs(interaction: discord.Interaction):
         if not ctx.is_mod(interaction):
@@ -227,31 +436,6 @@ def register_auto_delete_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
-        lines = [f"**Active Auto-Delete Schedules ({len(rules)})**", ""]
-        for index, rule in enumerate(rules, start=1):
-            channel_id = int(rule["channel_id"])
-            channel = get_guild_channel_or_thread(guild, channel_id)
-            channel_label = channel.mention if channel is not None else f"<#{channel_id}> (missing)"
-
-            age_seconds = int(rule["max_age_seconds"])
-            interval_seconds = int(rule["interval_seconds"])
-            age_label = format_duration_seconds(age_seconds)
-            interval_label = format_duration_seconds(interval_seconds)
-
-            last_run_ts = float(rule["last_run_ts"])
-            if last_run_ts > 0:
-                last_run_display = f"<t:{int(last_run_ts)}:R>"
-                next_run_ts = int(last_run_ts + interval_seconds)
-                next_run_display = f"<t:{next_run_ts}:R>"
-            else:
-                last_run_display = "never"
-                next_run_display = "as soon as the scheduler runs"
-
-            lines.append(
-                f"{index}. {channel_label} | age `{age_label}` | every `{interval_label}`\n"
-                f"Last run: {last_run_display} | Next run: {next_run_display}"
-            )
-
-        await _send_ephemeral_text_chunks(interaction, "\n\n".join(lines))
+        embed = _build_config_embed(rules, guild)
+        view = _AutoDeleteConfigView(rules, guild, interaction.user.id, ctx.db_path, guild.id, interaction)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
