@@ -10,7 +10,7 @@ repos:
         pass_filenames: false
       - id: mypy
         name: mypy
-        entry: ./.venv/Scripts/python.exe -m mypy
+        entry: ./.venv/Scripts/python.exe -m mypy . --exclude .venv
         language: system
         pass_filenames: false
       - id: pytest

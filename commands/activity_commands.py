@@ -26,11 +26,13 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
     @app_commands.describe(
         resolution="Time resolution for the chart buckets.",
         member="Show activity for this member only (default: whole server).",
+        channel="Filter activity to a specific channel.",
     )
     async def activity(
         interaction: discord.Interaction,
         resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
         member: discord.Member | None = None,
+        channel: discord.TextChannel | None = None,
     ) -> None:
         guild = interaction.guild
         if guild is None:
@@ -43,24 +45,30 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         window_label = _WINDOW_LABELS[resolution]
 
-        if member is not None:
+        if member is not None and channel is not None:
+            title = f"{member.display_name} in #{channel.name} — Activity ({window_label})"
+        elif member is not None:
             title = f"{member.display_name} — Activity ({window_label})"
+        elif channel is not None:
+            title = f"#{channel.name} — Activity ({window_label})"
         else:
             title = f"{guild.name} — Activity ({window_label})"
 
         user_id = member.id if member is not None else None
+        channel_id = channel.id if channel is not None else None
         with ctx.open_db() as conn:
             if resolution in ("hour_of_day", "day_of_week"):
                 labels, msg_counts = query_message_histogram(
-                    conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution), user_id=user_id
+                    conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
+                    user_id=user_id, channel_id=channel_id,
                 )
                 member_counts: list[int] = []
                 show_members = False
             else:
                 labels, msg_counts, member_counts = query_message_activity(
-                    conn, guild.id, resolution, user_id=user_id
+                    conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
                 )
-                show_members = member is None
+                show_members = member is None and channel is None
 
         if not any(c > 0 for c in msg_counts):
             await interaction.followup.send(

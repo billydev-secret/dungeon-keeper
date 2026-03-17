@@ -132,6 +132,7 @@ def query_message_activity(
     resolution: Resolution,
     *,
     user_id: int | None = None,
+    channel_id: int | None = None,
 ) -> tuple[list[str], list[int], list[int]]:
     """
     Query message counts and unique active members per time bucket.
@@ -148,6 +149,9 @@ def query_message_activity(
     if user_id is not None:
         where += " AND user_id = ?"
         params.append(user_id)
+    if channel_id is not None:
+        where += " AND channel_id = ?"
+        params.append(channel_id)
 
     rows = conn.execute(
         f"""
@@ -178,6 +182,7 @@ def query_message_histogram(
     resolution: Literal["hour_of_day", "day_of_week"],
     *,
     user_id: int | None = None,
+    channel_id: int | None = None,
 ) -> tuple[list[str], list[int]]:
     """
     Aggregate message counts by hour-of-day (0-23) or day-of-week (0=Sun..6=Sat)
@@ -199,6 +204,9 @@ def query_message_histogram(
     if user_id is not None:
         where += " AND user_id = ?"
         params.append(user_id)
+    if channel_id is not None:
+        where += " AND channel_id = ?"
+        params.append(channel_id)
 
     rows = conn.execute(
         f"""
