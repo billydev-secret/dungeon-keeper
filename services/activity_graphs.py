@@ -223,6 +223,60 @@ def query_message_histogram(
 
 
 # ---------------------------------------------------------------------------
+# Message-rate drop analysis
+# ---------------------------------------------------------------------------
+
+
+def query_message_rate_drops(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    period_seconds: float,
+    *,
+    channel_id: int | None = None,
+    min_previous: int = 5,
+    limit: int = 10,
+) -> list[tuple[int, int, int]]:
+    """Compare per-user message counts across two consecutive equal-length windows.
+
+    The full window spans ``2 * period_seconds`` ending now.  The midpoint divides
+    it into a *previous* half and a *recent* half.
+
+    Returns a list of ``(user_id, previous_count, recent_count)`` sorted by
+    largest absolute drop, restricted to users whose previous count is at least
+    ``min_previous`` and whose recent count is lower than their previous count.
+    """
+    now = datetime.now(timezone.utc).timestamp()
+    mid = now - period_seconds
+    start = mid - period_seconds
+
+    channel_clause = "AND channel_id = ? " if channel_id is not None else ""
+
+    params: list[object] = [mid, mid, guild_id, start, now]
+    if channel_id is not None:
+        params.append(channel_id)
+    params.extend([min_previous, limit])
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            user_id,
+            SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END) AS prev_count,
+            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) AS recent_count
+        FROM processed_messages
+        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+        {channel_clause}
+        GROUP BY user_id
+        HAVING prev_count >= ? AND prev_count > recent_count
+        ORDER BY (prev_count - recent_count) DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+    return [(int(r[0]), int(r[1]), int(r[2])) for r in rows]
+
+
+# ---------------------------------------------------------------------------
 # Chart rendering
 # ---------------------------------------------------------------------------
 

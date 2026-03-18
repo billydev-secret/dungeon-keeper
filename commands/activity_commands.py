@@ -11,6 +11,7 @@ from services.activity_graphs import (
     _WINDOW_LABELS,
     query_message_activity,
     query_message_histogram,
+    query_message_rate_drops,
     render_activity_chart,
 )
 
@@ -90,3 +91,75 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             file=discord.File(io.BytesIO(chart_bytes), filename="activity.png"),
             ephemeral=True,
         )
+
+    _DROPOFF_PERIOD_SECONDS: dict[str, float] = {
+        "day": 24 * 60 * 60,
+        "week": 7 * 24 * 60 * 60,
+        "month": 30 * 24 * 60 * 60,
+    }
+
+    @bot.tree.command(
+        name="dropoff",
+        description="Show members with the largest drop in message rate between two equal time windows.",
+    )
+    @app_commands.describe(
+        period="Length of each comparison window.",
+        limit="Number of members to show (1–25, default 10).",
+        channel="Restrict comparison to a specific channel.",
+    )
+    async def dropoff(
+        interaction: discord.Interaction,
+        period: Literal["day", "week", "month"] = "week",
+        limit: app_commands.Range[int, 1, 25] = 10,
+        channel: discord.TextChannel | None = None,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        period_secs = _DROPOFF_PERIOD_SECONDS[period]
+        period_label = period  # "day" / "week" / "month"
+        channel_id = channel.id if channel is not None else None
+
+        with ctx.open_db() as conn:
+            results = query_message_rate_drops(
+                conn, guild.id, period_secs, channel_id=channel_id, limit=limit
+            )
+
+        if not results:
+            suffix = f" in #{channel.name}" if channel else ""
+            await interaction.followup.send(
+                f"No significant message rate drops found{suffix} "
+                f"comparing the last {period_label} to the prior {period_label}.",
+                ephemeral=True,
+            )
+            return
+
+        lines: list[str] = []
+        for rank, (user_id, prev, recent) in enumerate(results, start=1):
+            member = guild.get_member(user_id)
+            name = member.mention if member else f"<@{user_id}>"
+            drop = prev - recent
+            pct = round((drop / prev) * 100)
+            lines.append(f"`{rank:>2}.` {name}\n`{prev} → {recent}` (**\u2212{drop}**, \u2212{pct}%)")
+
+        if channel:
+            title = f"Message Rate Dropoff in #{channel.name}"
+            description = f"Prior {period_label} vs most recent {period_label}"
+        else:
+            title = f"Message Rate Dropoff — {guild.name}"
+            description = f"Prior {period_label} vs most recent {period_label}"
+
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=discord.Color.red(),
+        )
+        embed.add_field(name="Members", value="\n".join(lines), inline=False)
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
