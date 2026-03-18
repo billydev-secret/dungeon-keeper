@@ -150,16 +150,14 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         if channel:
             title = f"Message Rate Dropoff in #{channel.name}"
-            description = f"Prior {period_label} vs most recent {period_label}"
         else:
             title = f"Message Rate Dropoff — {guild.name}"
-            description = f"Prior {period_label} vs most recent {period_label}"
 
         embed = discord.Embed(
             title=title,
-            description=description,
+            description="\n".join(lines),
             color=discord.Color.red(),
         )
-        embed.add_field(name="Members", value="\n".join(lines), inline=False)
+        embed.set_footer(text=f"Prior {period_label} vs most recent {period_label}")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
