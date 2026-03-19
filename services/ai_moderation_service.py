@@ -26,7 +26,7 @@ async def _chat(
                 "OpenAI request [%d/%d] role=%s reasoning_effort=%s content=%.500s",
                 i + 1, len(messages), m.get("role"), reasoning_effort, m.get("content", ""),
             )
-    kwargs: dict = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    kwargs: dict = {"model": model, "messages": messages, "max_completion_tokens": max_tokens}
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
     return await client.chat.completions.create(**kwargs)
