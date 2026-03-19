@@ -379,7 +379,7 @@ async def ai_query_user(
     model: str = "gpt-5.4",
 ) -> AiModerationResult:
     lines, user_msg_count, channels_checked = await _fetch_user_context(
-        guild, user, lookback_days=days, max_user_messages=80
+        guild, user, lookback_days=days
     )
 
     if not lines:
