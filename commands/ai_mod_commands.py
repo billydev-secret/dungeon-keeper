@@ -43,27 +43,27 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         user: discord.Member,
         days: app_commands.Range[int, 1, 30] = 7,
     ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
         if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
 
         client = _openai_client()
         if client is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "OPENAI_API_KEY is not set in the bot's environment.", ephemeral=True
             )
             return
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This command only works in a server.", ephemeral=True
             )
             return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
 
         result = await ai_review_user(client, guild, user, days=days)
         header = (
@@ -82,27 +82,27 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         interaction: discord.Interaction,
         count: app_commands.Range[int, 10, 200] = 50,
     ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
         if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
 
         client = _openai_client()
         if client is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "OPENAI_API_KEY is not set in the bot's environment.", ephemeral=True
             )
             return
 
         channel = interaction.channel
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This command only works in text channels and threads.", ephemeral=True
             )
             return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
 
         result = await ai_scan_channel(client, channel, count=count)
         header = f"**AI Channel Scan** — {result.message_count} messages reviewed\n\n"
@@ -123,27 +123,27 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         question: str,
         days: app_commands.Range[int, 1, 30] = 14,
     ):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
         if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
 
         client = _openai_client()
         if client is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "OPENAI_API_KEY is not set in the bot's environment.", ephemeral=True
             )
             return
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This command only works in a server.", ephemeral=True
             )
             return
-
-        await interaction.response.defer(ephemeral=True, thinking=True)
 
         result = await ai_query_user(client, guild, user, question, days=days)
         header = (
