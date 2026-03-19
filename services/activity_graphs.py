@@ -451,19 +451,20 @@ def query_session_burst(
     user_id: int,
 ) -> tuple[list[list[float]], list[list[float]], float]:
     """
-    Find all session starts for a user and compute per-bin message counts.
+    Find all session starts for a user and compute per-bin server message counts.
 
     A session starts when the user's first message follows a gap of ≥20 minutes.
-    For each session, messages are counted in 2-minute bins covering:
-      - the 20 minutes before session start  (pre-bins, always ~0 by definition)
+    For each session, **all guild messages** are counted in 2-minute bins covering:
+      - the 20 minutes before session start  (pre-bins)
       - the 60 minutes after session start   (post-bins)
 
     Returns:
         pre_sessions  – list of sessions, each a list of _PRE_WINDOW_MINUTES//_BIN_MINUTES counts
         post_sessions – list of sessions, each a list of _POST_WINDOW_MINUTES//_BIN_MINUTES counts
-        overall_rate  – messages per _BIN_MINUTES across the user's full recorded history
+        overall_rate  – server messages per _BIN_MINUTES across the guild's full recorded history
     """
-    rows = conn.execute(
+    # User timestamps — used only to detect session starts
+    user_rows = conn.execute(
         """
         SELECT created_at FROM processed_messages
         WHERE guild_id = ? AND user_id = ?
@@ -472,8 +473,8 @@ def query_session_burst(
         (guild_id, user_id),
     ).fetchall()
 
-    timestamps = [float(r[0]) for r in rows]
-    if len(timestamps) < 2:
+    user_ts = [float(r[0]) for r in user_rows]
+    if len(user_ts) < 2:
         return [], [], 0.0
 
     pre_bins_count = _PRE_WINDOW_MINUTES // _BIN_MINUTES
@@ -482,32 +483,44 @@ def query_session_burst(
     pre_secs = _PRE_WINDOW_MINUTES * 60
     post_secs = _POST_WINDOW_MINUTES * 60
 
-    # Find session-start indices (gap ≥ 20 min before this message)
-    session_start_indices: list[int] = [0]  # first message is always a session start
-    for i in range(1, len(timestamps)):
-        if timestamps[i] - timestamps[i - 1] >= _IDLE_THRESHOLD_SECONDS:
-            session_start_indices.append(i)
+    # Find session starts (gap ≥ 20 min before this user message)
+    session_starts: list[float] = [user_ts[0]]
+    for i in range(1, len(user_ts)):
+        if user_ts[i] - user_ts[i - 1] >= _IDLE_THRESHOLD_SECONDS:
+            session_starts.append(user_ts[i])
+
+    # Fetch all guild messages in the window that covers all sessions
+    window_lo = min(session_starts) - pre_secs
+    window_hi = max(session_starts) + post_secs
+    guild_rows = conn.execute(
+        """
+        SELECT created_at FROM processed_messages
+        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+        ORDER BY created_at
+        """,
+        (guild_id, window_lo, window_hi),
+    ).fetchall()
+    guild_ts = [float(r[0]) for r in guild_rows]
 
     pre_sessions: list[list[float]] = []
     post_sessions: list[list[float]] = []
 
-    for idx in session_start_indices:
-        start_ts = timestamps[idx]
-
-        # Pre-window: messages in [start_ts - pre_secs, start_ts)
+    for start_ts in session_starts:
+        # Pre-window: guild messages in [start_ts - pre_secs, start_ts)
         pre_bins: list[float] = [0.0] * pre_bins_count
-        lo = bisect.bisect_left(timestamps, start_ts - pre_secs)
-        for ts in timestamps[lo:idx]:
+        lo = bisect.bisect_left(guild_ts, start_ts - pre_secs)
+        hi = bisect.bisect_left(guild_ts, start_ts)
+        for ts in guild_ts[lo:hi]:
             offset = ts - (start_ts - pre_secs)
             bin_i = int(offset // bin_secs)
             if 0 <= bin_i < pre_bins_count:
                 pre_bins[bin_i] += 1
         pre_sessions.append(pre_bins)
 
-        # Post-window: messages in [start_ts, start_ts + post_secs)
+        # Post-window: guild messages in [start_ts, start_ts + post_secs)
         post_bins: list[float] = [0.0] * post_bins_count
-        lo = bisect.bisect_left(timestamps, start_ts)
-        for ts in timestamps[lo:]:
+        lo = bisect.bisect_left(guild_ts, start_ts)
+        for ts in guild_ts[lo:]:
             offset = ts - start_ts
             if offset >= post_secs:
                 break
@@ -516,10 +529,18 @@ def query_session_burst(
                 post_bins[bin_i] += 1
         post_sessions.append(post_bins)
 
-    # Overall rate: total messages spread evenly over the recorded window
-    total_mins = (timestamps[-1] - timestamps[0]) / 60.0
-    total_bins = max(1.0, total_mins / _BIN_MINUTES)
-    overall_rate = len(timestamps) / total_bins
+    # Overall rate: total guild messages over the full recorded guild history
+    total_row = conn.execute(
+        "SELECT COUNT(*), MIN(created_at), MAX(created_at) FROM processed_messages WHERE guild_id = ?",
+        (guild_id,),
+    ).fetchone()
+    total_count = int(total_row[0]) if total_row and total_row[0] else 0
+    if total_count > 1:
+        total_mins = (float(total_row[2]) - float(total_row[1])) / 60.0
+        total_bins = max(1.0, total_mins / _BIN_MINUTES)
+        overall_rate = total_count / total_bins
+    else:
+        overall_rate = 0.0
 
     return pre_sessions, post_sessions, overall_rate
 
@@ -553,10 +574,10 @@ def render_session_burst_chart(
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_BG)
 
-    # Pre-session bars (muted colour — should be ~0)
-    ax.bar(x_pre, mean_pre, width=_BIN_MINUTES * 0.85, color="#4e5058", zorder=2, label="Pre-session avg")
+    # Pre-session bars (muted colour)
+    ax.bar(x_pre, mean_pre, width=_BIN_MINUTES * 0.85, color="#4e5058", zorder=2, label="Server activity (pre)")
     # Post-session bars
-    ax.bar(x_post, mean_post, width=_BIN_MINUTES * 0.85, color=_BAR, zorder=2, label="Post-session avg")
+    ax.bar(x_post, mean_post, width=_BIN_MINUTES * 0.85, color=_BAR, zorder=2, label="Server activity (post)")
 
     # Individual session lines (faint), capped at 20 to keep the chart readable
     if n_sessions <= 20:
@@ -570,7 +591,7 @@ def render_session_burst_chart(
         color="#fee75c",
         linewidth=1.5,
         linestyle="--",
-        label=f"Overall avg ({overall_rate:.2f} msg / {_BIN_MINUTES}min)",
+        label=f"Server avg ({overall_rate:.2f} msg / {_BIN_MINUTES}min)",
         zorder=3,
     )
 
@@ -581,7 +602,7 @@ def render_session_burst_chart(
     ax.axvspan(-_PRE_WINDOW_MINUTES, 0, alpha=0.06, color=_TEXT, zorder=0)
 
     ax.set_xlabel("Minutes relative to session start", color=_TEXT, fontsize=9)
-    ax.set_ylabel(f"Avg messages per {_BIN_MINUTES} min", color=_TEXT, fontsize=9)
+    ax.set_ylabel(f"Server messages per {_BIN_MINUTES} min", color=_TEXT, fontsize=9)
     ax.set_title(
         f"{user_display_name} — Session Burst Profile  ·  {n_sessions} session{'s' if n_sessions != 1 else ''}",
         color=_TEXT,
