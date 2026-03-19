@@ -26,6 +26,7 @@ _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "Spoiler Guard":    ("🛡️",  discord.Color.from_str("#E74C3C")),
     "Inactivity Prune": ("✂️",  discord.Color.from_str("#E67E22")),
     "Auto-Delete":      ("🗑️",  discord.Color.from_str("#992D22")),
+    "AI Moderation":    ("🤖", discord.Color.from_str("#5865F2")),
 }
 
 
@@ -83,6 +84,20 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/oldest_sfw_members count:10", "Members without spicy access, sorted by oldest last message."),
                 ("/xp_level_review level:5", "Time-to-reach stats (avg, mode, std dev) for a given XP level."),
                 ("/purge", "Delete the last N messages in this channel, or all recent messages if N is omitted."),
+            ])
+        ))
+
+        # ── AI Moderation ─────────────────────────────────────────────────────
+        pages.append(_page("AI Moderation",
+            "AI-powered tools for reviewing user behaviour and channel activity. "
+            "Requires `OPENAI_API_KEY` to be set in the bot's environment.\n\n"
+            + _fmt([
+                ("/ai_review member:@user days:7",
+                 "Pull a user's recent messages and have the AI flag rule violations or concerns."),
+                ("/ai_scan count:50",
+                 "Have the AI scan the last N messages in this channel for problems."),
+                ("/ai_query member:@user question:... days:14",
+                 "Ask the AI a specific question about a user based on their message history."),
             ])
         ))
 

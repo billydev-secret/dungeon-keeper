@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from app_context import AppContext, Bot, load_runtime_config
 from commands.activity_commands import register_activity_commands
+from commands.ai_mod_commands import register_ai_mod_commands
 from commands.auto_delete_commands import register_auto_delete_commands
 from commands.denizen_commands import register_denizen_commands
 from commands.inactivity_prune_commands import register_inactivity_prune_commands
@@ -128,6 +129,7 @@ with open_db(DB_PATH) as _conn:
 # ==============================
 register_events(bot, ctx)
 register_activity_commands(bot, ctx)
+register_ai_mod_commands(bot, ctx)
 register_xp_commands(bot, ctx)
 register_denizen_commands(bot, ctx)
 register_spoiler_commands(bot, ctx)

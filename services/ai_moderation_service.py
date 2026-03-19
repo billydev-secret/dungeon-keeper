@@ -10,12 +10,21 @@ from openai import AsyncOpenAI
 
 log = logging.getLogger("dungeonkeeper.ai_mod")
 
-_MAX_MSG_CHARS = 400  # truncate individual messages to avoid token bloat
+_MAX_MSG_CHARS = 400   # truncate individual messages to avoid token bloat
+_CONTEXT_WINDOW = 2    # messages before/after each target message to include
+_PER_CHANNEL_FETCH = 300  # messages fetched per channel (wider window for context)
+_MAX_USER_MSGS = 50    # stop collecting after this many target-user messages
 
 _REVIEW_SYSTEM = """\
 You are a Discord server moderation assistant. A moderator has requested a review of a user's recent messages.
 
-Analyze the provided messages and report concisely on:
+The log below shows conversation context. Each line is prefixed with a tag:
+  [TARGET]   — a message written by the user being reviewed
+  [CONTEXT]  — a nearby message from another user, shown for conversational context
+  [REPLY→TARGET] — another user replying directly to the target user
+  [TARGET REPLIED TO] — the message the target user was replying to
+
+Analyze the log and report concisely on:
 1. Any potential rule violations (harassment, hate speech, spam, threats, doxxing, etc.)
 2. Notable behavioral patterns
 3. Any concerns worth moderator attention
@@ -36,8 +45,15 @@ Cite specific users and messages when noting concerns. \
 If the channel looks healthy, say so clearly."""
 
 _QUERY_SYSTEM = """\
-You are a Discord server moderation assistant helping a moderator investigate a user. \
-Answer the moderator's question based solely on the provided message history. \
+You are a Discord server moderation assistant helping a moderator investigate a user.
+
+The log below shows conversation context. Each line is prefixed with a tag:
+  [TARGET]   — a message written by the user being investigated
+  [CONTEXT]  — a nearby message from another user, shown for conversational context
+  [REPLY→TARGET] — another user replying directly to the target user
+  [TARGET REPLIED TO] — the message the target user was replying to
+
+Answer the moderator's question based solely on the provided log. \
 Be concise and cite specific messages as evidence."""
 
 
@@ -48,57 +64,134 @@ class AiModerationResult:
     channels_checked: int
 
 
-async def _fetch_user_messages(
+def _tag(msg: discord.Message, user: discord.Member, replied_to_ids: set[int]) -> str:
+    """Return the display tag for a message given its relationship to the target user."""
+    if msg.author.id == user.id:
+        return "TARGET"
+    if msg.id in replied_to_ids:
+        return "REPLY→TARGET"
+    return "CONTEXT"
+
+
+def _fmt_msg(tag: str, channel_name: str, msg: discord.Message) -> str:
+    ts = msg.created_at.strftime("%Y-%m-%d %H:%M") if msg.created_at else "?"
+    content = (msg.content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
+    return f"[{tag}] #{channel_name} | {ts} | {msg.author.display_name}: {content}"
+
+
+async def _fetch_user_context(
     guild: discord.Guild,
     user: discord.Member,
     *,
-    max_messages: int = 60,
+    max_user_messages: int = _MAX_USER_MSGS,
     lookback_days: int = 7,
-    per_channel_limit: int = 20,
-) -> tuple[list[tuple[str, str, str]], int]:
-    """Return ((channel_name, timestamp, content), ...) and channels_checked count."""
-    after_dt = discord.utils.utcnow() - timedelta(days=lookback_days)
-    messages: list[tuple[str, str, str]] = []
-    channels_checked = 0
+) -> tuple[list[str], int, int]:
+    """
+    Fetch target user's messages with surrounding conversational context.
 
+    For each message the target user sent, includes:
+    - Up to _CONTEXT_WINDOW messages before and after in the same channel
+    - The message the target was replying to (if resolvable within the batch)
+    - Messages from others that directly reply to the target
+
+    Returns (formatted_lines, user_message_count, channels_checked).
+    """
+    after_dt = discord.utils.utcnow() - timedelta(days=lookback_days)
+    bot_member = guild.me
     channels: list[discord.TextChannel | discord.Thread] = list(guild.text_channels)
     for tc in guild.text_channels:
         channels.extend(tc.threads)
 
-    bot_member = guild.me
+    all_lines: list[str] = []
+    total_user_msgs = 0
+    channels_checked = 0
+
     for channel in channels:
-        if len(messages) >= max_messages:
+        if total_user_msgs >= max_user_messages:
             break
         if bot_member and not channel.permissions_for(bot_member).read_message_history:
             continue
-        channels_checked += 1
-        count = 0
+
+        channel_name = getattr(channel, "name", str(channel.id))
+
         try:
-            async for msg in channel.history(limit=200, after=after_dt, oldest_first=False):
-                if msg.author.id != user.id or not msg.content:
-                    continue
-                ts = msg.created_at.strftime("%Y-%m-%d %H:%M") if msg.created_at else "unknown"
-                content = msg.content[:_MAX_MSG_CHARS]
-                messages.append((getattr(channel, "name", str(channel.id)), ts, content))
-                count += 1
-                if count >= per_channel_limit or len(messages) >= max_messages:
-                    break
+            batch: list[discord.Message] = []
+            async for msg in channel.history(
+                limit=_PER_CHANNEL_FETCH, after=after_dt, oldest_first=True
+            ):
+                batch.append(msg)
         except (discord.Forbidden, discord.HTTPException):
             continue
 
-    return messages, channels_checked
+        # Only process channels where the user actually posted
+        target_indices = [i for i, m in enumerate(batch) if m.author.id == user.id]
+        if not target_indices:
+            continue
 
+        channels_checked += 1
 
-def _format_user_messages(
-    user: discord.Member,
-    messages: list[tuple[str, str, str]],
-) -> str:
-    if not messages:
-        return f"No messages found for {user.display_name} in the requested time window."
-    lines = [f"Messages from {user.display_name} (@{user.name}), newest first:\n"]
-    for channel_name, ts, content in messages:
-        lines.append(f"[#{channel_name} | {ts}] {content}")
-    return "\n".join(lines)
+        # Build lookup: message_id → index in batch
+        id_to_idx: dict[int, int] = {m.id: i for i, m in enumerate(batch)}
+
+        # Find messages in the batch that reply to a target message
+        target_ids = {batch[i].id for i in target_indices}
+        reply_to_target: set[int] = set()  # ids of messages that reply TO the user
+        for msg in batch:
+            if msg.reference and msg.reference.message_id in target_ids:
+                reply_to_target.add(msg.id)
+
+        # Determine which indices to include
+        include: set[int] = set()
+        for i in target_indices:
+            # Context window around each target message
+            for j in range(
+                max(0, i - _CONTEXT_WINDOW),
+                min(len(batch), i + _CONTEXT_WINDOW + 1),
+            ):
+                include.add(j)
+
+            # The message the target is replying to
+            target_ref = batch[i].reference
+            ref_id = target_ref.message_id if target_ref is not None else None
+            if ref_id is not None and ref_id in id_to_idx:
+                include.add(id_to_idx[ref_id])
+
+        # Include messages that reply to the target
+        for j, msg in enumerate(batch):
+            if msg.id in reply_to_target:
+                include.add(j)
+
+        # Emit lines in chronological order
+        for i in sorted(include):
+            msg = batch[i]
+
+            if msg.author.id == user.id:
+                tag = "TARGET"
+            elif msg.id in reply_to_target:
+                tag = "REPLY→TARGET"
+            elif (
+                msg.reference is not None
+                and msg.reference.message_id in target_ids
+            ):
+                tag = "REPLY→TARGET"
+            else:
+                is_replied_to = False
+                for ti in target_indices:
+                    ref = batch[ti].reference
+                    if ref is not None and ref.message_id == msg.id:
+                        is_replied_to = True
+                        break
+                tag = "TARGET REPLIED TO" if is_replied_to else "CONTEXT"
+
+            all_lines.append(_fmt_msg(tag, channel_name, msg))
+
+        total_user_msgs += len(target_indices)
+
+        # Blank line between channels for readability
+        if all_lines and all_lines[-1] != "":
+            all_lines.append("")
+
+    return all_lines, total_user_msgs, channels_checked
 
 
 async def ai_review_user(
@@ -109,21 +202,30 @@ async def ai_review_user(
     days: int = 7,
     model: str = "gpt-4o-mini",
 ) -> AiModerationResult:
-    messages, channels_checked = await _fetch_user_messages(guild, user, lookback_days=days)
-    user_text = _format_user_messages(user, messages)
+    lines, user_msg_count, channels_checked = await _fetch_user_context(
+        guild, user, lookback_days=days
+    )
+
+    if not lines:
+        body = f"No messages found for {user.display_name} in the last {days} days."
+    else:
+        body = (
+            f"Message log for {user.display_name} (@{user.name}), "
+            f"last {days} days:\n\n" + "\n".join(lines)
+        )
 
     response = await client.chat.completions.create(
         model=model,
         messages=[
             {"role": "system", "content": _REVIEW_SYSTEM},
-            {"role": "user", "content": user_text},
+            {"role": "user", "content": body},
         ],
         max_tokens=800,
     )
     analysis = response.choices[0].message.content or "No analysis returned."
     return AiModerationResult(
         analysis=analysis,
-        message_count=len(messages),
+        message_count=user_msg_count,
         channels_checked=channels_checked,
     )
 
@@ -139,7 +241,7 @@ async def ai_scan_channel(
     async for msg in channel.history(limit=count, oldest_first=False):
         if msg.content:
             raw.append(msg)
-    raw.reverse()  # oldest first for readability
+    raw.reverse()
 
     if not raw:
         return AiModerationResult(
@@ -151,8 +253,12 @@ async def ai_scan_channel(
     lines = ["Recent channel messages (oldest first):\n"]
     for msg in raw:
         ts = msg.created_at.strftime("%H:%M") if msg.created_at else "?"
-        content = msg.content[:_MAX_MSG_CHARS]
-        lines.append(f"[{ts}] {msg.author.display_name}: {content}")
+        content = (msg.content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
+        reply_note = ""
+        if msg.reference and isinstance(msg.reference.resolved, discord.Message):
+            replied_to = msg.reference.resolved
+            reply_note = f" [↩ replying to {replied_to.author.display_name}]"
+        lines.append(f"[{ts}] {msg.author.display_name}{reply_note}: {content}")
     channel_text = "\n".join(lines)
 
     response = await client.chat.completions.create(
@@ -176,11 +282,19 @@ async def ai_query_user(
     days: int = 14,
     model: str = "gpt-4o-mini",
 ) -> AiModerationResult:
-    messages, channels_checked = await _fetch_user_messages(
-        guild, user, lookback_days=days, max_messages=80
+    lines, user_msg_count, channels_checked = await _fetch_user_context(
+        guild, user, lookback_days=days, max_user_messages=80
     )
-    user_text = _format_user_messages(user, messages)
-    prompt = f"Moderator question: {question}\n\nMessage history:\n{user_text}"
+
+    if not lines:
+        body = f"No messages found for {user.display_name} in the last {days} days."
+    else:
+        body = (
+            f"Message log for {user.display_name} (@{user.name}), "
+            f"last {days} days:\n\n" + "\n".join(lines)
+        )
+
+    prompt = f"Moderator question: {question}\n\n{body}"
 
     response = await client.chat.completions.create(
         model=model,
@@ -193,6 +307,6 @@ async def ai_query_user(
     analysis = response.choices[0].message.content or "No analysis returned."
     return AiModerationResult(
         analysis=analysis,
-        message_count=len(messages),
+        message_count=user_msg_count,
         channels_checked=channels_checked,
     )
