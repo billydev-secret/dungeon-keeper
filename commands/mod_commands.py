@@ -20,6 +20,7 @@ _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "Role Grants":      ("🎭", discord.Color.from_str("#57F287")),
     "XP Grant":         ("⭐", discord.Color.from_str("#FEE75C")),
     "Reports":          ("📊", discord.Color.from_str("#EB459E")),
+    "Watch List":       ("🔍", discord.Color.from_str("#3498DB")),
     "Role Grant Config":("⚙️",  discord.Color.from_str("#1ABC9C")),
     "XP Config":        ("🔧", discord.Color.from_str("#2ECC71")),
     "Welcome & Leave":  ("👋", discord.Color.from_str("#9B59B6")),
@@ -49,6 +50,9 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ("/help", "Show this guide."),
             ("/xp_leaderboards timescale:week", "Top XP earners for a time window, plus your own rank."),
             ("/activity resolution:day", "Bar chart of message activity — server-wide or for one member."),
+            ("/session_burst member:@user",
+             "Histogram of a member's message activity in the 60 min after returning "
+             "from a 20-min absence, compared to the idle baseline."),
         ])
     ))
 
@@ -82,8 +86,23 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/inactive_role role:@Role days:7", "Members of a role who haven't posted in N days."),
                 ("/report_inactive time_period:7d", "All server members inactive for a given period."),
                 ("/oldest_sfw_members count:10", "Members without spicy access, sorted by oldest last message."),
-                ("/xp_level_review level:5", "Time-to-reach stats (avg, mode, std dev) for a given XP level."),
-                ("/purge", "Delete the last N messages in this channel, or all recent messages if N is omitted."),
+                ("/dropoff period:week limit:10",
+                 "Show members with the largest drop in message count between two equal time windows."),
+                ("/xp_level_review level:5",
+                 "Histogram of how long members take to reach a given XP level, "
+                 "with mean, mode, and std dev overlaid."),
+                ("/purge count:50",
+                 "Delete the last N messages in this channel (omit N to delete all recent messages)."),
+            ])
+        ))
+
+        # ── Watch List ────────────────────────────────────────────────────────
+        pages.append(_page("Watch List",
+            "Silently monitor a member — their public messages are forwarded to you by DM.\n\n"
+            + _fmt([
+                ("/watch_user user:@user", "Start watching a member; their posts will be DM'd to you."),
+                ("/unwatch_user user:@user", "Stop watching a member."),
+                ("/watch_list", "Show every member you are currently watching."),
             ])
         ))
 

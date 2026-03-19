@@ -1,4 +1,13 @@
-"""User watch list commands — DM any public posts from watched users to the watcher."""
+"""User watch list commands — DM any public posts from watched users to the watcher.
+
+Watched-user state is persisted in the ``watched_users`` DB table and mirrored
+in ``AppContext.watched_users`` for fast lookup on every message event.
+
+Commands (all mod-only):
+  /watch_user   — start watching a member
+  /unwatch_user — stop watching a member
+  /watch_list   — list members you are currently watching
+"""
 from __future__ import annotations
 
 import sqlite3

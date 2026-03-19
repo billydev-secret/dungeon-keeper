@@ -1,4 +1,10 @@
-"""Activity graph slash commands."""
+"""Activity graph slash commands.
+
+Commands:
+  /activity        — bar chart of message volume (server-wide or per member/channel)
+  /dropoff         — members with the largest recent message-rate decline
+  /session_burst   — per-member session burst profile (activity after a 20-min absence)
+"""
 from __future__ import annotations
 
 import io

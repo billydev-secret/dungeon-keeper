@@ -1,4 +1,12 @@
-"""AI-powered moderation commands backed by the OpenAI API."""
+"""AI-powered moderation commands backed by the OpenAI API.
+
+Provides three slash commands (all mod-only, all ephemeral):
+  /ai_review  — fetch a user's recent messages and have the AI flag concerns
+  /ai_scan    — scan the last N messages in the current channel
+  /ai_query   — ask the AI a free-form question about a user's message history
+
+Requires OPENAI_API_KEY to be set in the bot's environment.
+"""
 from __future__ import annotations
 
 import os
@@ -16,6 +24,7 @@ if TYPE_CHECKING:
 
 
 def _openai_client() -> AsyncOpenAI | None:
+    """Return a configured AsyncOpenAI client, or None if OPENAI_API_KEY is not set."""
     api_key = os.getenv("OPENAI_API_KEY")
     return AsyncOpenAI(api_key=api_key) if api_key else None
 

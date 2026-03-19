@@ -125,6 +125,7 @@ class MemberActivity:
 
 
 def is_channel_xp_eligible(channel_id: int, parent_id: int | None, excluded_channel_ids: set[int]) -> bool:
+    """Return True if the channel (or its parent thread) is not in the XP exclusion list."""
     if channel_id in excluded_channel_ids:
         return False
     if parent_id is not None and parent_id in excluded_channel_ids:
@@ -133,6 +134,11 @@ def is_channel_xp_eligible(channel_id: int, parent_id: int | None, excluded_chan
 
 
 def qualified_words(text: str) -> list[str]:
+    """Return words from text that count toward XP.
+
+    Excludes URLs, custom Discord emoji, text-emoji shortcodes, and tokens
+    shorter than 3 characters or containing no alphanumeric characters.
+    """
     clean_text = URL_RE.sub(" ", text)
     words: list[str] = []
 
@@ -156,6 +162,7 @@ def qualified_words(text: str) -> list[str]:
 
 
 def normalize_message_content(text: str) -> str:
+    """Return a canonical lowercase string used for duplicate-message detection."""
     normalized_words = []
     for word in qualified_words(text):
         compact = NON_ALNUM_RE.sub("", word.lower())
@@ -170,6 +177,12 @@ def normalize_message_content(text: str) -> str:
 
 
 def cooldown_multiplier(seconds_since_last_message: float | None, settings: XpSettings = DEFAULT_XP_SETTINGS) -> float:
+    """Return an XP multiplier (0–1) based on how quickly the user posted again.
+
+    None (first message or no prior timestamp) → 1.0 (no penalty).
+    Otherwise the three cooldown thresholds in XpSettings are checked in order;
+    if none match, 1.0 is returned.
+    """
     if seconds_since_last_message is None:
         return 1.0
 
@@ -181,6 +194,11 @@ def cooldown_multiplier(seconds_since_last_message: float | None, settings: XpSe
 
 
 def pair_multiplier(pair_streak: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> float:
+    """Return a reduced XP multiplier when two users have been exclusively messaging each other.
+
+    Once the alternating streak between a pair exceeds ``pair_streak_threshold``,
+    the multiplier drops to ``pair_streak_multiplier`` to discourage XP farming.
+    """
     if pair_streak >= settings.pair_streak_threshold:
         return settings.pair_streak_multiplier
     return 1.0
@@ -212,6 +230,10 @@ def calculate_message_xp(
 
 
 def xp_required_for_level(level: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> float:
+    """Return the total XP required to reach ``level``.
+
+    Uses a quadratic curve: ``factor × (level - 1)²``.  Level 1 always requires 0 XP.
+    """
     if level <= 1:
         return 0.0
 
@@ -220,6 +242,11 @@ def xp_required_for_level(level: int, settings: XpSettings = DEFAULT_XP_SETTINGS
 
 
 def level_for_xp(total_xp: float, settings: XpSettings = DEFAULT_XP_SETTINGS) -> int:
+    """Return the level a member is at given their total accumulated XP.
+
+    Inverse of ``xp_required_for_level``: ``floor(sqrt(xp / factor)) + 1``.
+    Always returns at least 1.
+    """
     if total_xp <= 0:
         return 1
 
@@ -228,6 +255,7 @@ def level_for_xp(total_xp: float, settings: XpSettings = DEFAULT_XP_SETTINGS) ->
 
 
 def role_grant_due(previous_level: int, new_level: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> bool:
+    """Return True if this level-up crosses the role-grant threshold for the first time."""
     return previous_level < settings.role_grant_level <= new_level
 
 
@@ -341,6 +369,12 @@ def apply_xp_award(
     event_timestamp: float | None = None,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
 ) -> AwardResult:
+    """Atomically add XP to a member and update member_xp, optionally recording an xp_events row.
+
+    ``xp_delta`` is clamped to ≥ 0.  If ``event_source`` is provided and the
+    delta is positive, an event row is inserted for leaderboard tracking.
+    Returns an ``AwardResult`` with old/new levels and whether a role grant is due.
+    """
     state = get_member_xp_state(conn, guild_id, user_id, settings)
     old_level = state.level
     new_total_xp = round(state.total_xp + max(0.0, xp_delta), 2)
@@ -565,6 +599,12 @@ def get_member_last_activity_map(
 
 
 def update_pair_state(state: PairState | None, author_id: int) -> tuple[PairState, int]:
+    """Advance the pair-streak state machine and return (new_state, current_streak).
+
+    A streak increments each time the same two authors alternate messages.
+    It resets to 1 whenever a different pair posts, and to 0 when the same
+    author posts consecutively.
+    """
     if state is None or state.last_author_id is None:
         return PairState(last_author_id=author_id), 0
 
@@ -667,6 +707,11 @@ def completed_voice_intervals(
     now_ts: float,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
 ) -> int:
+    """Return the number of full voice XP intervals earned since the last award.
+
+    Returns 0 if the session has not yet qualified (e.g. not enough humans in
+    the channel) or no new complete intervals have elapsed.
+    """
     if session.qualified_since is None:
         return 0
 

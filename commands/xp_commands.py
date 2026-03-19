@@ -1,4 +1,16 @@
-"""XP-related slash commands."""
+"""XP-related slash commands.
+
+Commands:
+  /xp_leaderboards      — top XP earners per source and time window, plus caller's rank
+  /xp_give              — manually award 20 XP to a member (mod or allowlisted users)
+  /xp_give_allow/disallow/allowed — manage the /xp_give allowlist (mod only)
+  /xp_set_levelup_log_here        — configure level-up announcement channel
+  /xp_set_level5_log_here         — configure level-5 milestone channel
+  /xp_exclude_here / /xp_include_here — toggle XP in a channel or thread
+  /xp_excluded_channels           — list XP-excluded channels
+  /xp_backfill_history            — scan message history to fill XP gaps
+  /xp_level_review                — histogram of time-to-reach for a given level
+"""
 from __future__ import annotations
 
 import statistics
