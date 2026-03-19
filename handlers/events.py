@@ -109,24 +109,16 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         channel_name = getattr(message.channel, "name", str(message.channel.id))
         guild_name = message.guild.name if message.guild else "Unknown Server"
 
-        embed = discord.Embed(
-            description=message.content or "*[no text content]*",
-            color=discord.Color.gold(),
-            timestamp=message.created_at,
+        body = message.content or "*[no text content]*"
+        attachment_lines = "\n".join(a.url for a in message.attachments)
+        footer = (
+            f"{attachment_lines}\n" if attachment_lines else ""
+        ) + (
+            f"— **{message.author.display_name}** (@{message.author.name}) "
+            f"in **{guild_name}** / #{channel_name}\n"
+            f"{message.jump_url}"
         )
-        embed.set_author(
-            name=f"{message.author.display_name} (@{message.author.name})",
-            icon_url=message.author.display_avatar.url,
-        )
-        embed.add_field(name="Server", value=guild_name, inline=True)
-        embed.add_field(name="Channel", value=f"#{channel_name}", inline=True)
-        if message.attachments:
-            embed.add_field(
-                name="Attachments",
-                value="\n".join(a.url for a in message.attachments),
-                inline=False,
-            )
-        embed.add_field(name="Jump to message", value=f"[View]({message.jump_url})", inline=False)
+        dm_text = f"{body}\n\n{footer}"
 
         for watcher_id in watchers:
             try:
@@ -138,7 +130,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 )
                 continue
             try:
-                await watcher.send(embed=embed)
+                await watcher.send(dm_text)
             except (discord.Forbidden, discord.HTTPException) as exc:
                 log.warning(
                     "Could not DM watcher %s for watched user %s: %s",

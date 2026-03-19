@@ -1,4 +1,5 @@
 import logging
+import logging.handlers
 import os
 from pathlib import Path
 
@@ -29,12 +30,32 @@ from xp_system import init_xp_tables
 # ==============================
 load_dotenv()
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)-8s %(name)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    force=True,
-)
+_log_queue: logging.handlers.QueueHandler
+_log_queue_listener: logging.handlers.QueueListener
+
+def _setup_logging() -> None:
+    """Route all log records through a queue so stream writes never block the event loop."""
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)-8s %(name)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    import queue
+    log_queue: queue.SimpleQueue = queue.SimpleQueue()
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    listener = logging.handlers.QueueListener(log_queue, stream_handler, respect_handler_level=True)
+    listener.start()
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(queue_handler)
+
+    # Keep a reference so the listener isn't garbage-collected
+    globals()["_log_queue_listener"] = listener
+
+_setup_logging()
 
 log = logging.getLogger("dungeonkeeper.bot")
 
