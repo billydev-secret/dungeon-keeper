@@ -22,6 +22,8 @@ class AutoDeleteSettings:
     poll_seconds: int = 60
     # Pause between individual message deletions (seconds)
     delete_pause_seconds: float = 0.35
+    # Pause between bulk-delete requests (rate limit is ~1/s per channel)
+    bulk_delete_pause_seconds: float = 1.1
     # Pause between bulk role/permission modifications (seconds)
     role_modify_pause_seconds: float = 0.25
 

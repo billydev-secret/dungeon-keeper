@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import discord
+from discord import app_commands
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -80,6 +81,8 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/inactive_role role:@Role days:7", "Members of a role who haven't posted in N days."),
                 ("/report_inactive time_period:7d", "All server members inactive for a given period."),
                 ("/oldest_sfw_members count:10", "Members without spicy access, sorted by oldest last message."),
+                ("/xp_level_review level:5", "Time-to-reach stats (avg, mode, std dev) for a given XP level."),
+                ("/purge", "Delete the last N messages in this channel, or all recent messages if N is omitted."),
             ])
         ))
 
@@ -232,3 +235,42 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
         pages = _build_help_pages(ctx, interaction)
         view = HelpView(pages, invoker_id=interaction.user.id)
         await interaction.response.send_message(embed=view.current_embed(), view=view, ephemeral=True)
+
+    @bot.tree.command(
+        name="purge",
+        description="Delete the last N messages in this channel, or all recent messages if N is omitted.",
+    )
+    @app_commands.describe(count="Number of messages to delete. Omit to delete all recent messages.")
+    async def purge(
+        interaction: discord.Interaction,
+        count: app_commands.Range[int, 1, 1000] | None = None,
+    ):
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            await interaction.response.send_message(
+                "This command only works in text channels and threads.", ephemeral=True
+            )
+            return
+
+        bot_member = channel.guild.me if hasattr(channel, "guild") else None
+        if bot_member and not channel.permissions_for(bot_member).manage_messages:
+            await interaction.response.send_message(
+                "I need the **Manage Messages** permission in this channel to delete messages.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        deleted = await channel.purge(limit=count)
+        label = f"last {count}" if count is not None else "all recent"
+        await interaction.followup.send(
+            f"Deleted {len(deleted)} message{'s' if len(deleted) != 1 else ''} ({label}).",
+            ephemeral=True,
+        )

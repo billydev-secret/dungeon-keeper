@@ -130,14 +130,14 @@ class AutoDeleteDbTests(unittest.TestCase):
             track_auto_delete_message(conn, 1, 100, 1002, 200.0)
             track_auto_delete_message(conn, 1, 100, 1003, 300.0)
             due = pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=250.0)
-        self.assertEqual(due, [1001, 1002])
+        self.assertEqual([mid for mid, _ in due], [1001, 1002])
 
     def test_track_message_is_idempotent(self):
         with open_db(self.db_path) as conn:
             track_auto_delete_message(conn, 1, 100, 1001, 100.0)
             track_auto_delete_message(conn, 1, 100, 1001, 100.0)
             due = pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=9999.0)
-        self.assertEqual(due, [1001])
+        self.assertEqual([mid for mid, _ in due], [1001])
 
     def test_remove_tracked_message(self):
         with open_db(self.db_path) as conn:
@@ -153,14 +153,14 @@ class AutoDeleteDbTests(unittest.TestCase):
             track_auto_delete_message(conn, 1, 100, 1003, 300.0)
         remove_tracked_auto_delete_messages(self.db_path, 1, 100, {1001, 1002})
         with open_db(self.db_path) as conn:
-            self.assertEqual(pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=9999.0), [1003])
+            self.assertEqual([mid for mid, _ in pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=9999.0)], [1003])
 
     def test_remove_tracked_messages_bulk_empty_set_is_noop(self):
         with open_db(self.db_path) as conn:
             track_auto_delete_message(conn, 1, 100, 1001, 100.0)
         remove_tracked_auto_delete_messages(self.db_path, 1, 100, set())
         with open_db(self.db_path) as conn:
-            self.assertEqual(pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=9999.0), [1001])
+            self.assertEqual([mid for mid, _ in pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=9999.0)], [1001])
 
     def test_remove_rule_also_clears_tracked_messages(self):
         upsert_auto_delete_rule(self.db_path, 1, 100, 86400, 3600)
