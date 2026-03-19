@@ -1,7 +1,9 @@
 """XP-related slash commands."""
 from __future__ import annotations
 
+import statistics
 import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Literal
 
@@ -20,6 +22,7 @@ from xp_system import (
     MessageXpContext,
     apply_xp_award,
     calculate_message_xp,
+    get_time_to_level_seconds,
     get_user_xp_standing,
     get_xp_distribution_stats,
     get_xp_leaderboard,
@@ -32,6 +35,7 @@ from xp_system import (
     record_member_activity,
     record_xp_event,
     update_pair_state,
+    xp_required_for_level,
 )
 
 if TYPE_CHECKING:
@@ -609,3 +613,62 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             ),
             ephemeral=True,
         )
+
+    @bot.tree.command(
+        name="xp_level_review",
+        description="Show how long it takes members to reach a given level (avg, mode, std dev).",
+    )
+    @app_commands.describe(level="The level to measure time-to-reach for (minimum 2).")
+    async def xp_level_review(
+        interaction: discord.Interaction,
+        level: app_commands.Range[int, 2, 100],
+    ):
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        with ctx.open_db() as conn:
+            durations = get_time_to_level_seconds(conn, guild.id, level)
+
+        if not durations:
+            xp_needed = xp_required_for_level(level)
+            await interaction.followup.send(
+                f"No members have reached level {level} yet "
+                f"({xp_needed:.0f} XP required).",
+                ephemeral=True,
+            )
+            return
+
+        mean_s = statistics.mean(durations)
+        stddev_s = statistics.pstdev(durations)
+
+        # Mode: bucket by day, find most common bucket
+        day_buckets = Counter(int(s // 86400) for s in durations)
+        modal_days, modal_count = day_buckets.most_common(1)[0]
+
+        def fmt(seconds: float) -> str:
+            d = int(seconds // 86400)
+            h = int((seconds % 86400) // 3600)
+            if d > 0:
+                return f"{d}d {h}h"
+            m = int((seconds % 3600) // 60)
+            return f"{h}h {m}m"
+
+        xp_needed = xp_required_for_level(level)
+        report = (
+            f"**Time to Reach Level {level}** ({xp_needed:.0f} XP required)\n"
+            f"Members who reached it: **{len(durations)}**\n"
+            f"Average: `{fmt(mean_s)}`\n"
+            f"Mode: `{modal_days}d` ({modal_count} member{'s' if modal_count != 1 else ''})\n"
+            f"Std Dev: `{fmt(stddev_s)}`"
+        )
+        await interaction.followup.send(report, ephemeral=True)

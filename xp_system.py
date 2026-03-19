@@ -816,6 +816,55 @@ def count_xp_events(conn: sqlite3.Connection, guild_id: int) -> int:
     return int(row[0]) if row else 0
 
 
+def get_time_to_level_seconds(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    target_level: int,
+    settings: XpSettings = DEFAULT_XP_SETTINGS,
+) -> list[float]:
+    """Return a list of durations (seconds) each user took to first reach target_level.
+
+    Uses a running-sum window query to find the exact event that pushed each user
+    over the XP threshold, then measures from that user's first-ever XP event.
+    """
+    xp_threshold = xp_required_for_level(target_level, settings)
+
+    rows = conn.execute(
+        """
+        WITH running AS (
+            SELECT
+                user_id,
+                created_at,
+                SUM(amount) OVER (
+                    PARTITION BY user_id ORDER BY created_at
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                ) AS cumulative_xp
+            FROM xp_events
+            WHERE guild_id = ?
+        ),
+        first_event AS (
+            SELECT user_id, MIN(created_at) AS first_at
+            FROM xp_events
+            WHERE guild_id = ?
+            GROUP BY user_id
+        ),
+        level_reached AS (
+            SELECT user_id, MIN(created_at) AS reached_at
+            FROM running
+            WHERE cumulative_xp >= ?
+            GROUP BY user_id
+        )
+        SELECT lr.reached_at - fe.first_at AS seconds_to_level
+        FROM level_reached lr
+        JOIN first_event fe ON fe.user_id = lr.user_id
+        WHERE seconds_to_level >= 0
+        """,
+        (guild_id, guild_id, xp_threshold),
+    ).fetchall()
+
+    return [float(row[0]) for row in rows]
+
+
 def get_oldest_xp_event_timestamp(
     conn: sqlite3.Connection,
     guild_id: int,
