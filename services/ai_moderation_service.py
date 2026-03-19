@@ -15,8 +15,30 @@ _CONTEXT_WINDOW = 2    # messages before/after each target message to include
 _PER_CHANNEL_FETCH = 300  # messages fetched per channel (wider window for context)
 _MAX_USER_MSGS = 50    # stop collecting after this many target-user messages
 
-_REVIEW_SYSTEM = """\
+_SERVER_RULES = """\
+Server rules (check all messages against these):
+  Rule 1 — Adults only (21+): This is an adult community. NSFW material is permitted but members must
+    know and follow the laws in their area.
+  Rule 2 — Be good to others: Harassment, coercion, threats, demeaning behavior, and discriminatory
+    language including slurs are not allowed. Boundaries must be respected immediately. The space is
+    built on consent, respect, and accountability.
+  Rule 3 — Keep things in the right channels: SFW content in SFW spaces, explicit content only in
+    designated areas. Explicit images must be spoilered to avoid push-notification previews. Content
+    warnings required for sensitive material (knives, food, body image, etc.).
+  Rule 4 — Keep the focus on this server: Do not bring callouts, beef, or conflicts from other Discord
+    servers into this space.
+  Rule 5 — Use the DM permissions bot: DMs are opt-in. Members must use the DM permissions bot and
+    wait for consent before messaging anyone privately. This extends to contacting members on other
+    platforms (Reddit, etc.) without their explicit permission.
+  Rule 6 — Settle disputes in tickets: Conflicts and moderation concerns go through the ticket system,
+    not public chat. Do not argue publicly, escalate in chat, or involve bystanders.
+  Rule 7 — Breaking rules has consequences: Violations may result in a warning, loss of access, or a
+    permanent ban depending on severity."""
+
+_REVIEW_SYSTEM = f"""\
 You are a Discord server moderation assistant. A moderator has requested a review of a user's recent messages.
+
+{_SERVER_RULES}
 
 The log below shows conversation context. Each line is prefixed with a tag:
   [TARGET]   — a message written by the user being reviewed
@@ -25,27 +47,31 @@ The log below shows conversation context. Each line is prefixed with a tag:
   [TARGET REPLIED TO] — the message the target user was replying to
 
 Analyze the log and report concisely on:
-1. Any potential rule violations (harassment, hate speech, spam, threats, doxxing, etc.)
+1. Any violations of the server rules listed above, citing which rule is implicated
 2. Notable behavioral patterns
 3. Any concerns worth moderator attention
 
 Cite specific messages as evidence when flagging concerns. \
 If the messages appear normal and rule-abiding, say so clearly."""
 
-_SCAN_SYSTEM = """\
+_SCAN_SYSTEM = f"""\
 You are a Discord server moderation assistant. A moderator has requested a scan of recent channel activity.
 
+{_SERVER_RULES}
+
 Analyze the messages and report concisely on:
-1. Any messages that may violate typical server rules
+1. Any messages that violate the server rules listed above — note which rule is implicated
 2. Conflicts, hostility, or tension between users
 3. Spam or coordinated behavior
 4. A one-line overall health summary
 
 Cite specific users and messages when noting concerns. \
-If the channel looks healthy, say so clearly."""
+If the channel looks healthy and rule-compliant, say so clearly."""
 
-_QUERY_SYSTEM = """\
+_QUERY_SYSTEM = f"""\
 You are a Discord server moderation assistant helping a moderator investigate a user.
+
+{_SERVER_RULES}
 
 The log below shows conversation context. Each line is prefixed with a tag:
   [TARGET]   — a message written by the user being investigated
@@ -53,8 +79,8 @@ The log below shows conversation context. Each line is prefixed with a tag:
   [REPLY→TARGET] — another user replying directly to the target user
   [TARGET REPLIED TO] — the message the target user was replying to
 
-Answer the moderator's question based solely on the provided log. \
-Be concise and cite specific messages as evidence."""
+Answer the moderator's question based solely on the provided log, referencing the server rules above \
+where relevant. Be concise and cite specific messages as evidence."""
 
 
 @dataclass
@@ -200,7 +226,7 @@ async def ai_review_user(
     user: discord.Member,
     *,
     days: int = 7,
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-4.5",
 ) -> AiModerationResult:
     lines, user_msg_count, channels_checked = await _fetch_user_context(
         guild, user, lookback_days=days
@@ -235,7 +261,7 @@ async def ai_scan_channel(
     channel: discord.TextChannel | discord.Thread,
     *,
     count: int = 50,
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-4.5",
 ) -> AiModerationResult:
     raw: list[discord.Message] = []
     async for msg in channel.history(limit=count, oldest_first=False):
@@ -280,7 +306,7 @@ async def ai_query_user(
     question: str,
     *,
     days: int = 14,
-    model: str = "gpt-4o-mini",
+    model: str = "gpt-4.5",
 ) -> AiModerationResult:
     lines, user_msg_count, channels_checked = await _fetch_user_context(
         guild, user, lookback_days=days, max_user_messages=80
