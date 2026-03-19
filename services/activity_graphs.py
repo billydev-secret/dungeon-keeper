@@ -1,6 +1,7 @@
 """Activity graph generation — message counts bucketed by time resolution."""
 from __future__ import annotations
 
+import bisect
 import io
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -427,6 +428,178 @@ def render_activity_chart(
 
     plt.tight_layout(pad=1.2)
 
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# Session burst profile
+# ---------------------------------------------------------------------------
+
+_IDLE_THRESHOLD_SECONDS = 20 * 60   # 20 minutes defines a session boundary
+_PRE_WINDOW_MINUTES = 20
+_POST_WINDOW_MINUTES = 60
+_BIN_MINUTES = 2
+
+
+def query_session_burst(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+) -> tuple[list[list[float]], list[list[float]], float]:
+    """
+    Find all session starts for a user and compute per-bin message counts.
+
+    A session starts when the user's first message follows a gap of ≥20 minutes.
+    For each session, messages are counted in 2-minute bins covering:
+      - the 20 minutes before session start  (pre-bins, always ~0 by definition)
+      - the 60 minutes after session start   (post-bins)
+
+    Returns:
+        pre_sessions  – list of sessions, each a list of _PRE_WINDOW_MINUTES//_BIN_MINUTES counts
+        post_sessions – list of sessions, each a list of _POST_WINDOW_MINUTES//_BIN_MINUTES counts
+        overall_rate  – messages per _BIN_MINUTES across the user's full recorded history
+    """
+    rows = conn.execute(
+        """
+        SELECT created_at FROM processed_messages
+        WHERE guild_id = ? AND user_id = ?
+        ORDER BY created_at
+        """,
+        (guild_id, user_id),
+    ).fetchall()
+
+    timestamps = [float(r[0]) for r in rows]
+    if len(timestamps) < 2:
+        return [], [], 0.0
+
+    pre_bins_count = _PRE_WINDOW_MINUTES // _BIN_MINUTES
+    post_bins_count = _POST_WINDOW_MINUTES // _BIN_MINUTES
+    bin_secs = _BIN_MINUTES * 60
+    pre_secs = _PRE_WINDOW_MINUTES * 60
+    post_secs = _POST_WINDOW_MINUTES * 60
+
+    # Find session-start indices (gap ≥ 20 min before this message)
+    session_start_indices: list[int] = [0]  # first message is always a session start
+    for i in range(1, len(timestamps)):
+        if timestamps[i] - timestamps[i - 1] >= _IDLE_THRESHOLD_SECONDS:
+            session_start_indices.append(i)
+
+    pre_sessions: list[list[float]] = []
+    post_sessions: list[list[float]] = []
+
+    for idx in session_start_indices:
+        start_ts = timestamps[idx]
+
+        # Pre-window: messages in [start_ts - pre_secs, start_ts)
+        pre_bins: list[float] = [0.0] * pre_bins_count
+        lo = bisect.bisect_left(timestamps, start_ts - pre_secs)
+        for ts in timestamps[lo:idx]:
+            offset = ts - (start_ts - pre_secs)
+            bin_i = int(offset // bin_secs)
+            if 0 <= bin_i < pre_bins_count:
+                pre_bins[bin_i] += 1
+        pre_sessions.append(pre_bins)
+
+        # Post-window: messages in [start_ts, start_ts + post_secs)
+        post_bins: list[float] = [0.0] * post_bins_count
+        lo = bisect.bisect_left(timestamps, start_ts)
+        for ts in timestamps[lo:]:
+            offset = ts - start_ts
+            if offset >= post_secs:
+                break
+            bin_i = int(offset // bin_secs)
+            if 0 <= bin_i < post_bins_count:
+                post_bins[bin_i] += 1
+        post_sessions.append(post_bins)
+
+    # Overall rate: total messages spread evenly over the recorded window
+    total_mins = (timestamps[-1] - timestamps[0]) / 60.0
+    total_bins = max(1.0, total_mins / _BIN_MINUTES)
+    overall_rate = len(timestamps) / total_bins
+
+    return pre_sessions, post_sessions, overall_rate
+
+
+def render_session_burst_chart(
+    pre_sessions: list[list[float]],
+    post_sessions: list[list[float]],
+    overall_rate: float,
+    user_display_name: str,
+) -> bytes:
+    """Render the average session burst profile as PNG bytes."""
+    n_pre = _PRE_WINDOW_MINUTES // _BIN_MINUTES
+    n_post = _POST_WINDOW_MINUTES // _BIN_MINUTES
+    n_sessions = len(post_sessions)
+
+    def _mean_bins(sessions: list[list[float]]) -> list[float]:
+        if not sessions:
+            return []
+        n = len(sessions[0])
+        return [sum(s[i] for s in sessions) / n_sessions for i in range(n)]
+
+    mean_pre = _mean_bins(pre_sessions)
+    mean_post = _mean_bins(post_sessions)
+
+    # X positions: pre bins are negative, post bins are positive
+    x_pre = [(-_PRE_WINDOW_MINUTES + i * _BIN_MINUTES + _BIN_MINUTES / 2) for i in range(n_pre)]
+    x_post = [(i * _BIN_MINUTES + _BIN_MINUTES / 2) for i in range(n_post)]
+
+    fig_width = max(11, (n_pre + n_post) * 0.45)
+    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    # Pre-session bars (muted colour — should be ~0)
+    ax.bar(x_pre, mean_pre, width=_BIN_MINUTES * 0.85, color="#4e5058", zorder=2, label="Pre-session avg")
+    # Post-session bars
+    ax.bar(x_post, mean_post, width=_BIN_MINUTES * 0.85, color=_BAR, zorder=2, label="Post-session avg")
+
+    # Individual session lines (faint), capped at 20 to keep the chart readable
+    if n_sessions <= 20:
+        for pre, post in zip(pre_sessions, post_sessions):
+            ax.plot(x_pre, pre, color="#4e5058", linewidth=0.6, alpha=0.4, zorder=1)
+            ax.plot(x_post, post, color=_BAR, linewidth=0.6, alpha=0.4, zorder=1)
+
+    # Overall average rate reference line
+    ax.axhline(
+        overall_rate,
+        color="#fee75c",
+        linewidth=1.5,
+        linestyle="--",
+        label=f"Overall avg ({overall_rate:.2f} msg / {_BIN_MINUTES}min)",
+        zorder=3,
+    )
+
+    # Session-start marker
+    ax.axvline(0, color=_BAR_ACCENT, linewidth=2, linestyle="-", label="Session start", zorder=4)
+
+    # Shade the pre-window to make it visually distinct
+    ax.axvspan(-_PRE_WINDOW_MINUTES, 0, alpha=0.06, color=_TEXT, zorder=0)
+
+    ax.set_xlabel("Minutes relative to session start", color=_TEXT, fontsize=9)
+    ax.set_ylabel(f"Avg messages per {_BIN_MINUTES} min", color=_TEXT, fontsize=9)
+    ax.set_title(
+        f"{user_display_name} — Session Burst Profile  ·  {n_sessions} session{'s' if n_sessions != 1 else ''}",
+        color=_TEXT,
+        fontsize=13,
+        pad=10,
+    )
+
+    ax.tick_params(axis="both", colors=_TEXT, labelsize=8, length=0)
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+    ax.set_axisbelow(True)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+
+    plt.tight_layout(pad=1.2)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
     plt.close(fig)

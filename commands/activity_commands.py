@@ -12,7 +12,9 @@ from services.activity_graphs import (
     query_message_activity,
     query_message_histogram,
     query_message_rate_drops,
+    query_session_burst,
     render_activity_chart,
+    render_session_burst_chart,
 )
 
 if TYPE_CHECKING:
@@ -161,3 +163,45 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         embed.set_footer(text=f"Prior {period_label} vs most recent {period_label}")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @bot.tree.command(
+        name="session_burst",
+        description="Show a member's message activity profile after returning from a 20-min absence.",
+    )
+    @app_commands.describe(member="The member to profile.")
+    async def session_burst(
+        interaction: discord.Interaction,
+        member: discord.Member,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        with ctx.open_db() as conn:
+            pre_sessions, post_sessions, overall_rate = query_session_burst(
+                conn, guild.id, member.id
+            )
+
+        if not post_sessions:
+            await interaction.followup.send(
+                f"Not enough message history recorded for {member.mention} "
+                "to build a session profile.",
+                ephemeral=True,
+            )
+            return
+
+        chart_bytes = render_session_burst_chart(
+            pre_sessions,
+            post_sessions,
+            overall_rate,
+            user_display_name=member.display_name,
+        )
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(chart_bytes), filename="session_burst.png"),
+            ephemeral=True,
+        )
