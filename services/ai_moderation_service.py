@@ -10,10 +10,50 @@ from openai import AsyncOpenAI
 
 log = logging.getLogger("dungeonkeeper.ai_mod")
 
+
+async def _chat(
+    client: AsyncOpenAI,
+    *,
+    model: str,
+    messages: list[dict],
+    max_tokens: int,
+    reasoning_effort: str | None = None,
+):
+    """Log the outgoing payload at DEBUG level, then call the OpenAI chat API."""
+    if log.isEnabledFor(logging.DEBUG):
+        for i, m in enumerate(messages):
+            log.debug(
+                "OpenAI request [%d/%d] role=%s reasoning_effort=%s content=%.500s",
+                i + 1, len(messages), m.get("role"), reasoning_effort, m.get("content", ""),
+            )
+    kwargs: dict = {"model": model, "messages": messages, "max_tokens": max_tokens}
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+    return await client.chat.completions.create(**kwargs)
+
+
 _MAX_MSG_CHARS = 400   # truncate individual messages to avoid token bloat
 _CONTEXT_WINDOW = 2    # messages before/after each target message to include
 _PER_CHANNEL_FETCH = 300  # messages fetched per channel (wider window for context)
 _MAX_USER_MSGS = 50    # stop collecting after this many target-user messages
+
+_WATCH_CHECK_SYSTEM = (
+    "You are a Discord moderation assistant. Determine whether the message below violates any "
+    "server rule.\n\n"
+    "Rules:\n"
+    "  Rule 1 — Adults only (21+). NSFW is permitted but members must follow laws in their area.\n"
+    "  Rule 2 — No harassment, coercion, threats, demeaning behavior, slurs, or boundary violations.\n"
+    "  Rule 3 — Explicit content only in designated channels. Spoiler NSFW images. Use content "
+    "warnings for sensitive material.\n"
+    "  Rule 4 — No callouts or conflicts imported from other servers.\n"
+    "  Rule 5 — DMs are opt-in; use the permissions bot and wait for consent before messaging anyone "
+    "privately or on other platforms.\n"
+    "  Rule 6 — Settle disputes in tickets, not public chat.\n\n"
+    "Reply with exactly one of:\n"
+    "  VIOLATION: <one-sentence reason citing the specific rule number>\n"
+    "  OK\n\n"
+    "No other output."
+)
 
 _SERVER_RULES = """\
 Server rules (check all messages against these):
@@ -226,7 +266,7 @@ async def ai_review_user(
     user: discord.Member,
     *,
     days: int = 7,
-    model: str = "gpt-4.5",
+    model: str = "gpt-5.4",
 ) -> AiModerationResult:
     lines, user_msg_count, channels_checked = await _fetch_user_context(
         guild, user, lookback_days=days
@@ -240,13 +280,14 @@ async def ai_review_user(
             f"last {days} days:\n\n" + "\n".join(lines)
         )
 
-    response = await client.chat.completions.create(
-        model=model,
+    response = await _chat(
+        client, model=model,
         messages=[
             {"role": "system", "content": _REVIEW_SYSTEM},
             {"role": "user", "content": body},
         ],
         max_tokens=800,
+        reasoning_effort="high",
     )
     analysis = response.choices[0].message.content or "No analysis returned."
     return AiModerationResult(
@@ -261,7 +302,7 @@ async def ai_scan_channel(
     channel: discord.TextChannel | discord.Thread,
     *,
     count: int = 50,
-    model: str = "gpt-4.5",
+    model: str = "gpt-5.4",
 ) -> AiModerationResult:
     raw: list[discord.Message] = []
     async for msg in channel.history(limit=count, oldest_first=False):
@@ -287,8 +328,8 @@ async def ai_scan_channel(
         lines.append(f"[{ts}] {msg.author.display_name}{reply_note}: {content}")
     channel_text = "\n".join(lines)
 
-    response = await client.chat.completions.create(
-        model=model,
+    response = await _chat(
+        client, model=model,
         messages=[
             {"role": "system", "content": _SCAN_SYSTEM},
             {"role": "user", "content": channel_text},
@@ -299,6 +340,38 @@ async def ai_scan_channel(
     return AiModerationResult(analysis=analysis, message_count=len(raw), channels_checked=1)
 
 
+async def ai_check_watched_message(
+    client: AsyncOpenAI,
+    message: discord.Message,
+    *,
+    model: str = "gpt-5.4",
+) -> tuple[bool, str]:
+    """
+    Check a single message against server rules.
+
+    Returns (is_violation, reason) where reason is a one-sentence explanation
+    if a violation was detected, or an empty string if the message is clean.
+    Errors in the API call are raised to the caller.
+    """
+    ts = message.created_at.strftime("%Y-%m-%d %H:%M") if message.created_at else "?"
+    channel_name = getattr(message.channel, "name", str(message.channel.id))
+    content = (message.content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
+    prompt = f"[{ts}] #{channel_name} | {message.author.display_name}: {content}"
+
+    response = await _chat(
+        client, model=model,
+        messages=[
+            {"role": "system", "content": _WATCH_CHECK_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=120,
+    )
+    reply = (response.choices[0].message.content or "").strip()
+    is_violation = reply.upper().startswith("VIOLATION")
+    reason = reply[len("VIOLATION:"):].strip() if is_violation else ""
+    return is_violation, reason
+
+
 async def ai_query_user(
     client: AsyncOpenAI,
     guild: discord.Guild,
@@ -306,7 +379,7 @@ async def ai_query_user(
     question: str,
     *,
     days: int = 14,
-    model: str = "gpt-4.5",
+    model: str = "gpt-5.4",
 ) -> AiModerationResult:
     lines, user_msg_count, channels_checked = await _fetch_user_context(
         guild, user, lookback_days=days, max_user_messages=80
@@ -322,8 +395,8 @@ async def ai_query_user(
 
     prompt = f"Moderator question: {question}\n\n{body}"
 
-    response = await client.chat.completions.create(
-        model=model,
+    response = await _chat(
+        client, model=model,
         messages=[
             {"role": "system", "content": _QUERY_SYSTEM},
             {"role": "user", "content": prompt},

@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
+from openai import AsyncOpenAI
 
 from post_monitoring import enforce_spoiler_requirement
+from services.ai_moderation_service import ai_check_watched_message
 from services.auto_delete_service import auto_delete_rule_exists, track_auto_delete_message
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
 from services.welcome_service import build_leave_embed, build_welcome_embed
@@ -106,11 +109,29 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if not watchers:
             return
 
+        # Only notify watchers when the AI detects a rule violation.
+        # If OPENAI_API_KEY is not set, fall back to notifying on every message.
+        reason = ""
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key:
+            client = AsyncOpenAI(api_key=api_key)
+            try:
+                is_violation, reason = await ai_check_watched_message(client, message)
+            except Exception as exc:
+                log.warning(
+                    "AI watch check failed for %s: %s — notifying anyway.",
+                    message.author.display_name, exc,
+                )
+                is_violation = True  # fail open: DM watchers if the AI check errors
+            if not is_violation:
+                return
+
         channel_name = getattr(message.channel, "name", str(message.channel.id))
         guild_name = message.guild.name if message.guild else "Unknown Server"
 
         body = message.content or "*[no text content]*"
         attachment_lines = "\n".join(a.url for a in message.attachments)
+        rule_line = f"\n⚠️ **Rule concern:** {reason}" if reason else ""
         footer = (
             f"{attachment_lines}\n" if attachment_lines else ""
         ) + (
@@ -118,7 +139,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             f"in **{guild_name}** / #{channel_name}\n"
             f"{message.jump_url}"
         )
-        dm_text = f"{body}\n\n{footer}"
+        dm_text = f"{body}{rule_line}\n\n{footer}"
 
         for watcher_id in watchers:
             try:
