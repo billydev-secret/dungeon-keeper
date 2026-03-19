@@ -281,6 +281,81 @@ def query_message_rate_drops(
 # ---------------------------------------------------------------------------
 
 
+def render_level_histogram(
+    durations_seconds: list[float],
+    target_level: int,
+    xp_required: float,
+    mean_s: float,
+    stddev_s: float,
+    modal_days: int,
+) -> bytes:
+    """Render a histogram of time-to-reach-level durations as PNG bytes."""
+    days = [s / 86400.0 for s in durations_seconds]
+    mean_d = mean_s / 86400.0
+    stddev_d = stddev_s / 86400.0
+
+    max_day = max(int(d) for d in days)
+    bins = list(range(0, max_day + 2))  # 1-day-wide bins
+
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    ax.hist(days, bins=bins, color=_BAR, edgecolor=_BG, linewidth=0.5, zorder=2)
+
+    # Mean ± 1 std dev band
+    ax.axvspan(
+        max(0.0, mean_d - stddev_d),
+        mean_d + stddev_d,
+        alpha=0.15,
+        color="#fee75c",
+        zorder=1,
+    )
+    ax.axvline(
+        mean_d,
+        color="#fee75c",
+        linewidth=2,
+        linestyle="--",
+        label=f"Mean {mean_d:.1f}d  ±{stddev_d:.1f}d",
+        zorder=3,
+    )
+    ax.axvline(
+        modal_days + 0.5,
+        color=_BAR_ACCENT,
+        linewidth=2,
+        linestyle=":",
+        label=f"Mode {modal_days}d",
+        zorder=3,
+    )
+
+    ax.set_xlabel("Days to reach level", color=_TEXT, fontsize=9)
+    ax.set_ylabel("Members", color=_TEXT, fontsize=9)
+    ax.set_title(
+        f"Time to Reach Level {target_level}  ({xp_required:.0f} XP required)"
+        f"  ·  n = {len(durations_seconds)}",
+        color=_TEXT,
+        fontsize=13,
+        pad=10,
+    )
+
+    ax.tick_params(axis="both", colors=_TEXT, labelsize=8, length=0)
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+    ax.set_axisbelow(True)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
 def render_activity_chart(
     labels: list[str],
     msg_counts: list[int],

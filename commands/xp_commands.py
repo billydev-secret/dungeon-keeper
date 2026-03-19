@@ -10,6 +10,9 @@ from typing import TYPE_CHECKING, Literal
 import discord
 from discord import app_commands
 
+import io
+
+from services.activity_graphs import render_level_histogram
 from services.xp_service import handle_level_progress, maybe_grant_level_role
 from utils import get_bot_member
 from xp_system import (
@@ -651,7 +654,6 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
         mean_s = statistics.mean(durations)
         stddev_s = statistics.pstdev(durations)
 
-        # Mode: bucket by day, find most common bucket
         day_buckets = Counter(int(s // 86400) for s in durations)
         modal_days, modal_count = day_buckets.most_common(1)[0]
 
@@ -664,11 +666,21 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             return f"{h}h {m}m"
 
         xp_needed = xp_required_for_level(level)
-        report = (
+        caption = (
             f"**Time to Reach Level {level}** ({xp_needed:.0f} XP required)\n"
-            f"Members who reached it: **{len(durations)}**\n"
-            f"Average: `{fmt(mean_s)}`\n"
-            f"Mode: `{modal_days}d` ({modal_count} member{'s' if modal_count != 1 else ''})\n"
+            f"Members: **{len(durations)}** · "
+            f"Avg: `{fmt(mean_s)}` · "
+            f"Mode: `{modal_days}d` ({modal_count}) · "
             f"Std Dev: `{fmt(stddev_s)}`"
         )
-        await interaction.followup.send(report, ephemeral=True)
+
+        png = render_level_histogram(
+            durations,
+            target_level=level,
+            xp_required=xp_needed,
+            mean_s=mean_s,
+            stddev_s=stddev_s,
+            modal_days=modal_days,
+        )
+        file = discord.File(io.BytesIO(png), filename=f"level_{level}_histogram.png")
+        await interaction.followup.send(caption, file=file, ephemeral=True)
