@@ -34,8 +34,7 @@ async def _chat(
 
 _MAX_MSG_CHARS = 400   # truncate individual messages to avoid token bloat
 _CONTEXT_WINDOW = 2    # messages before/after each target message to include
-_PER_CHANNEL_FETCH = 300  # messages fetched per channel (wider window for context)
-_MAX_USER_MSGS = 50    # stop collecting after this many target-user messages
+_MAX_USER_MSGS = 200   # stop collecting after this many target-user messages
 
 _WATCH_CHECK_SYSTEM = (
     "You are a Discord moderation assistant. Determine whether the message below violates any "
@@ -182,9 +181,7 @@ async def _fetch_user_context(
 
         try:
             batch: list[discord.Message] = []
-            async for msg in channel.history(
-                limit=_PER_CHANNEL_FETCH, after=after_dt, oldest_first=True
-            ):
+            async for msg in channel.history(limit=None, after=after_dt, oldest_first=True):
                 batch.append(msg)
         except (discord.Forbidden, discord.HTTPException):
             continue
