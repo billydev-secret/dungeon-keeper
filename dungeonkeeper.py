@@ -22,6 +22,7 @@ from commands.xp_commands import register_xp_commands
 from db_utils import init_config_db, open_db
 from handlers.events import register_events
 from services.interaction_graph import init_interaction_tables
+from services.message_store import init_message_tables
 from reports import register_reports
 from services.auto_delete_service import auto_delete_loop, init_auto_delete_tables
 from services.inactivity_prune_service import inactivity_prune_loop, init_inactivity_prune_tables
@@ -77,6 +78,7 @@ with open_db(DB_PATH) as _conn:
     init_watch_tables(_conn)
     init_inactivity_prune_tables(_conn)
     init_interaction_tables(_conn)
+    init_message_tables(_conn)
 
 # ==============================
 # Runtime config + context

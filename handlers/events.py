@@ -14,6 +14,12 @@ from post_monitoring import enforce_spoiler_requirement
 from services.ai_moderation_service import ai_check_watched_message
 from services.auto_delete_service import auto_delete_rule_exists, track_auto_delete_message
 from services.interaction_graph import record_interactions
+from services.message_store import (
+    adjust_reaction_count,
+    delete_message,
+    delete_messages_bulk,
+    store_message,
+)
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
 from services.welcome_service import build_leave_embed, build_welcome_embed
 from services.xp_service import handle_level_progress
@@ -64,6 +70,14 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             log=log,
         )
 
+        # Collect reply / mention data once (used by both store_message and record_interactions)
+        reply_to_id: int | None = None
+        if message.reference and message.reference.message_id:
+            reply_to_id = message.reference.message_id
+
+        mention_ids = [u.id for u in message.mentions if not u.bot and u.id != message.author.id]
+        attachment_urls = [a.url for a in message.attachments]
+
         with ctx.open_db() as conn:
             record_member_activity(
                 conn,
@@ -82,21 +96,31 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     message_ts,
                 )
 
+            store_message(
+                conn,
+                message_id=message.id,
+                guild_id=message.guild.id,
+                channel_id=message.channel.id,
+                author_id=message.author.id,
+                content=message.content or None,
+                reply_to_id=reply_to_id,
+                ts=int(message_ts),
+                attachment_urls=attachment_urls,
+                mention_ids=mention_ids,
+            )
+
             # Record reply and mention interactions for the connection web
-            interaction_targets: list[int] = []
-            if message.reference and isinstance(message.reference.resolved, discord.Message):
+            interaction_targets = [uid for uid in mention_ids]
+            if reply_to_id and message.reference and isinstance(message.reference.resolved, discord.Message):
                 ref = message.reference.resolved
-                if not ref.author.bot and ref.author.id != message.author.id:
-                    interaction_targets.append(ref.author.id)
-            for user in message.mentions:
-                if (
-                    not user.bot
-                    and user.id != message.author.id
-                    and user.id not in interaction_targets
-                ):
-                    interaction_targets.append(user.id)
+                if not ref.author.bot and ref.author.id != message.author.id and ref.author.id not in interaction_targets:
+                    interaction_targets.insert(0, ref.author.id)
             if interaction_targets:
-                record_interactions(conn, message.guild.id, message.author.id, interaction_targets)
+                record_interactions(
+                    conn, message.guild.id, message.author.id, interaction_targets,
+                    ts=int(message_ts),
+                    message_id=message.id,
+                )
 
         if spoiler_deleted:
             return
@@ -194,6 +218,16 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 level_5_log_channel_id=ctx.level_5_log_channel_id,
             )
 
+        if payload.guild_id:
+            with ctx.open_db() as conn:
+                adjust_reaction_count(conn, payload.message_id, str(payload.emoji), +1)
+
+    @bot.event
+    async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+        if payload.guild_id:
+            with ctx.open_db() as conn:
+                adjust_reaction_count(conn, payload.message_id, str(payload.emoji), -1)
+
     @bot.event
     async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
         if payload.guild_id is None:
@@ -202,6 +236,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         remove_tracked_auto_delete_message(
             ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
         )
+        with ctx.open_db() as conn:
+            delete_message(conn, payload.message_id)
 
     async def _dm_admin_permission_warning(guild: discord.Guild, message: str) -> None:
         owner = guild.owner
@@ -256,6 +292,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         remove_tracked_auto_delete_messages(
             ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
         )
+        with ctx.open_db() as conn:
+            delete_messages_bulk(conn, payload.message_ids)
 
     @bot.tree.error
     async def on_app_command_error(

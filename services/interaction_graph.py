@@ -8,6 +8,7 @@ import io
 import math
 import re
 import sqlite3
+import time as _time
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -55,6 +56,44 @@ def init_interaction_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_interactions_log (
+            guild_id     INTEGER NOT NULL,
+            from_user_id INTEGER NOT NULL,
+            to_user_id   INTEGER NOT NULL,
+            ts           INTEGER NOT NULL,
+            message_id   INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_interactions_log_guild_ts
+        ON user_interactions_log (guild_id, ts)
+        """
+    )
+    # Partial unique index: deduplicates rows that have a message_id so that
+    # running /interaction_scan multiple times (or while the bot is live) does
+    # not inflate the counts.
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_interactions_log_dedup
+        ON user_interactions_log (guild_id, message_id, from_user_id, to_user_id)
+        WHERE message_id IS NOT NULL
+        """
+    )
+    # Migration for existing databases that pre-date the message_id column.
+    try:
+        conn.execute("ALTER TABLE user_interactions_log ADD COLUMN message_id INTEGER")
+    except Exception:
+        pass  # Column already exists
+
+
+def clear_interaction_data(conn: sqlite3.Connection, guild_id: int) -> None:
+    """Delete all interaction records for a guild (both aggregate and log tables)."""
+    conn.execute("DELETE FROM user_interactions WHERE guild_id = ?", (guild_id,))
+    conn.execute("DELETE FROM user_interactions_log WHERE guild_id = ?", (guild_id,))
 
 
 def record_interactions(
@@ -63,10 +102,32 @@ def record_interactions(
     from_user_id: int,
     to_user_ids: list[int],
     amount: int = 1,
+    ts: int | None = None,
+    message_id: int | None = None,
 ) -> None:
-    """Increment the interaction weight from *from_user_id* to each target."""
+    """Increment the interaction weight from *from_user_id* to each target.
+
+    ts         – Unix timestamp of the interaction; defaults to now.
+    message_id – Discord message ID.  When provided, the unique index on the
+                 log table prevents the same message from being counted twice
+                 (guards against scan + live-recording overlap, and repeated
+                 scan runs).  The aggregate table is only updated when the log
+                 insert is genuinely new.
+    """
+    ts = ts if ts is not None else int(_time.time())
     for to_user_id in to_user_ids:
         if to_user_id == from_user_id:
+            continue
+        result = conn.execute(
+            """
+            INSERT OR IGNORE INTO user_interactions_log
+                (guild_id, from_user_id, to_user_id, ts, message_id)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (guild_id, from_user_id, to_user_id, ts, message_id),
+        )
+        if result.rowcount == 0:
+            # Duplicate message — already counted; skip aggregate update too.
             continue
         conn.execute(
             """
@@ -84,6 +145,7 @@ def query_connection_web(
     guild_id: int,
     min_weight: int = 1,
     limit_users: int = 40,
+    after_ts: int | None = None,
 ) -> list[tuple[int, int, int]]:
     """
     Return directed edges as (from_user_id, to_user_id, combined_weight).
@@ -93,36 +155,70 @@ def query_connection_web(
 
     Restricted to the top *limit_users* by total interaction volume to keep
     the chart readable.
-    """
-    # Top users by total interaction volume (sender + receiver)
-    top_rows = conn.execute(
-        """
-        SELECT user_id, SUM(w) AS total FROM (
-            SELECT from_user_id AS user_id, SUM(weight) AS w
-            FROM user_interactions WHERE guild_id = ?
-            GROUP BY from_user_id
-            UNION ALL
-            SELECT to_user_id AS user_id, SUM(weight) AS w
-            FROM user_interactions WHERE guild_id = ?
-            GROUP BY to_user_id
-        )
-        GROUP BY user_id
-        ORDER BY total DESC
-        LIMIT ?
-        """,
-        (guild_id, guild_id, limit_users),
-    ).fetchall()
-    top_ids = {int(r[0]) for r in top_rows}
 
-    rows = conn.execute(
-        """
-        SELECT from_user_id, to_user_id, weight
-        FROM user_interactions
-        WHERE guild_id = ?
-        ORDER BY weight DESC
-        """,
-        (guild_id,),
-    ).fetchall()
+    after_ts – if set, only count interactions recorded at or after this Unix
+               timestamp (queries the log table).  None means all-time
+               (queries the faster aggregate table).
+    """
+    if after_ts is not None:
+        top_rows = conn.execute(
+            """
+            SELECT user_id, SUM(w) AS total FROM (
+                SELECT from_user_id AS user_id, COUNT(*) AS w
+                FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+                GROUP BY from_user_id
+                UNION ALL
+                SELECT to_user_id AS user_id, COUNT(*) AS w
+                FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+                GROUP BY to_user_id
+            )
+            GROUP BY user_id
+            ORDER BY total DESC
+            LIMIT ?
+            """,
+            (guild_id, after_ts, guild_id, after_ts, limit_users),
+        ).fetchall()
+        top_ids = {int(r[0]) for r in top_rows}
+
+        rows = conn.execute(
+            """
+            SELECT from_user_id, to_user_id, COUNT(*) AS weight
+            FROM user_interactions_log
+            WHERE guild_id = ? AND ts >= ?
+            GROUP BY from_user_id, to_user_id
+            ORDER BY weight DESC
+            """,
+            (guild_id, after_ts),
+        ).fetchall()
+    else:
+        top_rows = conn.execute(
+            """
+            SELECT user_id, SUM(w) AS total FROM (
+                SELECT from_user_id AS user_id, SUM(weight) AS w
+                FROM user_interactions WHERE guild_id = ?
+                GROUP BY from_user_id
+                UNION ALL
+                SELECT to_user_id AS user_id, SUM(weight) AS w
+                FROM user_interactions WHERE guild_id = ?
+                GROUP BY to_user_id
+            )
+            GROUP BY user_id
+            ORDER BY total DESC
+            LIMIT ?
+            """,
+            (guild_id, guild_id, limit_users),
+        ).fetchall()
+        top_ids = {int(r[0]) for r in top_rows}
+
+        rows = conn.execute(
+            """
+            SELECT from_user_id, to_user_id, weight
+            FROM user_interactions
+            WHERE guild_id = ?
+            ORDER BY weight DESC
+            """,
+            (guild_id,),
+        ).fetchall()
 
     # Merge A→B and B→A into a single undirected edge
     merged: dict[tuple[int, int], int] = {}
