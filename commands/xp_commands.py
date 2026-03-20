@@ -4,9 +4,6 @@ Commands:
   /xp_leaderboards      — top XP earners per source and time window, plus caller's rank
   /xp_give              — manually award 20 XP to a member (mod or allowlisted users)
   /xp_give_allow/disallow/allowed — manage the /xp_give allowlist (mod only)
-  /xp_set_levelup_log_here        — configure level-up announcement channel
-  /xp_set_level5_log_here         — configure level-5 milestone channel
-  /xp_exclude_here / /xp_include_here — toggle XP in a channel or thread
   /xp_excluded_channels           — list XP-excluded channels
   /xp_backfill_history            — scan message history to fill XP gaps
   /xp_level_review                — histogram of time-to-reach for a given level
@@ -335,103 +332,6 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.send_message(
             "Users allowed to use /xp_give: " + ", ".join(labels), ephemeral=True
-        )
-
-    @bot.tree.command(
-        name="xp_set_levelup_log_here",
-        description="Send level-up announcements to this channel or thread.",
-    )
-    async def xp_set_levelup_log_here(interaction: discord.Interaction):
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-
-        channel = ctx.get_xp_config_target_channel(interaction)
-        if channel is None:
-            await interaction.response.send_message(
-                "This command only works in text channels or threads.", ephemeral=True
-            )
-            return
-
-        ctx.level_up_log_channel_id = int(ctx.set_config_value("xp_level_up_log_channel_id", str(channel.id)))
-        await interaction.response.send_message(
-            f"Level-up announcements will be posted in {channel.mention}.", ephemeral=True
-        )
-
-    @bot.tree.command(
-        name="xp_set_level5_log_here",
-        description="Send level 5 XP announcements to this channel or thread.",
-    )
-    async def xp_set_level5_log_here(interaction: discord.Interaction):
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-
-        channel = ctx.get_xp_config_target_channel(interaction)
-        if channel is None:
-            await interaction.response.send_message(
-                "This command only works in text channels or threads.", ephemeral=True
-            )
-            return
-
-        ctx.level_5_log_channel_id = int(ctx.set_config_value("xp_level_5_log_channel_id", str(channel.id)))
-        await interaction.response.send_message(
-            f"Level {DEFAULT_XP_SETTINGS.role_grant_level} announcements will be posted in {channel.mention}.",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(
-        name="xp_exclude_here",
-        description="Disable XP gain in this channel or thread.",
-    )
-    async def xp_exclude_here(interaction: discord.Interaction):
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-
-        channel = ctx.get_xp_config_target_channel(interaction)
-        if channel is None:
-            await interaction.response.send_message(
-                "This command only works in text channels or threads.", ephemeral=True
-            )
-            return
-
-        ctx.xp_excluded_channel_ids = ctx.add_config_id_value("xp_excluded_channel_ids", channel.id)
-        await interaction.response.send_message(
-            f"XP excluded for {channel.mention}. "
-            f"Excluded channel IDs: {sorted(ctx.xp_excluded_channel_ids)}",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(
-        name="xp_include_here",
-        description="Re-enable XP gain in this channel or thread.",
-    )
-    async def xp_include_here(interaction: discord.Interaction):
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-
-        channel = ctx.get_xp_config_target_channel(interaction)
-        if channel is None:
-            await interaction.response.send_message(
-                "This command only works in text channels or threads.", ephemeral=True
-            )
-            return
-
-        ctx.xp_excluded_channel_ids = ctx.remove_config_id_value("xp_excluded_channel_ids", channel.id)
-        await interaction.response.send_message(
-            f"XP enabled for {channel.mention}. "
-            f"Excluded channel IDs: {sorted(ctx.xp_excluded_channel_ids)}",
-            ephemeral=True,
         )
 
     @bot.tree.command(

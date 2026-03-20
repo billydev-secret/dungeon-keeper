@@ -16,18 +16,19 @@ def _fmt(command_specs: list[tuple[str, str]]) -> str:
 
 # (label, emoji, color, intro, [(command, description), ...])
 _SECTION_META: dict[str, tuple[str, discord.Color]] = {
-    "General":          ("🌿", discord.Color.from_str("#5865F2")),
-    "Role Grants":      ("🎭", discord.Color.from_str("#57F287")),
-    "XP Grant":         ("⭐", discord.Color.from_str("#FEE75C")),
-    "Reports":          ("📊", discord.Color.from_str("#EB459E")),
-    "Watch List":       ("🔍", discord.Color.from_str("#3498DB")),
-    "Role Grant Config":("⚙️",  discord.Color.from_str("#1ABC9C")),
-    "XP Config":        ("🔧", discord.Color.from_str("#2ECC71")),
-    "Welcome & Leave":  ("👋", discord.Color.from_str("#9B59B6")),
-    "Spoiler Guard":    ("🛡️",  discord.Color.from_str("#E74C3C")),
-    "Inactivity Prune": ("✂️",  discord.Color.from_str("#E67E22")),
-    "Auto-Delete":      ("🗑️",  discord.Color.from_str("#992D22")),
-    "AI Moderation":    ("🤖", discord.Color.from_str("#5865F2")),
+    "General":           ("🌿", discord.Color.from_str("#5865F2")),
+    "Role Grants":       ("🎭", discord.Color.from_str("#57F287")),
+    "XP Grant":          ("⭐", discord.Color.from_str("#FEE75C")),
+    "Reports":           ("📊", discord.Color.from_str("#EB459E")),
+    "Activity & Graphs": ("📈", discord.Color.from_str("#5DADE2")),
+    "Watch List":        ("🔍", discord.Color.from_str("#3498DB")),
+    "Role Grant Config": ("⚙️",  discord.Color.from_str("#1ABC9C")),
+    "XP Config":         ("🔧", discord.Color.from_str("#2ECC71")),
+    "Welcome & Leave":   ("👋", discord.Color.from_str("#9B59B6")),
+    "Spoiler Guard":     ("🛡️",  discord.Color.from_str("#E74C3C")),
+    "Inactivity Prune":  ("✂️",  discord.Color.from_str("#E67E22")),
+    "Auto-Delete":       ("🗑️",  discord.Color.from_str("#992D22")),
+    "AI Moderation":     ("🤖", discord.Color.from_str("#5865F2")),
 }
 
 
@@ -53,6 +54,9 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ("/session_burst member:@user",
              "Histogram of a member's message activity in the 60 min after returning "
              "from a 20-min absence, compared to the idle baseline."),
+            ("/connection_web",
+             "Visualise the web of replies and @mentions between members. "
+             "Add `member:@user` to centre the graph on one person's direct connections."),
         ])
     ))
 
@@ -86,13 +90,36 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/inactive_role role:@Role days:7", "Members of a role who haven't posted in N days."),
                 ("/report_inactive time_period:7d", "All server members inactive for a given period."),
                 ("/oldest_sfw_members count:10", "Members without spicy access, sorted by oldest last message."),
-                ("/dropoff period:week limit:10",
-                 "Show members with the largest drop in message count between two equal time windows."),
                 ("/xp_level_review level:5",
                  "Histogram of how long members take to reach a given XP level, "
                  "with mean, mode, and std dev overlaid."),
                 ("/purge count:50",
                  "Delete the last N messages in this channel (omit N to delete all recent messages)."),
+            ])
+        ))
+
+        # ── Activity & Graphs ─────────────────────────────────────────────────
+        pages.append(_page("Activity & Graphs",
+            "Charts and graphs for understanding server engagement patterns.\n\n"
+            "**Message Rate**\n"
+            + _fmt([
+                ("/dropoff period:week limit:10",
+                 "Members with the largest drop in message count between two equal time windows."),
+            ])
+            + "\n\n**Session Burst**\n"
+            + _fmt([
+                ("/burst_ranking limit:5",
+                 "Server-wide ranking of who drives the most (and least) activity after returning "
+                 "from a 20-min absence. Shows top and bottom N members side by side."),
+            ])
+            + "\n\n**Interaction Web**\n"
+            + _fmt([
+                ("/connection_web member:@user min_interactions:3 limit:40",
+                 "Spring-layout network graph of replies and @mentions between members. "
+                 "Omit `member` for the full server view; supply it to focus on one person's connections."),
+                ("/interaction_scan days:0",
+                 "Scan message history to seed the interaction graph. "
+                 "Run once after setup, then the graph updates live. Use `days:0` for all history."),
             ])
         ))
 
@@ -123,45 +150,31 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         # ── Role grant config ─────────────────────────────────────────────────
         pages.append(_page("Role Grant Config",
             "Configure which roles are granted and where grants are logged or announced.\n\n"
-            "**Greeter**\n"
             + _fmt([
-                ("/set_greeter_role role:@Role", "Allow this role to use grant commands alongside mods."),
-            ])
-            + "\n\n**Denizen**\n"
-            + _fmt([
-                ("/set_denizen_role role:@Role", "Role assigned by `/grant_denizen`."),
-                ("/set_denizen_log_here · /denizen_log_disable", "Log grants in this channel / turn off logging."),
-                ("/set_denizen_announce_here · /denizen_announce_disable", "Post grant announcements here / turn off."),
-                ("/set_denizen_message", "Customise the grant announcement template."),
-            ])
-            + "\n\n**NSFW**\n"
-            + _fmt([
-                ("/set_nsfw_role role:@Role", "Role assigned by `/grant_nsfw`."),
-                ("/set_nsfw_log_here · /nsfw_log_disable", "Log grants here / turn off."),
-                ("/set_nsfw_announce_here · /nsfw_announce_disable", "Post announcements here / turn off."),
-                ("/set_nsfw_message", "Customise the grant announcement template."),
-            ])
-            + "\n\n**Veteran**\n"
-            + _fmt([
-                ("/set_veteran_role role:@Role", "Role assigned by `/grant_veteran`."),
-                ("/set_veteran_log_here · /veteran_log_disable", "Log grants here / turn off."),
-                ("/set_veteran_announce_here · /veteran_announce_disable", "Post announcements here / turn off."),
-                ("/set_veteran_message", "Customise the grant announcement template."),
+                ("/config roles",
+                 "Open the roles config panel. Select Greeter, Denizen, NSFW, or Veteran to set "
+                 "the role ID, log channel, announce channel, and grant message template."),
             ])
         ))
 
         # ── XP config ─────────────────────────────────────────────────────────
         pages.append(_page("XP Config",
             "Control how XP is earned and tracked across the server.\n\n"
+            "**Allowlist**\n"
             + _fmt([
                 ("/xp_give_allow member:@user", "Add a member to the `/xp_give` allowlist."),
                 ("/xp_give_disallow member:@user", "Remove a member from the allowlist."),
                 ("/xp_give_allowed", "Show everyone currently on the allowlist."),
-                ("/xp_set_levelup_log_here", "Log every level-up event in this channel."),
-                ("/xp_set_level5_log_here", "Log level 5 milestone grants here."),
-                ("/xp_exclude_here", "Stop XP from being earned in this channel or thread."),
-                ("/xp_include_here", "Re-enable XP in a previously excluded channel or thread."),
+            ])
+            + "\n\n**Log Channels & Channel Exclusions**\n"
+            + _fmt([
+                ("/config xp",
+                 "Open the XP config panel — set level-up and level-5 log channels, "
+                 "and toggle XP on/off for the current channel."),
                 ("/xp_excluded_channels", "List every channel where XP is currently disabled."),
+            ])
+            + "\n\n**History**\n"
+            + _fmt([
                 ("/xp_backfill_history days:30", "Scan message history to fill gaps in XP and activity data."),
             ])
         ))
@@ -169,18 +182,11 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         # ── Welcome / Leave config ─────────────────────────────────────────────
         pages.append(_page("Welcome & Leave",
             "Customise the messages posted when members join or leave.\n\n"
-            "**Welcome**\n"
             + _fmt([
-                ("/welcome_set_here", "Post welcome messages in this channel."),
-                ("/welcome_disable", "Turn off welcome messages."),
-                ("/welcome_set_message", "Edit the welcome message template."),
+                ("/config welcome",
+                 "Open the welcome & leave config modal — set channel IDs and message templates "
+                 "for both welcome and leave messages in one form."),
                 ("/welcome_preview", "Preview how the welcome message looks with your profile."),
-            ])
-            + "\n\n**Leave**\n"
-            + _fmt([
-                ("/leave_set_here", "Post leave messages in this channel."),
-                ("/leave_disable", "Turn off leave messages."),
-                ("/leave_set_message", "Edit the leave message template."),
                 ("/leave_preview", "Preview how the leave message looks with your profile."),
             ])
         ))
@@ -189,9 +195,9 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         pages.append(_page("Spoiler Guard",
             "Auto-delete unspoilered images in designated channels.\n\n"
             + _fmt([
-                ("/spoiler_guard_add_here", "Require spoilers on all images posted in this channel or thread."),
-                ("/spoiler_guard_remove_here", "Remove the spoiler requirement from this channel or thread."),
-                ("/spoiler_guarded_channels", "List every channel currently under spoiler guard."),
+                ("/config spoiler",
+                 "Open the spoiler guard panel — shows guarded channels and lets you "
+                 "guard or unguard the current channel."),
             ])
         ))
 
@@ -199,13 +205,17 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         pages.append(_page("Inactivity Prune",
             "Automatically remove a role from members who haven't posted in N days. "
             "Runs once daily at midnight UTC.\n\n"
+            "**Setup**\n"
             + _fmt([
-                ("/inactivity_prune_setup role:@Role days:30", "Configure the role and inactivity threshold."),
-                ("/inactivity_prune_disable", "Turn off the scheduled prune."),
+                ("/config prune",
+                 "Open the prune config panel — set the role and inactivity threshold, "
+                 "disable the prune, or run it immediately."),
                 ("/inactivity_prune_status", "Show the current config and full exemption list."),
+            ])
+            + "\n\n**Exemptions**\n"
+            + _fmt([
                 ("/inactivity_prune_exempt member:@user", "Protect a member from ever being pruned."),
                 ("/inactivity_prune_unexempt member:@user", "Remove a member's exemption."),
-                ("/inactivity_prune_run", "Run the prune right now without waiting for midnight."),
             ])
         ))
 

@@ -10,7 +10,6 @@ import discord
 
 from commands.denizen_commands import register_denizen_commands
 from commands.mod_commands import register_mod_commands
-from commands.spoiler_commands import register_spoiler_commands
 from commands.xp_commands import register_xp_commands
 
 
@@ -239,141 +238,6 @@ class GrantDenizenTests(unittest.TestCase):
         self.assertIn("granted", ix.response.send_message.call_args[0][0].lower())
 
 
-# ---------------------------------------------------------------------------
-# set_greeter_role / set_denizen_role tests
-# ---------------------------------------------------------------------------
-
-
-class SetRoleCommandTests(unittest.TestCase):
-    def setUp(self):
-        cap = _CommandCapture()
-        self.ctx = _make_ctx(is_mod=True)
-        register_denizen_commands(cap.bot, self.ctx)
-        self.set_greeter = cap.get("set_greeter_role")
-        self.set_denizen = cap.get("set_denizen_role")
-
-    def test_set_greeter_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self.set_greeter(ix, MagicMock()))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_set_greeter_success_updates_ctx(self):
-        self.ctx.set_config_value.return_value = "42"
-        role = MagicMock()
-        role.id = 42
-        role.mention = "<@&42>"
-        ix = _make_interaction()
-        _run(self.set_greeter(ix, role))
-        self.ctx.set_config_value.assert_called_once_with("greeter_role_id", "42")
-        self.assertEqual(self.ctx.greeter_role_id, 42)
-
-    def test_set_denizen_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self.set_denizen(ix, MagicMock()))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_set_denizen_success_updates_ctx(self):
-        self.ctx.set_config_value.return_value = "55"
-        role = MagicMock()
-        role.id = 55
-        role.mention = "<@&55>"
-        ix = _make_interaction()
-        _run(self.set_denizen(ix, role))
-        self.ctx.set_config_value.assert_called_once_with("denizen_role_id", "55")
-        self.assertEqual(self.ctx.denizen_role_id, 55)
-
-
-# ---------------------------------------------------------------------------
-# Spoiler guard command tests
-# ---------------------------------------------------------------------------
-
-
-class SpoilerGuardCommandTests(unittest.TestCase):
-    def _make_channel(self, channel_id: int = 300) -> MagicMock:
-        ch = MagicMock()
-        ch.id = channel_id
-        ch.mention = f"<#{channel_id}>"
-        return ch
-
-    def test_add_non_mod_denied(self):
-        cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=False)
-        register_spoiler_commands(cap.bot, ctx)
-        ix = _make_interaction()
-        _run(cap.get("spoiler_guard_add_here")(ix))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_add_no_channel_denied(self):
-        cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=True, target_channel=None)
-        register_spoiler_commands(cap.bot, ctx)
-        ix = _make_interaction()
-        _run(cap.get("spoiler_guard_add_here")(ix))
-        self.assertIn("text channels", ix.response.send_message.call_args[0][0].lower())
-
-    def test_add_success_updates_ctx(self):
-        channel = self._make_channel(300)
-        cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=True, target_channel=channel)
-        ctx.add_config_id_value.return_value = {300}
-        register_spoiler_commands(cap.bot, ctx)
-        ix = _make_interaction()
-        _run(cap.get("spoiler_guard_add_here")(ix))
-        ctx.add_config_id_value.assert_called_once_with("spoiler_required_channels", 300)
-        self.assertEqual(ctx.spoiler_required_channels, {300})
-
-    def test_remove_non_mod_denied(self):
-        cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=False)
-        register_spoiler_commands(cap.bot, ctx)
-        ix = _make_interaction()
-        _run(cap.get("spoiler_guard_remove_here")(ix))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_remove_success_updates_ctx(self):
-        channel = self._make_channel(300)
-        cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=True, target_channel=channel, spoiler_required_channels={300})
-        ctx.remove_config_id_value.return_value = set()
-        register_spoiler_commands(cap.bot, ctx)
-        ix = _make_interaction()
-        _run(cap.get("spoiler_guard_remove_here")(ix))
-        ctx.remove_config_id_value.assert_called_once_with("spoiler_required_channels", 300)
-        self.assertEqual(ctx.spoiler_required_channels, set())
-
-    def test_list_non_mod_denied(self):
-        cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=False)
-        register_spoiler_commands(cap.bot, ctx)
-        ix = _make_interaction()
-        _run(cap.get("spoiler_guarded_channels")(ix))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_list_empty_reports_none_guarded(self):
-        cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=True, spoiler_required_channels=set())
-        register_spoiler_commands(cap.bot, ctx)
-        ix = _make_interaction()
-        _run(cap.get("spoiler_guarded_channels")(ix))
-        self.assertIn("disabled", ix.response.send_message.call_args[0][0].lower())
-
-    def test_list_shows_channel_ids(self):
-        channel = self._make_channel(300)
-        cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=True, spoiler_required_channels={300})
-        register_spoiler_commands(cap.bot, ctx)
-        guild = MagicMock()
-        guild.get_channel = MagicMock(return_value=channel)
-        guild.get_thread = MagicMock(return_value=None)
-        # get_channel_or_thread not available — test fallback path
-        del guild.get_channel_or_thread
-        ix = _make_interaction(guild=guild)
-        _run(cap.get("spoiler_guarded_channels")(ix))
-        text = ix.response.send_message.call_args[0][0]
-        self.assertIn("300", text)
-
 
 # ---------------------------------------------------------------------------
 # XP command permission guard tests
@@ -457,30 +321,6 @@ class XpCommandPermissionTests(unittest.TestCase):
         _run(self._cmd("xp_leaderboards")(ix))
         self.assertIn("server", ix.response.send_message.call_args[0][0].lower())
 
-    def test_xp_set_levelup_log_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self._cmd("xp_set_levelup_log_here")(ix))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_xp_set_level5_log_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self._cmd("xp_set_level5_log_here")(ix))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_xp_exclude_here_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self._cmd("xp_exclude_here")(ix))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_xp_include_here_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self._cmd("xp_include_here")(ix))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
     def test_xp_backfill_non_mod_denied(self):
         self.ctx.is_mod.return_value = False
         ix = _make_interaction()
@@ -520,38 +360,6 @@ class XpConfigCommandSuccessTests(unittest.TestCase):
         ix = _make_interaction()
         _run(self.cap.get("xp_give_disallow")(ix, member))
         self.ctx.remove_config_id_value.assert_called_once_with("xp_grant_allowed_user_ids", 42)
-
-    def test_xp_exclude_here_success(self):
-        channel = self._channel(400)
-        self.ctx.get_xp_config_target_channel.return_value = channel
-        self.ctx.add_config_id_value.return_value = {400}
-        ix = _make_interaction()
-        _run(self.cap.get("xp_exclude_here")(ix))
-        self.ctx.add_config_id_value.assert_called_once_with("xp_excluded_channel_ids", 400)
-        self.assertEqual(self.ctx.xp_excluded_channel_ids, {400})
-
-    def test_xp_include_here_success(self):
-        channel = self._channel(400)
-        self.ctx.get_xp_config_target_channel.return_value = channel
-        self.ctx.remove_config_id_value.return_value = set()
-        ix = _make_interaction()
-        _run(self.cap.get("xp_include_here")(ix))
-        self.ctx.remove_config_id_value.assert_called_once_with("xp_excluded_channel_ids", 400)
-
-    def test_xp_set_levelup_log_no_channel_denied(self):
-        self.ctx.get_xp_config_target_channel.return_value = None
-        ix = _make_interaction()
-        _run(self.cap.get("xp_set_levelup_log_here")(ix))
-        self.assertIn("text channels", ix.response.send_message.call_args[0][0].lower())
-
-    def test_xp_set_levelup_log_success(self):
-        channel = self._channel(500)
-        self.ctx.get_xp_config_target_channel.return_value = channel
-        self.ctx.set_config_value.return_value = "500"
-        ix = _make_interaction()
-        _run(self.cap.get("xp_set_levelup_log_here")(ix))
-        self.ctx.set_config_value.assert_called_once_with("xp_level_up_log_channel_id", "500")
-        self.assertEqual(self.ctx.level_up_log_channel_id, 500)
 
 
 # ---------------------------------------------------------------------------
