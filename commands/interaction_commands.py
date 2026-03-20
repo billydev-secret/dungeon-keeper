@@ -32,11 +32,13 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         description="Show the web of replies and mentions between server members.",
     )
     @app_commands.describe(
+        member="Focus on this member's direct connections only.",
         min_interactions="Only show pairs with at least this many interactions (default 3).",
-        limit="Max number of members to include (default 40).",
+        limit="Max number of members to include in server-wide view (default 40).",
     )
     async def connection_web(
         interaction: discord.Interaction,
+        member: discord.Member | None = None,
         min_interactions: app_commands.Range[int, 1, 500] = 3,
         limit: app_commands.Range[int, 5, 60] = 40,
     ) -> None:
@@ -50,28 +52,46 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         with ctx.open_db() as conn:
-            edges = query_connection_web(
+            all_edges = query_connection_web(
                 conn, guild.id,
-                min_weight=min_interactions,
+                min_weight=1 if member else min_interactions,
                 limit_users=limit,
             )
 
-        if not edges:
-            await interaction.followup.send(
-                f"No interaction data found with at least **{min_interactions}** interactions. "
-                "Use `/interaction_scan` to backfill history, or lower `min_interactions`.",
-                ephemeral=True,
+        if member is not None:
+            # Filter to only edges that include the focused member
+            edges = [
+                (u, v, w) for u, v, w in all_edges
+                if u == member.id or v == member.id
+            ]
+            no_data_msg = (
+                f"{member.mention} has no recorded interactions yet. "
+                "Use `/interaction_scan` to backfill history."
             )
+        else:
+            edges = all_edges
+            no_data_msg = (
+                f"No interaction data found with at least **{min_interactions}** interactions. "
+                "Use `/interaction_scan` to backfill history, or lower `min_interactions`."
+            )
+
+        if not edges:
+            await interaction.followup.send(no_data_msg, ephemeral=True)
             return
 
         # Resolve display names for every node in the edge list
         node_ids = {uid for u, v, _ in edges for uid in (u, v)}
         name_map: dict[int, str] = {}
         for uid in node_ids:
-            member = guild.get_member(uid)
-            name_map[uid] = member.display_name if member else f"User {uid}"
+            m = guild.get_member(uid)
+            name_map[uid] = m.display_name if m else f"User {uid}"
 
-        chart_bytes = render_connection_web(edges, name_map, guild_name=guild.name)
+        chart_bytes = render_connection_web(
+            edges,
+            name_map,
+            guild_name=guild.name,
+            focus_user_id=member.id if member else None,
+        )
         await interaction.followup.send(
             file=discord.File(io.BytesIO(chart_bytes), filename="connection_web.png"),
             ephemeral=True,

@@ -199,16 +199,22 @@ def _spring_layout(
 # Chart renderer
 # ---------------------------------------------------------------------------
 
+_NODE_FOCUS = "#eb459e"   # pink highlight for the centred user
+
+
 def render_connection_web(
     edges: list[tuple[int, int, int]],
     name_map: dict[int, str],
     guild_name: str,
+    focus_user_id: int | None = None,
 ) -> bytes:
     """
     Render the user interaction network as PNG bytes.
 
-    edges    – list of (user_id_a, user_id_b, combined_weight)
-    name_map – user_id -> display name
+    edges         – list of (user_id_a, user_id_b, combined_weight)
+    name_map      – user_id -> display name
+    focus_user_id – when set, this node is rendered in a highlight colour
+                    and the title reflects the focused view
     """
     if not edges:
         raise ValueError("No edges to render.")
@@ -270,22 +276,28 @@ def render_connection_web(
     for nid in node_ids:
         x, y = pos_n[nid]
         vol = node_vol.get(nid, 1)
-        size = 120 + 600 * (vol / max_vol)
+        is_focus = nid == focus_user_id
+        size = (300 if is_focus else 120) + 600 * (vol / max_vol)
         ax.scatter(
             x, y, s=size,
-            color=_NODE, zorder=4,
-            edgecolors=_NODE_EDGE, linewidths=0.8,
+            color=_NODE_FOCUS if is_focus else _NODE,
+            zorder=4,
+            edgecolors=_TEXT if is_focus else _NODE_EDGE,
+            linewidths=1.5 if is_focus else 0.8,
         )
 
     # Node labels — offset to avoid overlapping the dot
     label_pad = 0.07
     for nid in node_ids:
         x, y = pos_n[nid]
+        is_focus = nid == focus_user_id
         ax.text(
             x, y + label_pad,
             name_map.get(nid, str(nid)),
             ha="center", va="bottom",
-            color=_TEXT, fontsize=8, fontweight="bold",
+            color=_NODE_FOCUS if is_focus else _TEXT,
+            fontsize=10 if is_focus else 8,
+            fontweight="bold",
             zorder=5,
         )
 
@@ -293,17 +305,23 @@ def render_connection_web(
     ax.set_ylim(-1.4, 1.4)
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.set_title(
-        f"{guild_name} — Interaction Web  (replies + mentions)",
-        color=_TEXT, fontsize=14, pad=12,
-    )
+
+    if focus_user_id is not None:
+        focus_name = name_map.get(focus_user_id, str(focus_user_id))
+        title = f"{guild_name} — {focus_name}'s Connections  (replies + mentions)"
+    else:
+        title = f"{guild_name} — Interaction Web  (replies + mentions)"
+    ax.set_title(title, color=_TEXT, fontsize=14, pad=12)
 
     # Legend
     from matplotlib.lines import Line2D
-    legend_elements = [
+    from matplotlib.patches import Patch
+    legend_elements: list = [
         Line2D([0], [0], color=_EDGE_COLOR, linewidth=1, label="few interactions", alpha=0.4),
         Line2D([0], [0], color=_EDGE_COLOR, linewidth=4, label="many interactions", alpha=0.9),
     ]
+    if focus_user_id is not None:
+        legend_elements.append(Patch(color=_NODE_FOCUS, label="focused member"))
     ax.legend(
         handles=legend_elements,
         facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT,
