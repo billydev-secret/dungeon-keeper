@@ -34,6 +34,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
     @app_commands.describe(
         member="Focus on this member's direct connections only.",
         min_pct="Hide edges that are less than this % of either user's total interactions (default 5).",
+        layers="When focusing on a member, how many layers of connections to expand (default 2).",
         limit="Max number of members to include in server-wide view (default 40).",
         spread="How spread out the graph is — higher = more space between nodes (default 1.0).",
     )
@@ -41,6 +42,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         interaction: discord.Interaction,
         member: discord.Member | None = None,
         min_pct: app_commands.Range[int, 1, 100] = 5,
+        layers: app_commands.Range[int, 1, 5] = 2,
         limit: app_commands.Range[int, 5, 60] = 40,
         spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
     ) -> None:
@@ -76,29 +78,33 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         second_level_ids: set[int] | None = None
 
         if member is not None:
-            # 1st level: edges directly involving the focused member that pass threshold
-            first_level_edges = [
+            # Expand outward layer by layer. Layer 1 = direct connections (blurple),
+            # layers 2+ go into second_level_ids (green).
+            included_ids: set[int] = {member.id}
+            frontier: set[int] = {member.id}
+            second_level_ids = set()
+
+            for layer_idx in range(layers):
+                new_nodes: set[int] = set()
+                for u, v, w in all_edges:
+                    if not _pct_passes(u, v, w):
+                        continue
+                    if u in frontier and v not in included_ids:
+                        new_nodes.add(v)
+                    elif v in frontier and u not in included_ids:
+                        new_nodes.add(u)
+                if not new_nodes:
+                    break
+                if layer_idx > 0:
+                    second_level_ids |= new_nodes
+                included_ids |= new_nodes
+                frontier = new_nodes
+
+            # Collect every edge whose both endpoints are included and pass the threshold
+            edges = [
                 (u, v, w) for u, v, w in all_edges
-                if (u == member.id or v == member.id) and _pct_passes(u, v, w)
+                if u in included_ids and v in included_ids and _pct_passes(u, v, w)
             ]
-            direct_ids: set[int] = {
-                (v if u == member.id else u)
-                for u, v, _ in first_level_edges
-            }
-            # 2nd level: edges from direct connections to their other neighbours
-            second_level_edges = [
-                (u, v, w) for u, v, w in all_edges
-                if u != member.id and v != member.id
-                and (u in direct_ids or v in direct_ids)
-                and _pct_passes(u, v, w)
-            ]
-            second_level_ids = {
-                uid
-                for u, v, _ in second_level_edges
-                for uid in (u, v)
-                if uid not in direct_ids and uid != member.id
-            }
-            edges = first_level_edges + second_level_edges
             no_data_msg = (
                 f"{member.mention} has no connections that meet the **{min_pct}%** threshold. "
                 "Try lowering `min_pct` or running `/interaction_scan`."

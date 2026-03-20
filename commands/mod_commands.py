@@ -114,10 +114,11 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ])
             + "\n\n**Interaction Web**\n"
             + _fmt([
-                ("/connection_web member:@user min_pct:5 limit:40",
+                ("/connection_web member:@user min_pct:5 layers:2 limit:40",
                  "Spring-layout network graph of replies and @mentions between members. "
                  "Omit `member` for the full server view; supply it to focus on one person's connections. "
-                 "`min_pct` hides edges that account for less than that % of either user's total interactions."),
+                 "`min_pct` hides edges below that % of either user's total interactions. "
+                 "`layers` expands the graph recursively — each extra layer follows connections-of-connections that meet the threshold."),
                 ("/interaction_scan days:0",
                  "Scan message history to seed the interaction graph. "
                  "Run once after setup, then the graph updates live. Use `days:0` for all history."),
