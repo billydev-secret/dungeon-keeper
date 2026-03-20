@@ -121,6 +121,17 @@ The log below shows conversation context. Each line is prefixed with a tag:
 Answer the moderator's question based solely on the provided log, referencing the server rules above \
 where relevant. Be concise and cite specific messages as evidence."""
 
+_CHANNEL_QUERY_SYSTEM = f"""\
+You are a Discord server moderation assistant helping a moderator investigate recent activity in a channel.
+
+{_SERVER_RULES}
+
+The log below shows messages from a specific time window, oldest first. Each line is formatted as:
+  [HH:MM] author [↩ replying to other_author]: message content
+
+Answer the moderator's question based solely on the provided log, referencing the server rules where \
+relevant. Be concise and cite specific users and messages as evidence."""
+
 
 @dataclass
 class AiModerationResult:
@@ -367,6 +378,56 @@ async def ai_check_watched_message(
     is_violation = reply.upper().startswith("VIOLATION")
     reason = reply[len("VIOLATION:"):].strip() if is_violation else ""
     return is_violation, reason
+
+
+async def ai_query_channel(
+    client: AsyncOpenAI,
+    channel: discord.TextChannel | discord.Thread,
+    question: str,
+    *,
+    minutes: int = 60,
+    model: str = "gpt-5.4",
+) -> AiModerationResult:
+    """Fetch the last *minutes* of channel history and answer a free-form question."""
+    from datetime import datetime, timezone
+    after_dt = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    raw: list[discord.Message] = []
+    async for msg in channel.history(limit=None, after=after_dt, oldest_first=True):
+        if msg.content and not msg.author.bot:
+            raw.append(msg)
+
+    channel_name = getattr(channel, "name", str(channel.id))
+
+    if not raw:
+        return AiModerationResult(
+            analysis=f"No messages with text content found in #{channel_name} in the last {minutes} minute{'s' if minutes != 1 else ''}.",
+            message_count=0,
+            channels_checked=1,
+        )
+
+    lines = [f"#{channel_name} — last {minutes} minute{'s' if minutes != 1 else ''} (oldest first):\n"]
+    for msg in raw:
+        ts = msg.created_at.strftime("%H:%M") if msg.created_at else "?"
+        content = (msg.content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
+        reply_note = ""
+        if msg.reference and isinstance(msg.reference.resolved, discord.Message):
+            reply_note = f" [↩ replying to {msg.reference.resolved.author.display_name}]"
+        lines.append(f"[{ts}] {msg.author.display_name}{reply_note}: {content}")
+
+    prompt = f"Moderator question: {question}\n\n" + "\n".join(lines)
+
+    response = await _chat(
+        client, model=model,
+        messages=[
+            {"role": "system", "content": _CHANNEL_QUERY_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=800,
+        reasoning_effort="high",
+    )
+    analysis = response.choices[0].message.content or "No analysis returned."
+    return AiModerationResult(analysis=analysis, message_count=len(raw), channels_checked=1)
 
 
 async def ai_query_user(

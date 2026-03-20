@@ -196,6 +196,12 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/ai_scan count:50",
                  "Scans the last N messages in this channel and flags any that may breach the rules. "
                  "Good for reviewing a channel after a reported incident or a heated argument."),
+                ("/ai_channel_query question:... minutes:60 channel:#channel",
+                 "Ask the AI a free-form question about a channel's recent activity over a time window — "
+                 "e.g. 'Did anyone harass a new member in the last hour?' or "
+                 "'Summarise what this argument was about.' "
+                 "Defaults to the current channel; supply `channel` to query another. "
+                 "`minutes` accepts 1–1440 (up to 24 hours)."),
                 ("/ai_query member:@user question:... days:14",
                  "Ask the AI a free-form question about a member based on their message history — "
                  "e.g. 'Has this member been hostile toward new users?' or "
