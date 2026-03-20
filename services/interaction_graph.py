@@ -250,9 +250,13 @@ def _spring_layout(
 
     for restart in range(restarts):
         if restart == 0:
-            # First attempt: evenly-spaced circle (good starting point)
+            # First attempt: evenly-spaced circle with small jitter to break
+            # the symmetry that causes nodes to lock onto polygon vertices.
             pos: dict[int, list[float]] = {
-                nid: [math.cos(2 * math.pi * i / n), math.sin(2 * math.pi * i / n)]
+                nid: [
+                    math.cos(2 * math.pi * i / n) + _rng.uniform(-0.15, 0.15),
+                    math.sin(2 * math.pi * i / n) + _rng.uniform(-0.15, 0.15),
+                ]
                 for i, nid in enumerate(node_ids)
             }
         else:
