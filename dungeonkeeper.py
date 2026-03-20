@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from app_context import AppContext, Bot, load_runtime_config
 from commands.activity_commands import register_activity_commands
+from commands.interaction_commands import register_interaction_commands
 from commands.ai_mod_commands import register_ai_mod_commands
 from commands.auto_delete_commands import register_auto_delete_commands
 from commands.denizen_commands import register_denizen_commands
@@ -19,6 +20,7 @@ from commands.welcome_commands import register_welcome_commands
 from commands.xp_commands import register_xp_commands
 from db_utils import init_config_db, open_db
 from handlers.events import register_events
+from services.interaction_graph import init_interaction_tables
 from reports import register_reports
 from services.auto_delete_service import auto_delete_loop, init_auto_delete_tables
 from services.inactivity_prune_service import inactivity_prune_loop, init_inactivity_prune_tables
@@ -73,6 +75,7 @@ with open_db(DB_PATH) as _conn:
     init_auto_delete_tables(_conn)
     init_watch_tables(_conn)
     init_inactivity_prune_tables(_conn)
+    init_interaction_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -129,6 +132,7 @@ with open_db(DB_PATH) as _conn:
 # ==============================
 register_events(bot, ctx)
 register_activity_commands(bot, ctx)
+register_interaction_commands(bot, ctx)
 register_ai_mod_commands(bot, ctx)
 register_xp_commands(bot, ctx)
 register_denizen_commands(bot, ctx)

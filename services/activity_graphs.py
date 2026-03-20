@@ -4,6 +4,7 @@ from __future__ import annotations
 import bisect
 import io
 import sqlite3
+from itertools import groupby
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
@@ -619,6 +620,190 @@ def render_session_burst_chart(
         spine.set_visible(False)
 
     ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# Burst ranking — highest / lowest burst increase across all users
+# ---------------------------------------------------------------------------
+
+def query_burst_ranking(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    min_sessions: int = 3,
+) -> list[tuple[int, float, float, int]]:
+    """
+    Compute the session burst increase for every user in the guild.
+
+    For each user, "increase" = mean post-session msg rate minus mean pre-session
+    msg rate (both in messages per _BIN_MINUTES-minute bin, averaged over all
+    sessions and all bins in the window).
+
+    Returns a list of (user_id, pre_avg, post_avg, n_sessions) sorted by
+    (post_avg - pre_avg) descending.  Only users with at least *min_sessions*
+    sessions are included.
+    """
+    rows = conn.execute(
+        """
+        SELECT user_id, created_at FROM processed_messages
+        WHERE guild_id = ?
+        ORDER BY user_id, created_at
+        """,
+        (guild_id,),
+    ).fetchall()
+
+    user_ts_map: dict[int, list[float]] = {}
+    for uid, grp in groupby(rows, key=lambda r: r[0]):
+        ts_list = [float(r[1]) for r in grp]
+        if len(ts_list) >= 2:
+            user_ts_map[int(uid)] = ts_list
+
+    if not user_ts_map:
+        return []
+
+    guild_rows = conn.execute(
+        "SELECT created_at FROM processed_messages WHERE guild_id = ? ORDER BY created_at",
+        (guild_id,),
+    ).fetchall()
+    guild_ts = [float(r[0]) for r in guild_rows]
+
+    bin_secs = _BIN_MINUTES * 60
+    pre_secs = _PRE_WINDOW_MINUTES * 60
+    post_secs = _POST_WINDOW_MINUTES * 60
+    pre_bins_count = _PRE_WINDOW_MINUTES // _BIN_MINUTES
+    post_bins_count = _POST_WINDOW_MINUTES // _BIN_MINUTES
+
+    results: list[tuple[int, float, float, int]] = []
+
+    for user_id, user_ts in user_ts_map.items():
+        session_starts: list[float] = [user_ts[0]]
+        for i in range(1, len(user_ts)):
+            if user_ts[i] - user_ts[i - 1] >= _IDLE_THRESHOLD_SECONDS:
+                session_starts.append(user_ts[i])
+
+        if len(session_starts) < min_sessions:
+            continue
+
+        pre_sum = [0.0] * pre_bins_count
+        post_sum = [0.0] * post_bins_count
+
+        for start_ts in session_starts:
+            lo = bisect.bisect_left(guild_ts, start_ts - pre_secs)
+            hi = bisect.bisect_left(guild_ts, start_ts)
+            for ts in guild_ts[lo:hi]:
+                offset = ts - (start_ts - pre_secs)
+                bin_i = int(offset // bin_secs)
+                if 0 <= bin_i < pre_bins_count:
+                    pre_sum[bin_i] += 1
+
+            lo = bisect.bisect_left(guild_ts, start_ts)
+            for ts in guild_ts[lo:]:
+                offset = ts - start_ts
+                if offset >= post_secs:
+                    break
+                bin_i = int(offset // bin_secs)
+                if 0 <= bin_i < post_bins_count:
+                    post_sum[bin_i] += 1
+
+        n = len(session_starts)
+        pre_avg = sum(pre_sum) / (pre_bins_count * n)
+        post_avg = sum(post_sum) / (post_bins_count * n)
+        results.append((user_id, pre_avg, post_avg, n))
+
+    results.sort(key=lambda r: r[2] - r[1], reverse=True)
+    return results
+
+
+def render_burst_ranking_chart(
+    entries: list[tuple[str, float, float, int]],
+    limit: int,
+    guild_name: str,
+) -> bytes:
+    """
+    Render a horizontal bar chart showing the top and bottom *limit* users
+    by burst increase (post_avg - pre_avg).
+
+    entries: list of (display_name, pre_avg, post_avg, n_sessions)
+             sorted highest-increase first.
+    """
+    if not entries:
+        raise ValueError("No entries to render.")
+
+    top = entries[:limit]
+    bottom = entries[-limit:] if len(entries) > limit else []
+
+    names: list[str] = []
+    values: list[float] = []
+    colors: list[str] = []
+    n_sessions_list: list[int] = []
+
+    for name, pre, post, n in reversed(top):
+        names.append(name)
+        values.append(post - pre)
+        colors.append(_BAR)
+        n_sessions_list.append(n)
+
+    if bottom:
+        for name, pre, post, n in reversed(bottom):
+            names.append(name)
+            values.append(post - pre)
+            colors.append(_BAR_ACCENT)
+            n_sessions_list.append(n)
+
+    fig_height = max(4.5, len(names) * 0.45 + 1.5)
+    fig, ax = plt.subplots(figsize=(9, fig_height))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    y = list(range(len(names)))
+    bars = ax.barh(y, values, color=colors, height=0.7, zorder=2)
+
+    val_range = (max(values) - min(values)) if len(values) > 1 else (abs(values[0]) if values else 1.0)
+    nudge = val_range * 0.012 or 0.01
+
+    for bar, n in zip(bars, n_sessions_list):
+        width = bar.get_width()
+        x_pos = width + nudge if width >= 0 else width - nudge
+        ax.text(
+            x_pos,
+            bar.get_y() + bar.get_height() / 2,
+            f"{n}s",
+            va="center",
+            ha="left" if width >= 0 else "right",
+            color=_TEXT,
+            fontsize=7,
+        )
+
+    ax.axvline(0, color=_GRID, linewidth=1, zorder=3)
+
+    ax.set_yticks(y)
+    ax.set_yticklabels(names, color=_TEXT, fontsize=9)
+    ax.set_xlabel(f"Burst increase (msg / {_BIN_MINUTES} min, post - pre session avg)", color=_TEXT, fontsize=9)
+    ax.set_title(
+        f"{guild_name} - Session Burst Ranking",
+        color=_TEXT,
+        fontsize=13,
+        pad=10,
+    )
+    ax.tick_params(axis="x", colors=_TEXT, labelsize=8, length=0)
+    ax.tick_params(axis="y", length=0)
+    ax.xaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    from matplotlib.patches import Patch
+    legend_handles = [Patch(color=_BAR, label=f"Top {limit} highest burst")]
+    if bottom:
+        legend_handles.append(Patch(color=_BAR_ACCENT, label=f"Bottom {limit} lowest burst"))
+    ax.legend(handles=legend_handles, facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
 
     plt.tight_layout(pad=1.2)
     buf = io.BytesIO()

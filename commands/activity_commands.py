@@ -4,6 +4,7 @@ Commands:
   /activity        — bar chart of message volume (server-wide or per member/channel)
   /dropoff         — members with the largest recent message-rate decline
   /session_burst   — per-member session burst profile (activity after a 20-min absence)
+  /burst_ranking   — server-wide ranking of highest/lowest session burst increase
 """
 from __future__ import annotations
 
@@ -15,11 +16,13 @@ from discord import app_commands
 
 from services.activity_graphs import (
     _WINDOW_LABELS,
+    query_burst_ranking,
     query_message_activity,
     query_message_histogram,
     query_message_rate_drops,
     query_session_burst,
     render_activity_chart,
+    render_burst_ranking_chart,
     render_session_burst_chart,
 )
 
@@ -209,5 +212,49 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         )
         await interaction.followup.send(
             file=discord.File(io.BytesIO(chart_bytes), filename="session_burst.png"),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="burst_ranking",
+        description="Show which members have the highest and lowest session burst increase server-wide.",
+    )
+    @app_commands.describe(
+        limit="Number of members to show at each end (1–15, default 5).",
+    )
+    async def burst_ranking(
+        interaction: discord.Interaction,
+        limit: app_commands.Range[int, 1, 15] = 5,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        with ctx.open_db() as conn:
+            ranking = query_burst_ranking(conn, guild.id)
+
+        if not ranking:
+            await interaction.followup.send(
+                "Not enough session data to build a burst ranking. "
+                "Members need at least 3 sessions (20-min gaps between messages) recorded.",
+                ephemeral=True,
+            )
+            return
+
+        # Resolve display names
+        entries: list[tuple[str, float, float, int]] = []
+        for user_id, pre_avg, post_avg, n_sessions in ranking:
+            member = guild.get_member(user_id)
+            name = member.display_name if member else f"User {user_id}"
+            entries.append((name, pre_avg, post_avg, n_sessions))
+
+        chart_bytes = render_burst_ranking_chart(entries, limit=limit, guild_name=guild.name)
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(chart_bytes), filename="burst_ranking.png"),
             ephemeral=True,
         )
