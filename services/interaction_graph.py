@@ -129,10 +129,14 @@ def _spring_layout(
     node_ids: list[int],
     edges: list[tuple[int, int, int]],
     iterations: int = 300,
+    spread: float = 1.0,
 ) -> dict[int, tuple[float, float]]:
     """
     Fruchterman-Reingold spring layout.
     Returns a dict of node_id -> (x, y) in roughly [-1, 1]^2.
+
+    spread – multiplier on the ideal inter-node distance; higher values
+             push nodes further apart (1.0 = default, 3.0 = very loose).
     """
     n = len(node_ids)
     if n == 0:
@@ -147,8 +151,8 @@ def _spring_layout(
     }
 
     # Larger k = nodes want to sit further apart.
-    # Using area=5 instead of 1 gives roughly 2x the natural spacing.
-    k = math.sqrt(5.0 / n)
+    # spread scales the virtual area so users can loosen the graph.
+    k = math.sqrt(spread * 5.0 / n)
 
     # Build symmetric weight map for attractions
     weight_map: dict[tuple[int, int], float] = {}
@@ -202,7 +206,8 @@ def _spring_layout(
 # Chart renderer
 # ---------------------------------------------------------------------------
 
-_NODE_FOCUS = "#eb459e"   # pink highlight for the centred user
+_NODE_FOCUS = "#eb459e"      # pink  — focused user
+_NODE_SECONDARY = "#57f287"  # green — 2nd-level connections
 
 
 def render_connection_web(
@@ -210,20 +215,25 @@ def render_connection_web(
     name_map: dict[int, str],
     guild_name: str,
     focus_user_id: int | None = None,
+    second_level_ids: set[int] | None = None,
+    spread: float = 1.0,
 ) -> bytes:
     """
     Render the user interaction network as PNG bytes.
 
-    edges         – list of (user_id_a, user_id_b, combined_weight)
-    name_map      – user_id -> display name
-    focus_user_id – when set, this node is rendered in a highlight colour
-                    and the title reflects the focused view
+    edges             – list of (user_id_a, user_id_b, combined_weight)
+    name_map          – user_id -> display name
+    focus_user_id     – when set, this node is rendered in pink and the
+                        title reflects the focused view
+    second_level_ids  – nodes that are connections-of-connections; rendered
+                        in green to distinguish them from direct connections
+    spread            – passed to _spring_layout; controls how far apart nodes sit
     """
     if not edges:
         raise ValueError("No edges to render.")
 
     node_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-    pos = _spring_layout(node_ids, edges)
+    pos = _spring_layout(node_ids, edges, spread=spread)
 
     # Normalise positions to fit in [-1, 1]
     xs = [p[0] for p in pos.values()]
@@ -280,10 +290,17 @@ def render_connection_web(
         x, y = pos_n[nid]
         vol = node_vol.get(nid, 1)
         is_focus = nid == focus_user_id
+        is_secondary = bool(second_level_ids and nid in second_level_ids)
+        if is_focus:
+            node_color = _NODE_FOCUS
+        elif is_secondary:
+            node_color = _NODE_SECONDARY
+        else:
+            node_color = _NODE
         size = (300 if is_focus else 120) + 600 * (vol / max_vol)
         ax.scatter(
             x, y, s=size,
-            color=_NODE_FOCUS if is_focus else _NODE,
+            color=node_color,
             zorder=4,
             edgecolors=_TEXT if is_focus else _NODE_EDGE,
             linewidths=1.5 if is_focus else 0.8,
@@ -294,18 +311,25 @@ def render_connection_web(
     for nid in node_ids:
         x, y = pos_n[nid]
         is_focus = nid == focus_user_id
+        is_secondary = bool(second_level_ids and nid in second_level_ids)
+        if is_focus:
+            label_color = _NODE_FOCUS
+        elif is_secondary:
+            label_color = _NODE_SECONDARY
+        else:
+            label_color = _TEXT
         ax.text(
             x, y + label_pad,
             name_map.get(nid, str(nid)),
             ha="center", va="bottom",
-            color=_NODE_FOCUS if is_focus else _TEXT,
-            fontsize=10 if is_focus else 8,
+            color=label_color,
+            fontsize=10 if is_focus else (7 if is_secondary else 8),
             fontweight="bold",
             zorder=5,
         )
 
-    ax.set_xlim(-1.4, 1.4)
-    ax.set_ylim(-1.4, 1.4)
+    ax.set_xlim(-1.15, 1.15)
+    ax.set_ylim(-1.15, 1.15)
     ax.set_aspect("equal")
     ax.axis("off")
 
@@ -325,6 +349,8 @@ def render_connection_web(
     ]
     if focus_user_id is not None:
         legend_elements.append(Patch(color=_NODE_FOCUS, label="focused member"))
+    if second_level_ids:
+        legend_elements.append(Patch(color=_NODE_SECONDARY, label="2nd-level connections"))
     ax.legend(
         handles=legend_elements,
         facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT,

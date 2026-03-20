@@ -35,12 +35,14 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         member="Focus on this member's direct connections only.",
         min_interactions="Only show pairs with at least this many interactions (default 3).",
         limit="Max number of members to include in server-wide view (default 40).",
+        spread="How spread out the graph is — higher = more space between nodes (default 1.0).",
     )
     async def connection_web(
         interaction: discord.Interaction,
         member: discord.Member | None = None,
         min_interactions: app_commands.Range[int, 1, 500] = 3,
         limit: app_commands.Range[int, 5, 60] = 40,
+        spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
     ) -> None:
         guild = interaction.guild
         if guild is None:
@@ -58,12 +60,33 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                 limit_users=limit,
             )
 
+        second_level_ids: set[int] | None = None
+
         if member is not None:
-            # Filter to only edges that include the focused member
-            edges = [
+            # 1st level: all edges directly involving the focused member
+            first_level_edges = [
                 (u, v, w) for u, v, w in all_edges
                 if u == member.id or v == member.id
             ]
+            direct_ids: set[int] = {
+                (v if u == member.id else u)
+                for u, v, _ in first_level_edges
+            }
+            # 2nd level: edges from direct connections to their other neighbours
+            # that meet the min_interactions threshold
+            second_level_edges = [
+                (u, v, w) for u, v, w in all_edges
+                if u != member.id and v != member.id
+                and (u in direct_ids or v in direct_ids)
+                and w >= min_interactions
+            ]
+            second_level_ids = {
+                uid
+                for u, v, _ in second_level_edges
+                for uid in (u, v)
+                if uid not in direct_ids and uid != member.id
+            }
+            edges = first_level_edges + second_level_edges
             no_data_msg = (
                 f"{member.mention} has no recorded interactions yet. "
                 "Use `/interaction_scan` to backfill history."
@@ -91,6 +114,8 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
             name_map,
             guild_name=guild.name,
             focus_user_id=member.id if member else None,
+            second_level_ids=second_level_ids,
+            spread=spread,
         )
         await interaction.followup.send(
             file=discord.File(io.BytesIO(chart_bytes), filename="connection_web.png"),
