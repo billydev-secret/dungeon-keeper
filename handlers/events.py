@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 from post_monitoring import enforce_spoiler_requirement
 from services.ai_moderation_service import ai_check_watched_message
 from services.auto_delete_service import auto_delete_rule_exists, track_auto_delete_message
+from services.interaction_graph import record_interactions
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
 from services.welcome_service import build_leave_embed, build_welcome_embed
 from services.xp_service import handle_level_progress
@@ -80,6 +81,22 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     message.id,
                     message_ts,
                 )
+
+            # Record reply and mention interactions for the connection web
+            interaction_targets: list[int] = []
+            if message.reference and isinstance(message.reference.resolved, discord.Message):
+                ref = message.reference.resolved
+                if not ref.author.bot and ref.author.id != message.author.id:
+                    interaction_targets.append(ref.author.id)
+            for user in message.mentions:
+                if (
+                    not user.bot
+                    and user.id != message.author.id
+                    and user.id not in interaction_targets
+                ):
+                    interaction_targets.append(user.id)
+            if interaction_targets:
+                record_interactions(conn, message.guild.id, message.author.id, interaction_targets)
 
         if spoiler_deleted:
             return
