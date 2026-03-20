@@ -125,48 +125,20 @@ def query_connection_web(
 # Spring layout
 # ---------------------------------------------------------------------------
 
-def _spring_layout(
+def _run_fr(
     node_ids: list[int],
-    edges: list[tuple[int, int, int]],
-    iterations: int = 300,
-    spread: float = 1.0,
-) -> dict[int, tuple[float, float]]:
-    """
-    Fruchterman-Reingold spring layout.
-    Returns a dict of node_id -> (x, y) in roughly [-1, 1]^2.
-
-    spread – multiplier on the ideal inter-node distance; higher values
-             push nodes further apart (1.0 = default, 3.0 = very loose).
-    """
+    pos: dict[int, list[float]],
+    weight_map: dict[tuple[int, int], float],
+    max_w: float,
+    k: float,
+    iterations: int,
+) -> None:
+    """Run Fruchterman-Reingold in-place on *pos* for *iterations* steps."""
     n = len(node_ids)
-    if n == 0:
-        return {}
-    if n == 1:
-        return {node_ids[0]: (0.0, 0.0)}
-
-    # Start on a circle
-    pos: dict[int, list[float]] = {
-        nid: [math.cos(2 * math.pi * i / n), math.sin(2 * math.pi * i / n)]
-        for i, nid in enumerate(node_ids)
-    }
-
-    # Larger k = nodes want to sit further apart.
-    # spread scales the virtual area so users can loosen the graph.
-    k = math.sqrt(spread * 5.0 / n)
-
-    # Build symmetric weight map for attractions
-    weight_map: dict[tuple[int, int], float] = {}
-    for u, v, w in edges:
-        key = (min(u, v), max(u, v))
-        weight_map[key] = weight_map.get(key, 0) + w
-    max_w = max(weight_map.values()) if weight_map else 1.0
-
     for step in range(iterations):
-        # Higher starting temperature lets nodes travel further before cooling
         t = max(0.005, 1.0 * (1 - step / iterations))
         disp: dict[int, list[float]] = {nid: [0.0, 0.0] for nid in node_ids}
 
-        # Repulsion between every pair
         for i in range(n):
             u = node_ids[i]
             for j in range(i + 1, n):
@@ -180,7 +152,6 @@ def _spring_layout(
                 disp[v][0] -= rep * dx / d
                 disp[v][1] -= rep * dy / d
 
-        # Attraction along edges — scale kept low so repulsion can compete
         for (eu, ev), ew in weight_map.items():
             scale = 0.15 + 0.35 * (ew / max_w)
             dx = pos[eu][0] - pos[ev][0]
@@ -192,14 +163,97 @@ def _spring_layout(
             disp[ev][0] += attr * dx / d
             disp[ev][1] += attr * dy / d
 
-        # Apply displacements with cooling cap
         for nid in node_ids:
             mag = math.sqrt(disp[nid][0] ** 2 + disp[nid][1] ** 2) or 1e-6
             capped = min(mag, t)
             pos[nid][0] += disp[nid][0] / mag * capped
             pos[nid][1] += disp[nid][1] / mag * capped
 
-    return {nid: (pos[nid][0], pos[nid][1]) for nid in node_ids}
+
+def _layout_energy(
+    pos: dict[int, list[float]],
+    edge_pairs: set[tuple[int, int]],
+    node_ids: list[int],
+    k: float,
+) -> float:
+    """Fruchterman-Reingold energy — lower means less tangled."""
+    energy = 0.0
+    n = len(node_ids)
+    for i in range(n):
+        u = node_ids[i]
+        for j in range(i + 1, n):
+            v = node_ids[j]
+            dx = pos[u][0] - pos[v][0]
+            dy = pos[u][1] - pos[v][1]
+            d = math.sqrt(dx * dx + dy * dy) or 1e-6
+            key = (min(u, v), max(u, v))
+            if key in edge_pairs:
+                energy += (d - k) ** 2      # edge: penalise deviation from k
+            else:
+                energy += k * k / d         # non-edge: penalise closeness
+    return energy
+
+
+def _spring_layout(
+    node_ids: list[int],
+    edges: list[tuple[int, int, int]],
+    iterations: int = 500,
+    spread: float = 1.0,
+    restarts: int = 3,
+) -> dict[int, tuple[float, float]]:
+    """
+    Fruchterman-Reingold spring layout with multiple restarts.
+
+    Runs the layout *restarts* times from different random starting positions
+    and returns the lowest-energy result, which greatly reduces tangling.
+
+    spread   – multiplier on the ideal inter-node distance (1.0 = default).
+    restarts – number of independent attempts; the best is kept (default 3).
+    """
+    import random as _rng
+
+    n = len(node_ids)
+    if n == 0:
+        return {}
+    if n == 1:
+        return {node_ids[0]: (0.0, 0.0)}
+
+    k = math.sqrt(spread * 5.0 / n)
+
+    weight_map: dict[tuple[int, int], float] = {}
+    for u, v, w in edges:
+        key = (min(u, v), max(u, v))
+        weight_map[key] = weight_map.get(key, 0) + w
+    max_w = max(weight_map.values()) if weight_map else 1.0
+
+    edge_pairs: set[tuple[int, int]] = set(weight_map.keys())
+
+    best_pos: dict[int, list[float]] | None = None
+    best_energy = float("inf")
+
+    for restart in range(restarts):
+        if restart == 0:
+            # First attempt: evenly-spaced circle (good starting point)
+            pos: dict[int, list[float]] = {
+                nid: [math.cos(2 * math.pi * i / n), math.sin(2 * math.pi * i / n)]
+                for i, nid in enumerate(node_ids)
+            }
+        else:
+            # Subsequent attempts: random positions to escape local minima
+            pos = {
+                nid: [_rng.uniform(-1.0, 1.0), _rng.uniform(-1.0, 1.0)]
+                for nid in node_ids
+            }
+
+        _run_fr(node_ids, pos, weight_map, max_w, k, iterations)
+
+        energy = _layout_energy(pos, edge_pairs, node_ids, k)
+        if energy < best_energy:
+            best_energy = energy
+            best_pos = {nid: [pos[nid][0], pos[nid][1]] for nid in node_ids}
+
+    assert best_pos is not None
+    return {nid: (best_pos[nid][0], best_pos[nid][1]) for nid in node_ids}
 
 
 # ---------------------------------------------------------------------------
