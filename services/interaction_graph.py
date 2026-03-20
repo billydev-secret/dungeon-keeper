@@ -307,21 +307,135 @@ def _layout_energy(
     return energy
 
 
+# ---------------------------------------------------------------------------
+# Crossing minimization helpers
+# ---------------------------------------------------------------------------
+
+def _segments_cross(
+    ax: float, ay: float, bx: float, by: float,
+    cx: float, cy: float, dx: float, dy: float,
+) -> bool:
+    """Return True if segment AB properly crosses segment CD."""
+    def _side(ox: float, oy: float, px: float, py: float, qx: float, qy: float) -> float:
+        return (px - ox) * (qy - oy) - (py - oy) * (qx - ox)
+
+    d1 = _side(cx, cy, dx, dy, ax, ay)
+    d2 = _side(cx, cy, dx, dy, bx, by)
+    d3 = _side(ax, ay, bx, by, cx, cy)
+    d4 = _side(ax, ay, bx, by, dx, dy)
+    return ((d1 > 0 > d2) or (d1 < 0 < d2)) and ((d3 > 0 > d4) or (d3 < 0 < d4))
+
+
+def _count_crossings(
+    pos: dict[int, list[float]],
+    edge_list: list[tuple[int, int]],
+) -> int:
+    """Count proper edge crossings in *pos* — O(E²)."""
+    m = len(edge_list)
+    count = 0
+    for i in range(m):
+        u1, v1 = edge_list[i]
+        ax, ay = pos[u1][0], pos[u1][1]
+        bx, by = pos[v1][0], pos[v1][1]
+        for j in range(i + 1, m):
+            u2, v2 = edge_list[j]
+            if u1 in (u2, v2) or v1 in (u2, v2):
+                continue
+            if _segments_cross(ax, ay, bx, by, pos[u2][0], pos[u2][1], pos[v2][0], pos[v2][1]):
+                count += 1
+    return count
+
+
+def _incident_crossings(
+    pos: dict[int, list[float]],
+    edge_list: list[tuple[int, int]],
+    incident: list[int],
+) -> int:
+    """Count crossings involving at least one edge from *incident* (edge indices)."""
+    incident_set = set(incident)
+    m = len(edge_list)
+    count = 0
+    for idx_i in incident:
+        u1, v1 = edge_list[idx_i]
+        ax, ay = pos[u1][0], pos[u1][1]
+        bx, by = pos[v1][0], pos[v1][1]
+        for j in range(m):
+            if j == idx_i:
+                continue
+            if j in incident_set and j < idx_i:
+                continue  # pair already counted from the other direction
+            u2, v2 = edge_list[j]
+            if u1 in (u2, v2) or v1 in (u2, v2):
+                continue
+            if _segments_cross(ax, ay, bx, by, pos[u2][0], pos[u2][1], pos[v2][0], pos[v2][1]):
+                count += 1
+    return count
+
+
+def _swap_to_reduce_crossings(
+    node_ids: list[int],
+    pos: dict[int, list[float]],
+    edge_list: list[tuple[int, int]],
+    max_passes: int = 5,
+) -> None:
+    """
+    Greedy post-layout pass: swap pairs of node positions to reduce crossings.
+
+    For each candidate swap (u, v) only edges incident to u or v can change
+    crossing status, so the check is much cheaper than a full recount.
+    Repeats until no swap helps or *max_passes* is exhausted.
+    """
+    n = len(node_ids)
+    if n < 4 or not edge_list:
+        return
+
+    adj: dict[int, list[int]] = {nid: [] for nid in node_ids}
+    for k, (u, v) in enumerate(edge_list):
+        adj[u].append(k)
+        adj[v].append(k)
+
+    for _ in range(max_passes):
+        improved = False
+        for i in range(n):
+            for j in range(i + 1, n):
+                u, v = node_ids[i], node_ids[j]
+                uv = {u, v}
+                incident = [
+                    k for k in set(adj[u]) | set(adj[v])
+                    if set(edge_list[k]) != uv  # skip the invariant u-v edge
+                ]
+                if not incident:
+                    continue
+
+                before = _incident_crossings(pos, edge_list, incident)
+                pos[u], pos[v] = pos[v], pos[u]
+                after = _incident_crossings(pos, edge_list, incident)
+
+                if after < before:
+                    improved = True
+                else:
+                    pos[u], pos[v] = pos[v], pos[u]  # revert
+
+        if not improved:
+            break
+
+
 def _spring_layout(
     node_ids: list[int],
     edges: list[tuple[int, int, int]],
     iterations: int = 500,
     spread: float = 1.0,
-    restarts: int = 3,
+    restarts: int = 6,
 ) -> dict[int, tuple[float, float]]:
     """
     Fruchterman-Reingold spring layout with multiple restarts.
 
-    Runs the layout *restarts* times from different random starting positions
-    and returns the lowest-energy result, which greatly reduces tangling.
+    Selects the best result by crossing count first, then FR energy as a
+    tiebreaker.  A greedy node-swap pass is applied to the winner to further
+    reduce crossings.
 
     spread   – multiplier on the ideal inter-node distance (1.0 = default).
-    restarts – number of independent attempts; the best is kept (default 3).
+    restarts – number of independent attempts; the best is kept (default 6).
     """
     import random as _rng
 
@@ -340,9 +454,10 @@ def _spring_layout(
     max_w = max(weight_map.values()) if weight_map else 1.0
 
     edge_pairs: set[tuple[int, int]] = set(weight_map.keys())
+    edge_list: list[tuple[int, int]] = list(weight_map.keys())
 
     best_pos: dict[int, list[float]] | None = None
-    best_energy = float("inf")
+    best_score: tuple[int, float] = (2 ** 31, float("inf"))
 
     for restart in range(restarts):
         if restart == 0:
@@ -364,12 +479,16 @@ def _spring_layout(
 
         _run_fr(node_ids, pos, weight_map, max_w, k, iterations)
 
+        crossings = _count_crossings(pos, edge_list)
         energy = _layout_energy(pos, edge_pairs, node_ids, k)
-        if energy < best_energy:
-            best_energy = energy
+        score: tuple[int, float] = (crossings, energy)
+
+        if score < best_score:
+            best_score = score
             best_pos = {nid: [pos[nid][0], pos[nid][1]] for nid in node_ids}
 
     assert best_pos is not None
+    _swap_to_reduce_crossings(node_ids, best_pos, edge_list)
     return {nid: (best_pos[nid][0], best_pos[nid][1]) for nid in node_ids}
 
 

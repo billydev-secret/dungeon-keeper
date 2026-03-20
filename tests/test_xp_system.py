@@ -47,7 +47,7 @@ class XpSystemTests(unittest.TestCase):
 
         self.assertEqual(breakdown.qualified_words, 4)
         self.assertEqual(breakdown.normalized_content, "alpha beta gamma delta")
-        self.assertEqual(breakdown.awarded_xp, 0.07)
+        self.assertEqual(breakdown.awarded_xp, 0.02)
 
     def test_apply_xp_award_levels_up_and_marks_role_reward(self):
         conn = sqlite3.connect(":memory:")

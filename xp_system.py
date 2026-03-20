@@ -16,15 +16,15 @@ STRIP_CHARS = " \t\r\n`*_~|<>[](){}\"'“”‘’.,!?;:;/\\"
 
 @dataclass(frozen=True)
 class XpSettings:
-    message_word_xp: float = 0.25
-    reply_bonus_xp: float = 1.0
-    image_reaction_received_xp: float = 0.5
+    message_word_xp: float = 0.08
+    reply_bonus_xp: float = 0.33
+    image_reaction_received_xp: float = 0.17
     cooldown_thresholds_seconds: tuple[int, int, int] = (10, 30, 60)
     cooldown_multipliers: tuple[float, float, float] = (0.35, 0.6, 0.85)
     duplicate_multiplier: float = 0.2
     pair_streak_threshold: int = 4
     pair_streak_multiplier: float = 0.5
-    voice_award_xp: float = 20.0
+    voice_award_xp: float = 6.67
     voice_interval_seconds: int = 600
     voice_min_humans: int = 3
     voice_poll_seconds: int = 30
