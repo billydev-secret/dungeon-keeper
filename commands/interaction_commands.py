@@ -33,14 +33,14 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
     )
     @app_commands.describe(
         member="Focus on this member's direct connections only.",
-        min_interactions="Only show pairs with at least this many interactions (default 3).",
+        min_pct="Hide edges that are less than this % of either user's total interactions (default 5).",
         limit="Max number of members to include in server-wide view (default 40).",
         spread="How spread out the graph is — higher = more space between nodes (default 1.0).",
     )
     async def connection_web(
         interaction: discord.Interaction,
         member: discord.Member | None = None,
-        min_interactions: app_commands.Range[int, 1, 500] = 3,
+        min_pct: app_commands.Range[int, 1, 100] = 5,
         limit: app_commands.Range[int, 5, 60] = 40,
         spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
     ) -> None:
@@ -56,29 +56,41 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         with ctx.open_db() as conn:
             all_edges = query_connection_web(
                 conn, guild.id,
-                min_weight=1 if member else min_interactions,
+                min_weight=1,
                 limit_users=limit,
             )
+
+        # Total interaction weight per node — used for percentage filtering
+        node_total: dict[int, int] = {}
+        for u, v, w in all_edges:
+            node_total[u] = node_total.get(u, 0) + w
+            node_total[v] = node_total.get(v, 0) + w
+
+        threshold = min_pct / 100.0
+
+        def _pct_passes(u: int, v: int, w: int) -> bool:
+            """Keep edge if it is >= min_pct% of the less-active endpoint's total."""
+            denom = min(node_total.get(u, 1), node_total.get(v, 1))
+            return w >= threshold * denom
 
         second_level_ids: set[int] | None = None
 
         if member is not None:
-            # 1st level: all edges directly involving the focused member
+            # 1st level: edges directly involving the focused member that pass threshold
             first_level_edges = [
                 (u, v, w) for u, v, w in all_edges
-                if u == member.id or v == member.id
+                if (u == member.id or v == member.id) and _pct_passes(u, v, w)
             ]
             direct_ids: set[int] = {
                 (v if u == member.id else u)
                 for u, v, _ in first_level_edges
             }
             # 2nd level: edges from direct connections to their other neighbours
-            # that meet the min_interactions threshold
             second_level_edges = [
                 (u, v, w) for u, v, w in all_edges
                 if u != member.id and v != member.id
                 and (u in direct_ids or v in direct_ids)
-                and w >= min_interactions
+                and _pct_passes(u, v, w)
             ]
             second_level_ids = {
                 uid
@@ -88,14 +100,15 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
             }
             edges = first_level_edges + second_level_edges
             no_data_msg = (
-                f"{member.mention} has no recorded interactions yet. "
-                "Use `/interaction_scan` to backfill history."
+                f"{member.mention} has no connections that meet the **{min_pct}%** threshold. "
+                "Try lowering `min_pct` or running `/interaction_scan`."
             )
         else:
-            edges = all_edges
+            edges = [(u, v, w) for u, v, w in all_edges if _pct_passes(u, v, w)]
             no_data_msg = (
-                f"No interaction data found with at least **{min_interactions}** interactions. "
-                "Use `/interaction_scan` to backfill history, or lower `min_interactions`."
+                f"No edges found where a connection accounts for ≥**{min_pct}%** "
+                "of either user's total interactions. "
+                "Try lowering `min_pct` or running `/interaction_scan`."
             )
 
         if not edges:
