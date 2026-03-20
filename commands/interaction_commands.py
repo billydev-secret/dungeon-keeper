@@ -121,12 +121,14 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
             await interaction.followup.send(no_data_msg, ephemeral=True)
             return
 
-        # Resolve display names for every node in the edge list
-        node_ids = {uid for u, v, _ in edges for uid in (u, v)}
+        # Resolve display names — drop nodes for members who have left the server
         name_map: dict[int, str] = {}
-        for uid in node_ids:
+        for uid in {uid for u, v, _ in edges for uid in (u, v)}:
             m = guild.get_member(uid)
-            name_map[uid] = m.display_name if m else f"User {uid}"
+            if m:
+                name_map[uid] = m.display_name
+
+        edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
 
         chart_bytes = render_connection_web(
             edges,

@@ -6,12 +6,29 @@ from __future__ import annotations
 
 import io
 import math
+import re
 import sqlite3
 
 import matplotlib
 import matplotlib.pyplot as plt
 
 matplotlib.use("Agg")
+
+# Strip characters that DejaVu Sans (matplotlib default) cannot render,
+# primarily emoji and other supplementary-plane glyphs that show as boxes.
+_UNRENDERABLE_RE = re.compile(
+    "[\U00010000-\U0010FFFF"  # supplementary planes (most emoji)
+    "\u2600-\u27BF"           # misc symbols & dingbats
+    "\uFE00-\uFE0F"           # variation selectors
+    "\u200D\uFEFF]+",         # zero-width joiner, BOM
+    flags=re.UNICODE,
+)
+
+
+def _clean_label(name: str) -> str:
+    cleaned = _UNRENDERABLE_RE.sub("", name).strip()
+    return cleaned or name  # keep original if everything was stripped
+
 
 # Discord dark theme palette (shared with activity_graphs.py)
 _BG = "#2f3136"
@@ -389,7 +406,7 @@ def render_connection_web(
             label_color = _TEXT
         ax.text(
             x, y + label_pad,
-            name_map.get(nid, str(nid)),
+            _clean_label(name_map.get(nid, str(nid))),
             ha="center", va="bottom",
             color=label_color,
             fontsize=10 if is_focus else (7 if is_secondary else 8),
