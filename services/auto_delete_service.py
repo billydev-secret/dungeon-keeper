@@ -419,14 +419,13 @@ async def process_auto_delete_tick(
                     deleted,
                     failed,
                 )
+            touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
         except Exception:
             log.exception(
                 "Auto-delete tick failed for guild=%s channel=%s",
                 guild_id,
                 channel_id,
             )
-
-        touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
 
 
 async def _scan_and_delete_channel_history(
@@ -547,6 +546,7 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
                     deleted,
                     failed,
                 )
+            touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -555,8 +555,6 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
                 guild_id,
                 channel_id,
             )
-
-        touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
 
 
 async def auto_delete_loop(bot: discord.Client, db_path: Path) -> None:

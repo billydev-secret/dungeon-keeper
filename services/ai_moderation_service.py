@@ -207,6 +207,11 @@ def _fetch_user_context_from_db(
         if not target_indices:
             continue
 
+        # Enforce the per-run cap within this channel too, not just across channels.
+        remaining_cap = max_user_messages - total_user_msgs
+        if len(target_indices) > remaining_cap:
+            target_indices = target_indices[-remaining_cap:]  # keep most recent
+
         channels_checked += 1
         id_to_idx: dict[int, int] = {r[0]: i for i, r in enumerate(batch)}
         target_ids: set[int] = {batch[i][0] for i in target_indices}
@@ -305,9 +310,9 @@ async def ai_scan_channel(
     # Columns: 0=message_id, 1=author_id, 2=content, 3=reply_to_id, 4=ts
     rows = conn.execute(
         "SELECT message_id, author_id, content, reply_to_id, ts "
-        "FROM messages WHERE channel_id = ? AND content IS NOT NULL "
+        "FROM messages WHERE guild_id = ? AND channel_id = ? AND content IS NOT NULL "
         "ORDER BY ts DESC LIMIT ?",
-        (channel.id, count),
+        (guild.id, channel.id, count),
     ).fetchall()
     rows = list(reversed(rows))  # oldest first
 
@@ -390,9 +395,9 @@ async def ai_query_channel(
 
     rows = conn.execute(
         "SELECT message_id, author_id, content, reply_to_id, ts "
-        "FROM messages WHERE channel_id = ? AND ts >= ? AND content IS NOT NULL "
+        "FROM messages WHERE guild_id = ? AND channel_id = ? AND ts >= ? AND content IS NOT NULL "
         "ORDER BY ts ASC",
-        (channel.id, cutoff_ts),
+        (guild.id, channel.id, cutoff_ts),
     ).fetchall()
 
     channel_name = getattr(channel, "name", str(channel.id))

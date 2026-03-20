@@ -303,14 +303,3 @@ async def handle_level_progress(
             )
 
 
-def is_qualifying_voice_channel(
-    channel: discord.VoiceChannel,
-    settings: XpSettings = DEFAULT_XP_SETTINGS,
-) -> bool:
-    """Check if a voice channel qualifies for XP awards."""
-    afk_channel = channel.guild.afk_channel
-    if afk_channel and channel.id == afk_channel.id:
-        return False
-
-    human_count = sum(1 for member in channel.members if not member.bot)
-    return human_count >= settings.voice_min_humans
