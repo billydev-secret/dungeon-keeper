@@ -146,7 +146,9 @@ def _spring_layout(
         for i, nid in enumerate(node_ids)
     }
 
-    k = math.sqrt(1.0 / n)
+    # Larger k = nodes want to sit further apart.
+    # Using area=5 instead of 1 gives roughly 2x the natural spacing.
+    k = math.sqrt(5.0 / n)
 
     # Build symmetric weight map for attractions
     weight_map: dict[tuple[int, int], float] = {}
@@ -156,7 +158,8 @@ def _spring_layout(
     max_w = max(weight_map.values()) if weight_map else 1.0
 
     for step in range(iterations):
-        t = max(0.005, 0.5 * (1 - step / iterations))
+        # Higher starting temperature lets nodes travel further before cooling
+        t = max(0.005, 1.0 * (1 - step / iterations))
         disp: dict[int, list[float]] = {nid: [0.0, 0.0] for nid in node_ids}
 
         # Repulsion between every pair
@@ -173,9 +176,9 @@ def _spring_layout(
                 disp[v][0] -= rep * dx / d
                 disp[v][1] -= rep * dy / d
 
-        # Attraction along edges (stronger for heavier edges)
+        # Attraction along edges — scale kept low so repulsion can compete
         for (eu, ev), ew in weight_map.items():
-            scale = 0.5 + 1.5 * (ew / max_w)
+            scale = 0.15 + 0.35 * (ew / max_w)
             dx = pos[eu][0] - pos[ev][0]
             dy = pos[eu][1] - pos[ev][1]
             d = math.sqrt(dx * dx + dy * dy) or 1e-6
