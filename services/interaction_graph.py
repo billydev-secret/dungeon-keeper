@@ -302,6 +302,21 @@ def render_connection_web(
         for nid in node_ids
     }
 
+    # Radial spread transform: r → r^(1/spread) pushes interior nodes outward.
+    # spread=1 is identity; spread=2 moves r=0.25 → 0.5, r=0.5 → 0.707, r=1 → 1.
+    if spread != 1.0:
+        spread_exp = 1.0 / spread
+        new_pos_n: dict[int, tuple[float, float]] = {}
+        for nid in node_ids:
+            x, y = pos_n[nid]
+            r = math.sqrt(x * x + y * y)
+            if r > 1e-9:
+                scale = r ** (spread_exp - 1)
+                new_pos_n[nid] = (x * scale, y * scale)
+            else:
+                new_pos_n[nid] = (x, y)
+        pos_n = new_pos_n
+
     max_weight = max(w for _, _, w in edges)
 
     fig, ax = plt.subplots(figsize=(12, 12))
