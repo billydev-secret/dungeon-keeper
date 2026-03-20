@@ -71,11 +71,12 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        result = await ai_review_user(client, guild, user, days=days)
+        with ctx.open_db() as conn:
+            result = await ai_review_user(client, conn, guild, user, days=days)
         header = (
             f"**AI Review — {user.display_name}** "
             f"(last {days}d · {result.message_count} messages · "
-            f"{result.channels_checked} channels scanned)\n\n"
+            f"{result.channels_checked} channels)\n\n"
         )
         await send_ephemeral_text(interaction, header + result.analysis)
 
@@ -110,7 +111,13 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        result = await ai_scan_channel(client, channel, count=count)
+        guild = interaction.guild
+        if not guild:
+            await interaction.followup.send("This command only works in a server.", ephemeral=True)
+            return
+
+        with ctx.open_db() as conn:
+            result = await ai_scan_channel(client, conn, guild, channel, count=count)
         header = f"**AI Channel Scan** — {result.message_count} messages reviewed\n\n"
         await send_ephemeral_text(interaction, header + result.analysis)
 
@@ -151,7 +158,13 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        result = await ai_query_channel(client, target, question, minutes=minutes)
+        guild = interaction.guild
+        if not guild:
+            await interaction.followup.send("This command only works in a server.", ephemeral=True)
+            return
+
+        with ctx.open_db() as conn:
+            result = await ai_query_channel(client, conn, guild, target, question, minutes=minutes)
         channel_name = getattr(target, "name", str(target.id))
         label = f"{minutes} minute{'s' if minutes != 1 else ''}"
         header = (
@@ -197,7 +210,8 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        result = await ai_query_user(client, guild, user, question, days=days)
+        with ctx.open_db() as conn:
+            result = await ai_query_user(client, conn, guild, user, question, days=days)
         header = (
             f"**AI Query — {user.display_name}** "
             f"(last {days}d · {result.message_count} messages)\n"
