@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections import Counter, defaultdict
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -23,6 +23,23 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.drama")
+
+_MSG_PREVIEW = 90   # max chars shown per message in the report
+_EVENTS_PER_PERSON = 2   # example entry events shown per ranked person
+_VICTIMS_PER_EVENT = 3   # silenced users shown per event
+
+
+# ---------------------------------------------------------------------------
+# Types
+# ---------------------------------------------------------------------------
+
+# One victim's last message before the entrant arrived.
+# (victim_id, ts, content | None)
+_VictimMsg = tuple[int, int, str | None]
+
+# One entry event.
+# (channel_id, ts, author_id, content | None, silenced: list[_VictimMsg])
+_EntryEvent = tuple[int, int, int, str | None, list[_VictimMsg]]
 
 
 # ---------------------------------------------------------------------------
@@ -37,20 +54,20 @@ def _analyze_chilling_effect(
     entry_gap_seconds: int,
     window_seconds: int,
     channel_id: int | None = None,
-) -> tuple[list[tuple[int, int, float, Counter]], int, int]:
+) -> tuple[list[_EntryEvent], int]:
     """
     Scan message history for 'entry events' — a user posts in a channel after
-    being absent from it for at least entry_gap_seconds — and measure how
-    many currently-active users stop posting in the following window.
+    being absent for at least entry_gap_seconds — and record which currently-
+    active users stop posting in the following window.
 
-    Returns:
-        results        – list of (user_id, entry_count, avg_silenced, victim_counter)
-                         sorted by avg_silenced descending.
-        total_entries  – total number of entry events found.
-        channel_count  – number of channels analysed.
+    For each entry event, captures:
+      - the entry message content
+      - for each silenced user: their last message before the entry
+
+    Returns (events, channel_count).
     """
     query = (
-        "SELECT channel_id, author_id, ts "
+        "SELECT channel_id, author_id, ts, message_id, content "
         "FROM messages "
         "WHERE guild_id = ? AND ts >= ?"
     )
@@ -62,63 +79,76 @@ def _analyze_chilling_effect(
 
     rows = conn.execute(query, params).fetchall()
 
-    # Group (ts, author_id) pairs by channel
-    msgs_by_channel: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    # Group (ts, author_id, message_id, content) by channel
+    # Using a list of tuples: (ts, author_id, message_id, content)
+    msgs_by_channel: dict[int, list[tuple[int, int, int, str | None]]] = defaultdict(list)
     for row in rows:
-        msgs_by_channel[int(row[0])].append((int(row[2]), int(row[1])))
+        msgs_by_channel[int(row[0])].append(
+            (int(row[2]), int(row[1]), int(row[3]), row[4])
+        )
 
-    entry_count: Counter[int] = Counter()
-    silenced_by: dict[int, Counter[int]] = defaultdict(Counter)
+    events: list[_EntryEvent] = []
 
-    for ch_msgs in msgs_by_channel.values():
-        ch_msgs.sort()  # should be sorted already, but guarantee it
+    for ch_id, ch_msgs in msgs_by_channel.items():
+        ch_msgs.sort()
 
         last_ts_by_user: dict[int, int] = {}
 
-        for i, (ts, author_id) in enumerate(ch_msgs):
+        for i, (ts, author_id, _mid, content) in enumerate(ch_msgs):
             prev_ts = last_ts_by_user.get(author_id)
             last_ts_by_user[author_id] = ts
 
-            # Entry condition: user was present before AND the gap is large enough.
-            # First-ever message in this channel doesn't count — we have no baseline.
             if prev_ts is None or (ts - prev_ts) < entry_gap_seconds:
                 continue
 
-            # Who was active in [ts - window, ts)?  (excluding the entrant)
-            active_before: set[int] = set()
+            # Scan backward for [ts - window, ts): capture each other user's
+            # most recent message (the one they'll be "silenced" from).
+            last_before: dict[int, tuple[int, str | None]] = {}  # victim -> (ts, content)
             for j in range(i - 1, -1, -1):
-                if ch_msgs[j][0] < ts - window_seconds:
+                jts, jauthor, _jmid, jcontent = ch_msgs[j]
+                if jts < ts - window_seconds:
                     break
-                if ch_msgs[j][1] != author_id:
-                    active_before.add(ch_msgs[j][1])
+                if jauthor != author_id and jauthor not in last_before:
+                    last_before[jauthor] = (jts, jcontent)
 
-            if not active_before:
-                continue  # nobody else was talking — not an interesting entry
+            if not last_before:
+                continue
 
-            # Who posts in [ts, ts + window)?  (excluding the entrant)
+            # Scan forward for [ts, ts + window): find who does post.
             active_after: set[int] = set()
             for j in range(i + 1, len(ch_msgs)):
-                if ch_msgs[j][0] >= ts + window_seconds:
+                jts, jauthor, _jmid, _jcontent = ch_msgs[j]
+                if jts >= ts + window_seconds:
                     break
-                if ch_msgs[j][1] != author_id:
-                    active_after.add(ch_msgs[j][1])
+                if jauthor != author_id:
+                    active_after.add(jauthor)
 
-            silenced = active_before - active_after
+            silenced_victims: list[_VictimMsg] = [
+                (victim, victim_ts, victim_content)
+                for victim, (victim_ts, victim_content) in last_before.items()
+                if victim not in active_after
+            ]
 
-            entry_count[author_id] += 1
-            for victim in silenced:
-                silenced_by[author_id][victim] += 1
+            if not silenced_victims:
+                continue
 
-    total_entries = sum(entry_count.values())
-    channel_count = len(msgs_by_channel)
+            # Sort victims by most recent last-message first
+            silenced_victims.sort(key=lambda v: v[1], reverse=True)
+            events.append((ch_id, ts, author_id, content, silenced_victims))
 
-    results: list[tuple[int, int, float, Counter]] = [
-        (uid, count, sum(silenced_by[uid].values()) / count, silenced_by[uid])
-        for uid, count in entry_count.items()
-    ]
-    results.sort(key=lambda r: r[2], reverse=True)
+    return events, len(msgs_by_channel)
 
-    return results, total_entries, channel_count
+
+def _fmt(ts: int) -> str:
+    """Discord timestamp — renders as HH:MM in the viewer's local time."""
+    return f"<t:{ts}:t>"
+
+
+def _preview(text: str | None, limit: int = _MSG_PREVIEW) -> str:
+    if not text:
+        return "_[no text]_"
+    text = text.replace("\n", " ")
+    return text[:limit] + "…" if len(text) > limit else text
 
 
 # ---------------------------------------------------------------------------
@@ -166,30 +196,42 @@ def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
         cutoff_ts = int(
             (datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp()
         )
-        entry_gap = entry_gap_minutes * 60
-        window = window_minutes * 60
 
         with ctx.open_db() as conn:
-            results, total_entries, channel_count = _analyze_chilling_effect(
+            events, channel_count = _analyze_chilling_effect(
                 conn,
                 guild.id,
                 cutoff_ts=cutoff_ts,
-                entry_gap_seconds=entry_gap,
-                window_seconds=window,
+                entry_gap_seconds=entry_gap_minutes * 60,
+                window_seconds=window_minutes * 60,
                 channel_id=channel.id if channel else None,
             )
 
-        # Filter by min_entries
-        results = [(uid, cnt, avg, victims) for uid, cnt, avg, victims in results if cnt >= min_entries]
+        # Aggregate events per entrant
+        events_by_author: dict[int, list[_EntryEvent]] = defaultdict(list)
+        for ev in events:
+            events_by_author[ev[2]].append(ev)
+
+        # Build ranked list: (author_id, entry_count, avg_silenced)
+        # sorted by avg_silenced descending
+        ranked = sorted(
+            [
+                (uid, len(evs), sum(len(ev[4]) for ev in evs) / len(evs))
+                for uid, evs in events_by_author.items()
+                if len(evs) >= min_entries
+            ],
+            key=lambda r: r[2],
+            reverse=True,
+        )
 
         scope = f"#{channel.name}" if channel else f"{channel_count} channels"
         header = (
             f"**Chilling Effect Analysis** "
             f"(last {lookback_days}d · {entry_gap_minutes}m gap · {window_minutes}m window · "
-            f"{total_entries} arrivals across {scope})\n\n"
+            f"{len(events)} arrivals across {scope})\n\n"
         )
 
-        if not results:
+        if not ranked:
             await send_ephemeral_text(
                 interaction,
                 header + f"No member had ≥{min_entries} qualifying arrivals. "
@@ -198,25 +240,36 @@ def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
             return
 
         lines: list[str] = []
-        for rank, (uid, cnt, avg, victims) in enumerate(results[:top], start=1):
+        for rank, (uid, cnt, avg) in enumerate(ranked[:top], start=1):
             member = guild.get_member(uid)
             name = member.display_name if member else f"User {uid}"
 
-            top_victims = victims.most_common(3)
-            victim_parts: list[str] = []
-            for victim_id, times in top_victims:
-                vm = guild.get_member(victim_id)
-                vname = vm.display_name if vm else f"User {victim_id}"
-                victim_parts.append(f"{vname} ({times}×)")
+            lines.append(f"**{rank}. {name}** — {cnt} arrivals · avg **{avg:.1f}** silenced/arrival")
 
-            victim_str = ", ".join(victim_parts) if victim_parts else "—"
-            lines.append(
-                f"**{rank}. {name}** — {cnt} arrivals · avg **{avg:.1f}** silenced/arrival\n"
-                f"    Silences: {victim_str}"
-            )
+            # Show the most impactful example events (most victims first)
+            examples = sorted(
+                events_by_author[uid],
+                key=lambda ev: len(ev[4]),
+                reverse=True,
+            )[:_EVENTS_PER_PERSON]
+
+            for ch_id, ts, _author_id, entry_content, victims in examples:
+                ch = guild.get_channel(ch_id)
+                ch_name = ch.name if ch and hasattr(ch, "name") else str(ch_id)
+                lines.append(
+                    f"  [{_fmt(ts)} #{ch_name}] **arrived:** {_preview(entry_content)}"
+                )
+                for victim_id, v_ts, v_content in victims[:_VICTIMS_PER_EVENT]:
+                    vm = guild.get_member(victim_id)
+                    vname = vm.display_name if vm else f"User {victim_id}"
+                    lines.append(
+                        f"    ↳ **{vname}** last said {_fmt(v_ts)}: {_preview(v_content)}"
+                    )
+
+            lines.append("")  # blank line between entries
 
         lines.append(
-            "\n_Correlation only — arrivals when no one else was talking are excluded. "
+            "_Correlation only — arrivals when no one else was talking are excluded. "
             "High scores warrant a closer look, not automatic conclusions._"
         )
 
