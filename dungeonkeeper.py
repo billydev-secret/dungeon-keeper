@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from app_context import AppContext, Bot, load_runtime_config
 from commands.activity_commands import register_activity_commands
+from commands.drama_commands import register_drama_commands
 from commands.config_commands import register_config_commands
 from commands.interaction_commands import register_interaction_commands
 from commands.ai_mod_commands import register_ai_mod_commands
@@ -142,6 +143,7 @@ register_denizen_commands(bot, ctx)
 register_spoiler_commands(bot, ctx)
 register_auto_delete_commands(bot, ctx)
 register_inactivity_prune_commands(bot, ctx)
+register_drama_commands(bot, ctx)
 register_mod_commands(bot, ctx)
 register_config_commands(bot, ctx)
 register_welcome_commands(bot, ctx)
