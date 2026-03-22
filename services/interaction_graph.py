@@ -16,6 +16,9 @@ import matplotlib.pyplot as plt
 
 matplotlib.use("Agg")
 
+# Persistent pool — avoids spawning 4 threads on every /connection_web call.
+_layout_executor = ThreadPoolExecutor(max_workers=4)
+
 # Strip characters that DejaVu Sans (matplotlib default) cannot render.
 # DejaVu Sans covers the Basic Latin + Latin-1 Supplement blocks reliably.
 # Anything outside U+0020–U+024F is a candidate for box rendering or a
@@ -33,7 +36,7 @@ _UNRENDERABLE_RE = re.compile(
 
 def _clean_label(name: str) -> str:
     cleaned = _UNRENDERABLE_RE.sub("", name).strip()
-    return cleaned or name  # keep original if everything was stripped
+    return cleaned if cleaned else "[?]"  # never return an unrenderable string
 
 
 # Discord dark theme palette (shared with activity_graphs.py)
@@ -166,71 +169,59 @@ def query_connection_web(
                (queries the faster aggregate table).
     """
     if after_ts is not None:
-        top_rows = conn.execute(
-            """
-            SELECT user_id, SUM(w) AS total FROM (
-                SELECT from_user_id AS user_id, COUNT(*) AS w
-                FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
-                GROUP BY from_user_id
-                UNION ALL
-                SELECT to_user_id AS user_id, COUNT(*) AS w
-                FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
-                GROUP BY to_user_id
-            )
-            GROUP BY user_id
-            ORDER BY total DESC
-            LIMIT ?
-            """,
-            (guild_id, after_ts, guild_id, after_ts, limit_users),
-        ).fetchall()
-        top_ids = {int(r[0]) for r in top_rows}
-
         rows = conn.execute(
             """
+            WITH top_users AS (
+                SELECT user_id FROM (
+                    SELECT from_user_id AS user_id, COUNT(*) AS w
+                    FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+                    GROUP BY from_user_id
+                    UNION ALL
+                    SELECT to_user_id AS user_id, COUNT(*) AS w
+                    FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+                    GROUP BY to_user_id
+                )
+                GROUP BY user_id ORDER BY SUM(w) DESC LIMIT ?
+            )
             SELECT from_user_id, to_user_id, COUNT(*) AS weight
             FROM user_interactions_log
             WHERE guild_id = ? AND ts >= ?
+              AND from_user_id IN (SELECT user_id FROM top_users)
+              AND to_user_id   IN (SELECT user_id FROM top_users)
             GROUP BY from_user_id, to_user_id
             ORDER BY weight DESC
             """,
-            (guild_id, after_ts),
+            (guild_id, after_ts, guild_id, after_ts, limit_users, guild_id, after_ts),
         ).fetchall()
     else:
-        top_rows = conn.execute(
-            """
-            SELECT user_id, SUM(w) AS total FROM (
-                SELECT from_user_id AS user_id, SUM(weight) AS w
-                FROM user_interactions WHERE guild_id = ?
-                GROUP BY from_user_id
-                UNION ALL
-                SELECT to_user_id AS user_id, SUM(weight) AS w
-                FROM user_interactions WHERE guild_id = ?
-                GROUP BY to_user_id
-            )
-            GROUP BY user_id
-            ORDER BY total DESC
-            LIMIT ?
-            """,
-            (guild_id, guild_id, limit_users),
-        ).fetchall()
-        top_ids = {int(r[0]) for r in top_rows}
-
         rows = conn.execute(
             """
+            WITH top_users AS (
+                SELECT user_id FROM (
+                    SELECT from_user_id AS user_id, SUM(weight) AS w
+                    FROM user_interactions WHERE guild_id = ?
+                    GROUP BY from_user_id
+                    UNION ALL
+                    SELECT to_user_id AS user_id, SUM(weight) AS w
+                    FROM user_interactions WHERE guild_id = ?
+                    GROUP BY to_user_id
+                )
+                GROUP BY user_id ORDER BY SUM(w) DESC LIMIT ?
+            )
             SELECT from_user_id, to_user_id, weight
             FROM user_interactions
             WHERE guild_id = ?
+              AND from_user_id IN (SELECT user_id FROM top_users)
+              AND to_user_id   IN (SELECT user_id FROM top_users)
             ORDER BY weight DESC
             """,
-            (guild_id,),
+            (guild_id, guild_id, limit_users, guild_id),
         ).fetchall()
 
     # Merge A→B and B→A into a single undirected edge
     merged: dict[tuple[int, int], int] = {}
     for r in rows:
         u, v, w = int(r[0]), int(r[1]), int(r[2])
-        if u not in top_ids or v not in top_ids:
-            continue
         key = (min(u, v), max(u, v))
         merged[key] = merged.get(key, 0) + w
 
@@ -285,7 +276,10 @@ def _run_fr(
     """Run Fruchterman-Reingold in-place on *pos* for *iterations* steps."""
     n = len(node_ids)
     for step in range(iterations):
-        t = max(0.005, 1.0 * (1 - step / iterations))
+        # Temperature calibrated to k so early moves are ≤2× the ideal
+        # edge length rather than the previous fixed 1.0 (which was ~3× k
+        # for typical graph sizes and caused oscillation).
+        t = max(k * 0.01, k * 2.0 * (1 - step / iterations))
         disp: dict[int, list[float]] = {nid: [0.0, 0.0] for nid in node_ids}
 
         for i in range(n):
@@ -302,7 +296,9 @@ def _run_fr(
                 disp[v][1] -= rep * dy / d
 
         for (eu, ev), ew in weight_map.items():
-            scale = 0.15 + 0.35 * (ew / max_w)
+            # Scale purely proportional to weight — old formula had a 0.15
+            # floor that pulled even near-zero-weight edges strongly.
+            scale = 0.5 * (ew / max_w)
             dx = pos[eu][0] - pos[ev][0]
             dy = pos[eu][1] - pos[ev][1]
             d = math.sqrt(dx * dx + dy * dy) or 1e-6
@@ -311,6 +307,13 @@ def _run_fr(
             disp[eu][1] -= attr * dy / d
             disp[ev][0] += attr * dx / d
             disp[ev][1] += attr * dy / d
+
+        # Weak gravity toward origin — prevents the layout drifting
+        # asymmetrically when repulsion forces don't sum to zero.
+        g = k * 0.01
+        for nid in node_ids:
+            disp[nid][0] -= pos[nid][0] * g
+            disp[nid][1] -= pos[nid][1] * g
 
         for nid in node_ids:
             mag = math.sqrt(disp[nid][0] ** 2 + disp[nid][1] ** 2) or 1e-6
@@ -429,16 +432,18 @@ def _swap_to_reduce_crossings(
     for k, (u, v) in enumerate(edge_list):
         adj[u].append(k)
         adj[v].append(k)
+    # Pre-build frozen sets so the inner loop doesn't allocate per pair.
+    adj_set: dict[int, frozenset[int]] = {nid: frozenset(adj[nid]) for nid in node_ids}
 
     for _ in range(max_passes):
         improved = False
         for i in range(n):
             for j in range(i + 1, n):
                 u, v = node_ids[i], node_ids[j]
-                uv = {u, v}
+                uv_edge = (min(u, v), max(u, v))
                 incident = [
-                    k for k in set(adj[u]) | set(adj[v])
-                    if set(edge_list[k]) != uv  # skip the invariant u-v edge
+                    k for k in (adj_set[u] | adj_set[v])
+                    if edge_list[k] != uv_edge  # skip the invariant u-v edge
                 ]
                 if not incident:
                     continue
@@ -555,10 +560,11 @@ def _spring_layout(
     edge_list: list[tuple[int, int]] = list(weight_map.keys())
 
     def _one_restart(restart: int) -> tuple[dict[int, list[float]], tuple[int, float]]:
-        # Each restart gets its own seeded RNG — the module-level random
-        # instance is not thread-safe.
         import random as _rand
-        rng = _rand.Random(restart)
+        # Restart 0 is deterministic (repeatable baseline); the rest use
+        # entropy-seeded RNG so each call explores different regions of the
+        # search space instead of always revisiting the same fixed seeds.
+        rng = _rand.Random(0) if restart == 0 else _rand.Random()
         if restart == 0:
             # First attempt: evenly-spaced circle with small jitter to break
             # the symmetry that causes nodes to lock onto polygon vertices.
@@ -583,13 +589,12 @@ def _spring_layout(
     best_pos: dict[int, list[float]] | None = None
     best_score: tuple[int, float] = (2 ** 31, float("inf"))
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(_one_restart, r) for r in range(restarts)]
-        for fut in as_completed(futures):
-            pos, score = fut.result()
-            if score < best_score:
-                best_score = score
-                best_pos = {nid: [pos[nid][0], pos[nid][1]] for nid in node_ids}
+    futures = [_layout_executor.submit(_one_restart, r) for r in range(restarts)]
+    for fut in as_completed(futures):
+        pos, score = fut.result()
+        if score < best_score:
+            best_score = score
+            best_pos = {nid: [pos[nid][0], pos[nid][1]] for nid in node_ids}
 
     assert best_pos is not None
     _swap_to_reduce_crossings(node_ids, best_pos, edge_list)
@@ -646,6 +651,13 @@ def _pack_component_layouts(
 
     result: dict[int, tuple[float, float]] = {}
     n = len(normed)
+
+    if n == 1:
+        # Single component — return normalised positions directly; no cell
+        # scaling so the graph fills the full canvas without the 18% shrink
+        # that the weighted-row formula would apply.
+        result.update(normed[0][1])
+        return result
 
     if n <= 3:
         # Weighted row: cell width ∝ sqrt(node_count)
@@ -710,61 +722,27 @@ def render_connection_web(
 
     node_ids = list({uid for u, v, _ in edges for uid in (u, v)})
     components = _find_components(node_ids, [(u, v) for u, v, _ in edges])
+    components.sort(key=len, reverse=True)
 
-    if len(components) == 1:
-        pos = _spring_layout(node_ids, edges, spread=spread)
-
-        # Normalise — 85th-percentile radius keeps the core spread across the
-        # canvas; a handful of outlier nodes may sit slightly beyond ±1.
-        xs = [pos[nid][0] for nid in node_ids]
-        ys = [pos[nid][1] for nid in node_ids]
-        cx = sum(xs) / len(xs)
-        cy = sum(ys) / len(ys)
-        radii = sorted(
-            math.sqrt((pos[nid][0] - cx) ** 2 + (pos[nid][1] - cy) ** 2)
-            for nid in node_ids
-        )
-        pct_idx = min(len(radii) - 1, max(0, int(0.85 * len(radii))))
-        norm_r = radii[pct_idx] or radii[-1] or 1.0
-        pos_n: dict[int, tuple[float, float]] = {
-            nid: ((pos[nid][0] - cx) / norm_r, (pos[nid][1] - cy) / norm_r)
-            for nid in node_ids
-        }
-
-        # Radial spread transform: r → r^(1/spread) pushes interior nodes outward.
-        # spread=1 is identity; spread=2 moves r=0.25 → 0.5, r=0.5 → 0.707, r=1 → 1.
-        if spread != 1.0:
-            spread_exp = 1.0 / spread
-            new_pos_n: dict[int, tuple[float, float]] = {}
-            for nid in node_ids:
-                x, y = pos_n[nid]
-                r = math.sqrt(x * x + y * y)
-                if r > 1e-9:
-                    scale = r ** (spread_exp - 1)
-                    new_pos_n[nid] = (x * scale, y * scale)
-                else:
-                    new_pos_n[nid] = (x, y)
-            pos_n = new_pos_n
-    else:
-        # Multiple disconnected components: lay out each independently so the
-        # inter-component distance doesn't dominate the normalization scale and
-        # squish every group's internal layout.
-        components.sort(key=len, reverse=True)
-        comp_layouts: list[tuple[list[int], dict[int, tuple[float, float]]]] = []
-        for comp_nodes in components:
-            comp_set = set(comp_nodes)
-            comp_edges = [(u, v, w) for u, v, w in edges if u in comp_set]
-            n_comp = len(comp_nodes)
-            if n_comp == 1:
-                comp_pos: dict[int, tuple[float, float]] = {comp_nodes[0]: (0.0, 0.0)}
-            elif n_comp <= 4:
-                comp_pos = _spring_layout(
-                    comp_nodes, comp_edges, spread=spread, restarts=2, iterations=150
-                )
-            else:
-                comp_pos = _spring_layout(comp_nodes, comp_edges, spread=spread)
-            comp_layouts.append((comp_nodes, comp_pos))
-        pos_n = _pack_component_layouts(comp_layouts, spread=spread)
+    # Lay out each component independently — running FR on all nodes together
+    # makes inter-component distance dominate the normalisation scale and
+    # squishes every group's internal layout.  _pack_component_layouts handles
+    # the single-component case (n=1 fast-path) without any shrinkage.
+    comp_layouts: list[tuple[list[int], dict[int, tuple[float, float]]]] = []
+    for comp_nodes in components:
+        comp_set = set(comp_nodes)
+        comp_edges = [(u, v, w) for u, v, w in edges if u in comp_set]
+        n_comp = len(comp_nodes)
+        if n_comp == 1:
+            comp_pos: dict[int, tuple[float, float]] = {comp_nodes[0]: (0.0, 0.0)}
+        elif n_comp <= 4:
+            comp_pos = _spring_layout(
+                comp_nodes, comp_edges, spread=spread, restarts=2, iterations=150
+            )
+        else:
+            comp_pos = _spring_layout(comp_nodes, comp_edges, spread=spread)
+        comp_layouts.append((comp_nodes, comp_pos))
+    pos_n = _pack_component_layouts(comp_layouts, spread=spread)
 
     max_weight = max(w for _, _, w in edges)
 
@@ -803,10 +781,15 @@ def render_connection_web(
         node_vol[v] = node_vol.get(v, 0) + w
     max_vol = max(node_vol.values()) if node_vol else 1
 
+    # Pre-compute per-node scatter size so the label loop can scale label_pad to match
+    node_size: dict[int, float] = {
+        nid: (300 if nid == focus_user_id else 120) + 600 * (node_vol.get(nid, 1) / max_vol)
+        for nid in node_ids
+    }
+
     # Draw nodes
     for nid in node_ids:
         x, y = pos_n[nid]
-        vol = node_vol.get(nid, 1)
         is_focus = nid == focus_user_id
         is_secondary = bool(second_level_ids and nid in second_level_ids)
         if is_focus:
@@ -815,19 +798,18 @@ def render_connection_web(
             node_color = _NODE_SECONDARY
         else:
             node_color = _NODE
-        size = (300 if is_focus else 120) + 600 * (vol / max_vol)
         ax.scatter(
-            x, y, s=size,
+            x, y, s=node_size[nid],
             color=node_color,
             zorder=4,
             edgecolors=_TEXT if is_focus else _NODE_EDGE,
             linewidths=1.5 if is_focus else 0.8,
         )
 
-    # Node labels — offset to avoid overlapping the dot
-    label_pad = 0.07
+    # Node labels — offset scaled to node size so large hub nodes don't overlap their dot
     for nid in node_ids:
         x, y = pos_n[nid]
+        label_pad = math.sqrt(node_size[nid]) * 0.002 + 0.035
         is_focus = nid == focus_user_id
         is_secondary = bool(second_level_ids and nid in second_level_ids)
         if is_focus:
