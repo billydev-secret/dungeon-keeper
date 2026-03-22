@@ -463,17 +463,14 @@ def _nudge_to_reduce_crossings(
     max_passes: int = 3,
 ) -> None:
     """
-    One-sided position search run after _swap_to_reduce_crossings.
+    Fine-grained position search run after _swap_to_reduce_crossings.
 
-    For each node, evaluate:
-      - every other node's current position (one-sided move — the other
-        node stays put, unlike a swap)
-      - 8 points on a ring of radius ≈ average inter-node spacing
-
-    The best position (fewest incident crossings) is kept.  One-sided moves
-    can resolve crossings that pure swaps cannot: if moving A to B's position
-    helps A but worsens B, the swap pass rejects it; this pass accepts it
-    and lets B find its own improvement in the same or next iteration.
+    For each node, tries 12 directions × 4 radii (48 candidates) around its
+    current position and keeps whichever reduces incident crossings.  All
+    candidates are offsets from the node's own position, so no two nodes can
+    ever land on the same coordinates (which would cause an edge between them
+    to render as a self-loop dot).  Large-scale relocation is left to the
+    swap pass.
     """
     n = len(node_ids)
     if n < 4 or not edge_list:
@@ -499,39 +496,25 @@ def _nudge_to_reduce_crossings(
             best = [orig_x, orig_y]
             best_c = _incident_crossings(pos, edge_list, incident)
 
-            # One-sided move to each other node's current position
-            for other in node_ids:
-                if other == nid:
-                    continue
-                pos[nid] = [pos[other][0], pos[other][1]]
-                c = _incident_crossings(pos, edge_list, incident)
-                if c < best_c:
-                    best_c = c
-                    best = [pos[nid][0], pos[nid][1]]
-
-            # Fine-grained: 8 radial offsets around the original position
-            for i in range(8):
-                angle = math.pi * i / 4
-                pos[nid] = [orig_x + ring_r * math.cos(angle),
-                            orig_y + ring_r * math.sin(angle)]
-                c = _incident_crossings(pos, edge_list, incident)
-                if c < best_c:
-                    best_c = c
-                    best = [pos[nid][0], pos[nid][1]]
+            # Multi-scale radial search: 12 directions × 4 radii.
+            # All candidates are offsets from nid's OWN position, so no two
+            # nodes can ever land on the same point (which would render an
+            # edge between them as a self-loop dot).
+            # Large-scale relocation is handled by the swap pass that runs first.
+            for r_mult in (0.5, 1.0, 2.0, 3.5):
+                r = ring_r * r_mult
+                for i in range(12):
+                    angle = 2 * math.pi * i / 12
+                    pos[nid] = [orig_x + r * math.cos(angle),
+                                orig_y + r * math.sin(angle)]
+                    c = _incident_crossings(pos, edge_list, incident)
+                    if c < best_c:
+                        best_c = c
+                        best = [pos[nid][0], pos[nid][1]]
 
             pos[nid] = best
             if best[0] != orig_x or best[1] != orig_y:
                 improved = True
-                # If another node shares nid's new position exactly (because
-                # we moved nid on top of it), nudge that node away so no two
-                # nodes share coordinates — an edge between coincident nodes
-                # renders as a zero-length dot that looks like a self-loop.
-                for other in node_ids:
-                    if (other != nid
-                            and abs(pos[other][0] - pos[nid][0]) < 1e-9
-                            and abs(pos[other][1] - pos[nid][1]) < 1e-9):
-                        pos[other][0] += ring_r * 0.15
-                        break
 
         if not improved:
             break
