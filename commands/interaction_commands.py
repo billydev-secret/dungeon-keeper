@@ -138,16 +138,21 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
 
         if max_per_node > 0:
-            node_edges: dict[int, list[tuple[int, int, int]]] = {}
+            # Build per-node top-N neighbour sets.  An edge is kept only when
+            # it ranks in the top N for *both* endpoints — this guarantees no
+            # node ends up with more than max_per_node edges.
+            node_top: dict[int, set[int]] = {}
+            adj: dict[int, list[tuple[int, int, int]]] = {}
             for u, v, w in edges:
-                node_edges.setdefault(u, []).append((u, v, w))
-                node_edges.setdefault(v, []).append((u, v, w))
-            kept: set[tuple[int, int]] = set()
-            for ne in node_edges.values():
+                adj.setdefault(u, []).append((u, v, w))
+                adj.setdefault(v, []).append((u, v, w))
+            for node, ne in adj.items():
                 ne.sort(key=lambda e: e[2], reverse=True)
-                for eu, ev, _ in ne[:max_per_node]:
-                    kept.add((min(eu, ev), max(eu, ev)))
-            edges = [(u, v, w) for u, v, w in edges if (min(u, v), max(u, v)) in kept]
+                node_top[node] = {(ev if eu == node else eu) for eu, ev, _ in ne[:max_per_node]}
+            edges = [
+                (u, v, w) for u, v, w in edges
+                if v in node_top.get(u, set()) and u in node_top.get(v, set())
+            ]
 
         if not edges:
             await interaction.followup.send(no_data_msg, ephemeral=True)
