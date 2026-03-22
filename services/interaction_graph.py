@@ -240,6 +240,37 @@ def query_connection_web(
 
 
 # ---------------------------------------------------------------------------
+# Connected-component helpers
+# ---------------------------------------------------------------------------
+
+def _find_components(
+    node_ids: list[int],
+    edge_list: list[tuple[int, int]],
+) -> list[list[int]]:
+    """Return connected components as lists of node IDs (iterative DFS)."""
+    adj: dict[int, list[int]] = {nid: [] for nid in node_ids}
+    for u, v in edge_list:
+        adj[u].append(v)
+        adj[v].append(u)
+    visited: set[int] = set()
+    components: list[list[int]] = []
+    for nid in node_ids:
+        if nid in visited:
+            continue
+        comp: list[int] = []
+        stack = [nid]
+        while stack:
+            cur = stack.pop()
+            if cur in visited:
+                continue
+            visited.add(cur)
+            comp.append(cur)
+            stack.extend(adj[cur])
+        components.append(comp)
+    return components
+
+
+# ---------------------------------------------------------------------------
 # Spring layout
 # ---------------------------------------------------------------------------
 
@@ -574,6 +605,87 @@ def _spring_layout(
 
 
 # ---------------------------------------------------------------------------
+# Multi-component packing
+# ---------------------------------------------------------------------------
+
+def _pack_component_layouts(
+    component_layouts: list[tuple[list[int], dict[int, tuple[float, float]]]],
+    spread: float = 1.0,
+) -> dict[int, tuple[float, float]]:
+    """
+    Pack several independently laid-out components into the [-1, 1]² canvas.
+
+    Each component is normalised to a unit circle (85th-percentile radius,
+    same policy as the single-component path), the spread radial transform is
+    applied per-component, then components are packed:
+
+    - 2–3 components: a single row with cell widths ∝ sqrt(node_count) so a
+      large main cluster isn't squeezed to the same width as a tiny one.
+    - 4+ components: an equal-cell grid.
+    """
+    # Normalise each component to a unit circle and apply spread transform
+    normed: list[tuple[list[int], dict[int, tuple[float, float]]]] = []
+    for nodes, raw in component_layouts:
+        if len(nodes) == 1:
+            normed.append((nodes, {nodes[0]: (0.0, 0.0)}))
+            continue
+        xs = [raw[nid][0] for nid in nodes]
+        ys = [raw[nid][1] for nid in nodes]
+        cx = sum(xs) / len(xs)
+        cy = sum(ys) / len(ys)
+        radii = sorted(
+            math.sqrt((raw[nid][0] - cx) ** 2 + (raw[nid][1] - cy) ** 2)
+            for nid in nodes
+        )
+        pct_idx = min(len(radii) - 1, max(0, int(0.85 * len(radii))))
+        norm_r = radii[pct_idx] or radii[-1] or 1.0
+        unit: dict[int, tuple[float, float]] = {}
+        for nid in nodes:
+            x = (raw[nid][0] - cx) / norm_r
+            y = (raw[nid][1] - cy) / norm_r
+            if spread != 1.0:
+                r = math.sqrt(x * x + y * y)
+                if r > 1e-9:
+                    s = r ** (1.0 / spread - 1)
+                    x, y = x * s, y * s
+            unit[nid] = (x, y)
+        normed.append((nodes, unit))
+
+    result: dict[int, tuple[float, float]] = {}
+    n = len(normed)
+
+    if n <= 3:
+        # Weighted row: cell width ∝ sqrt(node_count)
+        weights = [math.sqrt(len(nodes)) for nodes, _ in normed]
+        total_w = sum(weights)
+        x_cursor = -1.0
+        for (nodes, unit), w in zip(normed, weights):
+            cell_w = 2.0 * w / total_w
+            cell_cx = x_cursor + cell_w * 0.5
+            hw = cell_w * 0.5 * 0.82   # 82% fill — gap between components
+            for nid, (x, y) in unit.items():
+                result[nid] = (cell_cx + x * hw, y * 0.82)
+            x_cursor += cell_w
+    else:
+        # Equal grid
+        cols = math.ceil(math.sqrt(n))
+        rows = math.ceil(n / cols)
+        cell_w = 2.0 / cols
+        cell_h = 2.0 / rows
+        for i, (nodes, unit) in enumerate(normed):
+            col = i % cols
+            row = i // cols
+            cell_cx = -1.0 + cell_w * (col + 0.5)
+            cell_cy = 1.0 - cell_h * (row + 0.5)
+            hw = cell_w * 0.5 * 0.80
+            hh = cell_h * 0.5 * 0.80
+            for nid, (x, y) in unit.items():
+                result[nid] = (cell_cx + x * hw, cell_cy + y * hh)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Chart renderer
 # ---------------------------------------------------------------------------
 
@@ -604,41 +716,62 @@ def render_connection_web(
         raise ValueError("No edges to render.")
 
     node_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-    pos = _spring_layout(node_ids, edges, spread=spread)
+    components = _find_components(node_ids, [(u, v) for u, v, _ in edges])
 
-    # Normalise positions.  Using max_r lets outlier nodes inflate the scale
-    # and squish the main cluster toward the centre.  Instead, use the
-    # 85th-percentile radius so the dense core fills the canvas and a few
-    # outliers simply sit slightly beyond ±1.
-    xs = [pos[nid][0] for nid in node_ids]
-    ys = [pos[nid][1] for nid in node_ids]
-    cx = sum(xs) / len(xs)
-    cy = sum(ys) / len(ys)
-    radii = sorted(
-        math.sqrt((pos[nid][0] - cx) ** 2 + (pos[nid][1] - cy) ** 2)
-        for nid in node_ids
-    )
-    pct_idx = min(len(radii) - 1, max(0, int(0.85 * len(radii))))
-    norm_r = radii[pct_idx] or radii[-1] or 1.0
-    pos_n = {
-        nid: ((pos[nid][0] - cx) / norm_r, (pos[nid][1] - cy) / norm_r)
-        for nid in node_ids
-    }
+    if len(components) == 1:
+        pos = _spring_layout(node_ids, edges, spread=spread)
 
-    # Radial spread transform: r → r^(1/spread) pushes interior nodes outward.
-    # spread=1 is identity; spread=2 moves r=0.25 → 0.5, r=0.5 → 0.707, r=1 → 1.
-    if spread != 1.0:
-        spread_exp = 1.0 / spread
-        new_pos_n: dict[int, tuple[float, float]] = {}
-        for nid in node_ids:
-            x, y = pos_n[nid]
-            r = math.sqrt(x * x + y * y)
-            if r > 1e-9:
-                scale = r ** (spread_exp - 1)
-                new_pos_n[nid] = (x * scale, y * scale)
+        # Normalise — 85th-percentile radius keeps the core spread across the
+        # canvas; a handful of outlier nodes may sit slightly beyond ±1.
+        xs = [pos[nid][0] for nid in node_ids]
+        ys = [pos[nid][1] for nid in node_ids]
+        cx = sum(xs) / len(xs)
+        cy = sum(ys) / len(ys)
+        radii = sorted(
+            math.sqrt((pos[nid][0] - cx) ** 2 + (pos[nid][1] - cy) ** 2)
+            for nid in node_ids
+        )
+        pct_idx = min(len(radii) - 1, max(0, int(0.85 * len(radii))))
+        norm_r = radii[pct_idx] or radii[-1] or 1.0
+        pos_n: dict[int, tuple[float, float]] = {
+            nid: ((pos[nid][0] - cx) / norm_r, (pos[nid][1] - cy) / norm_r)
+            for nid in node_ids
+        }
+
+        # Radial spread transform: r → r^(1/spread) pushes interior nodes outward.
+        # spread=1 is identity; spread=2 moves r=0.25 → 0.5, r=0.5 → 0.707, r=1 → 1.
+        if spread != 1.0:
+            spread_exp = 1.0 / spread
+            new_pos_n: dict[int, tuple[float, float]] = {}
+            for nid in node_ids:
+                x, y = pos_n[nid]
+                r = math.sqrt(x * x + y * y)
+                if r > 1e-9:
+                    scale = r ** (spread_exp - 1)
+                    new_pos_n[nid] = (x * scale, y * scale)
+                else:
+                    new_pos_n[nid] = (x, y)
+            pos_n = new_pos_n
+    else:
+        # Multiple disconnected components: lay out each independently so the
+        # inter-component distance doesn't dominate the normalization scale and
+        # squish every group's internal layout.
+        components.sort(key=len, reverse=True)
+        comp_layouts: list[tuple[list[int], dict[int, tuple[float, float]]]] = []
+        for comp_nodes in components:
+            comp_set = set(comp_nodes)
+            comp_edges = [(u, v, w) for u, v, w in edges if u in comp_set]
+            n_comp = len(comp_nodes)
+            if n_comp == 1:
+                comp_pos: dict[int, tuple[float, float]] = {comp_nodes[0]: (0.0, 0.0)}
+            elif n_comp <= 4:
+                comp_pos = _spring_layout(
+                    comp_nodes, comp_edges, spread=spread, restarts=2, iterations=150
+                )
             else:
-                new_pos_n[nid] = (x, y)
-        pos_n = new_pos_n
+                comp_pos = _spring_layout(comp_nodes, comp_edges, spread=spread)
+            comp_layouts.append((comp_nodes, comp_pos))
+        pos_n = _pack_component_layouts(comp_layouts, spread=spread)
 
     max_weight = max(w for _, _, w in edges)
 
