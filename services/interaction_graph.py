@@ -529,16 +529,22 @@ def render_connection_web(
     node_ids = list({uid for u, v, _ in edges for uid in (u, v)})
     pos = _spring_layout(node_ids, edges, spread=spread)
 
-    # Normalise positions to fit in [-1, 1]
-    xs = [p[0] for p in pos.values()]
-    ys = [p[1] for p in pos.values()]
+    # Normalise positions.  Using max_r lets outlier nodes inflate the scale
+    # and squish the main cluster toward the centre.  Instead, use the
+    # 85th-percentile radius so the dense core fills the canvas and a few
+    # outliers simply sit slightly beyond ±1.
+    xs = [pos[nid][0] for nid in node_ids]
+    ys = [pos[nid][1] for nid in node_ids]
     cx = sum(xs) / len(xs)
     cy = sum(ys) / len(ys)
-    max_r = max(
-        math.sqrt((p[0] - cx) ** 2 + (p[1] - cy) ** 2) for p in pos.values()
-    ) or 1.0
+    radii = sorted(
+        math.sqrt((pos[nid][0] - cx) ** 2 + (pos[nid][1] - cy) ** 2)
+        for nid in node_ids
+    )
+    pct_idx = min(len(radii) - 1, max(0, int(0.85 * len(radii))))
+    norm_r = radii[pct_idx] or radii[-1] or 1.0
     pos_n = {
-        nid: ((pos[nid][0] - cx) / max_r, (pos[nid][1] - cy) / max_r)
+        nid: ((pos[nid][0] - cx) / norm_r, (pos[nid][1] - cy) / norm_r)
         for nid in node_ids
     }
 
@@ -637,8 +643,8 @@ def render_connection_web(
             zorder=5,
         )
 
-    ax.set_xlim(-1.15, 1.15)
-    ax.set_ylim(-1.15, 1.15)
+    ax.set_xlim(-1.5, 1.5)
+    ax.set_ylim(-1.5, 1.5)
     ax.set_aspect("equal")
     ax.axis("off")
 
