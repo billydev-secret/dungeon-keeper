@@ -15,13 +15,17 @@ import matplotlib.pyplot as plt
 
 matplotlib.use("Agg")
 
-# Strip characters that DejaVu Sans (matplotlib default) cannot render,
-# primarily emoji and other supplementary-plane glyphs that show as boxes.
+# Strip characters that DejaVu Sans (matplotlib default) cannot render.
+# DejaVu Sans covers the Basic Latin + Latin-1 Supplement blocks reliably.
+# Anything outside U+0020–U+024F is a candidate for box rendering or a
+# freetype crash, so we allow only that range plus common punctuation.
 _UNRENDERABLE_RE = re.compile(
-    "[\U00010000-\U0010FFFF"  # supplementary planes (most emoji)
-    "\u2600-\u27BF"           # misc symbols & dingbats
-    "\uFE00-\uFE0F"           # variation selectors
-    "\u200D\uFEFF]+",         # zero-width joiner, BOM
+    "["
+    "\U00010000-\U0010FFFF"  # supplementary planes (emoji, etc.)
+    "\u0250-\u2DFF"          # extended Latin and everything up to CJK
+    "\u2E00-\uFDFF"          # misc punctuation through Arabic
+    "\uFE00-\uFFFF"          # variation selectors, specials
+    "]+",
     flags=re.UNICODE,
 )
 

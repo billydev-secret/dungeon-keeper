@@ -6,6 +6,8 @@ Commands:
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import io
 import logging
 import time as _time
@@ -157,13 +159,18 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
 
-        chart_bytes = render_connection_web(
-            edges,
-            name_map,
-            guild_name=guild.name,
-            focus_user_id=member.id if member else None,
-            second_level_ids=second_level_ids,
-            spread=spread,
+        loop = asyncio.get_running_loop()
+        chart_bytes = await loop.run_in_executor(
+            None,
+            functools.partial(
+                render_connection_web,
+                edges,
+                name_map,
+                guild_name=guild.name,
+                focus_user_id=member.id if member else None,
+                second_level_ids=second_level_ids,
+                spread=spread,
+            ),
         )
         await interaction.followup.send(
             file=discord.File(io.BytesIO(chart_bytes), filename="connection_web.png"),
