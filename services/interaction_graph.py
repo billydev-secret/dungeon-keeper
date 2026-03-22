@@ -425,6 +425,77 @@ def _swap_to_reduce_crossings(
             break
 
 
+def _nudge_to_reduce_crossings(
+    node_ids: list[int],
+    pos: dict[int, list[float]],
+    edge_list: list[tuple[int, int]],
+    max_passes: int = 3,
+) -> None:
+    """
+    One-sided position search run after _swap_to_reduce_crossings.
+
+    For each node, evaluate:
+      - every other node's current position (one-sided move — the other
+        node stays put, unlike a swap)
+      - 8 points on a ring of radius ≈ average inter-node spacing
+
+    The best position (fewest incident crossings) is kept.  One-sided moves
+    can resolve crossings that pure swaps cannot: if moving A to B's position
+    helps A but worsens B, the swap pass rejects it; this pass accepts it
+    and lets B find its own improvement in the same or next iteration.
+    """
+    n = len(node_ids)
+    if n < 4 or not edge_list:
+        return
+
+    adj: dict[int, list[int]] = {nid: [] for nid in node_ids}
+    for k, (u, v) in enumerate(edge_list):
+        adj[u].append(k)
+        adj[v].append(k)
+
+    xs = [pos[nid][0] for nid in node_ids]
+    ys = [pos[nid][1] for nid in node_ids]
+    ring_r = max(max(xs) - min(xs), max(ys) - min(ys)) / max(n - 1, 1)
+
+    for _ in range(max_passes):
+        improved = False
+        for nid in node_ids:
+            incident = adj[nid]
+            if not incident:
+                continue
+
+            orig_x, orig_y = pos[nid][0], pos[nid][1]
+            best = [orig_x, orig_y]
+            best_c = _incident_crossings(pos, edge_list, incident)
+
+            # One-sided move to each other node's current position
+            for other in node_ids:
+                if other == nid:
+                    continue
+                pos[nid] = [pos[other][0], pos[other][1]]
+                c = _incident_crossings(pos, edge_list, incident)
+                if c < best_c:
+                    best_c = c
+                    best = [pos[nid][0], pos[nid][1]]
+
+            # Fine-grained: 8 radial offsets around the original position
+            for i in range(8):
+                angle = math.pi * i / 4
+                pos[nid] = [orig_x + ring_r * math.cos(angle),
+                            orig_y + ring_r * math.sin(angle)]
+                c = _incident_crossings(pos, edge_list, incident)
+                if c < best_c:
+                    best_c = c
+                    best = [pos[nid][0], pos[nid][1]]
+
+            pos[nid] = best
+            if best[0] != orig_x or best[1] != orig_y:
+                improved = True
+
+        if not improved:
+            break
+
+
 def _spring_layout(
     node_ids: list[int],
     edges: list[tuple[int, int, int]],
@@ -498,6 +569,7 @@ def _spring_layout(
 
     assert best_pos is not None
     _swap_to_reduce_crossings(node_ids, best_pos, edge_list)
+    _nudge_to_reduce_crossings(node_ids, best_pos, edge_list)
     return {nid: (best_pos[nid][0], best_pos[nid][1]) for nid in node_ids}
 
 
