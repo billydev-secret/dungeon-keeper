@@ -697,6 +697,103 @@ def _pack_component_layouts(
 _NODE_FOCUS = "#eb459e"      # pink  — focused user
 _NODE_SECONDARY = "#57f287"  # green — 2nd-level connections
 
+# Label placement metrics for a 12×12 figure with ±1.5 data-unit axes:
+# 1 data unit = 4 in, 1 in = 72 pt, DejaVu Sans glyph ≈ 0.6 em wide.
+_LABEL_CW = 0.017   # data-unit width per character at 8 pt
+_LABEL_LH = 0.033   # data-unit line height at 8 pt
+
+
+def _place_labels(
+    node_ids: list[int],
+    pos_n: dict[int, tuple[float, float]],
+    node_size: dict[int, float],
+    edges: list[tuple[int, int, int]],
+    name_map: dict[int, str],
+    font_sizes: dict[int, int],
+) -> dict[int, tuple[float, float]]:
+    """
+    Return {nid: (label_cx, label_cy)} — bounding-box centres for node labels.
+
+    Render text with ha="center", va="center" at these coordinates.
+
+    Algorithm (greedy, hubs-first):
+      For each node try 12 angular directions × 3 radii (36 candidates).
+      Pick the candidate that points most away from connected neighbours
+      while not overlapping any already-placed label bounding box.
+    """
+    neighbors: dict[int, list[int]] = {nid: [] for nid in node_ids}
+    for u, v, _ in edges:
+        neighbors[u].append(v)
+        neighbors[v].append(u)
+
+    # Half-sizes of each label bounding box.
+    lhw: dict[int, float] = {}
+    lhh: dict[int, float] = {}
+    for nid in node_ids:
+        scale = font_sizes[nid] / 8.0
+        text = _clean_label(name_map.get(nid, str(nid)))
+        lhw[nid] = max(len(text), 1) * _LABEL_CW * scale / 2.0
+        lhh[nid] = _LABEL_LH * scale / 2.0
+
+    _DIRS = [
+        (math.cos(2 * math.pi * i / 12), math.sin(2 * math.pi * i / 12))
+        for i in range(12)
+    ]
+    _RADII = (1.0, 1.5, 2.2)
+    _GAP = 0.005  # minimum clear gap between adjacent label boxes
+
+    # Place most-connected nodes first so hubs get the cleanest spots.
+    ordered = sorted(node_ids, key=lambda n: -len(neighbors[n]))
+    placed: list[tuple[float, float, float, float]] = []  # (cx, cy, hw, hh)
+    label_center: dict[int, tuple[float, float]] = {}
+
+    for nid in ordered:
+        x, y = pos_n[nid]
+        # Base offset: dot radius + half label height + small gap.
+        # With va="center", cy - lhh is the bottom of the text box;
+        # placing it at node_r + gap ensures the text clears the dot.
+        node_r = math.sqrt(node_size[nid] / math.pi) / 288  # dot radius in data units
+        base_pad = node_r + lhh[nid] + 0.015
+        nbrs = neighbors[nid]
+
+        best: tuple[float, float] = (x, y + base_pad)
+        best_score = -1e9
+
+        for r_mult in _RADII:
+            pad = base_pad * r_mult
+            for da, db in _DIRS:
+                cx, cy = x + da * pad, y + db * pad
+
+                # Prefer directions pointing away from connected neighbours.
+                dir_score = (
+                    sum(
+                        -(da * (pos_n[nb][0] - x) + db * (pos_n[nb][1] - y))
+                        / (math.hypot(pos_n[nb][0] - x, pos_n[nb][1] - y) + 1e-9)
+                        for nb in nbrs
+                    )
+                    if nbrs else db  # isolated nodes: prefer upward
+                )
+
+                # Heavy per-box penalty for each overlapping placed label.
+                overlap_pen = sum(
+                    3.0
+                    for blx, bly, bhw, bhh in placed
+                    if abs(cx - blx) < lhw[nid] + bhw + _GAP
+                    and abs(cy - bly) < lhh[nid] + bhh + _GAP
+                )
+
+                # Slight preference for shorter radii (labels closer to node).
+                score = dir_score - overlap_pen - (r_mult - 1.0) * 0.3
+
+                if score > best_score:
+                    best_score = score
+                    best = (cx, cy)
+
+        placed.append((best[0], best[1], lhw[nid], lhh[nid]))
+        label_center[nid] = best
+
+    return label_center
+
 
 def render_connection_web(
     edges: list[tuple[int, int, int]],
@@ -806,10 +903,14 @@ def render_connection_web(
             linewidths=1.5 if is_focus else 0.8,
         )
 
-    # Node labels — offset scaled to node size so large hub nodes don't overlap their dot
+    # Node labels — placed to avoid vertex dots and each other
+    font_sizes: dict[int, int] = {
+        nid: 10 if nid == focus_user_id else (7 if second_level_ids and nid in second_level_ids else 8)
+        for nid in node_ids
+    }
+    label_centers = _place_labels(node_ids, pos_n, node_size, edges, name_map, font_sizes)
     for nid in node_ids:
-        x, y = pos_n[nid]
-        label_pad = math.sqrt(node_size[nid]) * 0.002 + 0.035
+        lx, ly = label_centers[nid]
         is_focus = nid == focus_user_id
         is_secondary = bool(second_level_ids and nid in second_level_ids)
         if is_focus:
@@ -819,11 +920,11 @@ def render_connection_web(
         else:
             label_color = _TEXT
         ax.text(
-            x, y + label_pad,
+            lx, ly,
             _clean_label(name_map.get(nid, str(nid))),
-            ha="center", va="bottom",
+            ha="center", va="center",
             color=label_color,
-            fontsize=10 if is_focus else (7 if is_secondary else 8),
+            fontsize=font_sizes[nid],
             fontweight="bold",
             zorder=5,
         )
