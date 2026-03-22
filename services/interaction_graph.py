@@ -9,6 +9,7 @@ import math
 import re
 import sqlite3
 import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -441,8 +442,6 @@ def _spring_layout(
     spread   – multiplier on the ideal inter-node distance (1.0 = default).
     restarts – number of independent attempts; the best is kept (default 6).
     """
-    import random as _rng
-
     n = len(node_ids)
     if n == 0:
         return {}
@@ -460,36 +459,42 @@ def _spring_layout(
     edge_pairs: set[tuple[int, int]] = set(weight_map.keys())
     edge_list: list[tuple[int, int]] = list(weight_map.keys())
 
-    best_pos: dict[int, list[float]] | None = None
-    best_score: tuple[int, float] = (2 ** 31, float("inf"))
-
-    for restart in range(restarts):
+    def _one_restart(restart: int) -> tuple[dict[int, list[float]], tuple[int, float]]:
+        # Each restart gets its own seeded RNG — the module-level random
+        # instance is not thread-safe.
+        import random as _rand
+        rng = _rand.Random(restart)
         if restart == 0:
             # First attempt: evenly-spaced circle with small jitter to break
             # the symmetry that causes nodes to lock onto polygon vertices.
             pos: dict[int, list[float]] = {
                 nid: [
-                    math.cos(2 * math.pi * i / n) + _rng.uniform(-0.15, 0.15),
-                    math.sin(2 * math.pi * i / n) + _rng.uniform(-0.15, 0.15),
+                    math.cos(2 * math.pi * i / n) + rng.uniform(-0.15, 0.15),
+                    math.sin(2 * math.pi * i / n) + rng.uniform(-0.15, 0.15),
                 ]
                 for i, nid in enumerate(node_ids)
             }
         else:
             # Subsequent attempts: random positions to escape local minima
             pos = {
-                nid: [_rng.uniform(-1.0, 1.0), _rng.uniform(-1.0, 1.0)]
+                nid: [rng.uniform(-1.0, 1.0), rng.uniform(-1.0, 1.0)]
                 for nid in node_ids
             }
-
         _run_fr(node_ids, pos, weight_map, max_w, k, iterations)
-
         crossings = _count_crossings(pos, edge_list)
         energy = _layout_energy(pos, edge_pairs, node_ids, k)
-        score: tuple[int, float] = (crossings, energy)
+        return pos, (crossings, energy)
 
-        if score < best_score:
-            best_score = score
-            best_pos = {nid: [pos[nid][0], pos[nid][1]] for nid in node_ids}
+    best_pos: dict[int, list[float]] | None = None
+    best_score: tuple[int, float] = (2 ** 31, float("inf"))
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_one_restart, r) for r in range(restarts)]
+        for fut in as_completed(futures):
+            pos, score = fut.result()
+            if score < best_score:
+                best_score = score
+                best_pos = {nid: [pos[nid][0], pos[nid][1]] for nid in node_ids}
 
     assert best_pos is not None
     _swap_to_reduce_crossings(node_ids, best_pos, edge_list)
