@@ -39,14 +39,29 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             return
 
         log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
-        log.info("In Guild %s (Guarding: %s)", ctx.guild_id, ctx.spoiler_required_channels)
+        _guild = bot.get_guild(ctx.guild_id) if ctx.guild_id else None
+        _guild_name = _guild.name if _guild else ctx.guild_id
+
+        def _ch(cid: int) -> str:
+            c = _guild.get_channel(cid) if _guild else None
+            return f"#{c.name}" if c else str(cid)
+
+        def _ro(rid: int) -> str:
+            r = _guild.get_role(rid) if _guild else None
+            return f"@{r.name}" if r else str(rid)
+
+        log.info(
+            "In Guild %s (ID: %s, guarding: %s)",
+            _guild_name, ctx.guild_id,
+            [_ch(c) for c in ctx.spoiler_required_channels],
+        )
         log.info(
             "XP config loaded: level-%s role=%s level-up-log=%s level-%s-log=%s.",
             DEFAULT_XP_SETTINGS.role_grant_level,
-            ctx.level_5_role_id,
-            ctx.level_up_log_channel_id,
+            _ro(ctx.level_5_role_id),
+            _ch(ctx.level_up_log_channel_id),
             DEFAULT_XP_SETTINGS.role_grant_level,
-            ctx.level_5_log_channel_id,
+            _ch(ctx.level_5_log_channel_id),
         )
         log.debug("XP excluded channels: %s", sorted(ctx.xp_excluded_channel_ids))
         if ctx.guild_id:
@@ -258,7 +273,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         try:
             await channel.send(embed=build_welcome_embed(member, ctx.welcome_message))
         except discord.Forbidden:
-            log.warning("Missing permission to send welcome message in channel %s.", ctx.welcome_channel_id)
+            log.warning("Missing permission to send welcome message in #%s.", channel.name)
             await _dm_admin_permission_warning(
                 member.guild,
                 f"Missing permission to send welcome messages in <#{ctx.welcome_channel_id}>.",
@@ -276,7 +291,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         try:
             await channel.send(embed=build_leave_embed(member, ctx.leave_message))
         except discord.Forbidden:
-            log.warning("Missing permission to send leave message in channel %s.", ctx.leave_channel_id)
+            log.warning("Missing permission to send leave message in #%s.", channel.name)
             await _dm_admin_permission_warning(
                 member.guild,
                 f"Missing permission to send leave messages in <#{ctx.leave_channel_id}>.",
@@ -305,8 +320,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 "Received unknown slash command '%s' in guild %s (user %s). "
                 "This is usually stale command registration.",
                 missing_name,
-                interaction.guild_id,
-                interaction.user.id,
+                interaction.guild.name if interaction.guild else interaction.guild_id,
+                interaction.user,
             )
             if not interaction.response.is_done():
                 await interaction.response.send_message(

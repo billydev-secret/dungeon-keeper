@@ -413,8 +413,9 @@ async def process_auto_delete_tick(
             )
             if queued > 0:
                 log.info(
-                    "Auto-delete in #%s: queued=%s deleted=%s failed=%s",
-                    channel_id,
+                    "Auto-delete in #%s (%s): queued=%s deleted=%s failed=%s",
+                    channel.name,
+                    guild.name,
                     queued,
                     deleted,
                     failed,
@@ -422,9 +423,9 @@ async def process_auto_delete_tick(
             touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
         except Exception:
             log.exception(
-                "Auto-delete tick failed for guild=%s channel=%s",
-                guild_id,
-                channel_id,
+                "Auto-delete tick failed for guild=%s channel=#%s",
+                guild.name,
+                channel.name,
             )
 
 
@@ -540,9 +541,9 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
             )
             if deleted > 0 or failed > 0:
                 log.info(
-                    "Auto-delete startup #%s (guild %s): deleted=%s failed=%s",
-                    channel_id,
-                    guild_id,
+                    "Auto-delete startup #%s (%s): deleted=%s failed=%s",
+                    channel.name,
+                    guild.name,
                     deleted,
                     failed,
                 )
@@ -551,9 +552,9 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
             raise
         except Exception:
             log.exception(
-                "Auto-delete startup failed for guild=%s channel=%s",
-                guild_id,
-                channel_id,
+                "Auto-delete startup failed for guild=%s channel=#%s",
+                guild.name,
+                channel.name,
             )
 
 

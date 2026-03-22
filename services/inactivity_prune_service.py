@@ -137,7 +137,7 @@ async def run_prune_for_guild(
 
     role = guild.get_role(role_id)
     if role is None:
-        log.warning("Inactivity prune: role %s not found in guild %s; skipping.", role_id, guild_id)
+        log.warning("Inactivity prune: role %s not found in guild %s; skipping.", role_id, guild.name)
         return
 
     exceptions = get_prune_exception_ids(db_path, guild_id)
@@ -173,8 +173,8 @@ async def run_prune_for_guild(
             "Inactivity prune: removed @%s from %d member(s) in guild %s: %s",
             role.name,
             len(pruned),
-            guild_id,
-            ", ".join(str(m.id) for m in pruned),
+            guild.name,
+            ", ".join(m.display_name for m in pruned),
         )
 
 

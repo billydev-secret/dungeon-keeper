@@ -311,7 +311,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                             stats["interactions"] += len(targets)
 
                 except (discord.Forbidden, discord.HTTPException) as exc:
-                    log.warning("Could not scan channel %s: %s", ch.id, exc)
+                    log.warning("Could not scan channel #%s: %s", ch.name, exc)
 
         window_label = "all available history" if days == 0 else f"last {days} day{'s' if days != 1 else ''}"
         reset_note = " (existing data was cleared first)" if reset else ""
