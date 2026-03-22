@@ -43,6 +43,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         layers="When focusing on a member, how many layers of connections to expand (default 2).",
         limit="Max number of members to include in server-wide view (default 40).",
         spread="How spread out the graph is — higher = more space between nodes (default 1.0).",
+        max_per_node="Keep only the top N edges per node by weight. 0 = no limit (default 0).",
     )
     @app_commands.choices(timescale=[
         app_commands.Choice(name="hour",  value="hour"),
@@ -59,6 +60,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         layers: app_commands.Range[int, 1, 5] = 2,
         limit: app_commands.Range[int, 5, 60] = 40,
         spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
+        max_per_node: app_commands.Range[int, 0, 20] = 0,
     ) -> None:
         guild = interaction.guild
         if guild is None:
@@ -134,6 +136,18 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                 "of either user's total interactions. "
                 "Try lowering `min_pct` or running `/interaction_scan`."
             )
+
+        if max_per_node > 0:
+            node_edges: dict[int, list[tuple[int, int, int]]] = {}
+            for u, v, w in edges:
+                node_edges.setdefault(u, []).append((u, v, w))
+                node_edges.setdefault(v, []).append((u, v, w))
+            kept: set[tuple[int, int]] = set()
+            for ne in node_edges.values():
+                ne.sort(key=lambda e: e[2], reverse=True)
+                for eu, ev, _ in ne[:max_per_node]:
+                    kept.add((min(eu, ev), max(eu, ev)))
+            edges = [(u, v, w) for u, v, w in edges if (min(u, v), max(u, v)) in kept]
 
         if not edges:
             await interaction.followup.send(no_data_msg, ephemeral=True)
