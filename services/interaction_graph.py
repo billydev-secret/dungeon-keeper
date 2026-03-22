@@ -235,7 +235,7 @@ def query_connection_web(
         merged[key] = merged.get(key, 0) + w
 
     return [
-        (u, v, w) for (u, v), w in merged.items() if w >= min_weight
+        (u, v, w) for (u, v), w in merged.items() if w >= min_weight and u != v
     ]
 
 
