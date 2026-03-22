@@ -235,7 +235,7 @@ def query_connection_web(
         merged[key] = merged.get(key, 0) + w
 
     return [
-        (u, v, w) for (u, v), w in merged.items() if w >= min_weight
+        (u, v, w) for (u, v), w in merged.items() if w >= min_weight and u != v
     ]
 
 
@@ -522,6 +522,16 @@ def _nudge_to_reduce_crossings(
             pos[nid] = best
             if best[0] != orig_x or best[1] != orig_y:
                 improved = True
+                # If another node shares nid's new position exactly (because
+                # we moved nid on top of it), nudge that node away so no two
+                # nodes share coordinates — an edge between coincident nodes
+                # renders as a zero-length dot that looks like a self-loop.
+                for other in node_ids:
+                    if (other != nid
+                            and abs(pos[other][0] - pos[nid][0]) < 1e-9
+                            and abs(pos[other][1] - pos[nid][1]) < 1e-9):
+                        pos[other][0] += ring_r * 0.15
+                        break
 
         if not improved:
             break
