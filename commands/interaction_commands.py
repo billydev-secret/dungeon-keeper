@@ -154,6 +154,24 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                 if v in node_top.get(u, set()) and u in node_top.get(v, set())
             ]
 
+            # After trimming, some pairs may no longer have a path back to the
+            # focus user.  Prune them by keeping only the connected component
+            # that contains the focus user.
+            if member is not None and edges:
+                _adj: dict[int, set[int]] = {}
+                for u, v, _ in edges:
+                    _adj.setdefault(u, set()).add(v)
+                    _adj.setdefault(v, set()).add(u)
+                reachable: set[int] = set()
+                stack = [member.id]
+                while stack:
+                    cur = stack.pop()
+                    if cur in reachable:
+                        continue
+                    reachable.add(cur)
+                    stack.extend(_adj.get(cur, set()) - reachable)
+                edges = [(u, v, w) for u, v, w in edges if u in reachable and v in reachable]
+
         if not edges:
             await interaction.followup.send(no_data_msg, ephemeral=True)
             return
