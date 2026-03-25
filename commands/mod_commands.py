@@ -1,6 +1,7 @@
 """General moderation and help commands."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
@@ -100,16 +101,16 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         pages.append(_page("Reports",
             "Inspect member activity and role membership.\n\n"
             + _fmt([
-                ("/listrole role:@Role",
+                ("/report list_role role:@Role",
                  "List every current holder of a role — handy before mass-messaging, "
                  "auditing permissions, or checking coverage."),
-                ("/inactive_role role:@Role days:7",
+                ("/report inactive_role role:@Role days:7",
                  "Members of a role who haven't posted in N days. "
                  "Good for identifying who might need a check-in before a prune run."),
-                ("/report_inactive time_period:7d",
+                ("/report inactive time_period:7d",
                  "All server members inactive for a given period, regardless of role. "
                  "Use this to plan prune runs or spot disengaged members early."),
-                ("/oldest_sfw_members count:10",
+                ("/report oldest_sfw count:10",
                  "Members without NSFW access, ranked by how long since they last posted. "
                  "Useful for finding long-inactive accounts that were never fully onboarded."),
                 ("/xp_level_review level:5",
@@ -118,7 +119,8 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Use this to judge whether your XP thresholds feel earned or too fast."),
                 ("/purge count:50",
                  "Delete the last N messages in this channel. "
-                 "Omit N to delete all recent messages. "
+                 "Use `after:19:35` to delete everything since a UTC time today — "
+                 "both can be combined. "
                  "Useful for clearing spam, failed bot responses, or accidental posts."),
             ])
         ))
@@ -174,11 +176,11 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             "If `OPENAI_API_KEY` is set, only messages the AI flags as potential rule violations "
             "are forwarded — otherwise every message is relayed.\n\n"
             + _fmt([
-                ("/watch_user user:@user",
+                ("/watch add user:@user",
                  "Start monitoring a member. Every public message they post in a channel "
                  "the bot can read is forwarded to your DMs (filtered by AI if configured)."),
-                ("/unwatch_user user:@user", "Stop monitoring a member."),
-                ("/watch_list", "Show every member you are currently watching."),
+                ("/watch remove user:@user", "Stop monitoring a member."),
+                ("/watch list", "Show every member you are currently watching."),
             ])
         ))
 
@@ -189,20 +191,20 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             "All commands use the stored message archive — run `/interaction_scan` first "
             "if the bot is newly set up.\n\n"
             + _fmt([
-                ("/ai_review member:@user days:7",
+                ("/ai review member:@user days:7",
                  "Pulls a member's recent messages and asks the AI to flag rule violations, "
                  "concerning patterns, or escalating behaviour. "
                  "Use this before taking moderation action to build a clear picture."),
-                ("/ai_scan count:50",
+                ("/ai scan count:50",
                  "Scans the last N messages in this channel and flags any that may breach the rules. "
                  "Good for reviewing a channel after a reported incident or a heated argument."),
-                ("/ai_channel_query question:... minutes:60 channel:#channel",
+                ("/ai channel question:... minutes:60 channel:#channel",
                  "Ask the AI a free-form question about a channel's recent activity over a time window — "
                  "e.g. 'Did anyone harass a new member in the last hour?' or "
                  "'Summarise what this argument was about.' "
                  "Defaults to the current channel; supply `channel` to query another. "
                  "`minutes` accepts 1–1440 (up to 24 hours)."),
-                ("/ai_query member:@user question:... days:14",
+                ("/ai query member:@user question:... days:14",
                  "Ask the AI a free-form question about a member based on their message history — "
                  "e.g. 'Has this member been hostile toward new users?' or "
                  "'Does this person engage constructively or mostly argue?' "
@@ -225,20 +227,13 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         # ── XP config ─────────────────────────────────────────────────────────
         pages.append(_page("XP Config",
             "Control how XP is earned, who can award it manually, and where progress is logged.\n\n"
-            "**Manual Grant Allowlist**\n"
-            + _fmt([
-                ("/xp_give_allow member:@user",
-                 "Add a member to the `/xp_give` allowlist so they can manually award XP "
-                 "without being a mod — useful for event hosts or community managers."),
-                ("/xp_give_disallow member:@user", "Remove a member from the allowlist."),
-                ("/xp_give_allowed", "Show everyone currently on the allowlist."),
-            ])
-            + "\n\n**Log Channels & Channel Exclusions**\n"
+            "**Configuration Panel**\n"
             + _fmt([
                 ("/config xp",
                  "Open the XP config panel — set the level-up log channel, the level-5 "
-                 "announcement channel, and toggle XP earning on or off for the current channel. "
-                 "Disable XP in bot-spam or off-topic channels to keep it meaningful."),
+                 "announcement channel, toggle XP on or off for the current channel, and manage "
+                 "the **grant allowlist** (who can use `/xp_give` without being a mod — useful "
+                 "for event hosts or community managers)."),
                 ("/xp_excluded_channels",
                  "List every channel where XP is currently disabled."),
             ])
@@ -289,15 +284,15 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/config prune",
                  "Open the prune config panel — set the role to manage and the inactivity "
                  "threshold in days, disable the prune entirely, or trigger an immediate run."),
-                ("/inactivity_prune_status",
+                ("/inactivity_prune status",
                  "Show the current threshold, the last run time, and the full exemption list."),
             ])
             + "\n\n**Exemptions**\n"
             + _fmt([
-                ("/inactivity_prune_exempt member:@user",
+                ("/inactivity_prune exempt member:@user",
                  "Permanently protect a member from being pruned — useful for bots, staff, "
                  "or members on a known hiatus who should keep their role."),
-                ("/inactivity_prune_unexempt member:@user",
+                ("/inactivity_prune unexempt member:@user",
                  "Remove a member's exemption, returning them to normal prune eligibility."),
             ])
         ))
@@ -371,18 +366,44 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="purge",
-        description="Delete the last N messages in this channel, or all recent messages if N is omitted.",
+        description="Delete messages in this channel by count, cutoff time, or both.",
     )
-    @app_commands.describe(count="Number of messages to delete. Omit to delete all recent messages.")
+    @app_commands.describe(
+        count="Number of messages to delete (max 1000). Omit to delete all messages since `after`.",
+        after="Delete messages at or after this time today (server local time), e.g. 19:35.",
+    )
     async def purge(
         interaction: discord.Interaction,
         count: app_commands.Range[int, 1, 1000] | None = None,
+        after: str | None = None,
     ):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
+
+        after_dt: datetime | None = None
+        if after is not None:
+            try:
+                parts = after.strip().split(":")
+                if len(parts) not in (2, 3):
+                    raise ValueError
+                h, m = int(parts[0]), int(parts[1])
+                s = int(parts[2]) if len(parts) == 3 else 0
+                server_tz = timezone(timedelta(hours=ctx.tz_offset_hours))
+                now = datetime.now(server_tz)
+                after_dt = now.replace(hour=h, minute=m, second=s, microsecond=0)
+                if after_dt > now:
+                    # Time hasn't occurred yet today — treat as yesterday
+                    after_dt -= timedelta(days=1)
+            except (ValueError, IndexError):
+                tz_label = f"UTC{ctx.tz_offset_hours:+g}" if ctx.tz_offset_hours != 0 else "UTC"
+                await interaction.response.send_message(
+                    f"Invalid time format. Use `HH:MM` or `HH:MM:SS` (server time is {tz_label}), e.g. `19:35`.",
+                    ephemeral=True,
+                )
+                return
 
         channel = interaction.channel
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
@@ -401,8 +422,16 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True)
 
-        deleted = await channel.purge(limit=count)
-        label = f"last {count}" if count is not None else "all recent"
+        deleted = await channel.purge(limit=count, after=after_dt)
+
+        if count is not None and after_dt is not None:
+            label = f"last {count} since {after}"
+        elif count is not None:
+            label = f"last {count}"
+        elif after_dt is not None:
+            label = f"since {after}"
+        else:
+            label = "all recent"
         await interaction.followup.send(
             f"Deleted {len(deleted)} message{'s' if len(deleted) != 1 else ''} ({label}).",
             ephemeral=True,

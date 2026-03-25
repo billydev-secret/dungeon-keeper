@@ -3,10 +3,11 @@
 Commands:
   /xp_leaderboards      — top XP earners per source and time window, plus caller's rank
   /xp_give              — manually award 20 XP to a member (mod or allowlisted users)
-  /xp_give_allow/disallow/allowed — manage the /xp_give allowlist (mod only)
-  /xp_excluded_channels           — list XP-excluded channels
-  /xp_backfill_history            — scan message history to fill XP gaps
-  /xp_level_review                — histogram of time-to-reach for a given level
+  /xp_excluded_channels — list XP-excluded channels (mod only)
+  /xp_backfill_history  — scan message history to fill XP gaps (mod only)
+  /xp_level_review      — histogram of time-to-reach for a given level (mod only)
+
+Grant allowlist management is handled via /config xp → Manage Grant Allowlist.
 """
 from __future__ import annotations
 
@@ -276,62 +277,6 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             f"{interaction.user.mention} granted {DEFAULT_XP_SETTINGS.manual_grant_xp:.0f} XP to {member.mention}. "
             f"They now have {award.total_xp:.2f} XP and are level {award.new_level}.",
             ephemeral=False,
-        )
-
-    @bot.tree.command(name="xp_give_allow", description="Allow a user to use /xp_give.")
-    @app_commands.describe(member="User to add to the /xp_give allowlist.")
-    async def xp_give_allow(interaction: discord.Interaction, member: discord.Member):
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-
-        ctx.xp_grant_allowed_user_ids = ctx.add_config_id_value("xp_grant_allowed_user_ids", member.id)
-        await interaction.response.send_message(
-            f"{member.mention} can now use /xp_give. "
-            f"Allowed user IDs: {sorted(ctx.xp_grant_allowed_user_ids)}",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(name="xp_give_disallow", description="Remove a user from /xp_give access.")
-    @app_commands.describe(member="User to remove from the /xp_give allowlist.")
-    async def xp_give_disallow(interaction: discord.Interaction, member: discord.Member):
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-
-        ctx.xp_grant_allowed_user_ids = ctx.remove_config_id_value("xp_grant_allowed_user_ids", member.id)
-        await interaction.response.send_message(
-            f"{member.mention} can no longer use /xp_give. "
-            f"Allowed user IDs: {sorted(ctx.xp_grant_allowed_user_ids)}",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(name="xp_give_allowed", description="List users allowed to use /xp_give.")
-    async def xp_give_allowed(interaction: discord.Interaction):
-        if not ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-
-        if not ctx.xp_grant_allowed_user_ids:
-            await interaction.response.send_message(
-                "No regular users are currently allowed to use /xp_give.", ephemeral=True
-            )
-            return
-
-        guild = interaction.guild
-        labels = []
-        for user_id in sorted(ctx.xp_grant_allowed_user_ids):
-            m = guild.get_member(user_id) if guild else None
-            labels.append(m.mention if m else f"`{user_id}`")
-
-        await interaction.response.send_message(
-            "Users allowed to use /xp_give: " + ", ".join(labels), ephemeral=True
         )
 
     @bot.tree.command(

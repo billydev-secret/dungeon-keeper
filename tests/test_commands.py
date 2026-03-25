@@ -278,31 +278,6 @@ class XpCommandPermissionTests(unittest.TestCase):
         _run(self._cmd("xp_give")(ix, _make_member()))
         self.assertIn("server", ix.response.send_message.call_args[0][0].lower())
 
-    def test_xp_give_allow_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self._cmd("xp_give_allow")(ix, _make_member()))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_xp_give_disallow_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self._cmd("xp_give_disallow")(ix, _make_member()))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_xp_give_allowed_non_mod_denied(self):
-        self.ctx.is_mod.return_value = False
-        ix = _make_interaction()
-        _run(self._cmd("xp_give_allowed")(ix))
-        self.assertIn("permission", ix.response.send_message.call_args[0][0].lower())
-
-    def test_xp_give_allowed_empty_list(self):
-        self.ctx.is_mod.return_value = True
-        self.ctx.xp_grant_allowed_user_ids = set()
-        ix = _make_interaction()
-        _run(self._cmd("xp_give_allowed")(ix))
-        self.assertIn("no regular users", ix.response.send_message.call_args[0][0].lower())
-
     def test_xp_excluded_channels_non_mod_denied(self):
         self.ctx.is_mod.return_value = False
         ix = _make_interaction()
@@ -345,22 +320,6 @@ class XpConfigCommandSuccessTests(unittest.TestCase):
         ch.id = channel_id
         ch.mention = f"<#{channel_id}>"
         return ch
-
-    def test_xp_give_allow_success(self):
-        member = _make_member(user_id=42)
-        self.ctx.add_config_id_value.return_value = {42}
-        ix = _make_interaction()
-        _run(self.cap.get("xp_give_allow")(ix, member))
-        self.ctx.add_config_id_value.assert_called_once_with("xp_grant_allowed_user_ids", 42)
-        self.assertEqual(self.ctx.xp_grant_allowed_user_ids, {42})
-
-    def test_xp_give_disallow_success(self):
-        member = _make_member(user_id=42)
-        self.ctx.remove_config_id_value.return_value = set()
-        ix = _make_interaction()
-        _run(self.cap.get("xp_give_disallow")(ix, member))
-        self.ctx.remove_config_id_value.assert_called_once_with("xp_grant_allowed_user_ids", 42)
-
 
 # ---------------------------------------------------------------------------
 # Help command tests

@@ -56,9 +56,14 @@ def format_member_activity_line(member: discord.Member, activity) -> str:
 
 
 def register_reports(bot: Bot, ctx: AppContext) -> None:
-    @bot.tree.command(name="listrole", description="List members who currently have a role.")
+    report_group = app_commands.Group(
+        name="report",
+        description="Member activity and role membership reports.",
+    )
+
+    @report_group.command(name="list_role", description="List members who currently have a role.")
     @app_commands.describe(role="The role to inspect")
-    async def listrole(interaction: discord.Interaction, role: discord.Role):
+    async def list_role(interaction: discord.Interaction, role: discord.Role):
         if not role.members:
             await interaction.response.send_message(f"No members found in **{role.name}**.", ephemeral=True)
             return
@@ -67,7 +72,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             output = output[:1900] + "\n... (truncated)"
         await interaction.response.send_message(f"**Members in {role.name}:**\n{output}", ephemeral=True)
 
-    @bot.tree.command(name="inactive_role", description="Report role members inactive for N days.")
+    @report_group.command(name="inactive_role", description="Report role members inactive for N days.")
     @app_commands.describe(role="Role to analyze", days="Number of days to check (default 7)")
     async def inactive_role(
         interaction: discord.Interaction, role: discord.Role, days: app_commands.Range[int, 1, 60] = 7
@@ -119,12 +124,12 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             )
         await send_ephemeral_text(interaction, summary)
 
-    @bot.tree.command(
-        name="oldest_sfw_members",
+    @report_group.command(
+        name="oldest_sfw",
         description="Show members without spicy access who have the oldest last messages.",
     )
     @app_commands.describe(count="How many members to show (default 10)")
-    async def oldest_sfw_members(
+    async def oldest_sfw(
         interaction: discord.Interaction,
         count: app_commands.Range[int, 1, 50] = 10,
     ):
@@ -165,9 +170,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         block = "\n".join(format_member_activity_line(m, activities.get(m.id)) for m in top)
         await send_ephemeral_text(interaction, header + block)
 
-    @bot.tree.command(name="report_inactive", description="Show all server members inactive for a given period.")
+    @report_group.command(name="inactive", description="Show all server members inactive for a given period.")
     @app_commands.describe(time_period="How long without a message counts as inactive, e.g. 7d, 2h, 30m")
-    async def report_inactive(interaction: discord.Interaction, time_period: str):
+    async def inactive(interaction: discord.Interaction, time_period: str):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
@@ -222,4 +227,6 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 "starts after this version is deployed."
             )
         await send_ephemeral_text(interaction, summary)
+
+    bot.tree.add_command(report_group)
 

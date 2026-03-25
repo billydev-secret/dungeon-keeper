@@ -1,10 +1,10 @@
 """AI-powered moderation commands backed by the OpenAI API.
 
-Provides four slash commands (all mod-only, all ephemeral):
-  /ai_review        — fetch a user's recent messages and have the AI flag concerns
-  /ai_scan          — scan the last N messages in the current channel
-  /ai_channel_query — ask the AI a free-form question about a channel's recent activity
-  /ai_query         — ask the AI a free-form question about a user's message history
+Provides four slash commands (all mod-only, all ephemeral, under the /ai group):
+  /ai review   — fetch a user's recent messages and have the AI flag concerns
+  /ai scan     — scan the last N messages in the current channel
+  /ai channel  — ask the AI a free-form question about a channel's recent activity
+  /ai query    — ask the AI a free-form question about a user's message history
 
 Requires OPENAI_API_KEY to be set in the bot's environment.
 """
@@ -36,8 +36,13 @@ def _openai_client() -> AsyncOpenAI | None:
 
 
 def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
-    @bot.tree.command(
-        name="ai_review",
+    ai_group = app_commands.Group(
+        name="ai",
+        description="AI-powered moderation tools (requires OPENAI_API_KEY).",
+    )
+
+    @ai_group.command(
+        name="review",
         description="AI review of a user's recent messages for rule violations or concerns.",
     )
     @app_commands.describe(
@@ -80,8 +85,8 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         )
         await send_ephemeral_text(interaction, header + result.analysis)
 
-    @bot.tree.command(
-        name="ai_scan",
+    @ai_group.command(
+        name="scan",
         description="AI scan of recent messages in this channel for rule violations or concerns.",
     )
     @app_commands.describe(count="How many recent messages to scan (default 50).")
@@ -121,8 +126,8 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         header = f"**AI Channel Scan** — {result.message_count} messages reviewed\n\n"
         await send_ephemeral_text(interaction, header + result.analysis)
 
-    @bot.tree.command(
-        name="ai_channel_query",
+    @ai_group.command(
+        name="channel",
         description="Ask the AI a question about recent activity in a channel.",
     )
     @app_commands.describe(
@@ -130,7 +135,7 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         minutes="How many minutes of history to include (default 60, max 1440).",
         channel="Channel to query — defaults to the current channel.",
     )
-    async def ai_channel_query(
+    async def ai_channel(
         interaction: discord.Interaction,
         question: str,
         minutes: app_commands.Range[int, 1, 1440] = 60,
@@ -173,8 +178,8 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         )
         await send_ephemeral_text(interaction, header + result.analysis)
 
-    @bot.tree.command(
-        name="ai_query",
+    @ai_group.command(
+        name="query",
         description="Ask the AI a specific question about a user based on their recent messages.",
     )
     @app_commands.describe(
@@ -218,3 +223,5 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             f"**Q:** {question}\n\n"
         )
         await send_ephemeral_text(interaction, header + result.analysis)
+
+    bot.tree.add_command(ai_group)

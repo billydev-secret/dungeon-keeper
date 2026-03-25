@@ -27,6 +27,18 @@ def _parse_int_config(raw_value: str, *, key: str, default: int = 0) -> int:
         return default
 
 
+def _parse_float_config(raw_value: str, *, key: str, default: float = 0.0) -> float:
+    """Parse float config values safely with fallback."""
+    normalized = raw_value.strip()
+    if not normalized:
+        return default
+    try:
+        return float(normalized)
+    except ValueError:
+        logging.warning("Invalid float config for %s: %r; using %s.", key, raw_value, default)
+        return default
+
+
 class RuntimeConfig(TypedDict):
     guild_id: int
     mod_channel_id: int
@@ -55,6 +67,7 @@ class RuntimeConfig(TypedDict):
     welcome_message: str
     leave_channel_id: int
     leave_message: str
+    tz_offset_hours: float
 
 
 def load_runtime_config(db_path: Path) -> RuntimeConfig:
@@ -123,6 +136,9 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
                 get_config_value(conn, "leave_channel_id", "0"), key="leave_channel_id"
             ),
             "leave_message": get_config_value(conn, "leave_message", DEFAULT_LEAVE_MESSAGE),
+            "tz_offset_hours": _parse_float_config(
+                get_config_value(conn, "tz_offset_hours", "0"), key="tz_offset_hours"
+            ),
         }
 
 
@@ -194,6 +210,7 @@ class AppContext:
     welcome_message: str
     leave_channel_id: int
     leave_message: str
+    tz_offset_hours: float = 0.0
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
     watched_users: dict[int, set[int]] = field(default_factory=dict)
 

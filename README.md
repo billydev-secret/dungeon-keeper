@@ -51,41 +51,71 @@ Most settings are configured through slash commands after the bot is running.
 
 ## Slash Commands
 
-**General**
-- `/help` — Command reference and examples
-- `/xp_leaderboards` — Top 5 XP earners for a timescale, plus your standing
+**General** (everyone)
+- `/help` — Contextual command reference (sections shown based on your permissions)
+- `/xp_leaderboards [timescale]` — Top 5 XP earners per source for a time window, plus your standing
+- `/activity [resolution] [member] [channel]` — Bar chart of message volume over time
+- `/session_burst [member]` — How active a member is after returning from a 20-min break
+- `/connection_web [member] [timescale] [...]` — Reply/mention network graph
 
-**Moderation**
-- `/listrole` — List members who currently have a role
-- `/inactive_role` — Report role members inactive for N days
-
-**Denizen**
-- `/grant_denizen` — Grant the configured Denizen role to a member
-- `/set_greeter_role` — Set the role allowed to run `/grant_denizen`
-- `/set_denizen_role` — Set the role that `/grant_denizen` assigns
+**Role Grants** (greeters and mods)
+- `/grant_denizen @member` — Grant the Denizen role
+- `/grant_nsfw @member` — Grant the NSFW role
+- `/grant_veteran @member` — Grant the Veteran role
 
 **XP**
-- `/xp_give` — Grant manual XP to a member
-- `/xp_give_allow` — Allow a user to run `/xp_give`
-- `/xp_give_disallow` — Remove a user from `/xp_give` access
-- `/xp_give_allowed` — List users currently allowed to run `/xp_give`
-- `/xp_set_levelup_log_here` — Set this channel/thread for level-up announcements
-- `/xp_set_level5_log_here` — Set this channel/thread for level-5 announcements
-- `/xp_exclude_here` — Disable XP gain in this channel/thread
-- `/xp_include_here` — Re-enable XP gain in this channel/thread
-- `/xp_excluded_channels` — List channels/threads where XP gain is disabled
-- `/xp_backfill_history` — Backfill historical message XP into the database
+- `/xp_give @member` — Manually award 20 XP (mod or allowlisted users)
+- `/xp_leaderboards [timescale]` — Leaderboard by source and time window
+- `/xp_excluded_channels` — List channels where XP is disabled (mod)
+- `/xp_backfill_history [days]` — Scan message history to fill XP gaps (mod)
+- `/xp_level_review [level]` — Histogram of time-to-reach for a given level (mod)
 
-**Spoiler Guard**
-- `/spoiler_guard_add_here` — Enable spoiler guard in this channel/thread
-- `/spoiler_guard_remove_here` — Disable spoiler guard in this channel/thread
-- `/spoiler_guarded_channels` — List channels/threads where spoiler guard is enabled
+**Reports** (mod)
+- `/report list_role @role` — List every current holder of a role
+- `/report inactive_role @role [days]` — Role members inactive for N days
+- `/report inactive [time_period]` — All server members inactive for a given period
+- `/report oldest_sfw [count]` — Members without NSFW access, ranked by last post date
 
-**Auto-Delete**
-- `/auto_delete` — Delete older messages now and optionally set a recurring schedule
-- `/auto_delete_configs` — List auto-delete schedules configured for this server
+**Activity & Graphs** (mod)
+- `/dropoff [period] [limit] [channel]` — Members with the largest message-rate drop
+- `/burst_ranking [limit]` — Who most reliably drives conversation after a break
+- `/connection_web [member] [timescale] [min_pct] [layers] [limit] [spread] [max_per_node]` — Interaction network graph
+- `/interaction_scan [days] [reset]` — Backfill the interaction graph from message history
+- `/chilling_effect [...]` — Members whose arrival correlates with others going quiet
 
-Duration syntax for `/auto_delete`: named intervals (`daily`, `weekly`) or compound units like `30d`, `1h30m`, `7d12h`.
+**Watch List** (mod)
+- `/watch add @user` — Start forwarding a member's public posts to your DMs
+- `/watch remove @user` — Stop watching a member
+- `/watch list` — Show members you are currently watching
+
+**AI Moderation** (mod, requires `OPENAI_API_KEY`)
+- `/ai review @user [days]` — AI review of a user's recent messages for concerns
+- `/ai scan [count]` — AI scan of recent messages in this channel
+- `/ai channel [question] [minutes] [channel]` — Ask the AI about a channel's recent activity
+- `/ai query @user [question] [days]` — Ask the AI a specific question about a user
+
+**Configuration** (mod)
+- `/config welcome` — Set welcome/leave channels and message templates
+- `/config roles` — Configure Greeter, Denizen, NSFW, and Veteran role grant settings
+- `/config xp` — Set XP log channels, toggle channel XP, manage the `/xp_give` allowlist
+- `/config prune` — Set up or disable the inactivity prune schedule
+- `/config spoiler` — Toggle spoiler guard on channels
+- `/welcome_preview` / `/leave_preview` — Preview welcome/leave message templates
+
+**Inactivity Prune** (mod)
+- `/inactivity_prune status` — Show current config and exemption list
+- `/inactivity_prune exempt @member` — Protect a member from being pruned
+- `/inactivity_prune unexempt @member` — Remove a member's exemption
+- `/inactivity_prune run` — Trigger an immediate prune run
+
+**Utility** (mod)
+- `/purge [count] [after]` — Delete messages by count, cutoff time (e.g. `after:19:35` UTC), or both
+
+**Auto-Delete** (mod)
+- `/auto_delete [del_age] [run]` — Delete old messages and optionally set a recurring schedule
+- `/auto_delete_configs` — List all auto-delete schedules for this server
+
+Duration syntax for `del_age` and `run`: compound units like `30d`, `1h30m`, `7d12h`, or `once` / `off`.
 
 ## Development
 

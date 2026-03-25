@@ -123,6 +123,7 @@ ctx = AppContext(
     welcome_message=_cfg["welcome_message"],
     leave_channel_id=_cfg["leave_channel_id"],
     leave_message=_cfg["leave_message"],
+    tz_offset_hours=_cfg["tz_offset_hours"],
 )
 
 # ==============================

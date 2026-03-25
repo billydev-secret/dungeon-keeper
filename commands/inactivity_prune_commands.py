@@ -1,4 +1,11 @@
-"""Inactivity prune slash commands."""
+"""Inactivity prune slash commands.
+
+Commands (all mod-only, under the /inactivity_prune group):
+  /inactivity_prune status   — show current config and exemption list
+  /inactivity_prune exempt   — exempt a member from pruning
+  /inactivity_prune unexempt — remove a member's exemption
+  /inactivity_prune run      — trigger an immediate prune run
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -19,12 +26,16 @@ if TYPE_CHECKING:
 
 
 def register_inactivity_prune_commands(bot: Bot, ctx: AppContext) -> None:
+    prune_group = app_commands.Group(
+        name="inactivity_prune",
+        description="Manage the inactivity prune schedule, exemptions, and status.",
+    )
 
-    @bot.tree.command(
-        name="inactivity_prune_status",
+    @prune_group.command(
+        name="status",
         description="Show the current inactivity prune configuration.",
     )
-    async def inactivity_prune_status(interaction: discord.Interaction) -> None:
+    async def prune_status(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
             return
@@ -58,12 +69,12 @@ def register_inactivity_prune_commands(bot: Bot, ctx: AppContext) -> None:
             ephemeral=True,
         )
 
-    @bot.tree.command(
-        name="inactivity_prune_exempt",
+    @prune_group.command(
+        name="exempt",
         description="Exempt a member from inactivity pruning.",
     )
     @app_commands.describe(member="Member to exempt.")
-    async def inactivity_prune_exempt(
+    async def prune_exempt(
         interaction: discord.Interaction,
         member: discord.Member,
     ) -> None:
@@ -80,12 +91,12 @@ def register_inactivity_prune_commands(bot: Bot, ctx: AppContext) -> None:
             f"**{member.display_name}** is now exempt from inactivity pruning.", ephemeral=True
         )
 
-    @bot.tree.command(
-        name="inactivity_prune_unexempt",
+    @prune_group.command(
+        name="unexempt",
         description="Remove a member's inactivity prune exemption.",
     )
     @app_commands.describe(member="Member to remove from the exemption list.")
-    async def inactivity_prune_unexempt(
+    async def prune_unexempt(
         interaction: discord.Interaction,
         member: discord.Member,
     ) -> None:
@@ -107,11 +118,11 @@ def register_inactivity_prune_commands(bot: Bot, ctx: AppContext) -> None:
                 f"**{member.display_name}** was not on the exemption list.", ephemeral=True
             )
 
-    @bot.tree.command(
-        name="inactivity_prune_run",
-        description="Run the inactivity prune immediately (mod only).",
+    @prune_group.command(
+        name="run",
+        description="Run the inactivity prune immediately.",
     )
-    async def inactivity_prune_run(interaction: discord.Interaction) -> None:
+    async def prune_run(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message("You don't have permission to use this command.", ephemeral=True)
             return
@@ -134,3 +145,5 @@ def register_inactivity_prune_commands(bot: Bot, ctx: AppContext) -> None:
             int(rule["inactivity_days"]),
         )
         await interaction.followup.send("Inactivity prune completed.", ephemeral=True)
+
+    bot.tree.add_command(prune_group)

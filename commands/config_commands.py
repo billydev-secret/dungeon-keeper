@@ -89,10 +89,18 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
             placeholder="{member_name} {server}",
             required=False, max_length=1000,
         )
+        tz_default = str(ctx.tz_offset_hours) if ctx.tz_offset_hours != 0.0 else "0"
+        self.tz_offset: discord.ui.TextInput = discord.ui.TextInput(
+            label="Server UTC offset  (e.g. 1, -5, 5.5 for UTC+5:30)",
+            default=tz_default,
+            placeholder="0 = UTC  ·  1 = UTC+1  ·  -5 = UTC-5",
+            required=False, max_length=10,
+        )
         self.add_item(self.welcome_channel)
         self.add_item(self.welcome_msg)
         self.add_item(self.leave_channel)
         self.add_item(self.leave_msg)
+        self.add_item(self.tz_offset)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         wc = _parse_channel(self.welcome_channel.value, self._current_channel_id)
@@ -102,6 +110,14 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
             errors.append(f"Invalid welcome channel: `{self.welcome_channel.value}`")
         if lc is None:
             errors.append(f"Invalid leave channel: `{self.leave_channel.value}`")
+        tz_raw = self.tz_offset.value.strip() or "0"
+        try:
+            tz_hours = float(tz_raw)
+            if not -24 < tz_hours < 24:
+                raise ValueError
+        except ValueError:
+            errors.append(f"Invalid UTC offset: `{tz_raw}` — use a number like 1, -5, or 5.5")
+            tz_hours = 0.0
         if errors:
             await interaction.response.send_message("\n".join(errors), ephemeral=True)
             return
@@ -111,11 +127,13 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
         self._ctx.welcome_message = self._ctx.set_config_value("welcome_message", self.welcome_msg.value)
         self._ctx.leave_channel_id = int(self._ctx.set_config_value("leave_channel_id", str(lc)))
         self._ctx.leave_message = self._ctx.set_config_value("leave_message", self.leave_msg.value)
+        self._ctx.tz_offset_hours = float(self._ctx.set_config_value("tz_offset_hours", str(tz_hours)))
 
         w_label = f"<#{wc}>" if wc > 0 else "disabled"
         l_label = f"<#{lc}>" if lc > 0 else "disabled"
+        tz_label = f"UTC{tz_hours:+g}" if tz_hours != 0 else "UTC"
         await interaction.response.send_message(
-            f"Saved.  Welcome → {w_label}  ·  Leave → {l_label}\n"
+            f"Saved.  Welcome → {w_label}  ·  Leave → {l_label}  ·  Timezone → {tz_label}\n"
             "Use `/welcome_preview` or `/leave_preview` to check the templates.",
             ephemeral=True,
         )
@@ -372,8 +390,67 @@ def _build_xp_embed(ctx: AppContext, guild: discord.Guild, current_channel_id: i
         value=f"XP **{'excluded' if excluded else 'active'}** in <#{current_channel_id}>",
         inline=False,
     )
+    if ctx.xp_grant_allowed_user_ids:
+        labels = []
+        for uid in sorted(ctx.xp_grant_allowed_user_ids):
+            m = guild.get_member(uid)
+            labels.append(m.mention if m else f"`{uid}`")
+        allowlist_value = ", ".join(labels)
+    else:
+        allowlist_value = "Mods only"
+    embed.add_field(name="Grant Allowlist", value=allowlist_value, inline=False)
     embed.set_footer(text="Use the buttons below to edit.")
     return embed
+
+
+class _XpAllowlistModal(discord.ui.Modal, title="XP Grant Allowlist"):
+    """Add or remove users from the /xp_give allowlist by ID."""
+
+    def __init__(self, ctx: AppContext) -> None:
+        super().__init__()
+        self._ctx = ctx
+        self.add_ids: discord.ui.TextInput = discord.ui.TextInput(
+            label="Add user IDs (space or comma-separated)",
+            placeholder="Right-click member → Copy ID",
+            required=False,
+            max_length=500,
+        )
+        self.remove_ids: discord.ui.TextInput = discord.ui.TextInput(
+            label="Remove user IDs (space or comma-separated)",
+            placeholder="Right-click member → Copy ID",
+            required=False,
+            max_length=500,
+        )
+        self.add_item(self.add_ids)
+        self.add_item(self.remove_ids)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        import re
+
+        def _parse(text: str) -> list[int]:
+            return [int(tok) for tok in re.split(r"[\s,]+", text.strip()) if tok.isdigit()]
+
+        added: list[int] = []
+        removed: list[int] = []
+        for uid in _parse(self.add_ids.value):
+            self._ctx.xp_grant_allowed_user_ids = self._ctx.add_config_id_value(
+                "xp_grant_allowed_user_ids", uid
+            )
+            added.append(uid)
+        for uid in _parse(self.remove_ids.value):
+            self._ctx.xp_grant_allowed_user_ids = self._ctx.remove_config_id_value(
+                "xp_grant_allowed_user_ids", uid
+            )
+            removed.append(uid)
+
+        parts: list[str] = []
+        if added:
+            parts.append(f"Added: {', '.join(f'`{uid}`' for uid in added)}")
+        if removed:
+            parts.append(f"Removed: {', '.join(f'`{uid}`' for uid in removed)}")
+        if not parts:
+            parts.append("No changes made.")
+        await interaction.response.send_message("\n".join(parts), ephemeral=True)
 
 
 class _XpView(discord.ui.View):
@@ -405,6 +482,18 @@ class _XpView(discord.ui.View):
         )
         self.toggle_btn.callback = self._on_toggle  # type: ignore[method-assign]
         self.add_item(self.toggle_btn)
+
+        self.allowlist_btn: discord.ui.Button = discord.ui.Button(
+            label="Manage Grant Allowlist", style=discord.ButtonStyle.secondary
+        )
+        self.allowlist_btn.callback = self._on_allowlist  # type: ignore[method-assign]
+        self.add_item(self.allowlist_btn)
+
+    async def _on_allowlist(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.defer()
+            return
+        await interaction.response.send_modal(_XpAllowlistModal(self._ctx))
 
     async def _on_log(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.invoker_id:

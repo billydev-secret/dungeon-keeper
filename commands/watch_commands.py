@@ -3,10 +3,10 @@
 Watched-user state is persisted in the ``watched_users`` DB table and mirrored
 in ``AppContext.watched_users`` for fast lookup on every message event.
 
-Commands (all mod-only):
-  /watch_user   — start watching a member
-  /unwatch_user — stop watching a member
-  /watch_list   — list members you are currently watching
+Commands (all mod-only, under the /watch group):
+  /watch add    — start watching a member
+  /watch remove — stop watching a member
+  /watch list   — list members you are currently watching
 """
 from __future__ import annotations
 
@@ -46,12 +46,17 @@ def load_watched_users(conn: sqlite3.Connection, guild_id: int) -> dict[int, set
 
 
 def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
-    @bot.tree.command(
-        name="watch_user",
+    watch_group = app_commands.Group(
+        name="watch",
+        description="Monitor member activity — their public posts are DM'd to you.",
+    )
+
+    @watch_group.command(
+        name="add",
         description="Watch a user — their public posts will be DM'd to you.",
     )
     @app_commands.describe(user="The server member to watch.")
-    async def watch_user(interaction: discord.Interaction, user: discord.Member):
+    async def watch_add(interaction: discord.Interaction, user: discord.Member):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
@@ -86,12 +91,12 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
             ephemeral=True,
         )
 
-    @bot.tree.command(
-        name="unwatch_user",
+    @watch_group.command(
+        name="remove",
         description="Stop watching a user.",
     )
     @app_commands.describe(user="The server member to stop watching.")
-    async def unwatch_user(interaction: discord.Interaction, user: discord.Member):
+    async def watch_remove(interaction: discord.Interaction, user: discord.Member):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
@@ -117,8 +122,8 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
             f"Stopped watching {user.mention}.", ephemeral=True
         )
 
-    @bot.tree.command(
-        name="watch_list",
+    @watch_group.command(
+        name="list",
         description="Show the users you are currently watching.",
     )
     async def watch_list(interaction: discord.Interaction):
@@ -147,3 +152,5 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
         await interaction.response.send_message(
             "You are currently watching: " + ", ".join(labels), ephemeral=True
         )
+
+    bot.tree.add_command(watch_group)
