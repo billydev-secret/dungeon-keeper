@@ -329,6 +329,39 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS role_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role_name TEXT NOT NULL,
+            action TEXT NOT NULL,
+            granted_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_role_events_lookup
+        ON role_events (guild_id, role_name, action, granted_at)
+        """
+    )
+
+
+def log_role_event(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    role_name: str,
+    action: str,
+    ts: float | None = None,
+) -> None:
+    """Record a role grant or removal event."""
+    conn.execute(
+        "INSERT INTO role_events (guild_id, user_id, role_name, action, granted_at) VALUES (?, ?, ?, ?, ?)",
+        (guild_id, user_id, role_name, action, ts if ts is not None else time.time()),
+    )
 
 
 def get_member_xp_state(

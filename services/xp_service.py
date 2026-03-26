@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import discord
@@ -39,6 +40,7 @@ async def maybe_grant_level_role(
     new_level: int,
     level_role_id: int,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    db_path: Path | None = None,
 ) -> None:
     """Grant a level reward role to a member if they qualify."""
     if level_role_id <= 0:
@@ -84,6 +86,11 @@ async def maybe_grant_level_role(
             role.id,
             format_user_for_log(member),
         )
+        if db_path is not None:
+            from db_utils import open_db
+            from xp_system import log_role_event
+            with open_db(db_path) as conn:
+                log_role_event(conn, member.guild.id, member.id, role.name, "grant")
     except discord.Forbidden:
         log.warning(
             "Missing permission to grant level reward role %s to %s.",
@@ -246,6 +253,7 @@ async def handle_level_progress(
     level_up_log_channel_id: int,
     level_5_log_channel_id: int,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    db_path: Path | None = None,
 ) -> None:
     """Handle role grants and announcements when a member levels up."""
     log.debug(
@@ -263,7 +271,7 @@ async def handle_level_progress(
     )
 
     if award.new_level >= settings.role_grant_level:
-        await maybe_grant_level_role(member, award.new_level, level_5_role_id, settings)
+        await maybe_grant_level_role(member, award.new_level, level_5_role_id, settings, db_path)
 
     if award.new_level > award.old_level:
         await maybe_log_level_ups(

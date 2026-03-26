@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
+from services.activity_graphs import Resolution, query_role_growth, render_role_growth_chart
 from services.auto_delete_service import parse_duration_seconds
 
 if TYPE_CHECKING:
@@ -227,6 +228,44 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 "starts after this version is deployed."
             )
         await send_ephemeral_text(interaction, summary)
+
+    @report_group.command(name="role_growth", description="Chart cumulative role grants over time.")
+    @app_commands.describe(resolution="Time resolution: day (30d), week (12wk), month (12mo)")
+    @app_commands.choices(resolution=[
+        app_commands.Choice(name="Daily (last 30 days)", value="day"),
+        app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
+        app_commands.Choice(name="Monthly (last 12 months)", value="month"),
+    ])
+    async def role_growth(
+        interaction: discord.Interaction,
+        resolution: app_commands.Choice[str] | None = None,
+    ):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_roles:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        res: Resolution = resolution.value if resolution else "week"  # type: ignore[assignment]
+        window_label = {"day": "Last 30 Days", "week": "Last 12 Weeks", "month": "Last 12 Months"}[res]
+
+        with ctx.open_db() as conn:
+            labels, role_counts = query_role_growth(conn, ctx.guild_id, res)
+
+        if not role_counts:
+            await interaction.followup.send("No role grant history recorded yet.", ephemeral=True)
+            return
+
+        chart_bytes = render_role_growth_chart(
+            labels,
+            role_counts,
+            title=f"Role Growth — {window_label}",
+        )
+        await interaction.followup.send(
+            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="role_growth.png"),
+            ephemeral=True,
+        )
 
     bot.tree.add_command(report_group)
 

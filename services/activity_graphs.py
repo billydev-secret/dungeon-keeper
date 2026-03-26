@@ -437,6 +437,131 @@ def render_activity_chart(
 
 
 # ---------------------------------------------------------------------------
+# Role growth over time
+# ---------------------------------------------------------------------------
+
+_ROLE_COLORS = [
+    "#5865f2",  # blurple
+    "#eb459e",  # pink
+    "#fee75c",  # yellow
+    "#57f287",  # green
+    "#ed4245",  # red
+    "#9b84ec",  # purple
+]
+
+
+def query_role_growth(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Resolution,
+) -> tuple[list[str], dict[str, list[int]]]:
+    """
+    Query cumulative role grant counts per time bucket.
+
+    Returns (labels, {role_name: [cumulative_count_per_bucket]}).
+    The cumulative count includes grants before the window start as a baseline.
+    """
+    now = datetime.now(timezone.utc)
+    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now)
+    bucket_expr = _strftime_expr(resolution)
+
+    # Grants that happened before the window — used as per-role baselines
+    baseline_rows = conn.execute(
+        """
+        SELECT role_name, COUNT(*) AS cnt
+        FROM role_events
+        WHERE guild_id = ? AND action = 'grant' AND granted_at < ?
+        GROUP BY role_name
+        """,
+        (guild_id, since_ts),
+    ).fetchall()
+    baselines: dict[str, int] = {str(r[0]): int(r[1]) for r in baseline_rows}
+
+    # Grants within the window, grouped by role and time bucket
+    window_rows = conn.execute(
+        f"""
+        SELECT role_name, {bucket_expr} AS bucket, COUNT(*) AS cnt
+        FROM role_events
+        WHERE guild_id = ? AND action = 'grant' AND granted_at >= ?
+        GROUP BY role_name, bucket
+        """,
+        (guild_id, since_ts),
+    ).fetchall()
+
+    grants_by_role: dict[str, dict[str, int]] = {}
+    for r in window_rows:
+        role, bucket, cnt = str(r[0]), str(r[1]), int(r[2])
+        grants_by_role.setdefault(role, {})[bucket] = cnt
+
+    all_roles = sorted(set(list(baselines.keys()) + list(grants_by_role.keys())))
+    labels = [label for _, label in bucket_sequence]
+
+    role_counts: dict[str, list[int]] = {}
+    for role in all_roles:
+        running = baselines.get(role, 0)
+        counts: list[int] = []
+        for key, _ in bucket_sequence:
+            running += grants_by_role.get(role, {}).get(key, 0)
+            counts.append(running)
+        role_counts[role] = counts
+
+    return labels, role_counts
+
+
+def render_role_growth_chart(
+    labels: list[str],
+    role_counts: dict[str, list[int]],
+    title: str,
+) -> bytes:
+    """Render a cumulative role-grant line chart as PNG bytes."""
+    n = len(labels)
+    fig_width = max(9, n * 0.42)
+
+    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    x = list(range(n))
+    for i, (role_name, counts) in enumerate(role_counts.items()):
+        color = _ROLE_COLORS[i % len(_ROLE_COLORS)]
+        ax.plot(x, counts, color=color, linewidth=2, marker="o", markersize=3,
+                label=role_name, zorder=2)
+
+    max_visible = 20
+    if n > max_visible:
+        step = max(1, n // max_visible)
+        tick_positions = list(range(0, n, step))
+        tick_labels_visible = [labels[i] for i in tick_positions]
+    else:
+        tick_positions = x
+        tick_labels_visible = labels
+
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
+    ax.tick_params(length=0)
+
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
+    ax.set_ylabel("Members", color=_TEXT, fontsize=9)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    if role_counts:
+        ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
 # Session burst profile
 # ---------------------------------------------------------------------------
 

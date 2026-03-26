@@ -23,7 +23,7 @@ from services.message_store import (
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
 from services.welcome_service import build_leave_embed, build_welcome_embed
 from services.xp_service import handle_level_progress
-from xp_system import DEFAULT_XP_SETTINGS, count_xp_events, record_member_activity
+from xp_system import DEFAULT_XP_SETTINGS, count_xp_events, log_role_event, record_member_activity
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -155,6 +155,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 level_5_role_id=ctx.level_5_role_id,
                 level_up_log_channel_id=ctx.level_up_log_channel_id,
                 level_5_log_channel_id=ctx.level_5_log_channel_id,
+                db_path=ctx.db_path,
             )
 
         if message.author.id in ctx.watched_users:
@@ -231,6 +232,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 level_5_role_id=ctx.level_5_role_id,
                 level_up_log_channel_id=ctx.level_up_log_channel_id,
                 level_5_log_channel_id=ctx.level_5_log_channel_id,
+                db_path=ctx.db_path,
             )
 
         if payload.guild_id:
@@ -262,6 +264,23 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             await owner.send(f"⚠️ **{guild.name}** — {message}")
         except (discord.Forbidden, discord.HTTPException):
             pass
+
+    @bot.event
+    async def on_member_update(before: discord.Member, after: discord.Member) -> None:
+        if before.guild.id != ctx.guild_id:
+            return
+        before_ids = {r.id for r in before.roles}
+        after_ids = {r.id for r in after.roles}
+        if before_ids == after_ids:
+            return
+        now = time.time()
+        with ctx.open_db() as conn:
+            for role in after.roles:
+                if role.id not in before_ids:
+                    log_role_event(conn, after.guild.id, after.id, role.name, "grant", ts=now)
+            for role in before.roles:
+                if role.id not in after_ids:
+                    log_role_event(conn, after.guild.id, after.id, role.name, "remove", ts=now)
 
     @bot.event
     async def on_member_join(member: discord.Member) -> None:

@@ -98,6 +98,10 @@ async def _execute_grant(
         )
         return
 
+    from xp_system import log_role_event
+    with ctx.open_db() as db_conn:
+        log_role_event(db_conn, guild.id, member.id, role.name, "grant")
+
     log.info(
         "%s granted %s to %s.",
         format_user_for_log(actor, interaction.user.id),
