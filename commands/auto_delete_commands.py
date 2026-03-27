@@ -241,6 +241,19 @@ class _AutoDeleteConfigView(discord.ui.View):
         self.remove_btn.callback = self._on_remove  # type: ignore[method-assign]
         self.add_item(self.remove_btn)
 
+        missing_count = sum(
+            1 for r in rules
+            if get_guild_channel_or_thread(guild, int(r["channel_id"])) is None
+        )
+        if missing_count:
+            self.cleanup_btn: discord.ui.Button = discord.ui.Button(
+                label=f"Clean up {missing_count} missing",
+                style=discord.ButtonStyle.secondary,
+                row=1,
+            )
+            self.cleanup_btn.callback = self._on_cleanup  # type: ignore[method-assign]
+            self.add_item(self.cleanup_btn)
+
     async def _on_edit(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.invoker_id or self.selected_index is None:
             await interaction.response.defer()
@@ -261,6 +274,19 @@ class _AutoDeleteConfigView(discord.ui.View):
             return
         rule = self.rules[self.selected_index]
         remove_auto_delete_rule(self.db_path, self.guild_id, int(rule["channel_id"]))
+        await interaction.response.defer()
+        await _refresh_config_panel(
+            self.original_interaction, self.db_path, self.guild_id, self.guild, self.invoker_id
+        )
+
+    async def _on_cleanup(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.defer()
+            return
+        for rule in self.rules:
+            channel_id = int(rule["channel_id"])
+            if get_guild_channel_or_thread(self.guild, channel_id) is None:
+                remove_auto_delete_rule(self.db_path, self.guild_id, channel_id)
         await interaction.response.defer()
         await _refresh_config_panel(
             self.original_interaction, self.db_path, self.guild_id, self.guild, self.invoker_id

@@ -557,6 +557,10 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
                 channel.name,
             )
 
+        # Pause between channels so delete buckets from the previous channel
+        # can settle before we start fetching and deleting in the next one.
+        await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
+
 
 async def auto_delete_loop(bot: discord.Client, db_path: Path) -> None:
     """Background task that periodically processes auto-delete rules."""
