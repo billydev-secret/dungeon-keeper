@@ -1,6 +1,7 @@
 """Consolidated /config command — modal and panel-based configuration.
 
 Sections:
+  global   — timezone, mod channel, bypass roles
   welcome  — welcome & leave channel + message template
   roles    — greeter / denizen / nsfw / veteran role, log, announce, message
   xp       — XP log channels + current-channel XP toggle
@@ -56,6 +57,108 @@ def _parse_role(text: str) -> int | None:
 
 
 # ---------------------------------------------------------------------------
+# Global settings modal
+# ---------------------------------------------------------------------------
+
+class _GlobalModal(discord.ui.Modal, title="Global Settings"):
+    def __init__(self, ctx: AppContext, current_channel_id: int) -> None:
+        super().__init__()
+        self._ctx = ctx
+        self._current_channel_id = current_channel_id
+
+        tz_default = str(ctx.tz_offset_hours) if ctx.tz_offset_hours != 0.0 else "0"
+        self.tz_offset: discord.ui.TextInput = discord.ui.TextInput(
+            label="UTC offset (e.g. 1, -5, 5.5)",
+            default=tz_default,
+            placeholder="0 = UTC  ·  1 = UTC+1  ·  -5 = UTC-5",
+            required=False, max_length=10,
+        )
+        self.mod_channel: discord.ui.TextInput = discord.ui.TextInput(
+            label="Mod channel (ID · 'here' · 'off')",
+            default=str(ctx.mod_channel_id) if ctx.mod_channel_id > 0 else "off",
+            required=False, max_length=30,
+        )
+        self.bypass_roles: discord.ui.TextInput = discord.ui.TextInput(
+            label="Bypass role IDs (space/comma-separated)",
+            default=", ".join(str(r) for r in sorted(ctx.bypass_role_ids)) if ctx.bypass_role_ids else "",
+            placeholder="Roles that bypass spoiler guard, etc.",
+            required=False, max_length=500,
+        )
+        self.add_item(self.tz_offset)
+        self.add_item(self.mod_channel)
+        self.add_item(self.bypass_roles)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        import re
+
+        errors: list[str] = []
+
+        # Timezone
+        tz_raw = self.tz_offset.value.strip() or "0"
+        try:
+            tz_hours = float(tz_raw)
+            if not -24 < tz_hours < 24:
+                raise ValueError
+        except ValueError:
+            errors.append(f"Invalid UTC offset: `{tz_raw}` — use a number like 1, -5, or 5.5")
+            tz_hours = None
+
+        # Mod channel
+        mc = _parse_channel(self.mod_channel.value, self._current_channel_id)
+        if mc is None:
+            errors.append(f"Invalid mod channel: `{self.mod_channel.value}`")
+
+        # Bypass roles
+        bypass_raw = self.bypass_roles.value.strip()
+        bypass_ids: list[int] = []
+        bypass_valid = True
+        if bypass_raw:
+            tokens = re.split(r"[\s,]+", bypass_raw)
+            for tok in tokens:
+                if not tok:
+                    continue
+                if tok.isdigit():
+                    bypass_ids.append(int(tok))
+                else:
+                    errors.append(f"Invalid bypass role ID: `{tok}`")
+                    bypass_valid = False
+                    break
+
+        if errors:
+            await interaction.response.send_message("\n".join(errors), ephemeral=True)
+            return
+
+        # Save timezone
+        assert tz_hours is not None
+        self._ctx.tz_offset_hours = float(self._ctx.set_config_value("tz_offset_hours", str(tz_hours)))
+
+        # Save mod channel
+        assert mc is not None
+        self._ctx.mod_channel_id = int(self._ctx.set_config_value("mod_channel_id", str(mc)))
+
+        # Save bypass roles — replace the full set
+        assert bypass_valid
+        with self._ctx.open_db() as conn:
+            conn.execute("DELETE FROM config_ids WHERE bucket = ?", ("bypass_role_ids",))
+            for rid in bypass_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
+                    ("bypass_role_ids", rid),
+                )
+            from db_utils import get_config_id_set
+            self._ctx.bypass_role_ids = get_config_id_set(conn, "bypass_role_ids")
+
+        tz_label = f"UTC{tz_hours:+g}" if tz_hours != 0 else "UTC"
+        mc_label = f"<#{mc}>" if mc > 0 else "off"
+        bypass_label = ", ".join(f"<@&{r}>" for r in sorted(self._ctx.bypass_role_ids)) or "none"
+        await interaction.response.send_message(
+            f"Saved.  Timezone → {tz_label}  ·  Mod channel → {mc_label}\n"
+            f"Bypass roles → {bypass_label}",
+            ephemeral=True,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Welcome & Leave modal
 # ---------------------------------------------------------------------------
 
@@ -89,18 +192,10 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
             placeholder="{member_name} {server}",
             required=False, max_length=1000,
         )
-        tz_default = str(ctx.tz_offset_hours) if ctx.tz_offset_hours != 0.0 else "0"
-        self.tz_offset: discord.ui.TextInput = discord.ui.TextInput(
-            label="UTC offset (e.g. 1, -5, 5.5)",
-            default=tz_default,
-            placeholder="0 = UTC  ·  1 = UTC+1  ·  -5 = UTC-5",
-            required=False, max_length=10,
-        )
         self.add_item(self.welcome_channel)
         self.add_item(self.welcome_msg)
         self.add_item(self.leave_channel)
         self.add_item(self.leave_msg)
-        self.add_item(self.tz_offset)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         wc = _parse_channel(self.welcome_channel.value, self._current_channel_id)
@@ -110,14 +205,6 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
             errors.append(f"Invalid welcome channel: `{self.welcome_channel.value}`")
         if lc is None:
             errors.append(f"Invalid leave channel: `{self.leave_channel.value}`")
-        tz_raw = self.tz_offset.value.strip() or "0"
-        try:
-            tz_hours = float(tz_raw)
-            if not -24 < tz_hours < 24:
-                raise ValueError
-        except ValueError:
-            errors.append(f"Invalid UTC offset: `{tz_raw}` — use a number like 1, -5, or 5.5")
-            tz_hours = 0.0
         if errors:
             await interaction.response.send_message("\n".join(errors), ephemeral=True)
             return
@@ -127,13 +214,11 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
         self._ctx.welcome_message = self._ctx.set_config_value("welcome_message", self.welcome_msg.value)
         self._ctx.leave_channel_id = int(self._ctx.set_config_value("leave_channel_id", str(lc)))
         self._ctx.leave_message = self._ctx.set_config_value("leave_message", self.leave_msg.value)
-        self._ctx.tz_offset_hours = float(self._ctx.set_config_value("tz_offset_hours", str(tz_hours)))
 
         w_label = f"<#{wc}>" if wc > 0 else "disabled"
         l_label = f"<#{lc}>" if lc > 0 else "disabled"
-        tz_label = f"UTC{tz_hours:+g}" if tz_hours != 0 else "UTC"
         await interaction.response.send_message(
-            f"Saved.  Welcome → {w_label}  ·  Leave → {l_label}  ·  Timezone → {tz_label}\n"
+            f"Saved.  Welcome → {w_label}  ·  Leave → {l_label}\n"
             "Use `/welcome_preview` or `/leave_preview` to check the templates.",
             ephemeral=True,
         )
@@ -772,10 +857,11 @@ class _SpoilerView(discord.ui.View):
 # ---------------------------------------------------------------------------
 
 _SECTION_CHOICES = [
-    app_commands.Choice(name="Welcome & Leave",   value="welcome"),
-    app_commands.Choice(name="Role Grants",        value="roles"),
-    app_commands.Choice(name="XP Logging",         value="xp"),
-    app_commands.Choice(name="Inactivity Prune",   value="prune"),
+    app_commands.Choice(name="Global",              value="global"),
+    app_commands.Choice(name="Welcome & Leave",     value="welcome"),
+    app_commands.Choice(name="Role Grants",         value="roles"),
+    app_commands.Choice(name="XP Logging",          value="xp"),
+    app_commands.Choice(name="Inactivity Prune",    value="prune"),
     app_commands.Choice(name="Spoiler Guard",       value="spoiler"),
 ]
 
@@ -807,7 +893,12 @@ def register_config_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         current_channel_id: int = interaction.channel_id or 0
 
-        if section == "welcome":
+        if section == "global":
+            await interaction.response.send_modal(
+                _GlobalModal(ctx, current_channel_id)
+            )
+
+        elif section == "welcome":
             await interaction.response.send_modal(
                 _WelcomeLeaveModal(ctx, current_channel_id)
             )
