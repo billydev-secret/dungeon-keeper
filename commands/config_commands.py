@@ -91,7 +91,7 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
         )
         tz_default = str(ctx.tz_offset_hours) if ctx.tz_offset_hours != 0.0 else "0"
         self.tz_offset: discord.ui.TextInput = discord.ui.TextInput(
-            label="Server UTC offset  (e.g. 1, -5, 5.5 for UTC+5:30)",
+            label="UTC offset (e.g. 1, -5, 5.5)",
             default=tz_default,
             placeholder="0 = UTC  ·  1 = UTC+1  ·  -5 = UTC-5",
             required=False, max_length=10,
