@@ -95,15 +95,15 @@ def _month_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
     return buckets, since_ts
 
 
-def _strftime_expr(resolution: Resolution) -> str:
-    """SQLite strftime expression that buckets created_at into the right key format."""
+def _strftime_expr(resolution: Resolution, col: str = "created_at") -> str:
+    """SQLite strftime expression that buckets a timestamp column into the right key format."""
     if resolution == "hour":
-        return "strftime('%Y-%m-%d %H', datetime(created_at, 'unixepoch'))"
+        return f"strftime('%Y-%m-%d %H', datetime({col}, 'unixepoch'))"
     if resolution == "day":
-        return "strftime('%Y-%m-%d', datetime(created_at, 'unixepoch'))"
+        return f"strftime('%Y-%m-%d', datetime({col}, 'unixepoch'))"
     if resolution == "week":
-        return "strftime('%Y-%W', datetime(created_at, 'unixepoch'))"
-    return "strftime('%Y-%m', datetime(created_at, 'unixepoch'))"
+        return f"strftime('%Y-%W', datetime({col}, 'unixepoch'))"
+    return f"strftime('%Y-%m', datetime({col}, 'unixepoch'))"
 
 
 _BUCKET_BUILDERS = {
@@ -463,7 +463,7 @@ def query_role_growth(
     """
     now = datetime.now(timezone.utc)
     bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now)
-    bucket_expr = _strftime_expr(resolution)
+    bucket_expr = _strftime_expr(resolution, col="granted_at")
 
     # Grants that happened before the window — used as per-role baselines
     baseline_rows = conn.execute(
