@@ -24,9 +24,9 @@ class XpSettings:
     duplicate_multiplier: float = 0.2
     pair_streak_threshold: int = 4
     pair_streak_multiplier: float = 0.5
-    voice_award_xp: float = 6.67
+    voice_award_xp: float = 13.34
     voice_interval_seconds: int = 600
-    voice_min_humans: int = 3
+    voice_min_humans: int = 2
     voice_poll_seconds: int = 30
     manual_grant_xp: float = 20.0
     level_curve_factor: float = 15.6
@@ -899,16 +899,27 @@ def get_time_to_level_seconds(
     guild_id: int,
     target_level: int,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    *,
+    since_ts: float | None = None,
 ) -> list[float]:
     """Return a list of durations (seconds) each user took to first reach target_level.
 
     Uses a running-sum window query to find the exact event that pushed each user
     over the XP threshold, then measures from that user's first-ever XP event.
+
+    If *since_ts* is given, only include users who reached the level at or after
+    that unix timestamp.
     """
     xp_threshold = xp_required_for_level(target_level, settings)
 
+    since_clause = ""
+    params: list[object] = [guild_id, guild_id, xp_threshold]
+    if since_ts is not None:
+        since_clause = " AND lr.reached_at >= ?"
+        params.append(since_ts)
+
     rows = conn.execute(
-        """
+        f"""
         WITH running AS (
             SELECT
                 user_id,
@@ -935,9 +946,9 @@ def get_time_to_level_seconds(
         SELECT lr.reached_at - fe.first_at AS seconds_to_level
         FROM level_reached lr
         JOIN first_event fe ON fe.user_id = lr.user_id
-        WHERE seconds_to_level >= 0
+        WHERE seconds_to_level >= 0{since_clause}
         """,
-        (guild_id, guild_id, xp_threshold),
+        params,
     ).fetchall()
 
     return [float(row[0]) for row in rows]

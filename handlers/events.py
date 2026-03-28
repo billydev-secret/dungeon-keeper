@@ -290,7 +290,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if not isinstance(channel, discord.TextChannel):
             return
         try:
-            await channel.send(embed=build_welcome_embed(member, ctx.welcome_message))
+            ping = f"<@&{ctx.welcome_ping_role_id}>" if ctx.welcome_ping_role_id > 0 else None
+            await channel.send(content=ping, embed=build_welcome_embed(member, ctx.welcome_message))
         except discord.Forbidden:
             log.warning("Missing permission to send welcome message in #%s.", channel.name)
             await _dm_admin_permission_warning(

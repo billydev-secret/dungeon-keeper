@@ -204,3 +204,31 @@ def register_denizen_commands(bot: Bot, ctx: AppContext) -> None:
         message_config_key="veteran_grant_message",
         can_grant=ctx.can_grant_denizen,
     )
+
+    _make_set_role_commands(
+        bot, ctx,
+        grant_name="kink",
+        role_attr="kink_role_id",
+        log_attr="kink_log_channel_id",
+        announce_attr="kink_announce_channel_id",
+        role_config_key="kink_role_id",
+        log_config_key="kink_log_channel_id",
+        announce_config_key="kink_announce_channel_id",
+        message_attr="kink_grant_message",
+        message_config_key="kink_grant_message",
+        can_grant=ctx.can_grant_denizen,
+    )
+
+    _make_set_role_commands(
+        bot, ctx,
+        grant_name="goldengirl",
+        role_attr="goldengirl_role_id",
+        log_attr="goldengirl_log_channel_id",
+        announce_attr="goldengirl_announce_channel_id",
+        role_config_key="goldengirl_role_id",
+        log_config_key="goldengirl_log_channel_id",
+        announce_config_key="goldengirl_announce_channel_id",
+        message_attr="goldengirl_grant_message",
+        message_config_key="goldengirl_grant_message",
+        can_grant=ctx.can_grant_denizen,
+    )

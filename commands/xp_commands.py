@@ -478,10 +478,14 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
         name="xp_level_review",
         description="Show how long it takes members to reach a given level (avg, mode, std dev).",
     )
-    @app_commands.describe(level="The level to measure time-to-reach for (minimum 2).")
+    @app_commands.describe(
+        level="The level to measure time-to-reach for (minimum 2).",
+        days="Only include members who reached the level in the last N days.",
+    )
     async def xp_level_review(
         interaction: discord.Interaction,
         level: app_commands.Range[int, 2, 100],
+        days: app_commands.Range[int, 1, 3650] | None = None,
     ):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -496,13 +500,19 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True)
 
+        since_ts: float | None = None
+        if days is not None:
+            from datetime import datetime, timezone, timedelta
+            since_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+
         with ctx.open_db() as conn:
-            durations = get_time_to_level_seconds(conn, guild.id, level)
+            durations = get_time_to_level_seconds(conn, guild.id, level, since_ts=since_ts)
 
         if not durations:
             xp_needed = xp_required_for_level(level)
+            qualifier = f" in the last {days} day{'s' if days != 1 else ''}" if days else ""
             await interaction.followup.send(
-                f"No members have reached level {level} yet "
+                f"No members have reached level {level}{qualifier} "
                 f"({xp_needed:.0f} XP required).",
                 ephemeral=True,
             )
@@ -523,8 +533,9 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             return f"{h}h {m}m"
 
         xp_needed = xp_required_for_level(level)
+        window_note = f" (last {days}d)" if days else ""
         caption = (
-            f"**Time to Reach Level {level}** ({xp_needed:.0f} XP required)\n"
+            f"**Time to Reach Level {level}**{window_note} ({xp_needed:.0f} XP required)\n"
             f"Members: **{len(durations)}** · "
             f"Avg: `{fmt(mean_s)}` · "
             f"Mode: `{modal_days}d` ({modal_count}) · "

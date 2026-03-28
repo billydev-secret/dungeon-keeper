@@ -81,6 +81,10 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Grant access to age-restricted channels after confirming eligibility."),
                 ("/grant_veteran member:@user",
                  "Recognise a longtime member with the Veteran role."),
+                ("/grant_kink member:@user",
+                 "Grant the Kink role to a member."),
+                ("/grant_goldengirl member:@user",
+                 "Grant the Golden Girl role to a member."),
             ])
         ))
 

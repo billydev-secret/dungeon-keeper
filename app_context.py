@@ -59,12 +59,21 @@ class RuntimeConfig(TypedDict):
     veteran_log_channel_id: int
     veteran_announce_channel_id: int
     veteran_grant_message: str
+    kink_role_id: int
+    kink_log_channel_id: int
+    kink_announce_channel_id: int
+    kink_grant_message: str
+    goldengirl_role_id: int
+    goldengirl_log_channel_id: int
+    goldengirl_announce_channel_id: int
+    goldengirl_grant_message: str
     spoiler_required_channels: set[int]
     bypass_role_ids: set[int]
     xp_grant_allowed_user_ids: set[int]
     xp_excluded_channel_ids: set[int]
     welcome_channel_id: int
     welcome_message: str
+    welcome_ping_role_id: int
     leave_channel_id: int
     leave_message: str
     tz_offset_hours: float
@@ -124,6 +133,22 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
             "veteran_announce_channel_id": _parse_int_config(
                 get_config_value(conn, "veteran_announce_channel_id", "0"), key="veteran_announce_channel_id"
             ),
+            "kink_role_id": _parse_int_config(get_config_value(conn, "kink_role_id", "0"), key="kink_role_id"),
+            "kink_log_channel_id": _parse_int_config(
+                get_config_value(conn, "kink_log_channel_id", "0"), key="kink_log_channel_id"
+            ),
+            "kink_grant_message": get_config_value(conn, "kink_grant_message", ""),
+            "kink_announce_channel_id": _parse_int_config(
+                get_config_value(conn, "kink_announce_channel_id", "0"), key="kink_announce_channel_id"
+            ),
+            "goldengirl_role_id": _parse_int_config(get_config_value(conn, "goldengirl_role_id", "0"), key="goldengirl_role_id"),
+            "goldengirl_log_channel_id": _parse_int_config(
+                get_config_value(conn, "goldengirl_log_channel_id", "0"), key="goldengirl_log_channel_id"
+            ),
+            "goldengirl_grant_message": get_config_value(conn, "goldengirl_grant_message", ""),
+            "goldengirl_announce_channel_id": _parse_int_config(
+                get_config_value(conn, "goldengirl_announce_channel_id", "0"), key="goldengirl_announce_channel_id"
+            ),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
             "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
@@ -132,6 +157,9 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
                 get_config_value(conn, "welcome_channel_id", "0"), key="welcome_channel_id"
             ),
             "welcome_message": get_config_value(conn, "welcome_message", DEFAULT_WELCOME_MESSAGE),
+            "welcome_ping_role_id": _parse_int_config(
+                get_config_value(conn, "welcome_ping_role_id", "0"), key="welcome_ping_role_id"
+            ),
             "leave_channel_id": _parse_int_config(
                 get_config_value(conn, "leave_channel_id", "0"), key="leave_channel_id"
             ),
@@ -206,8 +234,17 @@ class AppContext:
     veteran_log_channel_id: int
     veteran_announce_channel_id: int
     veteran_grant_message: str
+    kink_role_id: int
+    kink_log_channel_id: int
+    kink_announce_channel_id: int
+    kink_grant_message: str
+    goldengirl_role_id: int
+    goldengirl_log_channel_id: int
+    goldengirl_announce_channel_id: int
+    goldengirl_grant_message: str
     welcome_channel_id: int
     welcome_message: str
+    welcome_ping_role_id: int
     leave_channel_id: int
     leave_message: str
     tz_offset_hours: float = 0.0

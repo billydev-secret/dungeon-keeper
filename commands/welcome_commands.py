@@ -39,6 +39,8 @@ def register_welcome_commands(bot: "Bot", ctx: "AppContext") -> None:
             if ctx.welcome_channel_id > 0
             else "No welcome channel set — use `/config welcome` first."
         )
+        if ctx.welcome_ping_role_id > 0:
+            channel_note += f"  Pings <@&{ctx.welcome_ping_role_id}>."
         embed = build_welcome_embed(member, ctx.welcome_message)
         await interaction.response.send_message(channel_note, embed=embed, ephemeral=True)
 

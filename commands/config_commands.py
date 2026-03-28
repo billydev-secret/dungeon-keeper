@@ -185,6 +185,11 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
             default=str(ctx.leave_channel_id) if ctx.leave_channel_id > 0 else "off",
             required=False, max_length=30,
         )
+        self.welcome_ping_role: discord.ui.TextInput = discord.ui.TextInput(
+            label="Welcome ping role  (ID · 'off')",
+            default=str(ctx.welcome_ping_role_id) if ctx.welcome_ping_role_id > 0 else "off",
+            required=False, max_length=30,
+        )
         self.leave_msg: discord.ui.TextInput = discord.ui.TextInput(
             label="Leave message",
             style=discord.TextStyle.paragraph,
@@ -194,31 +199,37 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
         )
         self.add_item(self.welcome_channel)
         self.add_item(self.welcome_msg)
+        self.add_item(self.welcome_ping_role)
         self.add_item(self.leave_channel)
         self.add_item(self.leave_msg)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         wc = _parse_channel(self.welcome_channel.value, self._current_channel_id)
         lc = _parse_channel(self.leave_channel.value, self._current_channel_id)
+        pr = _parse_role(self.welcome_ping_role.value)
         errors: list[str] = []
         if wc is None:
             errors.append(f"Invalid welcome channel: `{self.welcome_channel.value}`")
         if lc is None:
             errors.append(f"Invalid leave channel: `{self.leave_channel.value}`")
+        if pr is None:
+            errors.append(f"Invalid welcome ping role: `{self.welcome_ping_role.value}`")
         if errors:
             await interaction.response.send_message("\n".join(errors), ephemeral=True)
             return
 
-        assert wc is not None and lc is not None
+        assert wc is not None and lc is not None and pr is not None
         self._ctx.welcome_channel_id = int(self._ctx.set_config_value("welcome_channel_id", str(wc)))
         self._ctx.welcome_message = self._ctx.set_config_value("welcome_message", self.welcome_msg.value)
+        self._ctx.welcome_ping_role_id = int(self._ctx.set_config_value("welcome_ping_role_id", str(pr)))
         self._ctx.leave_channel_id = int(self._ctx.set_config_value("leave_channel_id", str(lc)))
         self._ctx.leave_message = self._ctx.set_config_value("leave_message", self.leave_msg.value)
 
         w_label = f"<#{wc}>" if wc > 0 else "disabled"
         l_label = f"<#{lc}>" if lc > 0 else "disabled"
+        p_label = f"<@&{pr}>" if pr > 0 else "disabled"
         await interaction.response.send_message(
-            f"Saved.  Welcome → {w_label}  ·  Leave → {l_label}\n"
+            f"Saved.  Welcome → {w_label}  ·  Ping → {p_label}  ·  Leave → {l_label}\n"
             "Use `/welcome_preview` or `/leave_preview` to check the templates.",
             ephemeral=True,
         )
@@ -249,6 +260,20 @@ _ROLE_CONFIGS: dict[str, dict[str, str]] = {
         log_attr="veteran_log_channel_id",  log_key="veteran_log_channel_id",
         ann_attr="veteran_announce_channel_id", ann_key="veteran_announce_channel_id",
         msg_attr="veteran_grant_message",   msg_key="veteran_grant_message",
+    ),
+    "kink": dict(
+        label="Kink",
+        role_attr="kink_role_id",           role_key="kink_role_id",
+        log_attr="kink_log_channel_id",     log_key="kink_log_channel_id",
+        ann_attr="kink_announce_channel_id", ann_key="kink_announce_channel_id",
+        msg_attr="kink_grant_message",      msg_key="kink_grant_message",
+    ),
+    "goldengirl": dict(
+        label="Golden Girl",
+        role_attr="goldengirl_role_id",           role_key="goldengirl_role_id",
+        log_attr="goldengirl_log_channel_id",     log_key="goldengirl_log_channel_id",
+        ann_attr="goldengirl_announce_channel_id", ann_key="goldengirl_announce_channel_id",
+        msg_attr="goldengirl_grant_message",      msg_key="goldengirl_grant_message",
     ),
 }
 
@@ -384,6 +409,10 @@ class _RoleTypeSelect(discord.ui.Select):
                 discord.SelectOption(label="NSFW", value="nsfw",
                                      description="Role, log channel, announce channel, message"),
                 discord.SelectOption(label="Veteran", value="veteran",
+                                     description="Role, log channel, announce channel, message"),
+                discord.SelectOption(label="Kink", value="kink",
+                                     description="Role, log channel, announce channel, message"),
+                discord.SelectOption(label="Golden Girl", value="goldengirl",
                                      description="Role, log channel, announce channel, message"),
             ],
         )
