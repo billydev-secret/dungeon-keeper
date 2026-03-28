@@ -24,8 +24,8 @@ class XpSettings:
     duplicate_multiplier: float = 0.2
     pair_streak_threshold: int = 4
     pair_streak_multiplier: float = 0.5
-    voice_award_xp: float = 13.34
-    voice_interval_seconds: int = 600
+    voice_award_xp: float = 6.67
+    voice_interval_seconds: int = 60
     voice_min_humans: int = 2
     voice_poll_seconds: int = 30
     manual_grant_xp: float = 20.0
