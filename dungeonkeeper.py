@@ -14,6 +14,7 @@ from commands.interaction_commands import register_interaction_commands
 from commands.ai_mod_commands import register_ai_mod_commands
 from commands.auto_delete_commands import register_auto_delete_commands
 from commands.denizen_commands import register_denizen_commands
+from commands.give_role_commands import init_give_role_tables, register_give_role_commands
 from commands.inactivity_prune_commands import register_inactivity_prune_commands
 from commands.mod_commands import register_mod_commands
 from commands.spoiler_commands import register_spoiler_commands
@@ -80,6 +81,7 @@ with open_db(DB_PATH) as _conn:
     init_inactivity_prune_tables(_conn)
     init_interaction_tables(_conn)
     init_message_tables(_conn)
+    init_give_role_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -150,6 +152,7 @@ register_interaction_commands(bot, ctx)
 register_ai_mod_commands(bot, ctx)
 register_xp_commands(bot, ctx)
 register_denizen_commands(bot, ctx)
+register_give_role_commands(bot, ctx)
 register_spoiler_commands(bot, ctx)
 register_auto_delete_commands(bot, ctx)
 register_inactivity_prune_commands(bot, ctx)
