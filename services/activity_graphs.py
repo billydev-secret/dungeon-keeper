@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import bisect
+from dataclasses import dataclass
 import io
 import sqlite3
 from itertools import groupby
@@ -276,6 +277,521 @@ def query_message_rate_drops(
     ).fetchall()
 
     return [(int(r[0]), int(r[1]), int(r[2])) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Enriched dropoff profiles
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class DropoffProfile:
+    """Rich engagement profile comparing two consecutive time windows."""
+
+    user_id: int
+    # Messages
+    msgs_prev: int
+    msgs_recent: int
+    # Voice XP
+    voice_xp_prev: float
+    voice_xp_recent: float
+    # Days active (out of days_in_window)
+    days_prev: int
+    days_recent: int
+    days_in_window: int
+    # Channels active
+    channels_prev: int
+    channels_recent: int
+    # Replies sent
+    replies_prev: int
+    replies_recent: int
+    # Conversation initiations (messages with no reply_to)
+    initiations_prev: int
+    initiations_recent: int
+    # Average message length (chars)
+    avg_len_prev: float
+    avg_len_recent: float
+    # Unique interaction partners (outbound)
+    partners_prev: int
+    partners_recent: int
+    # Inbound interactions (others → this user)
+    inbound_prev: int
+    inbound_recent: int
+    # Outbound interactions (this user → others)
+    outbound_prev: int
+    outbound_recent: int
+    # Attachments sent
+    attachments_prev: int
+    attachments_recent: int
+    # Reactions received (sum of reaction counts on their messages)
+    reactions_prev: int
+    reactions_recent: int
+    # Peak posting hour (0-23, None if no messages)
+    peak_hour_prev: int | None
+    peak_hour_recent: int | None
+    # Weekday message percentage (Mon-Fri)
+    weekday_pct_prev: float
+    weekday_pct_recent: float
+    # Longest silence gap in recent window (seconds)
+    longest_gap_secs: float
+    # Last activity (unix timestamp)
+    last_seen_ts: float | None
+    # XP breakdown by source
+    text_xp_prev: float
+    text_xp_recent: float
+    reply_xp_prev: float
+    reply_xp_recent: float
+    image_react_xp_prev: float
+    image_react_xp_recent: float
+    # Current level and total XP
+    level: int
+    total_xp: float
+    # Channel migration (detail view) — channel IDs
+    channels_left: list[int]
+    channels_joined: list[int]
+    channels_stayed: list[int]
+    # Conversation depth (reply chains of 3+ the user participated in)
+    deep_convos_prev: int
+    deep_convos_recent: int
+    # Days into recent window before first message
+    first_activity_day: int | None
+    # Server-wide baseline (same for all profiles in a batch)
+    server_msgs_prev: int
+    server_msgs_recent: int
+
+
+def query_dropoff_profiles(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    period_seconds: float,
+    *,
+    channel_id: int | None = None,
+    min_previous: int = 5,
+    limit: int = 10,
+    target_user_id: int | None = None,
+) -> list[DropoffProfile]:
+    """Compute enriched engagement profiles for users with message-rate drops.
+
+    If *target_user_id* is given, returns a single-element list with that user's
+    profile regardless of whether they had a dropoff (useful for the detail view).
+    Candidate selection honours *channel_id*; enrichment queries are server-wide.
+    """
+    now_ts = datetime.now(timezone.utc).timestamp()
+    mid = now_ts - period_seconds
+    start = mid - period_seconds
+    days_in_window = max(1, round(period_seconds / 86400))
+
+    # ── server-wide baseline ──────────────────────────────────────────────
+    srv_row = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END)
+        FROM processed_messages
+        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+        """,
+        [mid, mid, guild_id, start, now_ts],
+    ).fetchone()
+    srv_prev = int(srv_row[0] or 0) if srv_row else 0
+    srv_recent = int(srv_row[1] or 0) if srv_row else 0
+
+    # ── candidate selection ───────────────────────────────────────────────
+    if target_user_id is not None:
+        ch_clause = "AND channel_id = ? " if channel_id else ""
+        params: list[object] = [mid, mid, guild_id, start, now_ts]
+        if channel_id:
+            params.append(channel_id)
+        params.append(target_user_id)
+        row = conn.execute(
+            f"""
+            SELECT user_id,
+                   SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END)
+            FROM processed_messages
+            WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+            {ch_clause}AND user_id = ?
+            GROUP BY user_id
+            """,
+            params,
+        ).fetchone()
+        candidates = [
+            (target_user_id, int(row[1]) if row else 0, int(row[2]) if row else 0)
+        ]
+    else:
+        candidates = query_message_rate_drops(
+            conn, guild_id, period_seconds,
+            channel_id=channel_id, min_previous=min_previous, limit=limit,
+        )
+
+    if not candidates:
+        return []
+
+    user_ids = [c[0] for c in candidates]
+    msg_map: dict[int, tuple[int, int]] = {c[0]: (c[1], c[2]) for c in candidates}
+    ph = ",".join("?" * len(user_ids))
+
+    # Integer timestamps for tables that use INTEGER ts columns
+    i_mid = int(mid)
+    i_start = int(start)
+    i_now = int(now_ts)
+
+    # ── messages table: channels, replies, initiations, avg len, weekday ──
+    msg_rows = conn.execute(
+        f"""
+        SELECT author_id,
+            COUNT(DISTINCT CASE WHEN ts < ? THEN channel_id END),
+            COUNT(DISTINCT CASE WHEN ts >= ? THEN channel_id END),
+            SUM(CASE WHEN ts < ? AND reply_to_id IS NOT NULL THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ts >= ? AND reply_to_id IS NOT NULL THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ts < ? AND reply_to_id IS NULL THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ts >= ? AND reply_to_id IS NULL THEN 1 ELSE 0 END),
+            AVG(CASE WHEN ts < ? AND content IS NOT NULL THEN LENGTH(content) END),
+            AVG(CASE WHEN ts >= ? AND content IS NOT NULL THEN LENGTH(content) END),
+            SUM(CASE WHEN ts < ? AND CAST(strftime('%w', datetime(ts, 'unixepoch')) AS INTEGER)
+                BETWEEN 1 AND 5 THEN 1.0 ELSE 0.0 END),
+            SUM(CASE WHEN ts < ? THEN 1.0 ELSE 0.0 END),
+            SUM(CASE WHEN ts >= ? AND CAST(strftime('%w', datetime(ts, 'unixepoch')) AS INTEGER)
+                BETWEEN 1 AND 5 THEN 1.0 ELSE 0.0 END),
+            SUM(CASE WHEN ts >= ? THEN 1.0 ELSE 0.0 END)
+        FROM messages
+        WHERE guild_id = ? AND ts >= ? AND ts < ?
+        AND author_id IN ({ph})
+        GROUP BY author_id
+        """,
+        [i_mid] * 12 + [guild_id, i_start, i_now] + user_ids,
+    ).fetchall()
+
+    msg_data: dict[int, dict] = {}
+    for r in msg_rows:
+        uid = int(r[0])
+        total_prev = float(r[10]) or 1.0
+        total_recent = float(r[12]) or 1.0
+        msg_data[uid] = {
+            "ch_p": int(r[1]), "ch_r": int(r[2]),
+            "re_p": int(r[3]), "re_r": int(r[4]),
+            "in_p": int(r[5]), "in_r": int(r[6]),
+            "al_p": float(r[7] or 0), "al_r": float(r[8] or 0),
+            "wd_p": float(r[9]) / total_prev * 100,
+            "wd_r": float(r[11]) / total_recent * 100,
+        }
+
+    # ── xp_events: XP by source ──────────────────────────────────────────
+    xp_rows = conn.execute(
+        f"""
+        SELECT user_id, source,
+            SUM(CASE WHEN created_at < ? THEN amount ELSE 0 END),
+            SUM(CASE WHEN created_at >= ? THEN amount ELSE 0 END)
+        FROM xp_events
+        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+              AND user_id IN ({ph})
+        GROUP BY user_id, source
+        """,
+        [mid, mid, guild_id, start, now_ts, *user_ids],
+    ).fetchall()
+    xp_map: dict[int, dict[str, tuple[float, float]]] = {}
+    for r in xp_rows:
+        uid = int(r[0])
+        xp_map.setdefault(uid, {})[str(r[1])] = (float(r[2]), float(r[3]))
+
+    # ── member_xp: current level ─────────────────────────────────────────
+    level_rows = conn.execute(
+        f"""
+        SELECT user_id, level, total_xp FROM member_xp
+        WHERE guild_id = ? AND user_id IN ({ph})
+        """,
+        [guild_id, *user_ids],
+    ).fetchall()
+    level_map: dict[int, tuple[int, float]] = {
+        int(r[0]): (int(r[1]), float(r[2])) for r in level_rows
+    }
+
+    # ── processed_messages: days active ───────────────────────────────────
+    days_rows = conn.execute(
+        f"""
+        SELECT user_id,
+            COUNT(DISTINCT CASE WHEN created_at < ?
+                  THEN DATE(datetime(created_at, 'unixepoch')) END),
+            COUNT(DISTINCT CASE WHEN created_at >= ?
+                  THEN DATE(datetime(created_at, 'unixepoch')) END)
+        FROM processed_messages
+        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+              AND user_id IN ({ph})
+        GROUP BY user_id
+        """,
+        [mid, mid, guild_id, start, now_ts, *user_ids],
+    ).fetchall()
+    days_map: dict[int, tuple[int, int]] = {
+        int(r[0]): (int(r[1]), int(r[2])) for r in days_rows
+    }
+
+    # ── user_interactions_log: outbound partners & count ──────────────────
+    out_rows = conn.execute(
+        f"""
+        SELECT from_user_id,
+            COUNT(DISTINCT CASE WHEN ts < ? THEN to_user_id END),
+            COUNT(DISTINCT CASE WHEN ts >= ? THEN to_user_id END),
+            SUM(CASE WHEN ts < ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END)
+        FROM user_interactions_log
+        WHERE guild_id = ? AND ts >= ? AND ts < ?
+              AND from_user_id IN ({ph})
+        GROUP BY from_user_id
+        """,
+        [i_mid] * 4 + [guild_id, i_start, i_now] + user_ids,
+    ).fetchall()
+    out_map: dict[int, tuple[int, int, int, int]] = {
+        int(r[0]): (int(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in out_rows
+    }
+
+    # ── user_interactions_log: inbound count ──────────────────────────────
+    in_rows = conn.execute(
+        f"""
+        SELECT to_user_id,
+            SUM(CASE WHEN ts < ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END)
+        FROM user_interactions_log
+        WHERE guild_id = ? AND ts >= ? AND ts < ?
+              AND to_user_id IN ({ph})
+        GROUP BY to_user_id
+        """,
+        [i_mid, i_mid, guild_id, i_start, i_now] + user_ids,
+    ).fetchall()
+    in_map: dict[int, tuple[int, int]] = {
+        int(r[0]): (int(r[1]), int(r[2])) for r in in_rows
+    }
+
+    # ── message_attachments: attachment count ─────────────────────────────
+    att_rows = conn.execute(
+        f"""
+        SELECT m.author_id,
+            SUM(CASE WHEN m.ts < ? THEN 1 ELSE 0 END),
+            SUM(CASE WHEN m.ts >= ? THEN 1 ELSE 0 END)
+        FROM message_attachments a
+        JOIN messages m ON a.message_id = m.message_id
+        WHERE m.guild_id = ? AND m.ts >= ? AND m.ts < ?
+              AND m.author_id IN ({ph})
+        GROUP BY m.author_id
+        """,
+        [i_mid, i_mid, guild_id, i_start, i_now] + user_ids,
+    ).fetchall()
+    att_map: dict[int, tuple[int, int]] = {
+        int(r[0]): (int(r[1]), int(r[2])) for r in att_rows
+    }
+
+    # ── message_reactions: reactions received ─────────────────────────────
+    react_rows = conn.execute(
+        f"""
+        SELECT m.author_id,
+            SUM(CASE WHEN m.ts < ? THEN r.count ELSE 0 END),
+            SUM(CASE WHEN m.ts >= ? THEN r.count ELSE 0 END)
+        FROM message_reactions r
+        JOIN messages m ON r.message_id = m.message_id
+        WHERE m.guild_id = ? AND m.ts >= ? AND m.ts < ?
+              AND m.author_id IN ({ph})
+        GROUP BY m.author_id
+        """,
+        [i_mid, i_mid, guild_id, i_start, i_now] + user_ids,
+    ).fetchall()
+    react_map: dict[int, tuple[int, int]] = {
+        int(r[0]): (int(r[1]), int(r[2])) for r in react_rows
+    }
+
+    # ── messages: peak posting hour ───────────────────────────────────────
+    hour_rows = conn.execute(
+        f"""
+        SELECT author_id,
+            CAST(strftime('%H', datetime(ts, 'unixepoch')) AS INTEGER) AS hr,
+            CASE WHEN ts < ? THEN 0 ELSE 1 END AS half,
+            COUNT(*) AS cnt
+        FROM messages
+        WHERE guild_id = ? AND ts >= ? AND ts < ?
+              AND author_id IN ({ph})
+        GROUP BY author_id, half, hr
+        """,
+        [i_mid, guild_id, i_start, i_now] + user_ids,
+    ).fetchall()
+    hour_counts: dict[tuple[int, int], dict[int, int]] = {}
+    for r in hour_rows:
+        key = (int(r[0]), int(r[2]))
+        hour_counts.setdefault(key, {})[int(r[1])] = int(r[3])
+    peak_map: dict[int, dict[int, int | None]] = {}
+    for (uid, half), hc in hour_counts.items():
+        peak_map.setdefault(uid, {})[half] = max(hc, key=lambda h: hc[h])
+
+    # ── messages: longest silence gap (recent window only) ────────────────
+    gap_rows = conn.execute(
+        f"""
+        SELECT author_id, ts FROM messages
+        WHERE guild_id = ? AND ts >= ? AND ts < ?
+              AND author_id IN ({ph})
+        ORDER BY author_id, ts
+        """,
+        [guild_id, i_mid, i_now] + user_ids,
+    ).fetchall()
+    gap_map: dict[int, float] = {}
+    cur_uid: int | None = None
+    prev_gap_ts = 0.0
+    max_gap = 0.0
+    for r in gap_rows:
+        uid, ts = int(r[0]), float(r[1])
+        if uid != cur_uid:
+            if cur_uid is not None:
+                gap_map[cur_uid] = max_gap
+            cur_uid = uid
+            prev_gap_ts = ts
+            max_gap = 0.0
+        else:
+            g = ts - prev_gap_ts
+            if g > max_gap:
+                max_gap = g
+            prev_gap_ts = ts
+    if cur_uid is not None:
+        gap_map[cur_uid] = max_gap
+
+    # ── member_activity: last seen ────────────────────────────────────────
+    last_rows = conn.execute(
+        f"""
+        SELECT user_id, last_message_at FROM member_activity
+        WHERE guild_id = ? AND user_id IN ({ph})
+        """,
+        [guild_id] + user_ids,
+    ).fetchall()
+    last_map: dict[int, float] = {int(r[0]): float(r[1]) for r in last_rows}
+
+    # ── channel migration (per-user channel sets per window) ──────────────
+    ch_rows = conn.execute(
+        f"""
+        SELECT author_id, channel_id,
+            SUM(CASE WHEN ts < ? THEN 1 ELSE 0 END) AS prev_n,
+            SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS recent_n
+        FROM messages
+        WHERE guild_id = ? AND ts >= ? AND ts < ?
+              AND author_id IN ({ph})
+        GROUP BY author_id, channel_id
+        """,
+        [i_mid, i_mid, guild_id, i_start, i_now] + user_ids,
+    ).fetchall()
+    ch_migration: dict[int, tuple[list[int], list[int], list[int]]] = {}
+    ch_per_user: dict[int, list[tuple[int, int, int]]] = {}
+    for r in ch_rows:
+        uid = int(r[0])
+        ch_per_user.setdefault(uid, []).append((int(r[1]), int(r[2]), int(r[3])))
+    for uid, entries in ch_per_user.items():
+        left = [cid for cid, pn, rn in entries if pn > 0 and rn == 0]
+        joined = [cid for cid, pn, rn in entries if pn == 0 and rn > 0]
+        stayed = [cid for cid, pn, rn in entries if pn > 0 and rn > 0]
+        ch_migration[uid] = (left, joined, stayed)
+
+    # ── conversation depth (reply chains ≥3 the user participated in) ─────
+    # Fetch reply edges in the window for candidate users' channels
+    chain_rows = conn.execute(
+        f"""
+        SELECT message_id, author_id, reply_to_id,
+            CASE WHEN ts < ? THEN 0 ELSE 1 END AS half
+        FROM messages
+        WHERE guild_id = ? AND ts >= ? AND ts < ?
+              AND reply_to_id IS NOT NULL
+              AND author_id IN ({ph})
+        ORDER BY ts
+        """,
+        [i_mid, guild_id, i_start, i_now] + user_ids,
+    ).fetchall()
+    # For each user reply, walk the reply_to chain upward to measure depth
+    msg_reply: dict[int, int] = {}  # message_id → reply_to_id (for chain walking)
+    # Also collect all reply_to_ids from the full window to build the chain map
+    all_reply_rows = conn.execute(
+        """
+        SELECT message_id, reply_to_id FROM messages
+        WHERE guild_id = ? AND ts >= ? AND ts < ? AND reply_to_id IS NOT NULL
+        """,
+        [guild_id, i_start, i_now],
+    ).fetchall()
+    for r in all_reply_rows:
+        msg_reply[int(r[0])] = int(r[1])
+
+    deep_map: dict[int, tuple[int, int]] = {}  # uid → (prev_count, recent_count)
+    for r in chain_rows:
+        _, uid, reply_to, half = int(r[0]), int(r[1]), int(r[2]), int(r[3])
+        # Walk up the chain to count depth
+        depth = 1
+        cursor = reply_to
+        while cursor in msg_reply and depth < 20:
+            depth += 1
+            cursor = msg_reply[cursor]
+        if depth >= 3:
+            prev_d, recent_d = deep_map.get(uid, (0, 0))
+            if half == 0:
+                deep_map[uid] = (prev_d + 1, recent_d)
+            else:
+                deep_map[uid] = (prev_d, recent_d + 1)
+
+    # ── first activity timing (days into recent window) ───────────────────
+    first_rows = conn.execute(
+        f"""
+        SELECT author_id, MIN(ts) FROM messages
+        WHERE guild_id = ? AND ts >= ? AND ts < ?
+              AND author_id IN ({ph})
+        GROUP BY author_id
+        """,
+        [guild_id, i_mid, i_now] + user_ids,
+    ).fetchall()
+    first_map: dict[int, int | None] = {}
+    for r in first_rows:
+        first_ts = float(r[1])
+        days_in = int((first_ts - mid) / 86400)
+        first_map[int(r[0])] = days_in
+
+    # ── assemble profiles ─────────────────────────────────────────────────
+    profiles: list[DropoffProfile] = []
+    for uid in user_ids:
+        mp, mr = msg_map.get(uid, (0, 0))
+        md = msg_data.get(uid, {})
+        xp = xp_map.get(uid, {})
+        dp, dr = days_map.get(uid, (0, 0))
+        om = out_map.get(uid, (0, 0, 0, 0))
+        ip, ir_ = in_map.get(uid, (0, 0))
+        ap, ar = att_map.get(uid, (0, 0))
+        rp, rr = react_map.get(uid, (0, 0))
+        peaks = peak_map.get(uid, {})
+        lv, txp = level_map.get(uid, (0, 0.0))
+        left, joined, stayed = ch_migration.get(uid, ([], [], []))
+        dd_p, dd_r = deep_map.get(uid, (0, 0))
+
+        voice_p, voice_r = xp.get("voice", (0.0, 0.0))
+        text_p, text_r = xp.get("text", (0.0, 0.0))
+        reply_xp_p, reply_xp_r = xp.get("reply", (0.0, 0.0))
+        img_p, img_r = xp.get("image_react", (0.0, 0.0))
+
+        profiles.append(DropoffProfile(
+            user_id=uid,
+            msgs_prev=mp, msgs_recent=mr,
+            voice_xp_prev=voice_p, voice_xp_recent=voice_r,
+            days_prev=dp, days_recent=dr, days_in_window=days_in_window,
+            channels_prev=md.get("ch_p", 0), channels_recent=md.get("ch_r", 0),
+            replies_prev=md.get("re_p", 0), replies_recent=md.get("re_r", 0),
+            initiations_prev=md.get("in_p", 0), initiations_recent=md.get("in_r", 0),
+            avg_len_prev=md.get("al_p", 0.0), avg_len_recent=md.get("al_r", 0.0),
+            partners_prev=om[0], partners_recent=om[1],
+            inbound_prev=ip, inbound_recent=ir_,
+            outbound_prev=om[2], outbound_recent=om[3],
+            attachments_prev=ap, attachments_recent=ar,
+            reactions_prev=rp, reactions_recent=rr,
+            peak_hour_prev=peaks.get(0), peak_hour_recent=peaks.get(1),
+            weekday_pct_prev=md.get("wd_p", 0.0), weekday_pct_recent=md.get("wd_r", 0.0),
+            longest_gap_secs=gap_map.get(uid, 0.0),
+            last_seen_ts=last_map.get(uid),
+            text_xp_prev=text_p, text_xp_recent=text_r,
+            reply_xp_prev=reply_xp_p, reply_xp_recent=reply_xp_r,
+            image_react_xp_prev=img_p, image_react_xp_recent=img_r,
+            level=lv, total_xp=txp,
+            channels_left=left, channels_joined=joined, channels_stayed=stayed,
+            deep_convos_prev=dd_p, deep_convos_recent=dd_r,
+            first_activity_day=first_map.get(uid),
+            server_msgs_prev=srv_prev,
+            server_msgs_recent=srv_recent,
+        ))
+
+    return profiles
 
 
 # ---------------------------------------------------------------------------

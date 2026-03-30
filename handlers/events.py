@@ -330,6 +330,32 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         with ctx.open_db() as conn:
             delete_messages_bulk(conn, payload.message_ids)
 
+    @bot.event
+    async def on_interaction(interaction: discord.Interaction) -> None:
+        if interaction.type == discord.InteractionType.application_command and interaction.data:
+            data: dict = interaction.data  # type: ignore[assignment]
+            cmd = data.get("name", "?")
+            opts: list[dict] = data.get("options") or []
+            parts: list[str] = [str(cmd)]
+            for opt in opts:
+                # Subcommand groups / subcommands nest one level deeper
+                if opt.get("type") in (1, 2) and opt.get("options"):
+                    parts.append(str(opt["name"]))
+                    for sub in opt["options"]:
+                        parts.append(f"{sub['name']}={sub.get('value', '')}")
+                else:
+                    parts.append(f"{opt['name']}={opt.get('value', '')}")
+            guild_name = interaction.guild.name if interaction.guild else "DM"
+            channel = getattr(interaction.channel, "name", interaction.channel_id)
+            log.info(
+                "Command /%s by %s (%s) in #%s [%s]",
+                " ".join(parts),
+                interaction.user.display_name,
+                interaction.user.id,
+                channel,
+                guild_name,
+            )
+
     @bot.tree.error
     async def on_app_command_error(
         interaction: discord.Interaction, error: app_commands.AppCommandError
