@@ -287,7 +287,7 @@ async def ai_review_user(
             {"role": "system", "content": _REVIEW_SYSTEM},
             {"role": "user", "content": body},
         ],
-        max_tokens=800,
+        max_tokens=16000,
         reasoning_effort="high",
     )
     analysis = response.choices[0].message.content or "No analysis returned."
@@ -432,7 +432,7 @@ async def ai_query_channel(
             {"role": "system", "content": _CHANNEL_QUERY_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=800,
+        max_tokens=16000,
         reasoning_effort="high",
     )
     analysis = response.choices[0].message.content or "No analysis returned."
@@ -469,7 +469,7 @@ async def ai_query_user(
             {"role": "system", "content": _QUERY_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=800,
+        max_tokens=16000,
         reasoning_effort="high",
     )
     analysis = response.choices[0].message.content or "No analysis returned."
