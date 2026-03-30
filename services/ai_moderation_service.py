@@ -34,7 +34,7 @@ async def _chat(
 
 
 _MAX_MSG_CHARS = 400   # truncate individual messages to avoid token bloat
-_CONTEXT_WINDOW = 2    # messages before/after each target message to include
+_CONTEXT_WINDOW = 4    # messages before/after each target message to include
 _MAX_USER_MSGS = 200   # stop collecting after this many target-user messages
 
 _WATCH_CHECK_SYSTEM = (
@@ -86,6 +86,11 @@ The log below shows conversation context. Each line is prefixed with a tag:
   [REPLY→TARGET] — another user replying directly to the target user
   [TARGET REPLIED TO] — the message the target user was replying to
 
+Additional inline markers you may see:
+  [📎 ext, ...]   — the message included file attachments (image extensions like jpg/png/gif suggest photos)
+  [@Name, ...]    — the message mentioned these users
+  [NSFW]          — after a channel name means the channel is designated for explicit content
+
 Analyze the log and report concisely on:
 1. Any violations of the server rules listed above, citing which rule is implicated
 2. Notable behavioral patterns
@@ -98,6 +103,11 @@ _SCAN_SYSTEM = f"""\
 You are a Discord server moderation assistant. A moderator has requested a scan of recent channel activity.
 
 {_SERVER_RULES}
+
+Additional inline markers you may see:
+  [📎 ext, ...]   — the message included file attachments (image extensions like jpg/png/gif suggest photos)
+  [@Name, ...]    — the message mentioned these users
+  [NSFW]          — after a channel name means the channel is designated for explicit content
 
 Analyze the messages and report concisely on:
 1. Any messages that violate the server rules listed above — note which rule is implicated
@@ -119,6 +129,11 @@ The log below shows conversation context. Each line is prefixed with a tag:
   [REPLY→TARGET] — another user replying directly to the target user
   [TARGET REPLIED TO] — the message the target user was replying to
 
+Additional inline markers you may see:
+  [📎 ext, ...]   — the message included file attachments (image extensions like jpg/png/gif suggest photos)
+  [@Name, ...]    — the message mentioned these users
+  [NSFW]          — after a channel name means the channel is designated for explicit content
+
 Answer the moderator's question based solely on the provided log, referencing the server rules above \
 where relevant. Be concise and cite specific messages as evidence."""
 
@@ -129,6 +144,11 @@ You are a Discord server moderation assistant helping a moderator investigate re
 
 The log below shows messages from a specific time window, oldest first. Each line is formatted as:
   [HH:MM] author [↩ replying to other_author]: message content
+
+Additional inline markers you may see:
+  [📎 ext, ...]   — the message included file attachments (image extensions like jpg/png/gif suggest photos)
+  [@Name, ...]    — the message mentioned these users
+  [NSFW]          — after a channel name means the channel is designated for explicit content
 
 Answer the moderator's question based solely on the provided log, referencing the server rules where \
 relevant. Be concise and cite specific users and messages as evidence."""
@@ -150,6 +170,68 @@ def _resolve_name(guild: discord.Guild, name_cache: dict[int, str], author_id: i
         m = guild.get_member(author_id)
         name_cache[author_id] = m.display_name if m else f"User {author_id}"
     return name_cache[author_id]
+
+
+def _channel_label(guild: discord.Guild, channel_id: int) -> str:
+    """Return channel name with an [NSFW] tag when applicable."""
+    ch = guild.get_channel(channel_id)
+    if not ch or not hasattr(ch, "name"):
+        return str(channel_id)
+    name = ch.name
+    if getattr(ch, "nsfw", False):
+        return f"{name} [NSFW]"
+    return name
+
+
+def _fetch_attachment_map(conn: sqlite3.Connection, message_ids: set[int]) -> dict[int, list[str]]:
+    """Return {message_id: [url, ...]} for the given message IDs."""
+    if not message_ids:
+        return {}
+    placeholders = ",".join("?" * len(message_ids))
+    rows = conn.execute(
+        f"SELECT message_id, url FROM message_attachments WHERE message_id IN ({placeholders})",
+        list(message_ids),
+    ).fetchall()
+    result: dict[int, list[str]] = {}
+    for mid, url in rows:
+        result.setdefault(mid, []).append(url)
+    return result
+
+
+def _fetch_mention_map(conn: sqlite3.Connection, message_ids: set[int]) -> dict[int, list[int]]:
+    """Return {message_id: [user_id, ...]} for the given message IDs."""
+    if not message_ids:
+        return {}
+    placeholders = ",".join("?" * len(message_ids))
+    rows = conn.execute(
+        f"SELECT message_id, user_id FROM message_mentions WHERE message_id IN ({placeholders})",
+        list(message_ids),
+    ).fetchall()
+    result: dict[int, list[int]] = {}
+    for mid, uid in rows:
+        result.setdefault(mid, []).append(uid)
+    return result
+
+
+def _attachment_note(urls: list[str]) -> str:
+    """Summarise attachments as a compact inline note."""
+    if not urls:
+        return ""
+    exts = []
+    for u in urls:
+        dot = u.rsplit(".", 1)
+        exts.append(dot[-1].split("?")[0].lower() if len(dot) > 1 else "file")
+    return " [📎 " + ", ".join(exts) + "]"
+
+
+def _mention_note(
+    user_ids: list[int], guild: discord.Guild, name_cache: dict[int, str],
+) -> str:
+    """Summarise mentions as a compact inline note."""
+    if not user_ids:
+        return ""
+    names = [_resolve_name(guild, name_cache, uid) for uid in user_ids]
+    return " [@" + ", @".join(names) + "]"
 
 
 def _fetch_user_context_from_db(
@@ -174,8 +256,9 @@ def _fetch_user_context_from_db(
     cutoff_ts = int((datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp())
 
     channel_rows = conn.execute(
-        "SELECT DISTINCT channel_id FROM messages "
-        "WHERE guild_id = ? AND author_id = ? AND ts >= ?",
+        "SELECT channel_id, MAX(ts) AS latest FROM messages "
+        "WHERE guild_id = ? AND author_id = ? AND ts >= ? "
+        "GROUP BY channel_id ORDER BY latest DESC",
         (guild.id, user.id, cutoff_ts),
     ).fetchall()
 
@@ -187,12 +270,11 @@ def _fetch_user_context_from_db(
     total_user_msgs = 0
     channels_checked = 0
 
-    for (channel_id,) in channel_rows:
+    for channel_id, _ in channel_rows:
         if total_user_msgs >= max_user_messages:
             break
 
-        ch = guild.get_channel(channel_id)
-        channel_name = ch.name if ch and hasattr(ch, "name") else str(channel_id)
+        channel_name = _channel_label(guild, channel_id)
 
         # All messages in this channel during the lookback window, oldest first
         # Columns: 0=message_id, 1=author_id, 2=content, 3=reply_to_id, 4=ts
@@ -235,6 +317,10 @@ def _fetch_user_context_from_db(
             if r[0] in reply_to_target:
                 include.add(j)
 
+        included_ids = {batch[i][0] for i in include}
+        attach_map = _fetch_attachment_map(conn, included_ids)
+        mention_map = _fetch_mention_map(conn, included_ids)
+
         for i in sorted(include):
             r = batch[i]
             msg_id, author_id, content, _, ts = r[0], r[1], r[2], r[3], r[4]
@@ -249,8 +335,10 @@ def _fetch_user_context_from_db(
 
             name = _resolve_name(guild, name_cache, author_id)
             content_str = (content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
+            extras = _attachment_note(attach_map.get(msg_id, []))
+            extras += _mention_note(mention_map.get(msg_id, []), guild, name_cache)
             all_lines.append(
-                f"[{tag}] #{channel_name} | {_ts_fmt(ts)} | {name}: {content_str}"
+                f"[{tag}] #{channel_name} | {_ts_fmt(ts)} | {name}: {content_str}{extras}"
             )
 
         total_user_msgs += len(target_indices)
@@ -316,7 +404,7 @@ async def ai_scan_channel(
     ).fetchall()
     rows = list(reversed(rows))  # oldest first
 
-    channel_name = getattr(channel, "name", str(channel.id))
+    channel_name = _channel_label(guild, channel.id)
 
     if not rows:
         return AiModerationResult(
@@ -328,16 +416,21 @@ async def ai_scan_channel(
 
     name_cache: dict[int, str] = {}
     id_to_author: dict[int, int] = {r[0]: r[1] for r in rows}
+    all_ids = {r[0] for r in rows}
+    attach_map = _fetch_attachment_map(conn, all_ids)
+    mention_map = _fetch_mention_map(conn, all_ids)
 
     lines = [f"#{channel_name} — last {len(rows)} messages (oldest first):\n"]
     for r in rows:
-        _, author_id, content, reply_to_id, ts = r[0], r[1], r[2], r[3], r[4]
+        msg_id, author_id, content, reply_to_id, ts = r[0], r[1], r[2], r[3], r[4]
         name = _resolve_name(guild, name_cache, author_id)
         content_str = (content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
         reply_note = ""
         if reply_to_id and reply_to_id in id_to_author:
             reply_note = f" [↩ replying to {_resolve_name(guild, name_cache, id_to_author[reply_to_id])}]"
-        lines.append(f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}")
+        extras = _attachment_note(attach_map.get(msg_id, []))
+        extras += _mention_note(mention_map.get(msg_id, []), guild, name_cache)
+        lines.append(f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}{extras}")
 
     response = await _chat(
         client, model=model,
@@ -400,7 +493,7 @@ async def ai_query_channel(
         (guild.id, channel.id, cutoff_ts),
     ).fetchall()
 
-    channel_name = getattr(channel, "name", str(channel.id))
+    channel_name = _channel_label(guild, channel.id)
     label = f"{minutes} minute{'s' if minutes != 1 else ''}"
 
     if not rows:
@@ -413,16 +506,21 @@ async def ai_query_channel(
 
     name_cache: dict[int, str] = {}
     id_to_author: dict[int, int] = {r[0]: r[1] for r in rows}
+    all_ids = {r[0] for r in rows}
+    attach_map = _fetch_attachment_map(conn, all_ids)
+    mention_map = _fetch_mention_map(conn, all_ids)
 
     lines = [f"#{channel_name} — last {label} (oldest first):\n"]
     for r in rows:
-        _, author_id, content, reply_to_id, ts = r[0], r[1], r[2], r[3], r[4]
+        msg_id, author_id, content, reply_to_id, ts = r[0], r[1], r[2], r[3], r[4]
         name = _resolve_name(guild, name_cache, author_id)
         content_str = (content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
         reply_note = ""
         if reply_to_id and reply_to_id in id_to_author:
             reply_note = f" [↩ replying to {_resolve_name(guild, name_cache, id_to_author[reply_to_id])}]"
-        lines.append(f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}")
+        extras = _attachment_note(attach_map.get(msg_id, []))
+        extras += _mention_note(mention_map.get(msg_id, []), guild, name_cache)
+        lines.append(f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}{extras}")
 
     prompt = f"Moderator question: {question}\n\n" + "\n".join(lines)
 
