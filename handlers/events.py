@@ -284,22 +284,32 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
     @bot.event
     async def on_member_join(member: discord.Member) -> None:
-        if ctx.welcome_channel_id <= 0:
-            return
-        channel = member.guild.get_channel(ctx.welcome_channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            return
-        try:
-            ping = f"<@&{ctx.welcome_ping_role_id}>" if ctx.welcome_ping_role_id > 0 else None
-            await channel.send(content=ping, embed=build_welcome_embed(member, ctx.welcome_message))
-        except discord.Forbidden:
-            log.warning("Missing permission to send welcome message in #%s.", channel.name)
-            await _dm_admin_permission_warning(
-                member.guild,
-                f"Missing permission to send welcome messages in <#{ctx.welcome_channel_id}>.",
-            )
-        except discord.HTTPException as exc:
-            log.error("Failed to send welcome message: %s", exc)
+        # Welcome message
+        if ctx.welcome_channel_id > 0:
+            channel = member.guild.get_channel(ctx.welcome_channel_id)
+            if isinstance(channel, discord.TextChannel):
+                try:
+                    ping = f"<@&{ctx.welcome_ping_role_id}>" if ctx.welcome_ping_role_id > 0 else None
+                    await channel.send(content=ping, embed=build_welcome_embed(member, ctx.welcome_message))
+                except discord.Forbidden:
+                    log.warning("Missing permission to send welcome message in #%s.", channel.name)
+                    await _dm_admin_permission_warning(
+                        member.guild,
+                        f"Missing permission to send welcome messages in <#{ctx.welcome_channel_id}>.",
+                    )
+                except discord.HTTPException as exc:
+                    log.error("Failed to send welcome message: %s", exc)
+
+        # Ping greeter chat channel if configured
+        if ctx.greeter_chat_channel_id > 0:
+            greeter_channel = member.guild.get_channel(ctx.greeter_chat_channel_id)
+            if isinstance(greeter_channel, discord.TextChannel):
+                try:
+                    await greeter_channel.send(f"@here - {member.mention} has arrived")
+                except discord.Forbidden:
+                    log.warning("Missing permission to send greeter ping in #%s.", greeter_channel.name)
+                except discord.HTTPException as exc:
+                    log.error("Failed to send greeter chat ping: %s", exc)
 
     @bot.event
     async def on_member_remove(member: discord.Member) -> None:

@@ -109,6 +109,7 @@ ctx = AppContext(
     level_5_log_channel_id=_cfg["xp_level_5_log_channel_id"],
     level_up_log_channel_id=_cfg["xp_level_up_log_channel_id"],
     greeter_role_id=_cfg["greeter_role_id"],
+    greeter_chat_channel_id=_cfg["greeter_chat_channel_id"],
     denizen_role_id=_cfg["denizen_role_id"],
     denizen_log_channel_id=_cfg["denizen_log_channel_id"],
     denizen_announce_channel_id=_cfg["denizen_announce_channel_id"],

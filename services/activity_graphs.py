@@ -50,15 +50,21 @@ def _hour_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
 
 
 def _day_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
-    """30 daily buckets ending today."""
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=29)
+    """30 rolling 24-hour buckets ending at *now*.
+
+    Each bucket spans exactly 24 hours.  The last bucket ends at *now*,
+    so the rightmost bar always contains a full day of data regardless
+    of the caller's timezone.
+    """
+    start = now - timedelta(days=30)
+    start_ts = start.timestamp()
     buckets = []
     for i in range(30):
-        dt = start + timedelta(days=i)
-        key = dt.strftime("%Y-%m-%d")
-        label = dt.strftime("%b %d")
+        bucket_end = start + timedelta(days=i + 1)
+        key = str(int(start_ts + (i + 1) * 86400))
+        label = bucket_end.strftime("%b %d")
         buckets.append((key, label))
-    return buckets, start.timestamp()
+    return buckets, start_ts
 
 
 def _week_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
@@ -96,12 +102,23 @@ def _month_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
     return buckets, since_ts
 
 
-def _strftime_expr(resolution: Resolution, col: str = "created_at") -> str:
-    """SQLite strftime expression that buckets a timestamp column into the right key format."""
+def _strftime_expr(resolution: Resolution, col: str = "created_at", since_ts: float = 0) -> str:
+    """SQLite expression that buckets a timestamp column into the right key format.
+
+    For ``day`` resolution the buckets are rolling 24-hour windows anchored to
+    the query start, so the key is the epoch of the bucket's upper edge.  All
+    other resolutions use the traditional ``strftime`` calendar bucketing.
+    """
     if resolution == "hour":
         return f"strftime('%Y-%m-%d %H', datetime({col}, 'unixepoch'))"
     if resolution == "day":
-        return f"strftime('%Y-%m-%d', datetime({col}, 'unixepoch'))"
+        # Rolling 24-hour buckets: CAST((col - since_ts) / 86400 + 1) gives
+        # bucket number 1..N; multiply back and add since_ts to get the epoch
+        # of the bucket's upper edge, which matches the key from _day_buckets.
+        return (
+            f"CAST(CAST(({col} - {since_ts}) / 86400 AS INTEGER) * 86400"
+            f" + 86400 + {since_ts} AS INTEGER)"
+        )
     if resolution == "week":
         return f"strftime('%Y-%W', datetime({col}, 'unixepoch'))"
     return f"strftime('%Y-%m', datetime({col}, 'unixepoch'))"
@@ -145,7 +162,7 @@ def query_message_activity(
     """
     now = datetime.now(timezone.utc)
     bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now)
-    bucket_expr = _strftime_expr(resolution)
+    bucket_expr = _strftime_expr(resolution, since_ts=since_ts)
 
     params: list[object] = [guild_id, since_ts]
     where = "guild_id = ? AND created_at >= ?"
@@ -169,8 +186,8 @@ def query_message_activity(
         params,
     ).fetchall()
 
-    msg_by_key = {row[0]: int(row[1]) for row in rows}
-    members_by_key = {row[0]: int(row[2]) for row in rows}
+    msg_by_key = {str(row[0]): int(row[1]) for row in rows}
+    members_by_key = {str(row[0]): int(row[2]) for row in rows}
 
     labels = [label for _, label in bucket_sequence]
     msg_counts = [msg_by_key.get(key, 0) for key, _ in bucket_sequence]
@@ -248,9 +265,9 @@ def query_message_rate_drops(
     largest absolute drop, restricted to users whose previous count is at least
     ``min_previous`` and whose recent count is lower than their previous count.
     """
-    now = datetime.now(timezone.utc).timestamp()
-    mid = now - period_seconds
-    start = mid - period_seconds
+    now = int(datetime.now(timezone.utc).timestamp())
+    mid = now - int(period_seconds)
+    start = mid - int(period_seconds)
 
     channel_clause = "AND channel_id = ? " if channel_id is not None else ""
 
@@ -376,9 +393,9 @@ def query_dropoff_profiles(
     profile regardless of whether they had a dropoff (useful for the detail view).
     Candidate selection honours *channel_id*; enrichment queries are server-wide.
     """
-    now_ts = datetime.now(timezone.utc).timestamp()
-    mid = now_ts - period_seconds
-    start = mid - period_seconds
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    mid = now_ts - int(period_seconds)
+    start = mid - int(period_seconds)
     days_in_window = max(1, round(period_seconds / 86400))
 
     # ── server-wide baseline ──────────────────────────────────────────────
@@ -430,11 +447,6 @@ def query_dropoff_profiles(
     msg_map: dict[int, tuple[int, int]] = {c[0]: (c[1], c[2]) for c in candidates}
     ph = ",".join("?" * len(user_ids))
 
-    # Integer timestamps for tables that use INTEGER ts columns
-    i_mid = int(mid)
-    i_start = int(start)
-    i_now = int(now_ts)
-
     # ── messages table: channels, replies, initiations, avg len, weekday ──
     msg_rows = conn.execute(
         f"""
@@ -458,7 +470,7 @@ def query_dropoff_profiles(
         AND author_id IN ({ph})
         GROUP BY author_id
         """,
-        [i_mid] * 12 + [guild_id, i_start, i_now] + user_ids,
+        [mid] * 12 + [guild_id, start, now_ts] + user_ids,
     ).fetchall()
 
     msg_data: dict[int, dict] = {}
@@ -537,7 +549,7 @@ def query_dropoff_profiles(
               AND from_user_id IN ({ph})
         GROUP BY from_user_id
         """,
-        [i_mid] * 4 + [guild_id, i_start, i_now] + user_ids,
+        [mid] * 4 + [guild_id, start, now_ts] + user_ids,
     ).fetchall()
     out_map: dict[int, tuple[int, int, int, int]] = {
         int(r[0]): (int(r[1]), int(r[2]), int(r[3]), int(r[4])) for r in out_rows
@@ -554,7 +566,7 @@ def query_dropoff_profiles(
               AND to_user_id IN ({ph})
         GROUP BY to_user_id
         """,
-        [i_mid, i_mid, guild_id, i_start, i_now] + user_ids,
+        [mid, mid, guild_id, start, now_ts] + user_ids,
     ).fetchall()
     in_map: dict[int, tuple[int, int]] = {
         int(r[0]): (int(r[1]), int(r[2])) for r in in_rows
@@ -572,7 +584,7 @@ def query_dropoff_profiles(
               AND m.author_id IN ({ph})
         GROUP BY m.author_id
         """,
-        [i_mid, i_mid, guild_id, i_start, i_now] + user_ids,
+        [mid, mid, guild_id, start, now_ts] + user_ids,
     ).fetchall()
     att_map: dict[int, tuple[int, int]] = {
         int(r[0]): (int(r[1]), int(r[2])) for r in att_rows
@@ -590,7 +602,7 @@ def query_dropoff_profiles(
               AND m.author_id IN ({ph})
         GROUP BY m.author_id
         """,
-        [i_mid, i_mid, guild_id, i_start, i_now] + user_ids,
+        [mid, mid, guild_id, start, now_ts] + user_ids,
     ).fetchall()
     react_map: dict[int, tuple[int, int]] = {
         int(r[0]): (int(r[1]), int(r[2])) for r in react_rows
@@ -608,7 +620,7 @@ def query_dropoff_profiles(
               AND author_id IN ({ph})
         GROUP BY author_id, half, hr
         """,
-        [i_mid, guild_id, i_start, i_now] + user_ids,
+        [mid, guild_id, start, now_ts] + user_ids,
     ).fetchall()
     hour_counts: dict[tuple[int, int], dict[int, int]] = {}
     for r in hour_rows:
@@ -626,7 +638,7 @@ def query_dropoff_profiles(
               AND author_id IN ({ph})
         ORDER BY author_id, ts
         """,
-        [guild_id, i_mid, i_now] + user_ids,
+        [guild_id, mid, now_ts] + user_ids,
     ).fetchall()
     gap_map: dict[int, float] = {}
     cur_uid: int | None = None
@@ -669,7 +681,7 @@ def query_dropoff_profiles(
               AND author_id IN ({ph})
         GROUP BY author_id, channel_id
         """,
-        [i_mid, i_mid, guild_id, i_start, i_now] + user_ids,
+        [mid, mid, guild_id, start, now_ts] + user_ids,
     ).fetchall()
     ch_migration: dict[int, tuple[list[int], list[int], list[int]]] = {}
     ch_per_user: dict[int, list[tuple[int, int, int]]] = {}
@@ -694,7 +706,7 @@ def query_dropoff_profiles(
               AND author_id IN ({ph})
         ORDER BY ts
         """,
-        [i_mid, guild_id, i_start, i_now] + user_ids,
+        [mid, guild_id, start, now_ts] + user_ids,
     ).fetchall()
     # For each user reply, walk the reply_to chain upward to measure depth
     msg_reply: dict[int, int] = {}  # message_id → reply_to_id (for chain walking)
@@ -704,7 +716,7 @@ def query_dropoff_profiles(
         SELECT message_id, reply_to_id FROM messages
         WHERE guild_id = ? AND ts >= ? AND ts < ? AND reply_to_id IS NOT NULL
         """,
-        [guild_id, i_start, i_now],
+        [guild_id, start, now_ts],
     ).fetchall()
     for r in all_reply_rows:
         msg_reply[int(r[0])] = int(r[1])
@@ -733,7 +745,7 @@ def query_dropoff_profiles(
               AND author_id IN ({ph})
         GROUP BY author_id
         """,
-        [guild_id, i_mid, i_now] + user_ids,
+        [guild_id, mid, now_ts] + user_ids,
     ).fetchall()
     first_map: dict[int, int | None] = {}
     for r in first_rows:
@@ -979,7 +991,7 @@ def query_role_growth(
     """
     now = datetime.now(timezone.utc)
     bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now)
-    bucket_expr = _strftime_expr(resolution, col="granted_at")
+    bucket_expr = _strftime_expr(resolution, col="granted_at", since_ts=since_ts)
 
     # Grants that happened before the window — used as per-role baselines
     baseline_rows = conn.execute(

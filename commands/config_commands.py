@@ -279,28 +279,45 @@ _ROLE_CONFIGS: dict[str, dict[str, str]] = {
 
 
 class _GreeterModal(discord.ui.Modal, title="Greeter Role Config"):
-    def __init__(self, ctx: AppContext) -> None:
+    def __init__(self, ctx: AppContext, current_channel_id: int) -> None:
         super().__init__()
         self._ctx = ctx
+        self._current_channel_id = current_channel_id
         self.role_id: discord.ui.TextInput = discord.ui.TextInput(
             label="Greeter role ID  (right-click role → Copy ID)",
             default=str(ctx.greeter_role_id) if ctx.greeter_role_id > 0 else "",
             placeholder="Role ID or '0' to clear",
             required=False, max_length=25,
         )
+        self.chat_channel: discord.ui.TextInput = discord.ui.TextInput(
+            label="Greeter chat channel  (ID · 'here' · 'off')",
+            default=str(ctx.greeter_chat_channel_id) if ctx.greeter_chat_channel_id > 0 else "off",
+            placeholder="Channel to ping @here when a new member joins",
+            required=False, max_length=30,
+        )
         self.add_item(self.role_id)
+        self.add_item(self.chat_channel)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         rid = _parse_role(self.role_id.value)
+        gc = _parse_channel(self.chat_channel.value, self._current_channel_id)
+        errors: list[str] = []
         if rid is None:
-            await interaction.response.send_message(
-                f"Invalid role ID: `{self.role_id.value}`", ephemeral=True
-            )
+            errors.append(f"Invalid role ID: `{self.role_id.value}`")
+        if gc is None:
+            errors.append(f"Invalid greeter chat channel: `{self.chat_channel.value}`")
+        if errors:
+            await interaction.response.send_message("\n".join(errors), ephemeral=True)
             return
+
+        assert rid is not None and gc is not None
         self._ctx.greeter_role_id = int(self._ctx.set_config_value("greeter_role_id", str(rid)))
-        label = f"<@&{rid}>" if rid > 0 else "cleared"
+        self._ctx.greeter_chat_channel_id = int(self._ctx.set_config_value("greeter_chat_channel_id", str(gc)))
+        role_label = f"<@&{rid}>" if rid > 0 else "cleared"
+        chat_label = f"<#{gc}>" if gc > 0 else "disabled"
         await interaction.response.send_message(
-            f"Greeter role set to {label}. Members with this role can use `/grant_denizen`.",
+            f"Greeter role set to {role_label}. Greeter chat → {chat_label}.\n"
+            "Members with this role can use `/grant_denizen`.",
             ephemeral=True,
         )
 
@@ -423,7 +440,7 @@ class _RoleTypeSelect(discord.ui.Select):
             return
         role_type = self.values[0]
         if role_type == "greeter":
-            await interaction.response.send_modal(_GreeterModal(self._ctx))
+            await interaction.response.send_modal(_GreeterModal(self._ctx, self._current_channel_id))
         else:
             await interaction.response.send_modal(
                 _FullRoleModal(self._ctx, role_type, self._current_channel_id)

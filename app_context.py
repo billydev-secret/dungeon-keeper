@@ -47,6 +47,7 @@ class RuntimeConfig(TypedDict):
     xp_level_5_log_channel_id: int
     xp_level_up_log_channel_id: int
     greeter_role_id: int
+    greeter_chat_channel_id: int
     denizen_role_id: int
     denizen_log_channel_id: int
     denizen_announce_channel_id: int
@@ -108,6 +109,9 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
             ),
             "greeter_role_id": _parse_int_config(get_config_value(conn, "greeter_role_id", "0"),
                                                  key="greeter_role_id"),
+            "greeter_chat_channel_id": _parse_int_config(
+                get_config_value(conn, "greeter_chat_channel_id", "0"), key="greeter_chat_channel_id"
+            ),
             "denizen_role_id": _parse_int_config(get_config_value(conn, "denizen_role_id", "0"),
                                                  key="denizen_role_id"),
             "denizen_log_channel_id": _parse_int_config(
@@ -222,6 +226,7 @@ class AppContext:
     level_5_log_channel_id: int
     level_up_log_channel_id: int
     greeter_role_id: int
+    greeter_chat_channel_id: int
     denizen_role_id: int
     denizen_log_channel_id: int
     denizen_announce_channel_id: int
