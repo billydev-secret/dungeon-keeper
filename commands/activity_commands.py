@@ -42,12 +42,14 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         resolution="Time resolution for the chart buckets.",
         member="Show activity for this member only (default: whole server).",
         channel="Filter activity to a specific channel.",
+        utc_offset="Your UTC offset in hours (e.g. -5 for EST, +1 for CET). Default 0 (UTC).",
     )
     async def activity(
         interaction: discord.Interaction,
         resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
         member: discord.Member | None = None,
         channel: discord.TextChannel | None = None,
+        utc_offset: app_commands.Range[float, -12, 14] = 0,
     ) -> None:
         guild = interaction.guild
         if guild is None:
@@ -59,15 +61,20 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         window_label = _WINDOW_LABELS[resolution]
+        if utc_offset:
+            sign = "+" if utc_offset >= 0 else ""
+            tz_label = f"UTC{sign}{utc_offset:g}"
+        else:
+            tz_label = "UTC"
 
         if member is not None and channel is not None:
-            title = f"{member.display_name} in #{channel.name} — Activity ({window_label})"
+            title = f"{member.display_name} in #{channel.name} — Activity ({window_label}, {tz_label})"
         elif member is not None:
-            title = f"{member.display_name} — Activity ({window_label})"
+            title = f"{member.display_name} — Activity ({window_label}, {tz_label})"
         elif channel is not None:
-            title = f"#{channel.name} — Activity ({window_label})"
+            title = f"#{channel.name} — Activity ({window_label}, {tz_label})"
         else:
-            title = f"{guild.name} — Activity ({window_label})"
+            title = f"{guild.name} — Activity ({window_label}, {tz_label})"
 
         user_id = member.id if member is not None else None
         channel_id = channel.id if channel is not None else None
@@ -76,12 +83,14 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
                 labels, msg_counts = query_message_histogram(
                     conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
                     user_id=user_id, channel_id=channel_id,
+                    utc_offset_hours=utc_offset,
                 )
                 member_counts: list[int] = []
                 show_members = False
             else:
                 labels, msg_counts, member_counts = query_message_activity(
                     conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
+                    utc_offset_hours=utc_offset,
                 )
                 show_members = member is None and channel is None
 

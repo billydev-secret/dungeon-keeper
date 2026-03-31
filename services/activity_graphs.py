@@ -37,27 +37,31 @@ _GRID = "#40444b"
 # ---------------------------------------------------------------------------
 
 
-def _hour_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
+def _hour_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple[str, str]], float]:
     """24 hourly buckets ending at the current hour."""
-    start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=23)
+    offset = timedelta(hours=utc_offset_hours)
+    local_now = now + offset
+    start = local_now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=23)
     buckets = []
     for i in range(24):
         dt = start + timedelta(hours=i)
-        key = dt.strftime("%Y-%m-%d %H")
-        label = dt.strftime("%a %H:%M")
+        key = (dt - offset).strftime("%Y-%m-%d %H")  # key in UTC for SQL match
+        label = dt.strftime("%a %H:%M")               # label in local time
         buckets.append((key, label))
-    return buckets, start.timestamp()
+    return buckets, (start - offset).timestamp()
 
 
-def _day_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
+def _day_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple[str, str]], float]:
     """30 rolling 24-hour buckets ending at *now*.
 
     Each bucket spans exactly 24 hours.  The last bucket ends at *now*,
     so the rightmost bar always contains a full day of data regardless
     of the caller's timezone.
     """
-    start = now - timedelta(days=30)
-    start_ts = start.timestamp()
+    offset = timedelta(hours=utc_offset_hours)
+    local_now = now + offset
+    start = local_now - timedelta(days=30)
+    start_ts = (start - offset).timestamp()  # back to UTC for SQL
     buckets = []
     for i in range(30):
         bucket_end = start + timedelta(days=i + 1)
@@ -67,28 +71,32 @@ def _day_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
     return buckets, start_ts
 
 
-def _week_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
+def _week_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple[str, str]], float]:
     """12 weekly buckets (Monday-based) ending this week."""
-    days_since_monday = now.weekday()
-    this_monday = (now - timedelta(days=days_since_monday)).replace(
+    offset = timedelta(hours=utc_offset_hours)
+    local_now = now + offset
+    days_since_monday = local_now.weekday()
+    this_monday = (local_now - timedelta(days=days_since_monday)).replace(
         hour=0, minute=0, second=0, microsecond=0
     )
     start = this_monday - timedelta(weeks=11)
     buckets = []
     for i in range(12):
         dt = start + timedelta(weeks=i)
-        key = dt.strftime("%Y-%W")
+        key = (dt - offset).strftime("%Y-%W")  # key in UTC
         label = dt.strftime("%b %d")
         buckets.append((key, label))
-    return buckets, start.timestamp()
+    return buckets, (start - offset).timestamp()
 
 
-def _month_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
+def _month_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple[str, str]], float]:
     """12 monthly buckets ending this month."""
+    offset = timedelta(hours=utc_offset_hours)
+    local_now = now + offset
     buckets = []
     for i in range(11, -1, -1):
-        m = now.month - i
-        y = now.year
+        m = local_now.month - i
+        y = local_now.year
         while m <= 0:
             m += 12
             y -= 1
@@ -102,26 +110,32 @@ def _month_buckets(now: datetime) -> tuple[list[tuple[str, str]], float]:
     return buckets, since_ts
 
 
-def _strftime_expr(resolution: Resolution, col: str = "created_at", since_ts: float = 0) -> str:
+def _strftime_expr(
+    resolution: Resolution,
+    col: str = "created_at",
+    since_ts: float = 0,
+    utc_offset_secs: int = 0,
+) -> str:
     """SQLite expression that buckets a timestamp column into the right key format.
 
     For ``day`` resolution the buckets are rolling 24-hour windows anchored to
     the query start, so the key is the epoch of the bucket's upper edge.  All
     other resolutions use the traditional ``strftime`` calendar bucketing.
+
+    *utc_offset_secs* shifts the timestamp before bucketing so that calendar
+    boundaries (midnight, Monday, month start) align with the user's local time.
     """
+    shifted = f"({col} + {utc_offset_secs})" if utc_offset_secs else col
     if resolution == "hour":
-        return f"strftime('%Y-%m-%d %H', datetime({col}, 'unixepoch'))"
+        return f"strftime('%Y-%m-%d %H', datetime({shifted}, 'unixepoch'))"
     if resolution == "day":
-        # Rolling 24-hour buckets: CAST((col - since_ts) / 86400 + 1) gives
-        # bucket number 1..N; multiply back and add since_ts to get the epoch
-        # of the bucket's upper edge, which matches the key from _day_buckets.
         return (
             f"CAST(CAST(({col} - {since_ts}) / 86400 AS INTEGER) * 86400"
             f" + 86400 + {since_ts} AS INTEGER)"
         )
     if resolution == "week":
-        return f"strftime('%Y-%W', datetime({col}, 'unixepoch'))"
-    return f"strftime('%Y-%m', datetime({col}, 'unixepoch'))"
+        return f"strftime('%Y-%W', datetime({shifted}, 'unixepoch'))"
+    return f"strftime('%Y-%m', datetime({shifted}, 'unixepoch'))"
 
 
 _BUCKET_BUILDERS = {
@@ -153,6 +167,7 @@ def query_message_activity(
     *,
     user_id: int | None = None,
     channel_id: int | None = None,
+    utc_offset_hours: float = 0,
 ) -> tuple[list[str], list[int], list[int]]:
     """
     Query message counts and unique active members per time bucket.
@@ -161,8 +176,9 @@ def query_message_activity(
     Empty buckets are filled with 0.
     """
     now = datetime.now(timezone.utc)
-    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now)
-    bucket_expr = _strftime_expr(resolution, since_ts=since_ts)
+    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
+    offset_secs = int(utc_offset_hours * 3600)
+    bucket_expr = _strftime_expr(resolution, since_ts=since_ts, utc_offset_secs=offset_secs)
 
     params: list[object] = [guild_id, since_ts]
     where = "guild_id = ? AND created_at >= ?"
@@ -203,6 +219,7 @@ def query_message_histogram(
     *,
     user_id: int | None = None,
     channel_id: int | None = None,
+    utc_offset_hours: float = 0,
 ) -> tuple[list[str], list[int]]:
     """
     Aggregate message counts by hour-of-day (0-23) or day-of-week (0=Sun..6=Sat)
@@ -210,12 +227,14 @@ def query_message_histogram(
 
     Returns (labels, message_counts).
     """
+    offset_secs = int(utc_offset_hours * 3600)
+    shifted = f"(created_at + {offset_secs})" if offset_secs else "created_at"
     if resolution == "hour_of_day":
-        expr = "CAST(strftime('%H', datetime(created_at, 'unixepoch')) AS INTEGER)"
+        expr = f"CAST(strftime('%H', datetime({shifted}, 'unixepoch')) AS INTEGER)"
         labels = _HOD_LABELS
         n = 24
     else:
-        expr = "CAST(strftime('%w', datetime(created_at, 'unixepoch')) AS INTEGER)"
+        expr = f"CAST(strftime('%w', datetime({shifted}, 'unixepoch')) AS INTEGER)"
         labels = _DOW_LABELS
         n = 7
 
