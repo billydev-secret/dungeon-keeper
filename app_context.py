@@ -194,6 +194,7 @@ class Bot(discord.Client):
                     synced = await self.tree.sync(guild=guild)
                     print(f"Synced {len(synced)} commands to development guild {self.guild_id}.")
                     # Clear any stale global commands so they don't appear alongside guild commands.
+                    self.tree.clear_commands(guild=None)
                     await self.tree.sync()
                     print("Cleared global commands (debug mode).")
                 except discord.Forbidden as exc:
