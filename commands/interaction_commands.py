@@ -1,8 +1,9 @@
 """Interaction graph slash commands.
 
 Commands:
-  /connection_web    — render the server's reply/mention interaction network
-  /interaction_scan  — backfill interaction history from message history
+  /connection_web       — render the server's reply/mention interaction network
+  /interaction_heatmap  — adjacency-matrix heatmap of interactions
+  /interaction_scan     — backfill interaction history from message history
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from services.interaction_graph import (
     query_connection_web,
     record_interactions,
     render_connection_web,
+    render_interaction_heatmap,
 )
 from services.message_store import set_reaction_count, store_message
 
@@ -338,5 +340,107 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
             f"Channels scanned: **{stats['channels']}**\n"
             f"Messages read: **{stats['messages']}**\n"
             f"Interactions recorded: **{stats['interactions']}**",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="interaction_heatmap",
+        description="Show a heatmap of reply/mention interactions between server members.",
+    )
+    @app_commands.describe(
+        timescale="Time window to consider (default: all time).",
+        min_pct="Hide edges that are less than this % of either user's total interactions (default 5).",
+        limit="Max number of members to include (default 30).",
+    )
+    @app_commands.choices(timescale=[
+        app_commands.Choice(name="hour",  value="hour"),
+        app_commands.Choice(name="day",   value="day"),
+        app_commands.Choice(name="week",  value="week"),
+        app_commands.Choice(name="month", value="month"),
+        app_commands.Choice(name="all time", value="all"),
+    ])
+    async def interaction_heatmap(
+        interaction: discord.Interaction,
+        timescale: str = "all",
+        min_pct: app_commands.Range[int, 1, 100] = 5,
+        limit: app_commands.Range[int, 5, 60] = 30,
+    ) -> None:
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        _TIMESCALE_SECONDS = {"hour": 3600, "day": 86400, "week": 604800, "month": 2592000}
+        after_ts = int(_time.time()) - _TIMESCALE_SECONDS[timescale] if timescale in _TIMESCALE_SECONDS else None
+
+        with ctx.open_db() as conn:
+            all_edges = query_connection_web(
+                conn, guild.id,
+                min_weight=1,
+                limit_users=limit,
+                after_ts=after_ts,
+            )
+
+        # Percentage filtering (same logic as connection_web)
+        node_total: dict[int, int] = {}
+        for u, v, w in all_edges:
+            node_total[u] = node_total.get(u, 0) + w
+            node_total[v] = node_total.get(v, 0) + w
+
+        threshold = min_pct / 100.0
+        edges = [
+            (u, v, w) for u, v, w in all_edges
+            if w >= threshold * min(node_total.get(u, 1), node_total.get(v, 1))
+        ]
+
+        if not edges:
+            await interaction.followup.send(
+                f"No edges found where a connection accounts for \u2265**{min_pct}%** "
+                "of either user's total interactions. "
+                "Try lowering `min_pct` or running `/interaction_scan`.",
+                ephemeral=True,
+            )
+            return
+
+        # Resolve display names
+        candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
+        name_map: dict[int, str] = {}
+        for i in range(0, len(candidate_ids), 100):
+            batch = candidate_ids[i:i + 100]
+            try:
+                fetched = await guild.query_members(user_ids=batch, limit=100)
+                for m in fetched:
+                    name_map[m.id] = m.display_name
+            except (discord.ClientException, discord.HTTPException):
+                for uid in batch:
+                    cached = guild.get_member(uid)
+                    if cached:
+                        name_map[uid] = cached.display_name
+
+        edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
+
+        if not edges:
+            await interaction.followup.send(
+                "Could not resolve any member names for the interaction data.",
+                ephemeral=True,
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+        chart_bytes = await loop.run_in_executor(
+            None,
+            functools.partial(
+                render_interaction_heatmap,
+                edges,
+                name_map,
+                guild_name=guild.name,
+            ),
+        )
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(chart_bytes), filename="interaction_heatmap.png"),
             ephemeral=True,
         )

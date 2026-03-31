@@ -1,11 +1,15 @@
 """Interaction graph — replies and mentions between users.
 
-Stores pairwise interaction weights and renders a spring-layout network chart.
+Stores pairwise interaction weights and renders network charts:
+  - Community-clustered spring layout (server-wide view)
+  - Radial ego layout (focused-member view)
+  - Adjacency heatmap (/interaction_heatmap)
 """
 from __future__ import annotations
 
 import io
 import math
+import random as _random
 import re
 import sqlite3
 import time as _time
@@ -259,6 +263,160 @@ def _find_components(
             stack.extend(adj[cur])
         components.append(comp)
     return components
+
+
+# ---------------------------------------------------------------------------
+# Community detection (Louvain-style label propagation)
+# ---------------------------------------------------------------------------
+
+def _detect_communities(
+    node_ids: list[int],
+    edges: list[tuple[int, int, int]],
+) -> dict[int, int]:
+    """Assign each node a community label via weighted label propagation.
+
+    Returns {node_id: community_label}.  Community labels are arbitrary ints
+    (one of the node IDs in the community).  Runs until convergence or
+    max_iterations.
+    """
+    # Build weighted adjacency
+    adj: dict[int, list[tuple[int, int]]] = {nid: [] for nid in node_ids}
+    for u, v, w in edges:
+        adj[u].append((v, w))
+        adj[v].append((u, w))
+
+    # Initialize each node in its own community
+    label: dict[int, int] = {nid: nid for nid in node_ids}
+
+    order = list(node_ids)
+    for _ in range(50):
+        _random.shuffle(order)
+        changed = False
+        for nid in order:
+            if not adj[nid]:
+                continue
+            # Weighted vote from neighbours
+            votes: dict[int, int] = {}
+            for nb, w in adj[nid]:
+                votes[label[nb]] = votes.get(label[nb], 0) + w
+            best_label = max(votes, key=lambda k: votes[k])
+            if best_label != label[nid]:
+                label[nid] = best_label
+                changed = True
+        if not changed:
+            break
+
+    # Renumber communities to 0, 1, 2, ...
+    unique = sorted(set(label.values()))
+    remap = {old: i for i, old in enumerate(unique)}
+    return {nid: remap[label[nid]] for nid in node_ids}
+
+
+# Community colour palette — distinct, muted colours that sit well on dark bg.
+_COMMUNITY_COLORS = [
+    "#5865f2",  # blurple
+    "#57f287",  # green
+    "#fee75c",  # yellow
+    "#eb459e",  # pink
+    "#ed4245",  # red
+    "#3ba5f7",  # light blue
+    "#e67e22",  # orange
+    "#9b59b6",  # purple
+    "#1abc9c",  # teal
+    "#e91e63",  # magenta
+    "#2ecc71",  # emerald
+    "#f39c12",  # amber
+]
+
+
+# ---------------------------------------------------------------------------
+# Radial / ego layout
+# ---------------------------------------------------------------------------
+
+def _radial_layout(
+    focus_id: int,
+    node_ids: list[int],
+    edges: list[tuple[int, int, int]],
+) -> dict[int, tuple[float, float]]:
+    """Lay out nodes in concentric rings around *focus_id*.
+
+    Ring 0 = focus user (centre).
+    Ring 1 = direct connections, spread evenly.
+    Ring 2+ = connections of connections, etc.
+
+    Within each ring nodes are evenly spaced; heavily-connected nodes get a
+    slight angular bias toward their strongest connection in the inner ring
+    so related nodes cluster together.
+    """
+    # BFS to find ring assignments
+    adj: dict[int, list[tuple[int, int]]] = {nid: [] for nid in node_ids}
+    for u, v, w in edges:
+        adj[u].append((v, w))
+        adj[v].append((u, w))
+
+    ring: dict[int, int] = {focus_id: 0}
+    frontier = [focus_id]
+    max_ring = 0
+    while frontier:
+        nxt: list[int] = []
+        for nid in frontier:
+            for nb, _ in adj[nid]:
+                if nb not in ring:
+                    ring[nb] = ring[nid] + 1
+                    max_ring = max(max_ring, ring[nb])
+                    nxt.append(nb)
+        frontier = nxt
+
+    # Unreachable nodes get outermost ring + 1
+    for nid in node_ids:
+        if nid not in ring:
+            ring[nid] = max_ring + 1
+
+    # Group nodes by ring
+    rings: dict[int, list[int]] = {}
+    for nid, r in ring.items():
+        rings.setdefault(r, []).append(nid)
+
+    pos: dict[int, tuple[float, float]] = {focus_id: (0.0, 0.0)}
+
+    if max_ring == 0:
+        return pos
+
+    # For rings beyond 0, sort nodes by their strongest inner-ring neighbour's
+    # angle so related nodes sit near each other.
+    inner_angle: dict[int, float] = {focus_id: 0.0}
+
+    for r in range(1, max(rings.keys()) + 1):
+        nodes = rings.get(r, [])
+        if not nodes:
+            continue
+
+        # Compute an angular anchor for each node based on inner connections
+        def _anchor(nid: int) -> float:
+            best_w = 0
+            best_angle = 0.0
+            for nb, w in adj[nid]:
+                if ring.get(nb, r) < r and nb in inner_angle:
+                    if w > best_w:
+                        best_w = w
+                        best_angle = inner_angle[nb]
+            return best_angle
+
+        nodes.sort(key=_anchor)
+
+        radius = r * (1.0 / max(max_ring, 1))
+        n = len(nodes)
+        for i, nid in enumerate(nodes):
+            angle = 2 * math.pi * i / n
+            # Slight bias toward anchor angle
+            anchor = _anchor(nid)
+            blended = 0.7 * angle + 0.3 * anchor if n > 2 else angle
+            x = radius * math.cos(blended)
+            y = radius * math.sin(blended)
+            pos[nid] = (x, y)
+            inner_angle[nid] = blended
+
+    return pos
 
 
 # ---------------------------------------------------------------------------
@@ -795,6 +953,100 @@ def _place_labels(
     return label_center
 
 
+def _community_clustered_layout(
+    node_ids: list[int],
+    edges: list[tuple[int, int, int]],
+    communities: dict[int, int],
+    spread: float = 1.0,
+) -> dict[int, tuple[float, float]]:
+    """Lay out nodes using community-aware clustering.
+
+    Each community is laid out internally with force-directed placement, then
+    communities are arranged around the canvas so clusters are visually
+    distinct.  Inter-community edges cross the gaps between clusters.
+    """
+    # Group nodes by community
+    comm_nodes: dict[int, list[int]] = {}
+    for nid in node_ids:
+        c = communities[nid]
+        comm_nodes.setdefault(c, []).append(nid)
+
+    # Sort communities by size (largest first) for a stable layout
+    sorted_comms = sorted(comm_nodes.keys(), key=lambda c: -len(comm_nodes[c]))
+
+    # Lay out each community internally
+    comm_layouts: dict[int, dict[int, tuple[float, float]]] = {}
+    for c in sorted_comms:
+        c_nodes = comm_nodes[c]
+        c_set = set(c_nodes)
+        c_edges = [(u, v, w) for u, v, w in edges if u in c_set and v in c_set]
+        if len(c_nodes) == 1:
+            comm_layouts[c] = {c_nodes[0]: (0.0, 0.0)}
+        elif len(c_nodes) <= 4:
+            comm_layouts[c] = _spring_layout(
+                c_nodes, c_edges, spread=spread, restarts=2, iterations=150
+            )
+        else:
+            comm_layouts[c] = _spring_layout(c_nodes, c_edges, spread=spread)
+
+    n_comms = len(sorted_comms)
+    if n_comms == 1:
+        # Single community — use it directly, pack handles normalisation
+        c = sorted_comms[0]
+        return _pack_component_layouts(
+            [(comm_nodes[c], comm_layouts[c])], spread=spread
+        )
+
+    # Place community centres on a circle (or line for 2)
+    comm_centre: dict[int, tuple[float, float]] = {}
+    if n_comms == 2:
+        comm_centre[sorted_comms[0]] = (-0.55, 0.0)
+        comm_centre[sorted_comms[1]] = (0.55, 0.0)
+    else:
+        for i, c in enumerate(sorted_comms):
+            angle = 2 * math.pi * i / n_comms - math.pi / 2
+            r = 0.65
+            comm_centre[c] = (r * math.cos(angle), r * math.sin(angle))
+
+    # Determine per-community radius based on relative node count
+    total_nodes = len(node_ids)
+    comm_radius: dict[int, float] = {}
+    for c in sorted_comms:
+        frac = len(comm_nodes[c]) / total_nodes
+        comm_radius[c] = max(0.15, 0.50 * math.sqrt(frac))
+
+    # Compose final positions: normalise each community's internal layout
+    # to fit within its radius, then offset to its centre
+    pos: dict[int, tuple[float, float]] = {}
+    for c in sorted_comms:
+        layout = comm_layouts[c]
+        nodes = comm_nodes[c]
+        cx, cy = comm_centre[c]
+        radius = comm_radius[c]
+
+        if len(nodes) == 1:
+            pos[nodes[0]] = (cx, cy)
+            continue
+
+        # Find bounding radius of internal layout
+        xs = [layout[n][0] for n in nodes]
+        ys = [layout[n][1] for n in nodes]
+        icx = sum(xs) / len(xs)
+        icy = sum(ys) / len(ys)
+        max_r = max(
+            math.sqrt((layout[n][0] - icx) ** 2 + (layout[n][1] - icy) ** 2)
+            for n in nodes
+        ) or 1.0
+
+        scale = radius / max_r
+        for nid in nodes:
+            x = cx + (layout[nid][0] - icx) * scale
+            y = cy + (layout[nid][1] - icy) * scale
+            pos[nid] = (x, y)
+
+    return pos
+
+
 def render_connection_web(
     edges: list[tuple[int, int, int]],
     name_map: dict[int, str],
@@ -806,40 +1058,32 @@ def render_connection_web(
     """
     Render the user interaction network as PNG bytes.
 
-    edges             – list of (user_id_a, user_id_b, combined_weight)
-    name_map          – user_id -> display name
-    focus_user_id     – when set, this node is rendered in pink and the
-                        title reflects the focused view
-    second_level_ids  – nodes that are connections-of-connections; rendered
-                        in green to distinguish them from direct connections
-    spread            – passed to _spring_layout; controls how far apart nodes sit
+    - Server-wide view (no focus): community-clustered layout with colour-
+      coded clusters.
+    - Focused-member view: radial ego layout with the focus user at centre
+      and connections in concentric rings.
     """
     if not edges:
         raise ValueError("No edges to render.")
 
     node_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-    components = _find_components(node_ids, [(u, v) for u, v, _ in edges])
-    components.sort(key=len, reverse=True)
 
-    # Lay out each component independently — running FR on all nodes together
-    # makes inter-component distance dominate the normalisation scale and
-    # squishes every group's internal layout.  _pack_component_layouts handles
-    # the single-component case (n=1 fast-path) without any shrinkage.
-    comp_layouts: list[tuple[list[int], dict[int, tuple[float, float]]]] = []
-    for comp_nodes in components:
-        comp_set = set(comp_nodes)
-        comp_edges = [(u, v, w) for u, v, w in edges if u in comp_set]
-        n_comp = len(comp_nodes)
-        if n_comp == 1:
-            comp_pos: dict[int, tuple[float, float]] = {comp_nodes[0]: (0.0, 0.0)}
-        elif n_comp <= 4:
-            comp_pos = _spring_layout(
-                comp_nodes, comp_edges, spread=spread, restarts=2, iterations=150
-            )
-        else:
-            comp_pos = _spring_layout(comp_nodes, comp_edges, spread=spread)
-        comp_layouts.append((comp_nodes, comp_pos))
-    pos_n = _pack_component_layouts(comp_layouts, spread=spread)
+    # ---- Layout strategy ----
+    if focus_user_id is not None:
+        # Radial ego layout
+        pos_n = _radial_layout(focus_user_id, node_ids, edges)
+        # Normalise to ±1.0 canvas
+        if len(pos_n) > 1:
+            xs = [p[0] for p in pos_n.values()]
+            ys = [p[1] for p in pos_n.values()]
+            max_r = max(max(abs(min(xs)), abs(max(xs))),
+                        max(abs(min(ys)), abs(max(ys)))) or 1.0
+            pos_n = {nid: (x / max_r, y / max_r) for nid, (x, y) in pos_n.items()}
+        communities = None
+    else:
+        # Community-clustered layout
+        communities = _detect_communities(node_ids, edges)
+        pos_n = _community_clustered_layout(node_ids, edges, communities, spread=spread)
 
     max_weight = max(w for _, _, w in edges)
 
@@ -847,12 +1091,16 @@ def render_connection_web(
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_BG)
 
-    # Draw edges
+    # Draw edges — colour inter-community edges differently
     for u, v, w in edges:
         xu, yu = pos_n[u]
         xv, yv = pos_n[v]
         alpha = 0.25 + 0.65 * (w / max_weight)
         lw = 0.8 + 4.0 * (math.log1p(w) / math.log1p(max_weight))
+        # Inter-community edges are dimmer
+        if communities is not None and communities.get(u) != communities.get(v):
+            alpha *= 0.5
+            lw *= 0.7
         ax.plot(
             [xu, xv], [yu, yv],
             color=_EDGE_COLOR,
@@ -861,7 +1109,6 @@ def render_connection_web(
             solid_capstyle="round",
             zorder=1,
         )
-        # Weight label at midpoint for strong connections
         if w >= max_weight * 0.15:
             mx, my = (xu + xv) / 2, (yu + yv) / 2
             ax.text(
@@ -878,32 +1125,47 @@ def render_connection_web(
         node_vol[v] = node_vol.get(v, 0) + w
     max_vol = max(node_vol.values()) if node_vol else 1
 
-    # Pre-compute per-node scatter size so the label loop can scale label_pad to match
     node_size: dict[int, float] = {
         nid: (300 if nid == focus_user_id else 120) + 600 * (node_vol.get(nid, 1) / max_vol)
         for nid in node_ids
     }
 
+    # Determine node colour
+    def _node_color(nid: int) -> str:
+        if nid == focus_user_id:
+            return _NODE_FOCUS
+        if second_level_ids and nid in second_level_ids:
+            return _NODE_SECONDARY
+        if communities is not None:
+            return _COMMUNITY_COLORS[communities[nid] % len(_COMMUNITY_COLORS)]
+        return _NODE
+
+    # Draw ring guides for radial layout
+    if focus_user_id is not None:
+        # Determine how many rings exist from the radial layout positions
+        dists = sorted(set(
+            round(math.sqrt(pos_n[nid][0] ** 2 + pos_n[nid][1] ** 2), 4)
+            for nid in node_ids if nid != focus_user_id
+        ))
+        for d in dists:
+            if d > 0.01:
+                circle = plt.Circle((0, 0), d, fill=False, color=_GRID,
+                                    linewidth=0.6, linestyle="--", alpha=0.4)
+                ax.add_patch(circle)
+
     # Draw nodes
     for nid in node_ids:
         x, y = pos_n[nid]
         is_focus = nid == focus_user_id
-        is_secondary = bool(second_level_ids and nid in second_level_ids)
-        if is_focus:
-            node_color = _NODE_FOCUS
-        elif is_secondary:
-            node_color = _NODE_SECONDARY
-        else:
-            node_color = _NODE
         ax.scatter(
             x, y, s=node_size[nid],
-            color=node_color,
+            color=_node_color(nid),
             zorder=4,
             edgecolors=_TEXT if is_focus else _NODE_EDGE,
             linewidths=1.5 if is_focus else 0.8,
         )
 
-    # Node labels — placed to avoid vertex dots and each other
+    # Node labels
     font_sizes: dict[int, int] = {
         nid: 10 if nid == focus_user_id else (7 if second_level_ids and nid in second_level_ids else 8)
         for nid in node_ids
@@ -911,12 +1173,12 @@ def render_connection_web(
     label_centers = _place_labels(node_ids, pos_n, node_size, edges, name_map, font_sizes)
     for nid in node_ids:
         lx, ly = label_centers[nid]
-        is_focus = nid == focus_user_id
-        is_secondary = bool(second_level_ids and nid in second_level_ids)
-        if is_focus:
+        if nid == focus_user_id:
             label_color = _NODE_FOCUS
-        elif is_secondary:
+        elif second_level_ids and nid in second_level_ids:
             label_color = _NODE_SECONDARY
+        elif communities is not None:
+            label_color = _COMMUNITY_COLORS[communities[nid] % len(_COMMUNITY_COLORS)]
         else:
             label_color = _TEXT
         ax.text(
@@ -952,6 +1214,15 @@ def render_connection_web(
         legend_elements.append(Patch(color=_NODE_FOCUS, label="focused member"))
     if second_level_ids:
         legend_elements.append(Patch(color=_NODE_SECONDARY, label="2nd-level connections"))
+    if communities is not None:
+        n_comms = len(set(communities.values()))
+        if n_comms > 1:
+            for c in sorted(set(communities.values())):
+                color = _COMMUNITY_COLORS[c % len(_COMMUNITY_COLORS)]
+                count = sum(1 for v in communities.values() if v == c)
+                legend_elements.append(
+                    Patch(color=color, label=f"group {c + 1} ({count} members)")
+                )
     ax.legend(
         handles=legend_elements,
         facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT,
@@ -959,6 +1230,103 @@ def render_connection_web(
     )
 
     plt.tight_layout(pad=0.5)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# Heatmap renderer
+# ---------------------------------------------------------------------------
+
+def render_interaction_heatmap(
+    edges: list[tuple[int, int, int]],
+    name_map: dict[int, str],
+    guild_name: str,
+) -> bytes:
+    """Render an adjacency-matrix heatmap as PNG bytes.
+
+    Users are ordered by total interaction volume.  Colour intensity maps to
+    interaction weight.
+    """
+    if not edges:
+        raise ValueError("No edges to render.")
+
+    # Total volume per user for ordering
+    node_vol: dict[int, int] = {}
+    for u, v, w in edges:
+        node_vol[u] = node_vol.get(u, 0) + w
+        node_vol[v] = node_vol.get(v, 0) + w
+
+    # Order by descending volume
+    ordered = sorted(node_vol.keys(), key=lambda n: -node_vol[n])
+    idx = {nid: i for i, nid in enumerate(ordered)}
+    n = len(ordered)
+
+    # Build symmetric weight matrix
+    matrix = [[0] * n for _ in range(n)]
+    for u, v, w in edges:
+        if u in idx and v in idx:
+            matrix[idx[u]][idx[v]] = w
+            matrix[idx[v]][idx[u]] = w
+
+    labels = [_clean_label(name_map.get(nid, str(nid))) for nid in ordered]
+
+    # Dynamic figure size: scale with member count so labels stay readable
+    cell_px = max(0.35, min(0.7, 14.0 / n))
+    fig_size = max(8, cell_px * n + 2.5)
+
+    fig, ax = plt.subplots(figsize=(fig_size, fig_size))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    import numpy as np
+    from matplotlib.colors import LinearSegmentedColormap
+
+    data = np.array(matrix, dtype=float)
+    # Custom colourmap: dark bg -> blurple
+    cmap = LinearSegmentedColormap.from_list(
+        "discord", [_BG, "#3a3d8f", _NODE, "#eb459e"], N=256
+    )
+
+    im = ax.imshow(data, cmap=cmap, aspect="equal", interpolation="nearest")
+
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    font_size = max(5, min(9, int(140 / n)))
+    ax.set_xticklabels(labels, rotation=45, ha="right", color=_TEXT, fontsize=font_size)
+    ax.set_yticklabels(labels, color=_TEXT, fontsize=font_size)
+    ax.tick_params(axis="both", which="both", length=0)
+
+    # Cell value annotations for small matrices
+    if n <= 25:
+        val_fontsize = max(5, min(8, int(100 / n)))
+        for i in range(n):
+            for j in range(n):
+                v = matrix[i][j]
+                if v > 0:
+                    ax.text(
+                        j, i, str(v),
+                        ha="center", va="center",
+                        color=_TEXT if v < data.max() * 0.7 else "#000000",
+                        fontsize=val_fontsize,
+                        fontweight="bold",
+                    )
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.yaxis.set_tick_params(color=_TEXT)
+    cbar.ax.set_ylabel("interactions", color=_TEXT, fontsize=10)
+    for label in cbar.ax.get_yticklabels():
+        label.set_color(_TEXT)
+
+    ax.set_title(
+        f"{guild_name} — Interaction Heatmap  (replies + mentions)",
+        color=_TEXT, fontsize=14, pad=12,
+    )
+
+    plt.tight_layout(pad=1.0)
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
     plt.close(fig)
