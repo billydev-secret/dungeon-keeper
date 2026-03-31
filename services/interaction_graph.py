@@ -1000,12 +1000,12 @@ def _community_clustered_layout(
     # Place community centres on a circle (or line for 2)
     comm_centre: dict[int, tuple[float, float]] = {}
     if n_comms == 2:
-        comm_centre[sorted_comms[0]] = (-0.55, 0.0)
-        comm_centre[sorted_comms[1]] = (0.55, 0.0)
+        comm_centre[sorted_comms[0]] = (-0.70, 0.0)
+        comm_centre[sorted_comms[1]] = (0.70, 0.0)
     else:
         for i, c in enumerate(sorted_comms):
             angle = 2 * math.pi * i / n_comms - math.pi / 2
-            r = 0.65
+            r = 0.85
             comm_centre[c] = (r * math.cos(angle), r * math.sin(angle))
 
     # Determine per-community radius based on relative node count
@@ -1013,7 +1013,7 @@ def _community_clustered_layout(
     comm_radius: dict[int, float] = {}
     for c in sorted_comms:
         frac = len(comm_nodes[c]) / total_nodes
-        comm_radius[c] = max(0.15, 0.50 * math.sqrt(frac))
+        comm_radius[c] = max(0.20, 0.65 * math.sqrt(frac))
 
     # Compose final positions: normalise each community's internal layout
     # to fit within its radius, then offset to its centre
