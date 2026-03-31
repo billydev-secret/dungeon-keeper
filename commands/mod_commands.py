@@ -53,18 +53,20 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ("/xp_leaderboards timescale:week",
              "Top XP earners for a chosen time window (hour / day / week / month / all time), "
              "plus your own rank within that period."),
-            ("/activity resolution:day",
+            ("/activity resolution:day utc_offset:-5",
              "Bar chart of message volume over time — server-wide or for one member. "
              "Useful for spotting quiet periods, activity spikes, or a member's posting rhythm. "
-             "Resolutions: hour, day, week."),
+             "Resolutions: hour, day, week, month, hour_of_day, day_of_week. "
+             "Use `utc_offset` to shift times to your local timezone (e.g. -5 for EST)."),
             ("/session_burst member:@user",
              "Histogram of how active a member is in the 60 minutes after returning from a "
              "20-min break, compared to their idle baseline. "
              "Reveals whether someone energises conversation or tends to post quietly."),
             ("/connection_web",
-             "Who replies to and @mentions whom. Renders a weighted network graph of interactions "
-             "across the server. Add `member:@user` to zoom in on one person — their direct "
-             "contacts appear in blue, extended connections in green. "
+             "Who replies to and @mentions whom. Renders a community-clustered network graph "
+             "where groups who interact heavily are colour-coded and positioned together. "
+             "Add `member:@user` to zoom in on one person — their direct "
+             "contacts appear in the cluster colour, extended connections in green. "
              "Use `timescale` to limit the graph to recent activity."),
         ])
     ))
@@ -163,7 +165,12 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "— `layers` controls how many hops to expand from the focused member. "
                  "`layers:1` shows only direct contacts; `layers:3` reveals their wider network.\n"
                  "— `limit` caps the number of members in the server-wide view — lower on large servers.\n"
-                 "— `spread` adjusts visual spacing. Raise if nodes overlap; lower to tighten a sparse graph."),
+                 "— `spread` adjusts visual spacing. Raise if nodes overlap; lower to tighten a sparse graph.\n"
+                 "— `max_per_node` keeps only the top N edges per node, pruning weak ties for cleaner graphs."),
+                ("/interaction_heatmap timescale:week min_pct:5 limit:30",
+                 "Adjacency-matrix heatmap of reply/mention interactions between members. "
+                 "Users are sorted by total interaction volume; colour intensity shows weight. "
+                 "A cleaner alternative to the network graph for dense servers — no edge crossings."),
                 ("/interaction_scan days:0 reset:True",
                  "Backfills the interaction graph and message archive (content, replies, reactions, "
                  "attachments, @mentions) from Discord's message history. "
