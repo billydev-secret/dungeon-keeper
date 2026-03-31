@@ -1112,10 +1112,24 @@ def render_connection_web(
         node_vol[v] = node_vol.get(v, 0) + w
     max_vol = max(node_vol.values()) if node_vol else 1
 
-    node_size: dict[int, float] = {
-        nid: (300 if nid == focus_user_id else 120) + 600 * (node_vol.get(nid, 1) / max_vol)
-        for nid in node_ids
-    }
+    # Font sizes and node sizing — nodes must be large enough to contain the name.
+    font_sizes: dict[int, float] = {}
+    node_size: dict[int, float] = {}
+    for nid in node_ids:
+        label = _clean_label(name_map.get(nid, str(nid)))
+        # Base font: scale down for longer names so they fit.
+        if nid == focus_user_id:
+            fs = max(6.0, 11.0 - 0.3 * max(0, len(label) - 6))
+        else:
+            fs = max(5.0, 8.5 - 0.25 * max(0, len(label) - 6))
+        font_sizes[nid] = fs
+        # Minimum scatter size to contain the label.
+        # Scatter `s` is area in points²; radius in pts = sqrt(s / π).
+        # Text width ≈ len * fs * 0.55; we need diameter >= text width + padding.
+        text_w = max(len(label), 1) * fs * 0.55 + 6
+        min_s = math.pi * (text_w / 2) ** 2
+        vol_s = (300 if nid == focus_user_id else 120) + 600 * (node_vol.get(nid, 1) / max_vol)
+        node_size[nid] = max(min_s, vol_s)
 
     # Determine node colour
     def _node_color(nid: int) -> str:
@@ -1127,7 +1141,7 @@ def render_connection_web(
             return _COMMUNITY_COLORS[communities[nid] % len(_COMMUNITY_COLORS)]
         return _NODE
 
-    # Draw nodes
+    # Draw nodes and labels — names are rendered inside the dots.
     for nid in node_ids:
         x, y = pos_n[nid]
         is_focus = nid == focus_user_id
@@ -1138,28 +1152,11 @@ def render_connection_web(
             edgecolors=_TEXT if is_focus else _NODE_EDGE,
             linewidths=1.5 if is_focus else 0.8,
         )
-
-    # Node labels
-    font_sizes: dict[int, int] = {
-        nid: 10 if nid == focus_user_id else (7 if second_level_ids and nid in second_level_ids else 8)
-        for nid in node_ids
-    }
-    label_centers = _place_labels(node_ids, pos_n, node_size, edges, name_map, font_sizes)
-    for nid in node_ids:
-        lx, ly = label_centers[nid]
-        if nid == focus_user_id:
-            label_color = _NODE_FOCUS
-        elif second_level_ids and nid in second_level_ids:
-            label_color = _NODE_SECONDARY
-        elif communities is not None:
-            label_color = _COMMUNITY_COLORS[communities[nid] % len(_COMMUNITY_COLORS)]
-        else:
-            label_color = _TEXT
         ax.text(
-            lx, ly,
+            x, y,
             _clean_label(name_map.get(nid, str(nid))),
             ha="center", va="center",
-            color=label_color,
+            color=_BG,
             fontsize=font_sizes[nid],
             fontweight="bold",
             zorder=5,
