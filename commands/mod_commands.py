@@ -53,11 +53,11 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ("/xp_leaderboards timescale:week",
              "Top XP earners for a chosen time window (hour / day / week / month / all time), "
              "plus your own rank within that period."),
-            ("/activity resolution:day utc_offset:-5",
+            ("/activity resolution:day",
              "Bar chart of message volume over time — server-wide or for one member. "
              "Useful for spotting quiet periods, activity spikes, or a member's posting rhythm. "
              "Resolutions: hour, day, week, month, hour_of_day, day_of_week. "
-             "Use `utc_offset` to shift times to your local timezone (e.g. -5 for EST)."),
+             "Times are shown in the server's configured timezone (set via `/config global`)."),
             ("/session_burst member:@user",
              "Histogram of how active a member is in the 60 minutes after returning from a "
              "20-min break, compared to their idle baseline. "

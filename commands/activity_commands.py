@@ -42,14 +42,12 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         resolution="Time resolution for the chart buckets.",
         member="Show activity for this member only (default: whole server).",
         channel="Filter activity to a specific channel.",
-        utc_offset="Your UTC offset in hours (e.g. -5 for EST, +1 for CET). Default 0 (UTC).",
     )
     async def activity(
         interaction: discord.Interaction,
         resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
         member: discord.Member | None = None,
         channel: discord.TextChannel | None = None,
-        utc_offset: app_commands.Range[float, -12, 14] = 0,
     ) -> None:
         guild = interaction.guild
         if guild is None:
@@ -60,10 +58,10 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+        utc_offset = ctx.tz_offset_hours
         window_label = _WINDOW_LABELS[resolution]
         if utc_offset:
-            sign = "+" if utc_offset >= 0 else ""
-            tz_label = f"UTC{sign}{utc_offset:g}"
+            tz_label = f"UTC{utc_offset:+g}"
         else:
             tz_label = "UTC"
 
