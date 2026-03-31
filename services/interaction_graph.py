@@ -1068,22 +1068,9 @@ def render_connection_web(
 
     node_ids = list({uid for u, v, _ in edges for uid in (u, v)})
 
-    # ---- Layout strategy ----
-    if focus_user_id is not None:
-        # Radial ego layout
-        pos_n = _radial_layout(focus_user_id, node_ids, edges)
-        # Normalise to ±1.0 canvas
-        if len(pos_n) > 1:
-            xs = [p[0] for p in pos_n.values()]
-            ys = [p[1] for p in pos_n.values()]
-            max_r = max(max(abs(min(xs)), abs(max(xs))),
-                        max(abs(min(ys)), abs(max(ys)))) or 1.0
-            pos_n = {nid: (x / max_r, y / max_r) for nid, (x, y) in pos_n.items()}
-        communities = None
-    else:
-        # Community-clustered layout
-        communities = _detect_communities(node_ids, edges)
-        pos_n = _community_clustered_layout(node_ids, edges, communities, spread=spread)
+    # ---- Layout: community-clustered for all views ----
+    communities = _detect_communities(node_ids, edges)
+    pos_n = _community_clustered_layout(node_ids, edges, communities, spread=spread)
 
     max_weight = max(w for _, _, w in edges)
 
@@ -1139,19 +1126,6 @@ def render_connection_web(
         if communities is not None:
             return _COMMUNITY_COLORS[communities[nid] % len(_COMMUNITY_COLORS)]
         return _NODE
-
-    # Draw ring guides for radial layout
-    if focus_user_id is not None:
-        # Determine how many rings exist from the radial layout positions
-        dists = sorted(set(
-            round(math.sqrt(pos_n[nid][0] ** 2 + pos_n[nid][1] ** 2), 4)
-            for nid in node_ids if nid != focus_user_id
-        ))
-        for d in dists:
-            if d > 0.01:
-                circle = plt.Circle((0, 0), d, fill=False, color=_GRID,
-                                    linewidth=0.6, linestyle="--", alpha=0.4)
-                ax.add_patch(circle)
 
     # Draw nodes
     for nid in node_ids:
