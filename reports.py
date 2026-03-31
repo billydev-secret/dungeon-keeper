@@ -267,5 +267,113 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             ephemeral=True,
         )
 
+    @report_group.command(
+        name="promotion_review",
+        description="Members above level 5 without spicy access — flags inactivity-pruned users.",
+    )
+    async def promotion_review(interaction: discord.Interaction):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_roles:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        nsfw_role = guild.get_role(ctx.nsfw_role_id) if ctx.nsfw_role_id else None
+        # Members without the NSFW role (excluding bots)
+        candidates = [
+            m for m in guild.members
+            if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
+        ]
+        if not candidates:
+            await interaction.followup.send("No members found without spicy access.", ephemeral=True)
+            return
+
+        candidate_ids = [m.id for m in candidates]
+
+        with ctx.open_db() as conn:
+            # Get XP levels for candidates
+            levels: dict[int, tuple[int, float]] = {}
+            batch_size = 800
+            for i in range(0, len(candidate_ids), batch_size):
+                batch = candidate_ids[i:i + batch_size]
+                placeholders = ", ".join("?" for _ in batch)
+                rows = conn.execute(
+                    f"SELECT user_id, level, total_xp FROM member_xp "
+                    f"WHERE guild_id = ? AND user_id IN ({placeholders})",
+                    [guild.id, *batch],
+                ).fetchall()
+                for row in rows:
+                    levels[int(row["user_id"])] = (int(row["level"]), float(row["total_xp"]))
+
+            # Filter to level > 5
+            eligible = [m for m in candidates if levels.get(m.id, (1, 0))[0] > 5]
+            if not eligible:
+                await interaction.followup.send(
+                    "No members above level 5 without spicy access.", ephemeral=True
+                )
+                return
+
+            eligible_ids = [m.id for m in eligible]
+
+            # Check for NSFW removal events in role_events
+            nsfw_role_name = nsfw_role.name if nsfw_role else ""
+            pruned_users: dict[int, float] = {}  # user_id -> removal timestamp
+            if nsfw_role_name:
+                for i in range(0, len(eligible_ids), batch_size):
+                    batch = eligible_ids[i:i + batch_size]
+                    placeholders = ", ".join("?" for _ in batch)
+                    # Get the most recent event per user for the NSFW role
+                    rows = conn.execute(
+                        f"SELECT user_id, action, granted_at FROM role_events "
+                        f"WHERE guild_id = ? AND role_name = ? "
+                        f"AND user_id IN ({placeholders}) "
+                        f"ORDER BY granted_at DESC",
+                        [guild.id, nsfw_role_name, *batch],
+                    ).fetchall()
+                    seen: set[int] = set()
+                    for row in rows:
+                        uid = int(row["user_id"])
+                        if uid not in seen:
+                            seen.add(uid)
+                            if row["action"] == "remove":
+                                pruned_users[uid] = float(row["granted_at"])
+
+            # Get activity data
+            activities = ctx.get_member_last_activity_map(conn, guild.id, eligible_ids)
+
+        # Sort by level descending, then XP descending
+        eligible.sort(key=lambda m: (-levels.get(m.id, (1, 0))[0], -levels.get(m.id, (1, 0))[1]))
+
+        nsfw_label = nsfw_role.name if nsfw_role else "spicy role (not configured)"
+        header = (
+            f"**Promotion Review — above level 5, no {nsfw_label}**\n"
+            f"Total eligible: {len(eligible)}\n"
+            f"----------------------------------\n"
+        )
+
+        lines: list[str] = []
+        for m in eligible:
+            lvl, xp = levels.get(m.id, (1, 0.0))
+            activity = activities.get(m.id)
+            if activity is not None:
+                ts = int(activity.created_at)
+                last_seen = f"last seen <t:{ts}:R>"
+            else:
+                last_seen = "no recorded activity"
+
+            line = f"**{m.display_name}** — Level {lvl} ({xp:.1f} XP) — {last_seen}"
+            if m.id in pruned_users:
+                removal_ts = int(pruned_users[m.id])
+                line += f"\n  ⚠ Previously had {nsfw_label}, removed <t:{removal_ts}:R> (inactivity sweep)"
+            lines.append(line)
+
+        await send_ephemeral_text(interaction, header + "\n".join(lines))
+
     bot.tree.add_command(report_group)
 
