@@ -147,7 +147,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True)
 
-        nsfw_role = guild.get_role(ctx.nsfw_role_id) if ctx.nsfw_role_id else None
+        nsfw_cfg = ctx.grant_roles.get("nsfw")
+        nsfw_role_id = nsfw_cfg["role_id"] if nsfw_cfg else 0
+        nsfw_role = guild.get_role(nsfw_role_id) if nsfw_role_id else None
         sfw_members = [
             m for m in guild.members
             if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
@@ -285,7 +287,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True)
 
-        nsfw_role = guild.get_role(ctx.nsfw_role_id) if ctx.nsfw_role_id else None
+        nsfw_cfg = ctx.grant_roles.get("nsfw")
+        nsfw_role_id = nsfw_cfg["role_id"] if nsfw_cfg else 0
+        nsfw_role = guild.get_role(nsfw_role_id) if nsfw_role_id else None
         # Members without the NSFW role (excluding bots)
         candidates = [
             m for m in guild.members

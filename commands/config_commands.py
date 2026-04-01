@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
+from db_utils import upsert_grant_role
 from services.inactivity_prune_service import (
     get_prune_rule,
     remove_prune_rule,
@@ -239,43 +240,8 @@ class _WelcomeLeaveModal(discord.ui.Modal, title="Welcome & Leave Config"):
 # Roles — select which role type, then open a modal
 # ---------------------------------------------------------------------------
 
-_ROLE_CONFIGS: dict[str, dict[str, str]] = {
-    "denizen": dict(
-        label="Denizen",
-        role_attr="denizen_role_id",        role_key="denizen_role_id",
-        log_attr="denizen_log_channel_id",  log_key="denizen_log_channel_id",
-        ann_attr="denizen_announce_channel_id", ann_key="denizen_announce_channel_id",
-        msg_attr="denizen_grant_message",   msg_key="denizen_grant_message",
-    ),
-    "nsfw": dict(
-        label="NSFW",
-        role_attr="nsfw_role_id",           role_key="nsfw_role_id",
-        log_attr="nsfw_log_channel_id",     log_key="nsfw_log_channel_id",
-        ann_attr="nsfw_announce_channel_id", ann_key="nsfw_announce_channel_id",
-        msg_attr="nsfw_grant_message",      msg_key="nsfw_grant_message",
-    ),
-    "veteran": dict(
-        label="Veteran",
-        role_attr="veteran_role_id",        role_key="veteran_role_id",
-        log_attr="veteran_log_channel_id",  log_key="veteran_log_channel_id",
-        ann_attr="veteran_announce_channel_id", ann_key="veteran_announce_channel_id",
-        msg_attr="veteran_grant_message",   msg_key="veteran_grant_message",
-    ),
-    "kink": dict(
-        label="Kink",
-        role_attr="kink_role_id",           role_key="kink_role_id",
-        log_attr="kink_log_channel_id",     log_key="kink_log_channel_id",
-        ann_attr="kink_announce_channel_id", ann_key="kink_announce_channel_id",
-        msg_attr="kink_grant_message",      msg_key="kink_grant_message",
-    ),
-    "goldengirl": dict(
-        label="Golden Girl",
-        role_attr="goldengirl_role_id",           role_key="goldengirl_role_id",
-        log_attr="goldengirl_log_channel_id",     log_key="goldengirl_log_channel_id",
-        ann_attr="goldengirl_announce_channel_id", ann_key="goldengirl_announce_channel_id",
-        msg_attr="goldengirl_grant_message",      msg_key="goldengirl_grant_message",
-    ),
-}
+
+
 
 
 class _GreeterModal(discord.ui.Modal, title="Greeter Role Config"):
@@ -323,33 +289,35 @@ class _GreeterModal(discord.ui.Modal, title="Greeter Role Config"):
 
 
 class _FullRoleModal(discord.ui.Modal):
-    def __init__(self, ctx: AppContext, role_type: str, current_channel_id: int) -> None:
-        cfg = _ROLE_CONFIGS[role_type]
-        super().__init__(title=f"{cfg['label']} Role Config")
+    def __init__(self, ctx: AppContext, grant_name: str, current_channel_id: int) -> None:
+        cfg = ctx.grant_roles.get(grant_name)
+        label = cfg["label"] if cfg else grant_name.title()
+        super().__init__(title=f"{label} Role Config")
         self._ctx = ctx
-        self._cfg = cfg
+        self._grant_name = grant_name
+        self._label = label
         self._current_channel_id = current_channel_id
 
         self.role_id: discord.ui.TextInput = discord.ui.TextInput(
             label="Role ID  (right-click role → Copy ID)",
-            default=str(getattr(ctx, cfg["role_attr"])) if getattr(ctx, cfg["role_attr"], 0) > 0 else "",
+            default=str(cfg["role_id"]) if cfg and cfg["role_id"] > 0 else "",
             placeholder="Role ID or '0' to clear",
             required=False, max_length=25,
         )
         self.log_channel: discord.ui.TextInput = discord.ui.TextInput(
             label="Log channel  (ID · 'here' · 'off')",
-            default=str(getattr(ctx, cfg["log_attr"])) if getattr(ctx, cfg["log_attr"], 0) > 0 else "off",
+            default=str(cfg["log_channel_id"]) if cfg and cfg["log_channel_id"] > 0 else "off",
             required=False, max_length=30,
         )
         self.announce_channel: discord.ui.TextInput = discord.ui.TextInput(
             label="Announce channel  (ID · 'here' · 'off')",
-            default=str(getattr(ctx, cfg["ann_attr"])) if getattr(ctx, cfg["ann_attr"], 0) > 0 else "off",
+            default=str(cfg["announce_channel_id"]) if cfg and cfg["announce_channel_id"] > 0 else "off",
             required=False, max_length=30,
         )
         self.grant_message: discord.ui.TextInput = discord.ui.TextInput(
             label="Grant message template",
             style=discord.TextStyle.paragraph,
-            default=getattr(ctx, cfg["msg_attr"], ""),
+            default=cfg["grant_message"] if cfg else "",
             placeholder="{member} {member_name} {role} {role_name} {actor}",
             required=False, max_length=1000,
         )
@@ -359,7 +327,6 @@ class _FullRoleModal(discord.ui.Modal):
         self.add_item(self.grant_message)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        cfg = self._cfg
         rid = _parse_role(self.role_id.value)
         lc = _parse_channel(self.log_channel.value, self._current_channel_id)
         ac = _parse_channel(self.announce_channel.value, self._current_channel_id)
@@ -375,13 +342,20 @@ class _FullRoleModal(discord.ui.Modal):
             return
 
         assert rid is not None and lc is not None and ac is not None
-        setattr(self._ctx, cfg["role_attr"], int(self._ctx.set_config_value(cfg["role_key"], str(rid))))
-        setattr(self._ctx, cfg["log_attr"], int(self._ctx.set_config_value(cfg["log_key"], str(lc))))
-        setattr(self._ctx, cfg["ann_attr"], int(self._ctx.set_config_value(cfg["ann_key"], str(ac))))
-        setattr(self._ctx, cfg["msg_attr"], self._ctx.set_config_value(cfg["msg_key"], self.grant_message.value))
+        guild = interaction.guild
+        if guild is None:
+            return
+
+        with self._ctx.open_db() as conn:
+            upsert_grant_role(
+                conn, guild.id, self._grant_name,
+                label=self._label, role_id=rid, log_channel_id=lc,
+                announce_channel_id=ac, grant_message=self.grant_message.value,
+            )
+        self._ctx.reload_grant_roles()
 
         await interaction.response.send_message(
-            f"{cfg['label']} config saved.\n"
+            f"{self._label} config saved.\n"
             f"Role: {'<@&' + str(rid) + '>' if rid else 'cleared'}  ·  "
             f"Log: {'<#' + str(lc) + '>' if lc else 'off'}  ·  "
             f"Announce: {'<#' + str(ac) + '>' if ac else 'off'}",
@@ -398,13 +372,10 @@ def _build_roles_embed(ctx: AppContext) -> discord.Embed:
 
     embed = discord.Embed(title="🎭  Role Grant Config", color=discord.Color.from_str("#57F287"))
     embed.add_field(name="Greeter", value=f"Role: {_role(ctx.greeter_role_id)}", inline=False)
-    for key, cfg in _ROLE_CONFIGS.items():
-        rid = getattr(ctx, cfg["role_attr"], 0)
-        lc = getattr(ctx, cfg["log_attr"], 0)
-        ac = getattr(ctx, cfg["ann_attr"], 0)
+    for cfg in ctx.grant_roles.values():
         embed.add_field(
             name=cfg["label"],
-            value=f"Role: {_role(rid)}  ·  Log: {_ch(lc)}  ·  Announce: {_ch(ac)}",
+            value=f"Role: {_role(cfg['role_id'])}  ·  Log: {_ch(cfg['log_channel_id'])}  ·  Announce: {_ch(cfg['announce_channel_id'])}",
             inline=False,
         )
     embed.set_footer(text="Select a role type below to edit its settings.")
@@ -416,23 +387,16 @@ class _RoleTypeSelect(discord.ui.Select):
         self._ctx = ctx
         self.invoker_id = invoker_id
         self._current_channel_id = current_channel_id
-        super().__init__(
-            placeholder="Choose a role type to configure…",
-            options=[
-                discord.SelectOption(label="Greeter", value="greeter",
-                                     description="Who can use /grant_denizen"),
-                discord.SelectOption(label="Denizen", value="denizen",
-                                     description="Role, log channel, announce channel, message"),
-                discord.SelectOption(label="NSFW", value="nsfw",
-                                     description="Role, log channel, announce channel, message"),
-                discord.SelectOption(label="Veteran", value="veteran",
-                                     description="Role, log channel, announce channel, message"),
-                discord.SelectOption(label="Kink", value="kink",
-                                     description="Role, log channel, announce channel, message"),
-                discord.SelectOption(label="Golden Girl", value="goldengirl",
-                                     description="Role, log channel, announce channel, message"),
-            ],
-        )
+        options = [
+            discord.SelectOption(label="Greeter", value="greeter",
+                                 description="Who can use grant commands"),
+        ]
+        for grant_name, cfg in ctx.grant_roles.items():
+            options.append(discord.SelectOption(
+                label=cfg["label"], value=grant_name,
+                description="Role, log channel, announce channel, message",
+            ))
+        super().__init__(placeholder="Choose a role type to configure…", options=options)
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.invoker_id:

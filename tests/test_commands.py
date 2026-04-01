@@ -76,18 +76,19 @@ def _make_ctx(**kwargs) -> MagicMock:
     actor = MagicMock()
     actor.id = kwargs.get("actor_id", 100)
     ctx.get_interaction_member = MagicMock(return_value=actor)
-    ctx.denizen_role_id = kwargs.get("denizen_role_id", 0)
-    ctx.denizen_log_channel_id = kwargs.get("denizen_log_channel_id", 0)
-    ctx.denizen_announce_channel_id = kwargs.get("denizen_announce_channel_id", 0)
-    ctx.denizen_grant_message = kwargs.get("denizen_grant_message", "")
-    ctx.nsfw_role_id = kwargs.get("nsfw_role_id", 0)
-    ctx.nsfw_log_channel_id = kwargs.get("nsfw_log_channel_id", 0)
-    ctx.nsfw_announce_channel_id = kwargs.get("nsfw_announce_channel_id", 0)
-    ctx.nsfw_grant_message = kwargs.get("nsfw_grant_message", "")
-    ctx.veteran_role_id = kwargs.get("veteran_role_id", 0)
-    ctx.veteran_log_channel_id = kwargs.get("veteran_log_channel_id", 0)
-    ctx.veteran_announce_channel_id = kwargs.get("veteran_announce_channel_id", 0)
-    ctx.veteran_grant_message = kwargs.get("veteran_grant_message", "")
+    ctx.grant_roles = kwargs.get("grant_roles", {
+        "denizen": {"label": "Denizen", "role_id": kwargs.get("denizen_role_id", 0),
+                    "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
+        "nsfw": {"label": "NSFW", "role_id": 0,
+                 "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
+        "veteran": {"label": "Veteran", "role_id": 0,
+                    "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
+        "kink": {"label": "Kink", "role_id": 0,
+                 "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
+        "goldengirl": {"label": "Golden Girl", "role_id": 0,
+                       "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
+    })
+    ctx.can_use_grant_role = MagicMock(return_value=kwargs.get("can_grant_denizen", False))
     ctx.greeter_role_id = kwargs.get("greeter_role_id", 0)
     ctx.spoiler_required_channels = kwargs.get("spoiler_required_channels", set())
     ctx.xp_excluded_channel_ids = kwargs.get("xp_excluded_channel_ids", set())
@@ -149,7 +150,7 @@ class GrantDenizenTests(unittest.TestCase):
         return guild
 
     def test_no_permission_denied(self):
-        self.ctx.can_grant_denizen.return_value = False
+        self.ctx.can_use_grant_role.return_value = False
         ix = _make_interaction()
         _run(self.grant(ix, _make_member()))
         ix.response.send_message.assert_awaited_once()
@@ -179,7 +180,7 @@ class GrantDenizenTests(unittest.TestCase):
         member.add_roles.assert_awaited_once()
 
     def test_role_not_configured_denied(self):
-        self.ctx.denizen_role_id = 0
+        self.ctx.grant_roles["denizen"]["role_id"] = 0
         ix = _make_interaction(guild=MagicMock())
         _run(self.grant(ix, _make_member()))
         self.assertIn("not configured", ix.response.send_message.call_args[0][0].lower())

@@ -65,23 +65,18 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         ])
     ))
 
-    # ── Greeter (greeter role or mod) ─────────────────────────────────────────
+    # ── Role Grants (per-role permissions or mod) ───────────────────────────
     if ctx.can_grant_denizen(interaction):
+        grant_cmds: list[tuple[str, str]] = []
+        for gname, gcfg in ctx.grant_roles.items():
+            grant_cmds.append((
+                f"/grant_{gname} member:@user",
+                f"Grant the {gcfg['label']} role to a member.",
+            ))
         pages.append(_page("Role Grants",
-            "Grant community roles to members. Available to greeters and mods.\n\n"
-            + _fmt([
-                ("/grant_denizen member:@user",
-                 "Welcome a new member by granting them the Denizen role, "
-                 "opening up the main community channels."),
-                ("/grant_nsfw member:@user",
-                 "Grant access to age-restricted channels after confirming eligibility."),
-                ("/grant_veteran member:@user",
-                 "Recognise a longtime member with the Veteran role."),
-                ("/grant_kink member:@user",
-                 "Grant the Kink role to a member."),
-                ("/grant_goldengirl member:@user",
-                 "Grant the Golden Girl role to a member."),
-            ])
+            "Grant community roles to members. "
+            "Access is configured per-role via `/grant_allow`.\n\n"
+            + _fmt(grant_cmds)
         ))
 
     # ── XP give (allowlisted users or mod) ────────────────────────────────────
@@ -285,6 +280,12 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Remove a user or role's `/give_role` permission."),
                 ("/give_role_list",
                  "List all `/give_role` permission rules."),
+                ("/grant_allow grant: allowed:",
+                 "Allow a user or role to use a `/grant_*` command."),
+                ("/grant_deny grant: denied:",
+                 "Remove a user or role's `/grant_*` permission."),
+                ("/grant_permissions",
+                 "List who can use each grant command."),
             ])
         ))
 

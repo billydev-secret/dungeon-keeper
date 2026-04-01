@@ -22,7 +22,7 @@ from commands.watch_commands import init_watch_tables, load_watched_users, regis
 from commands.foolsday_commands import foolsday_loop, register_foolsday_commands
 from commands.welcome_commands import register_welcome_commands
 from commands.xp_commands import register_xp_commands
-from db_utils import init_config_db, open_db
+from db_utils import init_config_db, init_grant_role_tables, migrate_grant_roles, open_db
 from handlers.events import register_events
 from services.interaction_graph import init_interaction_tables
 from services.message_store import init_message_tables
@@ -83,6 +83,7 @@ with open_db(DB_PATH) as _conn:
     init_interaction_tables(_conn)
     init_message_tables(_conn)
     init_give_role_tables(_conn)
+    init_grant_role_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -111,26 +112,6 @@ ctx = AppContext(
     level_up_log_channel_id=_cfg["xp_level_up_log_channel_id"],
     greeter_role_id=_cfg["greeter_role_id"],
     greeter_chat_channel_id=_cfg["greeter_chat_channel_id"],
-    denizen_role_id=_cfg["denizen_role_id"],
-    denizen_log_channel_id=_cfg["denizen_log_channel_id"],
-    denizen_announce_channel_id=_cfg["denizen_announce_channel_id"],
-    denizen_grant_message=_cfg["denizen_grant_message"],
-    nsfw_role_id=_cfg["nsfw_role_id"],
-    nsfw_log_channel_id=_cfg["nsfw_log_channel_id"],
-    nsfw_announce_channel_id=_cfg["nsfw_announce_channel_id"],
-    nsfw_grant_message=_cfg["nsfw_grant_message"],
-    veteran_role_id=_cfg["veteran_role_id"],
-    veteran_log_channel_id=_cfg["veteran_log_channel_id"],
-    veteran_announce_channel_id=_cfg["veteran_announce_channel_id"],
-    veteran_grant_message=_cfg["veteran_grant_message"],
-    kink_role_id=_cfg["kink_role_id"],
-    kink_log_channel_id=_cfg["kink_log_channel_id"],
-    kink_announce_channel_id=_cfg["kink_announce_channel_id"],
-    kink_grant_message=_cfg["kink_grant_message"],
-    goldengirl_role_id=_cfg["goldengirl_role_id"],
-    goldengirl_log_channel_id=_cfg["goldengirl_log_channel_id"],
-    goldengirl_announce_channel_id=_cfg["goldengirl_announce_channel_id"],
-    goldengirl_grant_message=_cfg["goldengirl_grant_message"],
     welcome_channel_id=_cfg["welcome_channel_id"],
     welcome_message=_cfg["welcome_message"],
     welcome_ping_role_id=_cfg["welcome_ping_role_id"],
@@ -143,7 +124,10 @@ ctx = AppContext(
 # Populate runtime state from DB
 # ==============================
 with open_db(DB_PATH) as _conn:
+    migrate_grant_roles(_conn, _cfg["guild_id"])
     ctx.watched_users = load_watched_users(_conn, _cfg["guild_id"])
+
+ctx.reload_grant_roles()
 
 # ==============================
 # Event handlers + commands

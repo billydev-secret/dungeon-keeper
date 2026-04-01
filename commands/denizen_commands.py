@@ -1,4 +1,4 @@
-"""Denizen role management commands."""
+"""Role grant commands — data-driven from the grant_roles DB table."""
 from __future__ import annotations
 
 import logging
@@ -7,13 +7,17 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
+from db_utils import (
+    add_grant_permission,
+    get_grant_permissions,
+    remove_grant_permission,
+)
 from utils import format_user_for_log, get_bot_member
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.denizen")
-
 
 
 def _resolve_grant_message(
@@ -40,7 +44,7 @@ async def _execute_grant(
     log_channel_id: int,
     announce_channel_id: int,
     grant_message: str,
-    ctx: AppContext,
+    ctx: "AppContext",
 ) -> None:
     """Shared grant logic for all role-grant commands."""
     guild = interaction.guild
@@ -127,108 +131,187 @@ async def _execute_grant(
             )
 
 
-def _make_set_role_commands(
-    bot: Bot,
-    ctx: AppContext,
-    *,
-    grant_name: str,
-    role_attr: str,
-    log_attr: str,
-    announce_attr: str,
-    role_config_key: str,
-    log_config_key: str,
-    announce_config_key: str,
-    message_attr: str | None = None,
-    message_config_key: str | None = None,
-    can_grant,
-) -> None:
-    """Register /grant_X for one role type."""
+def _make_grant_command(bot: "Bot", ctx: "AppContext", *, grant_name: str) -> None:
+    """Register /grant_<name> for one role type, reading config from ctx.grant_roles at runtime."""
 
     @bot.tree.command(name=f"grant_{grant_name}", description=f"Grant the {grant_name} role to a member.")
     @app_commands.describe(member=f"Member to receive the {grant_name} role.")
-    async def grant_cmd(interaction: discord.Interaction, member: discord.Member):
-        if not can_grant(interaction):
+    async def grant_cmd(interaction: discord.Interaction, member: discord.Member) -> None:
+        if not ctx.can_use_grant_role(interaction, grant_name):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
+        cfg = ctx.grant_roles.get(grant_name)
+        if cfg is None:
+            await interaction.response.send_message("This grant role is not configured.", ephemeral=True)
+            return
         await _execute_grant(
             interaction, member,
-            role_id=getattr(ctx, role_attr),
-            log_channel_id=getattr(ctx, log_attr),
-            announce_channel_id=getattr(ctx, announce_attr),
-            grant_message=getattr(ctx, message_attr) if message_attr else "",
+            role_id=cfg["role_id"],
+            log_channel_id=cfg["log_channel_id"],
+            announce_channel_id=cfg["announce_channel_id"],
+            grant_message=cfg["grant_message"],
             ctx=ctx,
         )
 
 
-def register_denizen_commands(bot: Bot, ctx: AppContext) -> None:
-    _make_set_role_commands(
-        bot, ctx,
-        grant_name="denizen",
-        role_attr="denizen_role_id",
-        log_attr="denizen_log_channel_id",
-        announce_attr="denizen_announce_channel_id",
-        role_config_key="denizen_role_id",
-        log_config_key="denizen_log_channel_id",
-        announce_config_key="denizen_announce_channel_id",
-        message_attr="denizen_grant_message",
-        message_config_key="denizen_grant_message",
-        can_grant=ctx.can_grant_denizen,
-    )
+def _parse_mention(text: str) -> tuple[str, int] | None:
+    """Parse a role/user mention or raw ID. Returns (entity_type, entity_id) or None."""
+    import re
+    text = text.strip()
+    # <@!123> or <@123>
+    m = re.match(r"<@!?(\d+)>", text)
+    if m:
+        return ("user", int(m.group(1)))
+    # <@&123>
+    m = re.match(r"<@&(\d+)>", text)
+    if m:
+        return ("role", int(m.group(1)))
+    # raw ID — guess based on guild
+    if text.isdigit():
+        return ("unknown", int(text))
+    return None
 
-    _make_set_role_commands(
-        bot, ctx,
-        grant_name="nsfw",
-        role_attr="nsfw_role_id",
-        log_attr="nsfw_log_channel_id",
-        announce_attr="nsfw_announce_channel_id",
-        role_config_key="nsfw_role_id",
-        log_config_key="nsfw_log_channel_id",
-        announce_config_key="nsfw_announce_channel_id",
-        message_attr="nsfw_grant_message",
-        message_config_key="nsfw_grant_message",
-        can_grant=ctx.can_grant_denizen,
-    )
 
-    _make_set_role_commands(
-        bot, ctx,
-        grant_name="veteran",
-        role_attr="veteran_role_id",
-        log_attr="veteran_log_channel_id",
-        announce_attr="veteran_announce_channel_id",
-        role_config_key="veteran_role_id",
-        log_config_key="veteran_log_channel_id",
-        announce_config_key="veteran_announce_channel_id",
-        message_attr="veteran_grant_message",
-        message_config_key="veteran_grant_message",
-        can_grant=ctx.can_grant_denizen,
-    )
+def register_denizen_commands(bot: "Bot", ctx: "AppContext") -> None:
+    for name in ("denizen", "nsfw", "veteran", "kink", "goldengirl"):
+        _make_grant_command(bot, ctx, grant_name=name)
 
-    _make_set_role_commands(
-        bot, ctx,
-        grant_name="kink",
-        role_attr="kink_role_id",
-        log_attr="kink_log_channel_id",
-        announce_attr="kink_announce_channel_id",
-        role_config_key="kink_role_id",
-        log_config_key="kink_log_channel_id",
-        announce_config_key="kink_announce_channel_id",
-        message_attr="kink_grant_message",
-        message_config_key="kink_grant_message",
-        can_grant=ctx.can_grant_denizen,
-    )
+    # --- Permission management commands ---
 
-    _make_set_role_commands(
-        bot, ctx,
-        grant_name="goldengirl",
-        role_attr="goldengirl_role_id",
-        log_attr="goldengirl_log_channel_id",
-        announce_attr="goldengirl_announce_channel_id",
-        role_config_key="goldengirl_role_id",
-        log_config_key="goldengirl_log_channel_id",
-        announce_config_key="goldengirl_announce_channel_id",
-        message_attr="goldengirl_grant_message",
-        message_config_key="goldengirl_grant_message",
-        can_grant=ctx.can_grant_denizen,
+    _grant_name_choices = [
+        app_commands.Choice(name=label, value=key)
+        for key, label in [
+            ("denizen", "Denizen"), ("nsfw", "NSFW"), ("veteran", "Veteran"),
+            ("kink", "Kink"), ("goldengirl", "Golden Girl"),
+        ]
+    ]
+
+    @bot.tree.command(
+        name="grant_allow",
+        description="Allow a user or role to use a grant command.",
     )
+    @app_commands.describe(
+        grant="Which grant command to configure.",
+        allowed="The user or role to allow (mention or ID).",
+    )
+    @app_commands.choices(grant=_grant_name_choices)
+    async def grant_allow(interaction: discord.Interaction, grant: str, allowed: str) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
+
+        parsed = _parse_mention(allowed)
+        if parsed is None:
+            await interaction.response.send_message(f"Could not parse `{allowed}` as a user or role.", ephemeral=True)
+            return
+
+        entity_type, entity_id = parsed
+        if entity_type == "unknown":
+            # Try to resolve: role first, then user
+            if guild.get_role(entity_id):
+                entity_type = "role"
+            else:
+                entity_type = "user"
+
+        with ctx.open_db() as conn:
+            added = add_grant_permission(conn, guild.id, grant, entity_type, entity_id)
+
+        if entity_type == "role":
+            label = f"<@&{entity_id}>"
+        else:
+            label = f"<@{entity_id}>"
+
+        if added:
+            await interaction.response.send_message(
+                f"{label} can now use `/grant_{grant}`.", ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"{label} already has permission for `/grant_{grant}`.", ephemeral=True,
+            )
+
+    @bot.tree.command(
+        name="grant_deny",
+        description="Remove a user or role's permission for a grant command.",
+    )
+    @app_commands.describe(
+        grant="Which grant command to configure.",
+        denied="The user or role to remove (mention or ID).",
+    )
+    @app_commands.choices(grant=_grant_name_choices)
+    async def grant_deny(interaction: discord.Interaction, grant: str, denied: str) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
+
+        parsed = _parse_mention(denied)
+        if parsed is None:
+            await interaction.response.send_message(f"Could not parse `{denied}` as a user or role.", ephemeral=True)
+            return
+
+        entity_type, entity_id = parsed
+        if entity_type == "unknown":
+            if guild.get_role(entity_id):
+                entity_type = "role"
+            else:
+                entity_type = "user"
+
+        with ctx.open_db() as conn:
+            removed = remove_grant_permission(conn, guild.id, grant, entity_type, entity_id)
+
+        if entity_type == "role":
+            label = f"<@&{entity_id}>"
+        else:
+            label = f"<@{entity_id}>"
+
+        if removed:
+            await interaction.response.send_message(
+                f"{label} can no longer use `/grant_{grant}`.", ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"{label} didn't have permission for `/grant_{grant}`.", ephemeral=True,
+            )
+
+    @bot.tree.command(
+        name="grant_permissions",
+        description="List who can use each grant command.",
+    )
+    async def grant_permissions_cmd(interaction: discord.Interaction) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message("You don't have permission.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
+
+        lines: list[str] = []
+        with ctx.open_db() as conn:
+            for grant_name, cfg in ctx.grant_roles.items():
+                perms = get_grant_permissions(conn, guild.id, grant_name)
+                if perms:
+                    entries = []
+                    for etype, eid in perms:
+                        if etype == "role":
+                            entries.append(f"<@&{eid}>")
+                        else:
+                            entries.append(f"<@{eid}>")
+                    lines.append(f"**{cfg['label']}**: {', '.join(entries)}")
+                else:
+                    lines.append(f"**{cfg['label']}**: mod-only")
+
+        await interaction.response.send_message(
+            "**Grant Permissions**\n" + "\n".join(lines) + "\n\n*Mods always have access.*",
+            ephemeral=True,
+        )

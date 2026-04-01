@@ -10,7 +10,15 @@ from typing import Any, Callable, Coroutine, TypeAlias, TypedDict
 
 import discord
 
-from db_utils import get_config_id_set, get_config_value, open_db, parse_bool
+from db_utils import (
+    GrantRoleConfig,
+    can_use_grant,
+    get_config_id_set,
+    get_config_value,
+    get_grant_roles,
+    open_db,
+    parse_bool,
+)
 
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
@@ -48,26 +56,6 @@ class RuntimeConfig(TypedDict):
     xp_level_up_log_channel_id: int
     greeter_role_id: int
     greeter_chat_channel_id: int
-    denizen_role_id: int
-    denizen_log_channel_id: int
-    denizen_announce_channel_id: int
-    denizen_grant_message: str
-    nsfw_role_id: int
-    nsfw_log_channel_id: int
-    nsfw_announce_channel_id: int
-    nsfw_grant_message: str
-    veteran_role_id: int
-    veteran_log_channel_id: int
-    veteran_announce_channel_id: int
-    veteran_grant_message: str
-    kink_role_id: int
-    kink_log_channel_id: int
-    kink_announce_channel_id: int
-    kink_grant_message: str
-    goldengirl_role_id: int
-    goldengirl_log_channel_id: int
-    goldengirl_announce_channel_id: int
-    goldengirl_grant_message: str
     spoiler_required_channels: set[int]
     bypass_role_ids: set[int]
     xp_grant_allowed_user_ids: set[int]
@@ -111,47 +99,6 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
                                                  key="greeter_role_id"),
             "greeter_chat_channel_id": _parse_int_config(
                 get_config_value(conn, "greeter_chat_channel_id", "0"), key="greeter_chat_channel_id"
-            ),
-            "denizen_role_id": _parse_int_config(get_config_value(conn, "denizen_role_id", "0"),
-                                                 key="denizen_role_id"),
-            "denizen_log_channel_id": _parse_int_config(
-                get_config_value(conn, "denizen_log_channel_id", "0"), key="denizen_log_channel_id"
-            ),
-            "denizen_grant_message": get_config_value(conn, "denizen_grant_message", ""),
-            "denizen_announce_channel_id": _parse_int_config(
-                get_config_value(conn, "denizen_announce_channel_id", "0"), key="denizen_announce_channel_id"
-            ),
-            "nsfw_role_id": _parse_int_config(get_config_value(conn, "nsfw_role_id", "0"), key="nsfw_role_id"),
-            "nsfw_log_channel_id": _parse_int_config(
-                get_config_value(conn, "nsfw_log_channel_id", "0"), key="nsfw_log_channel_id"
-            ),
-            "nsfw_grant_message": get_config_value(conn, "nsfw_grant_message", ""),
-            "nsfw_announce_channel_id": _parse_int_config(
-                get_config_value(conn, "nsfw_announce_channel_id", "0"), key="nsfw_announce_channel_id"
-            ),
-            "veteran_role_id": _parse_int_config(get_config_value(conn, "veteran_role_id", "0"), key="veteran_role_id"),
-            "veteran_log_channel_id": _parse_int_config(
-                get_config_value(conn, "veteran_log_channel_id", "0"), key="veteran_log_channel_id"
-            ),
-            "veteran_grant_message": get_config_value(conn, "veteran_grant_message", ""),
-            "veteran_announce_channel_id": _parse_int_config(
-                get_config_value(conn, "veteran_announce_channel_id", "0"), key="veteran_announce_channel_id"
-            ),
-            "kink_role_id": _parse_int_config(get_config_value(conn, "kink_role_id", "0"), key="kink_role_id"),
-            "kink_log_channel_id": _parse_int_config(
-                get_config_value(conn, "kink_log_channel_id", "0"), key="kink_log_channel_id"
-            ),
-            "kink_grant_message": get_config_value(conn, "kink_grant_message", ""),
-            "kink_announce_channel_id": _parse_int_config(
-                get_config_value(conn, "kink_announce_channel_id", "0"), key="kink_announce_channel_id"
-            ),
-            "goldengirl_role_id": _parse_int_config(get_config_value(conn, "goldengirl_role_id", "0"), key="goldengirl_role_id"),
-            "goldengirl_log_channel_id": _parse_int_config(
-                get_config_value(conn, "goldengirl_log_channel_id", "0"), key="goldengirl_log_channel_id"
-            ),
-            "goldengirl_grant_message": get_config_value(conn, "goldengirl_grant_message", ""),
-            "goldengirl_announce_channel_id": _parse_int_config(
-                get_config_value(conn, "goldengirl_announce_channel_id", "0"), key="goldengirl_announce_channel_id"
             ),
             "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
@@ -228,32 +175,13 @@ class AppContext:
     level_up_log_channel_id: int
     greeter_role_id: int
     greeter_chat_channel_id: int
-    denizen_role_id: int
-    denizen_log_channel_id: int
-    denizen_announce_channel_id: int
-    denizen_grant_message: str
-    nsfw_role_id: int
-    nsfw_log_channel_id: int
-    nsfw_announce_channel_id: int
-    nsfw_grant_message: str
-    veteran_role_id: int
-    veteran_log_channel_id: int
-    veteran_announce_channel_id: int
-    veteran_grant_message: str
-    kink_role_id: int
-    kink_log_channel_id: int
-    kink_announce_channel_id: int
-    kink_grant_message: str
-    goldengirl_role_id: int
-    goldengirl_log_channel_id: int
-    goldengirl_announce_channel_id: int
-    goldengirl_grant_message: str
     welcome_channel_id: int
     welcome_message: str
     welcome_ping_role_id: int
     leave_channel_id: int
     leave_message: str
     tz_offset_hours: float = 0.0
+    grant_roles: dict[str, GrantRoleConfig] = field(default_factory=dict)
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
     watched_users: dict[int, set[int]] = field(default_factory=dict)
 
@@ -330,13 +258,33 @@ class AppContext:
         perms = member.guild_permissions
         return perms.manage_guild or perms.administrator
 
+    def reload_grant_roles(self) -> None:
+        with self.open_db() as conn:
+            self.grant_roles = get_grant_roles(conn, self.guild_id)
+
     def can_grant_denizen(self, interaction: discord.Interaction) -> bool:
+        """Legacy check — returns True if user can grant ANY grant role."""
         if self.is_mod(interaction):
             return True
         member = self.get_interaction_member(interaction)
-        if member is None or self.greeter_role_id <= 0:
+        if member is None:
             return False
-        return any(role.id == self.greeter_role_id for role in member.roles)
+        role_ids = [r.id for r in member.roles]
+        with self.open_db() as conn:
+            for grant_name in self.grant_roles:
+                if can_use_grant(conn, self.guild_id, grant_name, member.id, role_ids):
+                    return True
+        return False
+
+    def can_use_grant_role(self, interaction: discord.Interaction, grant_name: str) -> bool:
+        if self.is_mod(interaction):
+            return True
+        member = self.get_interaction_member(interaction)
+        if member is None:
+            return False
+        role_ids = [r.id for r in member.roles]
+        with self.open_db() as conn:
+            return can_use_grant(conn, self.guild_id, grant_name, member.id, role_ids)
 
     def can_use_xp_grant(self, interaction: discord.Interaction) -> bool:
         if self.is_mod(interaction):
