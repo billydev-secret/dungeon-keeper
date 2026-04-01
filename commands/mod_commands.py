@@ -185,6 +185,8 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Remove a user from the exclusion list."),
                 ("/foolsday_exclusions",
                  "List all excluded users."),
+                ("/foolsday_repair",
+                 "Fix broken name mappings — walks through each saved name and lets you assign the correct user."),
             ])
         ))
 

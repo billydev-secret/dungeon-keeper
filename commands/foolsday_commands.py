@@ -599,3 +599,125 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             f"**Foolsday exclusions ({len(lines)}):**\n" + "\n".join(lines),
             ephemeral=True,
         )
+
+    # ------------------------------------------------------------------
+    # Repair tool
+    # ------------------------------------------------------------------
+
+    class _RepairView(discord.ui.View):
+        """Walk through saved original names and let a mod assign each to the correct user."""
+
+        def __init__(self, guild: discord.Guild, names: list[str], open_db_fn):
+            super().__init__(timeout=600)
+            self.guild = guild
+            self.names = names
+            self.open_db_fn = open_db_fn
+            self.index = 0
+            self.assignments: dict[str, int] = {}  # original_name -> user_id
+
+        def _prompt(self) -> str:
+            return (
+                f"**Name {self.index + 1} of {len(self.names)}**\n"
+                f"# `{self.names[self.index]}`\n"
+                f"Select the user whose **real** display name this is."
+            )
+
+        def _summary(self) -> str:
+            lines = ["**Repair complete — updated mappings:**"]
+            for name, uid in self.assignments.items():
+                lines.append(f"- `{name}` → <@{uid}>")
+            return "\n".join(lines)
+
+        @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Pick the user this name belongs to…")
+        async def pick_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
+            chosen: discord.Member | discord.User = select.values[0]
+            name = self.names[self.index]
+
+            # Prevent assigning the same user twice
+            if chosen.id in self.assignments.values():
+                already = next(n for n, uid in self.assignments.items() if uid == chosen.id)
+                await interaction.response.edit_message(
+                    content=(
+                        f"{chosen.mention} was already assigned to `{already}`.\n"
+                        f"Pick someone else for `{name}`.\n\n" + self._prompt()
+                    ),
+                    view=self,
+                )
+                return
+
+            self.assignments[name] = chosen.id
+            log.info("Foolsday repair: %r assigned to %s (%d)", name, chosen, chosen.id)
+            self.index += 1
+
+            if self.index < len(self.names):
+                await interaction.response.edit_message(content=self._prompt(), view=self)
+            else:
+                # All assigned — update DB and restore nicks
+                self.stop()
+                await interaction.response.edit_message(
+                    content="Applying fixes…", view=None,
+                )
+                await self._apply(interaction)
+
+        async def _apply(self, interaction: discord.Interaction) -> None:
+            with self.open_db_fn() as conn:
+                _init_table(conn)
+                conn.execute("DELETE FROM foolsday_names WHERE guild_id = ?", (self.guild.id,))
+                conn.executemany(
+                    "INSERT INTO foolsday_names (guild_id, user_id, original) VALUES (?, ?, ?)",
+                    [(self.guild.id, uid, name) for name, uid in self.assignments.items()],
+                )
+
+            restored = 0
+            failed = 0
+            for name, uid in self.assignments.items():
+                m = self.guild.get_member(uid)
+                if m is None:
+                    continue
+                nick = None if name == m.name else name
+                try:
+                    await m.edit(nick=nick, reason="April Fools repair — restoring original name")
+                    restored += 1
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    log.warning("Foolsday repair: could not restore %s (%d): %s", m, m.id, exc)
+                    failed += 1
+
+            log.info("Foolsday repair complete: %d restored, %d failed", restored, failed)
+            summary = self._summary()
+            summary += f"\n\nRestored **{restored}** nicknames."
+            if failed:
+                summary += f" Failed **{failed}**."
+            summary += "\nThe shuffle is still active — use `/foolsday action:restore` to stop, or wait for the next hourly reshuffle."
+            await interaction.edit_original_response(content=summary)
+
+        async def on_timeout(self) -> None:
+            log.info("Foolsday repair timed out at name %d/%d", self.index + 1, len(self.names))
+
+    @bot.tree.command(
+        name="foolsday_repair",
+        description="Fix broken name mappings — walk through each saved name and assign the correct user.",
+    )
+    async def foolsday_repair(interaction: discord.Interaction) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True,
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        with ctx.open_db() as conn:
+            _init_table(conn)
+            saved = _load_names(conn, guild.id)
+
+        if not saved:
+            await interaction.response.send_message(
+                "No saved names found — nothing to repair.", ephemeral=True,
+            )
+            return
+
+        names = sorted(saved.values())
+        view = _RepairView(guild, names, ctx.open_db)
+        await interaction.response.send_message(view._prompt(), view=view, ephemeral=True)
