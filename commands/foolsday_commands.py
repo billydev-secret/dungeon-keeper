@@ -143,18 +143,23 @@ async def _reshuffle_guild(guild: discord.Guild, conn: sqlite3.Connection, bot_u
         log.info("Foolsday reshuffle: not enough renameable members (%d), skipping", len(candidates))
         return
 
-    # Collect current display names and shuffle
-    names = [m.display_name for m in candidates]
+    # Shuffle the saved originals — these are unique and stable
+    names = [saved[m.id] for m in candidates]
     random.shuffle(names)
+    # Derangement: nobody gets their own original name
     if len(candidates) > 2:
         for _ in range(20):
-            if all(names[i] != candidates[i].display_name for i in range(len(candidates))):
+            if all(names[i] != saved[candidates[i].id] for i in range(len(candidates))):
                 break
             random.shuffle(names)
 
     renamed = 0
+    skipped = 0
     failed = 0
     for member, new_name in zip(candidates, names):
+        if member.display_name == new_name:
+            skipped += 1
+            continue
         try:
             log.debug("Reshuffle %s (%d): %r -> %r", member, member.id, member.display_name, new_name)
             await member.edit(nick=new_name, reason="April Fools hourly reshuffle")
@@ -163,7 +168,7 @@ async def _reshuffle_guild(guild: discord.Guild, conn: sqlite3.Connection, bot_u
             log.warning("Reshuffle could not rename %s (%d): %s", member, member.id, exc)
             failed += 1
 
-    log.info("Foolsday reshuffle complete: %d renamed, %d failed", renamed, failed)
+    log.info("Foolsday reshuffle complete: %d renamed, %d skipped (unchanged), %d failed", renamed, skipped, failed)
 
 
 # ---------------------------------------------------------------------------
@@ -292,10 +297,10 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 # Shuffle names
                 names = list(originals.values())
                 random.shuffle(names)
-                # Make sure nobody keeps their own name if possible
+                # Derangement: nobody keeps their own original name
                 if len(candidates) > 2:
                     for _ in range(20):
-                        if all(names[i] != candidates[i].display_name for i in range(len(candidates))):
+                        if all(names[i] != originals[candidates[i].id] for i in range(len(candidates))):
                             break
                         random.shuffle(names)
 
