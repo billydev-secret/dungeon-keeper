@@ -42,6 +42,15 @@ def _init_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS foolsday_exclusions (
+            guild_id   INTEGER NOT NULL,
+            user_id    INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, user_id)
+        )
+        """
+    )
 
 
 def _save_names(
@@ -97,6 +106,14 @@ def _active_user_ids(
     return {int(r[0]) for r in rows}
 
 
+def _excluded_user_ids(conn: sqlite3.Connection, guild_id: int) -> set[int]:
+    rows = conn.execute(
+        "SELECT user_id FROM foolsday_exclusions WHERE guild_id = ?",
+        (guild_id,),
+    ).fetchall()
+    return {int(r[0]) for r in rows}
+
+
 # ---------------------------------------------------------------------------
 # Reshuffle helper (used by both the command and the background loop)
 # ---------------------------------------------------------------------------
@@ -107,9 +124,12 @@ async def _reshuffle_guild(guild: discord.Guild, conn: sqlite3.Connection, bot_u
     if not saved:
         return
 
+    excluded = _excluded_user_ids(conn, guild.id)
     bot_member = guild.get_member(bot_user_id)
     candidates: list[discord.Member] = []
     for uid in saved:
+        if uid in excluded:
+            continue
         m = guild.get_member(uid)
         if m is None or m.bot:
             continue
@@ -229,12 +249,17 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                     return
 
                 # Resolve to guild members the bot can rename
+                excluded = _excluded_user_ids(conn, guild.id)
                 bot_member = guild.get_member(bot.user.id) if bot.user else None
                 candidates: list[discord.Member] = []
                 skipped_bot = 0
                 skipped_owner = False
                 skipped_role = 0
+                skipped_excluded = 0
                 for uid in active_ids:
+                    if uid in excluded:
+                        skipped_excluded += 1
+                        continue
                     m = guild.get_member(uid)
                     if m is None or m.bot:
                         skipped_bot += 1
@@ -248,8 +273,8 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                     candidates.append(m)
 
                 log.info(
-                    "Foolsday candidates: %d renameable, %d bots/missing, %d above bot role, owner skipped=%s",
-                    len(candidates), skipped_bot, skipped_role, skipped_owner,
+                    "Foolsday candidates: %d renameable, %d excluded, %d bots/missing, %d above bot role, owner skipped=%s",
+                    len(candidates), skipped_excluded, skipped_bot, skipped_role, skipped_owner,
                 )
 
                 if len(candidates) < 2:
@@ -329,3 +354,143 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 if failed:
                     msg += f"\nFailed to restore **{failed}** members."
                 await interaction.followup.send(msg, ephemeral=True)
+
+    @bot.tree.command(
+        name="foolsday_exclude",
+        description="Opt out of the April Fools name shuffle (mods can exclude others).",
+    )
+    @app_commands.describe(user="(Mod only) The member to exclude. Leave blank to exclude yourself.")
+    async def foolsday_exclude(interaction: discord.Interaction, user: discord.Member | None = None) -> None:
+        # Non-mods can only exclude themselves
+        if user is not None and user.id != interaction.user.id and not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You can only exclude yourself. Run `/foolsday_exclude` with no user to opt out.",
+                ephemeral=True,
+            )
+            return
+
+        target = user or (interaction.guild.get_member(interaction.user.id) if interaction.guild else None)
+        if target is None:
+            await interaction.response.send_message("Could not resolve member.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        details: list[str] = []
+        with ctx.open_db() as conn:
+            _init_table(conn)
+            conn.execute(
+                "INSERT OR IGNORE INTO foolsday_exclusions (guild_id, user_id) VALUES (?, ?)",
+                (guild.id, target.id),
+            )
+
+            # If a shuffle is active, fix names immediately
+            saved = _load_names(conn, guild.id)
+            original_name = saved.get(target.id)
+            if original_name is not None:
+                current_nick = target.display_name
+
+                # Restore the excluded user to their original name
+                nick = None if original_name == target.name else original_name
+                try:
+                    log.info("Foolsday exclude: restoring %s (%d) to %r", target, target.id, original_name)
+                    await target.edit(nick=nick, reason="April Fools — excluded, restoring original name")
+                    details.append(f"Restored {target.mention} to their original name.")
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    log.warning("Foolsday exclude: could not restore %s (%d): %s", target, target.id, exc)
+                    details.append(f"Could not restore {target.mention}'s name: {exc}")
+
+                # Find whoever is currently wearing the excluded user's original name
+                # and give them the name the excluded user was wearing
+                for uid, orig in saved.items():
+                    if uid == target.id:
+                        continue
+                    m = guild.get_member(uid)
+                    if m is None:
+                        continue
+                    if m.display_name == original_name:
+                        try:
+                            log.info(
+                                "Foolsday exclude: reassigning %s (%d) from %r to %r",
+                                m, m.id, m.display_name, current_nick,
+                            )
+                            await m.edit(nick=current_nick, reason="April Fools — reassigned after exclusion")
+                            details.append(f"Reassigned {m.mention} to a different name.")
+                        except (discord.Forbidden, discord.HTTPException) as exc:
+                            log.warning("Foolsday exclude: could not reassign %s (%d): %s", m, m.id, exc)
+                            details.append(f"Could not reassign {m.mention}: {exc}")
+                        break
+
+                # Remove the excluded user from saved names so reshuffles skip them
+                conn.execute(
+                    "DELETE FROM foolsday_names WHERE guild_id = ? AND user_id = ?",
+                    (guild.id, target.id),
+                )
+
+        log.info("Foolsday: %s excluded %s (%d)", interaction.user, target, target.id)
+        msg = f"{target.mention} excluded from foolsday shuffle."
+        if details:
+            msg += "\n" + "\n".join(details)
+        await interaction.followup.send(msg, ephemeral=True)
+
+    @bot.tree.command(
+        name="foolsday_include",
+        description="Remove a user from the April Fools exclusion list.",
+    )
+    @app_commands.describe(user="The member to include again.")
+    async def foolsday_include(interaction: discord.Interaction, user: discord.Member) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        with ctx.open_db() as conn:
+            _init_table(conn)
+            conn.execute(
+                "DELETE FROM foolsday_exclusions WHERE guild_id = ? AND user_id = ?",
+                (guild.id, user.id),
+            )
+        log.info("Foolsday: %s re-included %s (%d)", interaction.user, user, user.id)
+        await interaction.response.send_message(f"{user.mention} is no longer excluded from foolsday shuffle.", ephemeral=True)
+
+    @bot.tree.command(
+        name="foolsday_exclusions",
+        description="List users excluded from the April Fools name shuffle.",
+    )
+    async def foolsday_exclusions(interaction: discord.Interaction) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        with ctx.open_db() as conn:
+            _init_table(conn)
+            excluded = _excluded_user_ids(conn, guild.id)
+
+        if not excluded:
+            await interaction.response.send_message("No users are excluded.", ephemeral=True)
+            return
+
+        lines: list[str] = []
+        for uid in excluded:
+            m = guild.get_member(uid)
+            lines.append(f"- {m.mention}" if m else f"- Unknown user ({uid})")
+        await interaction.response.send_message(
+            f"**Foolsday exclusions ({len(lines)}):**\n" + "\n".join(lines),
+            ephemeral=True,
+        )

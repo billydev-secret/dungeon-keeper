@@ -56,6 +56,9 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ("/give_role member:@user role:@Role",
              "Give a role to a member. Mods can give any role; other users need to be "
              "authorised for specific roles via `/give_role_allow`."),
+            ("/foolsday_exclude",
+             "Opt out of the April Fools name shuffle. "
+             "Mods can specify a user to exclude others."),
         ])
     ))
 
@@ -170,7 +173,13 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             + _fmt([
                 ("/foolsday action:shuffle",
                  "April Fools name shuffle — randomises nicknames among members active "
-                 "in at least 3 of the last 5 days. Use `action:restore` to undo."),
+                 "in at least 3 of the last 5 days. Reshuffles every hour. Use `action:restore` to stop and undo."),
+                ("/foolsday_exclude user:@User",
+                 "Exclude another user (self-exclude is in General)."),
+                ("/foolsday_include user",
+                 "Remove a user from the exclusion list."),
+                ("/foolsday_exclusions",
+                 "List all excluded users."),
             ])
         ))
 
