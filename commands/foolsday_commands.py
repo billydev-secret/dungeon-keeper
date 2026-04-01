@@ -439,6 +439,106 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
         await interaction.followup.send(msg, ephemeral=True)
 
     @bot.tree.command(
+        name="foolsday_join",
+        description="Join the active April Fools name shuffle (mods can add others).",
+    )
+    @app_commands.describe(user="(Mod only) The member to add. Leave blank to join yourself.")
+    async def foolsday_join(interaction: discord.Interaction, user: discord.Member | None = None) -> None:
+        if user is not None and user.id != interaction.user.id and not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You can only add yourself. Run `/foolsday_join` with no user to opt in.",
+                ephemeral=True,
+            )
+            return
+
+        target = user or (interaction.guild.get_member(interaction.user.id) if interaction.guild else None)
+        if target is None:
+            await interaction.response.send_message("Could not resolve member.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        with ctx.open_db() as conn:
+            _init_table(conn)
+            saved = _load_names(conn, guild.id)
+
+            if not saved:
+                await interaction.followup.send(
+                    "No shuffle is currently active. A mod needs to run `/foolsday action:shuffle` first.",
+                    ephemeral=True,
+                )
+                return
+
+            original_for_target = saved.get(target.id)
+            if original_for_target is not None and target.display_name != original_for_target:
+                # Already in the shuffle and actually renamed
+                await interaction.followup.send(
+                    f"{target.mention} is already in the shuffle.", ephemeral=True,
+                )
+                return
+
+            # Remove from exclusion list if present
+            conn.execute(
+                "DELETE FROM foolsday_exclusions WHERE guild_id = ? AND user_id = ?",
+                (guild.id, target.id),
+            )
+
+            # Pick a random current participant to swap with
+            excluded = _excluded_user_ids(conn, guild.id)
+            swap_candidates: list[discord.Member] = []
+            for uid in saved:
+                if uid in excluded:
+                    continue
+                m = guild.get_member(uid)
+                if m is not None and not m.bot:
+                    swap_candidates.append(m)
+
+            if not swap_candidates:
+                await interaction.followup.send(
+                    "No active participants to swap with.", ephemeral=True,
+                )
+                return
+
+            partner = random.choice(swap_candidates)
+            # Use the already-saved original if they were in the table but never renamed
+            target_original = original_for_target or target.display_name
+            partner_current = partner.display_name
+
+            # Save the new user's original name (no-op if already saved)
+            conn.execute(
+                "INSERT OR REPLACE INTO foolsday_names (guild_id, user_id, original) VALUES (?, ?, ?)",
+                (guild.id, target.id, target_original),
+            )
+
+            # Swap: target gets partner's current nick, partner gets target's original
+            details: list[str] = []
+            try:
+                log.debug("Foolsday join: %s (%d) %r -> %r", target, target.id, target_original, partner_current)
+                await target.edit(nick=partner_current, reason="April Fools — joined shuffle")
+                details.append(f"{target.mention} joined the shuffle.")
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Foolsday join: could not rename %s (%d): %s", target, target.id, exc)
+                details.append(f"Could not rename {target.mention}: {exc}")
+
+            try:
+                log.debug("Foolsday join: swapping %s (%d) %r -> %r", partner, partner.id, partner_current, target_original)
+                await partner.edit(nick=target_original, reason="April Fools — swapped after new join")
+                details.append(f"Swapped {partner.mention} to a new name.")
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Foolsday join: could not rename %s (%d): %s", partner, partner.id, exc)
+                details.append(f"Could not rename {partner.mention}: {exc}")
+
+            log.info("Foolsday: %s added %s (%d) to shuffle, swapped with %s (%d)",
+                     interaction.user, target, target.id, partner, partner.id)
+
+        await interaction.followup.send("\n".join(details), ephemeral=True)
+
+    @bot.tree.command(
         name="foolsday_include",
         description="Remove a user from the April Fools exclusion list.",
     )
