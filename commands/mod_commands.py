@@ -170,7 +170,13 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             + _fmt([
                 ("/foolsday action:shuffle",
                  "April Fools name shuffle — randomises nicknames among members active "
-                 "in at least 3 of the last 5 days. Use `action:restore` to undo."),
+                 "in at least 3 of the last 5 days. Reshuffles every hour. Use `action:restore` to stop and undo."),
+                ("/foolsday_exclude user",
+                 "Exclude a user from the name shuffle."),
+                ("/foolsday_include user",
+                 "Remove a user from the exclusion list."),
+                ("/foolsday_exclusions",
+                 "List all excluded users."),
             ])
         ))
 
