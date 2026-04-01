@@ -621,6 +621,14 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
         async def callback(self, interaction: discord.Interaction) -> None:
             await self.repair_view.handle_page(interaction, self.direction)
 
+    class _RepairSkipButton(discord.ui.Button["_RepairView"]):
+        def __init__(self, repair_view: "_RepairView"):
+            super().__init__(label="Skip", style=discord.ButtonStyle.danger)
+            self.repair_view = repair_view
+
+        async def callback(self, interaction: discord.Interaction) -> None:
+            await self.repair_view.handle_skip(interaction)
+
     class _RepairView(discord.ui.View):
         """Walk through current display names of active members and let a mod
         assign each to the correct user so the DB can be rebuilt.
@@ -645,6 +653,9 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             self.open_db_fn = open_db_fn
             self.index = 0
             self.assignments: dict[str, int] = {}  # original_name -> user_id
+            self.skipped: list[str] = []
+            self.restored = 0
+            self.failed = 0
             self.page = 0  # for paginating the dropdown when > 25 members
             self._rebuild_select()
 
@@ -671,6 +682,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             ] or [discord.SelectOption(label="—", value="none")]
 
             self.add_item(_RepairSelect(options, self))
+            self.add_item(_RepairSkipButton(self))
 
             # Pagination buttons if needed
             if self._total_pages > 1:
@@ -689,6 +701,8 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             lines = ["**Repair complete — updated mappings:**"]
             for name, uid in self.assignments.items():
                 lines.append(f"- `{name}` → <@{uid}>")
+            if self.skipped:
+                lines.append(f"\n**Skipped ({len(self.skipped)}):** " + ", ".join(f"`{n}`" for n in self.skipped))
             return "\n".join(lines)
 
         async def handle_select(self, interaction: discord.Interaction, value: str) -> None:
@@ -714,8 +728,37 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
             self.assignments[name] = chosen.id
             log.info("Foolsday repair: %r assigned to %s (%d)", name, chosen, chosen.id)
-            self.index += 1
 
+            # Restore immediately
+            member = self.guild.get_member(chosen.id)
+            if member is not None:
+                nick = None if name == member.name else name
+                try:
+                    await member.edit(nick=nick, reason="April Fools repair — restoring original name")
+                    self.restored += 1
+                    log.info("Foolsday repair: restored %s (%d) to %r", member, member.id, name)
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    self.failed += 1
+                    log.warning("Foolsday repair: could not restore %s (%d): %s", member, member.id, exc)
+
+            # Update DB immediately
+            with self.open_db_fn() as conn:
+                _init_table(conn)
+                conn.execute(
+                    "INSERT OR REPLACE INTO foolsday_names (guild_id, user_id, original) VALUES (?, ?, ?)",
+                    (self.guild.id, chosen.id, name),
+                )
+
+            await self._advance(interaction)
+
+        async def handle_skip(self, interaction: discord.Interaction) -> None:
+            name = self.names[self.index]
+            self.skipped.append(name)
+            log.info("Foolsday repair: skipped %r", name)
+            await self._advance(interaction)
+
+        async def _advance(self, interaction: discord.Interaction) -> None:
+            self.index += 1
             if self.index < len(self.names):
                 self.page = 0
                 self._rebuild_select()
@@ -731,34 +774,13 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             await interaction.response.edit_message(content=self._prompt(), view=self)
 
         async def _apply(self, interaction: discord.Interaction) -> None:
-            with self.open_db_fn() as conn:
-                _init_table(conn)
-                conn.execute("DELETE FROM foolsday_names WHERE guild_id = ?", (self.guild.id,))
-                conn.executemany(
-                    "INSERT INTO foolsday_names (guild_id, user_id, original) VALUES (?, ?, ?)",
-                    [(self.guild.id, uid, name) for name, uid in self.assignments.items()],
-                )
-
-            restored = 0
-            failed = 0
-            for name, uid in self.assignments.items():
-                m = self.guild.get_member(uid)
-                if m is None:
-                    continue
-                nick = None if name == m.name else name
-                try:
-                    await m.edit(nick=nick, reason="April Fools repair — restoring original name")
-                    restored += 1
-                except (discord.Forbidden, discord.HTTPException) as exc:
-                    log.warning("Foolsday repair: could not restore %s (%d): %s", m, m.id, exc)
-                    failed += 1
-
-            log.info("Foolsday repair complete: %d restored, %d failed", restored, failed)
+            log.info("Foolsday repair complete: %d restored, %d failed, %d skipped",
+                     self.restored, self.failed, len(self.skipped))
             summary = self._summary()
-            summary += f"\n\nRestored **{restored}** nicknames."
-            if failed:
-                summary += f" Failed **{failed}**."
-            summary += "\nThe shuffle is still active — use `/foolsday action:restore` to stop, or wait for the next hourly reshuffle."
+            summary += f"\n\nRestored **{self.restored}** nicknames."
+            if self.failed:
+                summary += f" Failed **{self.failed}**."
+            summary += "\nUse `/foolsday action:restore` to stop the shuffle, or wait for the next hourly reshuffle."
             await interaction.edit_original_response(content=summary)
 
         async def on_timeout(self) -> None:
