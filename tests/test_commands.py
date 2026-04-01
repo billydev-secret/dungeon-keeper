@@ -342,13 +342,13 @@ class HelpCommandTests(unittest.TestCase):
         sections = self._run_help(is_mod=False, can_grant=False, can_xp=False)
         self.assertIn("General", sections)
         self.assertNotIn("Reports", sections)
-        self.assertNotIn("Role Grant Config", sections)
+        self.assertNotIn("Configuration", sections)
 
     def test_mod_sees_full_help(self):
         sections = self._run_help(is_mod=True, can_grant=True, can_xp=True)
         self.assertIn("General", sections)
         self.assertIn("Reports", sections)
-        self.assertIn("Role Grant Config", sections)
+        self.assertIn("Configuration", sections)
 
     def test_greeter_sees_greeter_section(self):
         sections = self._run_help(is_mod=False, can_grant=True, can_xp=False)

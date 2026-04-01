@@ -49,6 +49,11 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         member: discord.Member | None = None,
         channel: discord.TextChannel | None = None,
     ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
@@ -335,6 +340,11 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         channel: discord.TextChannel | None = None,
         member: discord.Member | None = None,
     ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
@@ -406,6 +416,11 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         interaction: discord.Interaction,
         member: discord.Member,
     ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
@@ -450,6 +465,11 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         interaction: discord.Interaction,
         limit: app_commands.Range[int, 1, 15] = 5,
     ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(

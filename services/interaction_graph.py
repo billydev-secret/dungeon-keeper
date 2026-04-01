@@ -43,6 +43,12 @@ def _clean_label(name: str) -> str:
     return cleaned if cleaned else "[?]"  # never return an unrenderable string
 
 
+def _wrap_label(name: str) -> str:
+    """Break a cleaned label on spaces or underscores so it wraps inside a node."""
+    cleaned = _clean_label(name)
+    return re.sub(r"[ _]+", "\n", cleaned)
+
+
 # Discord dark theme palette (shared with activity_graphs.py)
 _BG = "#2f3136"
 _TEXT = "#dcddde"
@@ -1115,21 +1121,55 @@ def render_connection_web(
     # Font sizes and node sizing — nodes must be large enough to contain the name.
     font_sizes: dict[int, float] = {}
     node_size: dict[int, float] = {}
+    wrapped_labels: dict[int, str] = {}
     for nid in node_ids:
-        label = _clean_label(name_map.get(nid, str(nid)))
-        # Base font: scale down for longer names so they fit.
+        label = _wrap_label(name_map.get(nid, str(nid)))
+        wrapped_labels[nid] = label
+        lines = label.split("\n")
+        longest = max(len(ln) for ln in lines)
+        n_lines = len(lines)
+        # Base font: scale down for longer lines so they fit.
         if nid == focus_user_id:
-            fs = max(6.0, 11.0 - 0.3 * max(0, len(label) - 6))
+            fs = max(6.0, 11.0 - 0.3 * max(0, longest - 6))
         else:
-            fs = max(5.0, 8.5 - 0.25 * max(0, len(label) - 6))
+            fs = max(5.0, 8.5 - 0.25 * max(0, longest - 6))
         font_sizes[nid] = fs
-        # Minimum scatter size to contain the label.
+        # Minimum scatter size to contain the wrapped label.
         # Scatter `s` is area in points²; radius in pts = sqrt(s / π).
-        # Text width ≈ len * fs * 0.55; we need diameter >= text width + padding.
-        text_w = max(len(label), 1) * fs * 0.55 + 6
-        min_s = math.pi * (text_w / 2) ** 2
+        # Text width ≈ longest_line * fs * 0.55; height ≈ n_lines * fs * 1.2.
+        text_w = max(longest, 1) * fs * 0.55 + 6
+        text_h = n_lines * fs * 1.2 + 4
+        # Need circle diameter >= max(text_w, text_h).
+        diameter = max(text_w, text_h)
+        min_s = math.pi * (diameter / 2) ** 2
         vol_s = (300 if nid == focus_user_id else 120) + 600 * (node_vol.get(nid, 1) / max_vol)
         node_size[nid] = max(min_s, vol_s)
+
+    # Push apart overlapping nodes — sizes may now exceed the layout spacing.
+    # Radius in data units: scatter s is area in pts²; at 130 dpi on a 12 in
+    # figure spanning 3 data units, 1 data unit ≈ 520 px ≈ 288 pt.
+    node_r: dict[int, float] = {
+        nid: math.sqrt(node_size[nid] / math.pi) / 288 for nid in node_ids
+    }
+    _GAP = 0.008  # small breathing room between circles
+    for _pass in range(50):
+        moved = False
+        for i in range(len(node_ids)):
+            u = node_ids[i]
+            for j in range(i + 1, len(node_ids)):
+                v = node_ids[j]
+                dx = pos_n[u][0] - pos_n[v][0]
+                dy = pos_n[u][1] - pos_n[v][1]
+                d = math.sqrt(dx * dx + dy * dy) or 1e-9
+                min_d = node_r[u] + node_r[v] + _GAP
+                if d < min_d:
+                    overlap = (min_d - d) / 2
+                    nx, ny = dx / d, dy / d
+                    pos_n[u] = (pos_n[u][0] + nx * overlap, pos_n[u][1] + ny * overlap)
+                    pos_n[v] = (pos_n[v][0] - nx * overlap, pos_n[v][1] - ny * overlap)
+                    moved = True
+        if not moved:
+            break
 
     # Determine node colour
     def _node_color(nid: int) -> str:
@@ -1154,11 +1194,12 @@ def render_connection_web(
         )
         ax.text(
             x, y,
-            _clean_label(name_map.get(nid, str(nid))),
+            wrapped_labels[nid],
             ha="center", va="center",
             color=_BG,
             fontsize=font_sizes[nid],
             fontweight="bold",
+            linespacing=1.2,
             zorder=5,
         )
 

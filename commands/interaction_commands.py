@@ -64,6 +64,11 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
         max_per_node: app_commands.Range[int, 0, 20] = 0,
     ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
@@ -229,6 +234,11 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         days: app_commands.Range[int, 0, 3650] = 0,
         reset: bool = False,
     ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
@@ -365,6 +375,11 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         min_pct: app_commands.Range[int, 1, 100] = 5,
         limit: app_commands.Range[int, 5, 60] = 30,
     ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(

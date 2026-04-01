@@ -53,21 +53,9 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ("/xp_leaderboards timescale:week",
              "Top XP earners for a chosen time window (hour / day / week / month / all time), "
              "plus your own rank within that period."),
-            ("/activity resolution:day",
-             "Bar chart of message volume over time — server-wide or for one member. "
-             "Useful for spotting quiet periods, activity spikes, or a member's posting rhythm. "
-             "Resolutions: hour, day, week, month, hour_of_day, day_of_week. "
-             "Times are shown in the server's configured timezone (set via `/config global`)."),
-            ("/session_burst member:@user",
-             "Histogram of how active a member is in the 60 minutes after returning from a "
-             "20-min break, compared to their idle baseline. "
-             "Reveals whether someone energises conversation or tends to post quietly."),
-            ("/connection_web",
-             "Who replies to and @mentions whom. Renders a community-clustered network graph "
-             "where groups who interact heavily are colour-coded and positioned together. "
-             "Add `member:@user` to zoom in on one person — their direct "
-             "contacts appear in the cluster colour, extended connections in green. "
-             "Use `timescale` to limit the graph to recent activity."),
+            ("/give_role member:@user role:@Role",
+             "Give a role to a member. Mods can give any role; other users need to be "
+             "authorised for specific roles via `/give_role_allow`."),
         ])
     ))
 
@@ -105,7 +93,8 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
 
         # ── Reports ───────────────────────────────────────────────────────────
         pages.append(_page("Reports",
-            "Inspect member activity and role membership.\n\n"
+            "Inspect member activity and role membership. "
+            "Requires **Manage Server** permission.\n\n"
             + _fmt([
                 ("/report list_role role:@Role",
                  "List every current holder of a role — handy before mass-messaging, "
@@ -128,49 +117,67 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Use `after:19:35` to delete everything since a UTC time today — "
                  "both can be combined. "
                  "Useful for clearing spam, failed bot responses, or accidental posts."),
+                ("/dropoff period:week limit:10",
+                 "Compares message counts across two consecutive time windows and surfaces "
+                 "members with the steepest drop. "
+                 "A week-over-week dropoff is often the earliest signal of disengagement."),
+                ("/burst_ranking limit:5",
+                 "Server-wide ranking of who most reliably drives conversation after returning "
+                 "from a 20-min break, and who tends to post without pulling others in."),
+                ("/interaction_heatmap timescale:week min_pct:5 limit:30",
+                 "Adjacency-matrix heatmap of reply/mention interactions between members. "
+                 "Users are sorted by total interaction volume; colour intensity shows weight. "
+                 "A cleaner alternative to the network graph for dense servers."),
+                ("/report role_growth resolution:week",
+                 "Chart of cumulative role grants over time. "
+                 "Resolutions: daily (30d), weekly (12wk), monthly (12mo)."),
+                ("/report promotion_review",
+                 "Members above level 5 without spicy access — flags inactivity-pruned users."),
             ])
         ))
 
         # ── Activity & Graphs ─────────────────────────────────────────────────
         pages.append(_page("Activity & Graphs",
-            "Charts and graphs for understanding server engagement.\n\n"
-            "**Message Rate**\n"
+            "Charts and graphs for understanding server engagement. "
+            "Requires **Manage Server** permission.\n\n"
             + _fmt([
-                ("/dropoff period:week limit:10",
-                 "Compares message counts across two equal consecutive time windows and surfaces "
-                 "members with the steepest drop. "
-                 "A week-over-week dropoff is often the earliest signal of disengagement "
-                 "before someone goes fully quiet."),
-            ])
-            + "\n\n**Session Burst**\n"
-            + _fmt([
-                ("/burst_ranking limit:5",
-                 "Server-wide ranking of who most reliably drives conversation after returning "
-                 "from a 20-min break, and who tends to post without pulling others in. "
-                 "Shows the top and bottom N members side by side — useful for identifying "
-                 "your community's key conversation starters."),
-            ])
-            + "\n\n**Interaction Web**\n"
-            + _fmt([
+                ("/activity resolution:day",
+                 "Bar chart of message volume over time — server-wide or for one member. "
+                 "Resolutions: hour, day, week, month, hour_of_day, day_of_week. "
+                 "Times are shown in the server's configured timezone (set via `/config global`)."),
+                ("/session_burst member:@user",
+                 "Histogram of how active a member is in the 60 minutes after returning from a "
+                 "20-min break, compared to their idle baseline. "
+                 "Reveals whether someone energises conversation or tends to post quietly."),
                 ("/connection_web member:@user timescale:week min_pct:5 layers:2 limit:40",
-                 "Network graph of replies and @mentions, with edge thickness weighted by frequency. "
-                 "Use it to understand social structure, spot isolated members, or trace how "
-                 "conversation flows between cliques.\n"
-                 "— `timescale` limits the graph to recent interactions (hour/day/week/month) or "
-                 "all time. Comparing week vs all-time reveals whether the social graph has shifted.\n"
-                 "— `min_pct` hides edges below X% of either user's total interaction volume. "
-                 "Raise it to show only strong recurring bonds; drop it to 1–2% to expose weak ties.\n"
-                 "— `member:@user` focuses the graph on one person. Direct contacts appear in blue; "
-                 "extended connections in green.\n"
-                 "— `layers` controls how many hops to expand from the focused member. "
-                 "`layers:1` shows only direct contacts; `layers:3` reveals their wider network.\n"
-                 "— `limit` caps the number of members in the server-wide view — lower on large servers.\n"
-                 "— `spread` adjusts visual spacing. Raise if nodes overlap; lower to tighten a sparse graph.\n"
-                 "— `max_per_node` keeps only the top N edges per node, pruning weak ties for cleaner graphs."),
-                ("/interaction_heatmap timescale:week min_pct:5 limit:30",
-                 "Adjacency-matrix heatmap of reply/mention interactions between members. "
-                 "Users are sorted by total interaction volume; colour intensity shows weight. "
-                 "A cleaner alternative to the network graph for dense servers — no edge crossings."),
+                 "Community-clustered network graph of replies and @mentions.\n"
+                 "— `timescale` limits to recent interactions (hour/day/week/month) or all time.\n"
+                 "— `min_pct` hides edges below X% of either user's total interaction volume.\n"
+                 "— `member:@user` focuses on one person's connections.\n"
+                 "— `layers` controls how many hops to expand from the focused member.\n"
+                 "— `limit` caps the number of members in the server-wide view.\n"
+                 "— `spread` adjusts visual spacing.\n"
+                 "— `max_per_node` keeps only the top N edges per node."),
+                ("/chilling_effect lookback_days:30 top:10",
+                 "Find members whose arrival in a channel causes others to stop posting. "
+                 "Compares activity before and after each member's entries."),
+            ])
+        ))
+
+        # ── Fun ───────────────────────────────────────────────────────────────
+        pages.append(_page("Fun",
+            "Seasonal and fun mod tools.\n\n"
+            + _fmt([
+                ("/foolsday action:shuffle",
+                 "April Fools name shuffle — randomises nicknames among members active "
+                 "in at least 3 of the last 5 days. Use `action:restore` to undo."),
+            ])
+        ))
+
+        # ── Data Management ───────────────────────────────────────────────────
+        pages.append(_page("Data Management",
+            "Admin tools for populating and maintaining bot data.\n\n"
+            + _fmt([
                 ("/interaction_scan days:0 reset:True",
                  "Backfills the interaction graph and message archive (content, replies, reactions, "
                  "attachments, @mentions) from Discord's message history. "
@@ -223,106 +230,43 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ])
         ))
 
-        # ── Role grant config ─────────────────────────────────────────────────
-        pages.append(_page("Role Grant Config",
-            "Configure which roles are granted by the bot and where those grants are "
-            "logged and announced. Each role type (Greeter, Denizen, NSFW, Veteran) has its "
-            "own role ID, log channel, announcement channel, and grant message template.\n\n"
+        # ── Configuration ─────────────────────────────────────────────────────
+        pages.append(_page("Configuration",
+            "All bot settings are managed through `/config <section>`. "
+            "Each section opens a modal or interactive panel.\n\n"
+            "**`/config global`** — Timezone, mod channel, bypass roles.\n"
+            "**`/config roles`** — Role IDs, log/announce channels, and grant message "
+            "templates for Greeter, Denizen, NSFW, Veteran, Kink, Golden Girl.\n"
+            "**`/config xp`** — XP log channels, level-5 announcement channel, "
+            "per-channel XP toggle, and grant allowlist.\n"
+            "**`/config welcome`** — Welcome and leave channels + message templates. "
+            "Supports `{member}`, `{name}`, `{server}` placeholders.\n"
+            "**`/config spoiler`** — Spoiler-guard channel list + current-channel toggle.\n"
+            "**`/config prune`** — Inactivity prune role, threshold, and manual trigger.\n\n"
+            "**Related commands**\n"
             + _fmt([
-                ("/config roles",
-                 "Open the roles config panel. Select a role type to update its settings. "
-                 "The grant message template supports `{member}` and `{server}` placeholders."),
-            ])
-        ))
-
-        # ── XP config ─────────────────────────────────────────────────────────
-        pages.append(_page("XP Config",
-            "Control how XP is earned, who can award it manually, and where progress is logged.\n\n"
-            "**Configuration Panel**\n"
-            + _fmt([
-                ("/config xp",
-                 "Open the XP config panel — set the level-up log channel, the level-5 "
-                 "announcement channel, toggle XP on or off for the current channel, and manage "
-                 "the **grant allowlist** (who can use `/xp_give` without being a mod — useful "
-                 "for event hosts or community managers)."),
-                ("/xp_excluded_channels",
-                 "List every channel where XP is currently disabled."),
-            ])
-            + "\n\n**History**\n"
-            + _fmt([
+                ("/xp_excluded_channels", "List channels where XP is disabled."),
                 ("/xp_backfill_history days:30",
-                 "Scans message history to fill gaps in XP and activity data — "
-                 "useful after adding the bot to an existing server or after downtime."),
-            ])
-        ))
-
-        # ── Welcome / Leave config ─────────────────────────────────────────────
-        pages.append(_page("Welcome & Leave",
-            "Customise the messages posted when members join or leave the server. "
-            "Templates support `{member}` (mention), `{name}` (display name), "
-            "and `{server}` (server name) placeholders.\n\n"
-            + _fmt([
-                ("/config welcome",
-                 "Open the welcome & leave config modal — set channel IDs and message "
-                 "templates for both events in one form."),
-                ("/welcome_preview",
-                 "Preview how the welcome message will look using your own profile, "
-                 "without posting it publicly."),
-                ("/leave_preview",
-                 "Preview how the leave message will look using your own profile."),
-            ])
-        ))
-
-        # ── Spoiler guard ─────────────────────────────────────────────────────
-        pages.append(_page("Spoiler Guard",
-            "Auto-deletes unspoilered images posted in designated channels and notifies "
-            "the author. Useful for media-sharing or episode-discussion channels where "
-            "spoilers need to be hidden.\n\n"
-            + _fmt([
-                ("/config spoiler",
-                 "Open the spoiler guard panel — shows which channels are currently guarded "
-                 "and lets you guard or unguard the current channel with one click."),
-            ])
-        ))
-
-        # ── Inactivity prune ──────────────────────────────────────────────────
-        pages.append(_page("Inactivity Prune",
-            "Automatically removes a role from members who haven't posted in N days, "
-            "then re-grants it when they return. "
-            "Runs once daily at midnight UTC — no manual intervention needed once configured.\n\n"
-            "**Setup**\n"
-            + _fmt([
-                ("/config prune",
-                 "Open the prune config panel — set the role to manage and the inactivity "
-                 "threshold in days, disable the prune entirely, or trigger an immediate run."),
+                 "Scan message history to fill gaps in XP and activity data."),
+                ("/welcome_preview", "Preview the welcome message with your profile."),
+                ("/leave_preview", "Preview the leave message with your profile."),
                 ("/inactivity_prune status",
-                 "Show the current threshold, the last run time, and the full exemption list."),
-            ])
-            + "\n\n**Exemptions**\n"
-            + _fmt([
+                 "Show current prune threshold, last run time, and exemption list."),
                 ("/inactivity_prune exempt member:@user",
-                 "Permanently protect a member from being pruned — useful for bots, staff, "
-                 "or members on a known hiatus who should keep their role."),
+                 "Protect a member from being pruned."),
                 ("/inactivity_prune unexempt member:@user",
-                 "Remove a member's exemption, returning them to normal prune eligibility."),
-            ])
-        ))
-
-        # ── Auto-delete ───────────────────────────────────────────────────────
-        pages.append(_page("Auto-Delete",
-            "Deletes old messages in a channel on a repeating schedule. "
-            "Useful for keeping announcement channels clean, enforcing message lifetimes "
-            "in high-volume channels, or automatically clearing temporary event threads.\n"
-            "`del_age` and `run` accept values like `15m`, `2h`, `30d`, `1h30m`. "
-            "`run` also accepts `once` (run immediately and stop) or `off` (disable).\n\n"
-            + _fmt([
+                 "Remove a member's prune exemption."),
                 ("/auto_delete del_age:30d run:1d",
-                 "Delete messages older than `del_age` from this channel, "
-                 "then repeat on the `run` interval. "
-                 "Each channel can have its own schedule."),
+                 "Delete messages older than `del_age` on a repeating schedule. "
+                 "Accepts `15m`, `2h`, `30d`, `1h30m`, `once`, or `off`."),
                 ("/auto_delete_configs",
-                 "List every active auto-delete schedule across the server, "
-                 "including the channel, age threshold, and next run time."),
+                 "List every active auto-delete schedule across the server."),
+                ("/give_role_allow role_to_give:@Role allowed:@user_or_role",
+                 "Authorise a user or role to give a specific role via `/give_role`."),
+                ("/give_role_deny role_to_give:@Role denied:@user_or_role",
+                 "Remove a user or role's `/give_role` permission."),
+                ("/give_role_list",
+                 "List all `/give_role` permission rules."),
             ])
         ))
 

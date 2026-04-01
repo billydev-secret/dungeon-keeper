@@ -60,6 +60,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
     report_group = app_commands.Group(
         name="report",
         description="Member activity and role membership reports.",
+        default_permissions=discord.Permissions(manage_guild=True),
     )
 
     @report_group.command(name="list_role", description="List members who currently have a role.")
