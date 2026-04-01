@@ -28,6 +28,51 @@ DAY_SECONDS = 86400
 RESHUFFLE_INTERVAL = 3600  # seconds between automatic reshuffles
 
 
+def _derangement(items: list[str], own: list[str]) -> list[str]:
+    """Return a permutation of *items* where result[i] != own[i] for all i.
+
+    *items* is the pool of names to distribute (one per slot).
+    *own* is the name each slot must NOT receive (the member's original).
+    Both lists must have the same length.  Falls back to a best-effort
+    shuffle if a perfect derangement is impossible (e.g. one name makes
+    up more than half the pool).
+    """
+    n = len(items)
+    if n < 2:
+        return list(items)
+
+    for _ in range(50):
+        shuffled = list(items)
+        random.shuffle(shuffled)
+        if all(shuffled[i] != own[i] for i in range(n)):
+            return shuffled
+
+    # Fallback: build a derangement by swapping violations
+    shuffled = list(items)
+    random.shuffle(shuffled)
+    violations = [i for i in range(n) if shuffled[i] == own[i]]
+    for i in violations:
+        # Find a partner to swap with that fixes both
+        swapped = False
+        candidates = list(range(n))
+        random.shuffle(candidates)
+        for j in candidates:
+            if j == i:
+                continue
+            # After swap: shuffled[i] gets shuffled[j], shuffled[j] gets shuffled[i]
+            if shuffled[j] != own[i] and shuffled[i] != own[j]:
+                shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+                swapped = True
+                break
+        if not swapped:
+            # Best effort: swap with anyone who isn't us
+            for j in candidates:
+                if j != i and shuffled[j] != own[i]:
+                    shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+                    break
+    return shuffled
+
+
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
@@ -144,15 +189,15 @@ async def _reshuffle_guild(guild: discord.Guild, conn: sqlite3.Connection, bot_u
         log.info("Foolsday reshuffle: not enough renameable members (%d), skipping", len(candidates))
         return
 
-    # Shuffle the saved originals — these are unique and stable
-    names = [saved[m.id] for m in candidates]
-    random.shuffle(names)
-    # Derangement: nobody gets their own original name
-    if len(candidates) > 2:
-        for _ in range(20):
-            if all(names[i] != saved[candidates[i].id] for i in range(len(candidates))):
-                break
-            random.shuffle(names)
+    # 20% chance: everyone gets the same random name from the pool
+    own = [saved[m.id] for m in candidates]
+    if random.random() < 0.20:
+        single = random.choice(own)
+        names = [single] * len(candidates)
+        log.info("Foolsday reshuffle: same-name mode — everyone becomes %r", single)
+    else:
+        # Normal 1:1 derangement
+        names = _derangement(list(own), own)
 
     renamed = 0
     skipped = 0
@@ -295,15 +340,9 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 originals = {m.id: m.display_name for m in candidates}
                 _save_names(conn, guild.id, originals)
 
-                # Shuffle names
-                names = list(originals.values())
-                random.shuffle(names)
-                # Derangement: nobody keeps their own original name
-                if len(candidates) > 2:
-                    for _ in range(20):
-                        if all(names[i] != originals[candidates[i].id] for i in range(len(candidates))):
-                            break
-                        random.shuffle(names)
+                # Shuffle names — 1:1 derangement so nobody keeps their own
+                own = [originals[m.id] for m in candidates]
+                names = _derangement(list(own), own)
 
                 # Apply
                 renamed = 0
@@ -786,6 +825,73 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         async def on_timeout(self) -> None:
             log.info("Foolsday repair timed out at name %d/%d", self.index + 1, len(self.names))
+
+    @bot.tree.command(
+        name="foolsday_samename",
+        description="Set everyone in the shuffle to the same random name (or a custom one).",
+    )
+    @app_commands.describe(name="Custom name to use. Leave blank for a random name from the pool.")
+    async def foolsday_samename(interaction: discord.Interaction, name: str | None = None) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True,
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        with ctx.open_db() as conn:
+            _init_table(conn)
+            saved = _load_names(conn, guild.id)
+
+        if not saved:
+            await interaction.followup.send(
+                "No shuffle is currently active.", ephemeral=True,
+            )
+            return
+
+        with ctx.open_db() as conn:
+            excluded = _excluded_user_ids(conn, guild.id)
+
+        # Pick the name
+        if name is None:
+            pool = [n for uid, n in saved.items() if uid not in excluded]
+            name = random.choice(pool) if pool else random.choice(list(saved.values()))
+
+        bot_member = guild.get_member(bot.user.id) if bot.user else None
+        renamed = 0
+        failed = 0
+        for uid in saved:
+            if uid in excluded:
+                continue
+            m = guild.get_member(uid)
+            if m is None or m.bot:
+                continue
+            if m.id == guild.owner_id:
+                continue
+            if bot_member and m.top_role >= bot_member.top_role:
+                continue
+            if m.display_name == name:
+                continue
+            try:
+                await m.edit(nick=name, reason="April Fools — same name mode")
+                renamed += 1
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Foolsday samename: could not rename %s (%d): %s", m, m.id, exc)
+                failed += 1
+
+        log.info("Foolsday samename: set %d members to %r (%d failed), initiated by %s",
+                 renamed, name, failed, interaction.user)
+
+        msg = f"Set **{renamed}** members to `{name}`."
+        if failed:
+            msg += f" Failed **{failed}**."
+        msg += "\nThe next hourly reshuffle will return to normal shuffling."
+        await interaction.followup.send(msg, ephemeral=True)
 
     @bot.tree.command(
         name="foolsday_repair",

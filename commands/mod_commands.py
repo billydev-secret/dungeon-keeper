@@ -185,6 +185,8 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Remove a user from the exclusion list."),
                 ("/foolsday_exclusions",
                  "List all excluded users."),
+                ("/foolsday_samename name",
+                 "Set everyone to a single name. Leave blank for random. Normal shuffle resumes next tick."),
                 ("/foolsday_repair",
                  "Fix broken name mappings — walks through each saved name and lets you assign the correct user."),
             ])
