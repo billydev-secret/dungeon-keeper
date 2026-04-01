@@ -696,7 +696,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="foolsday_repair",
-        description="Fix broken name mappings — walk through each active member's current name and assign the correct user.",
+        description="Fix broken name mappings — match each display name to the correct user.",
     )
     async def foolsday_repair(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
