@@ -19,7 +19,7 @@ from commands.inactivity_prune_commands import register_inactivity_prune_command
 from commands.mod_commands import register_mod_commands
 from commands.spoiler_commands import register_spoiler_commands
 from commands.watch_commands import init_watch_tables, load_watched_users, register_watch_commands
-from commands.foolsday_commands import register_foolsday_commands
+from commands.foolsday_commands import foolsday_loop, register_foolsday_commands
 from commands.welcome_commands import register_welcome_commands
 from commands.xp_commands import register_xp_commands
 from db_utils import init_config_db, open_db
@@ -189,6 +189,10 @@ bot.startup_task_factories.append(
 
 bot.startup_task_factories.append(
     lambda: inactivity_prune_loop(bot, DB_PATH)
+)
+
+bot.startup_task_factories.append(
+    lambda: foolsday_loop(bot, DB_PATH)
 )
 
 # ==============================
