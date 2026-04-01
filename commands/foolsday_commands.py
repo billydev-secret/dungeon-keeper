@@ -8,6 +8,7 @@ every hour via a background loop.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import logging
 import random
 import sqlite3
@@ -832,10 +833,100 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
             return
 
-        names.sort()
-        view = _RepairView(guild, names, members, ctx.open_db)
-        await interaction.response.send_message(
-            f"Found **{len(names)}** names to assign.\n\n" + view._prompt(),
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # --- Auto-match phase ---
+        # Build lookup: lowercase known name -> member (username and global_name)
+        unmatched_members = list(members)
+        auto_matched: dict[str, discord.Member] = {}  # display_name -> member
+        remaining_names: list[str] = []
+
+        # Map each member to their known real names for matching
+        def _known_names(m: discord.Member) -> list[str]:
+            result = [m.name.lower()]
+            if m.global_name:
+                result.append(m.global_name.lower())
+            return result
+
+        # Pass 1: exact match (case-insensitive) on username or global name
+        for display in sorted(names):
+            matched = None
+            for m in unmatched_members:
+                if display.lower() in _known_names(m):
+                    matched = m
+                    break
+            if matched:
+                auto_matched[display] = matched
+                unmatched_members.remove(matched)
+            else:
+                remaining_names.append(display)
+
+        # Pass 2: fuzzy match remaining names against remaining members
+        still_remaining: list[str] = []
+        for display in remaining_names:
+            best_match: discord.Member | None = None
+            best_ratio = 0.0
+            for m in unmatched_members:
+                for known in _known_names(m):
+                    ratio = difflib.SequenceMatcher(None, display.lower(), known).ratio()
+                    if ratio > best_ratio:
+                        best_ratio = ratio
+                        best_match = m
+            if best_match and best_ratio >= 0.6:
+                auto_matched[display] = best_match
+                unmatched_members.remove(best_match)
+            else:
+                still_remaining.append(display)
+
+        # Apply auto-matches immediately
+        auto_restored = 0
+        auto_failed = 0
+        auto_lines: list[str] = []
+        for display, m in auto_matched.items():
+            nick = None if display == m.name else display
+            try:
+                await m.edit(nick=nick, reason="April Fools repair — auto-matched restore")
+                auto_restored += 1
+                auto_lines.append(f"- `{display}` → **{m.name}** (auto)")
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Foolsday repair auto: could not restore %s (%d): %s", m, m.id, exc)
+                auto_failed += 1
+                auto_lines.append(f"- `{display}` → **{m.name}** (failed: {exc})")
+
+            # Update DB
+            with ctx.open_db() as conn:
+                _init_table(conn)
+                conn.execute(
+                    "INSERT OR REPLACE INTO foolsday_names (guild_id, user_id, original) VALUES (?, ?, ?)",
+                    (guild.id, m.id, display),
+                )
+
+        log.info("Foolsday repair auto-match: %d matched (%d restored, %d failed), %d remaining",
+                 len(auto_matched), auto_restored, auto_failed, len(still_remaining))
+
+        auto_summary = ""
+        if auto_lines:
+            auto_summary = f"**Auto-matched {len(auto_lines)} names:**\n" + "\n".join(auto_lines) + "\n\n"
+
+        if not still_remaining:
+            await interaction.followup.send(
+                auto_summary + f"All **{len(names)}** names matched automatically. No manual assignment needed.",
+                ephemeral=True,
+            )
+            return
+
+        # --- Manual phase for remaining names ---
+        view = _RepairView(guild, still_remaining, members, ctx.open_db)
+        # Pre-fill assignments and counters from auto-match
+        for display, m in auto_matched.items():
+            view.assignments[display] = m.id
+        view.restored = auto_restored
+        view.failed = auto_failed
+
+        await interaction.followup.send(
+            auto_summary
+            + f"**{len(still_remaining)}** names need manual assignment.\n\n"
+            + view._prompt(),
             view=view,
             ephemeral=True,
         )
