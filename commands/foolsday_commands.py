@@ -604,23 +604,85 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
     # Repair tool
     # ------------------------------------------------------------------
 
+    class _RepairSelect(discord.ui.Select["_RepairView"]):
+        def __init__(self, options: list[discord.SelectOption], repair_view: "_RepairView"):
+            super().__init__(placeholder="Pick the user this name belongs to…", options=options)
+            self.repair_view = repair_view
+
+        async def callback(self, interaction: discord.Interaction) -> None:
+            await self.repair_view.handle_select(interaction, self.values[0])
+
+    class _RepairPageButton(discord.ui.Button["_RepairView"]):
+        def __init__(self, label: str, repair_view: "_RepairView", direction: int, *, disabled: bool = False):
+            super().__init__(label=label, style=discord.ButtonStyle.secondary, disabled=disabled)
+            self.repair_view = repair_view
+            self.direction = direction
+
+        async def callback(self, interaction: discord.Interaction) -> None:
+            await self.repair_view.handle_page(interaction, self.direction)
+
     class _RepairView(discord.ui.View):
         """Walk through current display names of active members and let a mod
-        assign each to the correct user so the DB can be rebuilt."""
+        assign each to the correct user so the DB can be rebuilt.
+        Uses a string Select with real usernames instead of UserSelect
+        (which would show shuffled nicknames)."""
 
-        def __init__(self, guild: discord.Guild, names: list[str], open_db_fn):
+        MAX_OPTIONS = 25  # Discord select menu limit
+
+        def __init__(
+            self,
+            guild: discord.Guild,
+            names: list[str],
+            members: list[discord.Member],
+            open_db_fn,
+        ):
             super().__init__(timeout=600)
             self.guild = guild
             self.names = names
+            # members sorted by username for the dropdown
+            self.members = sorted(members, key=lambda m: m.name.lower())
+            self.member_map = {str(m.id): m for m in self.members}
             self.open_db_fn = open_db_fn
             self.index = 0
             self.assignments: dict[str, int] = {}  # original_name -> user_id
+            self.page = 0  # for paginating the dropdown when > 25 members
+            self._rebuild_select()
+
+        @property
+        def _available_members(self) -> list[discord.Member]:
+            """Members not yet assigned."""
+            assigned = set(self.assignments.values())
+            return [m for m in self.members if m.id not in assigned]
+
+        @property
+        def _total_pages(self) -> int:
+            avail = len(self._available_members)
+            return max(1, (avail + self.MAX_OPTIONS - 1) // self.MAX_OPTIONS)
+
+        def _rebuild_select(self) -> None:
+            self.clear_items()
+            available = self._available_members
+            start = self.page * self.MAX_OPTIONS
+            page_members = available[start : start + self.MAX_OPTIONS]
+
+            options = [
+                discord.SelectOption(label=m.name, value=str(m.id))
+                for m in page_members
+            ] or [discord.SelectOption(label="—", value="none")]
+
+            self.add_item(_RepairSelect(options, self))
+
+            # Pagination buttons if needed
+            if self._total_pages > 1:
+                self.add_item(_RepairPageButton("◀ Prev", self, -1, disabled=self.page == 0))
+                self.add_item(_RepairPageButton("Next ▶", self, 1, disabled=self.page >= self._total_pages - 1))
 
         def _prompt(self) -> str:
+            page_info = f" (page {self.page + 1}/{self._total_pages})" if self._total_pages > 1 else ""
             return (
                 f"**Name {self.index + 1} of {len(self.names)}**\n"
                 f"# `{self.names[self.index]}`\n"
-                f"Select the user whose **real** display name this is."
+                f"Select the user whose **real** display name this is.{page_info}"
             )
 
         def _summary(self) -> str:
@@ -629,17 +691,21 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 lines.append(f"- `{name}` → <@{uid}>")
             return "\n".join(lines)
 
-        @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Pick the user this name belongs to…")
-        async def pick_user(self, interaction: discord.Interaction, select: discord.ui.UserSelect):
-            chosen: discord.Member | discord.User = select.values[0]
+        async def handle_select(self, interaction: discord.Interaction, value: str) -> None:
+            if value == "none":
+                return
+            chosen = self.member_map.get(value)
+            if chosen is None:
+                await interaction.response.edit_message(content="User not found.\n\n" + self._prompt(), view=self)
+                return
+
             name = self.names[self.index]
 
-            # Prevent assigning the same user twice
             if chosen.id in self.assignments.values():
                 already = next(n for n, uid in self.assignments.items() if uid == chosen.id)
                 await interaction.response.edit_message(
                     content=(
-                        f"{chosen.mention} was already assigned to `{already}`.\n"
+                        f"**{chosen.name}** was already assigned to `{already}`.\n"
                         f"Pick someone else for `{name}`.\n\n" + self._prompt()
                     ),
                     view=self,
@@ -651,14 +717,18 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             self.index += 1
 
             if self.index < len(self.names):
+                self.page = 0
+                self._rebuild_select()
                 await interaction.response.edit_message(content=self._prompt(), view=self)
             else:
-                # All assigned — update DB and restore nicks
                 self.stop()
-                await interaction.response.edit_message(
-                    content="Applying fixes…", view=None,
-                )
+                await interaction.response.edit_message(content="Applying fixes…", view=None)
                 await self._apply(interaction)
+
+        async def handle_page(self, interaction: discord.Interaction, direction: int) -> None:
+            self.page = max(0, min(self._total_pages - 1, self.page + direction))
+            self._rebuild_select()
+            await interaction.response.edit_message(content=self._prompt(), view=self)
 
         async def _apply(self, interaction: discord.Interaction) -> None:
             with self.open_db_fn() as conn:
@@ -719,8 +789,9 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
             return
 
-        # Gather current display names from all active, renameable members
+        # Gather active, renameable members and their current display names
         bot_member = guild.get_member(bot.user.id) if bot.user else None
+        members: list[discord.Member] = []
         names: list[str] = []
         for uid in active_ids:
             m = guild.get_member(uid)
@@ -730,6 +801,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 continue
             if bot_member and m.top_role >= bot_member.top_role:
                 continue
+            members.append(m)
             names.append(m.display_name)
 
         if not names:
@@ -739,7 +811,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             return
 
         names.sort()
-        view = _RepairView(guild, names, ctx.open_db)
+        view = _RepairView(guild, names, members, ctx.open_db)
         await interaction.response.send_message(
             f"Found **{len(names)}** names to assign.\n\n" + view._prompt(),
             view=view,
