@@ -1084,33 +1084,6 @@ def render_connection_web(
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_BG)
 
-    # Draw edges — colour inter-community edges differently
-    for u, v, w in edges:
-        xu, yu = pos_n[u]
-        xv, yv = pos_n[v]
-        alpha = 0.25 + 0.65 * (w / max_weight)
-        lw = 0.8 + 4.0 * (math.log1p(w) / math.log1p(max_weight))
-        # Inter-community edges are dimmer
-        if communities is not None and communities.get(u) != communities.get(v):
-            alpha *= 0.5
-            lw *= 0.7
-        ax.plot(
-            [xu, xv], [yu, yv],
-            color=_EDGE_COLOR,
-            linewidth=lw,
-            alpha=alpha,
-            solid_capstyle="round",
-            zorder=1,
-        )
-        if w >= max_weight * 0.15:
-            mx, my = (xu + xv) / 2, (yu + yv) / 2
-            ax.text(
-                mx, my, str(w),
-                ha="center", va="center",
-                color=_TEXT, fontsize=6, alpha=0.7,
-                zorder=3,
-            )
-
     # Node volume for sizing
     node_vol: dict[int, int] = {}
     for u, v, w in edges:
@@ -1171,6 +1144,45 @@ def render_connection_web(
         if not moved:
             break
 
+    # Draw edges — clipped to node boundaries so lines don't pass under dots.
+    for u, v, w in edges:
+        xu, yu = pos_n[u]
+        xv, yv = pos_n[v]
+        dx = xv - xu
+        dy = yv - yu
+        d = math.sqrt(dx * dx + dy * dy) or 1e-9
+        # Shorten each end by the node radius so the edge stops at the circle.
+        t_start = node_r[u] / d
+        t_end = 1.0 - node_r[v] / d
+        if t_start >= t_end:
+            continue  # nodes overlap or are adjacent — skip the edge line
+        x1 = xu + dx * t_start
+        y1 = yu + dy * t_start
+        x2 = xu + dx * t_end
+        y2 = yu + dy * t_end
+        alpha = 0.25 + 0.65 * (w / max_weight)
+        lw = 0.8 + 4.0 * (math.log1p(w) / math.log1p(max_weight))
+        # Inter-community edges are dimmer
+        if communities is not None and communities.get(u) != communities.get(v):
+            alpha *= 0.5
+            lw *= 0.7
+        ax.plot(
+            [x1, x2], [y1, y2],
+            color=_EDGE_COLOR,
+            linewidth=lw,
+            alpha=alpha,
+            solid_capstyle="round",
+            zorder=1,
+        )
+        if w >= max_weight * 0.15:
+            mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+            ax.text(
+                mx, my, str(w),
+                ha="center", va="center",
+                color=_TEXT, fontsize=6, alpha=0.7,
+                zorder=3,
+            )
+
     # Determine node colour
     def _node_color(nid: int) -> str:
         if nid == focus_user_id:
@@ -1188,6 +1200,7 @@ def render_connection_web(
         ax.scatter(
             x, y, s=node_size[nid],
             color=_node_color(nid),
+            alpha=0.8,
             zorder=4,
             edgecolors=_TEXT if is_focus else _NODE_EDGE,
             linewidths=1.5 if is_focus else 0.8,
