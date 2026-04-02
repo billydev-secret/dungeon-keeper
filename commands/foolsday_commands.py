@@ -894,7 +894,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="foolsday_repair",
-        description="Restore original nicknames using the audit log to find pre-shuffle names.",
+        description="Restore original nicknames for any member the bot has renamed.",
     )
     async def foolsday_repair(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
@@ -907,23 +907,12 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             await interaction.response.send_message("This command only works in a server.", ephemeral=True)
             return
 
-        with ctx.open_db() as conn:
-            _init_table(conn)
-            active_ids = _active_user_ids(conn, guild.id)
-
-        if not active_ids:
-            await interaction.response.send_message(
-                "No active members found (3/5 day criteria).", ephemeral=True,
-            )
-            return
-
-        # Gather active, renameable members
+        # Gather all renameable members (no activity filter)
         bot_member = guild.get_member(bot.user.id) if bot.user else None
         bot_user_id = bot.user.id if bot.user else 0
         members: list[discord.Member] = []
-        for uid in active_ids:
-            m = guild.get_member(uid)
-            if m is None or m.bot:
+        for m in guild.members:
+            if m.bot:
                 continue
             if m.id == guild.owner_id:
                 continue
@@ -933,7 +922,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         if not members:
             await interaction.response.send_message(
-                "No renameable active members found.", ephemeral=True,
+                "No renameable members found.", ephemeral=True,
             )
             return
 

@@ -152,24 +152,25 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             return f"{secs / 3600:.1f}h"
         return f"{secs / 86400:.1f}d"
 
-    def _vs_server(p: DropoffProfile) -> str:
-        """User's msg drop relative to the server-wide trend."""
+    def _vs_baseline(p: DropoffProfile, baseline_label: str = "server") -> str:
+        """User's msg drop relative to the baseline trend."""
         srv_pct = ((p.server_msgs_recent - p.server_msgs_prev) / p.server_msgs_prev * 100
                    if p.server_msgs_prev else 0.0)
         usr_pct = ((p.msgs_recent - p.msgs_prev) / p.msgs_prev * 100
                    if p.msgs_prev else 0.0)
         diff = round(usr_pct - srv_pct)
-        return f"{diff:+d}pp vs server"
+        return f"{diff:+d}pp vs {baseline_label}"
 
-    def _server_header(p: DropoffProfile) -> str:
-        """One-line server-wide trend shown above the ranked list."""
+    def _baseline_header(p: DropoffProfile, baseline_label: str = "Server") -> str:
+        """One-line baseline trend shown above the ranked list."""
         return (
-            f"Server trend: **{_arrow(p.server_msgs_prev, p.server_msgs_recent)}** msgs"
+            f"{baseline_label} trend: **{_arrow(p.server_msgs_prev, p.server_msgs_recent)}** msgs"
             f" ({_pct(p.server_msgs_prev, p.server_msgs_recent)})\n"
         )
 
     def _fmt_compact(
         rank: int, p: DropoffProfile, guild: discord.Guild,
+        baseline_label: str = "server",
     ) -> str:
         """Format one user as a name line plus a compact monospace table."""
         member = guild.get_member(p.user_id)
@@ -181,7 +182,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             voice_row = "\n" + _tbl_row("Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f")
 
         table = (
-            _tbl_row("Messages", p.msgs_prev, p.msgs_recent, suffix=f"  ({_vs_server(p)})")
+            _tbl_row("Messages", p.msgs_prev, p.msgs_recent, suffix=f"  ({_vs_baseline(p, baseline_label)})")
             + "\n" + _tbl_row("Days active", p.days_prev, p.days_recent, suffix=f"  /{p.days_in_window}")
             + voice_row
             + "\n" + _tbl_row("Channels", p.channels_prev, p.channels_recent)
@@ -203,10 +204,12 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     def _fmt_detail(
         p: DropoffProfile, guild: discord.Guild, period_label: str,
+        baseline_label: str = "server",
     ) -> discord.Embed:
         """Build a full-detail embed for a single user."""
         member = guild.get_member(p.user_id)
         name = member.display_name if member else f"User {p.user_id}"
+        bl_title = baseline_label.capitalize()
 
         srv_trend = _pct(p.server_msgs_prev, p.server_msgs_recent)
         lvl_note = f"  \u00b7  Level {p.level} ({p.total_xp:,.0f} XP)" if p.level else ""
@@ -214,7 +217,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             title=f"Engagement Profile \u2014 {name}",
             description=(
                 f"Comparing the prior {period_label} to the most recent {period_label}.{lvl_note}\n"
-                f"Server trend: **{_arrow(p.server_msgs_prev, p.server_msgs_recent)}** msgs ({srv_trend})\n"
+                f"{bl_title} trend: **{_arrow(p.server_msgs_prev, p.server_msgs_recent)}** msgs ({srv_trend})\n"
                 f"Last seen: {_last_seen_str(p.last_seen_ts)}"
             ),
             color=discord.Color.orange(),
@@ -226,7 +229,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         header = f"  {'':16s} {'Prior':>7s}     {'Recent':>7s}  {'Change':>6s}"
         activity_rows = [
             header,
-            _tbl_row("Messages", p.msgs_prev, p.msgs_recent, suffix=f"  ({_vs_server(p)})"),
+            _tbl_row("Messages", p.msgs_prev, p.msgs_recent, suffix=f"  ({_vs_baseline(p, baseline_label)})"),
             _tbl_row("Days active", p.days_prev, p.days_recent, suffix=f"  /{p.days_in_window}"),
             _tbl_row("Channels", p.channels_prev, p.channels_recent),
         ]
@@ -388,7 +391,8 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
                     ephemeral=True,
                 )
                 return
-            embed = _fmt_detail(profiles[0], guild, period_label)
+            bl = f"#{channel.name}" if channel else "server"
+            embed = _fmt_detail(profiles[0], guild, period_label, baseline_label=bl)
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
@@ -402,9 +406,10 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
             return
 
-        header = _server_header(profiles[0])
+        bl = f"#{channel.name}" if channel else "Server"
+        header = _baseline_header(profiles[0], baseline_label=bl)
         lines = [
-            _fmt_compact(rank, p, guild)
+            _fmt_compact(rank, p, guild, baseline_label=bl.lower())
             for rank, p in enumerate(profiles, start=1)
         ]
 

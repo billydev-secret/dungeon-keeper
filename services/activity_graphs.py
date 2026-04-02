@@ -417,17 +417,30 @@ def query_dropoff_profiles(
     start = mid - int(period_seconds)
     days_in_window = max(1, round(period_seconds / 86400))
 
-    # ── server-wide baseline ──────────────────────────────────────────────
-    srv_row = conn.execute(
-        """
-        SELECT
-            SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END),
-            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END)
-        FROM processed_messages
-        WHERE guild_id = ? AND created_at >= ? AND created_at < ?
-        """,
-        [mid, mid, guild_id, start, now_ts],
-    ).fetchone()
+    # ── baseline (server-wide, or channel-scoped when filtering) ───────────
+    if channel_id is not None:
+        srv_row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END),
+                SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END)
+            FROM processed_messages
+            WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+                  AND channel_id = ?
+            """,
+            [mid, mid, guild_id, start, now_ts, channel_id],
+        ).fetchone()
+    else:
+        srv_row = conn.execute(
+            """
+            SELECT
+                SUM(CASE WHEN created_at < ? THEN 1 ELSE 0 END),
+                SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END)
+            FROM processed_messages
+            WHERE guild_id = ? AND created_at >= ? AND created_at < ?
+            """,
+            [mid, mid, guild_id, start, now_ts],
+        ).fetchone()
     srv_prev = int(srv_row[0] or 0) if srv_row else 0
     srv_recent = int(srv_row[1] or 0) if srv_row else 0
 
