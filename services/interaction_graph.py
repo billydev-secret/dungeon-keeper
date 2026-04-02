@@ -1144,8 +1144,32 @@ def render_connection_web(
         if not moved:
             break
 
+    # Prune inter-community edges: for each node keep only its strongest
+    # cross-group connection so the graph isn't overwhelmed with bridge lines.
+    if communities is not None:
+        # Per node, find the heaviest inter-community edge.
+        best_cross: dict[int, int] = {}  # nid -> best weight across communities
+        for u, v, w in edges:
+            if communities.get(u) != communities.get(v):
+                if w > best_cross.get(u, 0):
+                    best_cross[u] = w
+                if w > best_cross.get(v, 0):
+                    best_cross[v] = w
+
+        draw_edges: list[tuple[int, int, int]] = []
+        for u, v, w in edges:
+            if communities.get(u) == communities.get(v):
+                draw_edges.append((u, v, w))
+            else:
+                # Keep the edge only if it's the top cross-community edge for
+                # at least one of its endpoints.
+                if w >= best_cross.get(u, 0) or w >= best_cross.get(v, 0):
+                    draw_edges.append((u, v, w))
+    else:
+        draw_edges = list(edges)
+
     # Draw edges — clipped around every node circle they pass through.
-    for u, v, w in edges:
+    for u, v, w in draw_edges:
         xu, yu = pos_n[u]
         xv, yv = pos_n[v]
         dx = xv - xu

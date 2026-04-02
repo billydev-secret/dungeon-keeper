@@ -25,6 +25,7 @@ from commands.xp_commands import register_xp_commands
 from db_utils import init_config_db, init_grant_role_tables, migrate_grant_roles, open_db
 from handlers.events import register_events
 from services.interaction_graph import init_interaction_tables
+from services.invite_tracker import init_invite_tables
 from services.message_store import init_message_tables
 from reports import register_reports
 from services.auto_delete_service import auto_delete_loop, init_auto_delete_tables
@@ -81,6 +82,7 @@ with open_db(DB_PATH) as _conn:
     init_watch_tables(_conn)
     init_inactivity_prune_tables(_conn)
     init_interaction_tables(_conn)
+    init_invite_tables(_conn)
     init_message_tables(_conn)
     init_give_role_tables(_conn)
     init_grant_role_tables(_conn)

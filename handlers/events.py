@@ -14,6 +14,7 @@ from post_monitoring import enforce_spoiler_requirement
 from services.ai_moderation_service import ai_check_watched_message
 from services.auto_delete_service import auto_delete_rule_exists, track_auto_delete_message
 from services.interaction_graph import record_interactions
+from services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from services.message_store import (
     adjust_reaction_count,
     delete_message,
@@ -64,6 +65,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             _ch(ctx.level_5_log_channel_id),
         )
         log.debug("XP excluded channels: %s", sorted(ctx.xp_excluded_channel_ids))
+        if _guild is not None:
+            await refresh_invite_cache(_guild)
         if ctx.guild_id:
             with ctx.open_db() as conn:
                 log.debug(
@@ -284,6 +287,13 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
     @bot.event
     async def on_member_join(member: discord.Member) -> None:
+        # Invite tracking — detect who invited this member
+        inviter_id, invite_code = await detect_inviter(member.guild)
+        if inviter_id is not None:
+            with ctx.open_db() as conn:
+                record_invite(conn, member.guild.id, inviter_id, member.id, invite_code)
+            log.info("Invite tracked: %s invited by %s (code: %s)", member, inviter_id, invite_code)
+
         # Welcome message
         if ctx.welcome_channel_id > 0:
             channel = member.guild.get_channel(ctx.welcome_channel_id)

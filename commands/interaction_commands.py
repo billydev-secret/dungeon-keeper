@@ -24,6 +24,7 @@ from services.interaction_graph import (
     render_connection_web,
     render_interaction_heatmap,
 )
+from services.invite_tracker import query_invite_web
 from services.message_store import set_reaction_count, store_message
 
 if TYPE_CHECKING:
@@ -466,5 +467,107 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         )
         await interaction.followup.send(
             file=discord.File(io.BytesIO(chart_bytes), filename="interaction_heatmap.png"),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="invite_web",
+        description="Show who invited whom as a network graph.",
+    )
+    @app_commands.describe(
+        member="Focus on this member's invite tree only.",
+        spread="How spread out the graph is (default 1.0).",
+    )
+    async def invite_web(
+        interaction: discord.Interaction,
+        member: discord.User | None = None,
+        spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True,
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        with ctx.open_db() as conn:
+            all_edges = query_invite_web(conn, guild.id)
+
+        if member is not None:
+            # Keep only edges reachable from the focused member (invite tree)
+            included: set[int] = {member.id}
+            changed = True
+            while changed:
+                changed = False
+                for u, v, w in all_edges:
+                    if u in included and v not in included:
+                        included.add(v)
+                        changed = True
+                    elif v in included and u not in included:
+                        included.add(u)
+                        changed = True
+            edges = [(u, v, w) for u, v, w in all_edges if u in included and v in included]
+        else:
+            edges = all_edges
+
+        if not edges:
+            await interaction.followup.send(
+                "No invite data recorded yet. Invites are tracked as new members join.",
+                ephemeral=True,
+            )
+            return
+
+        # Resolve display names
+        candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
+        name_map: dict[int, str] = {}
+        for i in range(0, len(candidate_ids), 100):
+            batch = candidate_ids[i:i + 100]
+            try:
+                fetched = await guild.query_members(user_ids=batch, limit=100)
+                for m in fetched:
+                    name_map[m.id] = m.display_name
+            except (discord.ClientException, discord.HTTPException):
+                for uid in batch:
+                    cached = guild.get_member(uid)
+                    if cached:
+                        name_map[uid] = cached.display_name
+
+        # Fetch names for users who left
+        for uid in candidate_ids:
+            if uid not in name_map:
+                try:
+                    fetched_user = await bot.fetch_user(uid)
+                    name_map[uid] = fetched_user.display_name
+                except discord.NotFound:
+                    pass
+
+        edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
+        if not edges:
+            await interaction.followup.send(
+                "No invite edges with resolvable users found.", ephemeral=True,
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+        chart_bytes = await loop.run_in_executor(
+            None,
+            functools.partial(
+                render_connection_web,
+                edges,
+                name_map,
+                guild_name=f"{guild.name} — Invite Tree",
+                focus_user_id=member.id if member else None,
+                spread=spread,
+            ),
+        )
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(chart_bytes), filename="invite_web.png"),
             ephemeral=True,
         )
