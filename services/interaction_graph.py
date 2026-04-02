@@ -1144,40 +1144,76 @@ def render_connection_web(
         if not moved:
             break
 
-    # Draw edges — clipped to node boundaries so lines don't pass under dots.
+    # Draw edges — clipped around every node circle they pass through.
     for u, v, w in edges:
         xu, yu = pos_n[u]
         xv, yv = pos_n[v]
         dx = xv - xu
         dy = yv - yu
         d = math.sqrt(dx * dx + dy * dy) or 1e-9
-        # Shorten each end by the node radius so the edge stops at the circle.
-        t_start = node_r[u] / d
-        t_end = 1.0 - node_r[v] / d
-        if t_start >= t_end:
-            continue  # nodes overlap or are adjacent — skip the edge line
-        x1 = xu + dx * t_start
-        y1 = yu + dy * t_start
-        x2 = xu + dx * t_end
-        y2 = yu + dy * t_end
+
+        # Collect (t_enter, t_exit) intervals where the edge is hidden by a node.
+        blocked: list[tuple[float, float]] = []
+        for nid in node_ids:
+            nx, ny = pos_n[nid]
+            r = node_r[nid]
+            # Project node centre onto the edge line: t = dot(node-u, v-u) / |v-u|²
+            ex, ey = nx - xu, ny - yu
+            t_proj = (ex * dx + ey * dy) / (d * d)
+            # Perpendicular distance from node centre to the line
+            closest_x = xu + dx * t_proj - nx
+            closest_y = yu + dy * t_proj - ny
+            perp = math.sqrt(closest_x * closest_x + closest_y * closest_y)
+            if perp < r:
+                # Half-chord length along the edge that falls inside the circle
+                half_chord = math.sqrt(r * r - perp * perp) / d
+                blocked.append((t_proj - half_chord, t_proj + half_chord))
+
+        # Merge overlapping blocked intervals and compute visible segments.
+        blocked.sort()
+        merged: list[tuple[float, float]] = []
+        for lo, hi in blocked:
+            if merged and lo <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            else:
+                merged.append((lo, hi))
+
+        # Build visible segments from the gaps between blocked intervals.
+        visible: list[tuple[float, float]] = []
+        cursor = 0.0
+        for lo, hi in merged:
+            if lo > cursor:
+                visible.append((cursor, lo))
+            cursor = max(cursor, hi)
+        if cursor < 1.0:
+            visible.append((cursor, 1.0))
+
+        if not visible:
+            continue
+
         alpha = 0.25 + 0.65 * (w / max_weight)
         lw = 0.8 + 4.0 * (math.log1p(w) / math.log1p(max_weight))
-        # Inter-community edges are dimmer
         if communities is not None and communities.get(u) != communities.get(v):
             alpha *= 0.5
             lw *= 0.7
-        ax.plot(
-            [x1, x2], [y1, y2],
-            color=_EDGE_COLOR,
-            linewidth=lw,
-            alpha=alpha,
-            solid_capstyle="round",
-            zorder=1,
-        )
+
+        for t0, t1 in visible:
+            ax.plot(
+                [xu + dx * t0, xu + dx * t1],
+                [yu + dy * t0, yu + dy * t1],
+                color=_EDGE_COLOR,
+                linewidth=lw,
+                alpha=alpha,
+                solid_capstyle="round",
+                zorder=1,
+            )
+
         if w >= max_weight * 0.15:
-            mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+            # Place weight label at the midpoint of the longest visible segment.
+            longest_seg = max(visible, key=lambda s: s[1] - s[0])
+            mt = (longest_seg[0] + longest_seg[1]) / 2
             ax.text(
-                mx, my, str(w),
+                xu + dx * mt, yu + dy * mt, str(w),
                 ha="center", va="center",
                 color=_TEXT, fontsize=6, alpha=0.7,
                 zorder=3,

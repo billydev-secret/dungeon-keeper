@@ -8,7 +8,6 @@ every hour via a background loop.
 from __future__ import annotations
 
 import asyncio
-import difflib
 import logging
 import random
 import sqlite3
@@ -895,7 +894,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="foolsday_repair",
-        description="Fix broken name mappings — match each display name to the correct user.",
+        description="Restore original nicknames using the audit log to find pre-shuffle names.",
     )
     async def foolsday_repair(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
@@ -918,10 +917,10 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
             return
 
-        # Gather active, renameable members and their current display names
+        # Gather active, renameable members
         bot_member = guild.get_member(bot.user.id) if bot.user else None
+        bot_user_id = bot.user.id if bot.user else 0
         members: list[discord.Member] = []
-        names: list[str] = []
         for uid in active_ids:
             m = guild.get_member(uid)
             if m is None or m.bot:
@@ -931,9 +930,8 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             if bot_member and m.top_role >= bot_member.top_role:
                 continue
             members.append(m)
-            names.append(m.display_name)
 
-        if not names:
+        if not members:
             await interaction.response.send_message(
                 "No renameable active members found.", ephemeral=True,
             )
@@ -941,98 +939,110 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # --- Auto-match phase ---
-        # Build lookup: lowercase known name -> member (username and global_name)
-        unmatched_members = list(members)
-        auto_matched: dict[str, discord.Member] = {}  # display_name -> member
-        remaining_names: list[str] = []
+        # --- Audit log phase: find original nick before the bot first changed it ---
+        # Walk the audit log for member_update actions performed by the bot.
+        # For each member, collect every nick change the bot made, ordered oldest
+        # first.  The `before.nick` of the earliest entry is the pre-shuffle name.
+        member_ids = {m.id for m in members}
+        # {user_id: (before_nick, entry_created_at)} — keep only the oldest per user
+        oldest_change: dict[int, tuple[str | None, float]] = {}
 
-        # Map each member to their known real names for matching
-        def _known_names(m: discord.Member) -> list[str]:
-            result = [m.name.lower()]
-            if m.global_name:
-                result.append(m.global_name.lower())
-            return result
+        try:
+            async for entry in guild.audit_logs(
+                action=discord.AuditLogAction.member_update,
+                limit=None,
+            ):
+                if entry.user is None or entry.user.id != bot_user_id:
+                    continue
+                target = entry.target
+                if target is None:
+                    continue
+                target_id: int = target if isinstance(target, int) else target.id  # type: ignore[assignment]
+                if target_id not in member_ids:
+                    continue
+                # Only care about nick changes
+                before_nick = getattr(entry.before, "nick", discord.utils.MISSING)
+                if before_nick is discord.utils.MISSING:
+                    continue
+                uid = target_id
+                ts = entry.created_at.timestamp()
+                if uid not in oldest_change or ts < oldest_change[uid][1]:
+                    oldest_change[uid] = (before_nick, ts)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I need the **View Audit Log** permission to look up original names.",
+                ephemeral=True,
+            )
+            return
 
-        # Pass 1: exact match (case-insensitive) on username or global name
-        for display in sorted(names):
-            matched = None
-            for m in unmatched_members:
-                if display.lower() in _known_names(m):
-                    matched = m
-                    break
-            if matched:
-                auto_matched[display] = matched
-                unmatched_members.remove(matched)
-            else:
-                remaining_names.append(display)
+        if not oldest_change:
+            await interaction.followup.send(
+                "No bot nickname changes found in the audit log. "
+                "Either the log has been pruned or no shuffle has happened.",
+                ephemeral=True,
+            )
+            return
 
-        # Pass 2: fuzzy match remaining names against remaining members
-        still_remaining: list[str] = []
-        for display in remaining_names:
-            best_match: discord.Member | None = None
-            best_ratio = 0.0
-            for m in unmatched_members:
-                for known in _known_names(m):
-                    ratio = difflib.SequenceMatcher(None, display.lower(), known).ratio()
-                    if ratio > best_ratio:
-                        best_ratio = ratio
-                        best_match = m
-            if best_match and best_ratio >= 0.6:
-                auto_matched[display] = best_match
-                unmatched_members.remove(best_match)
-            else:
-                still_remaining.append(display)
+        # --- Restore phase ---
+        restored = 0
+        failed = 0
+        skipped = 0
+        lines: list[str] = []
 
-        # Apply auto-matches immediately
-        auto_restored = 0
-        auto_failed = 0
-        auto_lines: list[str] = []
-        for display, m in auto_matched.items():
-            nick = None if display == m.name else display
+        for m in members:
+            if m.id not in oldest_change:
+                skipped += 1
+                continue
+
+            original_nick = oldest_change[m.id][0]  # None means they had no nickname
+            # If the member already has this name, skip
+            current_nick = m.nick
+            if current_nick == original_nick:
+                skipped += 1
+                lines.append(f"- **{m.name}** — already correct")
+                continue
+
             try:
-                await m.edit(nick=nick, reason="April Fools repair — auto-matched restore")
-                auto_restored += 1
-                auto_lines.append(f"- `{display}` → **{m.name}** (auto)")
+                await m.edit(nick=original_nick, reason="April Fools repair — audit log restore")
+                restored += 1
+                display_orig = original_nick or f"(no nickname / {m.name})"
+                lines.append(f"- **{m.name}** → `{display_orig}`")
             except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Foolsday repair auto: could not restore %s (%d): %s", m, m.id, exc)
-                auto_failed += 1
-                auto_lines.append(f"- `{display}` → **{m.name}** (failed: {exc})")
+                log.warning("Foolsday repair: could not restore %s (%d): %s", m, m.id, exc)
+                failed += 1
+                lines.append(f"- **{m.name}** — failed: {exc}")
 
             # Update DB
             with ctx.open_db() as conn:
                 _init_table(conn)
                 conn.execute(
                     "INSERT OR REPLACE INTO foolsday_names (guild_id, user_id, original) VALUES (?, ?, ?)",
-                    (guild.id, m.id, display),
+                    (guild.id, m.id, original_nick or m.name),
                 )
 
-        log.info("Foolsday repair auto-match: %d matched (%d restored, %d failed), %d remaining",
-                 len(auto_matched), auto_restored, auto_failed, len(still_remaining))
+        log.info("Foolsday repair (audit log): %d restored, %d failed, %d skipped, %d not in audit log",
+                 restored, failed, skipped, len(member_ids) - len(oldest_change))
 
-        auto_summary = ""
-        if auto_lines:
-            auto_summary = f"**Auto-matched {len(auto_lines)} names:**\n" + "\n".join(auto_lines) + "\n\n"
-
-        if not still_remaining:
-            await interaction.followup.send(
-                auto_summary + f"All **{len(names)}** names matched automatically. No manual assignment needed.",
-                ephemeral=True,
-            )
-            return
-
-        # --- Manual phase for remaining names ---
-        view = _RepairView(guild, still_remaining, members, ctx.open_db)
-        # Pre-fill assignments and counters from auto-match
-        for display, m in auto_matched.items():
-            view.assignments[display] = m.id
-        view.restored = auto_restored
-        view.failed = auto_failed
-
-        await interaction.followup.send(
-            auto_summary
-            + f"**{len(still_remaining)}** names need manual assignment.\n\n"
-            + view._prompt(),
-            view=view,
-            ephemeral=True,
+        summary = (
+            f"**Audit Log Repair Complete**\n"
+            f"Restored: {restored} · Failed: {failed} · Skipped: {skipped} · "
+            f"Not in audit log: {len(member_ids) - len(oldest_change)}\n"
+            f"----------------------------------\n"
         )
+        if lines:
+            summary += "\n".join(lines)
+
+        await _send_chunked_ephemeral(interaction, summary)
+
+
+    async def _send_chunked_ephemeral(interaction: discord.Interaction, text: str) -> None:
+        """Send a long ephemeral followup, splitting on newlines if needed."""
+        while text:
+            if len(text) <= 1900:
+                await interaction.followup.send(text, ephemeral=True)
+                break
+            split = text.rfind("\n", 0, 1900)
+            if split <= 0:
+                split = 1900
+            await interaction.followup.send(text[:split], ephemeral=True)
+            text = text[split:].lstrip("\n")

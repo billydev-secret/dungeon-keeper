@@ -56,7 +56,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
     ])
     async def connection_web(
         interaction: discord.Interaction,
-        member: discord.Member | None = None,
+        member: discord.User | None = None,
         timescale: str = "all",
         min_pct: app_commands.Range[int, 1, 100] = 5,
         layers: app_commands.Range[int, 1, 5] = 2,
@@ -200,6 +200,15 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                     cached = guild.get_member(uid)
                     if cached:
                         name_map[uid] = cached.display_name
+
+        # Fetch display names for users who left the server.
+        for uid in candidate_ids:
+            if uid not in name_map:
+                try:
+                    fetched_user = await bot.fetch_user(uid)
+                    name_map[uid] = fetched_user.display_name
+                except discord.NotFound:
+                    pass
 
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
 

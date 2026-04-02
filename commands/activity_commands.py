@@ -46,7 +46,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
     async def activity(
         interaction: discord.Interaction,
         resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
-        member: discord.Member | None = None,
+        member: discord.User | None = None,
         channel: discord.TextChannel | None = None,
     ) -> None:
         if not ctx.is_mod(interaction):
@@ -338,7 +338,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         period: Literal["day", "week", "month"] = "week",
         limit: app_commands.Range[int, 1, 25] = 10,
         channel: discord.TextChannel | None = None,
-        member: discord.Member | None = None,
+        member: discord.User | None = None,
     ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -414,7 +414,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
     @app_commands.describe(member="The member to profile.")
     async def session_burst(
         interaction: discord.Interaction,
-        member: discord.Member,
+        member: discord.User,
     ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
