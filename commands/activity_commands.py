@@ -200,6 +200,13 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         ch = guild.get_channel(cid)
         return f"#{ch.name}" if ch and hasattr(ch, "name") else f"#{cid}"
 
+    def _tbl_row(label: str, prev: int | float, recent: int | float, fmt: str = "g", suffix: str = "") -> str:
+        """One row of a fixed-width comparison table."""
+        p = f"{prev:{fmt}}"
+        r = f"{recent:{fmt}}"
+        pct = _pct(prev, recent)
+        return f"  {label:<16s} {p:>7s}  \u2192 {r:>7s}  {pct:>6s}{suffix}"
+
     def _fmt_detail(
         p: DropoffProfile, guild: discord.Guild, period_label: str,
     ) -> discord.Embed:
@@ -213,84 +220,96 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             title=f"Engagement Profile \u2014 {name}",
             description=(
                 f"Comparing the prior {period_label} to the most recent {period_label}.{lvl_note}\n"
-                f"Server trend: **{_arrow(p.server_msgs_prev, p.server_msgs_recent)}** msgs ({srv_trend})"
+                f"Server trend: **{_arrow(p.server_msgs_prev, p.server_msgs_recent)}** msgs ({srv_trend})\n"
+                f"Last seen: {_last_seen_str(p.last_seen_ts)}"
             ),
             color=discord.Color.orange(),
         )
         if member and member.display_avatar:
             embed.set_thumbnail(url=member.display_avatar.url)
 
-        # Activity
+        # Activity table
+        header = f"  {'':16s} {'Prior':>7s}     {'Recent':>7s}  {'Change':>6s}"
+        activity_rows = [
+            header,
+            _tbl_row("Messages", p.msgs_prev, p.msgs_recent, suffix=f"  ({_vs_server(p)})"),
+            _tbl_row("Days active", p.days_prev, p.days_recent, suffix=f"  /{p.days_in_window}"),
+            _tbl_row("Channels", p.channels_prev, p.channels_recent),
+        ]
         extras = ""
         if p.longest_gap_secs > 0:
-            extras += f"\nLongest silence: {_gap_str(p.longest_gap_secs)}"
+            extras += f"\n  Longest silence: {_gap_str(p.longest_gap_secs)}"
         if p.first_activity_day is not None and p.first_activity_day > 0:
-            extras += f"\nFirst active: day {p.first_activity_day} of {p.days_in_window}"
-        embed.add_field(name="Activity", value=(
-            f"Messages: **{_arrow(p.msgs_prev, p.msgs_recent)}** ({_pct(p.msgs_prev, p.msgs_recent)}, {_vs_server(p)})\n"
-            f"Days active: **{p.days_prev}/{p.days_in_window}** \u2192 **{p.days_recent}/{p.days_in_window}**\n"
-            f"Channels: **{_arrow(p.channels_prev, p.channels_recent)}**\n"
-            f"Last seen: {_last_seen_str(p.last_seen_ts)}"
-            f"{extras}"
-        ), inline=False)
+            extras += f"\n  First active: day {p.first_activity_day} of {p.days_in_window}"
+        embed.add_field(
+            name="Activity",
+            value=f"```\n{chr(10).join(activity_rows)}\n```{extras}",
+            inline=False,
+        )
 
-        # XP Breakdown
-        xp_lines = []
+        # XP table
+        xp_rows = [header]
         if p.text_xp_prev or p.text_xp_recent:
-            xp_lines.append(
-                f"Text: **{_arrow(p.text_xp_prev, p.text_xp_recent, '.0f')}** ({_pct(p.text_xp_prev, p.text_xp_recent)})"
-            )
+            xp_rows.append(_tbl_row("Text XP", p.text_xp_prev, p.text_xp_recent, fmt=".0f"))
         if p.reply_xp_prev or p.reply_xp_recent:
-            xp_lines.append(
-                f"Reply: **{_arrow(p.reply_xp_prev, p.reply_xp_recent, '.0f')}** ({_pct(p.reply_xp_prev, p.reply_xp_recent)})"
-            )
+            xp_rows.append(_tbl_row("Reply XP", p.reply_xp_prev, p.reply_xp_recent, fmt=".0f"))
         if p.voice_xp_prev or p.voice_xp_recent:
-            xp_lines.append(
-                f"Voice: **{_arrow(p.voice_xp_prev, p.voice_xp_recent, '.0f')}** ({_pct(p.voice_xp_prev, p.voice_xp_recent)})"
-            )
+            xp_rows.append(_tbl_row("Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f"))
         if p.image_react_xp_prev or p.image_react_xp_recent:
-            xp_lines.append(
-                f"Image react: **{_arrow(p.image_react_xp_prev, p.image_react_xp_recent, '.0f')}** ({_pct(p.image_react_xp_prev, p.image_react_xp_recent)})"
+            xp_rows.append(_tbl_row("Img React XP", p.image_react_xp_prev, p.image_react_xp_recent, fmt=".0f"))
+        if len(xp_rows) > 1:
+            embed.add_field(
+                name="XP Breakdown",
+                value=f"```\n{chr(10).join(xp_rows)}\n```",
+                inline=False,
             )
-        if xp_lines:
-            embed.add_field(name="XP Breakdown", value="\n".join(xp_lines), inline=False)
 
-        # Conversations
+        # Conversations table
         reply_pct_prev = round(p.replies_prev / p.msgs_prev * 100) if p.msgs_prev else 0
         reply_pct_recent = round(p.replies_recent / p.msgs_recent * 100) if p.msgs_recent else 0
-        convo_val = (
-            f"Replies: **{_arrow(p.replies_prev, p.replies_recent)}** ({reply_pct_prev}% \u2192 {reply_pct_recent}%)\n"
-            f"Initiations: **{_arrow(p.initiations_prev, p.initiations_recent)}** ({_pct(p.initiations_prev, p.initiations_recent)})\n"
-            f"Avg length: **{_arrow(round(p.avg_len_prev), round(p.avg_len_recent))}** chars"
-        )
+        convo_rows = [
+            header,
+            _tbl_row("Replies", p.replies_prev, p.replies_recent, suffix=f"  ({reply_pct_prev}%\u2192{reply_pct_recent}%)"),
+            _tbl_row("Initiations", p.initiations_prev, p.initiations_recent),
+            _tbl_row("Avg length", round(p.avg_len_prev), round(p.avg_len_recent), suffix="  chars"),
+        ]
         if p.deep_convos_prev or p.deep_convos_recent:
-            convo_val += (
-                f"\nDeep threads (3+): **{_arrow(p.deep_convos_prev, p.deep_convos_recent)}**"
+            convo_rows.append(_tbl_row("Deep threads", p.deep_convos_prev, p.deep_convos_recent))
+        embed.add_field(
+            name="Conversations",
+            value=f"```\n{chr(10).join(convo_rows)}\n```",
+            inline=False,
+        )
+
+        # Social table
+        social_rows = [
+            header,
+            _tbl_row("Partners", p.partners_prev, p.partners_recent),
+            _tbl_row("Inbound @s", p.inbound_prev, p.inbound_recent),
+            _tbl_row("Outbound @s", p.outbound_prev, p.outbound_recent),
+        ]
+        embed.add_field(
+            name="Social",
+            value=f"```\n{chr(10).join(social_rows)}\n```",
+            inline=False,
+        )
+
+        # Content table
+        content_rows = [header]
+        if p.attachments_prev or p.attachments_recent:
+            content_rows.append(_tbl_row("Attachments", p.attachments_prev, p.attachments_recent))
+        if p.reactions_prev or p.reactions_recent:
+            rpm_prev = p.reactions_prev / p.msgs_prev if p.msgs_prev else 0
+            rpm_recent = p.reactions_recent / p.msgs_recent if p.msgs_recent else 0
+            content_rows.append(
+                _tbl_row("Reactions", p.reactions_prev, p.reactions_recent, suffix=f"  ({rpm_prev:.1f}\u2192{rpm_recent:.1f}/msg)")
             )
-        embed.add_field(name="Conversations", value=convo_val, inline=False)
-
-        # Social
-        embed.add_field(name="Social", value=(
-            f"Unique partners: **{_arrow(p.partners_prev, p.partners_recent)}**\n"
-            f"Inbound mentions: **{_arrow(p.inbound_prev, p.inbound_recent)}** ({_pct(p.inbound_prev, p.inbound_recent)})\n"
-            f"Outbound mentions: **{_arrow(p.outbound_prev, p.outbound_recent)}** ({_pct(p.outbound_prev, p.outbound_recent)})"
-        ), inline=False)
-
-        # Content
-        if p.attachments_prev or p.attachments_recent or p.reactions_prev or p.reactions_recent:
-            content_lines = []
-            if p.attachments_prev or p.attachments_recent:
-                content_lines.append(
-                    f"Attachments: **{_arrow(p.attachments_prev, p.attachments_recent)}**"
-                )
-            if p.reactions_prev or p.reactions_recent:
-                rpm_prev = p.reactions_prev / p.msgs_prev if p.msgs_prev else 0
-                rpm_recent = p.reactions_recent / p.msgs_recent if p.msgs_recent else 0
-                content_lines.append(
-                    f"Reactions received: **{_arrow(p.reactions_prev, p.reactions_recent)}**"
-                    f" ({rpm_prev:.1f} \u2192 {rpm_recent:.1f} per msg)"
-                )
-            embed.add_field(name="Content", value="\n".join(content_lines), inline=False)
+        if len(content_rows) > 1:
+            embed.add_field(
+                name="Content",
+                value=f"```\n{chr(10).join(content_rows)}\n```",
+                inline=False,
+            )
 
         # Channel Migration
         if p.channels_left or p.channels_joined:
@@ -306,18 +325,20 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
                 migration_lines.append(f"Still active: {stayed_names}")
             embed.add_field(name="Channel Migration", value="\n".join(migration_lines), inline=False)
 
-        # Patterns
-        pattern_lines = []
+        # Patterns table
+        pattern_rows = []
         if p.peak_hour_prev is not None or p.peak_hour_recent is not None:
             h_prev = _HOD_LABELS[p.peak_hour_prev] if p.peak_hour_prev is not None else "\u2014"
             h_recent = _HOD_LABELS[p.peak_hour_recent] if p.peak_hour_recent is not None else "\u2014"
-            pattern_lines.append(f"Peak hour: **{h_prev} \u2192 {h_recent}**")
+            pattern_rows.append(f"  Peak hour        {h_prev:>7s}  \u2192 {h_recent:>7s}")
         if p.msgs_prev or p.msgs_recent:
-            pattern_lines.append(
-                f"Weekday msgs: **{p.weekday_pct_prev:.0f}% \u2192 {p.weekday_pct_recent:.0f}%**"
+            pattern_rows.append(f"  Weekday msgs   {p.weekday_pct_prev:>6.0f}%  \u2192 {p.weekday_pct_recent:>6.0f}%")
+        if pattern_rows:
+            embed.add_field(
+                name="Patterns",
+                value=f"```\n{chr(10).join(pattern_rows)}\n```",
+                inline=False,
             )
-        if pattern_lines:
-            embed.add_field(name="Patterns", value="\n".join(pattern_lines), inline=False)
 
         return embed
 
