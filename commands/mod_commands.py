@@ -70,12 +70,12 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         grant_cmds: list[tuple[str, str]] = []
         for gname, gcfg in ctx.grant_roles.items():
             grant_cmds.append((
-                f"/grant_{gname} member:@user",
+                f"/grant role:{gname} member:@user",
                 f"Grant the {gcfg['label']} role to a member.",
             ))
         pages.append(_page("Role Grants",
             "Grant community roles to members. "
-            "Access is configured per-role via `/grant_allow`.\n\n"
+            "Access is configured per-role via `/config roles`.\n\n"
             + _fmt(grant_cmds)
         ))
 

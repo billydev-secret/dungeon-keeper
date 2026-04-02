@@ -130,16 +130,19 @@ def _make_member(*, bot: bool = False, user_id: int = 200, roles=None) -> MagicM
 
 
 # ---------------------------------------------------------------------------
-# grant_denizen tests
+# grant command tests
 # ---------------------------------------------------------------------------
 
 
-class GrantDenizenTests(unittest.TestCase):
+class GrantCommandTests(unittest.TestCase):
     def setUp(self):
         cap = _CommandCapture()
         self.ctx = _make_ctx(can_grant_denizen=True, denizen_role_id=999)
         register_denizen_commands(cap.bot, self.ctx)
-        self.grant = cap.get("grant_denizen")
+        self._grant_cmd = cap.get("grant")
+
+    def grant(self, interaction, member):
+        return self._grant_cmd(interaction, "denizen", member)
 
     def _guild_with_role(self, role):
         guild = MagicMock()

@@ -15,7 +15,14 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from db_utils import upsert_grant_role
+import re
+
+from db_utils import (
+    add_grant_permission,
+    get_grant_permissions,
+    remove_grant_permission,
+    upsert_grant_role,
+)
 from services.inactivity_prune_service import (
     get_prune_rule,
     remove_prune_rule,
@@ -283,13 +290,21 @@ class _GreeterModal(discord.ui.Modal, title="Greeter Role Config"):
         chat_label = f"<#{gc}>" if gc > 0 else "disabled"
         await interaction.response.send_message(
             f"Greeter role set to {role_label}. Greeter chat → {chat_label}.\n"
-            "Members with this role can use `/grant_denizen`.",
+            "Members with this role can use `/grant`.",
             ephemeral=True,
         )
 
 
 class _FullRoleModal(discord.ui.Modal):
-    def __init__(self, ctx: AppContext, grant_name: str, current_channel_id: int) -> None:
+    def __init__(
+        self,
+        ctx: AppContext,
+        grant_name: str,
+        current_channel_id: int,
+        *,
+        original: discord.Interaction | None = None,
+        invoker_id: int = 0,
+    ) -> None:
         cfg = ctx.grant_roles.get(grant_name)
         label = cfg["label"] if cfg else grant_name.title()
         super().__init__(title=f"{label} Role Config")
@@ -297,6 +312,8 @@ class _FullRoleModal(discord.ui.Modal):
         self._grant_name = grant_name
         self._label = label
         self._current_channel_id = current_channel_id
+        self._original = original
+        self._invoker_id = invoker_id
 
         self.role_id: discord.ui.TextInput = discord.ui.TextInput(
             label="Role ID  (right-click role → Copy ID)",
@@ -354,13 +371,34 @@ class _FullRoleModal(discord.ui.Modal):
             )
         self._ctx.reload_grant_roles()
 
-        await interaction.response.send_message(
-            f"{self._label} config saved.\n"
-            f"Role: {'<@&' + str(rid) + '>' if rid else 'cleared'}  ·  "
-            f"Log: {'<#' + str(lc) + '>' if lc else 'off'}  ·  "
-            f"Announce: {'<#' + str(ac) + '>' if ac else 'off'}",
-            ephemeral=True,
-        )
+        if self._original:
+            await interaction.response.defer()
+            embed, view = _build_grant_role_panel(
+                self._ctx, self._grant_name, self._original, self._invoker_id,
+            )
+            await self._original.edit_original_response(embed=embed, view=view)
+        else:
+            await interaction.response.send_message(
+                f"{self._label} config saved.\n"
+                f"Role: {'<@&' + str(rid) + '>' if rid else 'cleared'}  ·  "
+                f"Log: {'<#' + str(lc) + '>' if lc else 'off'}  ·  "
+                f"Announce: {'<#' + str(ac) + '>' if ac else 'off'}",
+                ephemeral=True,
+            )
+
+
+def _parse_mention(text: str) -> tuple[str, int] | None:
+    """Parse a role/user mention or raw ID. Returns (entity_type, entity_id) or None."""
+    text = text.strip()
+    m = re.match(r"<@!?(\d+)>", text)
+    if m:
+        return ("user", int(m.group(1)))
+    m = re.match(r"<@&(\d+)>", text)
+    if m:
+        return ("role", int(m.group(1)))
+    if text.isdigit():
+        return ("unknown", int(text))
+    return None
 
 
 def _build_roles_embed(ctx: AppContext) -> discord.Embed:
@@ -370,23 +408,223 @@ def _build_roles_embed(ctx: AppContext) -> discord.Embed:
     def _role(val: int) -> str:
         return f"<@&{val}>" if val > 0 else "—"
 
-    embed = discord.Embed(title="🎭  Role Grant Config", color=discord.Color.from_str("#57F287"))
+    embed = discord.Embed(title="Role Grant Config", color=discord.Color.from_str("#57F287"))
     embed.add_field(name="Greeter", value=f"Role: {_role(ctx.greeter_role_id)}", inline=False)
-    for cfg in ctx.grant_roles.values():
-        embed.add_field(
-            name=cfg["label"],
-            value=f"Role: {_role(cfg['role_id'])}  ·  Log: {_ch(cfg['log_channel_id'])}  ·  Announce: {_ch(cfg['announce_channel_id'])}",
-            inline=False,
-        )
+    with ctx.open_db() as conn:
+        for grant_name, cfg in ctx.grant_roles.items():
+            perms = get_grant_permissions(conn, ctx.guild_id, grant_name)
+            perm_str = (
+                ", ".join(
+                    f"<@&{eid}>" if et == "role" else f"<@{eid}>"
+                    for et, eid in perms
+                )
+                if perms else "mod-only"
+            )
+            embed.add_field(
+                name=cfg["label"],
+                value=(
+                    f"Role: {_role(cfg['role_id'])}  ·  Log: {_ch(cfg['log_channel_id'])}  ·  "
+                    f"Announce: {_ch(cfg['announce_channel_id'])}\n"
+                    f"Granters: {perm_str}"
+                ),
+                inline=False,
+            )
     embed.set_footer(text="Select a role type below to edit its settings.")
     return embed
 
 
+# --- Grant role sub-panel (config + permissions for one role type) ---------
+
+def _build_grant_role_panel(
+    ctx: AppContext,
+    grant_name: str,
+    original: discord.Interaction,
+    invoker_id: int,
+) -> tuple[discord.Embed, "_GrantRolePanel"]:
+    cfg = ctx.grant_roles.get(grant_name)
+    label = cfg["label"] if cfg else grant_name.title()
+
+    def _r(val: int) -> str:
+        return f"<@&{val}>" if val > 0 else "not set"
+
+    def _c(val: int) -> str:
+        return f"<#{val}>" if val > 0 else "off"
+
+    embed = discord.Embed(title=f"Config: {label}", color=discord.Color.from_str("#57F287"))
+    embed.add_field(name="Role", value=_r(cfg["role_id"]) if cfg else "not set", inline=True)
+    embed.add_field(name="Log", value=_c(cfg["log_channel_id"]) if cfg else "off", inline=True)
+    embed.add_field(name="Announce", value=_c(cfg["announce_channel_id"]) if cfg else "off", inline=True)
+
+    guild = original.guild
+    guild_id = guild.id if guild else 0
+    with ctx.open_db() as conn:
+        perms = get_grant_permissions(conn, guild_id, grant_name)
+    if perms:
+        entries = [f"<@&{eid}>" if et == "role" else f"<@{eid}>" for et, eid in perms]
+        embed.add_field(name="Allowed granters", value=", ".join(entries), inline=False)
+    else:
+        embed.add_field(name="Allowed granters", value="Mods only", inline=False)
+
+    embed.set_footer(text="Mods always have access.")
+
+    current_channel_id = original.channel_id or 0
+    view = _GrantRolePanel(ctx, grant_name, perms, original, invoker_id, current_channel_id)
+    return embed, view
+
+
+class _AddPermissionModal(discord.ui.Modal, title="Add Grant Permission"):
+    def __init__(
+        self,
+        ctx: AppContext,
+        grant_name: str,
+        guild_id: int,
+        original: discord.Interaction,
+        invoker_id: int,
+    ) -> None:
+        super().__init__()
+        self._ctx = ctx
+        self._grant_name = grant_name
+        self._guild_id = guild_id
+        self._original = original
+        self._invoker_id = invoker_id
+        self.target: discord.ui.TextInput = discord.ui.TextInput(
+            label="User or role  (mention or ID)",
+            placeholder="@user, @role, or a numeric ID",
+            required=True, max_length=50,
+        )
+        self.add_item(self.target)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        parsed = _parse_mention(self.target.value)
+        if parsed is None:
+            await interaction.response.send_message(
+                f"Could not parse `{self.target.value}` as a user or role.", ephemeral=True,
+            )
+            return
+        entity_type, entity_id = parsed
+        guild = interaction.guild
+        if entity_type == "unknown" and guild:
+            entity_type = "role" if guild.get_role(entity_id) else "user"
+        with self._ctx.open_db() as conn:
+            add_grant_permission(conn, self._guild_id, self._grant_name, entity_type, entity_id)
+        await interaction.response.defer()
+        embed, view = _build_grant_role_panel(
+            self._ctx, self._grant_name, self._original, self._invoker_id,
+        )
+        await self._original.edit_original_response(embed=embed, view=view)
+
+
+class _RemovePermissionSelect(discord.ui.Select):
+    def __init__(
+        self,
+        ctx: AppContext,
+        grant_name: str,
+        guild_id: int,
+        permissions: list[tuple[str, int]],
+        original: discord.Interaction,
+        invoker_id: int,
+    ) -> None:
+        self._ctx = ctx
+        self._grant_name = grant_name
+        self._guild_id = guild_id
+        self._original = original
+        self._invoker_id = invoker_id
+        options = [
+            discord.SelectOption(
+                label=f"{'Role' if et == 'role' else 'User'}: {eid}",
+                value=f"{et}:{eid}",
+            )
+            for et, eid in permissions
+        ]
+        super().__init__(placeholder="Remove a permission…", options=options, row=1)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        entity_type, entity_id_str = self.values[0].split(":", 1)
+        with self._ctx.open_db() as conn:
+            remove_grant_permission(
+                conn, self._guild_id, self._grant_name, entity_type, int(entity_id_str),
+            )
+        await interaction.response.defer()
+        embed, view = _build_grant_role_panel(
+            self._ctx, self._grant_name, self._original, self._invoker_id,
+        )
+        await self._original.edit_original_response(embed=embed, view=view)
+
+
+class _GrantRolePanel(discord.ui.View):
+    def __init__(
+        self,
+        ctx: AppContext,
+        grant_name: str,
+        permissions: list[tuple[str, int]],
+        original: discord.Interaction,
+        invoker_id: int,
+        current_channel_id: int,
+    ) -> None:
+        super().__init__(timeout=120)
+        self._ctx = ctx
+        self._grant_name = grant_name
+        self._original = original
+        self._invoker_id = invoker_id
+        self._current_channel_id = current_channel_id
+
+        edit_btn: discord.ui.Button[_GrantRolePanel] = discord.ui.Button(
+            label="Edit Config", style=discord.ButtonStyle.primary, row=0,
+        )
+        edit_btn.callback = self._on_edit  # type: ignore[method-assign]
+        self.add_item(edit_btn)
+
+        add_btn: discord.ui.Button[_GrantRolePanel] = discord.ui.Button(
+            label="Add Permission", style=discord.ButtonStyle.success, row=0,
+        )
+        add_btn.callback = self._on_add  # type: ignore[method-assign]
+        self.add_item(add_btn)
+
+        if permissions:
+            guild_id = original.guild.id if original.guild else 0
+            self.add_item(_RemovePermissionSelect(
+                ctx, grant_name, guild_id, permissions, original, invoker_id,
+            ))
+
+    async def _on_edit(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        await interaction.response.send_modal(
+            _FullRoleModal(
+                self._ctx, self._grant_name, self._current_channel_id,
+                original=self._original, invoker_id=self._invoker_id,
+            )
+        )
+
+    async def _on_add(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        guild_id = interaction.guild.id if interaction.guild else 0
+        await interaction.response.send_modal(
+            _AddPermissionModal(
+                self._ctx, self._grant_name, guild_id,
+                self._original, self._invoker_id,
+            )
+        )
+
+
 class _RoleTypeSelect(discord.ui.Select):
-    def __init__(self, ctx: AppContext, invoker_id: int, current_channel_id: int) -> None:
+    def __init__(
+        self,
+        ctx: AppContext,
+        invoker_id: int,
+        current_channel_id: int,
+        original: discord.Interaction,
+    ) -> None:
         self._ctx = ctx
         self.invoker_id = invoker_id
         self._current_channel_id = current_channel_id
+        self._original = original
         options = [
             discord.SelectOption(label="Greeter", value="greeter",
                                  description="Who can use grant commands"),
@@ -394,7 +632,7 @@ class _RoleTypeSelect(discord.ui.Select):
         for grant_name, cfg in ctx.grant_roles.items():
             options.append(discord.SelectOption(
                 label=cfg["label"], value=grant_name,
-                description="Role, log channel, announce channel, message",
+                description="Role, permissions, channels, message",
             ))
         super().__init__(placeholder="Choose a role type to configure…", options=options)
 
@@ -406,15 +644,22 @@ class _RoleTypeSelect(discord.ui.Select):
         if role_type == "greeter":
             await interaction.response.send_modal(_GreeterModal(self._ctx, self._current_channel_id))
         else:
-            await interaction.response.send_modal(
-                _FullRoleModal(self._ctx, role_type, self._current_channel_id)
+            embed, view = _build_grant_role_panel(
+                self._ctx, role_type, self._original, self.invoker_id,
             )
+            await interaction.response.edit_message(embed=embed, view=view)
 
 
 class _RolesView(discord.ui.View):
-    def __init__(self, ctx: AppContext, invoker_id: int, current_channel_id: int) -> None:
+    def __init__(
+        self,
+        ctx: AppContext,
+        invoker_id: int,
+        current_channel_id: int,
+        original: discord.Interaction,
+    ) -> None:
         super().__init__(timeout=120)
-        self.add_item(_RoleTypeSelect(ctx, invoker_id, current_channel_id))
+        self.add_item(_RoleTypeSelect(ctx, invoker_id, current_channel_id, original))
 
 
 # ---------------------------------------------------------------------------
@@ -914,9 +1159,10 @@ def register_config_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
 
         elif section == "roles":
-            await interaction.response.send_message(
+            await interaction.response.defer(ephemeral=True)
+            await interaction.followup.send(
                 embed=_build_roles_embed(ctx),
-                view=_RolesView(ctx, interaction.user.id, current_channel_id),
+                view=_RolesView(ctx, interaction.user.id, current_channel_id, interaction),
                 ephemeral=True,
             )
 
