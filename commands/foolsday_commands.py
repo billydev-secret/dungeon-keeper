@@ -1001,13 +1001,10 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 failed += 1
                 lines.append(f"- **{m.name}** — failed: {exc}")
 
-            # Update DB
-            with ctx.open_db() as conn:
-                _init_table(conn)
-                conn.execute(
-                    "INSERT OR REPLACE INTO foolsday_names (guild_id, user_id, original) VALUES (?, ?, ?)",
-                    (guild.id, m.id, original_nick or m.name),
-                )
+        # Clear saved names so the hourly reshuffle loop stops.
+        with ctx.open_db() as conn:
+            _init_table(conn)
+            _clear_names(conn, guild.id)
 
         log.info("Foolsday repair (audit log): %d restored, %d failed, %d skipped, %d not in audit log",
                  restored, failed, skipped, len(member_ids) - len(oldest_change))
