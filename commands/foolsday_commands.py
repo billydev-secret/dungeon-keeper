@@ -2,17 +2,14 @@
 
 Records current display names, then shuffles nicknames among members who
 have been active in at least 3 of the last 5 days.  A restore option sets
-everyone back to their original name.  While active, names are reshuffled
-every hour via a background loop.
+everyone back to their original name.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import random
 import sqlite3
 import time as _time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import discord
@@ -24,7 +21,6 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.foolsday")
 
 DAY_SECONDS = 86400
-RESHUFFLE_INTERVAL = 3600  # seconds between automatic reshuffles
 
 
 def _derangement(items: list[str], own: list[str]) -> list[str]:
@@ -160,95 +156,6 @@ def _excluded_user_ids(conn: sqlite3.Connection, guild_id: int) -> set[int]:
 
 
 # ---------------------------------------------------------------------------
-# Reshuffle helper (used by both the command and the background loop)
-# ---------------------------------------------------------------------------
-
-async def _reshuffle_guild(guild: discord.Guild, conn: sqlite3.Connection, bot_user_id: int) -> None:
-    """Reshuffle nicknames among members that have saved originals."""
-    saved = _load_names(conn, guild.id)
-    if not saved:
-        return
-
-    excluded = _excluded_user_ids(conn, guild.id)
-    bot_member = guild.get_member(bot_user_id)
-    candidates: list[discord.Member] = []
-    for uid in saved:
-        if uid in excluded:
-            continue
-        m = guild.get_member(uid)
-        if m is None or m.bot:
-            continue
-        if m.id == guild.owner_id:
-            continue
-        if bot_member and m.top_role >= bot_member.top_role:
-            continue
-        candidates.append(m)
-
-    if len(candidates) < 2:
-        log.info("Foolsday reshuffle: not enough renameable members (%d), skipping", len(candidates))
-        return
-
-    # 20% chance: everyone gets the same random name from the pool
-    own = [saved[m.id] for m in candidates]
-    if random.random() < 0.20:
-        single = random.choice(own)
-        names = [single] * len(candidates)
-        log.info("Foolsday reshuffle: same-name mode — everyone becomes %r", single)
-    else:
-        # Normal 1:1 derangement
-        names = _derangement(list(own), own)
-
-    renamed = 0
-    skipped = 0
-    failed = 0
-    for member, new_name in zip(candidates, names):
-        if member.display_name == new_name:
-            skipped += 1
-            continue
-        try:
-            log.debug("Reshuffle %s (%d): %r -> %r", member, member.id, member.display_name, new_name)
-            await member.edit(nick=new_name, reason="April Fools hourly reshuffle")
-            renamed += 1
-        except (discord.Forbidden, discord.HTTPException) as exc:
-            log.warning("Reshuffle could not rename %s (%d): %s", member, member.id, exc)
-            failed += 1
-
-    log.info("Foolsday reshuffle complete: %d renamed, %d skipped (unchanged), %d failed", renamed, skipped, failed)
-
-
-# ---------------------------------------------------------------------------
-# Background loop
-# ---------------------------------------------------------------------------
-
-async def foolsday_loop(bot: discord.Client, db_path: Path) -> None:
-    """Reshuffle names every hour while the foolsday shuffle is active."""
-    from db_utils import open_db as _open_db
-
-    await bot.wait_until_ready()
-
-    while not bot.is_closed():
-        await asyncio.sleep(RESHUFFLE_INTERVAL)
-        try:
-            with _open_db(db_path) as conn:
-                _init_table(conn)
-                rows = conn.execute(
-                    "SELECT DISTINCT guild_id FROM foolsday_names"
-                ).fetchall()
-                if not rows:
-                    continue
-                for (guild_id,) in rows:
-                    guild = bot.get_guild(guild_id)
-                    if guild is None:
-                        continue
-                    log.info("Foolsday hourly reshuffle for guild %s (%d)", guild.name, guild.id)
-                    await _reshuffle_guild(guild, conn, bot.user.id if bot.user else 0)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("Foolsday reshuffle loop iteration failed")
-
-
-# ---------------------------------------------------------------------------
 # Command
 # ---------------------------------------------------------------------------
 
@@ -359,8 +266,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 msg = f"Shuffled **{renamed}** member nicknames."
                 if failed:
                     msg += f"\nFailed to rename **{failed}** members (permission issues)."
-                msg += "\nNames will reshuffle automatically every hour."
-                msg += "\nUse `/foolsday action:restore` to stop and undo."
+                msg += "\nUse `/foolsday action:restore` to undo."
                 await interaction.followup.send(msg, ephemeral=True)
 
             else:
@@ -470,7 +376,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                             details.append(f"Could not reassign {m.mention}: {exc}")
                         break
 
-                # Remove the excluded user from saved names so reshuffles skip them
+                # Remove the excluded user from saved names
                 conn.execute(
                     "DELETE FROM foolsday_names WHERE guild_id = ? AND user_id = ?",
                     (guild.id, target.id),
@@ -819,7 +725,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             summary += f"\n\nRestored **{self.restored}** nicknames."
             if self.failed:
                 summary += f" Failed **{self.failed}**."
-            summary += "\nUse `/foolsday action:restore` to stop the shuffle, or wait for the next hourly reshuffle."
+            summary += "\nUse `/foolsday action:restore` to undo the shuffle."
             await interaction.edit_original_response(content=summary)
 
         async def on_timeout(self) -> None:
@@ -889,7 +795,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
         msg = f"Set **{renamed}** members to `{name}`."
         if failed:
             msg += f" Failed **{failed}**."
-        msg += "\nThe next hourly reshuffle will return to normal shuffling."
+        msg += "\nUse `/foolsday action:restore` to undo."
         await interaction.followup.send(msg, ephemeral=True)
 
     @bot.tree.command(
@@ -1001,7 +907,6 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 failed += 1
                 lines.append(f"- **{m.name}** — failed: {exc}")
 
-        # Clear saved names so the hourly reshuffle loop stops.
         with ctx.open_db() as conn:
             _init_table(conn)
             _clear_names(conn, guild.id)
