@@ -233,7 +233,10 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         await send_ephemeral_text(interaction, summary)
 
     @report_group.command(name="role_growth", description="Chart cumulative role grants over time.")
-    @app_commands.describe(resolution="Time resolution: day (30d), week (12wk), month (12mo)")
+    @app_commands.describe(
+        resolution="Time resolution: day (30d), week (12wk), month (12mo)",
+        roles="Comma-separated role names to include (default: all)",
+    )
     @app_commands.choices(resolution=[
         app_commands.Choice(name="Daily (last 30 days)", value="day"),
         app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
@@ -242,6 +245,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
     async def role_growth(
         interaction: discord.Interaction,
         resolution: app_commands.Choice[str] | None = None,
+        roles: str | None = None,
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
@@ -255,6 +259,13 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         with ctx.open_db() as conn:
             labels, role_counts = query_role_growth(conn, ctx.guild_id, res)
+
+        if roles is not None:
+            wanted = {r.strip().lower() for r in roles.split(",") if r.strip()}
+            role_counts = {
+                name: counts for name, counts in role_counts.items()
+                if name.lower() in wanted
+            }
 
         if not role_counts:
             await interaction.followup.send("No role grant history recorded yet.", ephemeral=True)

@@ -228,7 +228,8 @@ class GrantCommandTests(unittest.TestCase):
         forbidden = discord.Forbidden(MagicMock(status=403, reason="Forbidden"), "Missing Permissions")
         member.add_roles = AsyncMock(side_effect=forbidden)
         _run(self.grant(ix, member))
-        self.assertIn("couldn't grant", ix.response.send_message.call_args[0][0].lower())
+        ix.response.defer.assert_awaited_once()
+        self.assertIn("couldn't grant", ix.followup.send.call_args[0][0].lower())
 
     def test_success_posts_public_message(self):
         denizen_role = _MockRole(position=1, role_id=999)
@@ -237,9 +238,9 @@ class GrantCommandTests(unittest.TestCase):
         member = _make_member()
         _run(self.grant(ix, member))
         member.add_roles.assert_awaited_once()
-        ix.response.send_message.assert_awaited_once()
-        self.assertFalse(ix.response.send_message.call_args[1]["ephemeral"])
-        self.assertIn("granted", ix.response.send_message.call_args[0][0].lower())
+        ix.response.defer.assert_awaited_once()
+        ix.followup.send.assert_awaited_once()
+        self.assertIn("granted", ix.followup.send.call_args[0][0].lower())
 
 
 

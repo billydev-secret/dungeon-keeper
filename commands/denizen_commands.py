@@ -89,10 +89,13 @@ async def _execute_grant(
         )
         return
 
+    # Defer before the slow add_roles API call to avoid the 3-second timeout.
+    await interaction.response.defer()
+
     try:
         await member.add_roles(role, reason=f"Granted by {interaction.user} via slash command")
     except discord.Forbidden:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"I couldn't grant {role.mention}. Check my role hierarchy and permissions.", ephemeral=True
         )
         return
@@ -107,8 +110,8 @@ async def _execute_grant(
         role.name,
         format_user_for_log(member),
     )
-    await interaction.response.send_message(
-        f"{member.mention} has been granted {role.mention}.", ephemeral=False
+    await interaction.followup.send(
+        f"{member.mention} has been granted {role.mention}."
     )
 
     if announce_channel_id > 0 and grant_message:
