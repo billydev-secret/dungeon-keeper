@@ -171,30 +171,24 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
     def _fmt_compact(
         rank: int, p: DropoffProfile, guild: discord.Guild,
     ) -> str:
-        """Format one user for the ranked list embed."""
+        """Format one user as a name line plus a compact monospace table."""
         member = guild.get_member(p.user_id)
         name = member.mention if member else f"<@{p.user_id}>"
-        lvl = f" (Lv {p.level})" if p.level else ""
+        lvl = f" Lv{p.level}" if p.level else ""
 
-        msg_drop = _pct(p.msgs_prev, p.msgs_recent)
-        voice = ""
+        voice_row = ""
         if p.voice_xp_prev or p.voice_xp_recent:
-            voice = f" \u00b7 Voice {_pct(p.voice_xp_prev, p.voice_xp_recent) or 'n/a'}"
+            voice_row = "\n" + _tbl_row("Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f")
 
-        parts = [
-            f"`{rank:>2}.` {name}{lvl}",
-            (
-                f"    Msgs `{_arrow(p.msgs_prev, p.msgs_recent)}` ({msg_drop}, {_vs_server(p)})"
-                f"{voice}"
-                f" \u00b7 Days `{p.days_prev}\u2192{p.days_recent}`/{p.days_in_window}"
-            ),
-            (
-                f"    Channels `{p.channels_prev}\u2192{p.channels_recent}`"
-                f" \u00b7 Partners `{p.partners_prev}\u2192{p.partners_recent}`"
-                f" \u00b7 Last seen {_last_seen_str(p.last_seen_ts)}"
-            ),
-        ]
-        return "\n".join(parts)
+        table = (
+            _tbl_row("Messages", p.msgs_prev, p.msgs_recent, suffix=f"  ({_vs_server(p)})")
+            + "\n" + _tbl_row("Days active", p.days_prev, p.days_recent, suffix=f"  /{p.days_in_window}")
+            + voice_row
+            + "\n" + _tbl_row("Channels", p.channels_prev, p.channels_recent)
+            + "\n" + _tbl_row("Partners", p.partners_prev, p.partners_recent)
+        )
+
+        return f"`{rank:>2}.` {name}{lvl} \u00b7 Last seen {_last_seen_str(p.last_seen_ts)}\n```\n{table}\n```"
 
     def _ch_name(guild: discord.Guild, cid: int) -> str:
         ch = guild.get_channel(cid)
