@@ -250,9 +250,11 @@ def _build_panel_embeds_and_files(
         image_path = role["image_path"]
         if image_path:
             if os.path.isfile(image_path):
-                filename = f"{role['role_key']}.png"
+                ext = os.path.splitext(image_path)[1] or ".png"
+                filename = f"{role['role_key']}{ext}"
                 files.append(discord.File(image_path, filename=filename))
                 embed.set_image(url=f"attachment://{filename}")
+                log.debug("Booster role %r attaching %s as %s", role["role_key"], image_path, filename)
             else:
                 log.warning("Booster role %r image not found: %s", role["role_key"], image_path)
         embeds.append(embed)
