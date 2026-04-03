@@ -163,6 +163,18 @@ def upsert_grant_role(
     )
 
 
+def delete_grant_role(conn: sqlite3.Connection, guild_id: int, grant_name: str) -> bool:
+    cursor = conn.execute(
+        "DELETE FROM grant_roles WHERE guild_id = ? AND grant_name = ?",
+        (guild_id, grant_name),
+    )
+    conn.execute(
+        "DELETE FROM grant_role_permissions WHERE guild_id = ? AND grant_name = ?",
+        (guild_id, grant_name),
+    )
+    return cursor.rowcount > 0
+
+
 def get_grant_permissions(
     conn: sqlite3.Connection, guild_id: int, grant_name: str,
 ) -> list[tuple[str, int]]:

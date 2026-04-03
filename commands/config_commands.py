@@ -19,6 +19,7 @@ import re
 
 from db_utils import (
     add_grant_permission,
+    delete_grant_role,
     get_grant_permissions,
     remove_grant_permission,
     upsert_grant_role,
@@ -571,6 +572,12 @@ class _GrantRolePanel(discord.ui.View):
         self._invoker_id = invoker_id
         self._current_channel_id = current_channel_id
 
+        back_btn: discord.ui.Button[_GrantRolePanel] = discord.ui.Button(
+            label="Back", style=discord.ButtonStyle.secondary, row=0,
+        )
+        back_btn.callback = self._on_back  # type: ignore[method-assign]
+        self.add_item(back_btn)
+
         edit_btn: discord.ui.Button[_GrantRolePanel] = discord.ui.Button(
             label="Edit Config", style=discord.ButtonStyle.primary, row=0,
         )
@@ -583,11 +590,27 @@ class _GrantRolePanel(discord.ui.View):
         add_btn.callback = self._on_add  # type: ignore[method-assign]
         self.add_item(add_btn)
 
+        remove_btn: discord.ui.Button[_GrantRolePanel] = discord.ui.Button(
+            label="Remove Role", style=discord.ButtonStyle.danger, row=0,
+        )
+        remove_btn.callback = self._on_remove_role  # type: ignore[method-assign]
+        self.add_item(remove_btn)
+
         if permissions:
             guild_id = original.guild.id if original.guild else 0
             self.add_item(_RemovePermissionSelect(
                 ctx, grant_name, guild_id, permissions, original, invoker_id,
             ))
+
+    async def _on_back(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        embed = _build_roles_embed(self._ctx)
+        view = _RolesView(
+            self._ctx, self._invoker_id, self._current_channel_id, self._original,
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
 
     async def _on_edit(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self._invoker_id:
@@ -611,6 +634,74 @@ class _GrantRolePanel(discord.ui.View):
                 self._original, self._invoker_id,
             )
         )
+
+    async def _on_remove_role(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        guild = interaction.guild
+        if guild is None:
+            return
+        with self._ctx.open_db() as conn:
+            delete_grant_role(conn, guild.id, self._grant_name)
+        self._ctx.reload_grant_roles()
+        await interaction.response.defer()
+        embed = _build_roles_embed(self._ctx)
+        view = _RolesView(
+            self._ctx, self._invoker_id, self._current_channel_id, self._original,
+        )
+        await self._original.edit_original_response(embed=embed, view=view)
+
+
+class _AddGrantRoleModal(discord.ui.Modal, title="Add Grant Role"):
+    def __init__(
+        self,
+        ctx: AppContext,
+        original: discord.Interaction,
+        invoker_id: int,
+        current_channel_id: int,
+    ) -> None:
+        super().__init__()
+        self._ctx = ctx
+        self._original = original
+        self._invoker_id = invoker_id
+        self._current_channel_id = current_channel_id
+        self.role_key: discord.ui.TextInput = discord.ui.TextInput(
+            label="Key  (short lowercase identifier)",
+            placeholder="e.g. denizen, nsfw, veteran",
+            required=True, max_length=30,
+        )
+        self.role_label: discord.ui.TextInput = discord.ui.TextInput(
+            label="Display name",
+            placeholder="e.g. Denizen, NSFW, Veteran",
+            required=True, max_length=50,
+        )
+        self.add_item(self.role_key)
+        self.add_item(self.role_label)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        key = self.role_key.value.strip().lower().replace(" ", "_")
+        label = self.role_label.value.strip()
+        if not key or not label:
+            await interaction.response.send_message("Key and label are required.", ephemeral=True)
+            return
+        if key == "greeter":
+            await interaction.response.send_message("'greeter' is reserved.", ephemeral=True)
+            return
+        guild = interaction.guild
+        if guild is None:
+            return
+        with self._ctx.open_db() as conn:
+            upsert_grant_role(
+                conn, guild.id, key,
+                label=label, role_id=0, log_channel_id=0,
+                announce_channel_id=0, grant_message="",
+            )
+        self._ctx.reload_grant_roles()
+        await interaction.response.defer()
+        embed = _build_roles_embed(self._ctx)
+        view = _RolesView(self._ctx, self._invoker_id, self._current_channel_id, self._original)
+        await self._original.edit_original_response(embed=embed, view=view)
 
 
 class _RoleTypeSelect(discord.ui.Select):
@@ -659,7 +750,27 @@ class _RolesView(discord.ui.View):
         original: discord.Interaction,
     ) -> None:
         super().__init__(timeout=120)
+        self._ctx = ctx
+        self._invoker_id = invoker_id
+        self._current_channel_id = current_channel_id
+        self._original = original
         self.add_item(_RoleTypeSelect(ctx, invoker_id, current_channel_id, original))
+
+        add_btn: discord.ui.Button[_RolesView] = discord.ui.Button(
+            label="Add Role", style=discord.ButtonStyle.success, row=1,
+        )
+        add_btn.callback = self._on_add  # type: ignore[method-assign]
+        self.add_item(add_btn)
+
+    async def _on_add(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        await interaction.response.send_modal(
+            _AddGrantRoleModal(
+                self._ctx, self._original, self._invoker_id, self._current_channel_id,
+            )
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1108,6 +1219,361 @@ class _SpoilerView(discord.ui.View):
 
 
 # ---------------------------------------------------------------------------
+# Booster Roles — cosmetic role picker for server boosters
+# ---------------------------------------------------------------------------
+
+def _build_booster_overview(
+    ctx: AppContext,
+    guild: discord.Guild,
+    original: discord.Interaction,
+) -> tuple[discord.Embed, "_BoosterConfigView"]:
+    from services.booster_roles import get_booster_roles
+
+    with ctx.open_db() as conn:
+        roles = get_booster_roles(conn, guild.id)
+
+    embed = discord.Embed(title="Booster Cosmetic Roles", color=discord.Color.from_str("#F47FFF"))
+    if roles:
+        for r in roles:
+            role_str = f"<@&{r['role_id']}>" if r["role_id"] > 0 else "not set"
+            img_str = r["image_path"] or "none"
+            embed.add_field(
+                name=r["label"],
+                value=f"Role: {role_str}\nImage: `{img_str}`",
+                inline=True,
+            )
+    else:
+        embed.description = "No booster roles configured yet."
+    embed.set_footer(text="Add roles, then post the panel to a channel.")
+
+    view = _BoosterConfigView(ctx, roles, guild, original, original.user.id)
+    return embed, view
+
+
+class _AddBoosterRoleModal(discord.ui.Modal, title="Add Booster Role"):
+    def __init__(
+        self,
+        ctx: AppContext,
+        guild: discord.Guild,
+        original: discord.Interaction,
+        invoker_id: int,
+    ) -> None:
+        super().__init__()
+        self._ctx = ctx
+        self._guild = guild
+        self._original = original
+        self._invoker_id = invoker_id
+
+        self.role_key: discord.ui.TextInput = discord.ui.TextInput(
+            label="Key  (short lowercase identifier)",
+            placeholder="e.g. ruby, sapphire, emerald",
+            required=True, max_length=30,
+        )
+        self.role_label: discord.ui.TextInput = discord.ui.TextInput(
+            label="Display name",
+            placeholder="e.g. Ruby, Sapphire, Emerald",
+            required=True, max_length=50,
+        )
+        self.role_id_input: discord.ui.TextInput = discord.ui.TextInput(
+            label="Role ID  (right-click role → Copy ID)",
+            placeholder="Role ID",
+            required=True, max_length=25,
+        )
+        self.image_path: discord.ui.TextInput = discord.ui.TextInput(
+            label="Image file path  (absolute path on server)",
+            placeholder="/path/to/image.png",
+            required=False, max_length=200,
+        )
+        self.add_item(self.role_key)
+        self.add_item(self.role_label)
+        self.add_item(self.role_id_input)
+        self.add_item(self.image_path)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from services.booster_roles import get_booster_roles, upsert_booster_role
+
+        key = self.role_key.value.strip().lower().replace(" ", "_")
+        label = self.role_label.value.strip()
+        if not key or not label:
+            await interaction.response.send_message("Key and label are required.", ephemeral=True)
+            return
+
+        rid = _parse_role(self.role_id_input.value)
+        if rid is None:
+            await interaction.response.send_message(
+                f"Invalid role ID: `{self.role_id_input.value}`", ephemeral=True,
+            )
+            return
+
+        with self._ctx.open_db() as conn:
+            existing = get_booster_roles(conn, self._guild.id)
+            if len(existing) >= 10 and not any(r["role_key"] == key for r in existing):
+                await interaction.response.send_message(
+                    "Maximum 10 booster roles allowed.", ephemeral=True,
+                )
+                return
+            sort_order = max((r["sort_order"] for r in existing), default=-1) + 1
+            upsert_booster_role(
+                conn, self._guild.id, key,
+                label=label, role_id=rid,
+                image_path=self.image_path.value.strip(),
+                sort_order=sort_order,
+            )
+
+        await interaction.response.defer()
+        embed, view = _build_booster_overview(self._ctx, self._guild, self._original)
+        await self._original.edit_original_response(embed=embed, view=view)
+
+
+class _EditBoosterRoleModal(discord.ui.Modal, title="Edit Booster Role"):
+    def __init__(
+        self,
+        ctx: AppContext,
+        guild: discord.Guild,
+        role_key: str,
+        current: "BoosterRoleRow",
+        original: discord.Interaction,
+        invoker_id: int,
+    ) -> None:
+        super().__init__()
+        self._ctx = ctx
+        self._guild = guild
+        self._role_key = role_key
+        self._original = original
+        self._invoker_id = invoker_id
+
+        self.role_label: discord.ui.TextInput = discord.ui.TextInput(
+            label="Display name",
+            default=current["label"],
+            required=True, max_length=50,
+        )
+        self.role_id_input: discord.ui.TextInput = discord.ui.TextInput(
+            label="Role ID",
+            default=str(current["role_id"]) if current["role_id"] > 0 else "",
+            required=True, max_length=25,
+        )
+        self.image_path: discord.ui.TextInput = discord.ui.TextInput(
+            label="Image file path",
+            default=current["image_path"],
+            required=False, max_length=200,
+        )
+        self.sort_order_input: discord.ui.TextInput = discord.ui.TextInput(
+            label="Sort order  (0 = first)",
+            default=str(current["sort_order"]),
+            required=False, max_length=5,
+        )
+        self.add_item(self.role_label)
+        self.add_item(self.role_id_input)
+        self.add_item(self.image_path)
+        self.add_item(self.sort_order_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        from services.booster_roles import upsert_booster_role
+
+        rid = _parse_role(self.role_id_input.value)
+        if rid is None:
+            await interaction.response.send_message(
+                f"Invalid role ID: `{self.role_id_input.value}`", ephemeral=True,
+            )
+            return
+
+        try:
+            sort_order = int(self.sort_order_input.value.strip() or "0")
+        except ValueError:
+            sort_order = 0
+
+        with self._ctx.open_db() as conn:
+            upsert_booster_role(
+                conn, self._guild.id, self._role_key,
+                label=self.role_label.value.strip(),
+                role_id=rid,
+                image_path=self.image_path.value.strip(),
+                sort_order=sort_order,
+            )
+
+        await interaction.response.defer()
+        embed, view = _build_booster_overview(self._ctx, self._guild, self._original)
+        await self._original.edit_original_response(embed=embed, view=view)
+
+
+if TYPE_CHECKING:
+    from services.booster_roles import BoosterRoleRow
+
+
+class _BoosterRoleSelect(discord.ui.Select):
+    def __init__(
+        self,
+        ctx: AppContext,
+        roles: list["BoosterRoleRow"],
+        guild: discord.Guild,
+        original: discord.Interaction,
+        invoker_id: int,
+    ) -> None:
+        self._ctx = ctx
+        self._roles = {r["role_key"]: r for r in roles}
+        self._guild = guild
+        self._original = original
+        self._invoker_id = invoker_id
+        options = [
+            discord.SelectOption(label=r["label"], value=r["role_key"])
+            for r in roles
+        ]
+        super().__init__(placeholder="Select a role to edit…", options=options, row=0)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        key = self.values[0]
+        role = self._roles.get(key)
+        if role is None:
+            await interaction.response.defer()
+            return
+        embed = discord.Embed(
+            title=f"Booster Role: {role['label']}",
+            color=discord.Color.from_str("#F47FFF"),
+        )
+        role_str = f"<@&{role['role_id']}>" if role["role_id"] > 0 else "not set"
+        embed.add_field(name="Role", value=role_str, inline=True)
+        embed.add_field(name="Image", value=f"`{role['image_path']}`" if role["image_path"] else "none", inline=True)
+        embed.add_field(name="Sort order", value=str(role["sort_order"]), inline=True)
+        view = _BoosterRoleDetailView(
+            self._ctx, self._guild, key, role, self._original, self._invoker_id,
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
+
+
+class _BoosterRoleDetailView(discord.ui.View):
+    def __init__(
+        self,
+        ctx: AppContext,
+        guild: discord.Guild,
+        role_key: str,
+        role: "BoosterRoleRow",
+        original: discord.Interaction,
+        invoker_id: int,
+    ) -> None:
+        super().__init__(timeout=120)
+        self._ctx = ctx
+        self._guild = guild
+        self._role_key = role_key
+        self._role = role
+        self._original = original
+        self._invoker_id = invoker_id
+
+        back_btn: discord.ui.Button[_BoosterRoleDetailView] = discord.ui.Button(
+            label="Back", style=discord.ButtonStyle.secondary, row=0,
+        )
+        back_btn.callback = self._on_back  # type: ignore[method-assign]
+        self.add_item(back_btn)
+
+        edit_btn: discord.ui.Button[_BoosterRoleDetailView] = discord.ui.Button(
+            label="Edit", style=discord.ButtonStyle.primary, row=0,
+        )
+        edit_btn.callback = self._on_edit  # type: ignore[method-assign]
+        self.add_item(edit_btn)
+
+        remove_btn: discord.ui.Button[_BoosterRoleDetailView] = discord.ui.Button(
+            label="Remove", style=discord.ButtonStyle.danger, row=0,
+        )
+        remove_btn.callback = self._on_remove  # type: ignore[method-assign]
+        self.add_item(remove_btn)
+
+    async def _on_back(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        embed, view = _build_booster_overview(self._ctx, self._guild, self._original)
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    async def _on_edit(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        await interaction.response.send_modal(
+            _EditBoosterRoleModal(
+                self._ctx, self._guild, self._role_key, self._role,
+                self._original, self._invoker_id,
+            )
+        )
+
+    async def _on_remove(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        from services.booster_roles import delete_booster_role
+
+        with self._ctx.open_db() as conn:
+            delete_booster_role(conn, self._guild.id, self._role_key)
+        await interaction.response.defer()
+        embed, view = _build_booster_overview(self._ctx, self._guild, self._original)
+        await self._original.edit_original_response(embed=embed, view=view)
+
+
+class _BoosterConfigView(discord.ui.View):
+    def __init__(
+        self,
+        ctx: AppContext,
+        roles: list["BoosterRoleRow"],
+        guild: discord.Guild,
+        original: discord.Interaction,
+        invoker_id: int,
+    ) -> None:
+        super().__init__(timeout=120)
+        self._ctx = ctx
+        self._guild = guild
+        self._original = original
+        self._invoker_id = invoker_id
+
+        if roles:
+            self.add_item(_BoosterRoleSelect(ctx, roles, guild, original, invoker_id))
+
+        add_btn: discord.ui.Button[_BoosterConfigView] = discord.ui.Button(
+            label="Add Role", style=discord.ButtonStyle.success, row=1,
+        )
+        add_btn.callback = self._on_add  # type: ignore[method-assign]
+        self.add_item(add_btn)
+
+        post_btn: discord.ui.Button[_BoosterConfigView] = discord.ui.Button(
+            label="Post / Update Panel", style=discord.ButtonStyle.primary, row=1,
+        )
+        post_btn.callback = self._on_post  # type: ignore[method-assign]
+        self.add_item(post_btn)
+
+    async def _on_add(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        await interaction.response.send_modal(
+            _AddBoosterRoleModal(
+                self._ctx, self._guild, self._original, self._invoker_id,
+            )
+        )
+
+    async def _on_post(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        from services.booster_roles import post_or_update_booster_panel
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Run this in the text channel where the panel should appear.", ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        msg = await post_or_update_booster_panel(self._ctx.db_path, self._guild, channel)
+        if msg is None:
+            await interaction.followup.send("No booster roles configured.", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                f"Panel posted/updated in {channel.mention}.", ephemeral=True,
+            )
+
+
+# ---------------------------------------------------------------------------
 # /config command
 # ---------------------------------------------------------------------------
 
@@ -1118,6 +1584,7 @@ _SECTION_CHOICES = [
     app_commands.Choice(name="XP Logging",          value="xp"),
     app_commands.Choice(name="Inactivity Prune",    value="prune"),
     app_commands.Choice(name="Spoiler Guard",       value="spoiler"),
+    app_commands.Choice(name="Booster Roles",      value="booster"),
 ]
 
 
@@ -1184,3 +1651,8 @@ def register_config_commands(bot: "Bot", ctx: "AppContext") -> None:
                 view=_SpoilerView(ctx, guild, interaction.user.id, current_channel_id, interaction),
                 ephemeral=True,
             )
+
+        elif section == "booster":
+            await interaction.response.defer(ephemeral=True)
+            embed, view = _build_booster_overview(ctx, guild, interaction)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)

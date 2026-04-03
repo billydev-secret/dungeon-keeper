@@ -129,23 +129,23 @@ async def _execute_grant(
             )
 
 
-_GRANT_CHOICES = [
-    app_commands.Choice(name=label, value=key)
-    for key, label in [
-        ("denizen", "Denizen"), ("nsfw", "NSFW"), ("veteran", "Veteran"),
-        ("kink", "Kink"), ("goldengirl", "Golden Girl"),
-    ]
-]
-
-
 def register_denizen_commands(bot: "Bot", ctx: "AppContext") -> None:
+
+    async def _role_autocomplete(
+        interaction: discord.Interaction, current: str,
+    ) -> list[app_commands.Choice[str]]:
+        choices: list[app_commands.Choice[str]] = []
+        for key, cfg in ctx.grant_roles.items():
+            if current.lower() in key.lower() or current.lower() in cfg["label"].lower():
+                choices.append(app_commands.Choice(name=cfg["label"], value=key))
+        return choices[:25]
 
     @bot.tree.command(name="grant", description="Grant a role to a member.")
     @app_commands.describe(
         role="Which role to grant.",
         member="Member to receive the role.",
     )
-    @app_commands.choices(role=_GRANT_CHOICES)
+    @app_commands.autocomplete(role=_role_autocomplete)
     async def grant_cmd(interaction: discord.Interaction, role: str, member: discord.Member) -> None:
         if not ctx.can_use_grant_role(interaction, role):
             await interaction.response.send_message(
