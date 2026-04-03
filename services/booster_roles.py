@@ -315,8 +315,8 @@ async def post_or_update_booster_panel(
 # Swatch sync — scan directory, create/delete roles to match files
 # ---------------------------------------------------------------------------
 
-def _parse_swatch_filename(filename: str) -> tuple[str, str] | None:
-    """Parse ``ColorName_HEX1_HEX2.ext`` → (label, hex1) or None."""
+def _parse_swatch_filename(filename: str) -> tuple[str, str, str] | None:
+    """Parse ``ColorName_HEX1_HEX2.ext`` → (label, hex1, hex2) or None."""
     stem = os.path.splitext(filename)[0]
     parts = stem.split("_")
     if len(parts) < 3:
@@ -326,7 +326,22 @@ def _parse_swatch_filename(filename: str) -> tuple[str, str] | None:
     if not (re.fullmatch(r"[0-9A-Fa-f]{6}", hex1) and re.fullmatch(r"[0-9A-Fa-f]{6}", hex2)):
         return None
     label = " ".join(parts[:-2])
-    return label, hex1
+    return label, hex1, hex2
+
+
+def _hex_sort_key(hex1: str, hex2: str) -> int:
+    """Return an integer sort key: hue of hex1 primary, hue of hex2 secondary.
+
+    Uses HSV hue (0-359) so colours order by visual gradient.
+    """
+    import colorsys
+
+    def _hue(h: str) -> int:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        hue, _s, _v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+        return int(hue * 3600)  # 0-3600 for extra precision
+
+    return _hue(hex1) * 10000 + _hue(hex2)
 
 
 def get_swatch_directory(db_path: Path) -> str:
@@ -347,7 +362,8 @@ async def sync_swatches(
         raise ValueError(f"Swatch directory not configured or missing: `{swatch_dir}`")
 
     # Discover swatch files
-    found: dict[str, tuple[str, str, str]] = {}  # role_key → (label, hex_color, file_path)
+    # role_key → (label, hex1, hex2, file_path, sort_order)
+    found: dict[str, tuple[str, str, str, int]] = {}
     for entry in os.listdir(swatch_dir):
         ext = os.path.splitext(entry)[1].lower()
         if ext not in _IMAGE_EXTS:
@@ -356,42 +372,54 @@ async def sync_swatches(
         if parsed is None:
             log.warning("Skipping swatch file with unexpected name format: %s", entry)
             continue
-        label, hex_color = parsed
+        label, hex1, hex2 = parsed
         role_key = label.lower().replace(" ", "_")
-        found[role_key] = (label, hex_color, os.path.join(swatch_dir, entry))
+        found[role_key] = (label, hex1, os.path.join(swatch_dir, entry), _hex_sort_key(hex1, hex2))
 
     with open_db(db_path) as conn:
         existing = get_booster_roles(conn, guild.id)
     existing_keys = {r["role_key"]: r for r in existing}
 
+    # Find the anchor role to position new roles below
+    anchor = discord.utils.get(guild.roles, name="#### Cosmetics")
+
     created: list[str] = []
     removed: list[str] = []
+    new_roles: list[discord.Role] = []
 
-    # Create roles for new swatches
-    sort_order = max((r["sort_order"] for r in existing), default=0)
-    for key, (label, hex_color, file_path) in sorted(found.items()):
+    # Create roles for new swatches and update sort order for all
+    for key, (label, hex_color, file_path, skey) in sorted(found.items()):
         if key in existing_keys:
-            # Update image path if it changed
             old = existing_keys[key]
-            if old["image_path"] != file_path:
+            if old["image_path"] != file_path or old["sort_order"] != skey:
                 with open_db(db_path) as conn:
                     upsert_booster_role(
                         conn, guild.id, key,
                         label=old["label"], role_id=old["role_id"],
-                        image_path=file_path, sort_order=old["sort_order"],
+                        image_path=file_path, sort_order=skey,
                     )
             continue
         color = discord.Color(int(hex_color, 16))
         role = await guild.create_role(name=label, color=color, reason="Booster swatch sync")
-        sort_order += 1
+        new_roles.append(role)
         with open_db(db_path) as conn:
             upsert_booster_role(
                 conn, guild.id, key,
                 label=label, role_id=role.id,
-                image_path=file_path, sort_order=sort_order,
+                image_path=file_path, sort_order=skey,
             )
         created.append(label)
         log.info("Created booster role %r (id=%d, color=#%s)", label, role.id, hex_color)
+
+    # Position new roles right under the anchor
+    if anchor and new_roles:
+        target_pos = max(anchor.position - 1, 1)
+        positions: dict[discord.abc.Snowflake, int] = {r: target_pos for r in new_roles}
+        try:
+            await guild.edit_role_positions(positions=positions)
+            log.info("Moved %d new booster roles below %r (pos %d)", len(new_roles), anchor.name, target_pos)
+        except discord.HTTPException as exc:
+            log.warning("Could not reposition booster roles: %s", exc)
 
     # Remove roles whose swatch files are gone
     for key, row in existing_keys.items():
