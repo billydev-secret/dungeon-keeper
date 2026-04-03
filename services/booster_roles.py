@@ -152,7 +152,7 @@ class BoosterRoleDynamicButton(
         super().__init__(
             discord.ui.Button(
                 label=key,
-                style=discord.ButtonStyle.primary,
+                style=discord.ButtonStyle.secondary,
                 custom_id=f"booster_role:{key}",
             )
         )
@@ -283,7 +283,7 @@ async def post_or_update_booster_panel(
         view = discord.ui.View(timeout=None)
         btn: discord.ui.Button[discord.ui.View] = discord.ui.Button(
             label=role["label"],
-            style=discord.ButtonStyle.primary,
+            style=discord.ButtonStyle.secondary,
             custom_id=f"booster_role:{role['role_key']}",
         )
         view.add_item(btn)
