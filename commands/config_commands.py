@@ -1564,12 +1564,12 @@ class _BoosterConfigView(discord.ui.View):
             return
 
         await interaction.response.defer(ephemeral=True)
-        msg = await post_or_update_booster_panel(self._ctx.db_path, self._guild, channel)
-        if msg is None:
+        msgs = await post_or_update_booster_panel(self._ctx.db_path, self._guild, channel)
+        if not msgs:
             await interaction.followup.send("No booster roles configured.", ephemeral=True)
         else:
             await interaction.followup.send(
-                f"Panel posted/updated in {channel.mention}.", ephemeral=True,
+                f"Panel posted/updated in {channel.mention} ({len(msgs)} messages).", ephemeral=True,
             )
 
 
