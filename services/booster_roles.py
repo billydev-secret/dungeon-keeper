@@ -11,10 +11,12 @@ from typing import TYPE_CHECKING, TypedDict
 
 import discord
 
-from db_utils import open_db
+from db_utils import get_config_value, open_db
 
 if TYPE_CHECKING:
     pass
+
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
 log = logging.getLogger("dungeonkeeper.booster_roles")
 
@@ -277,9 +279,13 @@ async def post_or_update_booster_panel(
     # Header message
     header = await channel.send("**Pick your booster cosmetic role:**")
 
-    # One message per role: image file + single button
+    # One message per role: image file + single button, with spacers between
     messages: list[discord.Message] = [header]
-    for role in roles:
+    for i, role in enumerate(roles):
+        if i > 0:
+            spacer = await channel.send("\u200b")  # zero-width space as visual gap
+            messages.append(spacer)
+
         view = discord.ui.View(timeout=None)
         btn: discord.ui.Button[discord.ui.View] = discord.ui.Button(
             label=role["label"],
@@ -303,3 +309,101 @@ async def post_or_update_booster_panel(
         )
     log.info("Posted %d booster panel messages in #%s", len(messages), channel.name)
     return messages
+
+
+# ---------------------------------------------------------------------------
+# Swatch sync — scan directory, create/delete roles to match files
+# ---------------------------------------------------------------------------
+
+def _parse_swatch_filename(filename: str) -> tuple[str, str] | None:
+    """Parse ``ColorName_HEX1_HEX2.ext`` → (label, hex1) or None."""
+    stem = os.path.splitext(filename)[0]
+    parts = stem.split("_")
+    if len(parts) < 3:
+        return None
+    hex2 = parts[-1]
+    hex1 = parts[-2]
+    if not (re.fullmatch(r"[0-9A-Fa-f]{6}", hex1) and re.fullmatch(r"[0-9A-Fa-f]{6}", hex2)):
+        return None
+    label = " ".join(parts[:-2])
+    return label, hex1
+
+
+def get_swatch_directory(db_path: Path) -> str:
+    with open_db(db_path) as conn:
+        return get_config_value(conn, "booster_swatch_dir", "")
+
+
+async def sync_swatches(
+    db_path: Path,
+    guild: discord.Guild,
+) -> tuple[list[str], list[str]]:
+    """Sync booster roles from swatch files on disk.
+
+    Returns (created_labels, removed_labels).
+    """
+    swatch_dir = get_swatch_directory(db_path)
+    if not swatch_dir or not os.path.isdir(swatch_dir):
+        raise ValueError(f"Swatch directory not configured or missing: `{swatch_dir}`")
+
+    # Discover swatch files
+    found: dict[str, tuple[str, str, str]] = {}  # role_key → (label, hex_color, file_path)
+    for entry in os.listdir(swatch_dir):
+        ext = os.path.splitext(entry)[1].lower()
+        if ext not in _IMAGE_EXTS:
+            continue
+        parsed = _parse_swatch_filename(entry)
+        if parsed is None:
+            log.warning("Skipping swatch file with unexpected name format: %s", entry)
+            continue
+        label, hex_color = parsed
+        role_key = label.lower().replace(" ", "_")
+        found[role_key] = (label, hex_color, os.path.join(swatch_dir, entry))
+
+    with open_db(db_path) as conn:
+        existing = get_booster_roles(conn, guild.id)
+    existing_keys = {r["role_key"]: r for r in existing}
+
+    created: list[str] = []
+    removed: list[str] = []
+
+    # Create roles for new swatches
+    sort_order = max((r["sort_order"] for r in existing), default=0)
+    for key, (label, hex_color, file_path) in sorted(found.items()):
+        if key in existing_keys:
+            # Update image path if it changed
+            old = existing_keys[key]
+            if old["image_path"] != file_path:
+                with open_db(db_path) as conn:
+                    upsert_booster_role(
+                        conn, guild.id, key,
+                        label=old["label"], role_id=old["role_id"],
+                        image_path=file_path, sort_order=old["sort_order"],
+                    )
+            continue
+        color = discord.Color(int(hex_color, 16))
+        role = await guild.create_role(name=label, color=color, reason="Booster swatch sync")
+        sort_order += 1
+        with open_db(db_path) as conn:
+            upsert_booster_role(
+                conn, guild.id, key,
+                label=label, role_id=role.id,
+                image_path=file_path, sort_order=sort_order,
+            )
+        created.append(label)
+        log.info("Created booster role %r (id=%d, color=#%s)", label, role.id, hex_color)
+
+    # Remove roles whose swatch files are gone
+    for key, row in existing_keys.items():
+        if key in found:
+            continue
+        if row["role_id"] > 0:
+            discord_role = guild.get_role(row["role_id"])
+            if discord_role is not None:
+                await discord_role.delete(reason="Booster swatch removed")
+                log.info("Deleted booster role %r (id=%d)", row["label"], row["role_id"])
+        with open_db(db_path) as conn:
+            delete_booster_role(conn, guild.id, key)
+        removed.append(row["label"])
+
+    return created, removed

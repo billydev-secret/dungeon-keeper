@@ -1227,12 +1227,18 @@ def _build_booster_overview(
     guild: discord.Guild,
     original: discord.Interaction,
 ) -> tuple[discord.Embed, "_BoosterConfigView"]:
-    from services.booster_roles import get_booster_roles
+    from services.booster_roles import get_booster_roles, get_swatch_directory
 
     with ctx.open_db() as conn:
         roles = get_booster_roles(conn, guild.id)
+    swatch_dir = get_swatch_directory(ctx.db_path)
 
     embed = discord.Embed(title="Booster Cosmetic Roles", color=discord.Color.from_str("#F47FFF"))
+    embed.add_field(
+        name="Swatch directory",
+        value=f"`{swatch_dir}`" if swatch_dir else "*not set*",
+        inline=False,
+    )
     if roles:
         for r in roles:
             role_str = f"<@&{r['role_id']}>" if r["role_id"] > 0 else "not set"
@@ -1244,7 +1250,7 @@ def _build_booster_overview(
             )
     else:
         embed.description = "No booster roles configured yet."
-    embed.set_footer(text="Add roles, then post the panel to a channel.")
+    embed.set_footer(text="Sync swatches to auto-create roles from image files.")
 
     view = _BoosterConfigView(ctx, roles, guild, original, original.user.id)
     return embed, view
@@ -1510,6 +1516,37 @@ class _BoosterRoleDetailView(discord.ui.View):
         await self._original.edit_original_response(embed=embed, view=view)
 
 
+class _SwatchPathModal(discord.ui.Modal, title="Set Swatch Directory"):
+    def __init__(
+        self,
+        ctx: AppContext,
+        guild: discord.Guild,
+        original: discord.Interaction,
+    ) -> None:
+        super().__init__()
+        self._ctx = ctx
+        self._guild = guild
+        self._original = original
+
+        from services.booster_roles import get_swatch_directory
+        current = get_swatch_directory(ctx.db_path)
+
+        self.path_input: discord.ui.TextInput = discord.ui.TextInput(
+            label="Absolute path to swatch image directory",
+            placeholder="/path/to/swatches",
+            default=current or "",
+            required=True,
+            max_length=300,
+        )
+        self.add_item(self.path_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        self._ctx.set_config_value("booster_swatch_dir", self.path_input.value.strip())
+        await interaction.response.defer()
+        embed, view = _build_booster_overview(self._ctx, self._guild, self._original)
+        await self._original.edit_original_response(embed=embed, view=view)
+
+
 class _BoosterConfigView(discord.ui.View):
     def __init__(
         self,
@@ -1534,8 +1571,20 @@ class _BoosterConfigView(discord.ui.View):
         add_btn.callback = self._on_add  # type: ignore[method-assign]
         self.add_item(add_btn)
 
+        path_btn: discord.ui.Button[_BoosterConfigView] = discord.ui.Button(
+            label="Set Swatch Path", style=discord.ButtonStyle.secondary, row=1,
+        )
+        path_btn.callback = self._on_set_path  # type: ignore[method-assign]
+        self.add_item(path_btn)
+
+        sync_btn: discord.ui.Button[_BoosterConfigView] = discord.ui.Button(
+            label="Sync Swatches", style=discord.ButtonStyle.secondary, row=1,
+        )
+        sync_btn.callback = self._on_sync  # type: ignore[method-assign]
+        self.add_item(sync_btn)
+
         post_btn: discord.ui.Button[_BoosterConfigView] = discord.ui.Button(
-            label="Post / Update Panel", style=discord.ButtonStyle.primary, row=1,
+            label="Post / Update Panel", style=discord.ButtonStyle.primary, row=2,
         )
         post_btn.callback = self._on_post  # type: ignore[method-assign]
         self.add_item(post_btn)
@@ -1549,6 +1598,39 @@ class _BoosterConfigView(discord.ui.View):
                 self._ctx, self._guild, self._original, self._invoker_id,
             )
         )
+
+    async def _on_set_path(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        await interaction.response.send_modal(
+            _SwatchPathModal(self._ctx, self._guild, self._original),
+        )
+
+    async def _on_sync(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.defer()
+            return
+        from services.booster_roles import sync_swatches
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            created, removed = await sync_swatches(self._ctx.db_path, self._guild)
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+
+        parts: list[str] = []
+        if created:
+            parts.append(f"**Created:** {', '.join(created)}")
+        if removed:
+            parts.append(f"**Removed:** {', '.join(removed)}")
+        if not parts:
+            parts.append("Everything is already in sync.")
+        await interaction.followup.send("\n".join(parts), ephemeral=True)
+
+        embed, view = _build_booster_overview(self._ctx, self._guild, self._original)
+        await self._original.edit_original_response(embed=embed, view=view)
 
     async def _on_post(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self._invoker_id:
