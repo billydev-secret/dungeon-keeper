@@ -1,8 +1,10 @@
 """Booster cosmetic role picker — persistent panel with mutually exclusive roles."""
 from __future__ import annotations
 
+import io
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
@@ -239,26 +241,30 @@ def _build_panel_view(roles: list[BoosterRoleRow]) -> discord.ui.View:
     return view
 
 
-def _build_panel_embeds_and_files(
-    roles: list[BoosterRoleRow],
-) -> tuple[list[discord.Embed], list[discord.File]]:
-    """Build one embed per role with its image, plus the file attachments."""
-    embeds: list[discord.Embed] = []
+def _safe_filename(name: str, ext: str) -> str:
+    """Sanitise a name into a Discord-safe attachment filename."""
+    clean = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+    return f"{clean}{ext}"
+
+
+def _build_panel_files(roles: list[BoosterRoleRow]) -> list[discord.File]:
+    """Build file attachments for roles that have images."""
     files: list[discord.File] = []
     for role in roles:
-        embed = discord.Embed(title=role["label"], color=discord.Color.from_str("#F47FFF"))
         image_path = role["image_path"]
-        if image_path:
-            if os.path.isfile(image_path):
-                ext = os.path.splitext(image_path)[1] or ".png"
-                filename = f"{role['role_key']}{ext}"
-                files.append(discord.File(image_path, filename=filename))
-                embed.set_image(url=f"attachment://{filename}")
-                log.debug("Booster role %r attaching %s as %s", role["role_key"], image_path, filename)
-            else:
-                log.warning("Booster role %r image not found: %s", role["role_key"], image_path)
-        embeds.append(embed)
-    return embeds, files
+        if image_path and os.path.isfile(image_path):
+            ext = os.path.splitext(image_path)[1] or ".png"
+            filename = _safe_filename(role["role_key"], ext)
+            with open(image_path, "rb") as fp:
+                data = fp.read()
+            files.append(discord.File(io.BytesIO(data), filename=filename))
+            log.info(
+                "Booster role %r: attaching %s as %s (%d bytes)",
+                role["role_key"], image_path, filename, len(data),
+            )
+        elif image_path:
+            log.warning("Booster role %r image not found: %s", role["role_key"], image_path)
+    return files
 
 
 async def post_or_update_booster_panel(
@@ -273,10 +279,10 @@ async def post_or_update_booster_panel(
     if not roles:
         return None
 
-    embeds, files = _build_panel_embeds_and_files(roles)
+    content = "**Pick your booster cosmetic role:**"
+    files = _build_panel_files(roles)
     view = _build_panel_view(roles)
 
-    # Try to edit existing message
     with open_db(db_path) as conn:
         ref = get_booster_panel_ref(conn, guild.id)
 
@@ -291,8 +297,7 @@ async def post_or_update_booster_panel(
         except (discord.NotFound, discord.HTTPException):
             pass
 
-    # Post new message (file attachments only work reliably on send, not edit)
-    msg = await channel.send(embeds=embeds, files=files, view=view)
+    msg = await channel.send(content=content, files=files, view=view)
     with open_db(db_path) as conn:
         upsert_booster_panel_ref(conn, guild.id, channel.id, msg.id)
     log.info("Posted booster panel message %d in #%s", msg.id, channel.name)
