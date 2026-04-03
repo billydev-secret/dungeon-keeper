@@ -397,5 +397,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             return
 
         log.exception("Unhandled app command error: %s", error)
-        if not interaction.response.is_done():
-            await interaction.response.send_message("Command failed. Please try again.", ephemeral=True)
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message("Command failed. Please try again.", ephemeral=True)
+        except discord.HTTPException:
+            pass

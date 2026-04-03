@@ -99,6 +99,7 @@ intents.members = True
 intents.message_content = True
 
 bot = Bot(intents=intents, debug=_cfg["debug"], guild_id=_cfg["guild_id"])
+bot.db_path = DB_PATH  # type: ignore[attr-defined]  # used by persistent button callbacks
 
 ctx = AppContext(
     bot=bot,
