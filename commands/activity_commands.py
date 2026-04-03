@@ -182,25 +182,26 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             voice_row = "\n" + _tbl_row("Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f")
 
         table = (
-            _tbl_row("Messages", p.msgs_prev, p.msgs_recent, suffix=f"  ({_vs_baseline(p, baseline_label)})")
-            + "\n" + _tbl_row("Days active", p.days_prev, p.days_recent, suffix=f"  /{p.days_in_window}")
+            _tbl_row("Msgs", p.msgs_prev, p.msgs_recent)
+            + "\n" + _tbl_row("Days", p.days_prev, p.days_recent, suffix=f" /{p.days_in_window}")
             + voice_row
             + "\n" + _tbl_row("Channels", p.channels_prev, p.channels_recent)
             + "\n" + _tbl_row("Partners", p.partners_prev, p.partners_recent)
         )
+        vs = _vs_baseline(p, baseline_label)
 
-        return f"`{rank:>2}.` {name}{lvl} \u00b7 Last seen {_last_seen_str(p.last_seen_ts)}\n```\n{table}\n```"
+        return f"`{rank:>2}.` {name}{lvl} \u00b7 {_last_seen_str(p.last_seen_ts)} \u00b7 {vs}\n```\n{table}\n```"
 
     def _ch_name(guild: discord.Guild, cid: int) -> str:
         ch = guild.get_channel(cid)
         return f"#{ch.name}" if ch and hasattr(ch, "name") else f"#{cid}"
 
     def _tbl_row(label: str, prev: int | float, recent: int | float, fmt: str = "g", suffix: str = "") -> str:
-        """One row of a fixed-width comparison table."""
+        """One row of a compact comparison table (fits ~36 char mobile width)."""
         p = f"{prev:{fmt}}"
         r = f"{recent:{fmt}}"
         pct = _pct(prev, recent)
-        return f"  {label:<16s} {p:>7s}  \u2192 {r:>7s}  {pct:>6s}{suffix}"
+        return f"{label:<12s}{p:>5s}\u2192{r:>5s} {pct:>6s}{suffix}"
 
     def _fmt_detail(
         p: DropoffProfile, guild: discord.Guild, period_label: str,
@@ -226,18 +227,18 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             embed.set_thumbnail(url=member.display_avatar.url)
 
         # Activity table
-        header = f"  {'':16s} {'Prior':>7s}     {'Recent':>7s}  {'Change':>6s}"
+        header = f"{'':12s}{'Prior':>5s} {'Recnt':>5s} {'Chg':>6s}"
         activity_rows = [
             header,
-            _tbl_row("Messages", p.msgs_prev, p.msgs_recent, suffix=f"  ({_vs_baseline(p, baseline_label)})"),
-            _tbl_row("Days active", p.days_prev, p.days_recent, suffix=f"  /{p.days_in_window}"),
+            _tbl_row("Msgs", p.msgs_prev, p.msgs_recent),
+            _tbl_row("Days", p.days_prev, p.days_recent, suffix=f" /{p.days_in_window}"),
             _tbl_row("Channels", p.channels_prev, p.channels_recent),
         ]
-        extras = ""
+        extras = f"\n{_vs_baseline(p, baseline_label)}"
         if p.longest_gap_secs > 0:
-            extras += f"\n  Longest silence: {_gap_str(p.longest_gap_secs)}"
+            extras += f" \u00b7 Silence: {_gap_str(p.longest_gap_secs)}"
         if p.first_activity_day is not None and p.first_activity_day > 0:
-            extras += f"\n  First active: day {p.first_activity_day} of {p.days_in_window}"
+            extras += f"\nFirst active: day {p.first_activity_day}/{p.days_in_window}"
         embed.add_field(
             name="Activity",
             value=f"```\n{chr(10).join(activity_rows)}\n```{extras}",
@@ -253,7 +254,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         if p.voice_xp_prev or p.voice_xp_recent:
             xp_rows.append(_tbl_row("Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f"))
         if p.image_react_xp_prev or p.image_react_xp_recent:
-            xp_rows.append(_tbl_row("Img React XP", p.image_react_xp_prev, p.image_react_xp_recent, fmt=".0f"))
+            xp_rows.append(_tbl_row("Img Rx XP", p.image_react_xp_prev, p.image_react_xp_recent, fmt=".0f"))
         if len(xp_rows) > 1:
             embed.add_field(
                 name="XP Breakdown",
@@ -266,15 +267,16 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         reply_pct_recent = round(p.replies_recent / p.msgs_recent * 100) if p.msgs_recent else 0
         convo_rows = [
             header,
-            _tbl_row("Replies", p.replies_prev, p.replies_recent, suffix=f"  ({reply_pct_prev}%\u2192{reply_pct_recent}%)"),
+            _tbl_row("Replies", p.replies_prev, p.replies_recent),
             _tbl_row("Initiations", p.initiations_prev, p.initiations_recent),
-            _tbl_row("Avg length", round(p.avg_len_prev), round(p.avg_len_recent), suffix="  chars"),
+            _tbl_row("Avg len", round(p.avg_len_prev), round(p.avg_len_recent)),
         ]
         if p.deep_convos_prev or p.deep_convos_recent:
             convo_rows.append(_tbl_row("Deep threads", p.deep_convos_prev, p.deep_convos_recent))
+        extras_c = f"\nReply rate: {reply_pct_prev}% \u2192 {reply_pct_recent}%"
         embed.add_field(
             name="Conversations",
-            value=f"```\n{chr(10).join(convo_rows)}\n```",
+            value=f"```\n{chr(10).join(convo_rows)}\n```{extras_c}",
             inline=False,
         )
 
@@ -298,9 +300,8 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         if p.reactions_prev or p.reactions_recent:
             rpm_prev = p.reactions_prev / p.msgs_prev if p.msgs_prev else 0
             rpm_recent = p.reactions_recent / p.msgs_recent if p.msgs_recent else 0
-            content_rows.append(
-                _tbl_row("Reactions", p.reactions_prev, p.reactions_recent, suffix=f"  ({rpm_prev:.1f}\u2192{rpm_recent:.1f}/msg)")
-            )
+            content_rows.append(_tbl_row("Reactions", p.reactions_prev, p.reactions_recent))
+            content_rows.append(f"{'  per msg':<12s}{rpm_prev:>5.1f}{rpm_recent:>6.1f}")
         if len(content_rows) > 1:
             embed.add_field(
                 name="Content",
@@ -319,7 +320,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
                 migration_lines.append(f"Joined: {joined_names}")
             if p.channels_stayed:
                 stayed_names = ", ".join(_ch_name(guild, c) for c in p.channels_stayed[:8])
-                migration_lines.append(f"Still active: {stayed_names}")
+                migration_lines.append(f"Active: {stayed_names}")
             embed.add_field(name="Channel Migration", value="\n".join(migration_lines), inline=False)
 
         # Patterns table
@@ -327,9 +328,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         if p.peak_hour_prev is not None or p.peak_hour_recent is not None:
             h_prev = _HOD_LABELS[p.peak_hour_prev] if p.peak_hour_prev is not None else "\u2014"
             h_recent = _HOD_LABELS[p.peak_hour_recent] if p.peak_hour_recent is not None else "\u2014"
-            pattern_rows.append(f"  Peak hour        {h_prev:>7s}  \u2192 {h_recent:>7s}")
+            pattern_rows.append(f"{'Peak hour':<12s}{h_prev:>5s}\u2192{h_recent:>5s}")
         if p.msgs_prev or p.msgs_recent:
-            pattern_rows.append(f"  Weekday msgs   {p.weekday_pct_prev:>6.0f}%  \u2192 {p.weekday_pct_recent:>6.0f}%")
+            pattern_rows.append(f"{'Weekday %':<12s}{p.weekday_pct_prev:>4.0f}%\u2192{p.weekday_pct_recent:>4.0f}%")
         if pattern_rows:
             embed.add_field(
                 name="Patterns",
