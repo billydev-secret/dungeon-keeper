@@ -248,10 +248,13 @@ def _build_panel_embeds_and_files(
     for role in roles:
         embed = discord.Embed(title=role["label"], color=discord.Color.from_str("#F47FFF"))
         image_path = role["image_path"]
-        if image_path and os.path.isfile(image_path):
-            filename = f"{role['role_key']}.png"
-            files.append(discord.File(image_path, filename=filename))
-            embed.set_image(url=f"attachment://{filename}")
+        if image_path:
+            if os.path.isfile(image_path):
+                filename = f"{role['role_key']}.png"
+                files.append(discord.File(image_path, filename=filename))
+                embed.set_image(url=f"attachment://{filename}")
+            else:
+                log.warning("Booster role %r image not found: %s", role["role_key"], image_path)
         embeds.append(embed)
     return embeds, files
 
@@ -275,19 +278,18 @@ async def post_or_update_booster_panel(
     with open_db(db_path) as conn:
         ref = get_booster_panel_ref(conn, guild.id)
 
+    # Delete old panel message if it exists
     if ref is not None:
         old_channel_id, old_message_id = ref
         try:
             old_channel = guild.get_channel(old_channel_id)
             if old_channel is not None and isinstance(old_channel, discord.TextChannel):
-                msg = old_channel.get_partial_message(old_message_id)
-                await msg.edit(embeds=embeds, attachments=files, view=view)
-                log.info("Updated booster panel message %d in #%s", old_message_id, old_channel.name)
-                return await old_channel.fetch_message(old_message_id)
+                old_msg = old_channel.get_partial_message(old_message_id)
+                await old_msg.delete()
         except (discord.NotFound, discord.HTTPException):
-            log.info("Old booster panel message not found, posting new one.")
+            pass
 
-    # Post new message
+    # Post new message (file attachments only work reliably on send, not edit)
     msg = await channel.send(embeds=embeds, files=files, view=view)
     with open_db(db_path) as conn:
         upsert_booster_panel_ref(conn, guild.id, channel.id, msg.id)
