@@ -325,7 +325,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 channel_id=channel_id,
             )
 
-        if not buckets or all(b.avg_gap_minutes == 0 for b in buckets):
+        if not buckets or all(b.median_gap == 0 for b in buckets):
             await interaction.followup.send(f"No message data found{scope} for this period.", ephemeral=True)
             return
 

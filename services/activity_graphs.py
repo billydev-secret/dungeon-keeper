@@ -1506,9 +1506,11 @@ def render_burst_ranking_chart(
 @dataclass
 class CadenceBucket:
     label: str
-    avg_gap_minutes: float
-    mode_gap_minutes: float
-    p80_gap_minutes: float
+    min_gap: float     # wick low
+    p20_gap: float     # body low (open)
+    median_gap: float  # body mid
+    p80_gap: float     # body high (close)
+    max_gap: float     # wick high
 
 
 def query_message_cadence(
@@ -1577,18 +1579,18 @@ def query_message_cadence(
     for i, (_key, label) in enumerate(buckets):
         gaps = gap_buckets[i]
         if not gaps:
-            results.append(CadenceBucket(label=label, avg_gap_minutes=0, mode_gap_minutes=0, p80_gap_minutes=0))
+            results.append(CadenceBucket(label=label, min_gap=0, p20_gap=0, median_gap=0, p80_gap=0, max_gap=0))
             continue
 
-        avg = statistics.mean(gaps)
-        rounded = [round(g) for g in gaps]
-        try:
-            mode = float(statistics.mode(rounded))
-        except statistics.StatisticsError:
-            mode = avg
-        p80 = float(sorted(gaps)[int(len(gaps) * 0.8)])
-
-        results.append(CadenceBucket(label=label, avg_gap_minutes=avg, mode_gap_minutes=mode, p80_gap_minutes=p80))
+        sg = sorted(gaps)
+        results.append(CadenceBucket(
+            label=label,
+            min_gap=sg[0],
+            p20_gap=sg[int(len(sg) * 0.2)],
+            median_gap=float(statistics.median(sg)),
+            p80_gap=sg[int(len(sg) * 0.8)],
+            max_gap=sg[-1],
+        ))
 
     return results
 
@@ -1597,26 +1599,56 @@ def render_message_cadence_chart(
     buckets: list[CadenceBucket],
     title: str,
 ) -> bytes:
-    """Render a line chart of inter-message cadence (avg, mode, p80)."""
-    labels = [b.label for b in buckets]
-    avgs = [b.avg_gap_minutes for b in buckets]
-    modes = [b.mode_gap_minutes for b in buckets]
-    p80s = [b.p80_gap_minutes for b in buckets]
+    """Render a candlestick chart of inter-message gap times.
 
+    Each candle:
+      wick  = min → max gap
+      body  = p20 → p80 gap
+      tick  = median
+    Green body when median decreased vs prior bucket, pink when increased.
+    """
+    labels = [b.label for b in buckets]
     n = len(labels)
-    fig_width = max(9, n * 0.42)
+    fig_width = max(9, n * 0.5)
     fig, ax = plt.subplots(figsize=(fig_width, 4.5))
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_BG)
 
-    x = list(range(n))
-    ax.plot(x, avgs, color="#5865f2", linewidth=2, marker="o", markersize=3, label="Average", zorder=3)
-    ax.plot(x, modes, color="#57f287", linewidth=2, marker="s", markersize=3, label="Mode", zorder=3)
-    ax.plot(x, p80s, color="#eb459e", linewidth=2, marker="^", markersize=3, label="80th pctl", zorder=3)
+    body_width = 0.5
+    wick_color = "#72767d"
+    color_down = "#57f287"   # green — median decreased (faster chat)
+    color_up = "#eb459e"     # pink — median increased (slower chat)
 
-    ax.fill_between(x, avgs, p80s, color="#eb459e", alpha=0.1, zorder=1)
+    prev_median = None
+    for i, b in enumerate(buckets):
+        if b.max_gap == 0:
+            prev_median = None
+            continue
+
+        # Wick: min to max
+        ax.plot([i, i], [b.min_gap, b.max_gap], color=wick_color, linewidth=1, zorder=2)
+
+        # Body color: green if median went down, pink if up
+        if prev_median is not None and b.median_gap <= prev_median:
+            color = color_down
+        else:
+            color = color_up
+
+        # Body: p20 to p80
+        body_bottom = b.p20_gap
+        body_height = b.p80_gap - b.p20_gap
+        ax.bar(i, body_height, bottom=body_bottom, width=body_width,
+               color=color, edgecolor=color, linewidth=0.5, zorder=3)
+
+        # Median tick
+        ax.plot([i - body_width / 2, i + body_width / 2],
+                [b.median_gap, b.median_gap],
+                color=_TEXT, linewidth=1.5, zorder=4)
+
+        prev_median = b.median_gap
 
     max_visible = 20
+    x = list(range(n))
     if n > max_visible:
         step = max(1, n // max_visible)
         tick_positions = list(range(0, n, step))
@@ -1638,7 +1670,12 @@ def render_message_cadence_chart(
     for spine in ax.spines.values():
         spine.set_visible(False)
 
-    ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+    from matplotlib.patches import Patch
+    legend_handles = [
+        Patch(color=color_down, label="Median \u2193 (faster)"),
+        Patch(color=color_up, label="Median \u2191 (slower)"),
+    ]
+    ax.legend(handles=legend_handles, facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
 
     plt.tight_layout(pad=1.2)
     buf = io.BytesIO()

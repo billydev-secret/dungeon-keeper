@@ -198,6 +198,13 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             if isinstance(interaction.user, discord.Member)
             else guild.get_member(interaction.user.id)
         )
+        if caller is None:
+            await interaction.response.send_message(
+                "Could not resolve your member record in this guild.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
         window_name, subtitle, color, cutoff = _resolve_leaderboard_timescale(timescale)
 
         with ctx.open_db() as conn:
@@ -218,17 +225,11 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                 embed.add_field(name="🎙️ Voice", value="No tracked voice XP yet.", inline=True)
                 embed.add_field(name="🖼️ Image Reacts", value="No tracked image react XP yet.", inline=True)
                 embed.set_footer(text="Top 5 by XP source and time window")
-                await interaction.response.send_message(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
-        if caller is None:
-            await interaction.response.send_message(
-                "Could not resolve your member record in this guild.", ephemeral=True
-            )
-            return
-
         embed = _build_xp_leaderboard_embed(ctx, guild, caller, window_name, subtitle, color, cutoff)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @bot.tree.command(name="xp_give", description="Give a member 20 XP.")
     @app_commands.describe(member="Member to receive the XP.")
