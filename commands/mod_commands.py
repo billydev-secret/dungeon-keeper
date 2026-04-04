@@ -53,9 +53,6 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ("/xp_leaderboards timescale:week",
              "Top XP earners for a chosen time window (hour / day / week / month / all time), "
              "plus your own rank within that period."),
-            ("/give_role member:@user role:@Role",
-             "Give a role to a member. Mods can give any role; other users need to be "
-             "authorised for specific roles via `/give_role_allow`."),
             ("/foolsday_exclude",
              "Opt out of the April Fools name shuffle. "
              "Mods can specify a user to exclude others."),
@@ -274,12 +271,6 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Accepts `15m`, `2h`, `30d`, `1h30m`, `once`, or `off`."),
                 ("/auto_delete_configs",
                  "List every active auto-delete schedule across the server."),
-                ("/give_role_allow role_to_give:@Role allowed:@user_or_role",
-                 "Authorise a user or role to give a specific role via `/give_role`."),
-                ("/give_role_deny role_to_give:@Role denied:@user_or_role",
-                 "Remove a user or role's `/give_role` permission."),
-                ("/give_role_list",
-                 "List all `/give_role` permission rules."),
                 ("/grant_allow grant: allowed:",
                  "Allow a user or role to use a `/grant_*` command."),
                 ("/grant_deny grant: denied:",
