@@ -725,7 +725,7 @@ class _RoleTypeSelect(discord.ui.Select):
                 label=cfg["label"], value=grant_name,
                 description="Role, permissions, channels, message",
             ))
-        super().__init__(placeholder="Choose a role type to configure…", options=options)
+        super().__init__(placeholder="Choose a role type to configure…", options=options[:25])
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.invoker_id:

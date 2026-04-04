@@ -90,7 +90,7 @@ async def _execute_grant(
         return
 
     # Defer before the slow add_roles API call to avoid the 3-second timeout.
-    await interaction.response.defer()
+    await interaction.response.defer(ephemeral=True)
 
     try:
         await member.add_roles(role, reason=f"Granted by {interaction.user} via slash command")

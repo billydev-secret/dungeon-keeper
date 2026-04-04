@@ -155,7 +155,9 @@ async def run_prune_for_guild(
     next_action_at = 0.0
     for member in candidates:
         activity = activity_map.get(member.id)
-        if activity is None or activity.created_at < cutoff_ts:
+        if activity is None:
+            continue
+        if activity.created_at < cutoff_ts:
             now = time.monotonic()
             if now < next_action_at:
                 await asyncio.sleep(next_action_at - now)

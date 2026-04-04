@@ -5,6 +5,7 @@ import bisect
 from dataclasses import dataclass
 import io
 import sqlite3
+import statistics
 from itertools import groupby
 from datetime import datetime, timedelta, timezone
 from typing import Literal
@@ -1489,6 +1490,151 @@ def render_burst_ranking_chart(
     if bottom:
         legend_handles.append(Patch(color=_BAR_ACCENT, label=f"Bottom {limit} lowest burst"))
     ax.legend(handles=legend_handles, facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# Message cadence — inter-message time stats over time
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CadenceBucket:
+    label: str
+    avg_gap_minutes: float
+    mode_gap_minutes: float
+    p80_gap_minutes: float
+
+
+def query_message_cadence(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Resolution,
+    utc_offset_hours: float = 0,
+    channel_id: int | None = None,
+) -> list[CadenceBucket]:
+    """Compute per-bucket inter-message time statistics.
+
+    Returns a list of CadenceBucket with average, mode, and 80th-percentile
+    gap durations (in minutes) between consecutive messages.
+    """
+    now = datetime.now(timezone.utc)
+
+    if resolution == "day":
+        buckets, start_ts = _day_buckets(now, utc_offset_hours)
+    elif resolution == "week":
+        buckets, start_ts = _week_buckets(now, utc_offset_hours)
+    elif resolution == "month":
+        buckets, start_ts = _month_buckets(now, utc_offset_hours)
+    elif resolution == "hour":
+        buckets, start_ts = _hour_buckets(now, utc_offset_hours)
+    else:
+        buckets, start_ts = _day_buckets(now, utc_offset_hours)
+
+    params: list[object] = [guild_id, int(start_ts)]
+    channel_clause = ""
+    if channel_id is not None:
+        channel_clause = " AND channel_id = ?"
+        params.append(channel_id)
+
+    rows = conn.execute(
+        f"SELECT ts FROM messages WHERE guild_id = ? AND ts >= ?{channel_clause} "
+        "ORDER BY ts",
+        params,
+    ).fetchall()
+
+    if not rows:
+        return []
+
+    timestamps = [int(r["ts"]) for r in rows]
+
+    # Build bucket boundaries as unix timestamps
+    bucket_boundaries: list[float] = []
+    for _label, iso_str in buckets:
+        dt = datetime.fromisoformat(iso_str).replace(tzinfo=timezone.utc)
+        bucket_boundaries.append(dt.timestamp())
+
+    # Assign each consecutive gap to its bucket (bucket of the second message)
+    gap_buckets: dict[int, list[float]] = {i: [] for i in range(len(buckets))}
+    for j in range(1, len(timestamps)):
+        gap_sec = timestamps[j] - timestamps[j - 1]
+        if gap_sec <= 0:
+            continue
+        idx = bisect.bisect_right(bucket_boundaries, timestamps[j]) - 1
+        idx = max(0, min(idx, len(buckets) - 1))
+        gap_buckets[idx].append(gap_sec / 60.0)
+
+    results: list[CadenceBucket] = []
+    for i, (label, _) in enumerate(buckets):
+        gaps = gap_buckets[i]
+        if not gaps:
+            results.append(CadenceBucket(label=label, avg_gap_minutes=0, mode_gap_minutes=0, p80_gap_minutes=0))
+            continue
+
+        avg = statistics.mean(gaps)
+        rounded = [round(g) for g in gaps]
+        try:
+            mode = float(statistics.mode(rounded))
+        except statistics.StatisticsError:
+            mode = avg
+        p80 = float(sorted(gaps)[int(len(gaps) * 0.8)])
+
+        results.append(CadenceBucket(label=label, avg_gap_minutes=avg, mode_gap_minutes=mode, p80_gap_minutes=p80))
+
+    return results
+
+
+def render_message_cadence_chart(
+    buckets: list[CadenceBucket],
+    title: str,
+) -> bytes:
+    """Render a line chart of inter-message cadence (avg, mode, p80)."""
+    labels = [b.label for b in buckets]
+    avgs = [b.avg_gap_minutes for b in buckets]
+    modes = [b.mode_gap_minutes for b in buckets]
+    p80s = [b.p80_gap_minutes for b in buckets]
+
+    n = len(labels)
+    fig_width = max(9, n * 0.42)
+    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    x = list(range(n))
+    ax.plot(x, avgs, color="#5865f2", linewidth=2, marker="o", markersize=3, label="Average", zorder=3)
+    ax.plot(x, modes, color="#57f287", linewidth=2, marker="s", markersize=3, label="Mode", zorder=3)
+    ax.plot(x, p80s, color="#eb459e", linewidth=2, marker="^", markersize=3, label="80th pctl", zorder=3)
+
+    ax.fill_between(x, avgs, p80s, color="#eb459e", alpha=0.1, zorder=1)
+
+    max_visible = 20
+    if n > max_visible:
+        step = max(1, n // max_visible)
+        tick_positions = list(range(0, n, step))
+        tick_labels_visible = [labels[i] for i in tick_positions]
+    else:
+        tick_positions = x
+        tick_labels_visible = labels
+
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
+    ax.tick_params(length=0)
+
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
+    ax.set_ylabel("Minutes between messages", color=_TEXT, fontsize=9)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
 
     plt.tight_layout(pad=1.2)
     buf = io.BytesIO()

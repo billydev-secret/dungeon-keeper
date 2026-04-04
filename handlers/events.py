@@ -33,6 +33,9 @@ log = logging.getLogger("dungeonkeeper.events")
 
 
 def register_events(bot: Bot, ctx: AppContext) -> None:
+    _openai_api_key = os.getenv("OPENAI_API_KEY")
+    _openai_client = AsyncOpenAI(api_key=_openai_api_key) if _openai_api_key else None
+
     @bot.event
     async def on_ready():
         if bot.user is None:
@@ -96,6 +99,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         mention_ids = [u.id for u in message.mentions if not u.bot and u.id != message.author.id]
         attachment_urls = [a.url for a in message.attachments]
 
+        if spoiler_deleted:
+            return
+
         with ctx.open_db() as conn:
             record_member_activity(
                 conn,
@@ -105,7 +111,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 message.id,
                 message_ts,
             )
-            if not spoiler_deleted and auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+            if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
                 track_auto_delete_message(
                     conn,
                     message.guild.id,
@@ -140,9 +146,6 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     message_id=message.id,
                 )
 
-        if spoiler_deleted:
-            return
-
         result = await award_message_xp(
             message,
             bot=bot,
@@ -172,11 +175,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         # Only notify watchers when the AI detects a rule violation.
         # If OPENAI_API_KEY is not set, fall back to notifying on every message.
         reason = ""
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key:
-            client = AsyncOpenAI(api_key=api_key)
+        if _openai_client is not None:
             try:
-                is_violation, reason = await ai_check_watched_message(client, message)
+                is_violation, reason = await ai_check_watched_message(_openai_client, message)
             except Exception as exc:
                 log.warning(
                     "AI watch check failed for %s: %s — notifying anyway.",

@@ -125,7 +125,7 @@ class _RuleSelect(discord.ui.Select):
                 description=f"age {age_label} · every {interval_label}"[:100],
                 emoji="🗑️",
             ))
-        super().__init__(placeholder="Choose a schedule to manage…", options=options)
+        super().__init__(placeholder="Choose a schedule to manage…", options=options[:25])
 
     async def callback(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self.invoker_id:

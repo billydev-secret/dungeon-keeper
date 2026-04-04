@@ -652,6 +652,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         async def handle_select(self, interaction: discord.Interaction, value: str) -> None:
             if value == "none":
+                await interaction.response.defer()
                 return
             chosen = self.member_map.get(value)
             if chosen is None:

@@ -217,10 +217,16 @@ class BoosterRoleDynamicButton(
 
         await interaction.response.defer(ephemeral=True)
 
-        if to_remove:
-            await member.remove_roles(*to_remove, reason="Booster cosmetic role switch")
-        if target_role not in member.roles:
-            await member.add_roles(target_role, reason="Booster cosmetic role pick")
+        try:
+            if to_remove:
+                await member.remove_roles(*to_remove, reason="Booster cosmetic role switch")
+            if target_role not in member.roles:
+                await member.add_roles(target_role, reason="Booster cosmetic role pick")
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            await interaction.followup.send(
+                f"Failed to update roles: {exc}", ephemeral=True,
+            )
+            return
 
         await interaction.followup.send(
             f"You now have {target_role.mention}!", ephemeral=True,
@@ -428,8 +434,11 @@ async def sync_swatches(
         if row["role_id"] > 0:
             discord_role = guild.get_role(row["role_id"])
             if discord_role is not None:
-                await discord_role.delete(reason="Booster swatch removed")
-                log.info("Deleted booster role %r (id=%d)", row["label"], row["role_id"])
+                try:
+                    await discord_role.delete(reason="Booster swatch removed")
+                    log.info("Deleted booster role %r (id=%d)", row["label"], row["role_id"])
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    log.warning("Could not delete booster role %r: %s", row["label"], exc)
         with open_db(db_path) as conn:
             delete_booster_role(conn, guild.id, key)
         removed.append(row["label"])

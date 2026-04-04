@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import sqlite3
+from collections.abc import Generator
 from pathlib import Path
 from typing import TypedDict
 
@@ -12,13 +14,22 @@ def parse_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def open_db(db_path: Path) -> sqlite3.Connection:
-    """Open SQLite database connection with WAL mode and timeout settings."""
-    conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
+@contextlib.contextmanager
+def open_db(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
+    """Open a SQLite connection, yield it inside a transaction, then close.
+
+    Uses deferred transactions so ``with open_db(...) as conn:`` commits
+    on success and rolls back on exception.
+    """
+    conn = sqlite3.connect(db_path, timeout=30, isolation_level="DEFERRED")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout = 30000")
-    return conn
+    try:
+        with conn:  # BEGIN … COMMIT/ROLLBACK
+            yield conn
+    finally:
+        conn.close()
 
 
 def get_config_value(conn: sqlite3.Connection, key: str, default: str) -> str:

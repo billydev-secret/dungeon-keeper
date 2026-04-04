@@ -177,10 +177,11 @@ def register_give_role_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
+        await interaction.response.defer()
         try:
             await member.add_roles(role, reason=f"Granted by {interaction.user} via /give_role")
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"I couldn't grant {role.mention}. Check my role hierarchy and permissions.", ephemeral=True
             )
             return
@@ -191,7 +192,7 @@ def register_give_role_commands(bot: Bot, ctx: AppContext) -> None:
             role.name,
             format_user_for_log(member),
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"{member.mention} has been given {role.mention}.", ephemeral=False
         )
 

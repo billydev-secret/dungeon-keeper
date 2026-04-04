@@ -357,6 +357,12 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
+        if count is None and after is None:
+            await interaction.response.send_message(
+                "Provide at least one of `count` or `after`.", ephemeral=True,
+            )
+            return
+
         after_dt: datetime | None = None
         if after is not None:
             try:

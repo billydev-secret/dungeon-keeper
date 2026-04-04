@@ -279,6 +279,8 @@ async def delete_tracked_messages_older_than(
             return queued, deleted, failed
         except discord.HTTPException:
             failed += len(chunk_ids)
+            # Remove from tracking to avoid infinite retry
+            remove_tracked_auto_delete_messages(db_path, guild_id, channel.id, set(chunk_ids))
 
         if i + _BULK_CHUNK < len(bulk):
             await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
@@ -307,6 +309,7 @@ async def delete_tracked_messages_older_than(
             break
         except discord.HTTPException:
             failed += 1
+            remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
 
     return queued, deleted, failed
 

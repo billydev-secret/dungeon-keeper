@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import sqlite3
@@ -185,7 +186,7 @@ class AppContext:
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
     watched_users: dict[int, set[int]] = field(default_factory=dict)
 
-    def open_db(self) -> sqlite3.Connection:
+    def open_db(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
         return open_db(self.db_path)
 
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:

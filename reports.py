@@ -140,12 +140,12 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
             return
 
+        await interaction.response.defer(ephemeral=True)
+
         guild = interaction.guild
         if guild is None:
             await interaction.followup.send("This command only works in a server.", ephemeral=True)
             return
-
-        await interaction.response.defer(ephemeral=True)
 
         nsfw_cfg = ctx.grant_roles.get("nsfw")
         nsfw_role_id = nsfw_cfg["role_id"] if nsfw_cfg else 0
@@ -182,6 +182,11 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
             return
 
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
         seconds = parse_duration_seconds(time_period)
         if seconds is None:
             await interaction.response.send_message(
@@ -190,11 +195,6 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             return
 
         await interaction.response.defer(ephemeral=True)
-
-        guild = interaction.guild
-        if guild is None:
-            await interaction.followup.send("This command only works in a server.", ephemeral=True)
-            return
 
         cutoff_ts = (discord.utils.utcnow() - timedelta(seconds=seconds)).timestamp()
         all_members = [m for m in guild.members if not m.bot]
@@ -278,6 +278,63 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="role_growth.png"),
+            ephemeral=True,
+        )
+
+    @report_group.command(
+        name="message_cadence",
+        description="Chart average, mode, and 80th percentile time between messages.",
+    )
+    @app_commands.describe(
+        resolution="Time resolution: hourly (24h), daily (30d), weekly (12wk), monthly (12mo)",
+        channel="Restrict to a specific channel.",
+    )
+    @app_commands.choices(resolution=[
+        app_commands.Choice(name="Hourly (last 24 hours)", value="hour"),
+        app_commands.Choice(name="Daily (last 30 days)", value="day"),
+        app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
+        app_commands.Choice(name="Monthly (last 12 months)", value="month"),
+    ])
+    async def message_cadence(
+        interaction: discord.Interaction,
+        resolution: app_commands.Choice[str] | None = None,
+        channel: discord.TextChannel | None = None,
+    ):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_roles:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        from services.activity_graphs import query_message_cadence, render_message_cadence_chart
+
+        res: Resolution = resolution.value if resolution else "day"  # type: ignore[assignment]
+        window_label = {
+            "hour": "Last 24 Hours", "day": "Last 30 Days",
+            "week": "Last 12 Weeks", "month": "Last 12 Months",
+        }[res]
+
+        channel_id = channel.id if channel else None
+        scope = f" in #{channel.name}" if channel else ""
+
+        with ctx.open_db() as conn:
+            buckets = query_message_cadence(
+                conn, ctx.guild_id, res,
+                utc_offset_hours=ctx.tz_offset_hours,
+                channel_id=channel_id,
+            )
+
+        if not buckets or all(b.avg_gap_minutes == 0 for b in buckets):
+            await interaction.followup.send(f"No message data found{scope} for this period.", ephemeral=True)
+            return
+
+        chart_bytes = render_message_cadence_chart(
+            buckets,
+            title=f"Message Cadence{scope} — {window_label}",
+        )
+        await interaction.followup.send(
+            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="message_cadence.png"),
             ephemeral=True,
         )
 
