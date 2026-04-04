@@ -1553,24 +1553,28 @@ def query_message_cadence(
 
     timestamps = [int(r["ts"]) for r in rows]
 
-    # Build bucket boundaries as unix timestamps
-    bucket_boundaries: list[float] = []
-    for _label, iso_str in buckets:
-        dt = datetime.fromisoformat(iso_str).replace(tzinfo=timezone.utc)
-        bucket_boundaries.append(dt.timestamp())
+    # Build bucket boundaries from the keys.
+    # Day/hour keys are unix timestamp strings; week keys are "YYYY-WW";
+    # month keys are "YYYY-MM".  Compute evenly-spaced boundaries from
+    # start_ts and the total window instead.
+    n_buckets = len(buckets)
+    end_ts = datetime.now(timezone.utc).timestamp()
+    span = end_ts - start_ts
+    bucket_size = span / n_buckets
+    bucket_boundaries = [start_ts + bucket_size * i for i in range(n_buckets)]
 
     # Assign each consecutive gap to its bucket (bucket of the second message)
-    gap_buckets: dict[int, list[float]] = {i: [] for i in range(len(buckets))}
+    gap_buckets: dict[int, list[float]] = {i: [] for i in range(n_buckets)}
     for j in range(1, len(timestamps)):
         gap_sec = timestamps[j] - timestamps[j - 1]
         if gap_sec <= 0:
             continue
         idx = bisect.bisect_right(bucket_boundaries, timestamps[j]) - 1
-        idx = max(0, min(idx, len(buckets) - 1))
+        idx = max(0, min(idx, n_buckets - 1))
         gap_buckets[idx].append(gap_sec / 60.0)
 
     results: list[CadenceBucket] = []
-    for i, (label, _) in enumerate(buckets):
+    for i, (_key, label) in enumerate(buckets):
         gaps = gap_buckets[i]
         if not gaps:
             results.append(CadenceBucket(label=label, avg_gap_minutes=0, mode_gap_minutes=0, p80_gap_minutes=0))
