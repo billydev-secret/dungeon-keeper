@@ -1526,7 +1526,61 @@ def query_message_cadence(
     gap durations (in minutes) between consecutive messages.
     """
     now = datetime.now(timezone.utc)
+    offset_secs = int(utc_offset_hours * 3600)
 
+    # hour_of_day / day_of_week: aggregate across all history into fixed bins
+    if resolution in ("hour_of_day", "day_of_week"):
+        params: list[object] = [guild_id]
+        channel_clause = ""
+        if channel_id is not None:
+            channel_clause = " AND channel_id = ?"
+            params.append(channel_id)
+
+        rows = conn.execute(
+            f"SELECT ts FROM messages WHERE guild_id = ?{channel_clause} ORDER BY ts",
+            params,
+        ).fetchall()
+        if not rows:
+            return []
+
+        if resolution == "hour_of_day":
+            labels_list, n_bins = _HOD_LABELS, 24
+        else:
+            labels_list, n_bins = _DOW_LABELS, 7
+
+        gap_buckets: dict[int, list[float]] = {i: [] for i in range(n_bins)}
+        prev_ts = int(rows[0]["ts"])
+        for row in rows[1:]:
+            cur_ts = int(row["ts"])
+            gap_sec = cur_ts - prev_ts
+            prev_ts = cur_ts
+            if gap_sec <= 0:
+                continue
+            dt = datetime.fromtimestamp(cur_ts + offset_secs, tz=timezone.utc)
+            if resolution == "hour_of_day":
+                idx = dt.hour
+            else:
+                idx = (dt.weekday() + 1) % 7  # Mon=0 -> Sun=0,Mon=1,...,Sat=6
+            gap_buckets[idx].append(gap_sec / 60.0)
+
+        results: list[CadenceBucket] = []
+        for i in range(n_bins):
+            gaps = gap_buckets[i]
+            if not gaps:
+                results.append(CadenceBucket(label=labels_list[i], min_gap=0, p20_gap=0, median_gap=0, p80_gap=0, max_gap=0))
+                continue
+            sg = sorted(gaps)
+            results.append(CadenceBucket(
+                label=labels_list[i],
+                min_gap=sg[0],
+                p20_gap=sg[int(len(sg) * 0.2)],
+                median_gap=float(statistics.median(sg)),
+                p80_gap=sg[int(len(sg) * 0.8)],
+                max_gap=sg[-1],
+            ))
+        return results
+
+    # Time-series resolutions
     if resolution == "day":
         buckets, start_ts = _day_buckets(now, utc_offset_hours)
     elif resolution == "week":
@@ -1538,16 +1592,16 @@ def query_message_cadence(
     else:
         buckets, start_ts = _day_buckets(now, utc_offset_hours)
 
-    params: list[object] = [guild_id, int(start_ts)]
-    channel_clause = ""
+    params2: list[object] = [guild_id, int(start_ts)]
+    channel_clause2 = ""
     if channel_id is not None:
-        channel_clause = " AND channel_id = ?"
-        params.append(channel_id)
+        channel_clause2 = " AND channel_id = ?"
+        params2.append(channel_id)
 
     rows = conn.execute(
-        f"SELECT ts FROM messages WHERE guild_id = ? AND ts >= ?{channel_clause} "
+        f"SELECT ts FROM messages WHERE guild_id = ? AND ts >= ?{channel_clause2} "
         "ORDER BY ts",
-        params,
+        params2,
     ).fetchall()
 
     if not rows:
@@ -1555,35 +1609,30 @@ def query_message_cadence(
 
     timestamps = [int(r["ts"]) for r in rows]
 
-    # Build bucket boundaries from the keys.
-    # Day/hour keys are unix timestamp strings; week keys are "YYYY-WW";
-    # month keys are "YYYY-MM".  Compute evenly-spaced boundaries from
-    # start_ts and the total window instead.
     n_buckets = len(buckets)
     end_ts = datetime.now(timezone.utc).timestamp()
     span = end_ts - start_ts
     bucket_size = span / n_buckets
     bucket_boundaries = [start_ts + bucket_size * i for i in range(n_buckets)]
 
-    # Assign each consecutive gap to its bucket (bucket of the second message)
-    gap_buckets: dict[int, list[float]] = {i: [] for i in range(n_buckets)}
+    ts_gap_buckets: dict[int, list[float]] = {i: [] for i in range(n_buckets)}
     for j in range(1, len(timestamps)):
         gap_sec = timestamps[j] - timestamps[j - 1]
         if gap_sec <= 0:
             continue
         idx = bisect.bisect_right(bucket_boundaries, timestamps[j]) - 1
         idx = max(0, min(idx, n_buckets - 1))
-        gap_buckets[idx].append(gap_sec / 60.0)
+        ts_gap_buckets[idx].append(gap_sec / 60.0)
 
-    results: list[CadenceBucket] = []
+    results2: list[CadenceBucket] = []
     for i, (_key, label) in enumerate(buckets):
-        gaps = gap_buckets[i]
+        gaps = ts_gap_buckets[i]
         if not gaps:
-            results.append(CadenceBucket(label=label, min_gap=0, p20_gap=0, median_gap=0, p80_gap=0, max_gap=0))
+            results2.append(CadenceBucket(label=label, min_gap=0, p20_gap=0, median_gap=0, p80_gap=0, max_gap=0))
             continue
 
         sg = sorted(gaps)
-        results.append(CadenceBucket(
+        results2.append(CadenceBucket(
             label=label,
             min_gap=sg[0],
             p20_gap=sg[int(len(sg) * 0.2)],
@@ -1592,7 +1641,7 @@ def query_message_cadence(
             max_gap=sg[-1],
         ))
 
-    return results
+    return results2
 
 
 def render_message_cadence_chart(

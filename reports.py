@@ -294,6 +294,8 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         app_commands.Choice(name="Daily (last 30 days)", value="day"),
         app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
         app_commands.Choice(name="Monthly (last 12 months)", value="month"),
+        app_commands.Choice(name="By Hour of Day", value="hour_of_day"),
+        app_commands.Choice(name="By Day of Week", value="day_of_week"),
     ])
     async def message_cadence(
         interaction: discord.Interaction,
@@ -313,6 +315,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         window_label = {
             "hour": "Last 24 Hours", "day": "Last 30 Days",
             "week": "Last 12 Weeks", "month": "Last 12 Months",
+            "hour_of_day": "By Hour of Day", "day_of_week": "By Day of Week",
         }[res]
 
         channel_id = channel.id if channel else None
