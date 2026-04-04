@@ -1662,10 +1662,11 @@ def render_message_cadence_chart(
     ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
     ax.tick_params(length=0)
 
+    ax.set_yscale("log")
     ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
     ax.set_axisbelow(True)
     ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
-    ax.set_ylabel("Minutes between messages", color=_TEXT, fontsize=9)
+    ax.set_ylabel("Minutes between messages (log)", color=_TEXT, fontsize=9)
 
     for spine in ax.spines.values():
         spine.set_visible(False)
