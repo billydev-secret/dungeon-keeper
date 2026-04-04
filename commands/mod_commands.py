@@ -23,13 +23,10 @@ _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "Reports":           ("📊", discord.Color.from_str("#EB459E")),
     "Activity & Graphs": ("📈", discord.Color.from_str("#5DADE2")),
     "Watch List":        ("🔍", discord.Color.from_str("#3498DB")),
-    "Role Grant Config": ("⚙️",  discord.Color.from_str("#1ABC9C")),
-    "XP Config":         ("🔧", discord.Color.from_str("#2ECC71")),
-    "Welcome & Leave":   ("👋", discord.Color.from_str("#9B59B6")),
-    "Spoiler Guard":     ("🛡️",  discord.Color.from_str("#E74C3C")),
-    "Inactivity Prune":  ("✂️",  discord.Color.from_str("#E67E22")),
-    "Auto-Delete":       ("🗑️",  discord.Color.from_str("#992D22")),
     "AI Moderation":     ("🤖", discord.Color.from_str("#5865F2")),
+    "Fun":               ("🎉", discord.Color.from_str("#F1C40F")),
+    "Data Management":   ("🗄️", discord.Color.from_str("#95A5A6")),
+    "Configuration":     ("⚙️", discord.Color.from_str("#1ABC9C")),
 }
 
 
@@ -131,6 +128,10 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Resolutions: daily (30d), weekly (12wk), monthly (12mo)."),
                 ("/report promotion_review",
                  "Members above level 5 without spicy access — flags inactivity-pruned users."),
+                ("/report message_cadence resolution:day channel:#channel",
+                 "Candlestick chart of time between messages. "
+                 "Body shows 20th–80th percentile, wick shows min–max, tick shows median. "
+                 "Green = chat speeding up, pink = slowing down."),
             ])
         ))
 
@@ -159,6 +160,9 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/chilling_effect lookback_days:30 top:10",
                  "Find members whose arrival in a channel causes others to stop posting. "
                  "Compares activity before and after each member's entries."),
+                ("/invite_web member:@user",
+                 "Network graph showing who invited whom. "
+                 "Optionally focus on one member's invite chain."),
             ])
         ))
 
@@ -245,14 +249,16 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             "All bot settings are managed through `/config <section>`. "
             "Each section opens a modal or interactive panel.\n\n"
             "**`/config global`** — Timezone, mod channel, bypass roles.\n"
-            "**`/config roles`** — Role IDs, log/announce channels, and grant message "
-            "templates for Greeter, Denizen, NSFW, Veteran, Kink, Golden Girl.\n"
+            "**`/config roles`** — Grant roles (add/edit/remove), log/announce channels, "
+            "permissions, and grant message templates.\n"
             "**`/config xp`** — XP log channels, level-5 announcement channel, "
             "per-channel XP toggle, and grant allowlist.\n"
             "**`/config welcome`** — Welcome and leave channels + message templates. "
             "Supports `{member}`, `{name}`, `{server}` placeholders.\n"
             "**`/config spoiler`** — Spoiler-guard channel list + current-channel toggle.\n"
-            "**`/config prune`** — Inactivity prune role, threshold, and manual trigger.\n\n"
+            "**`/config prune`** — Inactivity prune role, threshold, and manual trigger.\n"
+            "**`/config booster`** — Booster cosmetic role picker. "
+            "Manage swatch images, sync roles from a directory, and post the picker panel.\n\n"
             "**Related commands**\n"
             + _fmt([
                 ("/xp_excluded_channels", "List channels where XP is disabled."),
@@ -287,14 +293,15 @@ class HelpSelect(discord.ui.Select):
     def __init__(self, pages: list[discord.Embed], invoker_id: int):
         self.pages = pages
         self.invoker_id = invoker_id
-        options = [
-            discord.SelectOption(
-                label=(p.title or "").lstrip("🌿🎭⭐📊⚙️🔧👋🛡️✂️🗑️📖 "),
-                emoji=(p.title or " ")[0],
-                value=str(i),
-            )
-            for i, p in enumerate(pages)
-        ]
+        options = []
+        for i, p in enumerate(pages):
+            title = p.title or ""
+            # Title format: "{emoji}  {name}"
+            if "  " in title:
+                emoji, label = title.split("  ", 1)
+            else:
+                emoji, label = "📖", title
+            options.append(discord.SelectOption(label=label, emoji=emoji, value=str(i)))
         super().__init__(placeholder="Choose a section…", options=options)
 
     async def callback(self, interaction: discord.Interaction) -> None:
