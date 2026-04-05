@@ -610,7 +610,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         onboarding = [s for s in scores if s.status == STATUS_ONBOARDING]
         insufficient = [s for s in scores if s.status == STATUS_INSUFFICIENT]
         on_leave = [s for s in scores if s.status == STATUS_LEAVE]
-        shown = active[:limit]
+        shown = list(reversed(active))[:limit]
         now_ts = discord.utils.utcnow().timestamp()
 
         # -- Summary line --
@@ -621,36 +621,34 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             extras.append(f"{len(insufficient)} insufficient")
         if on_leave:
             extras.append(f"{len(on_leave)} on leave")
-        summary = f"Showing **{len(shown)}** of {len(active)} scored"
+        summary = f"Bottom **{len(shown)}** of {len(active)} scored"
         if extras:
             summary += " \u00b7 " + " \u00b7 ".join(extras)
 
         # -- Table --
         tbl: list[str] = []
-        tbl.append(f" #  {'Member':<18} {'':10}  Tot  Eng  C&R  Res  Pst  Last")
-        tbl.append("\u2500" * 66)
+        tbl.append(f" # {'Member':<14} Tot Eng C&R Res Pst Act")
+        tbl.append("\u2500" * 43)
 
         for rank, s in enumerate(shown, 1):
             m = guild.get_member(s.user_id)
             is_new = m is not None and m.joined_at is not None and (discord.utils.utcnow() - m.joined_at).days < 30
             raw = m.display_name if m else f"User {s.user_id}"
-            name = f"*{raw}"[:18] if is_new else raw[:18]
+            name = f"*{raw}"[:14] if is_new else raw[:14]
             tot = min(round(s.final_score * 100), 100)
             eng = min(round(s.engagement_given * 100), 100)
             cr = min(round(s.consistency_recency * 100), 100)
             res = min(round(s.content_resonance * 100), 100)
             pst = min(round(s.posting_activity * 100), 100)
-            filled = tot // 10
-            bar = "\u2588" * filled + "\u2591" * (10 - filled)
             if s.last_active_ts > 0:
                 days_ago = int((now_ts - s.last_active_ts) / 86400)
                 last = f"{days_ago}d" if days_ago > 0 else "0d"
             else:
                 last = "\u2014"
-            buf = f" +{s.tenure_buffer_days}d" if s.tenure_buffer_days > 0 else ""
+            if s.tenure_buffer_days > 0:
+                last += f"+{s.tenure_buffer_days}"
             tbl.append(
-                f"{rank:>2}  {name:<18} {bar}  {tot:>3}  {eng:>3}  {cr:>3}  {res:>3}  {pst:>3}  {last}{buf}"
-            )
+                f"{rank:>2} {name:<14} {tot:>3} {eng:>3} {cr:>3} {res:>3} {pst:>3} {last}")
 
         table_text = "```\n" + "\n".join(tbl) + "\n```"
 
