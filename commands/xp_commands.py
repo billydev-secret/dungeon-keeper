@@ -11,6 +11,7 @@ Grant allowlist management is handled via /config xp → Manage Grant Allowlist.
 """
 from __future__ import annotations
 
+import asyncio
 import statistics
 import time
 from collections import Counter
@@ -207,28 +208,36 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
         await interaction.response.defer(ephemeral=True)
         window_name, subtitle, color, cutoff = _resolve_leaderboard_timescale(timescale)
 
-        with ctx.open_db() as conn:
-            if not has_any_xp_events(conn, guild.id):
-                description = (
-                    "Existing XP totals predate the event ledger. "
-                    "New text and voice XP will appear here going forward."
-                    if has_any_member_xp(conn, guild.id)
-                    else "No XP recorded yet."
-                )
-                embed = discord.Embed(
-                    title="XP Leaderboards",
-                    description=description,
-                    color=discord.Color.blurple(),
-                )
-                embed.add_field(name="💬 Text", value="No tracked text XP yet.", inline=True)
-                embed.add_field(name="↩️ Replies", value="No tracked reply XP yet.", inline=True)
-                embed.add_field(name="🎙️ Voice", value="No tracked voice XP yet.", inline=True)
-                embed.add_field(name="🖼️ Image Reacts", value="No tracked image react XP yet.", inline=True)
-                embed.set_footer(text="Top 5 by XP source and time window")
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                return
+        def _check_xp():
+            with ctx.open_db() as conn:
+                has_events = has_any_xp_events(conn, guild.id)
+                has_xp = has_any_member_xp(conn, guild.id) if not has_events else False
+                return has_events, has_xp
+        has_events, has_xp = await asyncio.to_thread(_check_xp)
 
-        embed = _build_xp_leaderboard_embed(ctx, guild, caller, window_name, subtitle, color, cutoff)
+        if not has_events:
+            description = (
+                "Existing XP totals predate the event ledger. "
+                "New text and voice XP will appear here going forward."
+                if has_xp
+                else "No XP recorded yet."
+            )
+            embed = discord.Embed(
+                title="XP Leaderboards",
+                description=description,
+                color=discord.Color.blurple(),
+            )
+            embed.add_field(name="💬 Text", value="No tracked text XP yet.", inline=True)
+            embed.add_field(name="↩️ Replies", value="No tracked reply XP yet.", inline=True)
+            embed.add_field(name="🎙️ Voice", value="No tracked voice XP yet.", inline=True)
+            embed.add_field(name="🖼️ Image Reacts", value="No tracked image react XP yet.", inline=True)
+            embed.set_footer(text="Top 5 by XP source and time window")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        embed = await asyncio.to_thread(
+            _build_xp_leaderboard_embed, ctx, guild, caller, window_name, subtitle, color, cutoff,
+        )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @bot.tree.command(name="xp_give", description="Give a member 20 XP.")
@@ -506,8 +515,10 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             from datetime import datetime, timezone, timedelta
             since_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
 
-        with ctx.open_db() as conn:
-            durations = get_time_to_level_seconds(conn, guild.id, level, since_ts=since_ts)
+        def _query_durations():
+            with ctx.open_db() as conn:
+                return get_time_to_level_seconds(conn, guild.id, level, since_ts=since_ts)
+        durations = await asyncio.to_thread(_query_durations)
 
         if not durations:
             xp_needed = xp_required_for_level(level)
@@ -543,13 +554,10 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             f"Std Dev: `{fmt(stddev_s)}`"
         )
 
-        png = render_level_histogram(
-            durations,
-            target_level=level,
-            xp_required=xp_needed,
-            mean_s=mean_s,
-            stddev_s=stddev_s,
-            modal_days=modal_days,
+        png = await asyncio.to_thread(
+            render_level_histogram, durations,
+            target_level=level, xp_required=xp_needed,
+            mean_s=mean_s, stddev_s=stddev_s, modal_days=modal_days,
         )
         file = discord.File(io.BytesIO(png), filename=f"level_{level}_histogram.png")
         await interaction.followup.send(caption, file=file, ephemeral=True)

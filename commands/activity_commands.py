@@ -8,6 +8,7 @@ Commands:
 """
 from __future__ import annotations
 
+import asyncio
 import io
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal, cast
@@ -81,21 +82,22 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         user_id = member.id if member is not None else None
         channel_id = channel.id if channel is not None else None
-        with ctx.open_db() as conn:
-            if resolution in ("hour_of_day", "day_of_week"):
-                labels, msg_counts = query_message_histogram(
-                    conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
-                    user_id=user_id, channel_id=channel_id,
-                    utc_offset_hours=utc_offset,
-                )
-                member_counts: list[int] = []
-                show_members = False
-            else:
-                labels, msg_counts, member_counts = query_message_activity(
-                    conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
-                    utc_offset_hours=utc_offset,
-                )
-                show_members = member is None and channel is None
+        def _query_activity():
+            with ctx.open_db() as conn:
+                if resolution in ("hour_of_day", "day_of_week"):
+                    _labels, _msg_counts = query_message_histogram(
+                        conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
+                        user_id=user_id, channel_id=channel_id,
+                        utc_offset_hours=utc_offset,
+                    )
+                    return _labels, _msg_counts, [], False
+                else:
+                    _labels, _msg_counts, _member_counts = query_message_activity(
+                        conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
+                        utc_offset_hours=utc_offset,
+                    )
+                    return _labels, _msg_counts, _member_counts, member is None and channel is None
+        labels, msg_counts, member_counts, show_members = await asyncio.to_thread(_query_activity)
 
         if not any(c > 0 for c in msg_counts):
             await interaction.followup.send(
@@ -104,13 +106,10 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
             return
 
-        chart_bytes = render_activity_chart(
-            labels,
-            msg_counts,
-            member_counts,
-            title=title,
-            resolution=resolution,
-            show_members=show_members,
+        chart_bytes = await asyncio.to_thread(
+            render_activity_chart,
+            labels, msg_counts, member_counts,
+            title=title, resolution=resolution, show_members=show_members,
         )
 
         await interaction.followup.send(
@@ -377,12 +376,16 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         period_label = period
         channel_id = channel.id if channel is not None else None
 
-        with ctx.open_db() as conn:
-            profiles = query_dropoff_profiles(
-                conn, guild.id, period_secs,
-                channel_id=channel_id, limit=limit,
-                target_user_id=member.id if member else None,
-            )
+        _target_uid = member.id if member else None
+
+        def _query_dropoff():
+            with ctx.open_db() as conn:
+                return query_dropoff_profiles(
+                    conn, guild.id, period_secs,
+                    channel_id=channel_id, limit=limit,
+                    target_user_id=_target_uid,
+                )
+        profiles = await asyncio.to_thread(_query_dropoff)
 
         # ── detail view (single member) ───────────────────────────────────
         if member is not None:
@@ -451,10 +454,12 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        with ctx.open_db() as conn:
-            pre_sessions, post_sessions, overall_rate = query_session_burst(
-                conn, guild.id, member.id
-            )
+        _member_id = member.id
+
+        def _query_burst():
+            with ctx.open_db() as conn:
+                return query_session_burst(conn, guild.id, _member_id)
+        pre_sessions, post_sessions, overall_rate = await asyncio.to_thread(_query_burst)
 
         if not post_sessions:
             await interaction.followup.send(
@@ -464,10 +469,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
             return
 
-        chart_bytes = render_session_burst_chart(
-            pre_sessions,
-            post_sessions,
-            overall_rate,
+        chart_bytes = await asyncio.to_thread(
+            render_session_burst_chart,
+            pre_sessions, post_sessions, overall_rate,
             user_display_name=member.display_name,
         )
         await interaction.followup.send(
@@ -500,8 +504,10 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        with ctx.open_db() as conn:
-            ranking = query_burst_ranking(conn, guild.id)
+        def _query_ranking():
+            with ctx.open_db() as conn:
+                return query_burst_ranking(conn, guild.id)
+        ranking = await asyncio.to_thread(_query_ranking)
 
         if not ranking:
             await interaction.followup.send(
@@ -518,7 +524,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             name = member.display_name if member else f"User {user_id}"
             entries.append((name, pre_avg, post_avg, n_sessions))
 
-        chart_bytes = render_burst_ranking_chart(entries, limit=limit, guild_name=guild.name)
+        chart_bytes = await asyncio.to_thread(
+            render_burst_ranking_chart, entries, limit=limit, guild_name=guild.name,
+        )
         await interaction.followup.send(
             file=discord.File(io.BytesIO(chart_bytes), filename="burst_ranking.png"),
             ephemeral=True,

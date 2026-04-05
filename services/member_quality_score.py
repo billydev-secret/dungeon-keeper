@@ -342,6 +342,12 @@ def compute_quality_scores(
             if target_uid is not None and target_uid in id_set:
                 replies_received[target_uid] += 1
 
+    # Replies per message (for content resonance per-post lookup)
+    replies_per_msg: dict[int, int] = defaultdict(int)
+    for row in msg_rows:
+        if row["reply_to_id"] is not None:
+            replies_per_msg[int(row["reply_to_id"])] += 1
+
     # ------------------------------------------------------------------
     # Compute raw metrics per member
     # ------------------------------------------------------------------
@@ -358,6 +364,23 @@ def compute_quality_scores(
     last_active = [0.0] * n
     active_days_arr = [0] * n
     active_weeks_arr = [0] * n
+
+    # Pre-build reverse engagement indices (others engaging with each user)
+    replies_to_user: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for row in msg_rows:
+        if row["reply_to_id"] is not None:
+            _rev_target = msg_author_map.get(int(row["reply_to_id"]))
+            if _rev_target is not None:
+                _from_uid = int(row["author_id"])
+                if _from_uid != _rev_target:
+                    replies_to_user[_rev_target].append((int(row["ts"]), _from_uid))
+
+    reactions_to_user: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for rr in react_rows:
+        _rr_author = int(rr["author_id"])
+        _rr_reactor = int(rr["reactor_id"])
+        if _rr_reactor != _rr_author:
+            reactions_to_user[_rr_author].append((int(rr["ts"]), _rr_reactor))
 
     for idx, uid in enumerate(scored_ids):
         user_msgs = msgs_by_author.get(uid, [])
@@ -433,15 +456,7 @@ def compute_quality_scores(
         engagement_events.sort()
 
         # Also track reverse engagement (others engaging with this user)
-        reverse_events: list[tuple[int, int]] = []  # (ts, from_uid)
-        for row in msg_rows:
-            if row["reply_to_id"] is not None:
-                rev_target = msg_author_map.get(int(row["reply_to_id"]))
-                if rev_target == uid and int(row["author_id"]) != uid:
-                    reverse_events.append((int(row["ts"]), int(row["author_id"])))
-        for rr in react_rows:
-            if int(rr["author_id"]) == uid and int(rr["reactor_id"]) != uid:
-                reverse_events.append((int(rr["ts"]), int(rr["reactor_id"])))
+        reverse_events = replies_to_user.get(uid, []) + reactions_to_user.get(uid, [])
         reverse_events.sort()
 
         # Merge and determine who engaged first per pair
@@ -476,11 +491,7 @@ def compute_quality_scores(
             total_resonance = 0.0
             for mid in user_posts:
                 total_resonance += reaction_counts.get(mid, 0)
-                # Count replies received for this specific message
-                total_resonance += sum(
-                    1 for row in msg_rows
-                    if row["reply_to_id"] is not None and int(row["reply_to_id"]) == mid
-                )
+                total_resonance += replies_per_msg.get(mid, 0)
             resonance_values[idx] = total_resonance / len(user_posts)
         else:
             resonance_values[idx] = -1.0  # sentinel for "non-poster"

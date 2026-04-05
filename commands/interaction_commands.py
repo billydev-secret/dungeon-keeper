@@ -82,13 +82,15 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         _TIMESCALE_SECONDS = {"hour": 3600, "day": 86400, "week": 604800, "month": 2592000}
         after_ts = int(_time.time()) - _TIMESCALE_SECONDS[timescale] if timescale in _TIMESCALE_SECONDS else None
 
-        with ctx.open_db() as conn:
-            all_edges = query_connection_web(
-                conn, guild.id,
-                min_weight=1,
-                limit_users=limit,
-                after_ts=after_ts,
-            )
+        def _query_web():
+            with ctx.open_db() as conn:
+                return query_connection_web(
+                    conn, guild.id,
+                    min_weight=1,
+                    limit_users=limit,
+                    after_ts=after_ts,
+                )
+        all_edges = await asyncio.to_thread(_query_web)
 
         # Total interaction weight per node — used for percentage filtering
         node_total: dict[int, int] = {}
@@ -402,13 +404,15 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         _TIMESCALE_SECONDS = {"hour": 3600, "day": 86400, "week": 604800, "month": 2592000}
         after_ts = int(_time.time()) - _TIMESCALE_SECONDS[timescale] if timescale in _TIMESCALE_SECONDS else None
 
-        with ctx.open_db() as conn:
-            all_edges = query_connection_web(
-                conn, guild.id,
-                min_weight=1,
-                limit_users=limit,
-                after_ts=after_ts,
-            )
+        def _query_heatmap():
+            with ctx.open_db() as conn:
+                return query_connection_web(
+                    conn, guild.id,
+                    min_weight=1,
+                    limit_users=limit,
+                    after_ts=after_ts,
+                )
+        all_edges = await asyncio.to_thread(_query_heatmap)
 
         # Percentage filtering (same logic as connection_web)
         node_total: dict[int, int] = {}
@@ -497,8 +501,10 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        with ctx.open_db() as conn:
-            all_edges = query_invite_web(conn, guild.id)
+        def _query_invites():
+            with ctx.open_db() as conn:
+                return query_invite_web(conn, guild.id)
+        all_edges = await asyncio.to_thread(_query_invites)
 
         if member is not None:
             # Keep only edges reachable from the focused member (invite tree)

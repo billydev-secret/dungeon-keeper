@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -93,8 +94,11 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         cutoff_ts = cutoff.timestamp()
         role_members = sorted(role.members, key=lambda current: current.display_name.lower())
         role_member_ids = [current.id for current in role_members]
-        with ctx.open_db() as conn:
-            activities = ctx.get_member_last_activity_map(conn, guild.id, role_member_ids)
+
+        def _fetch_inactive_role():
+            with ctx.open_db() as conn:
+                return ctx.get_member_last_activity_map(conn, guild.id, role_member_ids)
+        activities = await asyncio.to_thread(_fetch_inactive_role)
 
         inactive_members = [
             current
@@ -156,8 +160,10 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         ]
         sfw_member_ids = [m.id for m in sfw_members]
 
-        with ctx.open_db() as conn:
-            activities = ctx.get_member_last_activity_map(conn, guild.id, sfw_member_ids)
+        def _fetch_oldest_sfw():
+            with ctx.open_db() as conn:
+                return ctx.get_member_last_activity_map(conn, guild.id, sfw_member_ids)
+        activities = await asyncio.to_thread(_fetch_oldest_sfw)
 
         sorted_members = sorted(
             sfw_members,
@@ -210,17 +216,21 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         all_member_ids = [m.id for m in all_members]
 
         if channel is not None or exclude_gif_only:
-            # Custom query: filter by channel and/or exclude gif-only posters
             from services.message_store import query_last_substantive_activity
-            with ctx.open_db() as conn:
-                activities = query_last_substantive_activity(
-                    conn, guild.id, all_member_ids,
-                    channel_id=channel.id if channel else None,
-                    exclude_gif_only=exclude_gif_only,
-                )
+            _ch_id = channel.id if channel else None
+
+            def _fetch_inactive():
+                with ctx.open_db() as conn:
+                    return query_last_substantive_activity(
+                        conn, guild.id, all_member_ids,
+                        channel_id=_ch_id,
+                        exclude_gif_only=exclude_gif_only,
+                    )
         else:
-            with ctx.open_db() as conn:
-                activities = ctx.get_member_last_activity_map(conn, guild.id, all_member_ids)
+            def _fetch_inactive():
+                with ctx.open_db() as conn:
+                    return ctx.get_member_last_activity_map(conn, guild.id, all_member_ids)
+        activities = await asyncio.to_thread(_fetch_inactive)
 
         inactive_members = sorted(
             [m for m in all_members if activities.get(m.id) is None or activities[m.id].created_at < cutoff_ts],
@@ -282,8 +292,10 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         res: Resolution = resolution.value if resolution else "week"  # type: ignore[assignment]
         window_label = {"day": "Last 30 Days", "week": "Last 12 Weeks", "month": "Last 12 Months"}[res]
 
-        with ctx.open_db() as conn:
-            labels, role_counts = query_role_growth(conn, ctx.guild_id, res)
+        def _query_role_growth():
+            with ctx.open_db() as conn:
+                return query_role_growth(conn, ctx.guild_id, res)
+        labels, role_counts = await asyncio.to_thread(_query_role_growth)
 
         if roles is not None:
             wanted = {r.strip().lower() for r in roles.split(",") if r.strip()}
@@ -296,9 +308,8 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             await interaction.followup.send("No role grant history recorded yet.", ephemeral=True)
             return
 
-        chart_bytes = render_role_growth_chart(
-            labels,
-            role_counts,
+        chart_bytes = await asyncio.to_thread(
+            render_role_growth_chart, labels, role_counts,
             title=f"Role Growth — {window_label}",
         )
         await interaction.followup.send(
@@ -346,19 +357,21 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         channel_id = channel.id if channel else None
         scope = f" in #{channel.name}" if channel else ""
 
-        with ctx.open_db() as conn:
-            buckets = query_message_cadence(
-                conn, ctx.guild_id, res,
-                utc_offset_hours=ctx.tz_offset_hours,
-                channel_id=channel_id,
-            )
+        def _query_cadence():
+            with ctx.open_db() as conn:
+                return query_message_cadence(
+                    conn, ctx.guild_id, res,
+                    utc_offset_hours=ctx.tz_offset_hours,
+                    channel_id=channel_id,
+                )
+        buckets = await asyncio.to_thread(_query_cadence)
 
         if not buckets or all(b.median_gap == 0 for b in buckets):
             await interaction.followup.send(f"No message data found{scope} for this period.", ephemeral=True)
             return
 
-        chart_bytes = render_message_cadence_chart(
-            buckets,
+        chart_bytes = await asyncio.to_thread(
+            render_message_cadence_chart, buckets,
             title=f"Message Cadence{scope} — {window_label}",
         )
         await interaction.followup.send(
@@ -425,7 +438,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 counts[(local_dt.weekday() + 1) % 7] += 1
 
         title_label = "By Hour of Day" if res == "hour_of_day" else "By Day of Week"
-        chart_bytes = render_join_histogram(labels, counts, f"Member Joins — {title_label}")
+        chart_bytes = await asyncio.to_thread(
+            render_join_histogram, labels, counts, f"Member Joins — {title_label}",
+        )
 
         import io as _io
         await interaction.followup.send(
@@ -464,56 +479,58 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         candidate_ids = [m.id for m in candidates]
 
-        with ctx.open_db() as conn:
-            # Get XP levels for candidates
-            levels: dict[int, tuple[int, float]] = {}
-            batch_size = 800
-            for i in range(0, len(candidate_ids), batch_size):
-                batch = candidate_ids[i:i + batch_size]
-                placeholders = ", ".join("?" for _ in batch)
-                rows = conn.execute(
-                    f"SELECT user_id, level, total_xp FROM member_xp "
-                    f"WHERE guild_id = ? AND user_id IN ({placeholders})",
-                    [guild.id, *batch],
-                ).fetchall()
-                for row in rows:
-                    levels[int(row["user_id"])] = (int(row["level"]), float(row["total_xp"]))
+        nsfw_role_name = nsfw_role.name if nsfw_role else ""
 
-            # Filter to level > 5
-            eligible = [m for m in candidates if levels.get(m.id, (1, 0))[0] > 5]
-            if not eligible:
-                await interaction.followup.send(
-                    "No members above level 5 without spicy access.", ephemeral=True
-                )
-                return
-
-            eligible_ids = [m.id for m in eligible]
-
-            # Check for NSFW removal events in role_events
-            nsfw_role_name = nsfw_role.name if nsfw_role else ""
-            pruned_users: dict[int, float] = {}  # user_id -> removal timestamp
-            if nsfw_role_name:
-                for i in range(0, len(eligible_ids), batch_size):
-                    batch = eligible_ids[i:i + batch_size]
+        def _query_promotion():
+            with ctx.open_db() as conn:
+                levels: dict[int, tuple[int, float]] = {}
+                batch_size = 800
+                for i in range(0, len(candidate_ids), batch_size):
+                    batch = candidate_ids[i:i + batch_size]
                     placeholders = ", ".join("?" for _ in batch)
-                    # Get the most recent event per user for the NSFW role
                     rows = conn.execute(
-                        f"SELECT user_id, action, granted_at FROM role_events "
-                        f"WHERE guild_id = ? AND role_name = ? "
-                        f"AND user_id IN ({placeholders}) "
-                        f"ORDER BY granted_at DESC",
-                        [guild.id, nsfw_role_name, *batch],
+                        f"SELECT user_id, level, total_xp FROM member_xp "
+                        f"WHERE guild_id = ? AND user_id IN ({placeholders})",
+                        [guild.id, *batch],
                     ).fetchall()
-                    seen: set[int] = set()
                     for row in rows:
-                        uid = int(row["user_id"])
-                        if uid not in seen:
-                            seen.add(uid)
-                            if row["action"] == "remove":
-                                pruned_users[uid] = float(row["granted_at"])
+                        levels[int(row["user_id"])] = (int(row["level"]), float(row["total_xp"]))
 
-            # Get activity data
-            activities = ctx.get_member_last_activity_map(conn, guild.id, eligible_ids)
+                eligible_ids = [m.id for m in candidates if levels.get(m.id, (1, 0))[0] > 5]
+                if not eligible_ids:
+                    return levels, {}, {}
+
+                pruned_users: dict[int, float] = {}
+                if nsfw_role_name:
+                    for i in range(0, len(eligible_ids), batch_size):
+                        batch = eligible_ids[i:i + batch_size]
+                        placeholders = ", ".join("?" for _ in batch)
+                        rows = conn.execute(
+                            f"SELECT user_id, action, granted_at FROM role_events "
+                            f"WHERE guild_id = ? AND role_name = ? "
+                            f"AND user_id IN ({placeholders}) "
+                            f"ORDER BY granted_at DESC",
+                            [guild.id, nsfw_role_name, *batch],
+                        ).fetchall()
+                        seen: set[int] = set()
+                        for row in rows:
+                            uid = int(row["user_id"])
+                            if uid not in seen:
+                                seen.add(uid)
+                                if row["action"] == "remove":
+                                    pruned_users[uid] = float(row["granted_at"])
+
+                activities = ctx.get_member_last_activity_map(conn, guild.id, eligible_ids)
+                return levels, pruned_users, activities
+
+        levels, pruned_users, activities = await asyncio.to_thread(_query_promotion)
+
+        eligible = [m for m in candidates if levels.get(m.id, (1, 0))[0] > 5]
+        if not eligible:
+            await interaction.followup.send(
+                "No members above level 5 without spicy access.", ephemeral=True
+            )
+            return
 
         # Sort by level descending, then XP descending
         eligible.sort(key=lambda m: (-levels.get(m.id, (1, 0))[0], -levels.get(m.id, (1, 0))[1]))
@@ -574,8 +591,12 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             compute_quality_scores,
         )
 
-        with ctx.open_db() as conn:
-            scores = compute_quality_scores(conn, guild.id, guild.members)
+        _members = list(guild.members)
+
+        def _compute():
+            with ctx.open_db() as conn:
+                return compute_quality_scores(conn, guild.id, _members)
+        scores = await asyncio.to_thread(_compute)
 
         if not scores:
             await interaction.followup.send("No members to score.", ephemeral=True)

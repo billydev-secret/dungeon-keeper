@@ -8,6 +8,7 @@ Uses the local message archive populated by /interaction_scan and on_message.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from collections import defaultdict
@@ -197,15 +198,19 @@ def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
             (datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp()
         )
 
-        with ctx.open_db() as conn:
-            events, channel_count = _analyze_chilling_effect(
-                conn,
-                guild.id,
-                cutoff_ts=cutoff_ts,
-                entry_gap_seconds=entry_gap_minutes * 60,
-                window_seconds=window_minutes * 60,
-                channel_id=channel.id if channel else None,
-            )
+        _ch_id = channel.id if channel else None
+
+        def _analyze():
+            with ctx.open_db() as conn:
+                return _analyze_chilling_effect(
+                    conn,
+                    guild.id,
+                    cutoff_ts=cutoff_ts,
+                    entry_gap_seconds=entry_gap_minutes * 60,
+                    window_seconds=window_minutes * 60,
+                    channel_id=_ch_id,
+                )
+        events, channel_count = await asyncio.to_thread(_analyze)
 
         # Aggregate events per entrant
         events_by_author: dict[int, list[_EntryEvent]] = defaultdict(list)
