@@ -568,7 +568,11 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         name="quality_scores",
         description="Ranked member quality scores with component breakdowns.",
     )
-    async def quality_scores(interaction: discord.Interaction):
+    @app_commands.describe(limit="Number of scored members to show (default 10).")
+    async def quality_scores(
+        interaction: discord.Interaction,
+        limit: app_commands.Range[int, 1, 100] = 10,
+    ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_guild:
             await interaction.response.send_message(
@@ -606,63 +610,79 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         onboarding = [s for s in scores if s.status == STATUS_ONBOARDING]
         insufficient = [s for s in scores if s.status == STATUS_INSUFFICIENT]
         on_leave = [s for s in scores if s.status == STATUS_LEAVE]
+        shown = active[:limit]
+        now_ts = discord.utils.utcnow().timestamp()
 
-        lines: list[str] = []
-        lines.append(
-            f"**Member Quality Scores** — {len(active)} scored, "
-            f"{len(onboarding)} onboarding, {len(insufficient)} insufficient data, "
-            f"{len(on_leave)} on leave\n"
-        )
+        # -- Summary line --
+        extras: list[str] = []
+        if onboarding:
+            extras.append(f"{len(onboarding)} onboarding")
+        if insufficient:
+            extras.append(f"{len(insufficient)} insufficient")
+        if on_leave:
+            extras.append(f"{len(on_leave)} on leave")
+        summary = f"Showing **{len(shown)}** of {len(active)} scored"
+        if extras:
+            summary += " \u00b7 " + " \u00b7 ".join(extras)
 
-        # Header
-        lines.append("```")
-        lines.append(f"{'#':>3} {'Member':<20} {'Score':>5} {'Engmt':>5} {'C&R':>5} {'Reson':>5} {'Post':>5} {'Last Active':<12} {'Buf':>3}")
-        lines.append(f"{'':->3} {'':->20} {'':->5} {'':->5} {'':->5} {'':->5} {'':->5} {'':->12} {'':->3}")
+        # -- Table --
+        tbl: list[str] = []
+        tbl.append(f" #  {'Member':<18} {'':10}  Tot  Eng  C&R  Res  Pst  Last")
+        tbl.append("\u2500" * 66)
 
-        for rank, s in enumerate(active, 1):
+        for rank, s in enumerate(shown, 1):
             m = guild.get_member(s.user_id)
-            name = (m.display_name[:19] if m else f"User {s.user_id}")[:19]
+            name = (m.display_name if m else f"User {s.user_id}")[:18]
+            tot = min(round(s.final_score * 100), 100)
+            eng = min(round(s.engagement_given * 100), 100)
+            cr = min(round(s.consistency_recency * 100), 100)
+            res = min(round(s.content_resonance * 100), 100)
+            pst = min(round(s.posting_activity * 100), 100)
+            filled = tot // 10
+            bar = "\u2588" * filled + "\u2591" * (10 - filled)
             if s.last_active_ts > 0:
-                days_ago = int((discord.utils.utcnow().timestamp() - s.last_active_ts) / 86400)
-                last = f"{days_ago}d ago" if days_ago > 0 else "today"
+                days_ago = int((now_ts - s.last_active_ts) / 86400)
+                last = f"{days_ago}d" if days_ago > 0 else "0d"
             else:
-                last = "never"
-            buf = f"+{s.tenure_buffer_days}" if s.tenure_buffer_days > 0 else ""
-            lines.append(
-                f"{rank:>3} {name:<20} {s.final_score:>5.2f} {s.engagement_given:>5.2f} "
-                f"{s.consistency_recency:>5.2f} {s.content_resonance:>5.2f} {s.posting_activity:>5.2f} "
-                f"{last:<12} {buf:>3}"
+                last = "\u2014"
+            buf = f" +{s.tenure_buffer_days}d" if s.tenure_buffer_days > 0 else ""
+            tbl.append(
+                f"{rank:>2}  {name:<18} {bar}  {tot:>3}  {eng:>3}  {cr:>3}  {res:>3}  {pst:>3}  {last}{buf}"
             )
 
-        lines.append("```")
+        table_text = "```\n" + "\n".join(tbl) + "\n```"
+
+        # -- Build embed --
+        embed = discord.Embed(
+            title="Member Quality Scores",
+            description=summary + "\n" + table_text,
+            color=discord.Color.blurple(),
+        )
+
+        # Compact footer sections
+        footer_parts: list[str] = []
+        def _name(uid: int) -> str:
+            m = guild.get_member(uid)
+            return m.display_name if m else f"User {uid}"
 
         if insufficient:
-            lines.append(f"\n**Insufficient Data** ({len(insufficient)}):")
-            for s in insufficient:
-                m = guild.get_member(s.user_id)
-                name = m.display_name if m else f"User {s.user_id}"
-                lines.append(f"  {name} — {s.active_days} active days")
-
+            names = ", ".join(_name(s.user_id) for s in insufficient[:5])
+            if len(insufficient) > 5:
+                names += f" +{len(insufficient) - 5} more"
+            footer_parts.append(f"**Insufficient Data** ({len(insufficient)}): {names}")
         if on_leave:
-            lines.append(f"\n**On Leave** ({len(on_leave)}):")
-            for s in on_leave:
-                m = guild.get_member(s.user_id)
-                name = m.display_name if m else f"User {s.user_id}"
-                lines.append(f"  {name}")
-
+            names = ", ".join(_name(s.user_id) for s in on_leave[:5])
+            if len(on_leave) > 5:
+                names += f" +{len(on_leave) - 5} more"
+            footer_parts.append(f"**On Leave** ({len(on_leave)}): {names}")
         if onboarding:
-            lines.append(f"\n**Onboarding — not yet scored** ({len(onboarding)}):")
-            for s in onboarding:
-                m = guild.get_member(s.user_id)
-                name = m.display_name if m else f"User {s.user_id}"
-                joined = m.joined_at if m else None
-                if joined:
-                    days = (discord.utils.utcnow() - joined).days
-                    lines.append(f"  {name} — joined {days}d ago")
-                else:
-                    lines.append(f"  {name}")
+            footer_parts.append(f"**Onboarding** ({len(onboarding)}): not yet scored")
+        if footer_parts:
+            embed.add_field(name="\u200b", value="\n".join(footer_parts), inline=False)
 
-        await send_ephemeral_text(interaction, "\n".join(lines))
+        embed.set_footer(text="Eng=Engagement \u00b7 C&R=Consistency & Recency \u00b7 Res=Resonance \u00b7 Pst=Posts")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     bot.tree.add_command(report_group)
 
