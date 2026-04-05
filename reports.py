@@ -632,7 +632,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         for rank, s in enumerate(shown, 1):
             m = guild.get_member(s.user_id)
-            name = (m.display_name if m else f"User {s.user_id}")[:18]
+            is_new = m is not None and m.joined_at is not None and (discord.utils.utcnow() - m.joined_at).days < 30
+            raw = m.display_name if m else f"User {s.user_id}"
+            name = f"*{raw}"[:18] if is_new else raw[:18]
             tot = min(round(s.final_score * 100), 100)
             eng = min(round(s.engagement_given * 100), 100)
             cr = min(round(s.consistency_recency * 100), 100)
@@ -680,7 +682,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         if footer_parts:
             embed.add_field(name="\u200b", value="\n".join(footer_parts), inline=False)
 
-        embed.set_footer(text="Eng=Engagement \u00b7 C&R=Consistency & Recency \u00b7 Res=Resonance \u00b7 Pst=Posts")
+        embed.set_footer(text="* < 30d tenure \u00b7 Eng=Engagement \u00b7 C&R=Consistency & Recency \u00b7 Res=Resonance \u00b7 Pst=Posts")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 

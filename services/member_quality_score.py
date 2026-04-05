@@ -24,7 +24,8 @@ import discord
 # ---------------------------------------------------------------------------
 
 WINDOW_DAYS = 90
-ONBOARDING_DAYS = 30
+ONBOARDING_DAYS = 7
+NEW_MEMBER_DAYS = 30  # starred in reports — scores normalized but based on less data
 MIN_ACTIVE_DAYS = 7
 WEEKS_IN_WINDOW = 13
 
@@ -476,7 +477,11 @@ def compute_quality_scores(
         # -- Consistency & Recency --
         days_since = (now_ts - last_ts) / 86400 if last_ts > 0 else WINDOW_DAYS
         recency_values[idx] = math.exp(-DECAY_RATE * days_since)
-        consistency_values[idx] = n_active_weeks / WEEKS_IN_WINDOW
+        # Normalize consistency denominator to actual tenure for newer members
+        _m = member_map.get(uid)
+        _joined_ts = _m.joined_at.timestamp() if _m and _m.joined_at else 0.0
+        _tenure_wks = max(1.0, (now_ts - _joined_ts) / (7 * 86400)) if _joined_ts else float(WEEKS_IN_WINDOW)
+        consistency_values[idx] = n_active_weeks / min(float(WEEKS_IN_WINDOW), _tenure_wks)
 
         # -- Content Resonance --
         # "Posts" = messages with attachment OR conversation starters (non-replies)
