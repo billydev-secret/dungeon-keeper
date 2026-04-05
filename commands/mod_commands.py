@@ -97,9 +97,9 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/report inactive_role role:@Role days:7",
                  "Members of a role who haven't posted in N days. "
                  "Good for identifying who might need a check-in before a prune run."),
-                ("/report inactive time_period:7d",
+                ("/report inactive time_period:7d channel:#channel exclude_gif_only:True",
                  "All server members inactive for a given period, regardless of role. "
-                 "Use this to plan prune runs or spot disengaged members early."),
+                 "Optionally filter to a channel or exclude members whose only activity is GIFs."),
                 ("/report oldest_sfw count:10",
                  "Members without NSFW access, ranked by how long since they last posted. "
                  "Useful for finding long-inactive accounts that were never fully onboarded."),
@@ -132,6 +132,12 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Candlestick chart of time between messages. "
                  "Body shows 20th–80th percentile, wick shows min–max, tick shows median. "
                  "Green = chat speeding up, pink = slowing down."),
+                ("/report join_times resolution:hour_of_day",
+                 "Histogram of when current members joined — by hour of day or day of week."),
+                ("/report quality_scores",
+                 "Ranked member quality scores. Four components: Engagement Given (40%), "
+                 "Consistency/Recency (25%), Content Resonance (20%), Posting Activity (15%). "
+                 "New members (<30d) and low-data members (<7 active days) are flagged separately."),
             ])
         ))
 
@@ -283,6 +289,12 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Remove a user or role's `/grant_*` permission."),
                 ("/grant_permissions",
                  "List who can use each grant command."),
+                ("/quality_leave add member:@user days:30",
+                 "Put a member on leave of absence (pauses quality scoring)."),
+                ("/quality_leave remove member:@user",
+                 "Remove a member's leave of absence."),
+                ("/quality_leave list",
+                 "List all members currently on leave."),
             ])
         ))
 

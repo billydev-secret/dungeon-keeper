@@ -11,12 +11,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time as _time
-from typing import TYPE_CHECKING
-
 import discord
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("dungeonkeeper.invite_tracker")
 

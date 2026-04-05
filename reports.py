@@ -175,8 +175,17 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         await send_ephemeral_text(interaction, header + block)
 
     @report_group.command(name="inactive", description="Show all server members inactive for a given period.")
-    @app_commands.describe(time_period="How long without a message counts as inactive, e.g. 7d, 2h, 30m")
-    async def inactive(interaction: discord.Interaction, time_period: str):
+    @app_commands.describe(
+        time_period="How long without a message counts as inactive, e.g. 7d, 2h, 30m",
+        channel="Only count activity in this channel.",
+        exclude_gif_only="Ignore members whose only recent activity is GIF/image links.",
+    )
+    async def inactive(
+        interaction: discord.Interaction,
+        time_period: str,
+        channel: discord.TextChannel | None = None,
+        exclude_gif_only: bool = False,
+    ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
             await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
@@ -200,8 +209,18 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         all_members = [m for m in guild.members if not m.bot]
         all_member_ids = [m.id for m in all_members]
 
-        with ctx.open_db() as conn:
-            activities = ctx.get_member_last_activity_map(conn, guild.id, all_member_ids)
+        if channel is not None or exclude_gif_only:
+            # Custom query: filter by channel and/or exclude gif-only posters
+            from services.message_store import query_last_substantive_activity
+            with ctx.open_db() as conn:
+                activities = query_last_substantive_activity(
+                    conn, guild.id, all_member_ids,
+                    channel_id=channel.id if channel else None,
+                    exclude_gif_only=exclude_gif_only,
+                )
+        else:
+            with ctx.open_db() as conn:
+                activities = ctx.get_member_last_activity_map(conn, guild.id, all_member_ids)
 
         inactive_members = sorted(
             [m for m in all_members if activities.get(m.id) is None or activities[m.id].created_at < cutoff_ts],
@@ -211,8 +230,14 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         total = len(all_members)
         inactive_count = len(inactive_members)
         percent = (inactive_count / total * 100) if total else 0
+        filters: list[str] = []
+        if channel:
+            filters.append(f"in #{channel.name}")
+        if exclude_gif_only:
+            filters.append("excl. GIF-only")
+        filter_label = f" ({', '.join(filters)})" if filters else ""
         summary = (
-            f"**Inactive Members Report ({time_period})**\n"
+            f"**Inactive Members Report ({time_period}{filter_label})**\n"
             f"Total Members: {total}\n"
             f"Inactive: {inactive_count} ({percent:.1f}%)\n"
             f"----------------------------------\n"
@@ -342,6 +367,73 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         )
 
     @report_group.command(
+        name="join_times",
+        description="Histogram of when members joined the server.",
+    )
+    @app_commands.describe(
+        resolution="Group by hour of day or day of week.",
+    )
+    @app_commands.choices(resolution=[
+        app_commands.Choice(name="By Hour of Day", value="hour_of_day"),
+        app_commands.Choice(name="By Day of Week", value="day_of_week"),
+    ])
+    async def join_times(
+        interaction: discord.Interaction,
+        resolution: app_commands.Choice[str] | None = None,
+    ):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_guild:
+            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        from datetime import datetime, timezone as tz
+
+        from services.activity_graphs import render_join_histogram
+
+        res = resolution.value if resolution else "hour_of_day"
+        offset_secs = int(ctx.tz_offset_hours * 3600)
+
+        _DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        _HOD_LABELS = [
+            "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am",
+            "8am", "9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm",
+            "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
+        ]
+
+        if res == "hour_of_day":
+            labels, n_bins = _HOD_LABELS, 24
+        else:
+            labels, n_bins = _DOW_LABELS, 7
+
+        counts = [0] * n_bins
+        for m in guild.members:
+            if m.bot or m.joined_at is None:
+                continue
+            dt = m.joined_at.astimezone(tz.utc)
+            ts = dt.timestamp() + offset_secs
+            local_dt = datetime.fromtimestamp(ts, tz=tz.utc)
+            if res == "hour_of_day":
+                counts[local_dt.hour] += 1
+            else:
+                counts[(local_dt.weekday() + 1) % 7] += 1
+
+        title_label = "By Hour of Day" if res == "hour_of_day" else "By Day of Week"
+        chart_bytes = render_join_histogram(labels, counts, f"Member Joins — {title_label}")
+
+        import io as _io
+        await interaction.followup.send(
+            file=discord.File(fp=_io.BytesIO(chart_bytes), filename="join_times.png"),
+            ephemeral=True,
+        )
+
+    @report_group.command(
         name="promotion_review",
         description="Members above level 5 without spicy access — flags inactivity-pruned users.",
     )
@@ -451,5 +543,208 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await send_ephemeral_text(interaction, header + "\n".join(lines))
 
+    # ------------------------------------------------------------------
+    # /report quality_scores
+    # ------------------------------------------------------------------
+
+    @report_group.command(
+        name="quality_scores",
+        description="Ranked member quality scores with component breakdowns.",
+    )
+    async def quality_scores(interaction: discord.Interaction):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_guild:
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        from services.member_quality_score import (
+            STATUS_ACTIVE,
+            STATUS_INSUFFICIENT,
+            STATUS_LEAVE,
+            STATUS_ONBOARDING,
+            compute_quality_scores,
+        )
+
+        with ctx.open_db() as conn:
+            scores = compute_quality_scores(conn, guild.id, guild.members)
+
+        if not scores:
+            await interaction.followup.send("No members to score.", ephemeral=True)
+            return
+
+        active = [s for s in scores if s.status == STATUS_ACTIVE]
+        onboarding = [s for s in scores if s.status == STATUS_ONBOARDING]
+        insufficient = [s for s in scores if s.status == STATUS_INSUFFICIENT]
+        on_leave = [s for s in scores if s.status == STATUS_LEAVE]
+
+        lines: list[str] = []
+        lines.append(
+            f"**Member Quality Scores** — {len(active)} scored, "
+            f"{len(onboarding)} onboarding, {len(insufficient)} insufficient data, "
+            f"{len(on_leave)} on leave\n"
+        )
+
+        # Header
+        lines.append("```")
+        lines.append(f"{'#':>3} {'Member':<20} {'Score':>5} {'Engmt':>5} {'C&R':>5} {'Reson':>5} {'Post':>5} {'Last Active':<12} {'Buf':>3}")
+        lines.append(f"{'':->3} {'':->20} {'':->5} {'':->5} {'':->5} {'':->5} {'':->5} {'':->12} {'':->3}")
+
+        for rank, s in enumerate(active, 1):
+            m = guild.get_member(s.user_id)
+            name = (m.display_name[:19] if m else f"User {s.user_id}")[:19]
+            if s.last_active_ts > 0:
+                days_ago = int((discord.utils.utcnow().timestamp() - s.last_active_ts) / 86400)
+                last = f"{days_ago}d ago" if days_ago > 0 else "today"
+            else:
+                last = "never"
+            buf = f"+{s.tenure_buffer_days}" if s.tenure_buffer_days > 0 else ""
+            lines.append(
+                f"{rank:>3} {name:<20} {s.final_score:>5.2f} {s.engagement_given:>5.2f} "
+                f"{s.consistency_recency:>5.2f} {s.content_resonance:>5.2f} {s.posting_activity:>5.2f} "
+                f"{last:<12} {buf:>3}"
+            )
+
+        lines.append("```")
+
+        if insufficient:
+            lines.append(f"\n**Insufficient Data** ({len(insufficient)}):")
+            for s in insufficient:
+                m = guild.get_member(s.user_id)
+                name = m.display_name if m else f"User {s.user_id}"
+                lines.append(f"  {name} — {s.active_days} active days")
+
+        if on_leave:
+            lines.append(f"\n**On Leave** ({len(on_leave)}):")
+            for s in on_leave:
+                m = guild.get_member(s.user_id)
+                name = m.display_name if m else f"User {s.user_id}"
+                lines.append(f"  {name}")
+
+        if onboarding:
+            lines.append(f"\n**Onboarding — not yet scored** ({len(onboarding)}):")
+            for s in onboarding:
+                m = guild.get_member(s.user_id)
+                name = m.display_name if m else f"User {s.user_id}"
+                joined = m.joined_at if m else None
+                if joined:
+                    days = (discord.utils.utcnow() - joined).days
+                    lines.append(f"  {name} — joined {days}d ago")
+                else:
+                    lines.append(f"  {name}")
+
+        await send_ephemeral_text(interaction, "\n".join(lines))
+
     bot.tree.add_command(report_group)
+
+    # ------------------------------------------------------------------
+    # /quality_leave group
+    # ------------------------------------------------------------------
+
+    leave_group = app_commands.Group(
+        name="quality_leave",
+        description="Manage leave of absence for quality scoring.",
+        default_permissions=discord.Permissions(manage_guild=True),
+    )
+
+    @leave_group.command(name="add", description="Put a member on leave of absence.")
+    @app_commands.describe(
+        member="Member to put on leave.",
+        days="Duration of leave in days (30, 60, or 90).",
+    )
+    @app_commands.choices(days=[
+        app_commands.Choice(name="30 days", value=30),
+        app_commands.Choice(name="60 days", value=60),
+        app_commands.Choice(name="90 days", value=90),
+    ])
+    async def leave_add(
+        interaction: discord.Interaction,
+        member: discord.Member,
+        days: app_commands.Choice[int],
+    ):
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+
+        from services.member_quality_score import add_leave
+
+        now_ts = discord.utils.utcnow().timestamp()
+        end_ts = now_ts + days.value * 86400
+        with ctx.open_db() as conn:
+            add_leave(conn, ctx.guild_id, member.id, now_ts, end_ts)
+
+        await interaction.response.send_message(
+            f"{member.mention} placed on leave of absence for {days.value} days.",
+            ephemeral=True,
+        )
+
+    @leave_group.command(name="remove", description="Remove a member's leave of absence.")
+    @app_commands.describe(member="Member to remove from leave.")
+    async def leave_remove(interaction: discord.Interaction, member: discord.Member):
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+
+        from services.member_quality_score import remove_leave
+
+        with ctx.open_db() as conn:
+            removed = remove_leave(conn, ctx.guild_id, member.id)
+
+        if removed:
+            await interaction.response.send_message(
+                f"{member.mention} removed from leave of absence.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                f"{member.mention} was not on leave.", ephemeral=True
+            )
+
+    @leave_group.command(name="list", description="List all members on leave of absence.")
+    async def leave_list(interaction: discord.Interaction):
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        from services.member_quality_score import get_leaves
+
+        with ctx.open_db() as conn:
+            leaves = get_leaves(conn, ctx.guild_id)
+
+        if not leaves:
+            await interaction.response.send_message("No members on leave.", ephemeral=True)
+            return
+
+        now_ts = discord.utils.utcnow().timestamp()
+        lines = ["**Members on Leave of Absence**\n"]
+        for uid, (start_ts, end_ts) in leaves.items():
+            m = guild.get_member(uid)
+            name = m.display_name if m else f"User {uid}"
+            remaining = max(0, int((end_ts - now_ts) / 86400))
+            if end_ts < now_ts:
+                lines.append(f"  {name} — **expired** (ended <t:{int(end_ts)}:R>)")
+            else:
+                lines.append(f"  {name} — {remaining}d remaining (ends <t:{int(end_ts)}:R>)")
+
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    bot.tree.add_command(leave_group)
 

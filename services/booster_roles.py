@@ -7,14 +7,11 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 import discord
 
 from db_utils import get_config_value, open_db
-
-if TYPE_CHECKING:
-    pass
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 

@@ -29,6 +29,7 @@ from services.message_store import init_message_tables
 from reports import register_reports
 from services.auto_delete_service import auto_delete_loop, init_auto_delete_tables
 from services.booster_roles import BoosterRoleDynamicButton, init_booster_role_tables
+from services.member_quality_score import init_quality_score_tables
 from services.inactivity_prune_service import inactivity_prune_loop, init_inactivity_prune_tables
 from services.voice_xp_service import voice_xp_loop
 from services.xp_service import handle_level_progress
@@ -86,6 +87,7 @@ with open_db(DB_PATH) as _conn:
     init_message_tables(_conn)
     init_grant_role_tables(_conn)
     init_booster_role_tables(_conn)
+    init_quality_score_tables(_conn)
 
 # ==============================
 # Runtime config + context

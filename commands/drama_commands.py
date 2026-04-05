@@ -178,20 +178,20 @@ def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
         top: app_commands.Range[int, 1, 25] = 10,
         channel: discord.TextChannel | None = None,
     ) -> None:
-        await interaction.response.defer(ephemeral=True, thinking=True)
-
         if not ctx.is_mod(interaction):
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
 
         guild = interaction.guild
         if guild is None:
-            await interaction.followup.send(
+            await interaction.response.send_message(
                 "This command only works in a server.", ephemeral=True
             )
             return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
 
         cutoff_ts = int(
             (datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp()

@@ -19,6 +19,7 @@ from services.message_store import (
     adjust_reaction_count,
     delete_message,
     delete_messages_bulk,
+    record_reaction,
     store_message,
 )
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
@@ -242,6 +243,21 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if payload.guild_id:
             with ctx.open_db() as conn:
                 adjust_reaction_count(conn, payload.message_id, str(payload.emoji), +1)
+                # Record individual reaction for quality scoring
+                row = conn.execute(
+                    "SELECT author_id, channel_id FROM messages WHERE message_id = ?",
+                    (payload.message_id,),
+                ).fetchone()
+                if row and payload.user_id != int(row["author_id"]):
+                    record_reaction(
+                        conn,
+                        guild_id=payload.guild_id,
+                        reactor_id=payload.user_id,
+                        author_id=int(row["author_id"]),
+                        channel_id=int(row["channel_id"]),
+                        message_id=payload.message_id,
+                        ts=int(discord.utils.utcnow().timestamp()),
+                    )
 
     @bot.event
     async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):

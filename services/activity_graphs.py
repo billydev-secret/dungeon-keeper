@@ -1733,3 +1733,54 @@ def render_message_cadence_chart(
     plt.close(fig)
     buf.seek(0)
     return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# Member join histogram
+# ---------------------------------------------------------------------------
+
+
+def render_join_histogram(
+    labels: list[str],
+    counts: list[int],
+    title: str,
+) -> bytes:
+    """Render a bar chart of member join counts per bucket."""
+    n = len(labels)
+    fig_width = max(9, n * 0.42)
+    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    x = list(range(n))
+    ax.bar(x, counts, color=_BAR, width=0.75, zorder=2)
+
+    max_visible = 20
+    if n > max_visible:
+        step = max(1, n // max_visible)
+        tick_positions = list(range(0, n, step))
+        tick_labels_visible = [labels[i] for i in tick_positions]
+    else:
+        tick_positions = x
+        tick_labels_visible = labels
+
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
+    ax.tick_params(length=0)
+
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
+    ax.set_ylabel("Members joined", color=_TEXT, fontsize=9)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()

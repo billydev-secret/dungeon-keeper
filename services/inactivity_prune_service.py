@@ -7,15 +7,10 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 import discord
 
 from db_utils import open_db
 from settings import AUTO_DELETE_SETTINGS
-
-if TYPE_CHECKING:
-    pass
 
 log = logging.getLogger("dungeonkeeper.inactivity_prune")
 
