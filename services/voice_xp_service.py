@@ -127,6 +127,7 @@ async def process_voice_xp_tick(
                         intervals_due * settings.voice_award_xp,
                         event_source=XP_SOURCE_VOICE,
                         event_timestamp=now_ts,
+                        channel_id=channel.id,
                         settings=settings,
                     )
                     if award.awarded_xp > 0:

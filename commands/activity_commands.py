@@ -25,6 +25,8 @@ from services.activity_graphs import (
     query_message_activity,
     query_message_histogram,
     query_session_burst,
+    query_xp_activity,
+    query_xp_histogram,
     render_activity_chart,
     render_burst_ranking_chart,
     render_session_burst_chart,
@@ -37,18 +39,20 @@ if TYPE_CHECKING:
 def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
     @bot.tree.command(
         name="activity",
-        description="Show a message activity chart for the server or a specific member.",
+        description="Show a message or XP activity chart for the server or a specific member.",
     )
     @app_commands.describe(
         resolution="Time resolution for the chart buckets.",
         member="Show activity for this member only (default: whole server).",
         channel="Filter activity to a specific channel.",
+        mode="Chart messages or XP earned (default: messages).",
     )
     async def activity(
         interaction: discord.Interaction,
         resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
         member: discord.User | None = None,
         channel: discord.TextChannel | None = None,
+        mode: Literal["messages", "xp"] = "messages",
     ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -71,45 +75,69 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         else:
             tz_label = "UTC"
 
+        mode_label = "XP" if mode == "xp" else "Activity"
         if member is not None and channel is not None:
-            title = f"{member.display_name} in #{channel.name} — Activity ({window_label}, {tz_label})"
+            title = f"{member.display_name} in #{channel.name} — {mode_label} ({window_label}, {tz_label})"
         elif member is not None:
-            title = f"{member.display_name} — Activity ({window_label}, {tz_label})"
+            title = f"{member.display_name} — {mode_label} ({window_label}, {tz_label})"
         elif channel is not None:
-            title = f"#{channel.name} — Activity ({window_label}, {tz_label})"
+            title = f"#{channel.name} — {mode_label} ({window_label}, {tz_label})"
         else:
-            title = f"{guild.name} — Activity ({window_label}, {tz_label})"
+            title = f"{guild.name} — {mode_label} ({window_label}, {tz_label})"
 
         user_id = member.id if member is not None else None
         channel_id = channel.id if channel is not None else None
-        def _query_activity():
-            with ctx.open_db() as conn:
-                if resolution in ("hour_of_day", "day_of_week"):
-                    _labels, _msg_counts = query_message_histogram(
-                        conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
-                        user_id=user_id, channel_id=channel_id,
-                        utc_offset_hours=utc_offset,
-                    )
-                    return _labels, _msg_counts, [], False
-                else:
-                    _labels, _msg_counts, _member_counts = query_message_activity(
-                        conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
-                        utc_offset_hours=utc_offset,
-                    )
-                    return _labels, _msg_counts, _member_counts, member is None and channel is None
-        labels, msg_counts, member_counts, show_members = await asyncio.to_thread(_query_activity)
 
-        if not any(c > 0 for c in msg_counts):
-            await interaction.followup.send(
-                f"No message activity recorded for the {window_label.lower()}.",
-                ephemeral=True,
-            )
+        if mode == "xp":
+            def _query_xp():
+                with ctx.open_db() as conn:
+                    if resolution in ("hour_of_day", "day_of_week"):
+                        _labels, _xp_totals = query_xp_histogram(
+                            conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
+                            user_id=user_id, channel_id=channel_id,
+                            utc_offset_hours=utc_offset,
+                        )
+                        return _labels, _xp_totals, [], False
+                    else:
+                        _labels, _xp_totals, _member_counts = query_xp_activity(
+                            conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
+                            utc_offset_hours=utc_offset,
+                        )
+                        return _labels, _xp_totals, _member_counts, member is None and channel is None
+            labels, counts, member_counts, show_members = await asyncio.to_thread(_query_xp)
+            y_label = "XP Earned"
+            bar_label = "XP"
+            empty_msg = f"No XP activity recorded for the {window_label.lower()}."
+        else:
+            def _query_activity():
+                with ctx.open_db() as conn:
+                    if resolution in ("hour_of_day", "day_of_week"):
+                        _labels, _msg_counts = query_message_histogram(
+                            conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
+                            user_id=user_id, channel_id=channel_id,
+                            utc_offset_hours=utc_offset,
+                        )
+                        return _labels, _msg_counts, [], False
+                    else:
+                        _labels, _msg_counts, _member_counts = query_message_activity(
+                            conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
+                            utc_offset_hours=utc_offset,
+                        )
+                        return _labels, _msg_counts, _member_counts, member is None and channel is None
+            labels, counts, member_counts, show_members = await asyncio.to_thread(_query_activity)
+            y_label = "Messages"
+            bar_label = "Messages"
+            empty_msg = f"No message activity recorded for the {window_label.lower()}."
+
+        if not any(c > 0 for c in counts):
+            await interaction.followup.send(empty_msg, ephemeral=True)
             return
 
         chart_bytes = await asyncio.to_thread(
             render_activity_chart,
-            labels, msg_counts, member_counts,
+            labels, counts, member_counts,
             title=title, resolution=resolution, show_members=show_members,
+            y_label=y_label, bar_label=bar_label,
         )
 
         await interaction.followup.send(

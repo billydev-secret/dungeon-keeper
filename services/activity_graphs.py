@@ -263,6 +263,110 @@ def query_message_histogram(
 
 
 # ---------------------------------------------------------------------------
+# XP activity queries
+# ---------------------------------------------------------------------------
+
+
+def query_xp_activity(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Resolution,
+    *,
+    user_id: int | None = None,
+    channel_id: int | None = None,
+    utc_offset_hours: float = 0,
+) -> tuple[list[str], list[float], list[int]]:
+    """
+    Query XP earned and unique active members per time bucket.
+
+    Returns (labels, xp_totals, unique_member_counts).
+    """
+    now = datetime.now(timezone.utc)
+    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
+    offset_secs = int(utc_offset_hours * 3600)
+    bucket_expr = _strftime_expr(resolution, since_ts=since_ts, utc_offset_secs=offset_secs)
+
+    params: list[object] = [guild_id, since_ts]
+    where = "guild_id = ? AND created_at >= ?"
+    if user_id is not None:
+        where += " AND user_id = ?"
+        params.append(user_id)
+    if channel_id is not None:
+        where += " AND channel_id = ?"
+        params.append(channel_id)
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            {bucket_expr} AS bucket,
+            COALESCE(SUM(amount), 0) AS xp_total,
+            COUNT(DISTINCT user_id) AS member_count
+        FROM xp_events
+        WHERE {where}
+        GROUP BY bucket
+        """,
+        params,
+    ).fetchall()
+
+    xp_by_key = {str(row[0]): float(row[1]) for row in rows}
+    members_by_key = {str(row[0]): int(row[2]) for row in rows}
+
+    labels = [label for _, label in bucket_sequence]
+    xp_totals = [round(xp_by_key.get(key, 0.0), 1) for key, _ in bucket_sequence]
+    member_counts = [members_by_key.get(key, 0) for key, _ in bucket_sequence]
+
+    return labels, xp_totals, member_counts
+
+
+def query_xp_histogram(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Literal["hour_of_day", "day_of_week"],
+    *,
+    user_id: int | None = None,
+    channel_id: int | None = None,
+    utc_offset_hours: float = 0,
+) -> tuple[list[str], list[float]]:
+    """
+    Aggregate XP earned by hour-of-day or day-of-week.
+
+    Returns (labels, xp_totals).
+    """
+    offset_secs = int(utc_offset_hours * 3600)
+    shifted = f"(created_at + {offset_secs})" if offset_secs else "created_at"
+    if resolution == "hour_of_day":
+        expr = f"CAST(strftime('%H', datetime({shifted}, 'unixepoch')) AS INTEGER)"
+        labels = _HOD_LABELS
+        n = 24
+    else:
+        expr = f"CAST(strftime('%w', datetime({shifted}, 'unixepoch')) AS INTEGER)"
+        labels = _DOW_LABELS
+        n = 7
+
+    params: list[object] = [guild_id]
+    where = "guild_id = ?"
+    if user_id is not None:
+        where += " AND user_id = ?"
+        params.append(user_id)
+    if channel_id is not None:
+        where += " AND channel_id = ?"
+        params.append(channel_id)
+
+    rows = conn.execute(
+        f"""
+        SELECT {expr} AS bucket, COALESCE(SUM(amount), 0) AS xp_total
+        FROM xp_events
+        WHERE {where}
+        GROUP BY bucket
+        """,
+        params,
+    ).fetchall()
+
+    totals_by_bucket = {int(row[0]): round(float(row[1]), 1) for row in rows}
+    return labels, [totals_by_bucket.get(i, 0.0) for i in range(n)]
+
+
+# ---------------------------------------------------------------------------
 # Message-rate drop analysis
 # ---------------------------------------------------------------------------
 
@@ -921,15 +1025,17 @@ def render_level_histogram(
 
 def render_activity_chart(
     labels: list[str],
-    msg_counts: list[int],
+    msg_counts: list[int] | list[float],
     member_counts: list[int],
     title: str,
     resolution: Resolution,
     *,
     show_members: bool = True,
+    y_label: str = "Messages",
+    bar_label: str = "Messages",
 ) -> bytes:
     """
-    Render an activity bar chart (messages + unique members overlay) as PNG bytes.
+    Render an activity bar chart (values + unique members overlay) as PNG bytes.
 
     show_members is ignored when a specific member is being graphed.
     """
@@ -941,7 +1047,7 @@ def render_activity_chart(
     ax1.set_facecolor(_BG)
 
     x = list(range(n))
-    ax1.bar(x, msg_counts, color=_BAR, width=0.75, zorder=2, label="Messages")
+    ax1.bar(x, msg_counts, color=_BAR, width=0.75, zorder=2, label=bar_label)
 
     # Unique member overlay line (server-wide only)
     if show_members and any(c > 0 for c in member_counts):
@@ -982,8 +1088,10 @@ def render_activity_chart(
     ax1.set_axisbelow(True)
 
     ax1.set_title(title, color=_TEXT, fontsize=13, pad=10)
-    ax1.set_ylabel("Messages", color=_TEXT, fontsize=9)
-    ax1.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+    ax1.set_ylabel(y_label, color=_TEXT, fontsize=9)
+    is_int_data = all(isinstance(v, int) or (isinstance(v, float) and v == int(v)) for v in msg_counts)
+    if is_int_data:
+        ax1.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
     for spine in ax1.spines.values():
         spine.set_visible(False)

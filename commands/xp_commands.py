@@ -433,8 +433,8 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                                 2,
                             )
                         text_award = round(max(0.0, award.awarded_xp - reply_award), 2)
-                        record_xp_event(conn, guild.id, message.author.id, XP_SOURCE_TEXT, text_award, now_ts)
-                        record_xp_event(conn, guild.id, message.author.id, XP_SOURCE_REPLY, reply_award, now_ts)
+                        record_xp_event(conn, guild.id, message.author.id, XP_SOURCE_TEXT, text_award, now_ts, channel_id=message.channel.id)
+                        record_xp_event(conn, guild.id, message.author.id, XP_SOURCE_REPLY, reply_award, now_ts, channel_id=message.channel.id)
                         mark_message_processed(
                             conn,
                             guild.id,

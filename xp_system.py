@@ -294,7 +294,8 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
             user_id INTEGER NOT NULL,
             source TEXT NOT NULL,
             amount REAL NOT NULL,
-            created_at REAL NOT NULL
+            created_at REAL NOT NULL,
+            channel_id INTEGER
         )
         """
     )
@@ -304,6 +305,16 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
         ON xp_events (guild_id, source, created_at, user_id)
         """
     )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_xp_events_channel
+        ON xp_events (guild_id, channel_id, created_at)
+        """
+    )
+    # Migration: add channel_id to existing xp_events tables and backfill
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(xp_events)").fetchall()}
+    if "channel_id" not in cols:
+        conn.execute("ALTER TABLE xp_events ADD COLUMN channel_id INTEGER")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS processed_messages (
@@ -345,6 +356,22 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_role_events_lookup
         ON role_events (guild_id, role_name, action, granted_at)
+        """
+    )
+    # Backfill channel_id from processed_messages by matching user + timestamp
+    conn.execute(
+        """
+        UPDATE xp_events
+        SET channel_id = (
+            SELECT pm.channel_id
+            FROM processed_messages pm
+            WHERE pm.guild_id = xp_events.guild_id
+              AND pm.user_id = xp_events.user_id
+              AND pm.created_at = xp_events.created_at
+            LIMIT 1
+        )
+        WHERE channel_id IS NULL
+          AND source IN ('text', 'reply', 'image_react')
         """
     )
 
@@ -400,6 +427,7 @@ def apply_xp_award(
     message_norm: str | None = None,
     event_source: str | None = None,
     event_timestamp: float | None = None,
+    channel_id: int | None = None,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
 ) -> AwardResult:
     """Atomically add XP to a member and update member_xp, optionally recording an xp_events row.
@@ -442,10 +470,10 @@ def apply_xp_award(
             created_at = message_timestamp if message_timestamp is not None else time.time()
         conn.execute(
             """
-            INSERT INTO xp_events (guild_id, user_id, source, amount, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO xp_events (guild_id, user_id, source, amount, created_at, channel_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (guild_id, user_id, event_source, positive_xp, created_at),
+            (guild_id, user_id, event_source, positive_xp, created_at, channel_id),
         )
 
     return AwardResult(
@@ -464,6 +492,7 @@ def record_xp_event(
     source: str,
     amount: float,
     created_at: float | None = None,
+    channel_id: int | None = None,
 ) -> None:
     positive_amount = round(max(0.0, amount), 2)
     if positive_amount <= 0:
@@ -472,10 +501,10 @@ def record_xp_event(
     event_created_at = time.time() if created_at is None else created_at
     conn.execute(
         """
-        INSERT INTO xp_events (guild_id, user_id, source, amount, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO xp_events (guild_id, user_id, source, amount, created_at, channel_id)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (guild_id, user_id, source, positive_amount, event_created_at),
+        (guild_id, user_id, source, positive_amount, event_created_at, channel_id),
     )
 
 

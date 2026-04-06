@@ -120,6 +120,7 @@ async def award_message_xp(
             XP_SOURCE_TEXT,
             text_award,
             now_ts,
+            channel_id=message.channel.id,
         )
         record_xp_event(
             conn,
@@ -128,6 +129,7 @@ async def award_message_xp(
             XP_SOURCE_REPLY,
             reply_award,
             now_ts,
+            channel_id=message.channel.id,
         )
         mark_message_processed(
             conn,
@@ -220,6 +222,7 @@ async def award_image_reaction_xp(
             author.id,
             settings.image_reaction_received_xp,
             event_source=XP_SOURCE_IMAGE_REACT,
+            channel_id=payload.channel_id,
             settings=settings,
         )
 
