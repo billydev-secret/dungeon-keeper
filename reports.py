@@ -715,19 +715,31 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
     @report_group.command(
         name="nsfw_gender",
-        description="Chart NSFW channel posting broken down by gender.",
+        description="Chart channel posting broken down by gender.",
     )
     @app_commands.describe(
         resolution="Time resolution: daily (30d), weekly (12wk), monthly (12mo)",
+        display="Chart style: stacked bars or ratio line chart.",
+        media_only="Only count messages with image/video attachments (no GIFs).",
+        channel="Limit to a specific channel (default: all NSFW channels).",
     )
-    @app_commands.choices(resolution=[
-        app_commands.Choice(name="Daily (last 30 days)", value="day"),
-        app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
-        app_commands.Choice(name="Monthly (last 12 months)", value="month"),
-    ])
+    @app_commands.choices(
+        resolution=[
+            app_commands.Choice(name="Daily (last 30 days)", value="day"),
+            app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
+            app_commands.Choice(name="Monthly (last 12 months)", value="month"),
+        ],
+        display=[
+            app_commands.Choice(name="Stacked bar chart", value="bar"),
+            app_commands.Choice(name="Ratio line chart", value="line"),
+        ],
+    )
     async def nsfw_gender(
         interaction: discord.Interaction,
         resolution: app_commands.Choice[str] | None = None,
+        display: app_commands.Choice[str] | None = None,
+        media_only: bool = False,
+        channel: discord.TextChannel | None = None,
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_guild:
@@ -743,35 +755,55 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True)
 
-        from services.activity_graphs import query_nsfw_gender_activity, render_nsfw_gender_chart
+        from services.activity_graphs import (
+            query_nsfw_gender_activity,
+            render_nsfw_gender_chart,
+            render_nsfw_gender_line_chart,
+        )
 
         res: Resolution = resolution.value if resolution else "week"  # type: ignore[assignment]
+        display_mode = display.value if display else "bar"
         window_label = {"day": "Last 30 Days", "week": "Last 12 Weeks", "month": "Last 12 Months"}[res]
 
-        nsfw_channel_ids = [
-            ch.id for ch in guild.channels
-            if getattr(ch, "nsfw", False)
-        ]
+        if channel is not None:
+            target_channel_ids = [channel.id]
+            channel_label = f"#{channel.name}"
+        else:
+            target_channel_ids = [
+                ch.id for ch in guild.channels
+                if getattr(ch, "nsfw", False)
+            ]
+            channel_label = "NSFW Channels"
 
-        if not nsfw_channel_ids:
-            await interaction.followup.send("No NSFW channels found in this server.", ephemeral=True)
+        if not target_channel_ids:
+            await interaction.followup.send("No matching channels found.", ephemeral=True)
             return
 
         def _query():
             with ctx.open_db() as conn:
                 return query_nsfw_gender_activity(
-                    conn, ctx.guild_id, res, nsfw_channel_ids,
+                    conn, ctx.guild_id, res, target_channel_ids,
                     utc_offset_hours=ctx.tz_offset_hours,
+                    media_only=media_only,
                 )
         labels, gender_counts = await asyncio.to_thread(_query)
 
         if not gender_counts:
-            await interaction.followup.send("No NSFW posting data found for this period.", ephemeral=True)
+            await interaction.followup.send("No posting data found for this period.", ephemeral=True)
             return
 
+        title_parts = [channel_label, "by Gender"]
+        if media_only:
+            title_parts.insert(1, "Media")
+        title = f"{' '.join(title_parts)} \u2014 {window_label}"
+
+        if display_mode == "line":
+            renderer = render_nsfw_gender_line_chart
+        else:
+            renderer = render_nsfw_gender_chart
+
         chart_bytes = await asyncio.to_thread(
-            render_nsfw_gender_chart, labels, gender_counts,
-            title=f"NSFW Posts by Gender \u2014 {window_label}",
+            renderer, labels, gender_counts, title=title,
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="nsfw_gender.png"),

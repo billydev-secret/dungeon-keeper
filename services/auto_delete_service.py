@@ -544,6 +544,7 @@ async def _scan_and_delete_channel_history(
 
     # Individual delete for messages older than 13 days
     next_delete_at = 0.0
+    old_processed = 0
     for partial in old_batch:
         now_monotonic = time.monotonic()
         if now_monotonic < next_delete_at:
@@ -563,6 +564,13 @@ async def _scan_and_delete_channel_history(
             break
         except discord.HTTPException:
             failed += 1
+        old_processed += 1
+        if old_processed % 50 == 0:
+            log.info(
+                "Auto-delete scan #%s: %s/%s deleted (%.1fs elapsed)",
+                channel_name, deleted, scanned,
+                time.monotonic() - start_time,
+            )
 
     elapsed = time.monotonic() - start_time
     log.info(

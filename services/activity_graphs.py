@@ -1908,45 +1908,82 @@ _GENDER_COLORS = {
 _GENDER_ORDER = ["male", "female", "nonbinary", "unknown"]
 
 
+_MEDIA_EXTENSIONS = {
+    ".jpg", ".jpeg", ".png", ".webp", ".bmp",
+    ".mp4", ".mov", ".webm", ".avi", ".mkv",
+}
+
+
 def query_nsfw_gender_activity(
     conn: sqlite3.Connection,
     guild_id: int,
     resolution: Resolution,
-    nsfw_channel_ids: list[int],
+    channel_ids: list[int],
     *,
     utc_offset_hours: float = 0,
+    media_only: bool = False,
 ) -> tuple[list[str], dict[str, list[int]]]:
     """
-    Query NSFW channel message counts per time bucket, grouped by gender.
+    Query channel message counts per time bucket, grouped by gender.
 
     Returns (labels, {gender: [count_per_bucket]}).
     Members without a gender classification are bucketed as 'unknown'.
+
+    When *media_only* is True, only messages with image/video attachments
+    (excluding GIFs) are counted.  This joins the ``messages`` and
+    ``message_attachments`` tables instead of ``processed_messages``.
     """
-    if not nsfw_channel_ids:
+    if not channel_ids:
         return [], {}
 
     now = datetime.now(timezone.utc)
     bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
     offset_secs = int(utc_offset_hours * 3600)
-    bucket_expr = _strftime_expr(resolution, since_ts=since_ts, utc_offset_secs=offset_secs)
 
-    ch_placeholders = ", ".join("?" for _ in nsfw_channel_ids)
+    ch_placeholders = ", ".join("?" for _ in channel_ids)
+    params: list[object] = [guild_id, since_ts, *channel_ids]
 
-    rows = conn.execute(
-        f"""
-        SELECT
-            {bucket_expr} AS bucket,
-            COALESCE(mg.gender, 'unknown') AS gender,
-            COUNT(*) AS cnt
-        FROM processed_messages pm
-        LEFT JOIN member_gender mg
-            ON mg.guild_id = pm.guild_id AND mg.user_id = pm.user_id
-        WHERE pm.guild_id = ? AND pm.created_at >= ?
-            AND pm.channel_id IN ({ch_placeholders})
-        GROUP BY bucket, gender
-        """,
-        [guild_id, since_ts, *nsfw_channel_ids],
-    ).fetchall()
+    if media_only:
+        # Use messages + message_attachments; ts column is integer epoch
+        bucket_expr = _strftime_expr(resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs)
+        ext_conditions = " OR ".join(
+            f"LOWER(ma.url) LIKE '%{ext}'" for ext in sorted(_MEDIA_EXTENSIONS)
+        )
+        rows = conn.execute(
+            f"""
+            SELECT
+                {bucket_expr} AS bucket,
+                COALESCE(mg.gender, 'unknown') AS gender,
+                COUNT(DISTINCT m.message_id) AS cnt
+            FROM messages m
+            INNER JOIN message_attachments ma ON ma.message_id = m.message_id
+            LEFT JOIN member_gender mg
+                ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
+            WHERE m.guild_id = ? AND m.ts >= ?
+                AND m.channel_id IN ({ch_placeholders})
+                AND ({ext_conditions})
+                AND LOWER(ma.url) NOT LIKE '%.gif'
+            GROUP BY bucket, gender
+            """,
+            params,
+        ).fetchall()
+    else:
+        bucket_expr = _strftime_expr(resolution, since_ts=since_ts, utc_offset_secs=offset_secs)
+        rows = conn.execute(
+            f"""
+            SELECT
+                {bucket_expr} AS bucket,
+                COALESCE(mg.gender, 'unknown') AS gender,
+                COUNT(*) AS cnt
+            FROM processed_messages pm
+            LEFT JOIN member_gender mg
+                ON mg.guild_id = pm.guild_id AND mg.user_id = pm.user_id
+            WHERE pm.guild_id = ? AND pm.created_at >= ?
+                AND pm.channel_id IN ({ch_placeholders})
+            GROUP BY bucket, gender
+            """,
+            params,
+        ).fetchall()
 
     # Build per-gender counts aligned to bucket sequence
     counts_by_gender: dict[str, dict[str, int]] = {}
@@ -2025,6 +2062,81 @@ def render_nsfw_gender_chart(
 
     if gender_counts:
         ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def render_nsfw_gender_line_chart(
+    labels: list[str],
+    gender_counts: dict[str, list[int]],
+    title: str,
+) -> bytes:
+    """Render a line chart showing gender ratio over time as PNG bytes."""
+    import numpy as np
+
+    n = len(labels)
+    fig_width = max(9, n * 0.42)
+
+    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    x = np.arange(n)
+
+    all_genders = [g for g in _GENDER_ORDER if g in gender_counts]
+    if not all_genders:
+        plt.close(fig)
+        return render_nsfw_gender_chart(labels, gender_counts, title)
+
+    stacked = np.array([gender_counts[g] for g in all_genders], dtype=float)
+    totals = stacked.sum(axis=0)
+    totals[totals == 0] = 1  # avoid division by zero
+
+    for gender in _GENDER_ORDER:
+        if gender not in gender_counts:
+            continue
+        values = np.array(gender_counts[gender], dtype=float)
+        pct = values / totals * 100
+        color = _GENDER_COLORS.get(gender, _GENDER_COLORS["unknown"])
+        ax.plot(
+            x, pct,
+            color=color,
+            linewidth=2,
+            marker="o",
+            markersize=4,
+            label=gender.capitalize(),
+            zorder=2,
+        )
+
+    max_visible = 20
+    if n > max_visible:
+        step = max(1, n // max_visible)
+        tick_positions = list(range(0, n, step))
+        tick_labels_visible = [labels[i] for i in tick_positions]
+    else:
+        tick_positions = list(range(n))
+        tick_labels_visible = labels
+
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
+    ax.tick_params(length=0)
+
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
+    ax.set_ylabel("% of Posts", color=_TEXT, fontsize=9)
+    ax.set_ylim(0, 100)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
 
     plt.tight_layout(pad=1.2)
     buf = io.BytesIO()
