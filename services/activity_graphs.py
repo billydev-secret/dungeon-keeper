@@ -1968,18 +1968,18 @@ def query_nsfw_gender_activity(
             params,
         ).fetchall()
     else:
-        bucket_expr = _strftime_expr(resolution, since_ts=since_ts, utc_offset_secs=offset_secs)
+        bucket_expr = _strftime_expr(resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs)
         rows = conn.execute(
             f"""
             SELECT
                 {bucket_expr} AS bucket,
                 COALESCE(mg.gender, 'unknown') AS gender,
                 COUNT(*) AS cnt
-            FROM processed_messages pm
+            FROM messages m
             LEFT JOIN member_gender mg
-                ON mg.guild_id = pm.guild_id AND mg.user_id = pm.user_id
-            WHERE pm.guild_id = ? AND pm.created_at >= ?
-                AND pm.channel_id IN ({ch_placeholders})
+                ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
+            WHERE m.guild_id = ? AND m.ts >= ?
+                AND m.channel_id IN ({ch_placeholders})
             GROUP BY bucket, gender
             """,
             params,
