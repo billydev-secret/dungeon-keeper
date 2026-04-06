@@ -1,11 +1,14 @@
 """General moderation and help commands."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
+
+from settings import AUTO_DELETE_SETTINGS
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -350,7 +353,7 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="purge",
-        description="Delete messages in this channel by count, cutoff time, or both.",
+        description="Delete messages in this channel. No arguments clears the entire channel.",
     )
     @app_commands.describe(
         count="Number of messages to delete (max 1000). Omit to delete all messages since `after`.",
@@ -364,12 +367,6 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-
-        if count is None and after is None:
-            await interaction.response.send_message(
-                "Provide at least one of `count` or `after`.", ephemeral=True,
             )
             return
 
@@ -412,7 +409,19 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True)
 
-        deleted = await channel.purge(limit=count, after=after_dt)
+        deleted: list[discord.Message] = []
+        remaining = count
+        while True:
+            batch_limit = min(remaining, 100) if remaining is not None else 100
+            batch = await channel.purge(limit=batch_limit, after=after_dt)
+            deleted.extend(batch)
+            if remaining is not None:
+                remaining -= len(batch)
+                if remaining <= 0:
+                    break
+            if len(batch) < batch_limit:
+                break
+            await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
 
         if count is not None and after_dt is not None:
             label = f"last {count} since {after}"
@@ -421,7 +430,7 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
         elif after_dt is not None:
             label = f"since {after}"
         else:
-            label = "all recent"
+            label = "entire channel"
         await interaction.followup.send(
             f"Deleted {len(deleted)} message{'s' if len(deleted) != 1 else ''} ({label}).",
             ephemeral=True,

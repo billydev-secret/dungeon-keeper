@@ -2155,3 +2155,128 @@ def render_nsfw_gender_line_chart(
     plt.close(fig)
     buf.seek(0)
     return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# Greeter response time
+# ---------------------------------------------------------------------------
+
+_RESPONSE_BUCKETS: list[tuple[float, str]] = [
+    (60, "< 1m"),
+    (300, "1\u20135m"),
+    (900, "5\u201315m"),
+    (1800, "15\u201330m"),
+    (3600, "30\u201360m"),
+    (14400, "1\u20134h"),
+    (43200, "4\u201312h"),
+    (86400, "12\u201324h"),
+    (float("inf"), "> 24h"),
+]
+
+
+def query_greeter_response_times(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    greeter_channel_id: int,
+    greeter_user_ids: set[int],
+    join_times: dict[int, float],
+) -> list[float]:
+    """Return greeter response times in seconds for each join that received a response.
+
+    *join_times* maps member-id -> joined-at unix timestamp.
+    """
+    if not greeter_user_ids or not join_times:
+        return []
+
+    placeholders = ",".join("?" * len(greeter_user_ids))
+    greeter_msgs = conn.execute(
+        f"""
+        SELECT ts FROM messages
+        WHERE guild_id = ? AND channel_id = ?
+          AND author_id IN ({placeholders})
+        ORDER BY ts
+        """,
+        (guild_id, greeter_channel_id, *greeter_user_ids),
+    ).fetchall()
+
+    greeter_times = [int(r[0]) for r in greeter_msgs]
+    if not greeter_times:
+        return []
+
+    response_times: list[float] = []
+    for joined_at in join_times.values():
+        idx = bisect.bisect_left(greeter_times, joined_at)
+        if idx < len(greeter_times):
+            delta = greeter_times[idx] - joined_at
+            if delta >= 0:
+                response_times.append(delta)
+
+    return response_times
+
+
+def render_greeter_response_chart(
+    response_times: list[float],
+    title: str,
+) -> bytes:
+    """Render a histogram of greeter response times as PNG bytes."""
+    bucket_counts = [0] * len(_RESPONSE_BUCKETS)
+    for t in response_times:
+        for i, (threshold, _) in enumerate(_RESPONSE_BUCKETS):
+            if t < threshold:
+                bucket_counts[i] += 1
+                break
+
+    labels = [label for _, label in _RESPONSE_BUCKETS]
+    n = len(labels)
+
+    fig, ax = plt.subplots(figsize=(max(9, n * 0.8), 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    x = list(range(n))
+    bars = ax.bar(x, bucket_counts, color=_BAR, width=0.7, zorder=2)
+
+    for bar, count in zip(bars, bucket_counts):
+        if count > 0:
+            ax.text(
+                bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                str(count), ha="center", va="bottom", color=_TEXT, fontsize=8,
+            )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha="right", color=_TEXT, fontsize=9)
+    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
+    ax.tick_params(length=0)
+
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
+    ax.set_ylabel("Joins", color=_TEXT, fontsize=9)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    if response_times:
+        med = statistics.median(response_times)
+        avg = statistics.mean(response_times)
+
+        def _fmt_dur(s: float) -> str:
+            if s < 60:
+                return f"{s:.0f}s"
+            if s < 3600:
+                return f"{s / 60:.0f}m"
+            return f"{s / 3600:.1f}h"
+
+        ax.annotate(
+            f"median {_fmt_dur(med)}  \u00b7  mean {_fmt_dur(avg)}  \u00b7  n={len(response_times)}",
+            xy=(0.5, 1.0), xycoords="axes fraction", ha="center", va="bottom",
+            fontsize=9, color=_BAR_ACCENT,
+        )
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()

@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 
-from services.activity_graphs import Resolution, query_role_growth, render_role_growth_chart
+from services.activity_graphs import (
+    Resolution,
+    query_greeter_response_times,
+    query_role_growth,
+    render_greeter_response_chart,
+    render_role_growth_chart,
+)
 from services.auto_delete_service import parse_duration_seconds
 from xp_system import log_role_event
 
@@ -809,6 +815,93 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="nsfw_gender.png"),
+            ephemeral=True,
+        )
+
+    @report_group.command(
+        name="greeter_response",
+        description="Chart how long new members wait for their first greeter message.",
+    )
+    @app_commands.describe(
+        days="Only include joins from the last N days (default: all).",
+    )
+    async def greeter_response(
+        interaction: discord.Interaction,
+        days: app_commands.Range[int, 1, 3650] | None = None,
+    ):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_roles:
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True,
+            )
+            return
+
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        if ctx.greeter_chat_channel_id <= 0:
+            await interaction.response.send_message(
+                "No greeter chat channel is configured.", ephemeral=True,
+            )
+            return
+
+        greeter_role = guild.get_role(ctx.greeter_role_id) if ctx.greeter_role_id else None
+        if not greeter_role or not greeter_role.members:
+            await interaction.response.send_message(
+                "No greeter role is configured or the role has no members.", ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        greeter_ids = {m.id for m in greeter_role.members}
+
+        # Build join times from invite_edges + current member joined_at
+        cutoff_ts = 0.0
+        if days is not None:
+            cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+
+        def _query():
+            join_times: dict[int, float] = {}
+
+            with ctx.open_db() as conn:
+                # Invite-tracked joins
+                rows = conn.execute(
+                    "SELECT invitee_id, joined_at FROM invite_edges WHERE guild_id = ? AND joined_at >= ?",
+                    (guild.id, cutoff_ts),
+                ).fetchall()
+                for r in rows:
+                    join_times[int(r[0])] = float(r[1])
+
+                # Fill in current members whose joined_at is more accurate or missing from invite_edges
+                for m in guild.members:
+                    if m.bot or not m.joined_at:
+                        continue
+                    ts = m.joined_at.timestamp()
+                    if ts >= cutoff_ts:
+                        join_times[m.id] = ts
+
+                return query_greeter_response_times(
+                    conn, guild.id, ctx.greeter_chat_channel_id, greeter_ids, join_times,
+                )
+
+        response_times = await asyncio.to_thread(_query)
+
+        if not response_times:
+            await interaction.followup.send(
+                "No greeter response data found for the selected period.", ephemeral=True,
+            )
+            return
+
+        window_label = f"Last {days} Days" if days else "All Time"
+        chart_bytes = await asyncio.to_thread(
+            render_greeter_response_chart, response_times,
+            title=f"Greeter Response Time \u2014 {window_label}",
+        )
+        await interaction.followup.send(
+            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="greeter_response.png"),
             ephemeral=True,
         )
 

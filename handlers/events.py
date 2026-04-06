@@ -407,11 +407,14 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 interaction.guild.name if interaction.guild else interaction.guild_id,
                 interaction.user,
             )
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "That command is out of date on this server. Please try again in a moment.",
-                    ephemeral=True,
-                )
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "That command is out of date on this server. Please try again in a moment.",
+                        ephemeral=True,
+                    )
+            except discord.HTTPException:
+                pass
             return
 
         log.exception("Unhandled app command error: %s", error)

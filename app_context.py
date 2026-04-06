@@ -154,6 +154,15 @@ class Bot(discord.Client):
         else:
             synced = await self.tree.sync()
             print(f"Synced {len(synced)} commands globally.")
+            # Clear any stale guild commands left from a previous debug-mode run.
+            if self.guild_id > 0:
+                try:
+                    guild = discord.Object(id=self.guild_id)
+                    self.tree.clear_commands(guild=guild)
+                    await self.tree.sync(guild=guild)
+                    print(f"Cleared stale guild commands for {self.guild_id}.")
+                except discord.HTTPException as exc:
+                    print(f"WARNING: could not clear guild commands for {self.guild_id}: {exc}")
 
         for factory in self.startup_task_factories:
             self.startup_tasks.append(asyncio.create_task(factory()))
