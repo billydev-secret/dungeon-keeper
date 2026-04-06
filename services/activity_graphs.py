@@ -1125,44 +1125,47 @@ def query_role_growth(
     resolution: Resolution,
 ) -> tuple[list[str], dict[str, list[int]]]:
     """
-    Query cumulative role grant counts per time bucket.
+    Query net role membership counts per time bucket.
 
-    Returns (labels, {role_name: [cumulative_count_per_bucket]}).
-    The cumulative count includes grants before the window start as a baseline.
+    Returns (labels, {role_name: [net_count_per_bucket]}).
+    The net count tracks grants minus removals, including events before the
+    window start as a baseline.
     """
     now = datetime.now(timezone.utc)
     bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now)
     bucket_expr = _strftime_expr(resolution, col="granted_at", since_ts=since_ts)
 
-    # Grants that happened before the window — used as per-role baselines
+    # Net role count (grants minus removals) before the window — per-role baselines
     baseline_rows = conn.execute(
         """
-        SELECT role_name, COUNT(*) AS cnt
+        SELECT role_name,
+               SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS cnt
         FROM role_events
-        WHERE guild_id = ? AND action = 'grant' AND granted_at < ?
+        WHERE guild_id = ? AND granted_at < ?
         GROUP BY role_name
         """,
         (guild_id, since_ts),
     ).fetchall()
-    baselines: dict[str, int] = {str(r[0]): int(r[1]) for r in baseline_rows}
+    baselines: dict[str, int] = {str(r[0]): max(0, int(r[1])) for r in baseline_rows}
 
-    # Grants within the window, grouped by role and time bucket
+    # Net changes within the window, grouped by role and time bucket
     window_rows = conn.execute(
         f"""
-        SELECT role_name, {bucket_expr} AS bucket, COUNT(*) AS cnt
+        SELECT role_name, {bucket_expr} AS bucket,
+               SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS cnt
         FROM role_events
-        WHERE guild_id = ? AND action = 'grant' AND granted_at >= ?
+        WHERE guild_id = ? AND granted_at >= ?
         GROUP BY role_name, bucket
         """,
         (guild_id, since_ts),
     ).fetchall()
 
-    grants_by_role: dict[str, dict[str, int]] = {}
+    deltas_by_role: dict[str, dict[str, int]] = {}
     for r in window_rows:
         role, bucket, cnt = str(r[0]), str(r[1]), int(r[2])
-        grants_by_role.setdefault(role, {})[bucket] = cnt
+        deltas_by_role.setdefault(role, {})[bucket] = cnt
 
-    all_roles = sorted(set(list(baselines.keys()) + list(grants_by_role.keys())))
+    all_roles = sorted(set(list(baselines.keys()) + list(deltas_by_role.keys())))
     labels = [label for _, label in bucket_sequence]
 
     role_counts: dict[str, list[int]] = {}
@@ -1170,8 +1173,8 @@ def query_role_growth(
         running = baselines.get(role, 0)
         counts: list[int] = []
         for key, _ in bucket_sequence:
-            running += grants_by_role.get(role, {}).get(key, 0)
-            counts.append(running)
+            running += deltas_by_role.get(role, {}).get(key, 0)
+            counts.append(max(0, running))
         role_counts[role] = counts
 
     return labels, role_counts
@@ -1182,7 +1185,7 @@ def render_role_growth_chart(
     role_counts: dict[str, list[int]],
     title: str,
 ) -> bytes:
-    """Render a cumulative role-grant line chart as PNG bytes."""
+    """Render a net role membership line chart as PNG bytes."""
     n = len(labels)
     fig_width = max(9, n * 0.42)
 
