@@ -523,18 +523,6 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
         guild_id = int(rule["guild_id"])
         channel_id = int(rule["channel_id"])
         max_age_seconds = int(rule["max_age_seconds"])
-        interval_seconds = int(rule["interval_seconds"])
-        last_run_ts = float(rule["last_run_ts"])
-
-        # Skip if the regular loop ran recently enough that nothing new is due
-        if now_ts - last_run_ts < interval_seconds:
-            log.debug(
-                "Auto-delete startup: skipping channel %s (last run %.0fs ago, interval %ss)",
-                channel_id,
-                now_ts - last_run_ts,
-                interval_seconds,
-            )
-            continue
 
         guild = bot.get_guild(guild_id)
         if guild is None:
