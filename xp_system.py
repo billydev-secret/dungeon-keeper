@@ -307,7 +307,8 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
     )
     # Migration: add channel_id to existing xp_events tables
     cols = {row[1] for row in conn.execute("PRAGMA table_info(xp_events)").fetchall()}
-    if "channel_id" not in cols:
+    _needs_channel_backfill = "channel_id" not in cols
+    if _needs_channel_backfill:
         conn.execute("ALTER TABLE xp_events ADD COLUMN channel_id INTEGER")
     conn.execute(
         """
@@ -358,22 +359,29 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
         ON role_events (guild_id, role_name, action, granted_at)
         """
     )
-    # Backfill channel_id from processed_messages by matching user + timestamp
     conn.execute(
         """
-        UPDATE xp_events
-        SET channel_id = (
-            SELECT pm.channel_id
-            FROM processed_messages pm
-            WHERE pm.guild_id = xp_events.guild_id
-              AND pm.user_id = xp_events.user_id
-              AND pm.created_at = xp_events.created_at
-            LIMIT 1
-        )
-        WHERE channel_id IS NULL
-          AND source IN ('text', 'reply', 'image_react')
+        CREATE INDEX IF NOT EXISTS idx_processed_messages_backfill
+        ON processed_messages (guild_id, user_id, created_at, channel_id)
         """
     )
+    # Backfill channel_id from processed_messages (one-time, only on migration)
+    if _needs_channel_backfill:
+        conn.execute(
+            """
+            UPDATE xp_events
+            SET channel_id = (
+                SELECT pm.channel_id
+                FROM processed_messages pm
+                WHERE pm.guild_id = xp_events.guild_id
+                  AND pm.user_id = xp_events.user_id
+                  AND pm.created_at = xp_events.created_at
+                LIMIT 1
+            )
+            WHERE channel_id IS NULL
+              AND source IN ('text', 'reply', 'image_react')
+            """
+        )
 
 
 def log_role_event(
