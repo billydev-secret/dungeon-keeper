@@ -626,15 +626,40 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             summary += " \u00b7 " + " \u00b7 ".join(extras)
 
         # -- Table --
+        import unicodedata
+
+        def _mono(text: str, width: int) -> str:
+            """Fixed visual-width string safe for monospace alignment."""
+            out: list[str] = []
+            w = 0
+            for ch in text:
+                if ord(ch) > 0xFFFF or ch in "\ufe0f\ufe0e\u200d":
+                    continue
+                if unicodedata.category(ch) == "So":
+                    continue
+                cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+                if w + cw > width:
+                    break
+                out.append(ch)
+                w += cw
+            name = "".join(out).strip() or "?"
+            vw = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in name)
+            return name + " " * (width - vw)
+
+        COL = 14
+        ACT_W = 7
         tbl: list[str] = []
-        tbl.append(f" # {'Member':<14} Tot Eng C&R Res Pst Act")
-        tbl.append("\u2500" * 43)
+        hdr = f" # {_mono('Member', COL)} {'Tot':>3} {'Eng':>3} {'C&R':>3} {'Res':>3} {'Pst':>3} {'Act':>{ACT_W}}"
+        tbl.append(hdr)
+        tbl.append("\u2500" * len(hdr))
 
         for rank, s in enumerate(shown, 1):
             m = guild.get_member(s.user_id)
             is_new = m is not None and m.joined_at is not None and (discord.utils.utcnow() - m.joined_at).days < 30
             raw = m.display_name if m else f"User {s.user_id}"
-            name = f"*{raw}"[:14] if is_new else raw[:14]
+            if is_new:
+                raw = f"*{raw}"
+            name = _mono(raw, COL)
             tot = min(round(s.final_score * 100), 100)
             eng = min(round(s.engagement_given * 100), 100)
             cr = min(round(s.consistency_recency * 100), 100)
@@ -648,7 +673,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             if s.tenure_buffer_days > 0:
                 last += f"+{s.tenure_buffer_days}"
             tbl.append(
-                f"{rank:>2} {name:<14} {tot:>3} {eng:>3} {cr:>3} {res:>3} {pst:>3} {last}")
+                f"{rank:>2} {name} {tot:>3} {eng:>3} {cr:>3} {res:>3} {pst:>3} {last:>{ACT_W}}")
 
         table_text = "```\n" + "\n".join(tbl) + "\n```"
 
