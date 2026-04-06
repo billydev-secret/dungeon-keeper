@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,7 @@ from discord import app_commands
 
 from services.activity_graphs import Resolution, query_role_growth, render_role_growth_chart
 from services.auto_delete_service import parse_duration_seconds
+from xp_system import log_role_event
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -267,7 +269,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             )
         await send_ephemeral_text(interaction, summary)
 
-    @report_group.command(name="role_growth", description="Chart cumulative role grants over time.")
+    @report_group.command(name="role_growth", description="Chart role membership over time.")
     @app_commands.describe(
         resolution="Time resolution: day (30d), week (12wk), month (12mo)",
         roles="Comma-separated role names to include (default: all)",
@@ -807,6 +809,81 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="nsfw_gender.png"),
+            ephemeral=True,
+        )
+
+    @report_group.command(
+        name="backfill_roles",
+        description="Sync role_events with current server state so the role growth graph is accurate.",
+    )
+    async def backfill_roles(interaction: discord.Interaction):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_roles:
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True,
+            )
+            return
+
+        guild = interaction.guild
+        if not guild:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        def _backfill():
+            grants_added = 0
+            removes_added = 0
+            now_ts = time.time()
+
+            with ctx.open_db() as conn:
+                # Build net state from role_events: {(user_id, role_name): net_count}
+                rows = conn.execute(
+                    """
+                    SELECT user_id, role_name,
+                           SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS net
+                    FROM role_events
+                    WHERE guild_id = ?
+                    GROUP BY user_id, role_name
+                    """,
+                    (guild.id,),
+                ).fetchall()
+                db_state: dict[tuple[int, str], int] = {
+                    (int(r[0]), str(r[1])): int(r[2]) for r in rows
+                }
+
+                # Current server truth: who actually has each role right now
+                live_pairs: set[tuple[int, str]] = set()
+                for role in guild.roles:
+                    if role.is_default():
+                        continue
+                    for m in role.members:
+                        live_pairs.add((m.id, role.name))
+
+                # Members who have a role but DB doesn't reflect it — insert grant
+                for user_id, role_name in live_pairs:
+                    net = db_state.get((user_id, role_name), 0)
+                    if net <= 0:
+                        # Backdate to member join time if available
+                        m = guild.get_member(user_id)
+                        ts = m.joined_at.timestamp() if m and m.joined_at else now_ts
+                        log_role_event(conn, guild.id, user_id, role_name, "grant", ts=ts)
+                        grants_added += 1
+
+                # Users the DB thinks have a role but they don't — insert remove
+                for (user_id, role_name), net in db_state.items():
+                    if net > 0 and (user_id, role_name) not in live_pairs:
+                        log_role_event(conn, guild.id, user_id, role_name, "remove", ts=now_ts)
+                        removes_added += 1
+
+            return grants_added, removes_added
+
+        grants_added, removes_added = await asyncio.to_thread(_backfill)
+
+        await interaction.followup.send(
+            f"Role backfill complete.\n"
+            f"Grant events added: {grants_added}\n"
+            f"Remove events added: {removes_added}",
             ephemeral=True,
         )
 
