@@ -253,9 +253,27 @@ async def delete_tracked_messages_older_than(
     are processed so a backlog is drained in one call instead of waiting for
     the next tick.  Returns (queued, deleted, failed).
     """
-    total_queued = 0
+    # Count total due upfront so progress logs can show "X / total"
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM auto_delete_messages "
+            "WHERE guild_id = ? AND channel_id = ? AND created_at <= ?",
+            (guild_id, channel.id, cutoff_ts),
+        ).fetchone()
+        grand_total = int(row["cnt"]) if row else 0
+
+    if grand_total == 0:
+        return 0, 0, 0
+
+    start_time = time.monotonic()
     total_deleted = 0
     total_failed = 0
+    channel_name = getattr(channel, "name", str(channel.id))
+
+    log.info(
+        "Auto-delete #%s: starting, %s messages due",
+        channel_name, grand_total,
+    )
 
     while True:
         with open_db(db_path) as conn:
@@ -264,7 +282,6 @@ async def delete_tracked_messages_older_than(
         if not due:
             break
 
-        total_queued += len(due)
         now = time.time()
         bulk_cutoff = now - _BULK_DELETE_MAX_AGE
 
@@ -282,7 +299,12 @@ async def delete_tracked_messages_older_than(
                 remove_tracked_auto_delete_messages(db_path, guild_id, channel.id, set(chunk_ids))
             except discord.Forbidden:
                 total_failed += len(chunk_ids)
-                return total_queued, total_deleted, total_failed
+                elapsed = time.monotonic() - start_time
+                log.info(
+                    "Auto-delete #%s: forbidden after %.1fs, %s/%s deleted, %s failed",
+                    channel_name, elapsed, total_deleted, grand_total, total_failed,
+                )
+                return grand_total, total_deleted, total_failed
             except discord.HTTPException:
                 total_failed += len(chunk_ids)
                 # Remove from tracking to avoid infinite retry
@@ -321,7 +343,18 @@ async def delete_tracked_messages_older_than(
         if abort:
             break
 
-    return total_queued, total_deleted, total_failed
+        log.info(
+            "Auto-delete #%s: %s/%s deleted (%.1fs elapsed)",
+            channel_name, total_deleted, grand_total,
+            time.monotonic() - start_time,
+        )
+
+    elapsed = time.monotonic() - start_time
+    log.info(
+        "Auto-delete #%s: done in %.1fs, %s/%s deleted, %s failed",
+        channel_name, elapsed, total_deleted, grand_total, total_failed,
+    )
+    return grand_total, total_deleted, total_failed
 
 
 def format_duration_seconds(seconds: int) -> str:
