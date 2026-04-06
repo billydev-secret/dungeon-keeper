@@ -305,16 +305,16 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
         ON xp_events (guild_id, source, created_at, user_id)
         """
     )
+    # Migration: add channel_id to existing xp_events tables
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(xp_events)").fetchall()}
+    if "channel_id" not in cols:
+        conn.execute("ALTER TABLE xp_events ADD COLUMN channel_id INTEGER")
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_xp_events_channel
         ON xp_events (guild_id, channel_id, created_at)
         """
     )
-    # Migration: add channel_id to existing xp_events tables and backfill
-    cols = {row[1] for row in conn.execute("PRAGMA table_info(xp_events)").fetchall()}
-    if "channel_id" not in cols:
-        conn.execute("ALTER TABLE xp_events ADD COLUMN channel_id INTEGER")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS processed_messages (
