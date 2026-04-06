@@ -649,7 +649,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         COL = 14
         ACT_W = 7
         tbl: list[str] = []
-        hdr = f" # {_mono('Member', COL)} {'Tot':>3} {'Eng':>3} {'C&R':>3} {'Res':>3} {'Pst':>3} {'Act':>{ACT_W}}"
+        hdr = f" # {_mono('Member', COL)} {'Tot':>3} {'Eng':>3} {'C&R':>3} {'Res':>3} {'Pst':>3} {'Seen':>{ACT_W}}"
         tbl.append(hdr)
         tbl.append("\u2500" * len(hdr))
 
@@ -705,7 +705,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         if footer_parts:
             embed.add_field(name="\u200b", value="\n".join(footer_parts), inline=False)
 
-        embed.set_footer(text="* < 30d tenure \u00b7 Eng=Engagement \u00b7 C&R=Consistency & Recency \u00b7 Res=Resonance \u00b7 Pst=Posts")
+        embed.set_footer(text="* < 30d tenure \u00b7 Eng=Engagement \u00b7 C&R=Consistency & Recency \u00b7 Res=Resonance \u00b7 Pst=Posts \u00b7 Seen=Last Active")
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 

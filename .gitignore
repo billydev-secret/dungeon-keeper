@@ -9,3 +9,4 @@ dungeonkeeper.db-shm
 .pytest_cache/
 __pycache__/
 .venv/
+/.claude/*

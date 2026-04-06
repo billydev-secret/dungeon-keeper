@@ -249,69 +249,79 @@ async def delete_tracked_messages_older_than(
     Delete tracked messages older than cutoff timestamp.
 
     Uses bulk delete (up to 100 per request) for messages < 13 days old,
-    and individual deletes for older messages. Returns (queued, deleted, failed).
+    and individual deletes for older messages.  Loops until all due messages
+    are processed so a backlog is drained in one call instead of waiting for
+    the next tick.  Returns (queued, deleted, failed).
     """
-    with open_db(db_path) as conn:
-        due = pop_due_auto_delete_message_ids(conn, guild_id, channel.id, cutoff_ts)
+    total_queued = 0
+    total_deleted = 0
+    total_failed = 0
 
-    if not due:
-        return 0, 0, 0
+    while True:
+        with open_db(db_path) as conn:
+            due = pop_due_auto_delete_message_ids(conn, guild_id, channel.id, cutoff_ts)
 
-    queued = len(due)
-    deleted = 0
-    failed = 0
-    now = time.time()
-    bulk_cutoff = now - _BULK_DELETE_MAX_AGE
-
-    bulk = [(mid, ts) for mid, ts in due if ts > bulk_cutoff]
-    old = [(mid, ts) for mid, ts in due if ts <= bulk_cutoff]
-
-    # Bulk-delete recent messages in chunks of 100
-    for i in range(0, len(bulk), _BULK_CHUNK):
-        chunk_ids = [mid for mid, _ in bulk[i:i + _BULK_CHUNK]]
-        partials = [channel.get_partial_message(mid) for mid in chunk_ids]
-        try:
-            await channel.delete_messages(partials, reason=reason)
-            deleted += len(chunk_ids)
-            remove_tracked_auto_delete_messages(db_path, guild_id, channel.id, set(chunk_ids))
-        except discord.Forbidden:
-            failed += len(chunk_ids)
-            return queued, deleted, failed
-        except discord.HTTPException:
-            failed += len(chunk_ids)
-            # Remove from tracking to avoid infinite retry
-            remove_tracked_auto_delete_messages(db_path, guild_id, channel.id, set(chunk_ids))
-
-        if i + _BULK_CHUNK < len(bulk):
-            await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
-
-    # Individual delete for messages older than 13 days
-    next_delete_at = 0.0
-    for mid, _ in old:
-        now_monotonic = time.monotonic()
-        if now_monotonic < next_delete_at:
-            await asyncio.sleep(next_delete_at - now_monotonic)
-
-        partial = channel.get_partial_message(mid)
-        try:
-            delete_call = cast(Any, partial.delete)
-            try:
-                await delete_call(reason=reason)
-            except TypeError:
-                await partial.delete()
-            deleted += 1
-            remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
-            next_delete_at = time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
-        except discord.NotFound:
-            remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
-        except discord.Forbidden:
-            failed += 1
+        if not due:
             break
-        except discord.HTTPException:
-            failed += 1
-            remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
 
-    return queued, deleted, failed
+        total_queued += len(due)
+        now = time.time()
+        bulk_cutoff = now - _BULK_DELETE_MAX_AGE
+
+        bulk = [(mid, ts) for mid, ts in due if ts > bulk_cutoff]
+        old = [(mid, ts) for mid, ts in due if ts <= bulk_cutoff]
+
+        # Bulk-delete recent messages in chunks of 100
+        abort = False
+        for i in range(0, len(bulk), _BULK_CHUNK):
+            chunk_ids = [mid for mid, _ in bulk[i:i + _BULK_CHUNK]]
+            partials = [channel.get_partial_message(mid) for mid in chunk_ids]
+            try:
+                await channel.delete_messages(partials, reason=reason)
+                total_deleted += len(chunk_ids)
+                remove_tracked_auto_delete_messages(db_path, guild_id, channel.id, set(chunk_ids))
+            except discord.Forbidden:
+                total_failed += len(chunk_ids)
+                return total_queued, total_deleted, total_failed
+            except discord.HTTPException:
+                total_failed += len(chunk_ids)
+                # Remove from tracking to avoid infinite retry
+                remove_tracked_auto_delete_messages(db_path, guild_id, channel.id, set(chunk_ids))
+
+            if i + _BULK_CHUNK < len(bulk):
+                await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
+
+        # Individual delete for messages older than 13 days
+        next_delete_at = 0.0
+        for mid, _ in old:
+            now_monotonic = time.monotonic()
+            if now_monotonic < next_delete_at:
+                await asyncio.sleep(next_delete_at - now_monotonic)
+
+            partial = channel.get_partial_message(mid)
+            try:
+                delete_call = cast(Any, partial.delete)
+                try:
+                    await delete_call(reason=reason)
+                except TypeError:
+                    await partial.delete()
+                total_deleted += 1
+                remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
+                next_delete_at = time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
+            except discord.NotFound:
+                remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
+            except discord.Forbidden:
+                total_failed += 1
+                abort = True
+                break
+            except discord.HTTPException:
+                total_failed += 1
+                remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
+
+        if abort:
+            break
+
+    return total_queued, total_deleted, total_failed
 
 
 def format_duration_seconds(seconds: int) -> str:
