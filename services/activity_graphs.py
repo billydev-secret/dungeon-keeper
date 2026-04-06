@@ -1945,9 +1945,17 @@ def query_nsfw_gender_activity(
 
     if media_only:
         # Use messages + message_attachments; ts column is integer epoch
+        # Discord CDN URLs have query params after extension, so we strip
+        # them by extracting the path portion before '?' for matching.
         bucket_expr = _strftime_expr(resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs)
+        # _url_path strips query params: "foo.jpg?ex=abc" -> "foo.jpg"
+        _url_path = (
+            "CASE WHEN INSTR(ma.url, '?') > 0 "
+            "THEN SUBSTR(LOWER(ma.url), 1, INSTR(ma.url, '?') - 1) "
+            "ELSE LOWER(ma.url) END"
+        )
         ext_conditions = " OR ".join(
-            f"LOWER(ma.url) LIKE '%{ext}'" for ext in sorted(_MEDIA_EXTENSIONS)
+            f"({_url_path}) LIKE '%{ext}'" for ext in sorted(_MEDIA_EXTENSIONS)
         )
         rows = conn.execute(
             f"""
@@ -1962,7 +1970,7 @@ def query_nsfw_gender_activity(
             WHERE m.guild_id = ? AND m.ts >= ?
                 AND m.channel_id IN ({ch_placeholders})
                 AND ({ext_conditions})
-                AND LOWER(ma.url) NOT LIKE '%.gif'
+                AND ({_url_path}) NOT LIKE '%.gif'
             GROUP BY bucket, gender
             """,
             params,
