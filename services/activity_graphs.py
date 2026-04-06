@@ -1784,3 +1784,143 @@ def render_join_histogram(
     plt.close(fig)
     buf.seek(0)
     return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# NSFW posting by gender
+# ---------------------------------------------------------------------------
+
+_GENDER_COLORS = {
+    "male": "#5865f2",      # blurple
+    "female": "#eb459e",    # pink
+    "nonbinary": "#57f287", # green
+    "unknown": "#72767d",   # grey
+}
+
+_GENDER_ORDER = ["male", "female", "nonbinary", "unknown"]
+
+
+def query_nsfw_gender_activity(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Resolution,
+    nsfw_channel_ids: list[int],
+    *,
+    utc_offset_hours: float = 0,
+) -> tuple[list[str], dict[str, list[int]]]:
+    """
+    Query NSFW channel message counts per time bucket, grouped by gender.
+
+    Returns (labels, {gender: [count_per_bucket]}).
+    Members without a gender classification are bucketed as 'unknown'.
+    """
+    if not nsfw_channel_ids:
+        return [], {}
+
+    now = datetime.now(timezone.utc)
+    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
+    offset_secs = int(utc_offset_hours * 3600)
+    bucket_expr = _strftime_expr(resolution, since_ts=since_ts, utc_offset_secs=offset_secs)
+
+    ch_placeholders = ", ".join("?" for _ in nsfw_channel_ids)
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            {bucket_expr} AS bucket,
+            COALESCE(mg.gender, 'unknown') AS gender,
+            COUNT(*) AS cnt
+        FROM processed_messages pm
+        LEFT JOIN member_gender mg
+            ON mg.guild_id = pm.guild_id AND mg.user_id = pm.user_id
+        WHERE pm.guild_id = ? AND pm.created_at >= ?
+            AND pm.channel_id IN ({ch_placeholders})
+        GROUP BY bucket, gender
+        """,
+        [guild_id, since_ts, *nsfw_channel_ids],
+    ).fetchall()
+
+    # Build per-gender counts aligned to bucket sequence
+    counts_by_gender: dict[str, dict[str, int]] = {}
+    for r in rows:
+        g = str(r["gender"])
+        counts_by_gender.setdefault(g, {})[str(r["bucket"])] = int(r["cnt"])
+
+    labels = [label for _, label in bucket_sequence]
+    gender_counts: dict[str, list[int]] = {}
+    for g in _GENDER_ORDER:
+        if g not in counts_by_gender:
+            continue
+        gender_counts[g] = [
+            counts_by_gender[g].get(key, 0) for key, _ in bucket_sequence
+        ]
+
+    return labels, gender_counts
+
+
+def render_nsfw_gender_chart(
+    labels: list[str],
+    gender_counts: dict[str, list[int]],
+    title: str,
+) -> bytes:
+    """Render a stacked bar chart of NSFW posting by gender as PNG bytes."""
+    import numpy as np
+
+    n = len(labels)
+    fig_width = max(9, n * 0.42)
+
+    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    x = np.arange(n)
+    bar_width = 0.7
+    bottom = np.zeros(n)
+
+    for gender in _GENDER_ORDER:
+        if gender not in gender_counts:
+            continue
+        values = np.array(gender_counts[gender], dtype=float)
+        color = _GENDER_COLORS.get(gender, _GENDER_COLORS["unknown"])
+        ax.bar(
+            x, values, bar_width,
+            bottom=bottom,
+            color=color,
+            label=gender.capitalize(),
+            zorder=2,
+        )
+        bottom += values
+
+    # Smart x-axis labeling
+    max_visible = 20
+    if n > max_visible:
+        step = max(1, n // max_visible)
+        tick_positions = list(range(0, n, step))
+        tick_labels_visible = [labels[i] for i in tick_positions]
+    else:
+        tick_positions = list(range(n))
+        tick_labels_visible = labels
+
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
+    ax.tick_params(length=0)
+
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
+    ax.set_ylabel("Messages", color=_TEXT, fontsize=9)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    if gender_counts:
+        ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()

@@ -338,6 +338,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 except discord.HTTPException as exc:
                     log.error("Failed to send greeter chat ping: %s", exc)
 
+
     @bot.event
     async def on_member_remove(member: discord.Member) -> None:
         if ctx.leave_channel_id <= 0:

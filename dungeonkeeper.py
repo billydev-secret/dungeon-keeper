@@ -14,6 +14,7 @@ from commands.interaction_commands import register_interaction_commands
 from commands.ai_mod_commands import register_ai_mod_commands
 from commands.auto_delete_commands import register_auto_delete_commands
 from commands.denizen_commands import register_denizen_commands
+from commands.gender_commands import register_gender_commands
 from commands.inactivity_prune_commands import register_inactivity_prune_commands
 from commands.mod_commands import register_mod_commands
 from commands.spoiler_commands import register_spoiler_commands
@@ -29,6 +30,7 @@ from services.message_store import init_message_tables
 from reports import register_reports
 from services.auto_delete_service import auto_delete_loop, init_auto_delete_tables
 from services.booster_roles import BoosterRoleDynamicButton, init_booster_role_tables
+from services.gender_service import init_gender_tables
 from services.member_quality_score import init_quality_score_tables
 from services.inactivity_prune_service import inactivity_prune_loop, init_inactivity_prune_tables
 from services.voice_xp_service import voice_xp_loop
@@ -88,6 +90,7 @@ with open_db(DB_PATH) as _conn:
     init_grant_role_tables(_conn)
     init_booster_role_tables(_conn)
     init_quality_score_tables(_conn)
+    init_gender_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -153,6 +156,7 @@ register_welcome_commands(bot, ctx)
 register_reports(bot, ctx)
 register_watch_commands(bot, ctx)
 register_foolsday_commands(bot, ctx)
+register_gender_commands(bot, ctx)
 
 # Register persistent booster-role buttons so they survive restarts
 bot.add_dynamic_items(BoosterRoleDynamicButton)

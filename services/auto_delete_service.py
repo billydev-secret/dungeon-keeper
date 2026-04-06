@@ -486,8 +486,11 @@ async def _scan_and_delete_channel_history(
     Uses bulk delete (up to 100 per request) for messages < 13 days old,
     and individual deletes for older messages.
     """
+    channel_name = getattr(channel, "name", str(channel.id))
+    start_time = time.monotonic()
     deleted = 0
     failed = 0
+    scanned = 0
     bulk_cutoff_ts = time.time() - _BULK_DELETE_MAX_AGE
 
     bulk_batch: list[discord.PartialMessage] = []
@@ -513,15 +516,28 @@ async def _scan_and_delete_channel_history(
     async for message in channel.history(limit=None, before=cutoff, oldest_first=True):
         if message.pinned:
             continue
+        scanned += 1
 
         msg_ts = message.created_at.timestamp() if message.created_at else 0.0
         if msg_ts > bulk_cutoff_ts:
             bulk_batch.append(channel.get_partial_message(message.id))
             if len(bulk_batch) >= _BULK_CHUNK:
                 if not await _flush_bulk():
+                    log.info(
+                        "Auto-delete scan #%s: forbidden after %.1fs, %s/%s deleted, %s failed",
+                        channel_name, time.monotonic() - start_time, deleted, scanned, failed,
+                    )
                     return deleted, failed
         else:
             old_batch.append(channel.get_partial_message(message.id))
+
+    if scanned == 0:
+        return 0, 0
+
+    log.info(
+        "Auto-delete scan #%s: starting, %s messages found (%s bulk, %s old)",
+        channel_name, scanned, scanned - len(old_batch), len(old_batch),
+    )
 
     # Flush any remaining bulk messages
     await _flush_bulk()
@@ -548,6 +564,11 @@ async def _scan_and_delete_channel_history(
         except discord.HTTPException:
             failed += 1
 
+    elapsed = time.monotonic() - start_time
+    log.info(
+        "Auto-delete scan #%s: done in %.1fs, %s/%s deleted, %s failed",
+        channel_name, elapsed, deleted, scanned, failed,
+    )
     return deleted, failed
 
 

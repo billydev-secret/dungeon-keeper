@@ -709,6 +709,75 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
+    # ------------------------------------------------------------------
+    # /report nsfw_gender
+    # ------------------------------------------------------------------
+
+    @report_group.command(
+        name="nsfw_gender",
+        description="Chart NSFW channel posting broken down by gender.",
+    )
+    @app_commands.describe(
+        resolution="Time resolution: daily (30d), weekly (12wk), monthly (12mo)",
+    )
+    @app_commands.choices(resolution=[
+        app_commands.Choice(name="Daily (last 30 days)", value="day"),
+        app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
+        app_commands.Choice(name="Monthly (last 12 months)", value="month"),
+    ])
+    async def nsfw_gender(
+        interaction: discord.Interaction,
+        resolution: app_commands.Choice[str] | None = None,
+    ):
+        member = ctx.get_interaction_member(interaction)
+        if member is None or not member.guild_permissions.manage_guild:
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        from services.activity_graphs import query_nsfw_gender_activity, render_nsfw_gender_chart
+
+        res: Resolution = resolution.value if resolution else "week"  # type: ignore[assignment]
+        window_label = {"day": "Last 30 Days", "week": "Last 12 Weeks", "month": "Last 12 Months"}[res]
+
+        nsfw_channel_ids = [
+            ch.id for ch in guild.channels
+            if getattr(ch, "nsfw", False)
+        ]
+
+        if not nsfw_channel_ids:
+            await interaction.followup.send("No NSFW channels found in this server.", ephemeral=True)
+            return
+
+        def _query():
+            with ctx.open_db() as conn:
+                return query_nsfw_gender_activity(
+                    conn, ctx.guild_id, res, nsfw_channel_ids,
+                    utc_offset_hours=ctx.tz_offset_hours,
+                )
+        labels, gender_counts = await asyncio.to_thread(_query)
+
+        if not gender_counts:
+            await interaction.followup.send("No NSFW posting data found for this period.", ephemeral=True)
+            return
+
+        chart_bytes = await asyncio.to_thread(
+            render_nsfw_gender_chart, labels, gender_counts,
+            title=f"NSFW Posts by Gender \u2014 {window_label}",
+        )
+        await interaction.followup.send(
+            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="nsfw_gender.png"),
+            ephemeral=True,
+        )
+
     bot.tree.add_command(report_group)
 
     # ------------------------------------------------------------------
