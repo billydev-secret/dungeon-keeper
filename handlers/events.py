@@ -7,8 +7,8 @@ import time
 from typing import TYPE_CHECKING
 
 import discord
+from anthropic import AsyncAnthropic
 from discord import app_commands
-from openai import AsyncOpenAI
 
 from post_monitoring import enforce_spoiler_requirement
 from services.ai_moderation_service import ai_check_watched_message
@@ -34,8 +34,8 @@ log = logging.getLogger("dungeonkeeper.events")
 
 
 def register_events(bot: Bot, ctx: AppContext) -> None:
-    _openai_api_key = os.getenv("OPENAI_API_KEY")
-    _openai_client = AsyncOpenAI(api_key=_openai_api_key) if _openai_api_key else None
+    _anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+    _anthropic_client = AsyncAnthropic(api_key=_anthropic_api_key) if _anthropic_api_key else None
 
     @bot.event
     async def on_ready():
@@ -174,11 +174,11 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             return
 
         # Only notify watchers when the AI detects a rule violation.
-        # If OPENAI_API_KEY is not set, fall back to notifying on every message.
+        # If ANTHROPIC_API_KEY is not set, fall back to notifying on every message.
         reason = ""
-        if _openai_client is not None:
+        if _anthropic_client is not None:
             try:
-                is_violation, reason = await ai_check_watched_message(_openai_client, message)
+                is_violation, reason = await ai_check_watched_message(_anthropic_client, message)
             except Exception as exc:
                 log.warning(
                     "AI watch check failed for %s: %s — notifying anyway.",

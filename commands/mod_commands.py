@@ -214,7 +214,7 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         # ── Watch List ────────────────────────────────────────────────────────
         pages.append(_page("Watch List",
             "Silently monitor a member's public messages. "
-            "If `OPENAI_API_KEY` is set, only messages the AI flags as potential rule violations "
+            "If `ANTHROPIC_API_KEY` is set, only messages the AI flags as potential rule violations "
             "are forwarded — otherwise every message is relayed.\n\n"
             + _fmt([
                 ("/watch add user:@user",
@@ -228,7 +228,7 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         # ── AI Moderation ─────────────────────────────────────────────────────
         pages.append(_page("AI Moderation",
             "AI-powered tools for reviewing user behaviour and channel activity. "
-            "Requires `OPENAI_API_KEY` in the bot's environment. "
+            "Requires `ANTHROPIC_API_KEY` in the bot's environment. "
             "All commands use the stored message archive — run `/interaction_scan` first "
             "if the bot is newly set up.\n\n"
             + _fmt([

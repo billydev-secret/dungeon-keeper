@@ -1,4 +1,4 @@
-"""AI-powered moderation commands backed by the OpenAI API.
+"""AI-powered moderation commands backed by the Anthropic API.
 
 Provides four slash commands (all mod-only, all ephemeral, under the /ai group):
   /ai review   — fetch a user's recent messages and have the AI flag concerns
@@ -6,7 +6,7 @@ Provides four slash commands (all mod-only, all ephemeral, under the /ai group):
   /ai channel  — ask the AI a free-form question about a channel's recent activity
   /ai query    — ask the AI a free-form question about a user's message history
 
-Requires OPENAI_API_KEY to be set in the bot's environment.
+Requires ANTHROPIC_API_KEY to be set in the bot's environment.
 """
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ import os
 from typing import TYPE_CHECKING
 
 import discord
+from anthropic import AsyncAnthropic
 from discord import app_commands
-from openai import AsyncOpenAI
 
 from reports import send_ephemeral_text
 from services.ai_moderation_service import (
@@ -29,16 +29,16 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 
-def _openai_client() -> AsyncOpenAI | None:
-    """Return a configured AsyncOpenAI client, or None if OPENAI_API_KEY is not set."""
-    api_key = os.getenv("OPENAI_API_KEY")
-    return AsyncOpenAI(api_key=api_key) if api_key else None
+def _anthropic_client() -> AsyncAnthropic | None:
+    """Return a configured AsyncAnthropic client, or None if ANTHROPIC_API_KEY is not set."""
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    return AsyncAnthropic(api_key=api_key) if api_key else None
 
 
 def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
     ai_group = app_commands.Group(
         name="ai",
-        description="AI-powered moderation tools (requires OPENAI_API_KEY).",
+        description="AI-powered moderation tools (requires ANTHROPIC_API_KEY).",
     )
 
     @ai_group.command(
@@ -60,10 +60,10 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        client = _openai_client()
+        client = _anthropic_client()
         if client is None:
             await interaction.response.send_message(
-                "OPENAI_API_KEY is not set in the bot's environment.", ephemeral=True
+                "ANTHROPIC_API_KEY is not set in the bot's environment.", ephemeral=True
             )
             return
 
@@ -100,10 +100,10 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        client = _openai_client()
+        client = _anthropic_client()
         if client is None:
             await interaction.response.send_message(
-                "OPENAI_API_KEY is not set in the bot's environment.", ephemeral=True
+                "ANTHROPIC_API_KEY is not set in the bot's environment.", ephemeral=True
             )
             return
 
@@ -147,10 +147,10 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        client = _openai_client()
+        client = _anthropic_client()
         if client is None:
             await interaction.response.send_message(
-                "OPENAI_API_KEY is not set in the bot's environment.", ephemeral=True
+                "ANTHROPIC_API_KEY is not set in the bot's environment.", ephemeral=True
             )
             return
 
@@ -199,10 +199,10 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        client = _openai_client()
+        client = _anthropic_client()
         if client is None:
             await interaction.response.send_message(
-                "OPENAI_API_KEY is not set in the bot's environment.", ephemeral=True
+                "ANTHROPIC_API_KEY is not set in the bot's environment.", ephemeral=True
             )
             return
 

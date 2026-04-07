@@ -1,4 +1,4 @@
-"""AI-powered moderation helpers using the OpenAI API."""
+"""AI-powered moderation helpers using the Anthropic API."""
 from __future__ import annotations
 
 import logging
@@ -7,30 +7,51 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import discord
-from openai import AsyncOpenAI
+from anthropic import AsyncAnthropic
+from anthropic.types import TextBlock
 
 log = logging.getLogger("dungeonkeeper.ai_mod")
 
+DEFAULT_MODEL = "claude-opus-4-6"
+
 
 async def _chat(
-    client: AsyncOpenAI,
+    client: AsyncAnthropic,
     *,
     model: str,
-    messages: list[dict],
+    system: str,
+    user_content: str,
     max_tokens: int,
-    reasoning_effort: str | None = None,
-):
-    """Log the outgoing payload at DEBUG level, then call the OpenAI chat API."""
+    use_thinking: bool = False,
+) -> str:
+    """Log the outgoing payload at DEBUG level, then call the Anthropic messages API.
+
+    Streams the response (via `messages.stream`) so long completions don't hit the
+    request timeout, and returns the concatenated text content. Thinking blocks are
+    skipped — only `text` blocks are included in the returned string.
+    """
     if log.isEnabledFor(logging.DEBUG):
-        for i, m in enumerate(messages):
-            log.debug(
-                "OpenAI request [%d/%d] role=%s reasoning_effort=%s content=%.500s",
-                i + 1, len(messages), m.get("role"), reasoning_effort, m.get("content", ""),
-            )
-    kwargs: dict = {"model": model, "messages": messages, "max_completion_tokens": max_tokens}
-    if reasoning_effort is not None:
-        kwargs["reasoning_effort"] = reasoning_effort
-    return await client.chat.completions.create(**kwargs)
+        log.debug(
+            "Anthropic request model=%s thinking=%s system=%.500s user=%.500s",
+            model, use_thinking, system, user_content,
+        )
+    kwargs: dict = {
+        "model": model,
+        "system": system,
+        "messages": [{"role": "user", "content": user_content}],
+        "max_tokens": max_tokens,
+    }
+    if use_thinking:
+        kwargs["thinking"] = {"type": "adaptive"}
+
+    async with client.messages.stream(**kwargs) as stream:
+        message = await stream.get_final_message()
+
+    parts: list[str] = []
+    for block in message.content:
+        if isinstance(block, TextBlock):
+            parts.append(block.text)
+    return "".join(parts).strip()
 
 
 _MAX_MSG_CHARS = 400   # truncate individual messages to avoid token bloat
@@ -349,13 +370,13 @@ def _fetch_user_context_from_db(
 
 
 async def ai_review_user(
-    client: AsyncOpenAI,
+    client: AsyncAnthropic,
     conn: sqlite3.Connection,
     guild: discord.Guild,
     user: discord.Member,
     *,
     days: int = 7,
-    model: str = "gpt-5.4",
+    model: str = DEFAULT_MODEL,
 ) -> AiModerationResult:
     lines, user_msg_count, channels_checked = _fetch_user_context_from_db(
         conn, guild, user, lookback_days=days
@@ -369,16 +390,13 @@ async def ai_review_user(
             f"last {days} days:\n\n" + "\n".join(lines)
         )
 
-    response = await _chat(
+    analysis = await _chat(
         client, model=model,
-        messages=[
-            {"role": "system", "content": _REVIEW_SYSTEM},
-            {"role": "user", "content": body},
-        ],
+        system=_REVIEW_SYSTEM,
+        user_content=body,
         max_tokens=16000,
-        reasoning_effort="high",
-    )
-    analysis = response.choices[0].message.content or "No analysis returned."
+        use_thinking=True,
+    ) or "No analysis returned."
     return AiModerationResult(
         analysis=analysis,
         message_count=user_msg_count,
@@ -387,13 +405,13 @@ async def ai_review_user(
 
 
 async def ai_scan_channel(
-    client: AsyncOpenAI,
+    client: AsyncAnthropic,
     conn: sqlite3.Connection,
     guild: discord.Guild,
     channel: discord.TextChannel | discord.Thread,
     *,
     count: int = 50,
-    model: str = "gpt-5.4",
+    model: str = DEFAULT_MODEL,
 ) -> AiModerationResult:
     # Columns: 0=message_id, 1=author_id, 2=content, 3=reply_to_id, 4=ts
     rows = conn.execute(
@@ -432,23 +450,20 @@ async def ai_scan_channel(
         extras += _mention_note(mention_map.get(msg_id, []), guild, name_cache)
         lines.append(f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}{extras}")
 
-    response = await _chat(
+    analysis = await _chat(
         client, model=model,
-        messages=[
-            {"role": "system", "content": _SCAN_SYSTEM},
-            {"role": "user", "content": "\n".join(lines)},
-        ],
-        max_tokens=800,
-    )
-    analysis = response.choices[0].message.content or "No analysis returned."
+        system=_SCAN_SYSTEM,
+        user_content="\n".join(lines),
+        max_tokens=2048,
+    ) or "No analysis returned."
     return AiModerationResult(analysis=analysis, message_count=len(rows), channels_checked=1)
 
 
 async def ai_check_watched_message(
-    client: AsyncOpenAI,
+    client: AsyncAnthropic,
     message: discord.Message,
     *,
-    model: str = "gpt-5.4",
+    model: str = DEFAULT_MODEL,
 ) -> tuple[bool, str]:
     """
     Check a single live message against server rules.
@@ -460,29 +475,26 @@ async def ai_check_watched_message(
     content = (message.content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
     prompt = f"[{ts}] #{channel_name} | {message.author.display_name}: {content}"
 
-    response = await _chat(
+    reply = await _chat(
         client, model=model,
-        messages=[
-            {"role": "system", "content": _WATCH_CHECK_SYSTEM},
-            {"role": "user", "content": prompt},
-        ],
-        max_tokens=120,
+        system=_WATCH_CHECK_SYSTEM,
+        user_content=prompt,
+        max_tokens=256,
     )
-    reply = (response.choices[0].message.content or "").strip()
     is_violation = reply.upper().startswith("VIOLATION")
     reason = reply[len("VIOLATION:"):].strip() if is_violation else ""
     return is_violation, reason
 
 
 async def ai_query_channel(
-    client: AsyncOpenAI,
+    client: AsyncAnthropic,
     conn: sqlite3.Connection,
     guild: discord.Guild,
     channel: discord.TextChannel | discord.Thread,
     question: str,
     *,
     minutes: int = 60,
-    model: str = "gpt-5.4",
+    model: str = DEFAULT_MODEL,
 ) -> AiModerationResult:
     cutoff_ts = int((datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp())
 
@@ -524,28 +536,25 @@ async def ai_query_channel(
 
     prompt = f"Moderator question: {question}\n\n" + "\n".join(lines)
 
-    response = await _chat(
+    analysis = await _chat(
         client, model=model,
-        messages=[
-            {"role": "system", "content": _CHANNEL_QUERY_SYSTEM},
-            {"role": "user", "content": prompt},
-        ],
+        system=_CHANNEL_QUERY_SYSTEM,
+        user_content=prompt,
         max_tokens=16000,
-        reasoning_effort="high",
-    )
-    analysis = response.choices[0].message.content or "No analysis returned."
+        use_thinking=True,
+    ) or "No analysis returned."
     return AiModerationResult(analysis=analysis, message_count=len(rows), channels_checked=1)
 
 
 async def ai_query_user(
-    client: AsyncOpenAI,
+    client: AsyncAnthropic,
     conn: sqlite3.Connection,
     guild: discord.Guild,
     user: discord.Member,
     question: str,
     *,
     days: int = 14,
-    model: str = "gpt-5.4",
+    model: str = DEFAULT_MODEL,
 ) -> AiModerationResult:
     lines, user_msg_count, _ = _fetch_user_context_from_db(
         conn, guild, user, lookback_days=days
@@ -561,16 +570,13 @@ async def ai_query_user(
 
     prompt = f"Moderator question: {question}\n\n{body}"
 
-    response = await _chat(
+    analysis = await _chat(
         client, model=model,
-        messages=[
-            {"role": "system", "content": _QUERY_SYSTEM},
-            {"role": "user", "content": prompt},
-        ],
+        system=_QUERY_SYSTEM,
+        user_content=prompt,
         max_tokens=16000,
-        reasoning_effort="high",
-    )
-    analysis = response.choices[0].message.content or "No analysis returned."
+        use_thinking=True,
+    ) or "No analysis returned."
     return AiModerationResult(
         analysis=analysis,
         message_count=user_msg_count,
