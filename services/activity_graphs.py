@@ -2286,23 +2286,19 @@ def render_greeter_response_chart(
 # Message rate (10-minute time-of-day buckets)
 # ---------------------------------------------------------------------------
 
-MessageRateWindow = Literal["day", "week", "month"]
-
-
 def query_message_rate_10min(
     conn: sqlite3.Connection,
     guild_id: int,
-    window: MessageRateWindow,
+    days: int,
     *,
     utc_offset_hours: float = 0,
-) -> tuple[list[int], int]:
-    """Aggregate message counts into 144 ten-minute time-of-day buckets.
+) -> list[int]:
+    """Aggregate message counts from the last *days* days into 144 ten-minute
+    time-of-day buckets.
 
-    Returns (counts_per_bucket, days_in_window). Bucket 0 = 00:00-00:10
-    (in the configured timezone), bucket 143 = 23:50-24:00.
+    Returns counts_per_bucket. Bucket 0 = 00:00-00:10 (in the configured
+    timezone), bucket 143 = 23:50-24:00.
     """
-    days_map = {"day": 1, "week": 7, "month": 30}
-    days = days_map[window]
     since_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
 
     offset_secs = int(utc_offset_hours * 3600)
@@ -2324,7 +2320,7 @@ def query_message_rate_10min(
     ).fetchall()
 
     counts_by_bucket = {int(row[0]): int(row[1]) for row in rows}
-    return [counts_by_bucket.get(i, 0) for i in range(144)], days
+    return [counts_by_bucket.get(i, 0) for i in range(144)]
 
 
 def render_message_rate_chart(

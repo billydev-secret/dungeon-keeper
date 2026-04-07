@@ -9,7 +9,6 @@ import discord
 from discord import app_commands
 
 from services.activity_graphs import (
-    MessageRateWindow,
     Resolution,
     query_greeter_response_times,
     query_message_rate_10min,
@@ -823,19 +822,14 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
     @report_group.command(
         name="message_rate",
-        description="Chart messages per 10-minute interval across the day.",
+        description="Chart messages per 10-minute interval across the day, averaged over N days.",
     )
     @app_commands.describe(
-        window="Time window of data to average over.",
+        days="How many days of history to average over (default: 7).",
     )
-    @app_commands.choices(window=[
-        app_commands.Choice(name="Last 24 hours", value="day"),
-        app_commands.Choice(name="Last 7 days", value="week"),
-        app_commands.Choice(name="Last 30 days", value="month"),
-    ])
     async def message_rate(
         interaction: discord.Interaction,
-        window: app_commands.Choice[str] | None = None,
+        days: app_commands.Range[int, 1, 365] = 7,
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
@@ -846,12 +840,6 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        win: MessageRateWindow = window.value if window else "week"  # type: ignore[assignment]
-        window_label = {
-            "day": "Last 24 Hours",
-            "week": "Last 7 Days",
-            "month": "Last 30 Days",
-        }[win]
         tz_label = (
             f"UTC{ctx.tz_offset_hours:+g}" if ctx.tz_offset_hours else "UTC"
         )
@@ -859,10 +847,10 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         def _query():
             with ctx.open_db() as conn:
                 return query_message_rate_10min(
-                    conn, ctx.guild_id, win, utc_offset_hours=ctx.tz_offset_hours,
+                    conn, ctx.guild_id, days, utc_offset_hours=ctx.tz_offset_hours,
                 )
 
-        counts, days = await asyncio.to_thread(_query)
+        counts = await asyncio.to_thread(_query)
 
         if not any(c > 0 for c in counts):
             await interaction.followup.send(
@@ -870,9 +858,10 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
+        day_label = "day" if days == 1 else f"{days} days"
         chart_bytes = await asyncio.to_thread(
             render_message_rate_chart, counts, days,
-            title=f"Message Rate \u2014 {window_label} ({tz_label})",
+            title=f"Message Rate \u2014 Last {day_label} ({tz_label})",
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="message_rate.png"),
