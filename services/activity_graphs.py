@@ -2280,3 +2280,90 @@ def render_greeter_response_chart(
     plt.close(fig)
     buf.seek(0)
     return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# Message rate (10-minute time-of-day buckets)
+# ---------------------------------------------------------------------------
+
+MessageRateWindow = Literal["day", "week", "month"]
+
+
+def query_message_rate_10min(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    window: MessageRateWindow,
+    *,
+    utc_offset_hours: float = 0,
+) -> tuple[list[int], int]:
+    """Aggregate message counts into 144 ten-minute time-of-day buckets.
+
+    Returns (counts_per_bucket, days_in_window). Bucket 0 = 00:00-00:10
+    (in the configured timezone), bucket 143 = 23:50-24:00.
+    """
+    days_map = {"day": 1, "week": 7, "month": 30}
+    days = days_map[window]
+    since_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+
+    offset_secs = int(utc_offset_hours * 3600)
+    shifted = f"(created_at + {offset_secs})" if offset_secs else "created_at"
+    # 10-min bucket = (hour * 6) + (minute // 10), 0..143
+    bucket_expr = (
+        f"(CAST(strftime('%H', datetime({shifted}, 'unixepoch')) AS INTEGER) * 6 "
+        f"+ CAST(strftime('%M', datetime({shifted}, 'unixepoch')) AS INTEGER) / 10)"
+    )
+
+    rows = conn.execute(
+        f"""
+        SELECT {bucket_expr} AS bucket, COUNT(*) AS msg_count
+        FROM processed_messages
+        WHERE guild_id = ? AND created_at >= ?
+        GROUP BY bucket
+        """,
+        (guild_id, since_ts),
+    ).fetchall()
+
+    counts_by_bucket = {int(row[0]): int(row[1]) for row in rows}
+    return [counts_by_bucket.get(i, 0) for i in range(144)], days
+
+
+def render_message_rate_chart(
+    counts: list[int],
+    days_in_window: int,
+    title: str,
+) -> bytes:
+    """Render a 144-bucket bar chart of messages per 10 minutes (averaged per day)."""
+    n = len(counts)
+    # Average per day so the y-axis is comparable across windows
+    avg = [c / days_in_window for c in counts]
+
+    fig, ax = plt.subplots(figsize=(13, 4.5))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    x = list(range(n))
+    ax.bar(x, avg, color=_BAR, width=0.95, zorder=2)
+
+    # Tick every 2 hours = every 12 buckets
+    tick_positions = list(range(0, n, 12))
+    tick_labels = [f"{(i // 6):02d}:00" for i in tick_positions]
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels, color=_TEXT, fontsize=8)
+    ax.set_xlim(-0.5, n - 0.5)
+    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
+    ax.tick_params(length=0)
+
+    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
+    ax.set_axisbelow(True)
+    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
+    ax.set_ylabel("Messages / 10 min (avg / day)", color=_TEXT, fontsize=9)
+
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    plt.tight_layout(pad=1.2)
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
