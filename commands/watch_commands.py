@@ -49,6 +49,7 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
     watch_group = app_commands.Group(
         name="watch",
         description="Monitor member activity — their public posts are DM'd to you.",
+        default_permissions=discord.Permissions(manage_guild=True),
     )
 
     @watch_group.command(

@@ -41,6 +41,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="activity",
         description="Show a message or XP activity chart for the server or a specific member.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         resolution="Time resolution for the chart buckets.",
         member="Show activity for this member only (default: whole server).",
@@ -373,6 +374,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="dropoff",
         description="Show members with the largest drop in engagement between two equal time windows.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         period="Length of each comparison window.",
         limit="Number of members to show (1\u201325, default 10).",
@@ -463,6 +465,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="session_burst",
         description="Show a member's message activity profile after returning from a 20-min absence.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(member="The member to profile.")
     async def session_burst(
         interaction: discord.Interaction,
@@ -511,6 +514,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="burst_ranking",
         description="Show which members have the highest and lowest session burst increase server-wide.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         limit="Number of members to show at each end (1–15, default 5).",
     )

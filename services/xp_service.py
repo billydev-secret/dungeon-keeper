@@ -136,6 +136,13 @@ async def maybe_log_level_5(
     embed.add_field(name="Total XP", value=f"{total_xp:.2f}", inline=True)
     if reward_role is not None:
         embed.add_field(name="Reward Role", value=reward_role.mention, inline=True)
+    if member.joined_at is not None:
+        joined_ts = int(member.joined_at.timestamp())
+        embed.add_field(
+            name="Joined",
+            value=f"<t:{joined_ts}:F> (<t:{joined_ts}:R>)",
+            inline=False,
+        )
     embed.set_thumbnail(url=member.display_avatar.url)
 
     log.info(

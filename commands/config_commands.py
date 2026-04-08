@@ -1676,6 +1676,7 @@ def register_config_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="config",
         description="Open a configuration panel for a bot feature.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(section="Which feature to configure.")
     @app_commands.choices(section=_SECTION_CHOICES)
     async def config_cmd(

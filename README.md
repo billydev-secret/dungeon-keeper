@@ -88,7 +88,7 @@ Most settings are configured through slash commands after the bot is running.
 - `/watch remove @user` — Stop watching a member
 - `/watch list` — Show members you are currently watching
 
-**AI Moderation** (mod, requires `OPENAI_API_KEY`)
+**AI Moderation** (mod, requires `ANTHROPIC_API_KEY`)
 - `/ai review @user [days]` — AI review of a user's recent messages for concerns
 - `/ai scan [count]` — AI scan of recent messages in this channel
 - `/ai channel [question] [minutes] [channel]` — Ask the AI about a channel's recent activity

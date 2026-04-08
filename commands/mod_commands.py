@@ -51,7 +51,7 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         + _fmt([
             ("/help", "Show this guide."),
             ("/xp_leaderboards timescale:week",
-             "Top XP earners for a chosen time window (hour / day / week / month / all time), "
+             "Top XP earners for a chosen time window (hour / day / week / month / year / all time), "
              "plus your own rank within that period."),
             ("/foolsday_exclude",
              "Opt out of the April Fools name shuffle. "
@@ -112,13 +112,15 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Use this to judge whether your XP thresholds feel earned or too fast."),
                 ("/purge count:50",
                  "Delete the last N messages in this channel. "
-                 "Use `after:19:35` to delete everything since a UTC time today — "
-                 "both can be combined. "
+                 "Use `after:19:35` to delete everything since a server-local time today — "
+                 "both can be combined. With no arguments, clears the entire channel. "
                  "Useful for clearing spam, failed bot responses, or accidental posts."),
-                ("/dropoff period:week limit:10",
+                ("/dropoff period:week limit:10 channel:#channel member:@user",
                  "Compares message counts across two consecutive time windows and surfaces "
                  "members with the steepest drop. "
-                 "A week-over-week dropoff is often the earliest signal of disengagement."),
+                 "A week-over-week dropoff is often the earliest signal of disengagement. "
+                 "Pass `channel` to restrict the comparison, or `member` to get a full "
+                 "engagement profile for one person instead of the ranked list."),
                 ("/burst_ranking limit:5",
                  "Server-wide ranking of who most reliably drives conversation after returning "
                  "from a 20-min break, and who tends to post without pulling others in."),
@@ -126,9 +128,10 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Adjacency-matrix heatmap of reply/mention interactions between members. "
                  "Users are sorted by total interaction volume; colour intensity shows weight. "
                  "A cleaner alternative to the network graph for dense servers."),
-                ("/report role_growth resolution:week",
+                ("/report role_growth resolution:week roles:NSFW,Booster",
                  "Chart of cumulative role grants over time. "
-                 "Resolutions: daily (30d), weekly (12wk), monthly (12mo)."),
+                 "Resolutions: daily (30d), weekly (12wk), monthly (12mo). "
+                 "Pass `roles:` as a comma-separated list to chart only specific roles."),
                 ("/report promotion_review",
                  "Members above level 5 without spicy access — flags inactivity-pruned users."),
                 ("/report message_cadence resolution:day channel:#channel",
@@ -141,6 +144,20 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "Ranked member quality scores. Four components: Engagement Given (40%), "
                  "Consistency/Recency (25%), Content Resonance (20%), Posting Activity (15%). "
                  "New members (<30d) and low-data members (<7 active days) are flagged separately."),
+                ("/report message_rate days:7",
+                 "Chart of messages per 10-minute interval across the day, averaged over N days. "
+                 "Reveals when the server is genuinely busy vs idle in your timezone."),
+                ("/report greeter_response days:30",
+                 "Histogram of how long new members wait for their first greeter message in the welcome channel. "
+                 "Requires the greeter role and welcome channel to be configured."),
+                ("/report nsfw_gender resolution:week display:bar media_only:False channel:#channel",
+                 "Chart NSFW channel posting broken down by gender (set via `/gender set`). "
+                 "`display:bar` = stacked bars, `display:line` = ratio line chart. "
+                 "`media_only:True` filters to image/video posts only. "
+                 "Defaults to all NSFW channels if `channel` is omitted."),
+                ("/report backfill_roles",
+                 "Sync the role event log with the current server state so the role growth chart "
+                 "is accurate. Run after manual role bulk-edits or after first install."),
             ])
         ))
 
@@ -149,9 +166,10 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             "Charts and graphs for understanding server engagement. "
             "Requires **Manage Server** permission.\n\n"
             + _fmt([
-                ("/activity resolution:day",
-                 "Bar chart of message volume over time — server-wide or for one member. "
+                ("/activity resolution:day mode:messages member:@user channel:#channel",
+                 "Bar chart of message volume (or XP earned) over time — server-wide or scoped to a member/channel. "
                  "Resolutions: hour, day, week, month, hour_of_day, day_of_week. "
+                 "`mode:xp` charts XP earned instead of message count. "
                  "Times are shown in the server's configured timezone (set via `/config global`)."),
                 ("/session_burst member:@user",
                  "Histogram of how active a member is in the 60 minutes after returning from a "
@@ -181,7 +199,7 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             + _fmt([
                 ("/foolsday action:shuffle",
                  "April Fools name shuffle — randomises nicknames among members active "
-                 "in at least 3 of the last 5 days. Reshuffles every hour. Use `action:restore` to stop and undo."),
+                 "in at least 3 of the last 5 days. Use `action:restore` to undo."),
                 ("/foolsday_exclude user:@User",
                  "Exclude another user (self-exclude is in General)."),
                 ("/foolsday_join user:@User",
@@ -191,7 +209,8 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/foolsday_exclusions",
                  "List all excluded users."),
                 ("/foolsday_samename name",
-                 "Set everyone to a single name. Leave blank for random. Normal shuffle resumes next tick."),
+                 "Set every shuffled member to one name (custom or random from the saved pool). "
+                 "Use `/foolsday action:restore` to undo."),
                 ("/foolsday_repair",
                  "Fix broken name mappings — walks through each saved name and lets you assign the correct user."),
             ])
@@ -208,6 +227,13 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                  "`days:0` scans all available history. "
                  "`reset:True` wipes existing data before scanning — use this to fix inflated "
                  "counts if the scan was run multiple times over the same period."),
+                ("/gender set member:@user gender:Female",
+                 "Tag a member as Male, Female, or Non-binary. "
+                 "Used by `/report nsfw_gender` to break down channel posting by gender."),
+                ("/gender check member:@user",
+                 "Show a member's current gender classification."),
+                ("/gender classify",
+                 "Walk through every unclassified member one at a time with a picker."),
             ])
         ))
 
@@ -227,11 +253,7 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
 
         # ── AI Moderation ─────────────────────────────────────────────────────
         pages.append(_page("AI Moderation",
-            "AI-powered tools for reviewing user behaviour and channel activity. "
-            "Requires `ANTHROPIC_API_KEY` in the bot's environment. "
-            "All commands use the stored message archive — run `/interaction_scan` first "
-            "if the bot is newly set up.\n\n"
-            + _fmt([
+            _fmt([
                 ("/ai review member:@user days:7",
                  "Pulls a member's recent messages and asks the AI to flag rule violations, "
                  "concerning patterns, or escalating behaviour. "
@@ -276,22 +298,18 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
                 ("/welcome_preview", "Preview the welcome message with your profile."),
                 ("/leave_preview", "Preview the leave message with your profile."),
                 ("/inactivity_prune status",
-                 "Show current prune threshold, last run time, and exemption list."),
+                 "Show current prune threshold, role, schedule, and exemption list."),
                 ("/inactivity_prune exempt member:@user",
                  "Protect a member from being pruned."),
                 ("/inactivity_prune unexempt member:@user",
                  "Remove a member's prune exemption."),
+                ("/inactivity_prune run",
+                 "Trigger an immediate prune run instead of waiting for the daily schedule."),
                 ("/auto_delete del_age:30d run:1d",
                  "Delete messages older than `del_age` on a repeating schedule. "
                  "Accepts `15m`, `2h`, `30d`, `1h30m`, `once`, or `off`."),
                 ("/auto_delete_configs",
                  "List every active auto-delete schedule across the server."),
-                ("/grant_allow grant: allowed:",
-                 "Allow a user or role to use a `/grant_*` command."),
-                ("/grant_deny grant: denied:",
-                 "Remove a user or role's `/grant_*` permission."),
-                ("/grant_permissions",
-                 "List who can use each grant command."),
                 ("/quality_leave add member:@user days:30",
                  "Put a member on leave of absence (pauses quality scoring)."),
                 ("/quality_leave remove member:@user",
@@ -355,6 +373,7 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
         name="purge",
         description="Delete messages in this channel. No arguments clears the entire channel.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         count="Number of messages to delete (max 1000). Omit to delete all messages since `after`.",
         after="Delete messages at or after this time today (server local time), e.g. 19:35.",

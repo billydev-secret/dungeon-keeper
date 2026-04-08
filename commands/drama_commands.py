@@ -162,6 +162,7 @@ def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="chilling_effect",
         description="Find members whose arrival in a channel causes others to stop posting.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         lookback_days="Days of message history to analyse (default 30).",
         entry_gap_minutes="Minutes of silence before counting someone as 'arriving' (default 30).",

@@ -316,6 +316,7 @@ def register_auto_delete_commands(bot: Bot, ctx: AppContext) -> None:
         name="auto_delete",
         description="Delete old posts now and optionally schedule recurring cleanup.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         del_age="Delete posts older than this duration (examples: 30d, 2h, 15m, 1h30m).",
         run="Run once, disable schedule, or set interval (examples: once, off, 1h, 30m, 1d).",
@@ -443,6 +444,7 @@ def register_auto_delete_commands(bot: Bot, ctx: AppContext) -> None:
         name="auto_delete_configs",
         description="List and manage auto-delete schedules for this server.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     async def auto_delete_configs(interaction: discord.Interaction):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(

@@ -29,6 +29,7 @@ def register_inactivity_prune_commands(bot: Bot, ctx: AppContext) -> None:
     prune_group = app_commands.Group(
         name="inactivity_prune",
         description="Manage the inactivity prune schedule, exemptions, and status.",
+        default_permissions=discord.Permissions(manage_guild=True),
     )
 
     @prune_group.command(

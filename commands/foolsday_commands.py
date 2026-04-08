@@ -165,6 +165,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="foolsday",
         description="April Fools name shuffle — randomise or restore member nicknames.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         action="shuffle = randomise names, restore = set names back to original.",
     )
@@ -492,6 +493,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="foolsday_include",
         description="Remove a user from the April Fools exclusion list.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(user="The member to include again.")
     async def foolsday_include(interaction: discord.Interaction, user: discord.Member) -> None:
         if not ctx.is_mod(interaction):
@@ -517,6 +519,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="foolsday_exclusions",
         description="List users excluded from the April Fools name shuffle.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     async def foolsday_exclusions(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -736,6 +739,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="foolsday_samename",
         description="Set everyone in the shuffle to the same random name (or a custom one).",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(name="Custom name to use. Leave blank for a random name from the pool.")
     async def foolsday_samename(interaction: discord.Interaction, name: str | None = None) -> None:
         if not ctx.is_mod(interaction):
@@ -803,6 +807,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="foolsday_repair",
         description="Restore original nicknames for any member the bot has renamed.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     async def foolsday_repair(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(

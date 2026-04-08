@@ -293,6 +293,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
         name="xp_excluded_channels",
         description="List channels and threads where XP is currently disabled.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     async def xp_excluded_channels(interaction: discord.Interaction):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -316,6 +317,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
         name="xp_backfill_history",
         description="Scan message history to fill gaps in XP and activity tracking.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(days="How many days back to scan. Use 0 for all available history.")
     async def xp_backfill_history(
         interaction: discord.Interaction,

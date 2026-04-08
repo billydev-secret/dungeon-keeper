@@ -39,6 +39,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="connection_web",
         description="Show the web of replies and mentions between server members.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         member="Focus on this member's direct connections only.",
         timescale="Time window to consider (default: all time).",
@@ -237,6 +238,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="interaction_scan",
         description="Scan message history to build the reply/mention interaction graph.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         days="How many days back to scan. Use 0 for all available history.",
         reset="Clear all existing interaction data for this server before scanning (fixes inflated counts).",
@@ -369,6 +371,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="interaction_heatmap",
         description="Show a heatmap of reply/mention interactions between server members.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         timescale="Time window to consider (default: all time).",
         min_pct="Hide edges that are less than this % of either user's total interactions (default 5).",
@@ -478,6 +481,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         name="invite_web",
         description="Show who invited whom as a network graph.",
     )
+    @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
         member="Focus on this member's invite tree only.",
         spread="How spread out the graph is (default 1.0).",
