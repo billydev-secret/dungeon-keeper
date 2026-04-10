@@ -64,6 +64,13 @@ async def home_data(
             ch.id for ch in guild.channels if getattr(ch, "nsfw", False)
         ]
 
+    # ── Recent joins from guild cache (more reliable than invite_edges) ──
+    recent_joins = 0
+    if guild:
+        for m in guild.members:
+            if m.joined_at and m.joined_at.timestamp() >= one_week:
+                recent_joins += 1
+
     # ── DB queries ───────────────────────────────────────────────────
     def _q():
         with ctx.open_db() as conn:
@@ -152,12 +159,6 @@ async def home_data(
                 for r in top_users_rows
             ]
 
-            # Recent joins (last 7 days)
-            recent_joins = conn.execute(
-                "SELECT COUNT(*) FROM invite_edges WHERE guild_id = ? AND joined_at >= ?",
-                (ctx.guild_id, one_week),
-            ).fetchone()[0]
-
             # XP earned today
             xp_today = conn.execute(
                 "SELECT COALESCE(SUM(amount), 0) FROM xp_events WHERE guild_id = ? AND created_at >= ?",
@@ -242,7 +243,6 @@ async def home_data(
                 "nsfw_unique": nsfw_unique,
                 "top_channels": top_channels,
                 "top_users": top_users,
-                "recent_joins": recent_joins,
                 "xp_today": round(xp_today, 1),
                 "xp_users_today": xp_users_today,
                 "active_jails": active_jails,
@@ -296,5 +296,6 @@ async def home_data(
         "guild": guild_info,
         "presence": presence,
         "voice_channels": voice_channels,
+        "recent_joins": recent_joins,
         **db_data,
     }

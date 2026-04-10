@@ -104,6 +104,7 @@ _cfg = load_runtime_config(DB_PATH)
 
 intents = discord.Intents.default()
 intents.members = True
+intents.presences = True
 intents.message_content = True
 
 bot = Bot(intents=intents, debug=_cfg["debug"], guild_id=_cfg["guild_id"])
