@@ -21,8 +21,11 @@ from services.message_store import (
     delete_messages_bulk,
     record_reaction,
     store_message,
+    upsert_known_channel,
+    upsert_known_user,
 )
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
+from commands.jail_commands import check_jail_rejoin
 from services.welcome_service import build_leave_embed, build_welcome_embed
 from services.xp_service import handle_level_progress
 from xp_system import DEFAULT_XP_SETTINGS, count_xp_events, log_role_event, record_member_activity
@@ -71,6 +74,25 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         log.debug("XP excluded channels: %s", sorted(ctx.xp_excluded_channel_ids))
         if _guild is not None:
             await refresh_invite_cache(_guild)
+            # Backfill known_users and known_channels from guild cache
+            now_ts = time.time()
+            with ctx.open_db() as conn:
+                for m in _guild.members:
+                    if not m.bot:
+                        upsert_known_user(
+                            conn, guild_id=_guild.id, user_id=m.id,
+                            username=str(m), display_name=m.display_name,
+                            ts=now_ts,
+                        )
+                for ch in _guild.channels:
+                    if hasattr(ch, "name"):
+                        upsert_known_channel(
+                            conn, guild_id=_guild.id, channel_id=ch.id,
+                            channel_name=ch.name, ts=now_ts,
+                        )
+            log.info("Backfilled %d known users and %d known channels.",
+                     sum(1 for m in _guild.members if not m.bot),
+                     len(_guild.channels))
         if ctx.guild_id:
             with ctx.open_db() as conn:
                 log.debug(
@@ -132,6 +154,23 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 ts=int(message_ts),
                 attachment_urls=attachment_urls,
                 mention_ids=mention_ids,
+            )
+
+            upsert_known_user(
+                conn,
+                guild_id=message.guild.id,
+                user_id=message.author.id,
+                username=str(message.author),
+                display_name=message.author.display_name,
+                ts=message_ts,
+            )
+
+            upsert_known_channel(
+                conn,
+                guild_id=message.guild.id,
+                channel_id=message.channel.id,
+                channel_name=getattr(message.channel, "name", str(message.channel.id)),
+                ts=message_ts,
             )
 
             # Record reply and mention interactions for the connection web
@@ -304,6 +343,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
     @bot.event
     async def on_member_join(member: discord.Member) -> None:
+        # Jail rejoin detection — re-apply jail if member has an active one
+        await check_jail_rejoin(ctx, member)
+
         # Invite tracking — detect who invited this member
         inviter_id, invite_code = await detect_inviter(member.guild)
         if inviter_id is not None:

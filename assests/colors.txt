@@ -1,0 +1,92 @@
+Here’s a clean, **copy/paste-ready textual listing** of your full system — split into **Core Identity Palette** and **Extended Harmonized Palette**, with **HEX + HSL** for each.
+
+---
+
+# 🌼 Core Identity Palette
+
+*(Golden Poppy System — Reserved for identity, icons, symbolism)*
+
+```
+Poppy Gold        — #E6B84C — HSL(42°, 75%, 60%)
+Shadow Amber      — #B88A2C — HSL(40°, 62%, 45%)
+Hearth Brown      — #3A2E22 — HSL(30°, 25%, 18%)
+Charcoal Ink      — #1F1B17 — HSL(30°, 16%, 11%)
+Petal Cream       — #F4ECDC — HSL(40°, 55%, 91%)
+```
+
+---
+
+# 🌈 Extended Harmonized Palette
+
+*(Support, UI, accents — never primary identity)*
+
+## 🔴 Red / Warm Earth
+
+```
+Clay Red          — #9E3B2E — HSL(8°, 55%, 40%)
+Brick Rose        — #A5564A — HSL(8°, 38%, 47%)
+```
+
+## 🌸 Pink / Rose
+
+```
+Dust Rose         — #C06A88 — HSL(338°, 41%, 58%)
+Warm Mauve        — #B36A92 — HSL(325°, 30%, 56%)
+Poppy Magenta     — #E0448F — HSL(332°, 71%, 57%)
+```
+
+## 🟢 Lime / Yellow-Green
+
+```
+Olive Lime        — #8A9C3A — HSL(70°, 46%, 42%)
+Golden Moss       — #7F8F3A — HSL(68°, 43%, 39%)
+```
+
+## 🟢 Green / Botanical
+
+```
+Muted Evergreen   — #3F6B4F — HSL(139°, 26%, 33%)
+Field Green       — #4F7A58 — HSL(132°, 21%, 40%)
+```
+
+## 🟦 Teal / Split Complement
+
+```
+Deep Teal         — #2F6F73 — HSL(183°, 42%, 32%)
+Slate Teal        — #3A6E72 — HSL(184°, 32%, 34%)
+```
+
+## 🔵 Blue / Primary Contrast
+
+```
+Slate Blue        — #2F4E79 — HSL(213°, 43%, 33%)
+Storm Blue        — #3A567F — HSL(217°, 37%, 36%)
+```
+
+## 🟣 Indigo / Violet
+
+```
+Muted Indigo      — #4A4F7A — HSL(233°, 25%, 38%)
+Dusk Violet       — #5B547A — HSL(249°, 18%, 40%)
+```
+
+---
+
+# 🧭 Usage Reminder (System Integrity)
+
+```
+Core Palette      → Identity, roles, icons
+Cool Colors       → UI structure, interaction
+Warm Accents      → Emotional highlights (sparingly)
+Full Spectrum     → Never inside a single symbol
+```
+
+---
+
+If you want, I can next:
+
+* Turn this into a **Discord-friendly markdown block with color chips**
+* Generate a **.json or .css variables file**
+* Or build a **gradient library** based on this palette
+
+You’ve now got a **complete, system-safe color language** 👍

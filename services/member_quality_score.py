@@ -211,6 +211,8 @@ def compute_quality_scores(
     guild_id: int,
     members: Sequence[discord.Member],
     now: datetime | None = None,
+    window_days: int | None = None,
+    min_active_days: int | None = None,
 ) -> list[QualityScore]:
     """Compute quality scores for all provided members.
 
@@ -220,7 +222,9 @@ def compute_quality_scores(
     if now is None:
         now = datetime.now(timezone.utc)
     now_ts = now.timestamp()
-    window_start = now_ts - (WINDOW_DAYS * 86400)
+    _window_days = window_days if window_days is not None else WINDOW_DAYS
+    _min_active_days = min_active_days if min_active_days is not None else MIN_ACTIVE_DAYS
+    window_start = now_ts - (_window_days * 86400)
 
     # Fetch leaves
     leaves = get_leaves(conn, guild_id)
@@ -480,8 +484,9 @@ def compute_quality_scores(
         # Normalize consistency denominator to actual tenure for newer members
         _m = member_map.get(uid)
         _joined_ts = _m.joined_at.timestamp() if _m and _m.joined_at else 0.0
-        _tenure_wks = max(1.0, (now_ts - _joined_ts) / (7 * 86400)) if _joined_ts else float(WEEKS_IN_WINDOW)
-        consistency_values[idx] = n_active_weeks / min(float(WEEKS_IN_WINDOW), _tenure_wks)
+        _weeks_in_window = max(1, _window_days // 7)
+        _tenure_wks = max(1.0, (now_ts - _joined_ts) / (7 * 86400)) if _joined_ts else float(_weeks_in_window)
+        consistency_values[idx] = n_active_weeks / min(float(_weeks_in_window), _tenure_wks)
 
         # -- Content Resonance --
         # "Posts" = messages with attachment OR conversation starters (non-replies)
@@ -542,7 +547,7 @@ def compute_quality_scores(
 
     for idx, uid in enumerate(scored_ids):
         # Check minimum active days
-        if active_days_arr[idx] < MIN_ACTIVE_DAYS:
+        if active_days_arr[idx] < _min_active_days:
             results.append(QualityScore(
                 user_id=uid, final_score=0, engagement_given=0,
                 consistency_recency=0, content_resonance=0, posting_activity=0,

@@ -1123,6 +1123,7 @@ def query_role_growth(
     conn: sqlite3.Connection,
     guild_id: int,
     resolution: Resolution,
+    utc_offset_hours: float = 0,
 ) -> tuple[list[str], dict[str, list[int]]]:
     """
     Query net role membership counts per time bucket.
@@ -1132,8 +1133,9 @@ def query_role_growth(
     window start as a baseline.
     """
     now = datetime.now(timezone.utc)
-    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now)
-    bucket_expr = _strftime_expr(resolution, col="granted_at", since_ts=since_ts)
+    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
+    offset_secs = int(utc_offset_hours * 3600)
+    bucket_expr = _strftime_expr(resolution, col="granted_at", since_ts=since_ts, utc_offset_secs=offset_secs)
 
     # Net role count (grants minus removals) before the window — per-role baselines
     baseline_rows = conn.execute(
@@ -1434,6 +1436,7 @@ def query_burst_ranking(
     conn: sqlite3.Connection,
     guild_id: int,
     min_sessions: int = 3,
+    days: int | None = None,
 ) -> list[tuple[int, float, float, int]]:
     """
     Compute the session burst increase for every user in the guild.
@@ -1446,13 +1449,21 @@ def query_burst_ranking(
     (post_avg - pre_avg) descending.  Only users with at least *min_sessions*
     sessions are included.
     """
+    cutoff_clause = ""
+    params: list[object] = [guild_id]
+    if days is not None:
+        import time as _time
+        cutoff_ts = _time.time() - days * 86400
+        cutoff_clause = "AND created_at >= ?"
+        params.append(cutoff_ts)
+
     rows = conn.execute(
-        """
+        f"""
         SELECT user_id, created_at FROM processed_messages
-        WHERE guild_id = ?
+        WHERE guild_id = ? {cutoff_clause}
         ORDER BY user_id, created_at
         """,
-        (guild_id,),
+        params,
     ).fetchall()
 
     user_ts_map: dict[int, list[float]] = {}
@@ -1465,8 +1476,8 @@ def query_burst_ranking(
         return []
 
     guild_rows = conn.execute(
-        "SELECT created_at FROM processed_messages WHERE guild_id = ? ORDER BY created_at",
-        (guild_id,),
+        f"SELECT created_at FROM processed_messages WHERE guild_id = ? {cutoff_clause} ORDER BY created_at",
+        params,
     ).fetchall()
     guild_ts = [float(r[0]) for r in guild_rows]
 

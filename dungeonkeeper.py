@@ -16,6 +16,7 @@ from commands.auto_delete_commands import register_auto_delete_commands
 from commands.denizen_commands import register_denizen_commands
 from commands.gender_commands import register_gender_commands
 from commands.inactivity_prune_commands import register_inactivity_prune_commands
+from commands.jail_commands import register_jail_commands
 from commands.mod_commands import register_mod_commands
 from commands.spoiler_commands import register_spoiler_commands
 from commands.watch_commands import init_watch_tables, load_watched_users, register_watch_commands
@@ -26,12 +27,13 @@ from db_utils import init_config_db, init_grant_role_tables, migrate_grant_roles
 from handlers.events import register_events
 from services.interaction_graph import init_interaction_tables
 from services.invite_tracker import init_invite_tables
-from services.message_store import init_message_tables
+from services.message_store import init_known_channels_table, init_known_users_table, init_message_tables
 from reports import register_reports
 from services.auto_delete_service import auto_delete_loop, init_auto_delete_tables
 from services.booster_roles import BoosterRoleDynamicButton, init_booster_role_tables
 from services.gender_service import init_gender_tables
 from services.member_quality_score import init_quality_score_tables
+from services.moderation import init_moderation_tables
 from services.inactivity_prune_service import inactivity_prune_loop, init_inactivity_prune_tables
 from services.voice_xp_service import voice_xp_loop
 from services.xp_service import handle_level_progress
@@ -87,10 +89,13 @@ with open_db(DB_PATH) as _conn:
     init_interaction_tables(_conn)
     init_invite_tables(_conn)
     init_message_tables(_conn)
+    init_known_users_table(_conn)
+    init_known_channels_table(_conn)
     init_grant_role_tables(_conn)
     init_booster_role_tables(_conn)
     init_quality_score_tables(_conn)
     init_gender_tables(_conn)
+    init_moderation_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -157,6 +162,7 @@ register_reports(bot, ctx)
 register_watch_commands(bot, ctx)
 register_foolsday_commands(bot, ctx)
 register_gender_commands(bot, ctx)
+register_jail_commands(bot, ctx)
 
 # Register persistent booster-role buttons so they survive restarts
 bot.add_dynamic_items(BoosterRoleDynamicButton)
@@ -185,6 +191,18 @@ bot.startup_task_factories.append(
 bot.startup_task_factories.append(
     lambda: inactivity_prune_loop(bot, DB_PATH)
 )
+
+# ==============================
+# Optional web dashboard (LAN, opt-in via DASHBOARD_ENABLED=1)
+# ==============================
+if os.getenv("DASHBOARD_ENABLED") == "1":
+    from web.server import serve_forever as _dashboard_serve_forever
+    _dashboard_host = os.getenv("DASHBOARD_HOST", "0.0.0.0")
+    _dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
+    bot.startup_task_factories.append(
+        lambda: _dashboard_serve_forever(ctx, _dashboard_host, _dashboard_port)
+    )
+    log.info("Dashboard enabled — will bind %s:%d", _dashboard_host, _dashboard_port)
 
 # ==============================
 # Run

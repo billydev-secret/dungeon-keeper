@@ -92,6 +92,126 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
     )
 
 
+def init_known_users_table(conn: sqlite3.Connection) -> None:
+    """Create the known_users lookup table for offline username resolution."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS known_users (
+            guild_id        INTEGER NOT NULL,
+            user_id         INTEGER NOT NULL,
+            username        TEXT NOT NULL DEFAULT '',
+            display_name    TEXT NOT NULL DEFAULT '',
+            updated_at      REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+        """
+    )
+
+
+def upsert_known_user(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    username: str,
+    display_name: str,
+    ts: float,
+) -> None:
+    """Insert or update a user's known name. Only updates if ts is newer."""
+    conn.execute(
+        """
+        INSERT INTO known_users (guild_id, user_id, username, display_name, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET
+            username = excluded.username,
+            display_name = excluded.display_name,
+            updated_at = excluded.updated_at
+        WHERE excluded.updated_at > known_users.updated_at
+        """,
+        (guild_id, user_id, username, display_name, ts),
+    )
+
+
+def get_known_user(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+) -> str | None:
+    """Return display_name for a user, or None if unknown."""
+    row = conn.execute(
+        "SELECT display_name FROM known_users WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def get_known_users_bulk(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_ids: list[int],
+) -> dict[int, str]:
+    """Return {user_id: display_name} for a batch of users."""
+    if not user_ids:
+        return {}
+    ph = ",".join("?" * len(user_ids))
+    rows = conn.execute(
+        f"SELECT user_id, display_name FROM known_users WHERE guild_id = ? AND user_id IN ({ph})",
+        [guild_id, *user_ids],
+    ).fetchall()
+    return {int(r[0]): str(r[1]) for r in rows}
+
+
+def init_known_channels_table(conn: sqlite3.Connection) -> None:
+    """Create the known_channels lookup table for offline channel name resolution."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS known_channels (
+            guild_id        INTEGER NOT NULL,
+            channel_id      INTEGER NOT NULL,
+            channel_name    TEXT NOT NULL DEFAULT '',
+            updated_at      REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+        """
+    )
+
+
+def upsert_known_channel(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    channel_name: str,
+    ts: float,
+) -> None:
+    """Insert or update a channel's known name. Only updates if ts is newer."""
+    conn.execute(
+        """
+        INSERT INTO known_channels (guild_id, channel_id, channel_name, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(guild_id, channel_id) DO UPDATE SET
+            channel_name = excluded.channel_name,
+            updated_at = excluded.updated_at
+        WHERE excluded.updated_at > known_channels.updated_at
+        """,
+        (guild_id, channel_id, channel_name, ts),
+    )
+
+
+def get_known_channels_bulk(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_ids: list[int],
+) -> dict[int, str]:
+    """Return {channel_id: channel_name} for a batch of channels."""
+    if not channel_ids:
+        return {}
+    ph = ",".join("?" * len(channel_ids))
+    rows = conn.execute(
+        f"SELECT channel_id, channel_name FROM known_channels WHERE guild_id = ? AND channel_id IN ({ph})",
+        [guild_id, *channel_ids],
+    ).fetchall()
+    return {int(r[0]): str(r[1]) for r in rows}
+
+
 def store_message(
     conn: sqlite3.Connection,
     message_id: int,

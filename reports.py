@@ -10,14 +10,12 @@ from discord import app_commands
 
 from services.activity_graphs import (
     Resolution,
-    query_greeter_response_times,
-    query_message_rate_10min,
-    query_role_growth,
     render_greeter_response_chart,
     render_message_rate_chart,
     render_role_growth_chart,
 )
 from services.auto_delete_service import parse_duration_seconds
+from services import reports_data
 from xp_system import log_role_event
 
 if TYPE_CHECKING:
@@ -300,27 +298,24 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         await interaction.response.defer(ephemeral=True)
 
         res: Resolution = resolution.value if resolution else "week"  # type: ignore[assignment]
-        window_label = {"day": "Last 30 Days", "week": "Last 12 Weeks", "month": "Last 12 Months"}[res]
 
-        def _query_role_growth():
-            with ctx.open_db() as conn:
-                return query_role_growth(conn, ctx.guild_id, res)
-        labels, role_counts = await asyncio.to_thread(_query_role_growth)
-
+        role_filter: set[str] | None = None
         if roles is not None:
-            wanted = {r.strip().lower() for r in roles.split(",") if r.strip()}
-            role_counts = {
-                name: counts for name, counts in role_counts.items()
-                if name.lower() in wanted
-            }
+            role_filter = {r.strip().lower() for r in roles.split(",") if r.strip()}
 
-        if not role_counts:
+        def _fetch():
+            with ctx.open_db() as conn:
+                return reports_data.get_role_growth_data(conn, ctx.guild_id, res, role_filter)
+        data = await asyncio.to_thread(_fetch)
+
+        if not data["series"]:
             await interaction.followup.send("No role grant history recorded yet.", ephemeral=True)
             return
 
+        role_counts = {s["role"]: s["counts"] for s in data["series"]}
         chart_bytes = await asyncio.to_thread(
-            render_role_growth_chart, labels, role_counts,
-            title=f"Role Growth — {window_label}",
+            render_role_growth_chart, data["labels"], role_counts,
+            title=f"Role Growth — {data['window_label']}",
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="role_growth.png"),
@@ -355,34 +350,29 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True)
 
-        from services.activity_graphs import query_message_cadence, render_message_cadence_chart
+        from services.activity_graphs import CadenceBucket, render_message_cadence_chart
 
         res: Resolution = resolution.value if resolution else "day"  # type: ignore[assignment]
-        window_label = {
-            "hour": "Last 24 Hours", "day": "Last 30 Days",
-            "week": "Last 12 Weeks", "month": "Last 12 Months",
-            "hour_of_day": "By Hour of Day", "day_of_week": "By Day of Week",
-        }[res]
-
         channel_id = channel.id if channel else None
         scope = f" in #{channel.name}" if channel else ""
 
-        def _query_cadence():
+        def _fetch():
             with ctx.open_db() as conn:
-                return query_message_cadence(
-                    conn, ctx.guild_id, res,
-                    utc_offset_hours=ctx.tz_offset_hours,
-                    channel_id=channel_id,
+                return reports_data.get_message_cadence_data(
+                    conn, ctx.guild_id, res, ctx.tz_offset_hours, channel_id,
                 )
-        buckets = await asyncio.to_thread(_query_cadence)
+        data = await asyncio.to_thread(_fetch)
 
-        if not buckets or all(b.median_gap == 0 for b in buckets):
+        if not data["buckets"] or all(b["median_gap"] == 0 for b in data["buckets"]):
             await interaction.followup.send(f"No message data found{scope} for this period.", ephemeral=True)
             return
 
+        cadence_objs = [
+            CadenceBucket(**b) for b in data["buckets"]
+        ]
         chart_bytes = await asyncio.to_thread(
-            render_message_cadence_chart, buckets,
-            title=f"Message Cadence{scope} — {window_label}",
+            render_message_cadence_chart, cadence_objs,
+            title=f"Message Cadence{scope} — {data['window_label']}",
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="message_cadence.png"),
@@ -416,40 +406,27 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True)
 
-        from datetime import datetime, timezone as tz
-
         from services.activity_graphs import render_join_histogram
+        from services.reports_data import MemberSnapshot
 
         res = resolution.value if resolution else "hour_of_day"
-        offset_secs = int(ctx.tz_offset_hours * 3600)
 
-        _DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        _HOD_LABELS = [
-            "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am",
-            "8am", "9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm",
-            "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
+        members = [
+            MemberSnapshot(
+                user_id=m.id, display_name=m.display_name, is_bot=m.bot,
+                joined_at=m.joined_at.timestamp() if m.joined_at else None,
+                role_ids=tuple(r.id for r in m.roles),
+            )
+            for m in guild.members
         ]
 
-        if res == "hour_of_day":
-            labels, n_bins = _HOD_LABELS, 24
-        else:
-            labels, n_bins = _DOW_LABELS, 7
-
-        counts = [0] * n_bins
-        for m in guild.members:
-            if m.bot or m.joined_at is None:
-                continue
-            dt = m.joined_at.astimezone(tz.utc)
-            ts = dt.timestamp() + offset_secs
-            local_dt = datetime.fromtimestamp(ts, tz=tz.utc)
-            if res == "hour_of_day":
-                counts[local_dt.hour] += 1
-            else:
-                counts[(local_dt.weekday() + 1) % 7] += 1
+        def _fetch():
+            return reports_data.get_join_times_data(members, res, ctx.tz_offset_hours)
+        data = await asyncio.to_thread(_fetch)
 
         title_label = "By Hour of Day" if res == "hour_of_day" else "By Day of Week"
         chart_bytes = await asyncio.to_thread(
-            render_join_histogram, labels, counts, f"Member Joins — {title_label}",
+            render_join_histogram, data["labels"], data["counts"], f"Member Joins — {title_label}",
         )
 
         import io as _io
@@ -766,14 +743,12 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         await interaction.response.defer(ephemeral=True)
 
         from services.activity_graphs import (
-            query_nsfw_gender_activity,
             render_nsfw_gender_chart,
             render_nsfw_gender_line_chart,
         )
 
         res: Resolution = resolution.value if resolution else "week"  # type: ignore[assignment]
         display_mode = display.value if display else "bar"
-        window_label = {"day": "Last 30 Days", "week": "Last 12 Weeks", "month": "Last 12 Months"}[res]
 
         if channel is not None:
             target_channel_ids = [channel.id]
@@ -789,23 +764,24 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             await interaction.followup.send("No matching channels found.", ephemeral=True)
             return
 
-        def _query():
+        def _fetch():
             with ctx.open_db() as conn:
-                return query_nsfw_gender_activity(
+                return reports_data.get_nsfw_gender_data(
                     conn, ctx.guild_id, res, target_channel_ids,
-                    utc_offset_hours=ctx.tz_offset_hours,
-                    media_only=media_only,
+                    ctx.tz_offset_hours, media_only,
                 )
-        labels, gender_counts = await asyncio.to_thread(_query)
+        data = await asyncio.to_thread(_fetch)
 
-        if not gender_counts:
+        if not data["series"]:
             await interaction.followup.send("No posting data found for this period.", ephemeral=True)
             return
+
+        gender_counts = {s["gender"]: s["counts"] for s in data["series"]}
 
         title_parts = [channel_label, "by Gender"]
         if media_only:
             title_parts.insert(1, "Media")
-        title = f"{' '.join(title_parts)} \u2014 {window_label}"
+        title = f"{' '.join(title_parts)} \u2014 {data['window_label']}"
 
         if display_mode == "line":
             renderer = render_nsfw_gender_line_chart
@@ -813,7 +789,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             renderer = render_nsfw_gender_chart
 
         chart_bytes = await asyncio.to_thread(
-            renderer, labels, gender_counts, title=title,
+            renderer, data["labels"], gender_counts, title=title,
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="nsfw_gender.png"),
@@ -840,19 +816,15 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        tz_label = (
-            f"UTC{ctx.tz_offset_hours:+g}" if ctx.tz_offset_hours else "UTC"
-        )
-
-        def _query():
+        def _fetch():
             with ctx.open_db() as conn:
-                return query_message_rate_10min(
-                    conn, ctx.guild_id, days, utc_offset_hours=ctx.tz_offset_hours,
+                return reports_data.get_message_rate_data(
+                    conn, ctx.guild_id, days, ctx.tz_offset_hours,
                 )
 
-        counts = await asyncio.to_thread(_query)
+        data = await asyncio.to_thread(_fetch)
 
-        if not any(c > 0 for c in counts):
+        if not any(c > 0 for c in data["buckets"]):
             await interaction.followup.send(
                 "No message activity recorded for the selected window.", ephemeral=True,
             )
@@ -860,8 +832,8 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         day_label = "day" if days == 1 else f"{days} days"
         chart_bytes = await asyncio.to_thread(
-            render_message_rate_chart, counts, days,
-            title=f"Message Rate \u2014 Last {day_label} ({tz_label})",
+            render_message_rate_chart, data["buckets"], days,
+            title=f"Message Rate \u2014 Last {day_label} ({data['tz_label']})",
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="message_rate.png"),
@@ -908,16 +880,14 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         greeter_ids = {m.id for m in greeter_role.members}
 
-        # Build join times from invite_edges + current member joined_at
         cutoff_ts = 0.0
         if days is not None:
             cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
 
-        def _query():
+        def _fetch():
             join_times: dict[int, float] = {}
 
             with ctx.open_db() as conn:
-                # Invite-tracked joins
                 rows = conn.execute(
                     "SELECT invitee_id, joined_at FROM invite_edges WHERE guild_id = ? AND joined_at >= ?",
                     (guild.id, cutoff_ts),
@@ -925,7 +895,6 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 for r in rows:
                     join_times[int(r[0])] = float(r[1])
 
-                # Fill in current members whose joined_at is more accurate or missing from invite_edges
                 for m in guild.members:
                     if m.bot or not m.joined_at:
                         continue
@@ -933,22 +902,24 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                     if ts >= cutoff_ts:
                         join_times[m.id] = ts
 
-                return query_greeter_response_times(
+                return reports_data.get_greeter_response_data(
                     conn, guild.id, ctx.welcome_channel_id, greeter_ids, join_times,
                 )
 
-        response_times = await asyncio.to_thread(_query)
+        data = await asyncio.to_thread(_fetch)
 
-        if not response_times:
+        if data["count"] == 0:
             await interaction.followup.send(
                 "No greeter response data found for the selected period.", ephemeral=True,
             )
             return
 
-        window_label = f"Last {days} Days" if days else "All Time"
+        if days is not None:
+            data["window_label"] = f"Last {days} Days"
+
         chart_bytes = await asyncio.to_thread(
-            render_greeter_response_chart, response_times,
-            title=f"Greeter Response Time \u2014 {window_label}",
+            render_greeter_response_chart, data["response_times_seconds"],
+            title=f"Greeter Response Time \u2014 {data['window_label']}",
         )
         await interaction.followup.send(
             file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="greeter_response.png"),

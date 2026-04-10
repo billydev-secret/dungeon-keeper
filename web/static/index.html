@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dungeonkeeper Dashboard</title>
+  <link rel="stylesheet" href="/static/app.css?v=7" />
+  <script src="/static/vendor/chart.umd.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <span class="topbar-brand">Dungeonkeeper</span>
+      <nav id="topbar-tabs"></nav>
+      <span id="me"></span>
+    </header>
+    <div id="body-row">
+      <aside id="sidebar">
+        <nav id="sidebar-items"></nav>
+      </aside>
+      <main id="panel-container">
+        <div id="panel-root"></div>
+      </main>
+    </div>
+  </div>
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

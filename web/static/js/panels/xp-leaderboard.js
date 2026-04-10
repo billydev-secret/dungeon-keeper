@@ -1,0 +1,121 @@
+import { api } from "../api.js";
+import { makeBarChart, makeDoughnutChart } from "../charts.js";
+import { renderSortableTable } from "../table.js";
+
+export function mount(container, initialParams) {
+  container.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>XP Leaderboard</h2>
+        <div class="subtitle">XP distribution, level spread, and top earners</div>
+      </header>
+      <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;">
+        <div class="chart-wrap" style="flex:2;min-width:300px;"><canvas data-chart-levels></canvas></div>
+        <div class="chart-wrap" style="flex:1;min-width:200px;"><canvas data-chart-sources></canvas></div>
+      </div>
+      <div data-table-wrap style="margin-top:12px; max-height:400px; overflow-y:auto;"></div>
+    </div>
+  `;
+
+  const statsEl = container.querySelector("[data-stats]");
+  const tableWrap = container.querySelector("[data-table-wrap]");
+  let chartLevels = null;
+  let chartSources = null;
+
+  function fmtXp(n) {
+    if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+    return Math.round(n).toString();
+  }
+
+  async function refresh() {
+    history.replaceState(null, "", "#/xp-leaderboard");
+    try {
+      const data = await api("/api/reports/xp-leaderboard");
+      if (chartLevels) { chartLevels.destroy(); chartLevels = null; }
+      if (chartSources) { chartSources.destroy(); chartSources = null; }
+
+      statsEl.textContent = `${data.total_users} users tracked`;
+
+      // Level distribution
+      const levelWrap = container.querySelector("[data-chart-levels]").parentElement;
+      if (data.level_distribution.length) {
+        levelWrap.innerHTML = '<canvas data-chart-levels></canvas>';
+        chartLevels = makeBarChart(container.querySelector("[data-chart-levels]"), {
+          labels: data.level_distribution.map((b) => `Lv ${b.level}`),
+          data: data.level_distribution.map((b) => b.count),
+          title: "Level Distribution",
+          yLabel: "Members",
+          color: "#E6B84C",
+        });
+      }
+
+      // Source breakdown
+      const srcWrap = container.querySelector("[data-chart-sources]").parentElement;
+      const srcLabels = Object.keys(data.source_totals);
+      if (srcLabels.length) {
+        srcWrap.innerHTML = '<canvas data-chart-sources></canvas>';
+        chartSources = makeDoughnutChart(container.querySelector("[data-chart-sources]"), {
+          labels: srcLabels.map((s) => s.replace("_", " ")),
+          data: srcLabels.map((s) => data.source_totals[s]),
+          title: "XP by Source",
+        });
+      }
+
+      if (data.leaderboard.length) {
+        // Compute median total_xp
+        const sorted = [...data.leaderboard].sort((a, b) => a.total_xp - b.total_xp);
+        const mid = Math.floor(sorted.length / 2);
+        const median = sorted.length % 2 === 0
+          ? (sorted[mid - 1].total_xp + sorted[mid].total_xp) / 2
+          : sorted[mid].total_xp;
+
+        // Assign rank by total_xp descending
+        const ranked = [...data.leaderboard].sort((a, b) => b.total_xp - a.total_xp);
+        const rankMap = {};
+        ranked.forEach((r, i) => { rankMap[r.user_id] = i + 1; });
+
+        // Enrich rows
+        for (const r of data.leaderboard) {
+          r._rank = rankMap[r.user_id];
+          r._diff = r.total_xp - median;
+        }
+
+        renderSortableTable(tableWrap, {
+          columns: [
+            { key: "_rank", label: "Rank" },
+            { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
+            { key: "level", label: "Level" },
+            { key: "total_xp", label: "Total XP", format: (v) => fmtXp(v) },
+            { key: "_diff", label: "vs Median", format: (v) => {
+              const s = v >= 0 ? "+" + fmtXp(v) : "\u2212" + fmtXp(Math.abs(v));
+              const color = v >= 0 ? "#7F8F3A" : "#9E3B2E";
+              return `<span style="color:${color}">${s}</span>`;
+            }},
+            { key: "text_xp", label: "Text", format: (v) => fmtXp(v) },
+            { key: "voice_xp", label: "Voice", format: (v) => fmtXp(v) },
+            { key: "reply_xp", label: "Reply", format: (v) => fmtXp(v) },
+            { key: "react_xp", label: "React", format: (v) => fmtXp(v) },
+          ],
+          data: data.leaderboard,
+          defaultSort: "_rank",
+          defaultAsc: true,
+        });
+      } else { tableWrap.innerHTML = ""; }
+    } catch (err) {
+      statsEl.textContent = "";
+      container.querySelector("[data-chart-levels]").parentElement.innerHTML = `<div class="error">${err.message}</div>`;
+      tableWrap.innerHTML = "";
+    }
+  }
+
+  refresh();
+
+  return {
+    unmount() {
+      if (chartLevels) { chartLevels.destroy(); chartLevels = null; }
+      if (chartSources) { chartSources.destroy(); chartSources = null; }
+    },
+  };
+}
