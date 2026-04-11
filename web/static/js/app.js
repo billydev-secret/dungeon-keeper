@@ -5,13 +5,13 @@ import { api } from "./api.js";
 
 const SECTIONS = [
   {
-    id: "home", label: "Home",
+    id: "home", label: "Home", perms: [],
     items: [
       { id: "home", label: "Home", module: "./panels/home.js" },
     ],
   },
   {
-    id: "reports", label: "Reports",
+    id: "reports", label: "Reports", perms: [],
     groups: [
       { heading: "General", items: [
         { id: "activity",             label: "Activity",             module: "./panels/activity.js" },
@@ -42,7 +42,7 @@ const SECTIONS = [
     ],
   },
   {
-    id: "moderation", label: "Moderation",
+    id: "moderation", label: "Moderation", perms: ["manage_guild"],
     items: [
       { id: "mod-jails",    label: "Jails",     module: "./panels/mod-jails.js" },
       { id: "mod-tickets",  label: "Tickets",   module: "./panels/mod-tickets.js" },
@@ -51,13 +51,19 @@ const SECTIONS = [
     ],
   },
   {
-    id: "messages", label: "Message Review",
+    id: "messages", label: "Message Review", perms: ["manage_guild"],
     items: [
       { id: "message-search", label: "Search", module: "./panels/message-search.js" },
     ],
   },
   {
-    id: "config", label: "Config",
+    id: "logs", label: "Logs", perms: ["manage_guild"],
+    items: [
+      { id: "live-log", label: "Live Log", module: "./panels/live-log.js" },
+    ],
+  },
+  {
+    id: "config", label: "Config", perms: ["manage_guild"],
     items: [
       { id: "config-global",     label: "Global",          module: "./panels/config-global.js" },
       { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js" },
@@ -75,15 +81,25 @@ function allPages(section) {
   if (section.groups) return section.groups.flatMap((g) => g.items);
   return section.items || [];
 }
-const ALL_PAGES = SECTIONS.flatMap(allPages);
 
-// Map page id -> section
-const PAGE_TO_SECTION = {};
-for (const sec of SECTIONS) {
-  for (const page of allPages(sec)) {
-    PAGE_TO_SECTION[page.id] = sec;
+let userPerms = new Set();
+let visibleSections = SECTIONS;
+let ALL_PAGES = SECTIONS.flatMap(allPages);
+let PAGE_TO_SECTION = {};
+
+function rebuildIndex() {
+  visibleSections = SECTIONS.filter((sec) =>
+    !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p))
+  );
+  ALL_PAGES = visibleSections.flatMap(allPages);
+  PAGE_TO_SECTION = {};
+  for (const sec of visibleSections) {
+    for (const page of allPages(sec)) {
+      PAGE_TO_SECTION[page.id] = sec;
+    }
   }
 }
+rebuildIndex();
 
 // ── DOM refs ────────────────────────────────────────────────────────
 
@@ -115,7 +131,7 @@ function renderNav(activeId) {
 
   // Top bar tabs
   topbarTabsEl.innerHTML = "";
-  for (const sec of SECTIONS) {
+  for (const sec of visibleSections) {
     const btn = document.createElement("button");
     btn.textContent = sec.label;
     if (sec.id === activeSection.id) btn.classList.add("active");
@@ -200,7 +216,23 @@ async function mountPanel() {
 async function boot() {
   try {
     const me = await api("/api/me");
-    meEl.textContent = `${me.username} · ${me.guild_name || me.guild_id}`;
+    if (!me) return; // redirecting to login
+
+    userPerms = new Set(me.perms);
+    rebuildIndex();
+
+    meEl.textContent = me.username;
+    if (me.user_id !== "0") {
+      const sep = document.createTextNode(" \u00b7 ");
+      const link = document.createElement("a");
+      link.href = "/logout";
+      link.textContent = "Logout";
+      link.style.cssText = "color:var(--text-dim);font-size:12px;text-decoration:none;";
+      link.addEventListener("mouseenter", () => { link.style.color = "var(--text)"; });
+      link.addEventListener("mouseleave", () => { link.style.color = "var(--text-dim)"; });
+      meEl.appendChild(sep);
+      meEl.appendChild(link);
+    }
   } catch (err) {
     meEl.textContent = `auth error: ${err.message}`;
   }

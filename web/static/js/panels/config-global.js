@@ -28,6 +28,11 @@ export function mount(container) {
             <input type="text" name="bypass_role_ids" value="${g.bypass_role_ids.join(", ")}" />
             <div class="field-hint">Comma-separated role IDs that bypass spoiler guard, etc.</div>
           </div>
+          <div class="field">
+            <label>Booster Swatch Directory</label>
+            <input type="text" name="booster_swatch_dir" value="${g.booster_swatch_dir || ""}" />
+            <div class="field-hint">Path to the directory containing booster color swatch images</div>
+          </div>
           <div><button type="submit">Save</button><span data-status></span></div>
         </form>
       </div>
@@ -43,6 +48,7 @@ export function mount(container) {
           tz_offset_hours: parseFloat(fd.get("tz_offset_hours")) || 0,
           mod_channel_id: fd.get("mod_channel_id"),
           bypass_role_ids: fd.get("bypass_role_ids").split(",").map((s) => s.trim()).filter(Boolean),
+          booster_swatch_dir: fd.get("booster_swatch_dir"),
         });
         showStatus(status, true);
       } catch (err) {

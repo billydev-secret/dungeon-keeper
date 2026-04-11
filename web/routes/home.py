@@ -65,11 +65,22 @@ async def home_data(
         ]
 
     # ── Recent joins from guild cache (more reliable than invite_edges) ──
-    recent_joins = 0
+    one_month = now - 30 * 86400
+    joins_1d = 0
+    joins_7d = 0
+    joins_30d = 0
     if guild:
         for m in guild.members:
-            if m.joined_at and m.joined_at.timestamp() >= one_week:
-                recent_joins += 1
+            if not m.joined_at:
+                continue
+            jts = m.joined_at.timestamp()
+            if jts >= one_day:
+                joins_1d += 1
+            if jts >= one_week:
+                joins_7d += 1
+            if jts >= one_month:
+                joins_30d += 1
+    recent_joins = joins_7d
 
     # ── DB queries ───────────────────────────────────────────────────
     def _q():
@@ -215,15 +226,136 @@ async def home_data(
                 (ctx.guild_id, int(one_day)),
             ).fetchone()[0]
 
+            # Users who returned after 6+ hours of inactivity
+            # Find users whose latest message is within the last hour,
+            # but their previous message was 6+ hours before that.
+            returned_rows = conn.execute(
+                """
+                SELECT m1.author_id,
+                       m1.ts AS latest_ts,
+                       (SELECT MAX(m2.ts) FROM messages m2
+                        WHERE m2.guild_id = m1.guild_id
+                          AND m2.author_id = m1.author_id
+                          AND m2.ts < m1.ts) AS prev_ts
+                FROM (
+                    SELECT author_id, MAX(ts) AS ts, guild_id
+                    FROM messages
+                    WHERE guild_id = ? AND ts >= ?
+                    GROUP BY author_id
+                ) m1
+                WHERE prev_ts IS NOT NULL
+                  AND (m1.ts - prev_ts) >= 21600
+                ORDER BY m1.ts DESC
+                LIMIT 15
+                """,
+                (ctx.guild_id, int(one_hour)),
+            ).fetchall()
+            returned_users = [
+                {
+                    "user_id": str(r["author_id"]),
+                    "user_name": "",
+                    "gap_hours": round((r["latest_ts"] - r["prev_ts"]) / 3600, 1),
+                }
+                for r in returned_rows
+            ]
+
+            # Conversation starters — first message in a channel after 30min silence
+            starter_rows = conn.execute(
+                """
+                WITH ranked AS (
+                    SELECT author_id, ts,
+                           LAG(ts) OVER (PARTITION BY channel_id ORDER BY ts) AS prev_ts
+                    FROM messages
+                    WHERE guild_id = ? AND ts >= ? - 1800
+                )
+                SELECT author_id, COUNT(*) AS starts
+                FROM ranked
+                WHERE ts >= ? AND (prev_ts IS NULL OR (ts - prev_ts) >= 1800)
+                GROUP BY author_id
+                ORDER BY starts DESC
+                LIMIT 5
+                """,
+                (ctx.guild_id, int(one_day), int(one_day)),
+            ).fetchall()
+            conversation_starters = [
+                {"user_id": str(r["author_id"]), "user_name": "", "starts": int(r["starts"])}
+                for r in starter_rows
+            ]
+
+            # Social butterfly — users who interacted with the most unique people
+            butterfly_rows = conn.execute(
+                """
+                SELECT from_user_id AS user_id, COUNT(DISTINCT to_user_id) AS unique_partners
+                FROM user_interactions_log
+                WHERE guild_id = ? AND ts >= ?
+                GROUP BY from_user_id
+                ORDER BY unique_partners DESC
+                LIMIT 5
+                """,
+                (ctx.guild_id, int(one_day)),
+            ).fetchall()
+            social_butterflies = [
+                {"user_id": str(r["user_id"]), "user_name": "", "unique": int(r["unique_partners"])}
+                for r in butterfly_rows
+            ]
+
+            # Channel loyalty — users who put 80%+ of messages in one channel
+            loyalty_rows = conn.execute(
+                """
+                WITH user_totals AS (
+                    SELECT author_id, COUNT(*) AS total
+                    FROM messages
+                    WHERE guild_id = ? AND ts >= ?
+                    GROUP BY author_id
+                    HAVING total >= 10
+                ),
+                user_channel AS (
+                    SELECT author_id, channel_id, COUNT(*) AS ch_count
+                    FROM messages
+                    WHERE guild_id = ? AND ts >= ?
+                    GROUP BY author_id, channel_id
+                )
+                SELECT uc.author_id, uc.channel_id, uc.ch_count, ut.total,
+                       CAST(uc.ch_count AS REAL) / ut.total AS pct
+                FROM user_channel uc
+                JOIN user_totals ut ON uc.author_id = ut.author_id
+                WHERE CAST(uc.ch_count AS REAL) / ut.total >= 0.8
+                ORDER BY ut.total DESC
+                LIMIT 5
+                """,
+                (ctx.guild_id, int(one_day), ctx.guild_id, int(one_day)),
+            ).fetchall()
+            channel_loyalists = [
+                {
+                    "user_id": str(r["author_id"]),
+                    "user_name": "",
+                    "channel_id": str(r["channel_id"]),
+                    "channel_name": "",
+                    "pct": round(r["pct"] * 100),
+                    "count": int(r["ch_count"]),
+                }
+                for r in loyalty_rows
+            ]
+
             # Resolve names
             all_user_ids: set[int] = set()
             for u in top_users:
                 all_user_ids.add(int(u["user_id"]))
+            for ru in returned_users:
+                all_user_ids.add(int(ru["user_id"]))
+            for cs in conversation_starters:
+                all_user_ids.add(int(cs["user_id"]))
+            for sb in social_butterflies:
+                all_user_ids.add(int(sb["user_id"]))
+            for cl in channel_loyalists:
+                all_user_ids.add(int(cl["user_id"]))
             for a in actions_list:
                 all_user_ids.add(int(a["actor_id"]))
                 if a["target_id"]:
                     all_user_ids.add(int(a["target_id"]))
             all_channel_ids = [int(c["channel_id"]) for c in top_channels]
+            for cl in channel_loyalists:
+                all_channel_ids.append(int(cl["channel_id"]))
 
             # Resolve via known tables
             user_names: dict[int, str] = {}
@@ -250,6 +382,10 @@ async def home_data(
                 "active_warnings": active_warnings,
                 "recent_actions": actions_list,
                 "unique_today": unique_today,
+                "returned_users": returned_users,
+                "conversation_starters": conversation_starters,
+                "social_butterflies": social_butterflies,
+                "channel_loyalists": channel_loyalists,
                 "user_names": {str(k): v for k, v in user_names.items()},
                 "channel_names": {str(k): v for k, v in channel_names.items()},
             }
@@ -278,6 +414,18 @@ async def home_data(
             if a["target_id"]:
                 t = guild.get_member(int(a["target_id"]))
                 a["target_name"] = t.display_name if t else db_data["user_names"].get(a["target_id"], "")
+        for ru in db_data["returned_users"]:
+            m = guild.get_member(int(ru["user_id"]))
+            ru["user_name"] = m.display_name if m else db_data["user_names"].get(ru["user_id"], "")
+        for item in db_data["conversation_starters"] + db_data["social_butterflies"] + db_data["channel_loyalists"]:
+            m = guild.get_member(int(item["user_id"]))
+            item["user_name"] = m.display_name if m else db_data["user_names"].get(item["user_id"], "")
+        for cl in db_data["channel_loyalists"]:
+            ch = guild.get_channel(int(cl["channel_id"]))
+            if ch:
+                cl["channel_name"] = ch.name
+            elif cl["channel_id"] in db_data["channel_names"]:
+                cl["channel_name"] = db_data["channel_names"][cl["channel_id"]]
     else:
         for u in db_data["top_users"]:
             u["user_name"] = db_data["user_names"].get(u["user_id"], "")
@@ -287,6 +435,12 @@ async def home_data(
             a["actor_name"] = db_data["user_names"].get(a["actor_id"], "")
             if a["target_id"]:
                 a["target_name"] = db_data["user_names"].get(a["target_id"], "")
+        for ru in db_data["returned_users"]:
+            ru["user_name"] = db_data["user_names"].get(ru["user_id"], "")
+        for item in db_data["conversation_starters"] + db_data["social_butterflies"] + db_data["channel_loyalists"]:
+            item["user_name"] = db_data["user_names"].get(item["user_id"], "")
+        for cl in db_data["channel_loyalists"]:
+            cl["channel_name"] = db_data["channel_names"].get(cl["channel_id"], "")
 
     # Remove bulk lookup maps from response
     del db_data["user_names"]
@@ -297,5 +451,10 @@ async def home_data(
         "presence": presence,
         "voice_channels": voice_channels,
         "recent_joins": recent_joins,
+        "joins_1d": joins_1d,
+        "joins_7d": joins_7d,
+        "joins_30d": joins_30d,
+        "joins_avg_daily_7d": round(joins_7d / 7, 1),
+        "joins_avg_daily_30d": round(joins_30d / 30, 1),
         **db_data,
     }

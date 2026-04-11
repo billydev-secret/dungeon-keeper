@@ -15,71 +15,124 @@ export function mount(container, initialParams) {
         <h2>Role Growth</h2>
         <div class="subtitle">Net role membership over time</div>
       </header>
-      <div class="controls">
+      <div class="controls" style="align-items:flex-start;">
         <label>Resolution
           <select data-control="resolution">
             ${RESOLUTIONS.map((r) => `<option value="${r.value}">${r.label}</option>`).join("")}
           </select>
         </label>
-        <label>Roles (multi-select — Ctrl/Cmd for multi)
-          <select data-control="roles" multiple size="6"></select>
+        <label>Add Role
+          <div class="filter-select" data-role-search>
+            <input class="filter-select-input" data-role-input type="text" placeholder="Search roles…" autocomplete="off" />
+            <div class="filter-select-list" data-role-list></div>
+          </div>
         </label>
-        <button data-control="reset" type="button">Show all</button>
       </div>
+      <div data-selected-roles style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;"></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
       <div data-slider-wrap></div>
     </div>
   `;
 
   const resolutionEl = container.querySelector('[data-control="resolution"]');
-  const rolesEl = container.querySelector('[data-control="roles"]');
-  const resetEl = container.querySelector('[data-control="reset"]');
-  const canvas = container.querySelector("[data-chart]");
+  const roleInput = container.querySelector("[data-role-input]");
+  const roleList = container.querySelector("[data-role-list]");
+  const selectedWrap = container.querySelector("[data-selected-roles]");
 
   resolutionEl.value = initialParams.resolution || "week";
-  if (initialParams.roles) {
-    // Selection applied once the roles list has been populated.
-  }
 
   let chart = null;
   let slider = null;
   const sliderWrap = container.querySelector("[data-slider-wrap]");
-  let rolesLoaded = false;
+  let allRoles = [];
+  const selected = new Set();
+
+  // ── Role search dropdown ──────────────────────────────────────────
+
+  function renderDropdown(filter) {
+    const q = filter.toLowerCase();
+    const matches = allRoles.filter(
+      (r) => r.name.toLowerCase().includes(q) && !selected.has(r.name)
+    ).slice(0, 20);
+    roleList.innerHTML = matches.map(
+      (r) => `<div class="filter-select-item" data-value="${r.name}">${r.name} (${r.member_count})</div>`
+    ).join("");
+    roleList.style.display = matches.length ? "block" : "none";
+  }
+
+  roleInput.addEventListener("focus", () => renderDropdown(roleInput.value));
+  roleInput.addEventListener("input", () => renderDropdown(roleInput.value));
+  roleList.addEventListener("mousedown", (e) => {
+    const item = e.target.closest(".filter-select-item");
+    if (!item) return;
+    e.preventDefault();
+    addRole(item.dataset.value);
+    roleInput.value = "";
+    roleList.style.display = "none";
+  });
+  roleInput.addEventListener("blur", () => {
+    setTimeout(() => { roleList.style.display = "none"; }, 150);
+  });
+
+  // ── Selected role pills ───────────────────────────────────────────
+
+  function addRole(name) {
+    if (selected.has(name)) return;
+    selected.add(name);
+    renderPills();
+    refresh();
+  }
+
+  function removeRole(name) {
+    selected.delete(name);
+    renderPills();
+    refresh();
+  }
+
+  function renderPills() {
+    selectedWrap.innerHTML = [...selected].map((name) => `
+      <button class="role-pill" data-role="${name}" style="
+        display:inline-flex;align-items:center;gap:4px;
+        background:var(--bg-alt);border:1px solid var(--grid);border-radius:14px;
+        padding:3px 10px 3px 10px;font-size:12px;color:var(--text);cursor:pointer;
+      ">${name} <span style="color:var(--text-dim);font-weight:700;">&times;</span></button>
+    `).join("");
+    updateHashState();
+  }
+
+  selectedWrap.addEventListener("click", (e) => {
+    const pill = e.target.closest(".role-pill");
+    if (pill) removeRole(pill.dataset.role);
+  });
+
+  // ── Data loading ──────────────────────────────────────────────────
 
   async function loadRoles() {
     try {
-      const roles = await api("/api/meta/roles");
-      rolesEl.innerHTML = roles
-        .map((r) => `<option value="${r.name}">${r.name} (${r.member_count})</option>`)
-        .join("");
-      const defaultRoles = initialParams.roles || "denizen,spicy";
-      const wanted = new Set(defaultRoles.split(",").map((s) => s.trim().toLowerCase()));
-      for (const opt of rolesEl.options) {
-        if (wanted.has(opt.value.toLowerCase())) opt.selected = true;
+      allRoles = await api("/api/meta/roles");
+      // Apply initial selection
+      const defaults = initialParams.roles || "denizen,spicy";
+      for (const name of defaults.split(",").map((s) => s.trim())) {
+        const match = allRoles.find((r) => r.name.toLowerCase() === name.toLowerCase());
+        if (match) selected.add(match.name);
       }
-      rolesLoaded = true;
+      renderPills();
     } catch (err) {
       console.warn("could not load roles list:", err);
     }
   }
 
-  function selectedRoles() {
-    return Array.from(rolesEl.selectedOptions).map((o) => o.value);
-  }
-
   function updateHashState() {
-    const sel = selectedRoles();
     const params = new URLSearchParams();
     params.set("resolution", resolutionEl.value);
-    if (sel.length) params.set("roles", sel.join(","));
+    if (selected.size) params.set("roles", [...selected].join(","));
     history.replaceState(null, "", `#/role-growth?${params.toString()}`);
   }
 
   async function refresh() {
     updateHashState();
-    const sel = selectedRoles();
     const params = { resolution: resolutionEl.value };
-    if (sel.length) params.roles = sel.join(",");
+    if (selected.size) params.roles = [...selected].join(",");
     try {
       const data = await api("/api/reports/role-growth", params);
       if (chart) { chart.destroy(); chart = null; }
@@ -115,11 +168,6 @@ export function mount(container, initialParams) {
   }
 
   resolutionEl.addEventListener("change", refresh);
-  rolesEl.addEventListener("change", refresh);
-  resetEl.addEventListener("click", () => {
-    for (const opt of rolesEl.options) opt.selected = false;
-    refresh();
-  });
 
   (async () => {
     await loadRoles();

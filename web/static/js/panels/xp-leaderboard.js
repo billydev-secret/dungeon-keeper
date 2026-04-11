@@ -2,6 +2,15 @@ import { api } from "../api.js";
 import { makeBarChart, makeDoughnutChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
+const INTERVALS = [
+  { value: "",   label: "All Time" },
+  { value: "1",  label: "Last 24h" },
+  { value: "7",  label: "Last 7 Days" },
+  { value: "14", label: "Last 14 Days" },
+  { value: "30", label: "Last 30 Days" },
+  { value: "90", label: "Last 90 Days" },
+];
+
 export function mount(container, initialParams) {
   container.innerHTML = `
     <div class="panel">
@@ -9,6 +18,13 @@ export function mount(container, initialParams) {
         <h2>XP Leaderboard</h2>
         <div class="subtitle">XP distribution, level spread, and top earners</div>
       </header>
+      <div class="controls">
+        <label>Time Period
+          <select data-control="days">
+            ${INTERVALS.map((i) => `<option value="${i.value}">${i.label}</option>`).join("")}
+          </select>
+        </label>
+      </div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;">
         <div class="chart-wrap" style="flex:2;min-width:300px;"><canvas data-chart-levels></canvas></div>
@@ -18,10 +34,13 @@ export function mount(container, initialParams) {
     </div>
   `;
 
+  const daysEl = container.querySelector('[data-control="days"]');
   const statsEl = container.querySelector("[data-stats]");
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chartLevels = null;
   let chartSources = null;
+
+  if (initialParams.days) daysEl.value = initialParams.days;
 
   function fmtXp(n) {
     if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
@@ -30,13 +49,17 @@ export function mount(container, initialParams) {
   }
 
   async function refresh() {
-    history.replaceState(null, "", "#/xp-leaderboard");
+    const params = {};
+    if (daysEl.value) params.days = daysEl.value;
+    history.replaceState(null, "", `#/xp-leaderboard${daysEl.value ? "?days=" + daysEl.value : ""}`);
+
     try {
-      const data = await api("/api/reports/xp-leaderboard");
+      const data = await api("/api/reports/xp-leaderboard", params);
       if (chartLevels) { chartLevels.destroy(); chartLevels = null; }
       if (chartSources) { chartSources.destroy(); chartSources = null; }
 
-      statsEl.textContent = `${data.total_users} users tracked`;
+      const label = INTERVALS.find((i) => i.value === daysEl.value)?.label || "All Time";
+      statsEl.textContent = `${data.total_users} users tracked · ${label}`;
 
       // Level distribution
       const levelWrap = container.querySelector("[data-chart-levels]").parentElement;
@@ -110,6 +133,7 @@ export function mount(container, initialParams) {
     }
   }
 
+  daysEl.addEventListener("change", refresh);
   refresh();
 
   return {

@@ -516,6 +516,7 @@ async def voice_activity(
 @router.get("/xp-leaderboard", response_model=XpLeaderboardResponse)
 async def xp_leaderboard(
     request: Request,
+    days: int | None = None,
     _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
 ):
     ctx = get_ctx(request)
@@ -524,7 +525,7 @@ async def xp_leaderboard(
 
     def _q():
         with ctx.open_db() as conn:
-            return reports_data.get_xp_leaderboard_data(conn, ctx.guild_id)
+            return reports_data.get_xp_leaderboard_data(conn, ctx.guild_id, days=days)
 
     result = await run_query(_q)
     _resolve_names(ctx, guild, result.get("leaderboard", []),

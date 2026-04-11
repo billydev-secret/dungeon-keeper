@@ -104,6 +104,47 @@ export function mount(container) {
         `).join("")
       : '<div class="home-dim">No messages this hour</div>';
 
+    function fmtGap(hours) {
+      if (hours < 24) return Math.round(hours) + "h";
+      return Math.round(hours / 24) + "d";
+    }
+
+    const returnedHTML = d.returned_users && d.returned_users.length
+      ? d.returned_users.map((u) => `
+          <div class="home-rank-row">
+            <span class="home-rank-name">${esc(u.user_name || u.user_id)}</span>
+            <span class="home-rank-val" style="color:#7F8F3A;">after ${fmtGap(u.gap_hours)}</span>
+          </div>
+        `).join("")
+      : '<div class="home-dim">No returning users right now</div>';
+
+    const startersHTML = d.conversation_starters && d.conversation_starters.length
+      ? d.conversation_starters.map((u) => `
+          <div class="home-rank-row">
+            <span class="home-rank-name">${esc(u.user_name || u.user_id)}</span>
+            <span class="home-rank-val">${u.starts}</span>
+          </div>
+        `).join("")
+      : '<div class="home-dim">Not enough data yet</div>';
+
+    const butterflyHTML = d.social_butterflies && d.social_butterflies.length
+      ? d.social_butterflies.map((u) => `
+          <div class="home-rank-row">
+            <span class="home-rank-name">${esc(u.user_name || u.user_id)}</span>
+            <span class="home-rank-val">${u.unique} people</span>
+          </div>
+        `).join("")
+      : '<div class="home-dim">Not enough data yet</div>';
+
+    const loyaltyHTML = d.channel_loyalists && d.channel_loyalists.length
+      ? d.channel_loyalists.map((u) => `
+          <div class="home-rank-row">
+            <span class="home-rank-name">${esc(u.user_name || u.user_id)}</span>
+            <span class="home-rank-val">#${esc(u.channel_name || u.channel_id)} <span style="color:var(--text-dim);font-size:11px;">${u.pct}%</span></span>
+          </div>
+        `).join("")
+      : '<div class="home-dim">No loyalists today (need 10+ msgs, 80%+ in one channel)</div>';
+
     const actionsHTML = d.recent_actions.length
       ? d.recent_actions.map((a) => {
           const label = ACTION_LABELS[a.action] || a.action;
@@ -152,8 +193,10 @@ export function mount(container) {
         </div>
 
         <div class="home-card">
-          <div class="home-card-label">Recent Joins (7d)</div>
-          <div class="home-card-big">${d.recent_joins}</div>
+          <div class="home-card-label">Recent Joins</div>
+          <div class="home-rank-row"><span class="home-rank-name">24h</span><span class="home-rank-val">${d.joins_1d}</span></div>
+          <div class="home-rank-row"><span class="home-rank-name">7d</span><span class="home-rank-val">${d.joins_7d} <span style="font-size:11px;color:var(--text-dim);">(${d.joins_avg_daily_7d}/day)</span></span></div>
+          <div class="home-rank-row"><span class="home-rank-name">30d</span><span class="home-rank-val">${d.joins_30d} <span style="font-size:11px;color:var(--text-dim);">(${d.joins_avg_daily_30d}/day)</span></span></div>
         </div>
 
         <div class="home-card">
@@ -178,6 +221,26 @@ export function mount(container) {
         <div class="home-card">
           <div class="home-card-label">Most Active Users (1h)</div>
           ${topUsersHTML}
+        </div>
+
+        <div class="home-card">
+          <div class="home-card-label">Returned After Break</div>
+          ${returnedHTML}
+        </div>
+
+        <div class="home-card">
+          <div class="home-card-label">Conversation Starters (24h)</div>
+          ${startersHTML}
+        </div>
+
+        <div class="home-card">
+          <div class="home-card-label">Social Butterflies (24h)</div>
+          ${butterflyHTML}
+        </div>
+
+        <div class="home-card">
+          <div class="home-card-label">Channel Loyalists (24h)</div>
+          ${loyaltyHTML}
         </div>
 
         <div class="home-card home-card-wide">

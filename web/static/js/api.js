@@ -9,6 +9,10 @@ export async function api(path, params) {
     }
   }
   const res = await fetch(url, { credentials: "same-origin" });
+  if (res.status === 401) {
+    window.location = "/login";
+    return new Promise(() => {}); // hang — page is navigating away
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {

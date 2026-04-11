@@ -949,29 +949,49 @@ def get_xp_leaderboard_data(
     conn: sqlite3.Connection,
     guild_id: int,
     limit: int = 30,
+    days: int | None = None,
 ) -> XpLeaderboardData:
-    # Top users
-    top_rows = conn.execute(
-        """
-        SELECT user_id, level, total_xp
-        FROM member_xp
-        WHERE guild_id = ?
-        ORDER BY total_xp DESC
-        LIMIT ?
-        """,
-        (guild_id, limit),
-    ).fetchall()
+    import time as _time
+    since = int(_time.time() - days * 86400) if days else 0
+
+    if days:
+        # Time-filtered: rank by XP earned in the window from xp_events
+        top_rows = conn.execute(
+            """
+            SELECT e.user_id, COALESCE(m.level, 0), SUM(e.amount) AS period_xp
+            FROM xp_events e
+            LEFT JOIN member_xp m ON m.guild_id = e.guild_id AND m.user_id = e.user_id
+            WHERE e.guild_id = ? AND e.created_at >= ?
+            GROUP BY e.user_id
+            ORDER BY period_xp DESC
+            LIMIT ?
+            """,
+            (guild_id, since, limit),
+        ).fetchall()
+    else:
+        # All-time: use cumulative member_xp
+        top_rows = conn.execute(
+            """
+            SELECT user_id, level, total_xp
+            FROM member_xp
+            WHERE guild_id = ?
+            ORDER BY total_xp DESC
+            LIMIT ?
+            """,
+            (guild_id, limit),
+        ).fetchall()
 
     user_ids = [int(r[0]) for r in top_rows]
     # XP by source for top users
     xp_by_source: dict[int, dict[str, float]] = {}
     if user_ids:
         ph = ",".join("?" * len(user_ids))
+        time_clause = f" AND created_at >= {since}" if days else ""
         src_rows = conn.execute(
             f"""
             SELECT user_id, source, SUM(amount)
             FROM xp_events
-            WHERE guild_id = ? AND user_id IN ({ph})
+            WHERE guild_id = ? AND user_id IN ({ph}){time_clause}
             GROUP BY user_id, source
             """,
             [guild_id, *user_ids],
@@ -994,7 +1014,7 @@ def get_xp_leaderboard_data(
             "react_xp": sources.get("image_react", 0.0),
         })
 
-    # Level distribution
+    # Level distribution (always all-time)
     level_rows = conn.execute(
         """
         SELECT level, COUNT(*) FROM member_xp
@@ -1008,15 +1028,25 @@ def get_xp_leaderboard_data(
         {"level": int(r[0]), "count": int(r[1])} for r in level_rows
     ]
 
-    # Source totals
-    source_rows = conn.execute(
-        """
-        SELECT source, SUM(amount) FROM xp_events
-        WHERE guild_id = ?
-        GROUP BY source
-        """,
-        (guild_id,),
-    ).fetchall()
+    # Source totals (filtered if days set)
+    if days:
+        source_rows = conn.execute(
+            """
+            SELECT source, SUM(amount) FROM xp_events
+            WHERE guild_id = ? AND created_at >= ?
+            GROUP BY source
+            """,
+            (guild_id, since),
+        ).fetchall()
+    else:
+        source_rows = conn.execute(
+            """
+            SELECT source, SUM(amount) FROM xp_events
+            WHERE guild_id = ?
+            GROUP BY source
+            """,
+            (guild_id,),
+        ).fetchall()
     source_totals = {str(r[0]): float(r[1]) for r in source_rows}
 
     total_row = conn.execute(

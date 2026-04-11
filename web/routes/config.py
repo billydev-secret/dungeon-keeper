@@ -64,6 +64,7 @@ async def get_config(
                     "tz_offset_hours": _float_val(conn, "tz_offset_hours"),
                     "mod_channel_id": str(_int_val(conn, "mod_channel_id")),
                     "bypass_role_ids": [str(i) for i in _id_set_list(conn, "bypass_role_ids")],
+                    "booster_swatch_dir": _str_val(conn, "booster_swatch_dir"),
                 },
                 "welcome": {
                     "welcome_channel_id": str(_int_val(conn, "welcome_channel_id")),
@@ -120,6 +121,7 @@ class GlobalConfigUpdate(BaseModel):
     tz_offset_hours: float | None = None
     mod_channel_id: str | None = None
     bypass_role_ids: list[str] | None = None
+    booster_swatch_dir: str | None = None
 
 
 @router.put("/config/global")
@@ -152,6 +154,11 @@ async def update_global(
                         ("bypass_role_ids", int(rid)),
                     )
                 ctx.bypass_role_ids = {int(r) for r in body.bypass_role_ids}
+            if body.booster_swatch_dir is not None:
+                conn.execute(
+                    "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    ("booster_swatch_dir", body.booster_swatch_dir),
+                )
         return {"ok": True}
 
     return await run_query(_q)
