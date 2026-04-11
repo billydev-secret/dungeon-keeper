@@ -39,6 +39,7 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
     ai_group = app_commands.Group(
         name="ai",
         description="AI-powered moderation tools (requires ANTHROPIC_API_KEY).",
+        default_permissions=discord.Permissions(manage_guild=True),
     )
 
     @ai_group.command(
@@ -54,7 +55,7 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         user: discord.Member,
         days: app_commands.Range[int, 1, 30] = 7,
     ):
-        if not ctx.is_mod(interaction):
+        if not ctx.is_admin(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
@@ -94,7 +95,7 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         interaction: discord.Interaction,
         count: app_commands.Range[int, 10, 200] = 50,
     ):
-        if not ctx.is_mod(interaction):
+        if not ctx.is_admin(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
@@ -141,7 +142,7 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         minutes: app_commands.Range[int, 1, 1440] = 60,
         channel: discord.TextChannel | None = None,
     ):
-        if not ctx.is_mod(interaction):
+        if not ctx.is_admin(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
@@ -193,7 +194,7 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
         question: str,
         days: app_commands.Range[int, 1, 30] = 14,
     ):
-        if not ctx.is_mod(interaction):
+        if not ctx.is_admin(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )

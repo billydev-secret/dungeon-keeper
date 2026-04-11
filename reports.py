@@ -72,6 +72,16 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
+    async def _report_admin_check(interaction: discord.Interaction) -> bool:
+        if not ctx.is_admin(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return False
+        return True
+
+    report_group.interaction_check = _report_admin_check  # type: ignore[method-assign]
+
     @report_group.command(name="list_role", description="List members who currently have a role.")
     @app_commands.describe(role="The role to inspect")
     async def list_role(interaction: discord.Interaction, role: discord.Role):

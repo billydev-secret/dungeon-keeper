@@ -266,7 +266,28 @@ class AppContext:
         if member is None:
             return False
         perms = member.guild_permissions
-        return perms.manage_guild or perms.administrator
+        if perms.manage_guild or perms.administrator:
+            return True
+        with self.open_db() as conn:
+            mod_raw = get_config_value(conn, "mod_role_ids", "")
+            admin_raw = get_config_value(conn, "admin_role_ids", "")
+        configured = {
+            int(x)
+            for x in f"{mod_raw},{admin_raw}".split(",")
+            if x.strip().isdigit()
+        }
+        return bool(configured & {r.id for r in member.roles})
+
+    def is_admin(self, interaction: discord.Interaction) -> bool:
+        member = self.get_interaction_member(interaction)
+        if member is None:
+            return False
+        if member.guild_permissions.administrator:
+            return True
+        with self.open_db() as conn:
+            raw = get_config_value(conn, "admin_role_ids", "")
+        configured = {int(x) for x in raw.split(",") if x.strip().isdigit()}
+        return bool(configured & {r.id for r in member.roles})
 
     def reload_grant_roles(self) -> None:
         with self.open_db() as conn:
