@@ -16,7 +16,7 @@ router = APIRouter()
 @router.get("/messages/search")
 async def search_messages(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
     author: str | None = Query(None, description="Filter by author user ID"),
     mentions: str | None = Query(None, description="Filter to messages that mention this user ID"),
     reply_to: str | None = Query(None, description="Filter to messages that are replies to this user ID"),

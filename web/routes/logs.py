@@ -78,7 +78,7 @@ async def _event_stream(request: Request) -> AsyncGenerator[str, None]:
 @router.get("/logs/stream")
 async def log_stream(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ) -> StreamingResponse:
     return StreamingResponse(
         _event_stream(request),

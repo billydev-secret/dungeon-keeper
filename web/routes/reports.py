@@ -76,7 +76,7 @@ async def role_growth(
     request: Request,
     resolution: Literal["day", "week", "month"] = "week",
     roles: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_roles"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
@@ -100,7 +100,7 @@ async def message_cadence(
     request: Request,
     resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
     channel_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_roles"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     ch_id = int(channel_id) if channel_id else None
@@ -121,7 +121,7 @@ async def message_cadence(
 async def join_times(
     request: Request,
     resolution: Literal["hour_of_day", "day_of_week"] = "hour_of_day",
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
@@ -188,7 +188,7 @@ async def nsfw_gender(
     resolution: Literal["day", "week", "month"] = "week",
     media_only: bool = False,
     channel_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
@@ -242,7 +242,7 @@ async def nsfw_gender(
 async def message_rate(
     request: Request,
     days: int = 7,
-    _: AuthenticatedUser = Depends(require_perms({"manage_roles"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     days = max(1, min(365, days))
@@ -263,7 +263,7 @@ async def message_rate(
 async def greeter_response(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_roles"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -388,7 +388,7 @@ async def activity(
     mode: Literal["messages", "xp"] = "messages",
     user_id: str | None = None,
     channel_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
@@ -413,7 +413,7 @@ async def invite_effectiveness(
     request: Request,
     days: int | None = None,
     active_days: int = 30,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -438,7 +438,7 @@ async def interaction_graph(
     request: Request,
     days: int | None = None,
     limit: int = 50,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -467,7 +467,7 @@ async def retention(
     request: Request,
     period_days: int = 30,
     min_previous: int = 5,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -492,7 +492,7 @@ async def retention(
 async def voice_activity(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
@@ -517,7 +517,7 @@ async def voice_activity(
 async def xp_leaderboard(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -539,7 +539,7 @@ async def xp_leaderboard(
 async def reaction_analytics(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -566,7 +566,7 @@ async def message_rate_drops(
     request: Request,
     period_days: int = 14,
     min_previous: int = 5,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -592,7 +592,7 @@ async def burst_ranking(
     request: Request,
     min_sessions: int = 3,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -616,7 +616,7 @@ async def burst_ranking(
 async def channel_comparison(
     request: Request,
     days: int = 30,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -675,7 +675,7 @@ async def quality_score(
     request: Request,
     days: int | None = None,
     min_active_days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)

@@ -82,6 +82,14 @@ def _is_mod(member: discord.Member, ctx: AppContext) -> bool:
     return bool(mod_ids & {r.id for r in member.roles})
 
 
+def _is_admin(member: discord.Member, ctx: AppContext) -> bool:
+    """Check if member has admin access via the Discord ADMINISTRATOR bit or a configured admin role."""
+    if member.guild_permissions.administrator:
+        return True
+    admin_ids = _get_admin_role_ids(ctx)
+    return bool(admin_ids & {r.id for r in member.roles})
+
+
 def _get_config(ctx: AppContext, key: str, default: str = "0") -> int:
     with ctx.open_db() as conn:
         return int(get_config_value(conn, key, default) or 0)
@@ -667,8 +675,14 @@ async def _do_jail(
     if target.bot:
         await interaction.response.send_message("Cannot jail a bot.", ephemeral=True)
         return
-    if _is_mod(target, ctx):
-        await interaction.response.send_message("Cannot jail a moderator.", ephemeral=True)
+    if target.id == mod.id:
+        await interaction.response.send_message("Cannot jail yourself.", ephemeral=True)
+        return
+    if _is_admin(target, ctx):
+        await interaction.response.send_message("Cannot jail an admin.", ephemeral=True)
+        return
+    if _is_mod(target, ctx) and not _is_admin(mod, ctx):
+        await interaction.response.send_message("Only admins can jail a moderator.", ephemeral=True)
         return
     with ctx.open_db() as conn:
         if get_active_jail(conn, guild.id, target.id):

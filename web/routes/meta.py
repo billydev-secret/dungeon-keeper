@@ -29,7 +29,7 @@ async def me(
 @router.get("/meta/roles", response_model=list[RoleMeta])
 async def meta_roles(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"manage_roles"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -78,7 +78,7 @@ async def meta_roles(
 @router.get("/meta/members", response_model=list[MemberMeta])
 async def meta_members(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -119,7 +119,7 @@ async def meta_members(
 @router.get("/meta/channels", response_model=list[ChannelMeta])
 async def meta_channels(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"manage_roles"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     import discord
 

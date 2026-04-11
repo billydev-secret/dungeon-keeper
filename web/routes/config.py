@@ -47,7 +47,7 @@ def _float_val(conn, key: str, default: float = 0.0) -> float:
 @router.get("/config")
 async def get_config(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
 
@@ -128,7 +128,7 @@ class GlobalConfigUpdate(BaseModel):
 async def update_global(
     request: Request,
     body: GlobalConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
 
@@ -178,7 +178,7 @@ class WelcomeConfigUpdate(BaseModel):
 async def update_welcome(
     request: Request,
     body: WelcomeConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
 
@@ -224,7 +224,7 @@ class XpConfigUpdate(BaseModel):
 async def update_xp(
     request: Request,
     body: XpConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
 
@@ -274,7 +274,7 @@ class PruneConfigUpdate(BaseModel):
 async def update_prune(
     request: Request,
     body: PruneConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
 
@@ -305,7 +305,7 @@ class ModerationConfigUpdate(BaseModel):
 async def update_moderation(
     request: Request,
     body: ModerationConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
 
@@ -351,7 +351,7 @@ async def update_role_grant(
     grant_name: str,
     request: Request,
     body: RoleGrantUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
 
@@ -384,7 +384,7 @@ class SpoilerConfigUpdate(BaseModel):
 async def update_spoiler(
     request: Request,
     body: SpoilerConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
 

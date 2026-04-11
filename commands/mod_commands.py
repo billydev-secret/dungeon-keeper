@@ -20,16 +20,17 @@ def _fmt(command_specs: list[tuple[str, str]]) -> str:
 
 # (label, emoji, color, intro, [(command, description), ...])
 _SECTION_META: dict[str, tuple[str, discord.Color]] = {
-    "General":           ("🌿", discord.Color.from_str("#5865F2")),
-    "Role Grants":       ("🎭", discord.Color.from_str("#57F287")),
-    "XP Grant":          ("⭐", discord.Color.from_str("#FEE75C")),
-    "Reports":           ("📊", discord.Color.from_str("#EB459E")),
-    "Activity & Graphs": ("📈", discord.Color.from_str("#5DADE2")),
-    "Watch List":        ("🔍", discord.Color.from_str("#3498DB")),
-    "AI Moderation":     ("🤖", discord.Color.from_str("#5865F2")),
-    "Fun":               ("🎉", discord.Color.from_str("#F1C40F")),
-    "Data Management":   ("🗄️", discord.Color.from_str("#95A5A6")),
-    "Configuration":     ("⚙️", discord.Color.from_str("#1ABC9C")),
+    "General":            ("🌿", discord.Color.from_str("#5865F2")),
+    "Role Grants":        ("🎭", discord.Color.from_str("#57F287")),
+    "XP Grant":           ("⭐", discord.Color.from_str("#FEE75C")),
+    "Moderation Actions": ("🛡️", discord.Color.from_str("#ED4245")),
+    "Reports":            ("📊", discord.Color.from_str("#EB459E")),
+    "Activity & Graphs":  ("📈", discord.Color.from_str("#5DADE2")),
+    "Watch List":         ("🔍", discord.Color.from_str("#3498DB")),
+    "AI Moderation":      ("🤖", discord.Color.from_str("#5865F2")),
+    "Fun":                ("🎉", discord.Color.from_str("#F1C40F")),
+    "Data Management":    ("🗄️", discord.Color.from_str("#95A5A6")),
+    "Configuration":      ("⚙️", discord.Color.from_str("#1ABC9C")),
 }
 
 
@@ -53,6 +54,10 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
             ("/xp_leaderboards timescale:week",
              "Top XP earners for a chosen time window (hour / day / week / month / year / all time), "
              "plus your own rank within that period."),
+            ("/ticket open description:...",
+             "Open a private support ticket with the mod team. "
+             "A new channel is created that only you and the mods can see. "
+             "Optional `description` gives mods context up front."),
             ("/foolsday_exclude",
              "Opt out of the April Fools name shuffle. "
              "Mods can specify a user to exclude others."),
@@ -88,6 +93,64 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         ))
 
     if ctx.is_mod(interaction):
+
+        # ── Moderation Actions ────────────────────────────────────────────────
+        pages.append(_page("Moderation Actions",
+            "Jail, warn, and ticket management. Requires **Manage Server** permission. "
+            "All actions are written to the audit log and — where applicable — the configured "
+            "log / transcript channels.\n\n"
+            "**🔒 Jail**\n"
+            + _fmt([
+                ("/setup",
+                 "First-time moderation setup wizard — creates the jailed role, jail and ticket "
+                 "categories, log / transcript channels, and mod/admin role pickers. "
+                 "Admin only. Re-run to adjust settings."),
+                ("/jail user:@user duration:24h reason:...",
+                 "Place a member in a private jail channel. "
+                 "`duration` accepts formats like `30m`, `2h`, `7d`; omit for indefinite. "
+                 "The member loses access to the rest of the server until released or expiry."),
+                ("/unjail user:@user reason:...",
+                 "Release a jailed member. Restores their prior role set and posts a transcript "
+                 "of the jail channel before deleting it."),
+                ("/pull user:@user",
+                 "Add a user to the current jail/ticket channel so they can participate "
+                 "(useful for bringing in witnesses, reporters, or additional mods)."),
+                ("/remove user:@user",
+                 "Remove a user you previously `pull`ed from the current jail/ticket channel."),
+            ])
+            + "\n\n**⚠️ Warnings**\n"
+            + _fmt([
+                ("/warn user:@user reason:...",
+                 "Issue a warning. The member is DM'd, the action is audited, and "
+                 "admins are pinged when they hit the configured warning threshold."),
+                ("/warnings user:@user",
+                 "List every warning (active + revoked) for a member, with reasons and moderators."),
+                ("/revokewarn user:@user warning_id:42 reason:...",
+                 "Cancel a specific warning by ID. The warning stays in history but no longer "
+                 "counts toward the threshold."),
+                ("/modinfo user:@user",
+                 "Comprehensive moderation profile: current jail status, jail history, "
+                 "warning count, and ticket history — the first thing to run before taking action."),
+            ])
+            + "\n\n**📩 Tickets**\n"
+            + _fmt([
+                ("/ticket panel channel:#support",
+                 "Post the ticket-creation button panel in a channel. "
+                 "Users click the button (or run `/ticket open`) to create their own private ticket."),
+                ("/ticket close reason:...",
+                 "Close the current ticket. The channel stays visible read-only with Reopen / Delete buttons."),
+                ("/ticket reopen",
+                 "Reopen a closed ticket — restores the creator's write access."),
+                ("/ticket delete",
+                 "Permanently delete a closed ticket. Generates a transcript in the log channel first."),
+                ("/ticket claim",
+                 "Mark yourself as handling this ticket. You'll get DM pings on new activity "
+                 "so you don't have to watch the channel."),
+                ("/ticket escalate reason:...",
+                 "Bring admin roles into the ticket and ping them. Use for situations that "
+                 "need authority above the normal mod team."),
+            ])
+        ))
 
         # ── Reports ───────────────────────────────────────────────────────────
         pages.append(_page("Reports",
@@ -279,6 +342,9 @@ def _build_help_pages(ctx: AppContext, interaction: discord.Interaction) -> list
         pages.append(_page("Configuration",
             "All bot settings are managed through `/config <section>`. "
             "Each section opens a modal or interactive panel.\n\n"
+            "**🌐 Web dashboard:** admins can also configure the bot, view reports, and "
+            "manage moderation from the web UI. If the dashboard is deployed it's reachable "
+            "at the configured base URL; sign in with Discord.\n\n"
             "**`/config global`** — Timezone, mod channel, bypass roles.\n"
             "**`/config roles`** — Grant roles (add/edit/remove), log/announce channels, "
             "permissions, and grant message templates.\n"

@@ -50,7 +50,7 @@ class OpenAuth:
     is reachable from an untrusted network.
     """
 
-    _ALL_PERMS = frozenset({"manage_guild", "manage_roles"})
+    _ALL_PERMS = frozenset({"admin", "moderator"})
 
     async def authenticate(self, request: Request) -> AuthenticatedUser:
         return AuthenticatedUser(
@@ -60,16 +60,23 @@ class OpenAuth:
         )
 
 
+_MOD_BITS = _MANAGE_GUILD | _KICK_MEMBERS | _BAN_MEMBERS | _MANAGE_MESSAGES | _MANAGE_ROLES
+
+
 def resolve_discord_perms(permission_bits: int) -> frozenset[str]:
-    """Map a Discord permission bitfield to dashboard permission strings."""
+    """Map a Discord permission bitfield to dashboard permission strings.
+
+    * ``admin``     — user has the Discord ADMINISTRATOR bit.
+    * ``moderator`` — user has ADMINISTRATOR *or* any of MANAGE_GUILD,
+      KICK_MEMBERS, BAN_MEMBERS, MANAGE_MESSAGES, MANAGE_ROLES.
+
+    Admin implies moderator, so admin users get both strings.
+    """
     perms: set[str] = set()
     if permission_bits & _ADMINISTRATOR:
-        perms.update({"manage_guild", "manage_roles"})
-    else:
-        if permission_bits & (_MANAGE_GUILD | _KICK_MEMBERS | _BAN_MEMBERS | _MANAGE_MESSAGES):
-            perms.add("manage_guild")
-        if permission_bits & _MANAGE_ROLES:
-            perms.add("manage_roles")
+        perms.update({"admin", "moderator"})
+    elif permission_bits & _MOD_BITS:
+        perms.add("moderator")
     return frozenset(perms)
 
 

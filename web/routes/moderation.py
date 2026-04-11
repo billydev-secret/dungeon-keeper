@@ -51,7 +51,7 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
 @router.get("/moderation/stats", response_model=ModerationStatsResponse)
 async def moderation_stats(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     one_week_ago = time.time() - 7 * 86400
@@ -81,7 +81,7 @@ async def list_jails(
     request: Request,
     status: str | None = None,
     user_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -132,7 +132,7 @@ async def list_tickets(
     request: Request,
     status: str | None = None,
     user_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -188,7 +188,7 @@ async def list_warnings(
     request: Request,
     user_id: str | None = None,
     active_only: bool = False,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)
@@ -238,7 +238,7 @@ async def audit_log(
     request: Request,
     limit: int = 50,
     action: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"manage_guild"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     bot = getattr(ctx, "bot", None)

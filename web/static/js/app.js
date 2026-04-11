@@ -11,7 +11,7 @@ const SECTIONS = [
     ],
   },
   {
-    id: "reports", label: "Reports", perms: [],
+    id: "reports", label: "Reports", perms: ["admin"],
     groups: [
       { heading: "General", items: [
         { id: "activity",             label: "Activity",             module: "./panels/activity.js" },
@@ -42,7 +42,7 @@ const SECTIONS = [
     ],
   },
   {
-    id: "moderation", label: "Moderation", perms: ["manage_guild"],
+    id: "moderation", label: "Moderation", perms: ["moderator"],
     items: [
       { id: "mod-jails",    label: "Jails",     module: "./panels/mod-jails.js" },
       { id: "mod-tickets",  label: "Tickets",   module: "./panels/mod-tickets.js" },
@@ -51,19 +51,19 @@ const SECTIONS = [
     ],
   },
   {
-    id: "messages", label: "Message Review", perms: ["manage_guild"],
+    id: "messages", label: "Message Review", perms: ["admin"],
     items: [
       { id: "message-search", label: "Search", module: "./panels/message-search.js" },
     ],
   },
   {
-    id: "logs", label: "Logs", perms: ["manage_guild"],
+    id: "logs", label: "Logs", perms: ["admin"],
     items: [
       { id: "live-log", label: "Live Log", module: "./panels/live-log.js" },
     ],
   },
   {
-    id: "config", label: "Config", perms: ["manage_guild"],
+    id: "config", label: "Config", perms: ["admin"],
     items: [
       { id: "config-global",     label: "Global",          module: "./panels/config-global.js" },
       { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js" },
