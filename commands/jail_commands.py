@@ -962,7 +962,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /jail ─────────────────────────────────────────────────────────────
 
     @bot.tree.command(name="jail", description="Place a member in a moderation hold.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(
         user="Member to jail",
         duration="How long (e.g. 24h, 7d). Leave blank for indefinite.",
@@ -983,7 +983,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /unjail ───────────────────────────────────────────────────────────
 
     @bot.tree.command(name="unjail", description="Release a member from jail.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="Member to release", reason="Release reason")
     async def unjail_cmd(
         interaction: discord.Interaction,
@@ -1004,7 +1004,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     ticket_group = app_commands.Group(name="ticket", description="Ticket management commands.")
 
     @ticket_group.command(name="panel", description="Post the ticket panel embed in a channel.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(channel="Channel to post the panel in")
     async def ticket_panel(interaction: discord.Interaction, channel: discord.TextChannel):
         member = interaction.user
@@ -1289,7 +1289,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /pull ─────────────────────────────────────────────────────────────
 
     @bot.tree.command(name="pull", description="Add a user to this jail/ticket channel.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="User to add to the channel")
     async def pull_cmd(interaction: discord.Interaction, user: discord.Member):
         member = interaction.user
@@ -1331,7 +1331,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /remove ───────────────────────────────────────────────────────────
 
     @bot.tree.command(name="remove", description="Remove a user from this jail/ticket channel.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="User to remove from the channel")
     async def remove_cmd(interaction: discord.Interaction, user: discord.Member):
         member = interaction.user
@@ -1376,7 +1376,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /warn ─────────────────────────────────────────────────────────────
 
     @bot.tree.command(name="warn", description="Issue a warning to a member.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="Member to warn", reason="Reason for warning")
     async def warn_cmd(interaction: discord.Interaction, user: discord.Member, reason: str | None = None):
         member = interaction.user
@@ -1429,7 +1429,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /warnings ─────────────────────────────────────────────────────────
 
     @bot.tree.command(name="warnings", description="View a member's warnings.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="Member to check")
     async def warnings_cmd(interaction: discord.Interaction, user: discord.Member):
         member = interaction.user
@@ -1470,7 +1470,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /revokewarn ───────────────────────────────────────────────────────
 
     @bot.tree.command(name="revokewarn", description="Revoke a warning.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="Member", warning_id="Warning ID to revoke", reason="Reason for revoking")
     async def revokewarn_cmd(
         interaction: discord.Interaction,
@@ -1502,7 +1502,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /modinfo ──────────────────────────────────────────────────────────
 
     @bot.tree.command(name="modinfo", description="Comprehensive moderation history for a member.")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="Member to inspect")
     async def modinfo_cmd(interaction: discord.Interaction, user: discord.Member):
         member = interaction.user
@@ -1557,7 +1557,7 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── Context menus ─────────────────────────────────────────────────────
 
     @bot.tree.context_menu(name="Jail User")
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     async def jail_context_menu(interaction: discord.Interaction, user: discord.Member):
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):

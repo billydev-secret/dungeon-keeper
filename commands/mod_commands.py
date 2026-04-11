@@ -439,7 +439,7 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
         name="purge",
         description="Delete messages in this channel. No arguments clears the entire channel.",
     )
-    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(
         count="Number of messages to delete (max 1000). Omit to delete all messages since `after`.",
         after="Delete messages at or after this time today (server local time), e.g. 19:35.",
