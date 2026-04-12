@@ -295,6 +295,22 @@ class _SetupWizardView(discord.ui.View):
             await interaction.response.edit_message(content="Setup failed.", embed=None, view=None)
             return
 
+        try:
+            await self._finish_setup(interaction, guild)
+        except Exception:
+            log.exception("Wellness setup failed for user %s", interaction.user.id)
+            try:
+                await interaction.response.edit_message(
+                    content="⚠️ Something went wrong during setup. Please try again.",
+                    embed=None, view=None,
+                )
+            except discord.NotFound:
+                pass
+
+    async def _finish_setup(self, interaction: discord.Interaction, guild: discord.Guild) -> None:
+        assert self._timezone is not None
+        assert self._enforcement is not None
+
         # Persist + assign role
         with self._ctx.open_db() as conn:
             cfg = get_wellness_config(conn, guild.id)
@@ -338,7 +354,7 @@ class _SetupWizardView(discord.ui.View):
 
         try:
             await member.add_roles(role, reason="Wellness Guardian opt-in")
-        except discord.Forbidden:
+        except discord.HTTPException:
             await interaction.response.edit_message(
                 content=(
                     "⚠️ I couldn't assign the wellness role — I'm missing permissions. "

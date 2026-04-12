@@ -21,6 +21,8 @@ async def me(
         user_id=str(user.user_id),
         username=user.username,
         perms=sorted(user.perms),
+        role_ids=[str(r) for r in user.role_ids],
+        role_names=list(user.role_names),
         guild_id=str(ctx.guild_id),
         guild_name=guild.name if guild else None,
     )

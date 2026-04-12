@@ -8,6 +8,8 @@ class MeResponse(BaseModel):
     user_id: str
     username: str
     perms: list[str]
+    role_ids: list[str] = []
+    role_names: list[str] = []
     guild_id: str
     guild_name: str | None = None
 

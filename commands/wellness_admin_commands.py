@@ -42,10 +42,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.wellness.admin")
 
 WELLNESS_ROLE_NAME = "Wellness Guardian"
-WELLNESS_CATEGORY_NAME = "🌿 Wellness"
-LOUNGE_CHANNEL_NAME = "wellness-lounge"
-ACTIVE_CHANNEL_NAME = "active-in-commitment"
-PARTNER_CHANNEL_NAME = "find-a-partner"
+WELLNESS_CHANNEL_NAME = "wellness"
 
 CRISIS_RESOURCES_DEFAULT = (
     "If you're in crisis, please reach out: "
@@ -71,18 +68,15 @@ def _check_admin(interaction: discord.Interaction) -> bool:
 # Setup helpers
 # ---------------------------------------------------------------------------
 
-async def _create_wellness_category(
+async def _create_wellness_channel(
     guild: discord.Guild,
     role: discord.Role,
     *,
-    category_name: str = WELLNESS_CATEGORY_NAME,
+    channel_name: str = WELLNESS_CHANNEL_NAME,
     crisis_resource_url: str = "",
-) -> tuple[discord.CategoryChannel, discord.TextChannel, discord.TextChannel, discord.TextChannel]:
-    """Create the wellness category and 3 channels, all role-gated.
-
-    Mirrors the pattern from jail_commands._do_jail at line 732 onwards.
-    """
-    base_overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
+) -> discord.TextChannel:
+    """Create a single role-gated wellness channel."""
+    overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         role: discord.PermissionOverwrite(
             view_channel=True,
@@ -91,67 +85,29 @@ async def _create_wellness_category(
         ),
     }
     if guild.me:
-        base_overwrites[guild.me] = discord.PermissionOverwrite(
+        overwrites[guild.me] = discord.PermissionOverwrite(
             view_channel=True,
             send_messages=True,
             manage_messages=True,
-            manage_channels=True,
             read_message_history=True,
             embed_links=True,
             attach_files=True,
         )
 
-    category = await guild.create_category(category_name, overwrites=base_overwrites)  # type: ignore[arg-type]
-
-    lounge_topic_parts: list[str] = [
-        "Open discussion for tips, encouragement, and check-ins. This is not therapy.",
+    topic_parts: list[str] = [
+        "Wellness Guardian — tips, encouragement, check-ins, and accountability.",
     ]
     if crisis_resource_url:
-        lounge_topic_parts.append(f"Crisis resources: {crisis_resource_url}")
+        topic_parts.append(f"Crisis resources: {crisis_resource_url}")
     else:
-        lounge_topic_parts.append(CRISIS_RESOURCES_DEFAULT)
-    lounge_topic = "  •  ".join(lounge_topic_parts)[:1024]
+        topic_parts.append(CRISIS_RESOURCES_DEFAULT)
+    topic = "  •  ".join(topic_parts)[:1024]
 
-    lounge = await guild.create_text_channel(
-        LOUNGE_CHANNEL_NAME,
-        category=category,
-        overwrites=base_overwrites,  # type: ignore[arg-type]
-        topic=lounge_topic,
+    return await guild.create_text_channel(
+        channel_name,
+        overwrites=overwrites,  # type: ignore[arg-type]
+        topic=topic,
     )
-
-    # active-in-commitment is read-only for participants — only the bot can post
-    active_overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        role: discord.PermissionOverwrite(
-            view_channel=True,
-            read_message_history=True,
-            send_messages=False,
-            add_reactions=True,
-        ),
-    }
-    if guild.me:
-        active_overwrites[guild.me] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            manage_messages=True,
-            read_message_history=True,
-            embed_links=True,
-        )
-    active = await guild.create_text_channel(
-        ACTIVE_CHANNEL_NAME,
-        category=category,
-        overwrites=active_overwrites,  # type: ignore[arg-type]
-        topic="The Active in Commitment list. People showing up for themselves.",
-    )
-
-    partner = await guild.create_text_channel(
-        PARTNER_CHANNEL_NAME,
-        category=category,
-        overwrites=base_overwrites,  # type: ignore[arg-type]
-        topic="Looking for an accountability partner? Introduce yourself here.",
-    )
-
-    return category, lounge, active, partner
 
 
 # ---------------------------------------------------------------------------
@@ -169,17 +125,17 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @admin_group.command(
         name="setup",
-        description="Create the wellness role, category, and 3 channels.",
+        description="Create the wellness role and channel.",
     )
     @app_commands.describe(
         role_name="Name for the wellness role (default: Wellness Guardian)",
-        category_name="Name for the wellness category (default: 🌿 Wellness)",
+        channel_name="Name for the wellness channel (default: wellness)",
         crisis_resource_url="URL or text for crisis resources (shown in channel topic)",
     )
     async def setup_cmd(
         interaction: discord.Interaction,
         role_name: str | None = None,
-        category_name: str | None = None,
+        channel_name: str | None = None,
         crisis_resource_url: str | None = None,
     ) -> None:
         if not _check_admin(interaction):
@@ -194,7 +150,6 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # Bot must be able to manage roles & channels and (ideally) manage messages
         bot_member = guild.me
         if bot_member is None or not bot_member.guild_permissions.manage_roles:
             await interaction.followup.send(
@@ -204,7 +159,7 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
             return
         if not bot_member.guild_permissions.manage_channels:
             await interaction.followup.send(
-                "❌ I need **Manage Channels** to create the category.",
+                "❌ I need **Manage Channels** to create the wellness channel.",
                 ephemeral=True,
             )
             return
@@ -220,32 +175,17 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
         with ctx.open_db() as conn:
             existing = get_wellness_config(conn, guild.id)
 
-        # Reuse existing role/category/channels if they still exist
+        # Reuse existing role/channel if they still exist
         role: discord.Role | None = None
-        category: discord.CategoryChannel | None = None
-        lounge: discord.TextChannel | None = None
-        active: discord.TextChannel | None = None
-        partner: discord.TextChannel | None = None
+        channel: discord.TextChannel | None = None
 
         if existing:
             if existing.role_id:
                 role = guild.get_role(existing.role_id)
-            if existing.category_id:
-                cat = guild.get_channel(existing.category_id)
-                if isinstance(cat, discord.CategoryChannel):
-                    category = cat
-            if existing.lounge_channel_id:
-                ch = guild.get_channel(existing.lounge_channel_id)
+            if existing.channel_id:
+                ch = guild.get_channel(existing.channel_id)
                 if isinstance(ch, discord.TextChannel):
-                    lounge = ch
-            if existing.active_channel_id:
-                ch = guild.get_channel(existing.active_channel_id)
-                if isinstance(ch, discord.TextChannel):
-                    active = ch
-            if existing.partner_channel_id:
-                ch = guild.get_channel(existing.partner_channel_id)
-                if isinstance(ch, discord.TextChannel):
-                    partner = ch
+                    channel = ch
 
         try:
             if role is None:
@@ -263,17 +203,17 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         crisis_text = (crisis_resource_url or "").strip() or (existing.crisis_resource_url if existing else "")
 
-        if category is None or lounge is None or active is None or partner is None:
+        if channel is None:
             try:
-                category, lounge, active, partner = await _create_wellness_category(
+                channel = await _create_wellness_channel(
                     guild,
                     role,
-                    category_name=category_name or WELLNESS_CATEGORY_NAME,
+                    channel_name=channel_name or WELLNESS_CHANNEL_NAME,
                     crisis_resource_url=crisis_text,
                 )
             except discord.Forbidden:
                 await interaction.followup.send(
-                    "❌ I don't have permission to create the wellness category or channels.",
+                    "❌ I don't have permission to create the wellness channel.",
                     ephemeral=True,
                 )
                 return
@@ -283,10 +223,7 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
                 conn,
                 guild.id,
                 role_id=role.id,
-                category_id=category.id,
-                lounge_channel_id=lounge.id,
-                active_channel_id=active.id,
-                partner_channel_id=partner.id,
+                channel_id=channel.id,
                 crisis_resource_url=crisis_text or None,
             )
 
@@ -294,10 +231,7 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
             title="🌿 Wellness Guardian — Setup Complete",
             description=(
                 f"**Role:** {role.mention}\n"
-                f"**Category:** {category.name}\n"
-                f"• {lounge.mention} — open discussion\n"
-                f"• {active.mention} — active in commitment list\n"
-                f"• {partner.mention} — accountability partners\n\n"
+                f"**Channel:** {channel.mention}\n\n"
                 "Members can now run `/wellness setup` to opt in."
                 + manage_messages_warning
             ),

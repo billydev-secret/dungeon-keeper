@@ -133,11 +133,16 @@ async def callback(request: Request) -> RedirectResponse:
         bot = getattr(ctx, "bot", None)
         guild = bot.get_guild(guild_id) if bot else None
 
+        role_ids: list[int] = []
+        role_names: list[str] = []
+
         if guild:
             member = guild.get_member(user_id)
             if not member:
                 return _login_redirect("You must be a member of The Golden Meadow to use this dashboard.")
             permission_bits = member.guild_permissions.value
+            role_ids = [r.id for r in member.roles if not r.is_default()]
+            role_names = [r.name for r in member.roles if not r.is_default()]
         else:
             # Standalone mode — check via user's guild list
             guilds_resp = await client.get(f"{DISCORD_API}/users/@me/guilds", headers=headers)
@@ -158,6 +163,8 @@ async def callback(request: Request) -> RedirectResponse:
         username=username,
         access_token=access_token,
         permission_bits=permission_bits,
+        role_ids=role_ids,
+        role_names=role_names,
     )
 
     _log.info(

@@ -34,9 +34,17 @@ class AuthenticatedUser:
     user_id: int
     username: str
     perms: frozenset[str]
+    role_ids: tuple[int, ...] = ()
+    role_names: tuple[str, ...] = ()
 
     def has_perm(self, perm: str) -> bool:
         return perm in self.perms
+
+    def has_role(self, role_id: int) -> bool:
+        return role_id in self.role_ids
+
+    def has_role_named(self, name: str) -> bool:
+        return any(n.lower() == name.lower() for n in self.role_names)
 
 
 class AuthBackend(Protocol):
@@ -108,6 +116,8 @@ class DiscordOAuthAuth:
         username: str,
         access_token: str,
         permission_bits: int = 0,
+        role_ids: list[int] | None = None,
+        role_names: list[str] | None = None,
     ) -> str:
         """Create a signed, timestamped session cookie value."""
         return self._serializer.dumps({
@@ -115,6 +125,8 @@ class DiscordOAuthAuth:
             "name": username,
             "token": access_token,
             "perms_bits": permission_bits,
+            "role_ids": role_ids or [],
+            "role_names": role_names or [],
         })
 
     def read_session(self, cookie: str) -> dict | None:
@@ -148,16 +160,24 @@ class DiscordOAuthAuth:
             if not member:
                 return None  # User no longer in guild
             perms = resolve_discord_perms(member.guild_permissions.value)
+            rids = tuple(r.id for r in member.roles if not r.is_default())
+            rnames = tuple(r.name for r in member.roles if not r.is_default())
             return AuthenticatedUser(
                 user_id=user_id,
                 username=member.display_name,
                 perms=perms,
+                role_ids=rids,
+                role_names=rnames,
             )
 
-        # Fallback: use permission bits stored at login time
+        # Fallback: use permission bits and roles stored at login time
         perms_bits: int = session.get("perms_bits", 0)
+        stored_rids = tuple(int(r) for r in session.get("role_ids", []))
+        stored_rnames = tuple(str(r) for r in session.get("role_names", []))
         return AuthenticatedUser(
             user_id=user_id,
             username=username,
             perms=resolve_discord_perms(perms_bits),
+            role_ids=stored_rids,
+            role_names=stored_rnames,
         )

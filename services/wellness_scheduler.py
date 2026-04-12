@@ -248,11 +248,11 @@ def _build_active_embed(
 async def _rebuild_active_list_for_guild(bot: discord.Client, db_path: Path, guild: discord.Guild) -> None:
     with open_db(db_path) as conn:
         cfg = get_wellness_config(conn, guild.id)
-        if cfg is None or not cfg.active_channel_id:
+        if cfg is None or not cfg.channel_id:
             return
         entries = list_committed_users_with_streaks(conn, guild.id)
 
-    channel = guild.get_channel(cfg.active_channel_id)
+    channel = guild.get_channel(cfg.channel_id)
     if channel is None or not isinstance(channel, discord.TextChannel):
         return
     me = guild.me
@@ -300,11 +300,11 @@ async def _post_milestone_celebrations(bot: discord.Client, db_path: Path, guild
     """Post celebration messages for users whose badge upgraded since last check."""
     with open_db(db_path) as conn:
         cfg = get_wellness_config(conn, guild.id)
-        if cfg is None or not cfg.active_channel_id:
+        if cfg is None or not cfg.channel_id:
             return
         pending = list_uncelebrated_milestones(conn, guild.id)
 
-    channel = guild.get_channel(cfg.active_channel_id)
+    channel = guild.get_channel(cfg.channel_id)
     if channel is None or not isinstance(channel, discord.TextChannel):
         return
     me = guild.me

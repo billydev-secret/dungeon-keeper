@@ -266,15 +266,17 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
         """
     )
 
+    # Migrate old schema (category + 3 channels) → single channel
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(wellness_config)").fetchall()}
+    if "category_id" in cols and "channel_id" not in cols:
+        conn.execute("DROP TABLE wellness_config")
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS wellness_config (
             guild_id               INTEGER PRIMARY KEY,
             role_id                INTEGER NOT NULL DEFAULT 0,
-            category_id            INTEGER NOT NULL DEFAULT 0,
-            lounge_channel_id      INTEGER NOT NULL DEFAULT 0,
-            active_channel_id      INTEGER NOT NULL DEFAULT 0,
-            partner_channel_id     INTEGER NOT NULL DEFAULT 0,
+            channel_id             INTEGER NOT NULL DEFAULT 0,
             active_list_message_id INTEGER NOT NULL DEFAULT 0,
             crisis_resource_url    TEXT NOT NULL DEFAULT '',
             default_enforcement    TEXT NOT NULL DEFAULT 'gradual'
@@ -576,10 +578,7 @@ def gc_opted_out_users(conn: sqlite3.Connection, retention_seconds: int = SETTIN
 class WellnessConfig:
     guild_id: int
     role_id: int
-    category_id: int
-    lounge_channel_id: int
-    active_channel_id: int
-    partner_channel_id: int
+    channel_id: int
     active_list_message_id: int
     crisis_resource_url: str
     default_enforcement: str
@@ -589,10 +588,7 @@ class WellnessConfig:
         return cls(
             guild_id=int(row["guild_id"]),
             role_id=int(row["role_id"]),
-            category_id=int(row["category_id"]),
-            lounge_channel_id=int(row["lounge_channel_id"]),
-            active_channel_id=int(row["active_channel_id"]),
-            partner_channel_id=int(row["partner_channel_id"]),
+            channel_id=int(row["channel_id"]),
             active_list_message_id=int(row["active_list_message_id"]),
             crisis_resource_url=str(row["crisis_resource_url"]),
             default_enforcement=str(row["default_enforcement"]),
@@ -611,10 +607,7 @@ def upsert_wellness_config(
     guild_id: int,
     *,
     role_id: int | None = None,
-    category_id: int | None = None,
-    lounge_channel_id: int | None = None,
-    active_channel_id: int | None = None,
-    partner_channel_id: int | None = None,
+    channel_id: int | None = None,
     active_list_message_id: int | None = None,
     crisis_resource_url: str | None = None,
     default_enforcement: str | None = None,
@@ -634,18 +627,9 @@ def upsert_wellness_config(
     if role_id is not None:
         fields.append("role_id = ?")
         values.append(int(role_id))
-    if category_id is not None:
-        fields.append("category_id = ?")
-        values.append(int(category_id))
-    if lounge_channel_id is not None:
-        fields.append("lounge_channel_id = ?")
-        values.append(int(lounge_channel_id))
-    if active_channel_id is not None:
-        fields.append("active_channel_id = ?")
-        values.append(int(active_channel_id))
-    if partner_channel_id is not None:
-        fields.append("partner_channel_id = ?")
-        values.append(int(partner_channel_id))
+    if channel_id is not None:
+        fields.append("channel_id = ?")
+        values.append(int(channel_id))
     if active_list_message_id is not None:
         fields.append("active_list_message_id = ?")
         values.append(int(active_list_message_id))

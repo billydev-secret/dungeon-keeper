@@ -100,6 +100,8 @@ function allPages(section) {
 }
 
 let userPerms = new Set();
+let userRoleIds = new Set();
+let userRoleNames = [];
 let visibleSections = SECTIONS;
 let ALL_PAGES = SECTIONS.flatMap(allPages);
 let PAGE_TO_SECTION = {};
@@ -236,6 +238,18 @@ async function boot() {
     if (!me) return; // redirecting to login
 
     userPerms = new Set(me.perms);
+    userRoleIds = new Set(me.role_ids || []);
+    userRoleNames = me.role_names || [];
+
+    // Expose user info globally so panel modules can access it.
+    window.__dk_user = {
+      user_id: me.user_id,
+      username: me.username,
+      perms: userPerms,
+      role_ids: userRoleIds,
+      role_names: userRoleNames,
+    };
+
     rebuildIndex();
 
     meEl.textContent = me.username;
