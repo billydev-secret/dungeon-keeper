@@ -75,7 +75,7 @@ const SECTIONS = [
     ],
   },
   {
-    id: "wellness", label: "Wellness", perms: [],
+    id: "wellness", label: "Wellness", perms: [], roles: ["Wellness Guardian"],
     items: [
       { id: "wellness-home",      label: "Overview",   module: "./panels/wellness-home.js" },
       { id: "wellness-caps",      label: "Caps",       module: "./panels/wellness-caps.js" },
@@ -107,9 +107,15 @@ let ALL_PAGES = SECTIONS.flatMap(allPages);
 let PAGE_TO_SECTION = {};
 
 function rebuildIndex() {
-  visibleSections = SECTIONS.filter((sec) =>
-    !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p))
-  );
+  visibleSections = SECTIONS.filter((sec) => {
+    const permOk = !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p));
+    if (!permOk) return false;
+    if (sec.roles && sec.roles.length > 0) {
+      if (userPerms.has("manage_server") || userPerms.has("admin")) return true;
+      return sec.roles.some((r) => userRoleNames.includes(r));
+    }
+    return true;
+  });
   ALL_PAGES = visibleSections.flatMap(allPages);
   PAGE_TO_SECTION = {};
   for (const sec of visibleSections) {
