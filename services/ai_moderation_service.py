@@ -379,10 +379,10 @@ async def ai_review_user(
     days: int = 7,
     model: str | None = None,
 ) -> AiModerationResult:
-    from services.ai_config import get_mod_model, get_prompt
+    from services.ai_config import get_command_model, get_prompt
 
     if model is None:
-        model = get_mod_model(conn)
+        model = get_command_model(conn, "ai_prompt_review")
     system = get_prompt(conn, "ai_prompt_review")
 
     lines, user_msg_count, channels_checked = _fetch_user_context_from_db(
@@ -420,10 +420,10 @@ async def ai_scan_channel(
     count: int = 50,
     model: str | None = None,
 ) -> AiModerationResult:
-    from services.ai_config import get_mod_model, get_prompt
+    from services.ai_config import get_command_model, get_prompt
 
     if model is None:
-        model = get_mod_model(conn)
+        model = get_command_model(conn, "ai_prompt_scan")
     system = get_prompt(conn, "ai_prompt_scan")
 
     # Columns: 0=message_id, 1=author_id, 2=content, 3=reply_to_id, 4=ts
@@ -486,12 +486,12 @@ async def ai_check_watched_message(
     """
     from services.ai_config import (
         DEFAULT_MOD_MODEL,
-        get_mod_model_from_path,
+        get_command_model_from_path,
         get_prompt_from_path,
     )
 
     if model is None:
-        model = get_mod_model_from_path(db_path) if db_path else DEFAULT_MOD_MODEL
+        model = get_command_model_from_path(db_path, "ai_prompt_watch_check") if db_path else DEFAULT_MOD_MODEL
     system = get_prompt_from_path(db_path, "ai_prompt_watch_check") if db_path else _WATCH_CHECK_SYSTEM
 
     ts = message.created_at.strftime("%Y-%m-%d %H:%M") if message.created_at else "?"
@@ -520,10 +520,10 @@ async def ai_query_channel(
     minutes: int = 60,
     model: str | None = None,
 ) -> AiModerationResult:
-    from services.ai_config import get_mod_model, get_prompt
+    from services.ai_config import get_command_model, get_prompt
 
     if model is None:
-        model = get_mod_model(conn)
+        model = get_command_model(conn, "ai_prompt_query_channel")
     system = get_prompt(conn, "ai_prompt_query_channel")
 
     cutoff_ts = int((datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp())
@@ -586,10 +586,10 @@ async def ai_query_user(
     days: int = 14,
     model: str | None = None,
 ) -> AiModerationResult:
-    from services.ai_config import get_mod_model, get_prompt
+    from services.ai_config import get_command_model, get_prompt
 
     if model is None:
-        model = get_mod_model(conn)
+        model = get_command_model(conn, "ai_prompt_query_user")
     system = get_prompt(conn, "ai_prompt_query_user")
 
     lines, user_msg_count, _ = _fetch_user_context_from_db(

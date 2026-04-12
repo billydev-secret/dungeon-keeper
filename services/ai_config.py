@@ -45,6 +45,7 @@ class PromptInfo:
     label: str               # human-readable name shown in the dashboard
     description: str         # one-line description
     default_factory: Callable[[], str]  # returns the baked-in default
+    model_key: str = ""      # per-command model override key (empty = use global)
 
 
 def _default_watch_check() -> str:
@@ -83,36 +84,42 @@ _PROMPTS: list[PromptInfo] = [
         label="Watch — live rule check",
         description="System prompt for /ai watch (single-message rule check).",
         default_factory=_default_watch_check,
+        model_key="ai_model_watch_check",
     ),
     PromptInfo(
         key="ai_prompt_review",
         label="Review — user history",
         description="System prompt for /ai review.",
         default_factory=_default_review,
+        model_key="ai_model_review",
     ),
     PromptInfo(
         key="ai_prompt_scan",
         label="Scan — recent channel messages",
         description="System prompt for /ai scan.",
         default_factory=_default_scan,
+        model_key="ai_model_scan",
     ),
     PromptInfo(
         key="ai_prompt_query_user",
         label="Query — user question",
         description="System prompt for /ai query (free-form question about a user).",
         default_factory=_default_query_user,
+        model_key="ai_model_query_user",
     ),
     PromptInfo(
         key="ai_prompt_query_channel",
         label="Query — channel question",
         description="System prompt for /ai channel (free-form question about a channel).",
         default_factory=_default_query_channel,
+        model_key="ai_model_query_channel",
     ),
     PromptInfo(
         key="ai_prompt_wellness_encouragement",
         label="Wellness encouragement",
         description="System prompt for the weekly wellness encouragement note.",
         default_factory=_default_wellness,
+        model_key="ai_model_wellness",
     ),
 ]
 
@@ -136,6 +143,49 @@ def get_mod_model(conn: sqlite3.Connection) -> str:
 
 def get_wellness_model(conn: sqlite3.Connection) -> str:
     return get_config_value(conn, _WELLNESS_MODEL_KEY, DEFAULT_WELLNESS_MODEL) or DEFAULT_WELLNESS_MODEL
+
+
+def get_command_model(conn: sqlite3.Connection, prompt_key: str) -> str:
+    """Return the model for a specific command.
+
+    Checks the per-command model key first, then falls back to the global
+    moderation model (or wellness model for the wellness prompt).
+    """
+    info = _PROMPTS_BY_KEY.get(prompt_key)
+    if info and info.model_key:
+        per_cmd = get_config_value(conn, info.model_key, "")
+        if per_cmd:
+            return per_cmd
+    # Fallback to global
+    if prompt_key == "ai_prompt_wellness_encouragement":
+        return get_wellness_model(conn)
+    return get_mod_model(conn)
+
+
+def get_command_model_with_source(
+    conn: sqlite3.Connection, prompt_key: str,
+) -> tuple[str, bool]:
+    """Return ``(model, is_per_command)``.
+
+    ``is_per_command`` is True when a per-command override is set.
+    """
+    info = _PROMPTS_BY_KEY.get(prompt_key)
+    if info and info.model_key:
+        per_cmd = get_config_value(conn, info.model_key, "")
+        if per_cmd:
+            return per_cmd, True
+    if prompt_key == "ai_prompt_wellness_encouragement":
+        return get_wellness_model(conn), False
+    return get_mod_model(conn), False
+
+
+def get_command_model_from_path(db_path: Path, prompt_key: str) -> str:
+    """Like ``get_command_model`` but opens the DB itself."""
+    try:
+        with open_db(db_path) as conn:
+            return get_command_model(conn, prompt_key)
+    except sqlite3.Error:
+        return DEFAULT_MOD_MODEL
 
 
 def get_prompt(conn: sqlite3.Connection, key: str) -> str:
@@ -204,6 +254,17 @@ def set_mod_model(conn: sqlite3.Connection, model: str) -> None:
 
 def set_wellness_model(conn: sqlite3.Connection, model: str) -> None:
     set_config(conn, _WELLNESS_MODEL_KEY, model)
+
+
+def set_command_model(conn: sqlite3.Connection, prompt_key: str, model: str) -> None:
+    """Set a per-command model override. Pass empty string to clear it."""
+    info = _PROMPTS_BY_KEY.get(prompt_key)
+    if info is None or not info.model_key:
+        raise KeyError(f"Unknown AI prompt key: {prompt_key}")
+    if model:
+        set_config(conn, info.model_key, model)
+    else:
+        conn.execute("DELETE FROM config WHERE key = ?", (info.model_key,))
 
 
 def set_prompt(conn: sqlite3.Connection, key: str, value: str) -> None:

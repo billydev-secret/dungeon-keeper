@@ -88,8 +88,8 @@ async def generate_weekly_encouragement(
     model = WELLNESS_AI_MODEL
     system = _ENCOURAGEMENT_SYSTEM
     if db_path is not None:
-        from services.ai_config import get_prompt_from_path, get_wellness_model_from_path
-        model = get_wellness_model_from_path(db_path)
+        from services.ai_config import get_command_model_from_path, get_prompt_from_path
+        model = get_command_model_from_path(db_path, "ai_prompt_wellness_encouragement")
         system = get_prompt_from_path(db_path, "ai_prompt_wellness_encouragement")
 
     facts = (

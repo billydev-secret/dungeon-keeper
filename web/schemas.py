@@ -416,6 +416,30 @@ class WarningsResponse(BaseModel):
     warnings: list[WarningEntrySchema]
 
 
+# ── Moderation: Policy Tickets ───────────────────────────────────────────
+
+class PolicyTicketEntrySchema(BaseModel):
+    id: int
+    creator_id: str
+    creator_name: str = ""
+    title: str
+    description: str = ""
+    status: str
+    vote_text: str = ""
+    channel_id: str = ""
+    created_at: float
+    vote_started_at: float | None = None
+    vote_ended_at: float | None = None
+
+
+class PolicyTicketsResponse(BaseModel):
+    open_count: int
+    voting_count: int
+    closed_count: int
+    total_count: int
+    policy_tickets: list[PolicyTicketEntrySchema]
+
+
 # ── Moderation: Audit log ────────────────────────────────────────────────
 
 class AuditEntrySchema(BaseModel):

@@ -28,6 +28,7 @@ async def get_ai_config(
     def _q():
         from services.ai_config import (
             KNOWN_MODELS,
+            get_command_model_with_source,
             get_mod_model,
             get_prompt_with_source,
             get_wellness_model,
@@ -38,12 +39,15 @@ async def get_ai_config(
             prompts = []
             for info in list_prompts():
                 text, is_override = get_prompt_with_source(conn, info.key)
+                cmd_model, model_is_override = get_command_model_with_source(conn, info.key)
                 prompts.append({
                     "key": info.key,
                     "label": info.label,
                     "description": info.description,
                     "text": text,
                     "is_override": is_override,
+                    "model": cmd_model,
+                    "model_is_override": model_is_override,
                 })
 
             return {
@@ -80,6 +84,33 @@ async def update_models(
                 set_mod_model(conn, body.mod_model.strip())
             if body.wellness_model is not None:
                 set_wellness_model(conn, body.wellness_model.strip())
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── PUT: update per-command model ─────────────────────────────────────
+
+class CommandModelUpdate(BaseModel):
+    model: str  # empty string clears the override
+
+
+@router.put("/ai/prompts/{prompt_key}/model")
+async def update_command_model(
+    prompt_key: str,
+    request: Request,
+    body: CommandModelUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+
+    def _q():
+        from services.ai_config import get_prompt_info, set_command_model
+
+        if get_prompt_info(prompt_key) is None:
+            return {"ok": False, "detail": f"Unknown prompt key: {prompt_key}"}
+        with ctx.open_db() as conn:
+            set_command_model(conn, prompt_key, body.model.strip())
         return {"ok": True}
 
     return await run_query(_q)

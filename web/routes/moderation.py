@@ -13,6 +13,7 @@ from web.schemas import (
     AuditLogResponse,
     JailsResponse,
     ModerationStatsResponse,
+    PolicyTicketsResponse,
     TicketsResponse,
     WarningsResponse,
 )
@@ -230,6 +231,61 @@ async def list_warnings(
     _resolve_names(ctx, guild, result["warnings"],
                    ("user_id", "user_name"), ("moderator_id", "moderator_name"),
                    ("revoked_by", "revoker_name"))
+    return result
+
+
+# ── Policy Tickets ────────────────────────────────────────────────────────
+
+@router.get("/moderation/policy-tickets", response_model=PolicyTicketsResponse)
+async def list_policy_tickets(
+    request: Request,
+    status: str | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(ctx.guild_id) if bot else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            clauses = ["guild_id = ?"]
+            params: list = [ctx.guild_id]
+            if status:
+                clauses.append("status = ?")
+                params.append(status)
+            where = " AND ".join(clauses)
+            rows = conn.execute(
+                f"SELECT * FROM policy_tickets WHERE {where} ORDER BY created_at DESC LIMIT 200",
+                params,
+            ).fetchall()
+            tickets = []
+            for r in rows:
+                tickets.append({
+                    "id": r["id"],
+                    "creator_id": str(r["creator_id"]),
+                    "title": r["title"],
+                    "description": r["description"],
+                    "status": r["status"],
+                    "vote_text": r["vote_text"],
+                    "channel_id": str(r["channel_id"]) if r["channel_id"] else "",
+                    "created_at": r["created_at"],
+                    "vote_started_at": r["vote_started_at"],
+                    "vote_ended_at": r["vote_ended_at"],
+                })
+            open_c = sum(1 for t in tickets if t["status"] == "open")
+            voting_c = sum(1 for t in tickets if t["status"] == "voting")
+            closed_c = sum(1 for t in tickets if t["status"] == "closed")
+            return {
+                "open_count": open_c,
+                "voting_count": voting_c,
+                "closed_count": closed_c,
+                "total_count": len(tickets),
+                "policy_tickets": tickets,
+            }
+
+    result = await run_query(_q)
+    _resolve_names(ctx, guild, result["policy_tickets"],
+                   ("creator_id", "creator_name"))
     return result
 
 

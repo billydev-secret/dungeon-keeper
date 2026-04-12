@@ -15,23 +15,39 @@ export function mount(container) {
 
     const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-    const modelOptions = (models, selected) =>
-      models.map((m) => `<option value="${m}"${m === selected ? " selected" : ""}>${m}</option>`).join("");
+    const modelOptions = (models, selected, { allowGlobal = false } = {}) => {
+      let html = allowGlobal ? `<option value=""${!selected ? " selected" : ""}>(use global default)</option>` : "";
+      for (const m of models) {
+        html += `<option value="${m}"${m === selected ? " selected" : ""}>${m}</option>`;
+      }
+      return html;
+    };
 
     let promptCards = "";
     for (const p of data.prompts) {
       const badge = p.is_override
         ? `<span class="ai-badge ai-badge-custom">custom</span>`
         : `<span class="ai-badge ai-badge-default">default</span>`;
+      const modelBadge = p.model_is_override
+        ? `<span class="ai-badge ai-badge-custom">custom</span>`
+        : `<span class="ai-badge ai-badge-default">global</span>`;
       promptCards += `
         <div class="ai-prompt-card" data-key="${p.key}">
           <div class="ai-prompt-header">
             <strong>${esc(p.label)}</strong> ${badge}
             <div class="field-hint">${esc(p.description)}</div>
           </div>
+          <div class="ai-model-row">
+            <label>Model ${modelBadge}</label>
+            <select class="ai-cmd-model">
+              ${modelOptions(data.known_models, p.model_is_override ? p.model : "", { allowGlobal: true })}
+            </select>
+            <button type="button" class="ai-btn ai-btn-save" data-action="save-model" style="padding:4px 10px;">Save</button>
+            <span class="save-status" data-model-status></span>
+          </div>
           <textarea class="ai-prompt-text" rows="8">${esc(p.text)}</textarea>
           <div class="ai-prompt-actions">
-            <button type="button" class="ai-btn ai-btn-save" data-action="save">Save</button>
+            <button type="button" class="ai-btn ai-btn-save" data-action="save">Save Prompt</button>
             <button type="button" class="ai-btn ai-btn-reset" data-action="reset">Reset to Default</button>
             <button type="button" class="ai-btn ai-btn-test" data-action="test">Test</button>
             <span class="save-status" data-prompt-status></span>
@@ -62,29 +78,30 @@ export function mount(container) {
         <div style="margin-bottom:16px;font-size:13px;">${apiKeyNote}</div>
 
         <form class="config-form" data-models-form style="max-width:100%">
-          <h3 style="margin:0 0 4px;font-size:14px;">Models</h3>
+          <h3 style="margin:0 0 4px;font-size:14px;">Global Default Models</h3>
+          <div class="field-hint" style="margin-bottom:8px;">Commands use these unless overridden per-command below</div>
           <div style="display:flex;gap:16px;flex-wrap:wrap;">
             <div class="field" style="flex:1;min-width:220px;">
               <label>Moderation Model</label>
               <select name="mod_model">
                 ${modelOptions(data.known_models, data.mod_model)}
               </select>
-              <div class="field-hint">Used by /ai review, scan, channel, query, and watch</div>
+              <div class="field-hint">Default for /ai review, scan, channel, query, and watch</div>
             </div>
             <div class="field" style="flex:1;min-width:220px;">
               <label>Wellness Model</label>
               <select name="wellness_model">
                 ${modelOptions(data.known_models, data.wellness_model)}
               </select>
-              <div class="field-hint">Used for weekly wellness encouragement notes</div>
+              <div class="field-hint">Default for weekly wellness encouragement notes</div>
             </div>
           </div>
-          <div><button type="submit">Save Models</button><span data-status></span></div>
+          <div><button type="submit">Save Defaults</button><span data-status></span></div>
         </form>
 
         <hr style="border:none;border-top:1px solid var(--grid);margin:20px 0;">
 
-        <h3 style="margin:0 0 12px;font-size:14px;">System Prompts</h3>
+        <h3 style="margin:0 0 12px;font-size:14px;">Commands</h3>
         <div class="ai-prompts-list">
           ${promptCards}
         </div>
@@ -114,6 +131,9 @@ export function mount(container) {
       const textarea = card.querySelector(".ai-prompt-text");
       const status = card.querySelector("[data-prompt-status]");
       const badge = card.querySelector(".ai-badge");
+      const modelSelect = card.querySelector(".ai-cmd-model");
+      const modelStatus = card.querySelector("[data-model-status]");
+      const modelBadge = card.querySelector(".ai-model-row .ai-badge");
       const testArea = card.querySelector(".ai-test-area");
       const testInput = card.querySelector(".ai-test-input");
       const testOutput = card.querySelector(".ai-test-output");
@@ -122,6 +142,22 @@ export function mount(container) {
       card.addEventListener("click", async (e) => {
         const action = e.target.dataset?.action;
         if (!action) return;
+
+        if (action === "save-model") {
+          try {
+            await apiPut(`/api/config/ai/prompts/${key}/model`, { model: modelSelect.value });
+            if (modelSelect.value) {
+              modelBadge.className = "ai-badge ai-badge-custom";
+              modelBadge.textContent = "custom";
+            } else {
+              modelBadge.className = "ai-badge ai-badge-default";
+              modelBadge.textContent = "global";
+            }
+            showStatus(modelStatus, true);
+          } catch (err) {
+            showStatus(modelStatus, false, err.message);
+          }
+        }
 
         if (action === "save") {
           try {
@@ -141,7 +177,6 @@ export function mount(container) {
               credentials: "same-origin",
             });
             if (!res.ok) throw new Error(`${res.status}`);
-            // Reload the default text
             const fresh = await api("/api/config/ai");
             const p = fresh.prompts.find((x) => x.key === key);
             if (p) {
@@ -164,6 +199,7 @@ export function mount(container) {
           testStatus.textContent = "Running…";
           testOutput.textContent = "";
           try {
+            const model = modelSelect.value || undefined;
             const res = await fetch("/api/config/ai/test", {
               method: "POST",
               credentials: "same-origin",
@@ -171,6 +207,7 @@ export function mount(container) {
               body: JSON.stringify({
                 system: textarea.value,
                 user_input: testInput.value,
+                model,
               }),
             });
             const result = await res.json();
