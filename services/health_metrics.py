@@ -561,14 +561,13 @@ def compute_social_graph(conn: sqlite3.Connection, guild_id: int, *,
     thirty_days_ago = _ts(30, now=now)
     nsfw_ids = set(nsfw_channel_ids or [])
 
-    # Build adjacency list from user_interactions (30-day window)
+    # Build adjacency list from interaction log (30-day window)
     rows = conn.execute(
-        """SELECT from_user_id, to_user_id, SUM(reply_count + reaction_count) AS weight
-           FROM user_interactions
-           WHERE guild_id=? AND updated_at>=?
-           GROUP BY from_user_id, to_user_id
-           HAVING weight > 0""",
-        (guild_id, thirty_days_ago),
+        """SELECT from_user_id, to_user_id, COUNT(*) AS weight
+           FROM user_interactions_log
+           WHERE guild_id=? AND ts>=?
+           GROUP BY from_user_id, to_user_id""",
+        (guild_id, int(thirty_days_ago)),
     ).fetchall()
 
     # Directed adjacency: out_edges[u] = {v: weight}
