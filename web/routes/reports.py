@@ -10,7 +10,7 @@ from services.member_quality_score import compute_quality_scores
 from services.message_store import get_known_channels_bulk, get_known_users_bulk
 from services.reports_data import MemberSnapshot
 from web.auth import AuthenticatedUser
-from web.deps import get_ctx, require_perms, run_query
+from web.deps import cached_run_query, get_ctx, invalidate_report_cache, require_perms, run_query
 from web.schemas import (
     ActivityResponse,
     BurstRankingResponse,
@@ -32,6 +32,16 @@ from web.schemas import (
 )
 
 router = APIRouter()
+
+
+@router.post("/cache/clear")
+async def clear_cache(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    removed = invalidate_report_cache(guild_id=ctx.guild_id)
+    return {"cleared": removed}
 
 
 def _resolve_names(ctx, guild, entries, *id_name_pairs):
@@ -90,7 +100,11 @@ async def role_growth(
                 conn, ctx.guild_id, resolution, role_filter, utc_offset_hours=tz
             )
 
-    return await run_query(_q)
+    return await cached_run_query(
+        "role-growth", ctx.guild_id,
+        {"resolution": resolution, "roles": roles},
+        _q,
+    )
 
 
 # ── Message cadence ──────────────────────────────────────────────────────
@@ -112,7 +126,11 @@ async def message_cadence(
                 conn, ctx.guild_id, resolution, tz, ch_id,
             )
 
-    return await run_query(_q)
+    return await cached_run_query(
+        "message-cadence", ctx.guild_id,
+        {"resolution": resolution, "channel_id": channel_id},
+        _q,
+    )
 
 
 # ── Join times ───────────────────────────────────────────────────────────
@@ -177,7 +195,11 @@ async def join_times(
     def _q():
         return reports_data.get_join_times_data(members, resolution, tz)
 
-    return await run_query(_q)
+    return await cached_run_query(
+        "join-times", ctx.guild_id,
+        {"resolution": resolution},
+        _q,
+    )
 
 
 # ── NSFW gender activity ────────────────────────────────────────────────
@@ -233,7 +255,11 @@ async def nsfw_gender(
                 conn, ctx.guild_id, resolution, target_ids, tz, media_only,
             )
 
-    return await run_query(_q)
+    return await cached_run_query(
+        "nsfw-gender", ctx.guild_id,
+        {"resolution": resolution, "media_only": media_only, "channel_id": channel_id},
+        _q,
+    )
 
 
 # ── Message rate ─────────────────────────────────────────────────────────
@@ -254,7 +280,11 @@ async def message_rate(
                 conn, ctx.guild_id, days, tz,
             )
 
-    return await run_query(_q)
+    return await cached_run_query(
+        "message-rate", ctx.guild_id,
+        {"days": days},
+        _q,
+    )
 
 
 # ── Greeter response ────────────────────────────────────────────────────
@@ -370,7 +400,11 @@ async def greeter_response(
             data["window_label"] = f"Last {days} Days"
         return data
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "greeter-response", ctx.guild_id,
+        {"days": days},
+        _q,
+    )
     if result is None or result["count"] == 0:
         raise HTTPException(status_code=404, detail="No greeter response data found for the selected period.")
 
@@ -402,7 +436,11 @@ async def activity(
                 mode=mode, user_id=uid, channel_id=cid,
             )
 
-    return await run_query(_q)
+    return await cached_run_query(
+        "activity", ctx.guild_id,
+        {"resolution": resolution, "mode": mode, "user_id": user_id, "channel_id": channel_id},
+        _q,
+    )
 
 
 
@@ -425,7 +463,11 @@ async def invite_effectiveness(
                 conn, ctx.guild_id, days=days, active_days=active_days,
             )
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "invite-effectiveness", ctx.guild_id,
+        {"days": days, "active_days": active_days},
+        _q,
+    )
     _resolve_names(ctx, guild, result.get("inviters", []),
                    ("inviter_id", "inviter_name"))
     return result
@@ -450,7 +492,11 @@ async def interaction_graph(
                 conn, ctx.guild_id, days=days, limit=min(limit, 100),
             )
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "interaction-graph", ctx.guild_id,
+        {"days": days, "limit": limit},
+        _q,
+    )
     _resolve_names(ctx, guild, result.get("nodes", []),
                    ("user_id", "user_name"))
     _resolve_names(ctx, guild, result.get("edges", []),
@@ -480,7 +526,11 @@ async def retention(
                 min_previous=min_previous,
             )
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "retention", ctx.guild_id,
+        {"period_days": period_days, "min_previous": min_previous},
+        _q,
+    )
     _resolve_names(ctx, guild, result.get("entries", []),
                    ("user_id", "user_name"))
     return result
@@ -505,7 +555,11 @@ async def voice_activity(
                 conn, ctx.guild_id, days=days, utc_offset_hours=tz,
             )
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "voice-activity", ctx.guild_id,
+        {"days": days},
+        _q,
+    )
     _resolve_names(ctx, guild, result.get("top_users", []),
                    ("user_id", "user_name"))
     return result
@@ -527,7 +581,11 @@ async def xp_leaderboard(
         with ctx.open_db() as conn:
             return reports_data.get_xp_leaderboard_data(conn, ctx.guild_id, days=days)
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "xp-leaderboard", ctx.guild_id,
+        {"days": days},
+        _q,
+    )
     _resolve_names(ctx, guild, result.get("leaderboard", []),
                    ("user_id", "user_name"))
     return result
@@ -551,7 +609,11 @@ async def reaction_analytics(
                 conn, ctx.guild_id, days=days,
             )
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "reaction-analytics", ctx.guild_id,
+        {"days": days},
+        _q,
+    )
     _resolve_names(ctx, guild, result.get("top_givers", []),
                    ("user_id", "user_name"))
     _resolve_names(ctx, guild, result.get("top_receivers", []),
@@ -579,7 +641,11 @@ async def message_rate_drops(
                 min_previous=min_previous,
             )
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "message-rate-drops", ctx.guild_id,
+        {"period_days": period_days, "min_previous": min_previous},
+        _q,
+    )
     _resolve_names(ctx, guild, result.get("entries", []),
                    ("user_id", "user_name"))
     return result
@@ -604,7 +670,11 @@ async def burst_ranking(
                 conn, ctx.guild_id, min_sessions=min_sessions, days=days,
             )
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "burst-ranking", ctx.guild_id,
+        {"min_sessions": min_sessions, "days": days},
+        _q,
+    )
     _resolve_names(ctx, guild, result.get("entries", []),
                    ("user_id", "user_name"))
     return result
@@ -628,7 +698,11 @@ async def channel_comparison(
                 conn, ctx.guild_id, days=max(1, min(365, days)),
             )
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "channel-comparison", ctx.guild_id,
+        {"days": days},
+        _q,
+    )
     # Resolve channel names: guild cache first, then known_channels DB
     if result.get("channels"):
         unresolved_ids: list[int] = []
@@ -718,7 +792,11 @@ async def quality_score(
             scored = sum(1 for e in entries if e["status"] == "Active")
             return {"total_scored": scored, "entries": entries}
 
-    result = await run_query(_q)
+    result = await cached_run_query(
+        "quality-score", ctx.guild_id,
+        {"days": days, "min_active_days": min_active_days},
+        _q, ttl=300,
+    )
     _resolve_names(ctx, guild, result.get("entries", []),
                    ("user_id", "user_name"))
     return result
