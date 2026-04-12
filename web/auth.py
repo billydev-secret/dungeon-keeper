@@ -66,17 +66,22 @@ _MOD_BITS = _MANAGE_GUILD | _KICK_MEMBERS | _BAN_MEMBERS | _MANAGE_MESSAGES | _M
 def resolve_discord_perms(permission_bits: int) -> frozenset[str]:
     """Map a Discord permission bitfield to dashboard permission strings.
 
-    * ``admin``     — user has the Discord ADMINISTRATOR bit.
-    * ``moderator`` — user has ADMINISTRATOR *or* any of MANAGE_GUILD,
+    * ``admin``         — user has the Discord ADMINISTRATOR bit.
+    * ``moderator``     — user has ADMINISTRATOR *or* any of MANAGE_GUILD,
       KICK_MEMBERS, BAN_MEMBERS, MANAGE_MESSAGES, MANAGE_ROLES.
+    * ``manage_server`` — user has ADMINISTRATOR or MANAGE_GUILD specifically.
+      Used by the wellness panel admin pages (spec §10).
 
-    Admin implies moderator, so admin users get both strings.
+    Admin implies moderator AND manage_server.
     """
     perms: set[str] = set()
     if permission_bits & _ADMINISTRATOR:
-        perms.update({"admin", "moderator"})
-    elif permission_bits & _MOD_BITS:
-        perms.add("moderator")
+        perms.update({"admin", "moderator", "manage_server"})
+    else:
+        if permission_bits & _MOD_BITS:
+            perms.add("moderator")
+        if permission_bits & _MANAGE_GUILD:
+            perms.add("manage_server")
     return frozenset(perms)
 
 

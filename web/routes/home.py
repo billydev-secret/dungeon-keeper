@@ -5,6 +5,7 @@ import time
 
 from fastapi import APIRouter, Depends, Request
 
+from db_utils import get_config_value
 from services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web.auth import AuthenticatedUser
 from web.deps import get_ctx, require_perms, run_query
@@ -81,6 +82,29 @@ async def home_data(
             if jts >= one_month:
                 joins_30d += 1
     recent_joins = joins_7d
+
+    # ── Mod member IDs for "Returned After Break" acknowledgment check ──
+    # A returning user stays on the card until any mod has replied to or
+    # mentioned them after the return event. We need the set of user IDs
+    # that currently have mod/admin access; role membership is only
+    # available via the live guild cache.
+    mod_ids: set[int] = set()
+    if guild:
+        with ctx.open_db() as _conn_cfg:
+            _mod_raw = get_config_value(_conn_cfg, "mod_role_ids", "")
+            _admin_raw = get_config_value(_conn_cfg, "admin_role_ids", "")
+        _configured_mod_roles = {
+            int(x) for x in (_mod_raw + "," + _admin_raw).split(",") if x.strip().isdigit()
+        }
+        for _m in guild.members:
+            if _m.bot:
+                continue
+            perms = _m.guild_permissions
+            if perms.administrator or perms.manage_guild:
+                mod_ids.add(_m.id)
+                continue
+            if _configured_mod_roles & {r.id for r in _m.roles}:
+                mod_ids.add(_m.id)
 
     # ── DB queries ───────────────────────────────────────────────────
     def _q():
@@ -226,38 +250,106 @@ async def home_data(
                 (ctx.guild_id, int(one_day)),
             ).fetchone()[0]
 
-            # Users who returned after 6+ hours of inactivity
-            # Find users whose latest message is within the last hour,
-            # but their previous message was 6+ hours before that.
-            returned_rows = conn.execute(
+            # Users who returned after 6+ hours of inactivity — persists
+            # until a moderator has replied to or mentioned them.
+            #
+            # Look back 7 days for "return events" (a message preceded by a
+            # 6h+ gap). Use a 30-day LAG window so returns near the edge of
+            # the 7-day window still see their prior message. Keep the most
+            # recent return per user.
+            seven_days_ago = now - 7 * 86400
+            thirty_days_ago = now - 30 * 86400
+            return_rows = conn.execute(
                 """
-                SELECT m1.author_id,
-                       m1.ts AS latest_ts,
-                       (SELECT MAX(m2.ts) FROM messages m2
-                        WHERE m2.guild_id = m1.guild_id
-                          AND m2.author_id = m1.author_id
-                          AND m2.ts < m1.ts) AS prev_ts
-                FROM (
-                    SELECT author_id, MAX(ts) AS ts, guild_id
+                WITH recent_msgs AS (
+                    SELECT author_id, ts,
+                           LAG(ts) OVER (PARTITION BY author_id ORDER BY ts) AS prev_ts
                     FROM messages
                     WHERE guild_id = ? AND ts >= ?
-                    GROUP BY author_id
-                ) m1
-                WHERE prev_ts IS NOT NULL
-                  AND (m1.ts - prev_ts) >= 21600
-                ORDER BY m1.ts DESC
-                LIMIT 15
+                ),
+                returns AS (
+                    SELECT author_id, ts AS return_ts, (ts - prev_ts) AS gap,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY author_id ORDER BY ts DESC
+                           ) AS rn
+                    FROM recent_msgs
+                    WHERE prev_ts IS NOT NULL
+                      AND (ts - prev_ts) >= 21600
+                      AND ts >= ?
+                )
+                SELECT author_id, return_ts, gap
+                FROM returns
+                WHERE rn = 1
+                ORDER BY return_ts DESC
+                LIMIT 50
                 """,
-                (ctx.guild_id, int(one_hour)),
+                (ctx.guild_id, int(thirty_days_ago), int(seven_days_ago)),
             ).fetchall()
+
+            return_candidates = [
+                {
+                    "author_id": int(r["author_id"]),
+                    "return_ts": int(r["return_ts"]),
+                    "gap": int(r["gap"]),
+                }
+                for r in return_rows
+            ]
+
+            # Acknowledgment check: for each candidate, has any moderator
+            # replied to or @mentioned them since their return? We batch
+            # this into a single query using a VALUES CTE.
+            acknowledged: set[int] = set()
+            if return_candidates and mod_ids:
+                values_clause = ",".join("(?, ?)" for _ in return_candidates)
+                values_params: list = []
+                for c in return_candidates:
+                    values_params.append(c["author_id"])
+                    values_params.append(c["return_ts"])
+                mod_list = list(mod_ids)
+                mod_placeholders = ",".join("?" for _ in mod_list)
+                ack_query = f"""
+                    WITH cands(user_id, return_ts) AS (VALUES {values_clause})
+                    SELECT DISTINCT cands.user_id
+                    FROM cands
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM messages reply
+                        JOIN messages target
+                          ON reply.reply_to_id = target.message_id
+                        WHERE reply.guild_id = ?
+                          AND reply.author_id IN ({mod_placeholders})
+                          AND target.author_id = cands.user_id
+                          AND reply.ts > cands.return_ts
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM message_mentions mm
+                        JOIN messages mres ON mm.message_id = mres.message_id
+                        WHERE mres.guild_id = ?
+                          AND mres.author_id IN ({mod_placeholders})
+                          AND mm.user_id = cands.user_id
+                          AND mres.ts > cands.return_ts
+                    )
+                """
+                ack_params = (
+                    values_params
+                    + [ctx.guild_id]
+                    + mod_list
+                    + [ctx.guild_id]
+                    + mod_list
+                )
+                ack_rows = conn.execute(ack_query, ack_params).fetchall()
+                acknowledged = {int(r[0]) for r in ack_rows}
+
             returned_users = [
                 {
-                    "user_id": str(r["author_id"]),
+                    "user_id": str(c["author_id"]),
                     "user_name": "",
-                    "gap_hours": round((r["latest_ts"] - r["prev_ts"]) / 3600, 1),
+                    "gap_hours": round(c["gap"] / 3600, 1),
                 }
-                for r in returned_rows
-            ]
+                for c in return_candidates
+                if c["author_id"] not in acknowledged
+            ][:15]
 
             # Conversation starters — first message in a channel after 30min silence
             starter_rows = conn.execute(

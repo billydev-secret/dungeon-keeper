@@ -74,6 +74,23 @@ const SECTIONS = [
       { id: "config-spoiler",    label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
     ],
   },
+  {
+    id: "wellness", label: "Wellness", perms: [],
+    items: [
+      { id: "wellness-home",      label: "Overview",   module: "./panels/wellness-home.js" },
+      { id: "wellness-caps",      label: "Caps",       module: "./panels/wellness-caps.js" },
+      { id: "wellness-blackouts", label: "Blackouts",  module: "./panels/wellness-blackouts.js" },
+      { id: "wellness-away",      label: "Away",       module: "./panels/wellness-away.js" },
+      { id: "wellness-partners",  label: "Partners",   module: "./panels/wellness-partners.js" },
+      { id: "wellness-history",   label: "History",    module: "./panels/wellness-history.js" },
+    ],
+  },
+  {
+    id: "wellness-admin", label: "Wellness Admin", perms: ["manage_server"],
+    items: [
+      { id: "wellness-admin-overview", label: "Overview",  module: "./panels/wellness-admin.js" },
+    ],
+  },
 ];
 
 // Flatten all page items for lookup

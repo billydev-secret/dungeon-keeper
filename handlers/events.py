@@ -27,6 +27,7 @@ from services.message_store import (
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
 from commands.jail_commands import check_jail_rejoin
 from services.welcome_service import build_leave_embed, build_welcome_embed
+from services.wellness_enforcement import wellness_on_message
 from services.xp_service import handle_level_progress
 from xp_system import DEFAULT_XP_SETTINGS, count_xp_events, log_role_event, record_member_activity
 
@@ -123,6 +124,10 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         attachment_urls = [a.url for a in message.attachments]
 
         if spoiler_deleted:
+            return
+
+        # Wellness Guardian enforcement — may delete the message and DM the user
+        if await wellness_on_message(ctx, message):
             return
 
         with ctx.open_db() as conn:

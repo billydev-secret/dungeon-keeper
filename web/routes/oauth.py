@@ -33,6 +33,24 @@ def _is_secure() -> bool:
     return _base_url().startswith("https://")
 
 
+_RETURN_TO_COOKIE = "dk_oauth_return"
+
+
+def _safelisted_return_urls() -> list[str]:
+    """Origins allowed as `return_to` after OAuth callback. Must match scheme+host+port."""
+    return [_base_url()]
+
+
+def _is_safe_return_to(value: str | None) -> bool:
+    if not value:
+        return False
+    safelist = _safelisted_return_urls()
+    for prefix in safelist:
+        if value == prefix or value.startswith(prefix + "/"):
+            return True
+    return False
+
+
 # ── Initiate OAuth2 ────────────────────────────────────────────────────
 
 @router.get("/auth/discord", include_in_schema=False)
@@ -54,6 +72,14 @@ async def auth_discord(request: Request) -> RedirectResponse:
         "dk_oauth_state", state,
         max_age=300, httponly=True, samesite="lax", secure=_is_secure(),
     )
+
+    # Honor optional return_to (used by the wellness panel on 8079)
+    return_to = request.query_params.get("return_to")
+    if return_to and _is_safe_return_to(return_to):
+        response.set_cookie(
+            _RETURN_TO_COOKIE, return_to,
+            max_age=300, httponly=True, samesite="lax", secure=_is_secure(),
+        )
     return response
 
 
@@ -139,7 +165,12 @@ async def callback(request: Request) -> RedirectResponse:
         username, user_id, resolve_discord_perms(permission_bits),
     )
 
-    response = RedirectResponse("/", status_code=302)
+    # Honor a safelisted return_to from the original /auth/discord call.
+    # Defaults to the dashboard root.
+    return_to = request.cookies.get(_RETURN_TO_COOKIE)
+    final_redirect: str = return_to if return_to and _is_safe_return_to(return_to) else "/"
+
+    response = RedirectResponse(final_redirect, status_code=302)
     response.set_cookie(
         SESSION_COOKIE, cookie_value,
         max_age=30 * 86400,
@@ -149,6 +180,7 @@ async def callback(request: Request) -> RedirectResponse:
         path="/",
     )
     response.delete_cookie("dk_oauth_state")
+    response.delete_cookie(_RETURN_TO_COOKIE)
     return response
 
 

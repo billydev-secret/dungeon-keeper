@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from services.moderation import init_moderation_tables
+from services.wellness_service import init_wellness_tables
 from web.auth import AuthBackend, DiscordOAuthAuth, OpenAuth
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -41,13 +42,14 @@ def _auto_detect_auth(guild_id: int) -> AuthBackend:
 
 
 def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
-    app = FastAPI(title="Dungeonkeeper Dashboard", docs_url="/api/docs", redoc_url=None)
+    app = FastAPI(title="TGM Dashboard", docs_url="/api/docs", redoc_url=None)
     app.state.ctx = ctx
     app.state.auth = auth or _auto_detect_auth(ctx.guild_id)
 
-    # Ensure moderation tables exist (in case bot hasn't restarted yet)
+    # Ensure tables exist (in case bot hasn't restarted yet)
     with ctx.open_db() as conn:
         init_moderation_tables(conn)
+        init_wellness_tables(conn)
 
     # ── OAuth routes (login / callback / logout) ────────────────────
     from web.routes import oauth as oauth_routes
@@ -70,6 +72,13 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])
+
+    # ── Wellness routes ─────────────────────────────────────────────
+    from web.wellness_routes import api as wellness_api
+    from web.wellness_routes import admin as wellness_admin
+
+    app.include_router(wellness_api.router, prefix="/api/wellness", tags=["wellness"])
+    app.include_router(wellness_admin.router, prefix="/api/wellness/admin", tags=["wellness-admin"])
 
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()

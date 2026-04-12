@@ -22,6 +22,8 @@ from commands.spoiler_commands import register_spoiler_commands
 from commands.watch_commands import init_watch_tables, load_watched_users, register_watch_commands
 from commands.foolsday_commands import register_foolsday_commands
 from commands.welcome_commands import register_welcome_commands
+from commands.wellness_admin_commands import register_wellness_admin_commands
+from commands.wellness_commands import register_wellness_commands
 from commands.xp_commands import register_xp_commands
 from db_utils import init_config_db, init_grant_role_tables, migrate_grant_roles, open_db
 from handlers.events import register_events
@@ -36,6 +38,16 @@ from services.member_quality_score import init_quality_score_tables
 from services.moderation import init_moderation_tables
 from services.inactivity_prune_service import inactivity_prune_loop, init_inactivity_prune_tables
 from services.voice_xp_service import voice_xp_loop
+from services.wellness_partners import (
+    WellnessPartnerAcceptButton,
+    WellnessPartnerDeclineButton,
+)
+from services.wellness_scheduler import (
+    wellness_active_list_loop,
+    wellness_tick_loop,
+    wellness_weekly_report_loop,
+)
+from services.wellness_service import init_wellness_tables
 from services.xp_service import handle_level_progress
 from xp_system import init_xp_tables
 
@@ -96,6 +108,7 @@ with open_db(DB_PATH) as _conn:
     init_quality_score_tables(_conn)
     init_gender_tables(_conn)
     init_moderation_tables(_conn)
+    init_wellness_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -164,9 +177,14 @@ register_watch_commands(bot, ctx)
 register_foolsday_commands(bot, ctx)
 register_gender_commands(bot, ctx)
 register_jail_commands(bot, ctx)
+register_wellness_admin_commands(bot, ctx)
+register_wellness_commands(bot, ctx)
 
 # Register persistent booster-role buttons so they survive restarts
 bot.add_dynamic_items(BoosterRoleDynamicButton)
+
+# Register persistent wellness-partner request buttons so DM Accept/Decline survive restarts
+bot.add_dynamic_items(WellnessPartnerAcceptButton, WellnessPartnerDeclineButton)
 
 # ==============================
 # Background tasks
@@ -191,6 +209,18 @@ bot.startup_task_factories.append(
 
 bot.startup_task_factories.append(
     lambda: inactivity_prune_loop(bot, DB_PATH)
+)
+
+bot.startup_task_factories.append(
+    lambda: wellness_tick_loop(bot, DB_PATH)
+)
+
+bot.startup_task_factories.append(
+    lambda: wellness_active_list_loop(bot, DB_PATH)
+)
+
+bot.startup_task_factories.append(
+    lambda: wellness_weekly_report_loop(bot, DB_PATH)
 )
 
 # ==============================
