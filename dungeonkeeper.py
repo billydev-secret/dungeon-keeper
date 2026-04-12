@@ -69,10 +69,16 @@ def _setup_logging() -> None:
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
 
+    file_handler = logging.handlers.RotatingFileHandler(
+        Path(__file__).with_name("log.txt"), encoding="utf-8",
+        maxBytes=10_000 * 200, backupCount=1,  # ~10 000 lines
+    )
+    file_handler.setFormatter(formatter)
+
     import queue
     log_queue: queue.SimpleQueue = queue.SimpleQueue()
     queue_handler = logging.handlers.QueueHandler(log_queue)
-    listener = logging.handlers.QueueListener(log_queue, stream_handler, respect_handler_level=True)
+    listener = logging.handlers.QueueListener(log_queue, stream_handler, file_handler, respect_handler_level=True)
     listener.start()
 
     root = logging.getLogger()

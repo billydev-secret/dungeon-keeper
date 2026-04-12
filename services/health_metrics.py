@@ -503,15 +503,15 @@ def compute_gini(conn: sqlite3.Connection, guild_id: int, *,
     ).fetchall()
     react_map = {r["author_id"]: r["cnt"] for r in react_rows}
 
-    # Voice minutes per user
+    # Voice activity per user (each voice XP event ≈ 1 minute interval)
     voice_rows = conn.execute(
-        """SELECT user_id, SUM(duration_seconds) / 60.0 AS mins
-           FROM voice_sessions
-           WHERE guild_id=? AND joined_at>=?
+        """SELECT user_id, COUNT(*) AS intervals
+           FROM xp_events
+           WHERE guild_id=? AND source='voice' AND created_at>=?
            GROUP BY user_id""",
         (guild_id, thirty_days_ago),
     ).fetchall()
-    voice_map = {r["user_id"]: r["mins"] for r in voice_rows}
+    voice_map: dict[int, float] = {r["user_id"]: float(r["intervals"]) for r in voice_rows}
 
     all_users = set(r["author_id"] for r in rows)
     all_users.update(react_map.keys())
