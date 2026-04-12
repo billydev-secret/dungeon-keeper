@@ -815,7 +815,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
     )
     async def message_rate(
         interaction: discord.Interaction,
-        days: app_commands.Range[int, 1, 365] = 7,
+        days: app_commands.Range[int, 1, 365] = 30,
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
@@ -859,7 +859,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
     )
     async def greeter_response(
         interaction: discord.Interaction,
-        days: app_commands.Range[int, 1, 3650] | None = None,
+        days: app_commands.Range[int, 1, 3650] | None = 10,
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:

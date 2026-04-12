@@ -64,7 +64,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         layers: app_commands.Range[int, 1, 5] = 2,
         limit: app_commands.Range[int, 5, 60] = 40,
         spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
-        max_per_node: app_commands.Range[int, 0, 20] = 0,
+        max_per_node: app_commands.Range[int, 0, 20] = 3,
     ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(

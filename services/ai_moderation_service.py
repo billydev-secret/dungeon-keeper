@@ -5,6 +5,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import discord
 from anthropic import AsyncAnthropic
@@ -12,7 +13,7 @@ from anthropic.types import TextBlock
 
 log = logging.getLogger("dungeonkeeper.ai_mod")
 
-DEFAULT_MODEL = "claude-opus-4-6"
+DEFAULT_MODEL = "claude-opus-4-6"  # fallback; runtime default loaded from ai_config
 
 
 async def _chat(
@@ -376,8 +377,14 @@ async def ai_review_user(
     user: discord.Member,
     *,
     days: int = 7,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
 ) -> AiModerationResult:
+    from services.ai_config import get_mod_model, get_prompt
+
+    if model is None:
+        model = get_mod_model(conn)
+    system = get_prompt(conn, "ai_prompt_review")
+
     lines, user_msg_count, channels_checked = _fetch_user_context_from_db(
         conn, guild, user, lookback_days=days
     )
@@ -392,7 +399,7 @@ async def ai_review_user(
 
     analysis = await _chat(
         client, model=model,
-        system=_REVIEW_SYSTEM,
+        system=system,
         user_content=body,
         max_tokens=16000,
         use_thinking=True,
@@ -411,8 +418,14 @@ async def ai_scan_channel(
     channel: discord.TextChannel | discord.Thread,
     *,
     count: int = 50,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
 ) -> AiModerationResult:
+    from services.ai_config import get_mod_model, get_prompt
+
+    if model is None:
+        model = get_mod_model(conn)
+    system = get_prompt(conn, "ai_prompt_scan")
+
     # Columns: 0=message_id, 1=author_id, 2=content, 3=reply_to_id, 4=ts
     rows = conn.execute(
         "SELECT message_id, author_id, content, reply_to_id, ts "
@@ -452,7 +465,7 @@ async def ai_scan_channel(
 
     analysis = await _chat(
         client, model=model,
-        system=_SCAN_SYSTEM,
+        system=system,
         user_content="\n".join(lines),
         max_tokens=2048,
     ) or "No analysis returned."
@@ -463,13 +476,24 @@ async def ai_check_watched_message(
     client: AsyncAnthropic,
     message: discord.Message,
     *,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
+    db_path: "Path | None" = None,
 ) -> tuple[bool, str]:
     """
     Check a single live message against server rules.
 
     Returns (is_violation, reason). Errors are raised to the caller.
     """
+    from services.ai_config import (
+        DEFAULT_MOD_MODEL,
+        get_mod_model_from_path,
+        get_prompt_from_path,
+    )
+
+    if model is None:
+        model = get_mod_model_from_path(db_path) if db_path else DEFAULT_MOD_MODEL
+    system = get_prompt_from_path(db_path, "ai_prompt_watch_check") if db_path else _WATCH_CHECK_SYSTEM
+
     ts = message.created_at.strftime("%Y-%m-%d %H:%M") if message.created_at else "?"
     channel_name = getattr(message.channel, "name", str(message.channel.id))
     content = (message.content or "").replace("\n", " ")[:_MAX_MSG_CHARS]
@@ -477,7 +501,7 @@ async def ai_check_watched_message(
 
     reply = await _chat(
         client, model=model,
-        system=_WATCH_CHECK_SYSTEM,
+        system=system,
         user_content=prompt,
         max_tokens=256,
     )
@@ -494,8 +518,14 @@ async def ai_query_channel(
     question: str,
     *,
     minutes: int = 60,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
 ) -> AiModerationResult:
+    from services.ai_config import get_mod_model, get_prompt
+
+    if model is None:
+        model = get_mod_model(conn)
+    system = get_prompt(conn, "ai_prompt_query_channel")
+
     cutoff_ts = int((datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp())
 
     rows = conn.execute(
@@ -538,7 +568,7 @@ async def ai_query_channel(
 
     analysis = await _chat(
         client, model=model,
-        system=_CHANNEL_QUERY_SYSTEM,
+        system=system,
         user_content=prompt,
         max_tokens=16000,
         use_thinking=True,
@@ -554,8 +584,14 @@ async def ai_query_user(
     question: str,
     *,
     days: int = 14,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
 ) -> AiModerationResult:
+    from services.ai_config import get_mod_model, get_prompt
+
+    if model is None:
+        model = get_mod_model(conn)
+    system = get_prompt(conn, "ai_prompt_query_user")
+
     lines, user_msg_count, _ = _fetch_user_context_from_db(
         conn, guild, user, lookback_days=days
     )
@@ -572,7 +608,7 @@ async def ai_query_user(
 
     analysis = await _chat(
         client, model=model,
-        system=_QUERY_SYSTEM,
+        system=system,
         user_content=prompt,
         max_tokens=16000,
         use_thinking=True,

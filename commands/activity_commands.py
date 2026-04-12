@@ -53,7 +53,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
         member: discord.User | None = None,
         channel: discord.TextChannel | None = None,
-        mode: Literal["messages", "xp"] = "messages",
+        mode: Literal["messages", "xp"] = "xp",
     ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(

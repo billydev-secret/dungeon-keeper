@@ -44,16 +44,11 @@ const SECTIONS = [
   {
     id: "moderation", label: "Moderation", perms: ["moderator"],
     items: [
-      { id: "mod-jails",    label: "Jails",     module: "./panels/mod-jails.js" },
-      { id: "mod-tickets",  label: "Tickets",   module: "./panels/mod-tickets.js" },
-      { id: "mod-warnings", label: "Warnings",  module: "./panels/mod-warnings.js" },
-      { id: "mod-audit",    label: "Audit Log",  module: "./panels/mod-audit.js" },
-    ],
-  },
-  {
-    id: "messages", label: "Message Review", perms: ["admin"],
-    items: [
-      { id: "message-search", label: "Search", module: "./panels/message-search.js" },
+      { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js" },
+      { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js" },
+      { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js" },
+      { id: "mod-audit",      label: "Audit Log",      module: "./panels/mod-audit.js" },
+      { id: "message-search", label: "Message Review",  module: "./panels/message-search.js" },
     ],
   },
   {
@@ -66,6 +61,7 @@ const SECTIONS = [
       { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js" },
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js" },
       { id: "config-spoiler",    label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
+      { id: "config-ai",         label: "AI Commands",       module: "./panels/config-ai.js" },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
       { id: "live-log",          label: "Live Log",          module: "./panels/live-log.js" },
       { id: "system-stats",      label: "System Stats",      module: "./panels/system-stats.js" },

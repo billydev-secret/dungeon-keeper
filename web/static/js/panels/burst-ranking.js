@@ -34,7 +34,7 @@ export function mount(container, initialParams) {
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chart = null;
 
-  daysEl.value = initialParams.days || "";
+  daysEl.value = initialParams.days || "7";
 
   async function refresh() {
     const params = { min_sessions: parseInt(minEl.value) || 3 };

@@ -427,6 +427,107 @@ html, body {
 .config-form .save-ok { color: var(--success); }
 .config-form .save-err { color: var(--danger); }
 
+/* ── AI config ────────────────────────────────────────────────────────── */
+
+.ai-prompts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.ai-prompt-card {
+  background: var(--bg-alt);
+  border: 1px solid var(--grid);
+  border-radius: 6px;
+  padding: 14px;
+}
+.ai-prompt-header {
+  margin-bottom: 8px;
+}
+.ai-prompt-header strong {
+  font-size: 13px;
+}
+.ai-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.ai-badge-default { background: var(--grid); color: var(--text-dim); }
+.ai-badge-custom  { background: var(--accent); color: #fff; }
+.ai-prompt-text {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  background: var(--bg-sidebar);
+  color: var(--text);
+  border: 1px solid var(--grid);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: "Consolas", "Monaco", monospace;
+  line-height: 1.5;
+}
+.ai-prompt-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.ai-btn {
+  border: none;
+  border-radius: 4px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ai-btn-save  { background: var(--accent); color: #fff; }
+.ai-btn-reset { background: var(--grid); color: var(--text-dim); }
+.ai-btn-test  { background: var(--info); color: #fff; }
+.ai-btn:hover { opacity: 0.85; }
+.ai-test-area {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--grid);
+}
+.ai-test-area label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+.ai-test-input {
+  width: 100%;
+  min-height: 60px;
+  resize: vertical;
+  background: var(--bg-sidebar);
+  color: var(--text);
+  border: 1px solid var(--grid);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.ai-test-output {
+  margin-top: 8px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--grid);
+  border-radius: 4px;
+  padding: 10px;
+  font-size: 12px;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+  color: var(--text);
+}
+.ai-test-output:empty { display: none; }
+
 /* ── Message search ──────────────────────────────────────────────────── */
 
 .msg-search-btn {

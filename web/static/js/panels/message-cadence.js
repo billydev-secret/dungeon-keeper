@@ -35,7 +35,7 @@ export function mount(container, initialParams) {
 
   const resEl = container.querySelector('[data-control="resolution"]');
   const chanEl = container.querySelector('[data-control="channel"]');
-  resEl.value = initialParams.resolution || "day";
+  resEl.value = initialParams.resolution || "hour";
 
   let chart = null;
   let slider = null;

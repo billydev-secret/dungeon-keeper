@@ -112,7 +112,7 @@ async def role_growth(
 @router.get("/message-cadence", response_model=MessageCadenceResponse)
 async def message_cadence(
     request: Request,
-    resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
+    resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "hour",
     channel_id: str | None = None,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
@@ -267,7 +267,7 @@ async def nsfw_gender(
 @router.get("/message-rate", response_model=MessageRateResponse)
 async def message_rate(
     request: Request,
-    days: int = 7,
+    days: int = 30,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
@@ -419,7 +419,7 @@ async def greeter_response(
 async def activity(
     request: Request,
     resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
-    mode: Literal["messages", "xp"] = "messages",
+    mode: Literal["messages", "xp"] = "xp",
     user_id: str | None = None,
     channel_id: str | None = None,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
@@ -511,7 +511,7 @@ async def interaction_graph(
 @router.get("/retention", response_model=RetentionResponse)
 async def retention(
     request: Request,
-    period_days: int = 30,
+    period_days: int = 3,
     min_previous: int = 5,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
@@ -626,8 +626,8 @@ async def reaction_analytics(
 @router.get("/message-rate-drops", response_model=MessageRateDropsResponse)
 async def message_rate_drops(
     request: Request,
-    period_days: int = 14,
-    min_previous: int = 5,
+    period_days: int = 2,
+    min_previous: int = 100,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
@@ -685,7 +685,7 @@ async def burst_ranking(
 @router.get("/channel-comparison", response_model=ChannelComparisonResponse)
 async def channel_comparison(
     request: Request,
-    days: int = 30,
+    days: int = 1,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)

@@ -446,6 +446,7 @@ async def _generate_and_send_weekly_report(
         streak_days=int(summary["current_days"]),
         is_personal_best=bool(summary["is_personal_best"]),
         compliance_pct=int(summary["compliance_pct"]),
+        db_path=db_path,
     )
 
     member = guild.get_member(user.user_id)

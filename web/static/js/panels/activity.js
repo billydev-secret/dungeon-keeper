@@ -83,7 +83,7 @@ export function mount(container, initialParams) {
   const modeEl = container.querySelector('[data-control="mode"]');
 
   resEl.value  = initialParams.resolution || "day";
-  modeEl.value = initialParams.mode || "messages";
+  modeEl.value = initialParams.mode || "xp";
 
   let chart = null;
   let slider = null;

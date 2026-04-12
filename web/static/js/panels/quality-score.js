@@ -57,9 +57,11 @@ export function mount(container, initialParams) {
       <div class="controls">
         <label>Period
           <select data-control="days">
-            <option value="90">Last 90 days</option>
+            <option value="1">Last day</option>
+            <option value="7">Last 7 days</option>
             <option value="30">Last 30 days</option>
             <option value="60">Last 60 days</option>
+            <option value="90">Last 90 days</option>
             <option value="180">Last 180 days</option>
             <option value="365">Last year</option>
           </select>
@@ -86,7 +88,7 @@ export function mount(container, initialParams) {
   const tableWrap = container.querySelector("[data-table-wrap]");
   let topChart = null, bottomChart = null;
 
-  daysEl.value = initialParams.days || "90";
+  daysEl.value = initialParams.days || "1";
   statusEl.value = initialParams.status ?? "Active";
 
   async function refresh() {

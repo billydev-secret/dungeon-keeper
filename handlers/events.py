@@ -222,7 +222,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         reason = ""
         if _anthropic_client is not None:
             try:
-                is_violation, reason = await ai_check_watched_message(_anthropic_client, message)
+                is_violation, reason = await ai_check_watched_message(_anthropic_client, message, db_path=ctx.db_path)
             except Exception as exc:
                 log.warning(
                     "AI watch check failed for %s: %s — notifying anyway.",

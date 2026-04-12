@@ -84,7 +84,7 @@ export function mount(container, initialParams) {
           <input type="range" data-control="spread" min="0.5" max="3" step="0.1" value="${initialParams.spread || 1.0}" style="width:80px;" />
         </label>
         <label>Max edges/node
-          <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 0}" title="0 = no limit" />
+          <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 3}" title="0 = no limit" />
         </label>
       </div>
       <div data-graph-wrap style="position:relative; flex:1; min-height:300px; min-width:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
@@ -119,7 +119,7 @@ export function mount(container, initialParams) {
     memberFS = fs;
   }).catch(() => {});
 
-  layoutEl.value = initialParams.layout || "force";
+  layoutEl.value = initialParams.layout || "community";
   timescaleEl.value = initialParams.timescale || "";
 
   let nodes = [];

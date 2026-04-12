@@ -11,7 +11,7 @@ export function mount(container, initialParams) {
       </header>
       <div class="controls">
         <label>Days to average
-          <input type="number" data-control="days" min="1" max="365" value="${initialParams.days || 7}" />
+          <input type="number" data-control="days" min="1" max="365" value="${initialParams.days || 30}" />
         </label>
       </div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>

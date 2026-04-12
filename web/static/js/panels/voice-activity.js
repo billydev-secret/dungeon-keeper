@@ -11,7 +11,7 @@ export function mount(container, initialParams) {
       </header>
       <div class="controls">
         <label>Days (empty = all time)
-          <input type="number" data-control="days" min="1" max="3650" value="${initialParams.days || ""}" placeholder="all" />
+          <input type="number" data-control="days" min="1" max="3650" value="${initialParams.days || 7}" placeholder="all" />
         </label>
       </div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>

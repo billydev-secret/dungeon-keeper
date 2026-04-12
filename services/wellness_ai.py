@@ -15,6 +15,8 @@ import os
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from anthropic import AsyncAnthropic
 
 log = logging.getLogger("dungeonkeeper.wellness.ai")
@@ -72,6 +74,7 @@ async def generate_weekly_encouragement(
     streak_days: int,
     is_personal_best: bool,
     compliance_pct: int,
+    db_path: "Path | None" = None,
 ) -> str:
     """Return a 1–2 sentence encouragement note for the user's weekly summary.
 
@@ -80,6 +83,14 @@ async def generate_weekly_encouragement(
     client = _client()
     if client is None:
         return _fallback_text(streak_days, is_personal_best, compliance_pct)
+
+    # Load model + prompt from config (falls back to module-level defaults)
+    model = WELLNESS_AI_MODEL
+    system = _ENCOURAGEMENT_SYSTEM
+    if db_path is not None:
+        from services.ai_config import get_prompt_from_path, get_wellness_model_from_path
+        model = get_wellness_model_from_path(db_path)
+        system = get_prompt_from_path(db_path, "ai_prompt_wellness_encouragement")
 
     facts = (
         f"Current streak: {streak_days} days.\n"
@@ -94,8 +105,8 @@ async def generate_weekly_encouragement(
     try:
         from anthropic.types import TextBlock
         async with client.messages.stream(
-            model=WELLNESS_AI_MODEL,
-            system=_ENCOURAGEMENT_SYSTEM,
+            model=model,
+            system=system,
             messages=[{"role": "user", "content": user_content}],
             max_tokens=200,
         ) as stream:

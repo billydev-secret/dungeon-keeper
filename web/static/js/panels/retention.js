@@ -11,7 +11,7 @@ export function mount(container, initialParams) {
       </header>
       <div class="controls">
         <label>Period (days)
-          <input type="number" data-control="period_days" min="7" max="365" value="${initialParams.period_days || 30}" />
+          <input type="number" data-control="period_days" min="1" max="365" value="${initialParams.period_days || 3}" />
         </label>
         <label>Min previous msgs
           <input type="number" data-control="min_previous" min="1" max="100" value="${initialParams.min_previous || 5}" />
