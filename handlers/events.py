@@ -1,6 +1,7 @@
 """Event handlers for the Discord bot."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -266,12 +267,23 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
     @bot.event
     async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
-        result = await award_image_reaction_xp(
-            payload,
-            bot=bot,
-            db_path=ctx.db_path,
-            excluded_channel_ids=ctx.xp_excluded_channel_ids,
-        )
+        delay = 1
+        deadline = asyncio.get_event_loop().time() + 30
+        while True:
+            try:
+                result = await award_image_reaction_xp(
+                    payload,
+                    bot=bot,
+                    db_path=ctx.db_path,
+                    excluded_channel_ids=ctx.xp_excluded_channel_ids,
+                )
+                break
+            except discord.HTTPException as exc:
+                if exc.status < 500 or asyncio.get_event_loop().time() + delay > deadline:
+                    raise
+                log.warning("award_image_reaction_xp got %s, retrying in %ss", exc.status, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 16)
         if result is not None:
             member, award = result
             await handle_level_progress(
