@@ -1131,14 +1131,14 @@ def compute_churn_risk(conn: sqlite3.Connection, guild_id: int, *,
 
         # Signal 4: Sentiment trend (15%)
         sent_row = conn.execute(
-            "SELECT AVG(sentiment) FROM message_sentiment ms "
+            "SELECT AVG(ms.sentiment) FROM message_sentiment ms "
             "JOIN messages m ON ms.message_id = m.message_id "
             "WHERE m.guild_id=? AND m.author_id=? AND ms.computed_at>=?",
             (guild_id, uid, _ts(7, now=now)),
         ).fetchone()
         recent_sent = sent_row[0] if sent_row and sent_row[0] is not None else 0
         prev_sent_row = conn.execute(
-            "SELECT AVG(sentiment) FROM message_sentiment ms "
+            "SELECT AVG(ms.sentiment) FROM message_sentiment ms "
             "JOIN messages m ON ms.message_id = m.message_id "
             "WHERE m.guild_id=? AND m.author_id=? AND ms.computed_at>=? AND ms.computed_at<?",
             (guild_id, uid, _ts(14, now=now), _ts(7, now=now)),
