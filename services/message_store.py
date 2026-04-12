@@ -21,10 +21,19 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
             author_id   INTEGER NOT NULL,
             content     TEXT,
             reply_to_id INTEGER,
-            ts          INTEGER NOT NULL
+            ts          INTEGER NOT NULL,
+            sentiment   REAL,
+            emotion     TEXT
         )
         """
     )
+    # Migrate existing tables that lack the sentiment columns
+    _cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    if "sentiment" not in _cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN sentiment REAL")
+    if "emotion" not in _cols:
+        conn.execute("ALTER TABLE messages ADD COLUMN emotion TEXT")
+
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_guild_ts "
         "ON messages (guild_id, ts)"
@@ -223,15 +232,17 @@ def store_message(
     ts: int,
     attachment_urls: list[str],
     mention_ids: list[int],
+    sentiment: float | None = None,
+    emotion: str | None = None,
 ) -> None:
     """Store a message and its related data. Silently skips if already stored."""
     conn.execute(
         """
         INSERT OR IGNORE INTO messages
-            (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts, sentiment, emotion)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts),
+        (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts, sentiment, emotion),
     )
     for url in attachment_urls:
         conn.execute(
@@ -315,6 +326,7 @@ def delete_message(conn: sqlite3.Connection, message_id: int) -> None:
     conn.execute("DELETE FROM message_reactions WHERE message_id = ?", (message_id,))
     conn.execute("DELETE FROM message_mentions WHERE message_id = ?", (message_id,))
     conn.execute("DELETE FROM message_attachments WHERE message_id = ?", (message_id,))
+    conn.execute("DELETE FROM message_sentiment WHERE message_id = ?", (message_id,))
     conn.execute("DELETE FROM messages WHERE message_id = ?", (message_id,))
 
 
@@ -327,6 +339,7 @@ def delete_messages_bulk(conn: sqlite3.Connection, message_ids: set[int]) -> Non
     conn.execute(f"DELETE FROM message_reactions  WHERE message_id IN ({ph})", ids)
     conn.execute(f"DELETE FROM message_mentions   WHERE message_id IN ({ph})", ids)
     conn.execute(f"DELETE FROM message_attachments WHERE message_id IN ({ph})", ids)
+    conn.execute(f"DELETE FROM message_sentiment  WHERE message_id IN ({ph})", ids)
     conn.execute(f"DELETE FROM messages            WHERE message_id IN ({ph})", ids)
 
 

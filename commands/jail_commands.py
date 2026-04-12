@@ -18,10 +18,14 @@ from discord import app_commands
 
 from db_utils import get_config_value
 from services.moderation import (
+    add_policy,
     add_ticket_participant,
+    cast_policy_vote,
     claim_ticket,
+    close_policy_ticket,
     close_ticket,
     create_jail,
+    create_policy_ticket,
     create_ticket,
     create_warning,
     delete_ticket,
@@ -33,6 +37,10 @@ from services.moderation import (
     get_expired_jails,
     get_jail_by_channel,
     get_jail_history,
+    get_policies,
+    get_policy_ticket,
+    get_policy_ticket_by_channel,
+    get_policy_votes,
     get_ticket_by_channel,
     get_ticket_history,
     get_warnings,
@@ -40,7 +48,9 @@ from services.moderation import (
     release_jail,
     remove_ticket_participant,
     reopen_ticket,
+    resolve_policy_vote,
     revoke_warning,
+    start_policy_vote,
     store_transcript,
     write_audit,
 )
@@ -458,6 +468,220 @@ class TicketDeleteButton(
         )
         await _post_audit(ctx, interaction.guild, audit_embed)  # type: ignore[arg-type]
         await channel.delete(reason=f"Ticket #{self.ticket_id} deleted by {member}")
+
+
+# ---------------------------------------------------------------------------
+# Policy vote persistent buttons
+# ---------------------------------------------------------------------------
+
+CLR_POLICY = discord.Color.from_str("#9B59B6")  # purple for policy actions
+
+
+async def _handle_policy_vote(interaction: discord.Interaction, policy_id: int, vote: str) -> None:
+    """Shared handler for all three policy vote buttons."""
+    bot = interaction.client
+    ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+    member = interaction.user
+    guild = interaction.guild
+    if not isinstance(member, discord.Member) or not guild:
+        await interaction.response.send_message("Server-only.", ephemeral=True)
+        return
+    if not (_is_mod(member, ctx) or _is_admin(member, ctx)):
+        await interaction.response.send_message("Only mods and admins can vote.", ephemeral=True)
+        return
+
+    with ctx.open_db() as conn:
+        policy = get_policy_ticket(conn, policy_id)
+    if not policy or policy["status"] != "voting":
+        await interaction.response.send_message("This vote is no longer active.", ephemeral=True)
+        return
+
+    # Cast or update vote
+    with ctx.open_db() as conn:
+        cast_policy_vote(conn, policy_id=policy_id, user_id=member.id, vote=vote)
+        votes = get_policy_votes(conn, policy_id)
+
+    # Build eligible voter set
+    mod_role_ids = _get_mod_role_ids(ctx)
+    admin_role_ids = _get_admin_role_ids(ctx)
+    all_role_ids = mod_role_ids | admin_role_ids
+    eligible: set[int] = set()
+    for m in guild.members:
+        if m.bot:
+            continue
+        if m.guild_permissions.administrator:
+            eligible.add(m.id)
+            continue
+        if all_role_ids & {r.id for r in m.roles}:
+            eligible.add(m.id)
+
+    vote_map = {v["user_id"]: v["vote"] for v in votes}
+    voted_ids = set(vote_map.keys()) & eligible
+    yes_ids = [uid for uid in voted_ids if vote_map[uid] == "yes"]
+    no_ids = [uid for uid in voted_ids if vote_map[uid] == "no"]
+    abstain_ids = [uid for uid in voted_ids if vote_map[uid] == "abstain"]
+    awaiting_ids = eligible - voted_ids
+
+    # Build updated embed
+    embed = discord.Embed(
+        title=f"Policy Vote: {policy['title']}",
+        color=CLR_POLICY,
+    )
+    embed.add_field(name="📜 Policy Text", value=policy["vote_text"] or policy["description"] or "(no text)", inline=False)
+    embed.add_field(name="Votes Cast", value=f"{len(voted_ids)}/{len(eligible)}", inline=True)
+    embed.add_field(name="Status", value="🗳️ Voting", inline=True)
+    embed.add_field(
+        name="✅ Yes",
+        value=", ".join(f"<@{uid}>" for uid in yes_ids) or "—",
+        inline=False,
+    )
+    embed.add_field(
+        name="❌ No",
+        value=", ".join(f"<@{uid}>" for uid in no_ids) or "—",
+        inline=False,
+    )
+    embed.add_field(
+        name="➖ Abstain",
+        value=", ".join(f"<@{uid}>" for uid in abstain_ids) or "—",
+        inline=False,
+    )
+    embed.add_field(
+        name="⏳ Awaiting",
+        value=", ".join(f"<@{uid}>" for uid in awaiting_ids) or "—",
+        inline=False,
+    )
+
+    # Check if all eligible voters have voted
+    all_voted = len(awaiting_ids) == 0
+    if all_voted:
+        has_no = len(no_ids) > 0
+        if has_no:
+            # Failed
+            with ctx.open_db() as conn:
+                resolve_policy_vote(conn, policy_id, status="failed")
+                write_audit(conn, guild_id=guild.id, action="policy_vote_failed",
+                            actor_id=member.id, extra={"policy_id": policy_id,
+                                                        "yes": len(yes_ids), "no": len(no_ids),
+                                                        "abstain": len(abstain_ids)})
+            embed.color = discord.Color.from_str("#E74C3C")
+            embed.set_field_at(2, name="Status", value="❌ Rejected", inline=True)
+            view = discord.ui.View(timeout=None)  # No more buttons
+            await interaction.response.edit_message(embed=embed, view=view)
+            channel = interaction.channel
+            vote_text = policy["vote_text"] or policy["title"]
+            if isinstance(channel, discord.TextChannel):
+                await channel.send(
+                    f"❌ **Policy rejected.** The proposal did not achieve unanimous support.\n"
+                    f"**Rejected policy:** {vote_text}"
+                )
+            audit_embed = discord.Embed(
+                title="❌ Policy Rejected",
+                description=f"**{policy['title']}**\n📜 {vote_text}\n\nVote: {len(yes_ids)} yes, {len(no_ids)} no, {len(abstain_ids)} abstain",
+                color=discord.Color.from_str("#E74C3C"),
+            )
+            await _post_audit(ctx, guild, audit_embed)
+        else:
+            # Passed — store the vote_text as the adopted policy
+            adopted_text = policy["vote_text"] or policy["description"]
+            with ctx.open_db() as conn:
+                resolve_policy_vote(conn, policy_id, status="passed")
+                policy_row_id = add_policy(conn, guild_id=guild.id, policy_ticket_id=policy_id,
+                                           title=policy["title"], description=adopted_text)
+                write_audit(conn, guild_id=guild.id, action="policy_passed",
+                            actor_id=member.id, extra={"policy_id": policy_id,
+                                                        "policy_row_id": policy_row_id,
+                                                        "vote_text": adopted_text,
+                                                        "yes": len(yes_ids), "no": 0,
+                                                        "abstain": len(abstain_ids)})
+            embed.color = CLR_SUCCESS
+            embed.set_field_at(2, name="Status", value="✅ Adopted", inline=True)
+            view = discord.ui.View(timeout=None)
+            await interaction.response.edit_message(embed=embed, view=view)
+            channel = interaction.channel
+            if isinstance(channel, discord.TextChannel):
+                await channel.send(
+                    f"✅ **Policy adopted!** \"{policy['title']}\" is now in effect.\n"
+                    f"**Adopted policy:** {adopted_text}\n"
+                    f"({len(yes_ids)} yes, {len(abstain_ids)} abstain)"
+                )
+            audit_embed = discord.Embed(
+                title="✅ Policy Adopted",
+                description=f"**{policy['title']}**\n📜 {adopted_text}\n\nVote: {len(yes_ids)} yes, {len(abstain_ids)} abstain",
+                color=CLR_SUCCESS,
+            )
+            await _post_audit(ctx, guild, audit_embed)
+    else:
+        # Still waiting for votes — update embed, keep buttons
+        view = discord.ui.View(timeout=None)
+        view.add_item(PolicyVoteYesButton(policy_id))
+        view.add_item(PolicyVoteNoButton(policy_id))
+        view.add_item(PolicyVoteAbstainButton(policy_id))
+        await interaction.response.edit_message(embed=embed, view=view)
+
+    await interaction.followup.send(f"Your vote ({vote}) has been recorded.", ephemeral=True)
+
+
+class PolicyVoteYesButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_vote:yes:(?P<pid>\d+)",
+):
+    def __init__(self, policy_id: int) -> None:
+        super().__init__(discord.ui.Button(
+            label="Yes", emoji="✅",
+            style=discord.ButtonStyle.success,
+            custom_id=f"policy_vote:yes:{policy_id}",
+        ))
+        self.policy_id = policy_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        pid = int((item.custom_id or "").split(":")[-1])
+        return cls(pid)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _handle_policy_vote(interaction, self.policy_id, "yes")
+
+
+class PolicyVoteNoButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_vote:no:(?P<pid>\d+)",
+):
+    def __init__(self, policy_id: int) -> None:
+        super().__init__(discord.ui.Button(
+            label="No", emoji="❌",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"policy_vote:no:{policy_id}",
+        ))
+        self.policy_id = policy_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        pid = int((item.custom_id or "").split(":")[-1])
+        return cls(pid)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _handle_policy_vote(interaction, self.policy_id, "no")
+
+
+class PolicyVoteAbstainButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_vote:abstain:(?P<pid>\d+)",
+):
+    def __init__(self, policy_id: int) -> None:
+        super().__init__(discord.ui.Button(
+            label="Abstain", emoji="➖",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"policy_vote:abstain:{policy_id}",
+        ))
+        self.policy_id = policy_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        pid = int((item.custom_id or "").split(":")[-1])
+        return cls(pid)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _handle_policy_vote(interaction, self.policy_id, "abstain")
 
 
 # Modals
@@ -944,6 +1168,9 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
     bot.add_dynamic_items(TicketCloseButton)
     bot.add_dynamic_items(TicketReopenButton)
     bot.add_dynamic_items(TicketDeleteButton)
+    bot.add_dynamic_items(PolicyVoteYesButton)
+    bot.add_dynamic_items(PolicyVoteNoButton)
+    bot.add_dynamic_items(PolicyVoteAbstainButton)
 
     # Start expiry loop
     bot.startup_task_factories.append(lambda: jail_expiry_loop(bot, ctx))
@@ -1285,6 +1512,279 @@ def register_jail_commands(bot: "Bot", ctx: "AppContext") -> None:
         await interaction.response.send_message(msg)
 
     bot.tree.add_command(ticket_group)
+
+    # ── /policy ──────────────────────────────────────────────────────────
+
+    policy_group = app_commands.Group(name="policy", description="Policy proposal and voting commands.")
+
+    @policy_group.command(name="open", description="Open a new policy proposal for discussion.")
+    @app_commands.default_permissions(moderate_members=True)
+    @app_commands.describe(title="Short title for the policy", description="Detailed description of the proposed policy")
+    async def policy_open(interaction: discord.Interaction, title: str, description: str | None = None):
+        guild = interaction.guild
+        user = interaction.user
+        if guild is None or not isinstance(user, discord.Member):
+            await interaction.response.send_message("Server-only.", ephemeral=True)
+            return
+        if not (_is_mod(user, ctx) or _is_admin(user, ctx)):
+            await interaction.response.send_message("Only mods and admins can open policy proposals.", ephemeral=True)
+            return
+
+        cat_id = _get_config(ctx, "ticket_category_id")
+        category = guild.get_channel(cat_id) if cat_id else None
+        if not isinstance(category, discord.CategoryChannel):
+            await interaction.response.send_message("Ticket category not configured. Ask an admin to run `/setup`.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        desc_text = description or "(no description)"
+        ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
+        safe_title = title[:20].lower().replace(" ", "-")
+        name = f"policy-{safe_title}-{ts}"
+
+        mod_role_ids = _get_mod_role_ids(ctx)
+        admin_role_ids = _get_admin_role_ids(ctx)
+        all_role_ids = mod_role_ids | admin_role_ids
+
+        overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        }
+        if guild.me:
+            overwrites[guild.me] = discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, manage_channels=True,
+                manage_messages=True, read_message_history=True,
+            )
+        for rid in all_role_ids:
+            role = guild.get_role(rid)
+            if role:
+                overwrites[role] = discord.PermissionOverwrite(
+                    view_channel=True, send_messages=True,
+                    read_message_history=True, manage_messages=True,
+                )
+
+        channel = await guild.create_text_channel(name, category=category, overwrites=overwrites)  # type: ignore[arg-type]
+
+        with ctx.open_db() as conn:
+            policy_id = create_policy_ticket(
+                conn, guild_id=guild.id, creator_id=user.id,
+                channel_id=channel.id, title=title, description=desc_text,
+            )
+            write_audit(conn, guild_id=guild.id, action="policy_open",
+                        actor_id=user.id, extra={"policy_id": policy_id, "title": title})
+
+        embed = discord.Embed(
+            title=f"📋 Policy Proposal #{policy_id}: {title}",
+            description=desc_text,
+            color=CLR_POLICY, timestamp=datetime.now(timezone.utc),
+        )
+        embed.add_field(name="Proposed by", value=user.mention, inline=True)
+        embed.add_field(name="Status", value="💬 Open for Discussion", inline=True)
+        embed.set_footer(text="Use /policy vote to start the formal vote when ready.")
+        await channel.send(embed=embed)
+
+        # Ping all mod and admin roles
+        role_mentions = []
+        for rid in all_role_ids:
+            role = guild.get_role(rid)
+            if role:
+                role_mentions.append(role.mention)
+        if role_mentions:
+            await channel.send(
+                f"📋 New policy proposal from {user.mention}: **{title}**\n"
+                f"Attention: {' '.join(role_mentions)}",
+            )
+
+        await interaction.followup.send(f"Policy proposal created → {channel.mention}", ephemeral=True)
+
+        audit_embed = discord.Embed(
+            title="📋 Policy Proposal Opened",
+            description=f"**{title}** by {user.mention} in {channel.mention}",
+            color=CLR_POLICY,
+        )
+        await _post_audit(ctx, guild, audit_embed)
+
+    class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
+        vote_text: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+            label="Exact policy text to vote on",
+            style=discord.TextStyle.paragraph,
+            placeholder="Type the exact wording of the policy being voted on...",
+            required=True,
+            max_length=2000,
+        )
+
+        def __init__(self, policy_id: int) -> None:
+            super().__init__()
+            self.policy_id = policy_id
+
+        async def on_submit(self, interaction: discord.Interaction) -> None:
+            guild = interaction.guild
+            member = interaction.user
+            if guild is None or not isinstance(member, discord.Member):
+                return
+
+            vote_text_val = self.vote_text.value.strip()
+            with ctx.open_db() as conn:
+                start_policy_vote(conn, self.policy_id, vote_text=vote_text_val)
+                write_audit(conn, guild_id=guild.id, action="policy_vote_started",
+                            actor_id=member.id, extra={"policy_id": self.policy_id,
+                                                        "vote_text": vote_text_val})
+
+            # Build eligible voter list
+            mod_role_ids = _get_mod_role_ids(ctx)
+            admin_role_ids = _get_admin_role_ids(ctx)
+            all_role_ids = mod_role_ids | admin_role_ids
+            eligible: set[int] = set()
+            for m in guild.members:
+                if m.bot:
+                    continue
+                if m.guild_permissions.administrator:
+                    eligible.add(m.id)
+                    continue
+                if all_role_ids & {r.id for r in m.roles}:
+                    eligible.add(m.id)
+
+            embed = discord.Embed(
+                title=f"Policy Vote: {interaction.channel.name}",  # type: ignore[union-attr]
+                color=CLR_POLICY,
+            )
+            embed.add_field(name="📜 Policy Text", value=vote_text_val, inline=False)
+            embed.add_field(name="Votes Cast", value=f"0/{len(eligible)}", inline=True)
+            embed.add_field(name="Status", value="🗳️ Voting", inline=True)
+            embed.add_field(name="✅ Yes", value="—", inline=False)
+            embed.add_field(name="❌ No", value="—", inline=False)
+            embed.add_field(name="➖ Abstain", value="—", inline=False)
+            embed.add_field(
+                name="⏳ Awaiting",
+                value=", ".join(f"<@{uid}>" for uid in eligible) or "—",
+                inline=False,
+            )
+
+            view = discord.ui.View(timeout=None)
+            view.add_item(PolicyVoteYesButton(self.policy_id))
+            view.add_item(PolicyVoteNoButton(self.policy_id))
+            view.add_item(PolicyVoteAbstainButton(self.policy_id))
+
+            channel = interaction.channel
+            if isinstance(channel, discord.TextChannel):
+                await interaction.response.send_message(
+                    "🗳️ **Voting has begun!** All mods and admins must vote.",
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+                await channel.send(embed=embed, view=view)
+                # Ping roles
+                role_mentions = []
+                for rid in all_role_ids:
+                    role = guild.get_role(rid)
+                    if role:
+                        role_mentions.append(role.mention)
+                if role_mentions:
+                    await channel.send(f"🗳️ Vote now! {' '.join(role_mentions)}")
+
+    @policy_group.command(name="vote", description="Start the formal vote on this policy proposal.")
+    @app_commands.default_permissions(moderate_members=True)
+    async def policy_vote_cmd(interaction: discord.Interaction):
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            await interaction.response.send_message("Server-only.", ephemeral=True)
+            return
+        if not (_is_mod(member, ctx) or _is_admin(member, ctx)):
+            await interaction.response.send_message("Only mods and admins can start a policy vote.", ephemeral=True)
+            return
+
+        with ctx.open_db() as conn:
+            policy = get_policy_ticket_by_channel(conn, interaction.channel_id or 0)
+        if not policy:
+            await interaction.response.send_message("This is not an active policy proposal channel.", ephemeral=True)
+            return
+        if policy["status"] != "open":
+            await interaction.response.send_message(f"This policy is already in '{policy['status']}' state.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(_PolicyVoteModal(policy["id"]))
+
+    @policy_group.command(name="close", description="Close a policy proposal without voting (admin only).")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(reason="Reason for closing without a vote")
+    async def policy_close_cmd(interaction: discord.Interaction, reason: str | None = None):
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            await interaction.response.send_message("Server-only.", ephemeral=True)
+            return
+        if not _is_admin(member, ctx):
+            await interaction.response.send_message("Only admins can close policy proposals.", ephemeral=True)
+            return
+
+        with ctx.open_db() as conn:
+            policy = get_policy_ticket_by_channel(conn, interaction.channel_id or 0)
+        if not policy:
+            await interaction.response.send_message("This is not an active policy proposal channel.", ephemeral=True)
+            return
+
+        policy_id = policy["id"]
+        reason_text = reason or "Closed without vote"
+
+        with ctx.open_db() as conn:
+            close_policy_ticket(conn, policy_id)
+            write_audit(conn, guild_id=guild.id, action="policy_closed",
+                        actor_id=member.id, extra={"policy_id": policy_id, "reason": reason_text})
+
+        channel = interaction.channel
+        if isinstance(channel, discord.TextChannel):
+            close_embed = discord.Embed(
+                title="📋 Policy Proposal Closed",
+                description=f"**{policy['title']}** was closed by {member.mention}.",
+                color=CLR_INFO,
+            )
+            if reason_text:
+                close_embed.add_field(name="Reason", value=reason_text, inline=False)
+            await interaction.response.send_message(embed=close_embed)
+
+        audit_embed = discord.Embed(
+            title="📋 Policy Proposal Closed",
+            description=f"**{policy['title']}** closed by {member.mention}" + (f"\nReason: {reason_text}" if reason_text else ""),
+            color=CLR_INFO,
+        )
+        await _post_audit(ctx, guild, audit_embed)
+
+    @policy_group.command(name="list", description="List all passed policies.")
+    @app_commands.default_permissions(moderate_members=True)
+    async def policy_list_cmd(interaction: discord.Interaction):
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            await interaction.response.send_message("Server-only.", ephemeral=True)
+            return
+        if not (_is_mod(member, ctx) or _is_admin(member, ctx)):
+            await interaction.response.send_message("Only mods and admins can view policies.", ephemeral=True)
+            return
+
+        with ctx.open_db() as conn:
+            policies_list = get_policies(conn, guild.id)
+
+        if not policies_list:
+            await interaction.response.send_message("No passed policies yet.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📋 Passed Policies",
+            color=CLR_POLICY,
+        )
+        for p in policies_list[:25]:  # Discord embed field limit
+            passed_ts = f"<t:{int(p['passed_at'])}:d>"
+            embed.add_field(
+                name=f"#{p['id']} — {p['title']}",
+                value=f"{p['description'][:100]}{'…' if len(p['description']) > 100 else ''}\nPassed: {passed_ts}",
+                inline=False,
+            )
+        if len(policies_list) > 25:
+            embed.set_footer(text=f"Showing 25 of {len(policies_list)} policies.")
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    bot.tree.add_command(policy_group)
 
     # ── /pull ─────────────────────────────────────────────────────────────
 

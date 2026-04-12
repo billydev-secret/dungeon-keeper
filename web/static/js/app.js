@@ -11,6 +11,24 @@ const SECTIONS = [
     ],
   },
   {
+    id: "health", label: "Health", perms: [],
+    items: [
+      { id: "health-dashboard",       label: "Dashboard",          module: "./panels/health-dashboard.js" },
+      { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js" },
+      { id: "health-heatmap",         label: "Activity Heatmap",   module: "./panels/health-heatmap.js" },
+      { id: "health-channel-health",  label: "Channel Health",     module: "./panels/health-channel-health.js" },
+      { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
+      { id: "health-social-graph",    label: "Social Graph",       module: "./panels/health-social-graph.js" },
+      { id: "health-sentiment",       label: "Sentiment & Tone",   module: "./panels/health-sentiment.js" },
+      { id: "health-newcomer-funnel", label: "Newcomer Funnel",    module: "./panels/health-newcomer-funnel.js" },
+      { id: "health-cohort-retention",label: "Cohort Retention",   module: "./panels/health-cohort-retention.js" },
+      { id: "health-churn-risk",      label: "Churn Risk",         module: "./panels/health-churn-risk.js" },
+      { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
+      { id: "health-incidents",       label: "Incidents",          module: "./panels/health-incidents.js" },
+      { id: "health-composite-score", label: "Health Score",       module: "./panels/health-composite-score.js" },
+    ],
+  },
+  {
     id: "reports", label: "Reports", perms: ["admin"],
     groups: [
       { heading: "General", items: [

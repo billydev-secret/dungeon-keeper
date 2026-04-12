@@ -50,6 +50,7 @@ from services.wellness_scheduler import (
 from services.wellness_service import init_wellness_tables
 from services.xp_service import handle_level_progress
 from xp_system import init_xp_tables
+from services.health_service import init_health_tables
 
 # ==============================
 # Bootstrap
@@ -109,6 +110,7 @@ with open_db(DB_PATH) as _conn:
     init_gender_tables(_conn)
     init_moderation_tables(_conn)
     init_wellness_tables(_conn)
+    init_health_tables(_conn)
 
 # ==============================
 # Runtime config + context
@@ -222,6 +224,83 @@ bot.startup_task_factories.append(
 bot.startup_task_factories.append(
     lambda: wellness_weekly_report_loop(bot, DB_PATH)
 )
+
+
+# ==============================
+# Health dashboard batch loop
+# ==============================
+async def _health_batch_loop() -> None:
+    """Refresh health metrics cache and run sentiment scoring every 15 min."""
+    import asyncio
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            guild = bot.get_guild(ctx.guild_id) if ctx.guild_id else None
+            _member_count = guild.member_count if guild else 0
+            _voice_active = 0
+            _nsfw_ids: list[int] = []
+            _recent_joins: dict[int, float] = {}
+            if guild:
+                import time as _t
+                _now = _t.time()
+                for _vc in guild.voice_channels:
+                    _voice_active += sum(1 for _m in _vc.members if not _m.bot)
+                _nsfw_ids = [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)]
+                for _m in guild.members:
+                    if not _m.bot and _m.joined_at:
+                        _age = _now - _m.joined_at.timestamp()
+                        if _age < 90 * 86400:
+                            _recent_joins[_m.id] = _m.joined_at.timestamp()
+
+            def _batch():
+                from services.health_metrics import (
+                    compute_channel_health, compute_churn_risk, compute_cohort_retention,
+                    compute_dau_mau, compute_gini, compute_heatmap, compute_incidents,
+                    compute_mod_workload, compute_newcomer_funnel,
+                    compute_sentiment, compute_social_graph,
+                )
+                from services.health_service import set_cached
+                from services.incident_detection import update_baselines
+                from services.sentiment_service import analyze_batch
+                with open_db(DB_PATH) as conn:
+                    # Sentiment scoring batch
+                    analyze_batch(conn, ctx.guild_id, batch_size=500)
+                    # Update velocity baselines
+                    update_baselines(conn, ctx.guild_id)
+                    # Refresh all health metrics
+                    data = compute_dau_mau(conn, ctx.guild_id,
+                                           member_count=_member_count, voice_active_count=_voice_active)
+                    set_cached(conn, ctx.guild_id, "dau_mau", data)
+                    data = compute_heatmap(conn, ctx.guild_id)
+                    set_cached(conn, ctx.guild_id, "heatmap", data)
+                    data = compute_channel_health(conn, ctx.guild_id, nsfw_channel_ids=_nsfw_ids)
+                    set_cached(conn, ctx.guild_id, "channel_health", data)
+                    data = compute_gini(conn, ctx.guild_id)
+                    set_cached(conn, ctx.guild_id, "gini", data)
+                    data = compute_social_graph(conn, ctx.guild_id, nsfw_channel_ids=_nsfw_ids)
+                    set_cached(conn, ctx.guild_id, "social_graph", data)
+                    data = compute_sentiment(conn, ctx.guild_id)
+                    set_cached(conn, ctx.guild_id, "sentiment", data)
+                    data = compute_newcomer_funnel(conn, ctx.guild_id, recent_join_ids=_recent_joins)
+                    set_cached(conn, ctx.guild_id, "newcomer_funnel", data)
+                    data = compute_cohort_retention(conn, ctx.guild_id, join_times=_recent_joins)
+                    set_cached(conn, ctx.guild_id, "cohort_retention", data)
+                    data = compute_churn_risk(conn, ctx.guild_id)
+                    set_cached(conn, ctx.guild_id, "churn_risk", data)
+                    data = compute_mod_workload(conn, ctx.guild_id)
+                    set_cached(conn, ctx.guild_id, "mod_workload", data)
+                    data = compute_incidents(conn, ctx.guild_id)
+                    set_cached(conn, ctx.guild_id, "incidents", data)
+
+            await asyncio.to_thread(_batch)
+            log.info("Health metrics batch completed")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Health metrics batch failed")
+        await asyncio.sleep(900)  # 15 minutes
+
+bot.startup_task_factories.append(lambda: _health_batch_loop())
 
 # ==============================
 # Optional web dashboard (LAN, opt-in via DASHBOARD_ENABLED=1)

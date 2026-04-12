@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
+from services.health_service import init_health_tables
 from services.moderation import init_moderation_tables
 from services.wellness_service import init_wellness_tables
 from web.auth import AuthBackend, DiscordOAuthAuth, OpenAuth
@@ -50,6 +51,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     with ctx.open_db() as conn:
         init_moderation_tables(conn)
         init_wellness_tables(conn)
+        init_health_tables(conn)
 
     # ── OAuth routes (login / callback / logout) ────────────────────
     from web.routes import oauth as oauth_routes
@@ -74,6 +76,11 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])
+
+    # ── Health dashboard routes ────────────────────────────────────
+    from web.routes import health as health_routes
+
+    app.include_router(health_routes.router, prefix="/api", tags=["health"])
 
     # ── Wellness routes ─────────────────────────────────────────────
     from web.wellness_routes import api as wellness_api

@@ -178,6 +178,56 @@ def init_moderation_tables(conn: sqlite3.Connection) -> None:
         "ON transcripts (record_type, record_id)"
     )
 
+    # Policy tickets & voting
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS policy_tickets (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id        INTEGER NOT NULL,
+            creator_id      INTEGER NOT NULL,
+            channel_id      INTEGER NOT NULL DEFAULT 0,
+            title           TEXT NOT NULL DEFAULT '',
+            description     TEXT NOT NULL DEFAULT '',
+            status          TEXT NOT NULL DEFAULT 'open',
+            vote_text       TEXT NOT NULL DEFAULT '',
+            created_at      REAL NOT NULL,
+            vote_started_at REAL,
+            vote_ended_at   REAL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policy_tickets_guild "
+        "ON policy_tickets (guild_id, status)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS policy_votes (
+            policy_id   INTEGER NOT NULL REFERENCES policy_tickets(id),
+            user_id     INTEGER NOT NULL,
+            vote        TEXT NOT NULL,
+            voted_at    REAL NOT NULL,
+            PRIMARY KEY (policy_id, user_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS policies (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id          INTEGER NOT NULL,
+            policy_ticket_id  INTEGER NOT NULL,
+            title             TEXT NOT NULL DEFAULT '',
+            description       TEXT NOT NULL DEFAULT '',
+            passed_at         REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_policies_guild "
+        "ON policies (guild_id)"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Typed row helpers
@@ -226,6 +276,36 @@ class WarningRow(TypedDict):
     revoked_at: float | None
     revoked_by: int | None
     revoke_reason: str
+
+
+class PolicyTicketRow(TypedDict):
+    id: int
+    guild_id: int
+    creator_id: int
+    channel_id: int
+    title: str
+    description: str
+    status: str
+    vote_text: str
+    created_at: float
+    vote_started_at: float | None
+    vote_ended_at: float | None
+
+
+class PolicyVoteRow(TypedDict):
+    policy_id: int
+    user_id: int
+    vote: str
+    voted_at: float
+
+
+class PolicyRow(TypedDict):
+    id: int
+    guild_id: int
+    policy_ticket_id: int
+    title: str
+    description: str
+    passed_at: float
 
 
 # ---------------------------------------------------------------------------
@@ -559,3 +639,133 @@ async def generate_transcript(
     if extra_meta:
         transcript.update(extra_meta)
     return transcript
+
+
+# ---------------------------------------------------------------------------
+# Policy ticket DB operations
+# ---------------------------------------------------------------------------
+
+def create_policy_ticket(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    creator_id: int,
+    channel_id: int,
+    title: str,
+    description: str,
+) -> int:
+    now = time.time()
+    cur = conn.execute(
+        """
+        INSERT INTO policy_tickets (guild_id, creator_id, channel_id, title,
+                                     description, status, created_at)
+        VALUES (?, ?, ?, ?, ?, 'open', ?)
+        """,
+        (guild_id, creator_id, channel_id, title, description, now),
+    )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def get_policy_ticket_by_channel(
+    conn: sqlite3.Connection, channel_id: int,
+) -> PolicyTicketRow | None:
+    row = conn.execute(
+        "SELECT * FROM policy_tickets WHERE channel_id = ? AND status IN ('open', 'voting')",
+        (channel_id,),
+    ).fetchone()
+    return dict(row) if row else None  # type: ignore[return-value]
+
+
+def get_policy_ticket(
+    conn: sqlite3.Connection, policy_id: int,
+) -> PolicyTicketRow | None:
+    row = conn.execute(
+        "SELECT * FROM policy_tickets WHERE id = ?",
+        (policy_id,),
+    ).fetchone()
+    return dict(row) if row else None  # type: ignore[return-value]
+
+
+def start_policy_vote(conn: sqlite3.Connection, policy_id: int, *, vote_text: str) -> None:
+    now = time.time()
+    conn.execute(
+        "UPDATE policy_tickets SET status = 'voting', vote_text = ?, vote_started_at = ? WHERE id = ?",
+        (vote_text, now, policy_id),
+    )
+
+
+def cast_policy_vote(
+    conn: sqlite3.Connection,
+    *,
+    policy_id: int,
+    user_id: int,
+    vote: str,
+) -> None:
+    now = time.time()
+    conn.execute(
+        """
+        INSERT INTO policy_votes (policy_id, user_id, vote, voted_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (policy_id, user_id)
+        DO UPDATE SET vote = excluded.vote, voted_at = excluded.voted_at
+        """,
+        (policy_id, user_id, vote, now),
+    )
+
+
+def get_policy_votes(
+    conn: sqlite3.Connection, policy_id: int,
+) -> list[PolicyVoteRow]:
+    rows = conn.execute(
+        "SELECT * FROM policy_votes WHERE policy_id = ?",
+        (policy_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]  # type: ignore[misc]
+
+
+def resolve_policy_vote(
+    conn: sqlite3.Connection, policy_id: int, *, status: str,
+) -> None:
+    now = time.time()
+    conn.execute(
+        "UPDATE policy_tickets SET status = ?, vote_ended_at = ? WHERE id = ?",
+        (status, now, policy_id),
+    )
+
+
+def close_policy_ticket(
+    conn: sqlite3.Connection, policy_id: int,
+) -> None:
+    conn.execute(
+        "UPDATE policy_tickets SET status = 'closed' WHERE id = ?",
+        (policy_id,),
+    )
+
+
+def add_policy(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    policy_ticket_id: int,
+    title: str,
+    description: str,
+) -> int:
+    now = time.time()
+    cur = conn.execute(
+        """
+        INSERT INTO policies (guild_id, policy_ticket_id, title, description, passed_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (guild_id, policy_ticket_id, title, description, now),
+    )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def get_policies(
+    conn: sqlite3.Connection, guild_id: int,
+) -> list[PolicyRow]:
+    rows = conn.execute(
+        "SELECT * FROM policies WHERE guild_id = ? ORDER BY passed_at DESC",
+        (guild_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]  # type: ignore[misc]

@@ -142,7 +142,9 @@ async def list_tickets(
         with ctx.open_db() as conn:
             clauses = ["guild_id = ?"]
             params: list = [ctx.guild_id]
-            if status:
+            if status == "closed":
+                clauses.append("status IN ('closed', 'deleted')")
+            elif status:
                 clauses.append("status = ?")
                 params.append(status)
             else:

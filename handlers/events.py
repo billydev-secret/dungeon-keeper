@@ -25,9 +25,11 @@ from services.message_store import (
     upsert_known_channel,
     upsert_known_user,
 )
+from services.sentiment_service import score_text
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
 from commands.jail_commands import check_jail_rejoin
 from services.welcome_service import build_leave_embed, build_welcome_embed
+from services.incident_detection import velocity_tracker
 from services.wellness_enforcement import wellness_on_message
 from services.xp_service import handle_level_progress
 from xp_system import DEFAULT_XP_SETTINGS, count_xp_events, log_role_event, record_member_activity
@@ -149,6 +151,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     message_ts,
                 )
 
+            # Real-time VADER sentiment scoring
+            sentiment, emotion = score_text(message.content)
+
             store_message(
                 conn,
                 message_id=message.id,
@@ -160,7 +165,19 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 ts=int(message_ts),
                 attachment_urls=attachment_urls,
                 mention_ids=mention_ids,
+                sentiment=sentiment,
+                emotion=emotion,
             )
+
+            # Also populate message_sentiment table for health dashboard
+            if sentiment is not None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO message_sentiment "
+                    "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (message.id, message.guild.id, message.channel.id,
+                     sentiment, emotion, message_ts),
+                )
 
             upsert_known_user(
                 conn,
@@ -191,6 +208,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     ts=int(message_ts),
                     message_id=message.id,
                 )
+
+            # Health dashboard: track message velocity for anomaly detection
+            velocity_tracker.record_message(conn, message.guild.id, message.channel.id, ts=message_ts)
 
         result = await award_message_xp(
             message,
