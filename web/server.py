@@ -14,8 +14,11 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
+from services.auto_delete_service import init_auto_delete_tables
+from services.booster_roles import init_booster_role_tables
 from services.health_service import init_health_tables
 from services.moderation import init_moderation_tables
 from services.wellness_service import init_wellness_tables
@@ -52,6 +55,8 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
         init_moderation_tables(conn)
         init_wellness_tables(conn)
         init_health_tables(conn)
+        init_booster_role_tables(conn)
+        init_auto_delete_tables(conn)
 
     # ── OAuth routes (login / callback / logout) ────────────────────
     from web.routes import oauth as oauth_routes
@@ -91,6 +96,16 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()
+
+    # ── Cache headers for JS/CSS so deploys take effect immediately ──
+    class _NoCacheJS(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            response = await call_next(request)
+            if request.url.path.startswith("/static/") and request.url.path.endswith((".js", ".css")):
+                response.headers["Cache-Control"] = "no-cache"
+            return response
+
+    app.add_middleware(_NoCacheJS)
 
     # ── Static files & HTML entry points ────────────────────────────
     if _STATIC_DIR.exists():

@@ -79,6 +79,19 @@ export async function apiPut(path, body) {
   return res.json();
 }
 
+export async function apiDelete(path) {
+  const res = await fetch(path, {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const b = await res.json(); if (b.detail) detail = b.detail; } catch (_) {}
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.json();
+}
+
 export function showStatus(el, ok, msg) {
   el.className = `save-status ${ok ? "save-ok" : "save-err"}`;
   el.textContent = msg || (ok ? "Saved" : "Error");

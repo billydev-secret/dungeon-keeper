@@ -5,9 +5,25 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from db_utils import (
+    add_grant_permission,
+    delete_grant_role,
     get_config_id_set,
     get_config_value,
+    get_grant_permissions,
     get_grant_roles,
+    remove_grant_permission,
+    upsert_grant_role,
+)
+from services.auto_delete_service import (
+    format_duration_seconds as _fmt_dur,
+    list_auto_delete_rules_for_guild,
+    remove_auto_delete_rule,
+    upsert_auto_delete_rule,
+)
+from services.booster_roles import (
+    delete_booster_role,
+    get_booster_roles,
+    upsert_booster_role,
 )
 from services.inactivity_prune_service import get_prune_rule as _get_prune_rule
 from web.auth import AuthenticatedUser
@@ -107,9 +123,34 @@ async def get_config(
                         "log_channel_id": str(cfg["log_channel_id"]),
                         "announce_channel_id": str(cfg["announce_channel_id"]),
                         "grant_message": cfg["grant_message"],
+                        "permissions": [
+                            {"entity_type": et, "entity_id": str(eid)}
+                            for et, eid in get_grant_permissions(conn, ctx.guild_id, name)
+                        ],
                     }
                     for name, cfg in grant_roles.items()
                 },
+                "booster_roles": [
+                    {
+                        "role_key": r["role_key"],
+                        "label": r["label"],
+                        "role_id": str(r["role_id"]),
+                        "image_path": r["image_path"],
+                        "sort_order": r["sort_order"],
+                    }
+                    for r in get_booster_roles(conn, ctx.guild_id)
+                ],
+                "auto_delete": [
+                    {
+                        "channel_id": str(r["channel_id"]),
+                        "max_age_seconds": int(r["max_age_seconds"]),
+                        "interval_seconds": int(r["interval_seconds"]),
+                        "last_run_ts": float(r["last_run_ts"]),
+                        "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
+                        "interval_display": _fmt_dur(int(r["interval_seconds"])),
+                    }
+                    for r in list_auto_delete_rules_for_guild(ctx.db_path, ctx.guild_id)
+                ],
             }
 
     return await run_query(_q)
@@ -340,10 +381,12 @@ async def update_moderation(
 
 
 class RoleGrantUpdate(BaseModel):
+    label: str | None = None
     role_id: str | None = None
     log_channel_id: str | None = None
     announce_channel_id: str | None = None
     grant_message: str | None = None
+    permissions: list[dict] | None = None
 
 
 @router.put("/config/roles/{grant_name}")
@@ -356,21 +399,51 @@ async def update_role_grant(
     ctx = get_ctx(request)
 
     def _q():
-        from db_utils import upsert_grant_role
         with ctx.open_db() as conn:
-            # Read existing values so partial updates work
             existing = get_grant_roles(conn, ctx.guild_id)
-            if grant_name not in existing:
-                return {"ok": False, "detail": f"Unknown grant role: {grant_name}"}
-            cur = existing[grant_name]
-            upsert_grant_role(
-                conn, ctx.guild_id, grant_name,
-                label=cur["label"],
-                role_id=int(body.role_id) if body.role_id is not None else cur["role_id"],
-                log_channel_id=int(body.log_channel_id) if body.log_channel_id is not None else cur["log_channel_id"],
-                announce_channel_id=int(body.announce_channel_id) if body.announce_channel_id is not None else cur["announce_channel_id"],
-                grant_message=body.grant_message if body.grant_message is not None else cur["grant_message"],
-            )
+            if grant_name in existing:
+                cur = existing[grant_name]
+                upsert_grant_role(
+                    conn, ctx.guild_id, grant_name,
+                    label=body.label if body.label is not None else cur["label"],
+                    role_id=int(body.role_id) if body.role_id is not None else cur["role_id"],
+                    log_channel_id=int(body.log_channel_id) if body.log_channel_id is not None else cur["log_channel_id"],
+                    announce_channel_id=int(body.announce_channel_id) if body.announce_channel_id is not None else cur["announce_channel_id"],
+                    grant_message=body.grant_message if body.grant_message is not None else cur["grant_message"],
+                )
+            else:
+                upsert_grant_role(
+                    conn, ctx.guild_id, grant_name,
+                    label=body.label or grant_name.replace("_", " ").title(),
+                    role_id=int(body.role_id) if body.role_id else 0,
+                    log_channel_id=int(body.log_channel_id) if body.log_channel_id else 0,
+                    announce_channel_id=int(body.announce_channel_id) if body.announce_channel_id else 0,
+                    grant_message=body.grant_message or "",
+                )
+            if body.permissions is not None:
+                for et, eid in get_grant_permissions(conn, ctx.guild_id, grant_name):
+                    remove_grant_permission(conn, ctx.guild_id, grant_name, et, eid)
+                for perm in body.permissions:
+                    add_grant_permission(
+                        conn, ctx.guild_id, grant_name,
+                        perm["entity_type"], int(perm["entity_id"]),
+                    )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/roles/{grant_name}")
+async def delete_role_grant(
+    grant_name: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            delete_grant_role(conn, ctx.guild_id, grant_name)
         return {"ok": True}
 
     return await run_query(_q)
@@ -396,6 +469,95 @@ async def update_spoiler(
                     conn.execute("INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
                                  ("spoiler_required_channels", int(cid)))
                 ctx.spoiler_required_channels = {int(c) for c in body.spoiler_required_channels}
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── Booster roles ─────────────────────────────────────────────────────
+
+class BoosterRoleUpdate(BaseModel):
+    label: str
+    role_id: str
+    image_path: str = ""
+    sort_order: int = 0
+
+
+@router.put("/config/booster-roles/{role_key}")
+async def update_booster_role(
+    role_key: str,
+    request: Request,
+    body: BoosterRoleUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            upsert_booster_role(
+                conn, ctx.guild_id, role_key,
+                label=body.label,
+                role_id=int(body.role_id) if body.role_id else 0,
+                image_path=body.image_path,
+                sort_order=body.sort_order,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/booster-roles/{role_key}")
+async def remove_booster_role(
+    role_key: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            delete_booster_role(conn, ctx.guild_id, role_key)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── Auto-delete schedules ────────────────────────────────────────────
+
+class AutoDeleteRuleUpdate(BaseModel):
+    max_age_seconds: int
+    interval_seconds: int
+
+
+@router.put("/config/auto-delete/{channel_id}")
+async def update_auto_delete(
+    channel_id: str,
+    request: Request,
+    body: AutoDeleteRuleUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+
+    def _q():
+        upsert_auto_delete_rule(
+            ctx.db_path, ctx.guild_id, int(channel_id),
+            body.max_age_seconds, body.interval_seconds,
+        )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/auto-delete/{channel_id}")
+async def remove_auto_delete(
+    channel_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+
+    def _q():
+        remove_auto_delete_rule(ctx.db_path, ctx.guild_id, int(channel_id))
         return {"ok": True}
 
     return await run_query(_q)
