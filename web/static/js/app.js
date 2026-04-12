@@ -72,6 +72,7 @@ const SECTIONS = [
       { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js" },
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js" },
       { id: "config-spoiler",    label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
+      { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
     ],
   },
   {
@@ -83,12 +84,6 @@ const SECTIONS = [
       { id: "wellness-away",      label: "Away",       module: "./panels/wellness-away.js" },
       { id: "wellness-partners",  label: "Partners",   module: "./panels/wellness-partners.js" },
       { id: "wellness-history",   label: "History",    module: "./panels/wellness-history.js" },
-    ],
-  },
-  {
-    id: "wellness-admin", label: "Wellness Admin", perms: ["manage_server"],
-    items: [
-      { id: "wellness-admin-overview", label: "Overview",  module: "./panels/wellness-admin.js" },
     ],
   },
 ];
@@ -133,8 +128,24 @@ const sidebarEl = document.getElementById("sidebar");
 const sidebarItemsEl = document.getElementById("sidebar-items");
 const rootEl = document.getElementById("panel-root");
 const meEl = document.getElementById("me");
+const sidebarToggleEl = document.getElementById("sidebar-toggle");
+const sidebarBackdropEl = document.getElementById("sidebar-backdrop");
 
 let currentPanel = null;
+
+// ── Mobile sidebar toggle ──────────────────────────────────────────
+
+function closeSidebar() {
+  sidebarEl.classList.remove("open");
+  sidebarBackdropEl.classList.remove("open");
+}
+
+sidebarToggleEl.addEventListener("click", () => {
+  const opening = !sidebarEl.classList.contains("open");
+  sidebarEl.classList.toggle("open", opening);
+  sidebarBackdropEl.classList.toggle("open", opening);
+});
+sidebarBackdropEl.addEventListener("click", closeSidebar);
 
 // ── Hash parsing ────────────────────────────────────────────────────
 
@@ -171,9 +182,11 @@ function renderNav(activeId) {
   const pages = allPages(activeSection);
   if (pages.length <= 1) {
     sidebarEl.classList.add("hidden");
+    sidebarToggleEl.classList.add("hidden");
     return;
   }
   sidebarEl.classList.remove("hidden");
+  sidebarToggleEl.classList.remove("hidden");
   sidebarItemsEl.innerHTML = "";
 
   if (activeSection.groups) {
@@ -219,6 +232,7 @@ function renderNav(activeId) {
 // ── Mount panel ─────────────────────────────────────────────────────
 
 async function mountPanel() {
+  closeSidebar();
   const { id, params } = parseHash();
   const page = ALL_PAGES.find((p) => p.id === id) || ALL_PAGES[0];
   renderNav(page.id);
