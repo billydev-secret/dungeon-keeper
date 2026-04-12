@@ -57,12 +57,6 @@ const SECTIONS = [
     ],
   },
   {
-    id: "logs", label: "Logs", perms: ["admin"],
-    items: [
-      { id: "live-log", label: "Live Log", module: "./panels/live-log.js" },
-    ],
-  },
-  {
     id: "config", label: "Config", perms: ["admin"],
     items: [
       { id: "config-global",     label: "Global",          module: "./panels/config-global.js" },
@@ -73,6 +67,8 @@ const SECTIONS = [
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js" },
       { id: "config-spoiler",    label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
+      { id: "live-log",          label: "Live Log",          module: "./panels/live-log.js" },
+      { id: "system-stats",      label: "System Stats",      module: "./panels/system-stats.js" },
     ],
   },
   {

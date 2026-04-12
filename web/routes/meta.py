@@ -1,6 +1,9 @@
-"""Metadata endpoints: /api/me and /api/meta/* lookups for frontend dropdowns."""
+"""Metadata endpoints: /api/me, /api/meta/* lookups, and /api/system/stats."""
 from __future__ import annotations
 
+import time
+
+import psutil
 from fastapi import APIRouter, Depends, Request
 
 from web.auth import AuthenticatedUser
@@ -160,3 +163,81 @@ async def meta_channels(
         )
         for r in rows
     ]
+
+
+# ── System stats ─────────────────────────────────────────────────────
+
+# Snapshot of counters from the previous poll, used to compute rates.
+_prev_net: dict[str, dict] = {}
+_prev_net_ts: float = 0.0
+
+
+@router.get("/system/stats")
+async def system_stats(
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    global _prev_net, _prev_net_ts
+
+    now = time.monotonic()
+    net = psutil.net_io_counters(pernic=True)
+    elapsed = now - _prev_net_ts if _prev_net_ts else 0.0
+
+    interfaces: list[dict] = []
+    for name, counters in sorted(net.items()):
+        entry: dict = {
+            "name": name,
+            "bytes_sent": counters.bytes_sent,
+            "bytes_recv": counters.bytes_recv,
+            "packets_sent": counters.packets_sent,
+            "packets_recv": counters.packets_recv,
+            "errin": counters.errin,
+            "errout": counters.errout,
+            "dropin": counters.dropin,
+            "dropout": counters.dropout,
+        }
+        if elapsed > 0 and name in _prev_net:
+            prev = _prev_net[name]
+            entry["send_rate"] = max(0, (counters.bytes_sent - prev["bytes_sent"])) / elapsed
+            entry["recv_rate"] = max(0, (counters.bytes_recv - prev["bytes_recv"])) / elapsed
+        else:
+            entry["send_rate"] = 0
+            entry["recv_rate"] = 0
+        interfaces.append(entry)
+
+    _prev_net = {
+        name: {"bytes_sent": c.bytes_sent, "bytes_recv": c.bytes_recv}
+        for name, c in net.items()
+    }
+    _prev_net_ts = now
+
+    total = psutil.net_io_counters()
+    total_send_rate = 0.0
+    total_recv_rate = 0.0
+    if elapsed > 0:
+        total_send_rate = sum(i.get("send_rate", 0) for i in interfaces)
+        total_recv_rate = sum(i.get("recv_rate", 0) for i in interfaces)
+
+    mem = psutil.virtual_memory()
+    disk = psutil.disk_usage("/")
+
+    return {
+        "cpu_percent": psutil.cpu_percent(interval=None),
+        "memory": {
+            "total": mem.total,
+            "used": mem.used,
+            "percent": mem.percent,
+        },
+        "disk": {
+            "total": disk.total,
+            "used": disk.used,
+            "percent": disk.percent,
+        },
+        "network": {
+            "total_bytes_sent": total.bytes_sent,
+            "total_bytes_recv": total.bytes_recv,
+            "send_rate": total_send_rate,
+            "recv_rate": total_recv_rate,
+        },
+        "interfaces": interfaces,
+        "uptime": time.time() - psutil.boot_time(),
+    }
