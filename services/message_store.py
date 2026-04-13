@@ -46,6 +46,14 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_messages_channel_ts "
         "ON messages (guild_id, channel_id, ts)"
     )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_sentiment "
+        "ON messages (guild_id, sentiment)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_emotion "
+        "ON messages (guild_id, emotion)"
+    )
 
     conn.execute(
         """

@@ -24,6 +24,15 @@ export function mount(container) {
         <div class="subtitle">Engagement depth and daily return rate</div>
       </header>
 
+      <details class="panel-about" style="margin:8px 0 14px;">
+        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
+        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+          <strong style="color:var(--text-normal, #dbdee1);">DAU/MAU</strong> (daily active / monthly active) measures how "sticky" the server is — what fraction of your monthly members show up on any given day.
+          20–30% is solid for a Discord community. The <strong style="color:var(--text-normal, #dbdee1);">engagement funnel</strong> shows how many members progress from lurking to daily participation.
+          <strong style="color:var(--text-normal, #dbdee1);">Lurker activation</strong> tracks members who broke their silence in the last 30 days.
+        </div>
+      </details>
+
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">DAU / MAU</div>

@@ -19,3 +19,17 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: eslint
+        name: eslint
+        entry: eslint
+        language: node
+        types: [javascript]
+        files: ^web/static/
+        additional_dependencies: ['eslint@8.57.1']
+      - id: stylelint
+        name: stylelint
+        entry: stylelint
+        language: node
+        types: [css]
+        files: ^web/static/
+        additional_dependencies: ['stylelint@16.14.1', 'stylelint-config-standard@37.0.0']

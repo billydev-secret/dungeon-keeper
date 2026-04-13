@@ -5,13 +5,26 @@ from __future__ import annotations
 import time
 
 import psutil
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 
-from web.auth import AuthenticatedUser
-from web.deps import get_ctx, require_perms, run_query
-from web.schemas import ChannelMeta, MemberMeta, MeResponse, RoleMeta
+from web.auth import AuthenticatedUser, DiscordOAuthAuth, SESSION_COOKIE
+from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web.schemas import ChannelMeta, GuildInfo, MemberMeta, MeResponse, RoleMeta
 
 router = APIRouter()
+
+
+def _guilds_from_session(request: Request) -> list[dict]:
+    """Read the mutual guild list from the session cookie."""
+    auth = request.app.state.auth
+    if not isinstance(auth, DiscordOAuthAuth):
+        return []
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if not cookie:
+        return []
+    session = auth.read_session(cookie)
+    return session.get("guilds", []) if session else []
 
 
 @router.get("/me", response_model=MeResponse)
@@ -20,16 +33,113 @@ async def me(
     user: AuthenticatedUser = Depends(require_perms(set())),
 ):
     ctx = get_ctx(request)
-    guild = ctx.bot.get_guild(ctx.guild_id)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    session_guilds = _guilds_from_session(request)
     return MeResponse(
         user_id=str(user.user_id),
         username=user.username,
         perms=sorted(user.perms),
         role_ids=[str(r) for r in user.role_ids],
         role_names=list(user.role_names),
-        guild_id=str(ctx.guild_id),
+        guild_id=str(guild_id),
         guild_name=guild.name if guild else None,
+        guilds=[
+            GuildInfo(id=str(g["id"]), name=g["name"], icon=g.get("icon"))
+            for g in session_guilds
+        ],
+        primary_guild_id=str(ctx.guild_id),
     )
+
+
+@router.get("/guilds")
+async def list_guilds(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms(set())),
+):
+    ctx = get_ctx(request)
+    active = get_active_guild_id(request)
+    guilds = _guilds_from_session(request)
+    return {
+        "active_guild_id": str(active),
+        "primary_guild_id": str(ctx.guild_id),
+        "guilds": [
+            {"id": str(g["id"]), "name": g["name"], "icon": g.get("icon")}
+            for g in guilds
+        ],
+    }
+
+
+@router.post("/guilds/{guild_id}/select")
+async def select_guild(
+    guild_id: int,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_perms(set())),
+):
+    auth = request.app.state.auth
+    if not isinstance(auth, DiscordOAuthAuth):
+        raise HTTPException(400, "Guild switching is not available in LAN mode")
+
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if not cookie:
+        raise HTTPException(401, "Not authenticated")
+
+    # Validate user is still a member of the target guild
+    ctx = get_ctx(request)
+    bot = getattr(ctx, "bot", None)
+    target_guild = bot.get_guild(guild_id) if bot else None
+    if target_guild:
+        member = target_guild.get_member(user.user_id)
+        if not member:
+            raise HTTPException(403, "You are not a member of that server")
+
+    new_cookie = auth.update_session_guild(cookie, guild_id)
+    if not new_cookie:
+        raise HTTPException(400, "Invalid guild selection")
+
+    # Build the response with updated user info for the new guild
+    from web.auth import resolve_discord_perms
+
+    perms: list[str] = []
+    role_ids: list[str] = []
+    role_names: list[str] = []
+    if target_guild:
+        member = target_guild.get_member(user.user_id)
+        if member:
+            perms = sorted(resolve_discord_perms(member.guild_permissions.value))
+            role_ids = [str(r.id) for r in member.roles if not r.is_default()]
+            role_names = [r.name for r in member.roles if not r.is_default()]
+
+    session_guilds = _guilds_from_session(request)
+    body = MeResponse(
+        user_id=str(user.user_id),
+        username=user.username,
+        perms=perms,
+        role_ids=role_ids,
+        role_names=role_names,
+        guild_id=str(guild_id),
+        guild_name=target_guild.name if target_guild else None,
+        guilds=[
+            GuildInfo(id=str(g["id"]), name=g["name"], icon=g.get("icon"))
+            for g in session_guilds
+        ],
+        primary_guild_id=str(ctx.guild_id),
+    )
+
+    from web.routes.oauth import _is_secure
+
+    response = JSONResponse(body.model_dump())
+    response.set_cookie(
+        SESSION_COOKIE,
+        new_cookie,
+        max_age=30 * 86400,
+        httponly=True,
+        samesite="lax",
+        secure=_is_secure(),
+        path="/",
+    )
+    return response
 
 
 @router.get("/meta/roles", response_model=list[RoleMeta])
@@ -38,8 +148,9 @@ async def meta_roles(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
     if guild is not None:
         return [
             RoleMeta(
@@ -66,7 +177,7 @@ async def meta_roles(
             GROUP BY role_name
             ORDER BY role_name COLLATE NOCASE
             """,
-            (ctx.guild_id,),
+            (guild_id,),
         ).fetchall()
     return [
         RoleMeta(
@@ -89,8 +200,9 @@ async def meta_members(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
     if guild is not None:
         return sorted(
             [
@@ -110,7 +222,7 @@ async def meta_members(
         with ctx.open_db() as conn:
             rows = conn.execute(
                 "SELECT user_id, username, display_name FROM known_users WHERE guild_id = ? ORDER BY display_name COLLATE NOCASE",
-                (ctx.guild_id,),
+                (guild_id,),
             ).fetchall()
         return [
             MemberMeta(
@@ -132,8 +244,9 @@ async def meta_channels(
     import discord
 
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
     if guild is not None:
         return [
             ChannelMeta(
@@ -156,7 +269,7 @@ async def meta_channels(
             WHERE guild_id = ?
             ORDER BY channel_id
             """,
-            (ctx.guild_id,),
+            (guild_id,),
         ).fetchall()
     return [
         ChannelMeta(

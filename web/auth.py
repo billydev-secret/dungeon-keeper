@@ -122,6 +122,8 @@ class DiscordOAuthAuth:
         permission_bits: int = 0,
         role_ids: list[int] | None = None,
         role_names: list[str] | None = None,
+        guild_id: int | None = None,
+        guilds: list[dict] | None = None,
     ) -> str:
         """Create a signed, timestamped session cookie value."""
         return self._serializer.dumps(
@@ -132,6 +134,8 @@ class DiscordOAuthAuth:
                 "perms_bits": permission_bits,
                 "role_ids": role_ids or [],
                 "role_names": role_names or [],
+                "guild_id": guild_id or self._guild_id,
+                "guilds": guilds or [],
             }
         )
 
@@ -143,6 +147,17 @@ class DiscordOAuthAuth:
             return self._serializer.loads(cookie, max_age=SESSION_MAX_AGE)  # type: ignore[no-any-return]
         except (BadSignature, Exception):
             return None
+
+    def update_session_guild(self, cookie: str, new_guild_id: int) -> str | None:
+        """Re-sign the session with a different active guild. Returns new cookie or None."""
+        session = self.read_session(cookie)
+        if not session:
+            return None
+        guild_ids = {g["id"] for g in session.get("guilds", [])}
+        if new_guild_id not in guild_ids:
+            return None
+        session["guild_id"] = new_guild_id
+        return self._serializer.dumps(session)
 
     # ── Per-request authentication ──────────────────────────────────
 
@@ -157,10 +172,13 @@ class DiscordOAuthAuth:
         user_id: int = session["uid"]
         username: str = session["name"]
 
+        # Use the active guild from session, falling back to the primary guild
+        active_guild_id = session.get("guild_id", self._guild_id)
+
         # Prefer bot guild cache — instant, always reflects current roles
         ctx = request.app.state.ctx
         bot = getattr(ctx, "bot", None)
-        guild = bot.get_guild(self._guild_id) if bot else None
+        guild = bot.get_guild(active_guild_id) if bot else None
 
         if guild:
             member = guild.get_member(user_id)

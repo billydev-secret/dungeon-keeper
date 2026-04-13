@@ -17,6 +17,8 @@ from typing import Literal, TypedDict
 
 from services.activity_graphs import (
     Resolution,
+    _BUCKET_BUILDERS,
+    _strftime_expr,
     query_burst_ranking,
     query_dropoff_profiles,
     query_message_activity,
@@ -1482,3 +1484,115 @@ def get_channel_comparison_data(
         )
 
     return {"channels": channels}
+
+
+# ---------------------------------------------------------------------------
+# Animated interaction heatmap
+# ---------------------------------------------------------------------------
+
+
+def get_animated_heatmap_data(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Literal["day", "week"] = "week",
+    days: int = 90,
+    top_n: int = 20,
+) -> dict:
+    """Return time-bucketed interaction matrices for animation.
+
+    Each frame contains an NxN symmetric matrix of interaction weights for a
+    fixed set of top-N users (by cumulative volume over the entire window).
+    """
+    import time
+
+    now = datetime.now(timezone.utc)
+    days = max(7, min(days, 365))
+    top_n = max(5, min(top_n, 40))
+    since_ts = int(time.time()) - days * 86400
+
+    # --- Stage 1: stable user set (top N by total volume) ---
+    user_rows = conn.execute(
+        """
+        SELECT user_id FROM (
+            SELECT from_user_id AS user_id, COUNT(*) AS w
+            FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+            GROUP BY from_user_id
+            UNION ALL
+            SELECT to_user_id AS user_id, COUNT(*) AS w
+            FROM user_interactions_log WHERE guild_id = ? AND ts >= ?
+            GROUP BY to_user_id
+        )
+        GROUP BY user_id ORDER BY SUM(w) DESC LIMIT ?
+        """,
+        (guild_id, since_ts, guild_id, since_ts, top_n),
+    ).fetchall()
+
+    ordered_uids = [int(r[0]) for r in user_rows]
+    n = len(ordered_uids)
+    if n == 0:
+        return {
+            "resolution": resolution,
+            "window_label": f"Last {days} Days",
+            "users": [],
+            "frames": [],
+            "global_max": 0,
+        }
+
+    uid_index = {uid: i for i, uid in enumerate(ordered_uids)}
+    placeholders = ",".join("?" * n)
+
+    # --- Stage 2: time-bucketed edges ---
+    bucket_builder = _BUCKET_BUILDERS[resolution]
+    buckets, bucket_since = bucket_builder(now)
+    effective_since = max(since_ts, int(bucket_since))
+
+    bucket_expr = _strftime_expr(resolution, col="ts", since_ts=effective_since)
+
+    rows = conn.execute(
+        f"""
+        SELECT {bucket_expr} AS bucket,
+               from_user_id, to_user_id, COUNT(*) AS weight
+        FROM user_interactions_log
+        WHERE guild_id = ? AND ts >= ?
+          AND from_user_id IN ({placeholders})
+          AND to_user_id   IN ({placeholders})
+        GROUP BY bucket, from_user_id, to_user_id
+        """,
+        (guild_id, effective_since, *ordered_uids, *ordered_uids),
+    ).fetchall()
+
+    # Build per-bucket symmetric matrices
+    bucket_key_set = {key for key, _label in buckets}
+    frames_dict: dict[str, list[list[int]]] = {}
+    for key, _label in buckets:
+        frames_dict[key] = [[0] * n for _ in range(n)]
+
+    global_max = 0
+    for r in rows:
+        bk, uid_a, uid_b, w = str(r[0]), int(r[1]), int(r[2]), int(r[3])
+        if bk not in bucket_key_set or uid_a == uid_b:
+            continue
+        i, j = uid_index.get(uid_a), uid_index.get(uid_b)
+        if i is None or j is None:
+            continue
+        lo, hi = min(i, j), max(i, j)
+        frames_dict[bk][lo][hi] += w
+        frames_dict[bk][hi][lo] += w
+        val = frames_dict[bk][lo][hi]
+        if val > global_max:
+            global_max = val
+
+    # Assemble ordered frames
+    frames = []
+    for key, label in buckets:
+        frames.append({"label": label, "matrix": frames_dict[key]})
+
+    users = [{"user_id": str(uid), "user_name": ""} for uid in ordered_uids]
+
+    return {
+        "resolution": resolution,
+        "window_label": f"Last {days} Days",
+        "users": users,
+        "frames": frames,
+        "global_max": global_max,
+    }

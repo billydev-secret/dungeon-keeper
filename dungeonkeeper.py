@@ -17,6 +17,7 @@ from commands.foolsday_commands import register_foolsday_commands
 from commands.gender_commands import register_gender_commands
 from commands.inactivity_prune_commands import register_inactivity_prune_commands
 from commands.interaction_commands import register_interaction_commands
+from commands.invite_commands import register_invite_commands
 from commands.jail_commands import register_jail_commands
 from commands.mod_commands import register_mod_commands
 from commands.spoiler_commands import register_spoiler_commands
@@ -208,6 +209,7 @@ register_reports(bot, ctx)
 register_watch_commands(bot, ctx)
 register_foolsday_commands(bot, ctx)
 register_gender_commands(bot, ctx)
+register_invite_commands(bot, ctx)
 register_jail_commands(bot, ctx)
 register_wellness_admin_commands(bot, ctx)
 register_wellness_commands(bot, ctx)

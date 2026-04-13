@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from services.message_store import get_known_users_bulk
 from services.moderation import get_transcript
 from web.auth import AuthenticatedUser
-from web.deps import get_ctx, require_perms, run_query
+from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from web.schemas import (
     AuditLogResponse,
     JailsResponse,
@@ -27,6 +27,7 @@ router = APIRouter()
 def _resolve_names(ctx, guild, entries, *id_name_pairs):
     if not entries:
         return
+    _guild_id = guild.id if guild else 0
     unresolved: set[int] = set()
     for entry in entries:
         for id_field, name_field in id_name_pairs:
@@ -40,7 +41,7 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
                 unresolved.add(int(uid))
     if unresolved:
         with ctx.open_db() as conn:
-            known = get_known_users_bulk(conn, ctx.guild_id, list(unresolved))
+            known = get_known_users_bulk(conn, _guild_id, list(unresolved))
         for entry in entries:
             for id_field, name_field in id_name_pairs:
                 if entry.get(name_field):
@@ -59,6 +60,7 @@ async def moderation_stats(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     one_week_ago = time.time() - 7 * 86400
 
     def _q():
@@ -70,32 +72,32 @@ async def moderation_stats(
             return {
                 "active_jails": r(
                     "SELECT COUNT(*) FROM jails WHERE guild_id = ? AND status = 'active'",
-                    ctx.guild_id,
+                    guild_id,
                 ),
                 "total_jails": r(
-                    "SELECT COUNT(*) FROM jails WHERE guild_id = ?", ctx.guild_id
+                    "SELECT COUNT(*) FROM jails WHERE guild_id = ?", guild_id
                 ),
                 "open_tickets": r(
                     "SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'open'",
-                    ctx.guild_id,
+                    guild_id,
                 ),
                 "closed_tickets": r(
                     "SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'closed'",
-                    ctx.guild_id,
+                    guild_id,
                 ),
                 "total_tickets": r(
-                    "SELECT COUNT(*) FROM tickets WHERE guild_id = ?", ctx.guild_id
+                    "SELECT COUNT(*) FROM tickets WHERE guild_id = ?", guild_id
                 ),
                 "active_warnings": r(
                     "SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND revoked = 0",
-                    ctx.guild_id,
+                    guild_id,
                 ),
                 "total_warnings": r(
-                    "SELECT COUNT(*) FROM warnings WHERE guild_id = ?", ctx.guild_id
+                    "SELECT COUNT(*) FROM warnings WHERE guild_id = ?", guild_id
                 ),
                 "recent_actions": r(
                     "SELECT COUNT(*) FROM audit_log WHERE guild_id = ? AND created_at >= ?",
-                    ctx.guild_id,
+                    guild_id,
                     one_week_ago,
                 ),
             }
@@ -114,13 +116,14 @@ async def list_jails(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
             clauses = ["guild_id = ?"]
-            params: list = [ctx.guild_id]
+            params: list = [guild_id]
             if status:
                 clauses.append("status = ?")
                 params.append(status)
@@ -173,13 +176,14 @@ async def list_tickets(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
             clauses = ["guild_id = ?"]
-            params: list = [ctx.guild_id]
+            params: list = [guild_id]
             if status == "closed":
                 clauses.append("status IN ('closed', 'deleted')")
             elif status:
@@ -244,13 +248,14 @@ async def list_warnings(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
             clauses = ["guild_id = ?"]
-            params: list = [ctx.guild_id]
+            params: list = [guild_id]
             if user_id:
                 clauses.append("user_id = ?")
                 params.append(int(user_id))
@@ -305,13 +310,14 @@ async def list_policy_tickets(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
             clauses = ["guild_id = ?"]
-            params: list = [ctx.guild_id]
+            params: list = [guild_id]
             if status:
                 clauses.append("status = ?")
                 params.append(status)
@@ -370,6 +376,7 @@ async def transcript(
         )
 
     ctx = get_ctx(request)
+    get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -389,14 +396,15 @@ async def audit_log(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     limit = min(limit, 200)
 
     def _q():
         with ctx.open_db() as conn:
             clauses = ["guild_id = ?"]
-            params: list = [ctx.guild_id]
+            params: list = [guild_id]
             if action:
                 clauses.append("action = ?")
                 params.append(action)

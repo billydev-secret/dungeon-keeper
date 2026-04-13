@@ -822,3 +822,14 @@ def get_policies(
         (guild_id,),
     ).fetchall()
     return [dict(r) for r in rows]  # type: ignore[misc]
+
+
+def get_policies_by_ticket_id(
+    conn: sqlite3.Connection,
+    policy_ticket_id: int,
+) -> list[PolicyRow]:
+    rows = conn.execute(
+        "SELECT * FROM policies WHERE policy_ticket_id = ? ORDER BY passed_at DESC",
+        (policy_ticket_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]  # type: ignore[misc]

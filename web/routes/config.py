@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from db_utils import (
@@ -30,10 +30,17 @@ from services.booster_roles import (
 )
 from services.inactivity_prune_service import get_prune_rule as _get_prune_rule
 from web.auth import AuthenticatedUser
-from web.deps import get_ctx, require_perms, run_query
+from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from xp_system import _XP_COEFF_PREFIX, DEFAULT_XP_SETTINGS
 
 router = APIRouter()
+
+
+def _require_primary_guild(request: Request) -> None:
+    """Raise 403 if the active guild is not the primary (config-owning) guild."""
+    ctx = request.app.state.ctx
+    if get_active_guild_id(request) != ctx.guild_id:
+        raise HTTPException(403, "Config editing is only available for the primary guild")
 
 
 # ── Read helpers ───────────────────────────────────────────────────────
@@ -113,6 +120,7 @@ async def get_config(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -121,8 +129,8 @@ async def get_config(
                 DEFAULT_WELCOME_MESSAGE,
             )
 
-            prune_rule = _get_prune_rule(ctx.db_path, ctx.guild_id)
-            grant_roles = get_grant_roles(conn, ctx.guild_id)
+            prune_rule = _get_prune_rule(ctx.db_path, guild_id)
+            grant_roles = get_grant_roles(conn, guild_id)
 
             return {
                 "global": {
@@ -202,7 +210,7 @@ async def get_config(
                         "permissions": [
                             {"entity_type": et, "entity_id": str(eid)}
                             for et, eid in get_grant_permissions(
-                                conn, ctx.guild_id, name
+                                conn, guild_id, name
                             )
                         ],
                     }
@@ -216,7 +224,7 @@ async def get_config(
                         "image_path": r["image_path"],
                         "sort_order": r["sort_order"],
                     }
-                    for r in get_booster_roles(conn, ctx.guild_id)
+                    for r in get_booster_roles(conn, guild_id)
                 ],
                 "auto_delete": [
                     {
@@ -227,7 +235,7 @@ async def get_config(
                         "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
                         "interval_display": _fmt_dur(int(r["interval_seconds"])),
                     }
-                    for r in list_auto_delete_rules_for_guild(ctx.db_path, ctx.guild_id)
+                    for r in list_auto_delete_rules_for_guild(ctx.db_path, guild_id)
                 ],
             }
 
@@ -251,6 +259,8 @@ async def update_global(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -303,6 +313,8 @@ async def update_welcome(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    get_active_guild_id(request)
+    _require_primary_guild(request)
 
     _FIELDS = {
         "welcome_channel_id": "welcome_channel_id",
@@ -363,6 +375,8 @@ async def update_xp(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -456,6 +470,8 @@ async def update_prune(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         from services.inactivity_prune_service import (
@@ -470,12 +486,12 @@ async def update_prune(
             and body.role_id != "0"
         ):
             upsert_prune_rule(
-                ctx.db_path, ctx.guild_id, int(body.role_id), body.inactivity_days
+                ctx.db_path, guild_id, int(body.role_id), body.inactivity_days
             )
         elif body.role_id == "0" or (
             body.inactivity_days is not None and body.inactivity_days <= 0
         ):
-            remove_prune_rule(ctx.db_path, ctx.guild_id)
+            remove_prune_rule(ctx.db_path, guild_id)
         return {"ok": True}
 
     return await run_query(_q)
@@ -500,6 +516,8 @@ async def update_moderation(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    get_active_guild_id(request)
+    _require_primary_guild(request)
 
     _FIELDS = {
         "jailed_role_id": "jailed_role_id",
@@ -548,15 +566,17 @@ async def update_role_grant(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
-            existing = get_grant_roles(conn, ctx.guild_id)
+            existing = get_grant_roles(conn, guild_id)
             if grant_name in existing:
                 cur = existing[grant_name]
                 upsert_grant_role(
                     conn,
-                    ctx.guild_id,
+                    guild_id,
                     grant_name,
                     label=body.label if body.label is not None else cur["label"],
                     role_id=int(body.role_id)
@@ -575,7 +595,7 @@ async def update_role_grant(
             else:
                 upsert_grant_role(
                     conn,
-                    ctx.guild_id,
+                    guild_id,
                     grant_name,
                     label=body.label or grant_name.replace("_", " ").title(),
                     role_id=int(body.role_id) if body.role_id else 0,
@@ -588,12 +608,12 @@ async def update_role_grant(
                     grant_message=body.grant_message or "",
                 )
             if body.permissions is not None:
-                for et, eid in get_grant_permissions(conn, ctx.guild_id, grant_name):
-                    remove_grant_permission(conn, ctx.guild_id, grant_name, et, eid)
+                for et, eid in get_grant_permissions(conn, guild_id, grant_name):
+                    remove_grant_permission(conn, guild_id, grant_name, et, eid)
                 for perm in body.permissions:
                     add_grant_permission(
                         conn,
-                        ctx.guild_id,
+                        guild_id,
                         grant_name,
                         perm["entity_type"],
                         int(perm["entity_id"]),
@@ -610,10 +630,12 @@ async def delete_role_grant(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
-            delete_grant_role(conn, ctx.guild_id, grant_name)
+            delete_grant_role(conn, guild_id, grant_name)
         return {"ok": True}
 
     return await run_query(_q)
@@ -630,6 +652,8 @@ async def update_spoiler(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -669,12 +693,14 @@ async def update_booster_role(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
             upsert_booster_role(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 role_key,
                 label=body.label,
                 role_id=int(body.role_id) if body.role_id else 0,
@@ -693,10 +719,12 @@ async def remove_booster_role(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
-            delete_booster_role(conn, ctx.guild_id, role_key)
+            delete_booster_role(conn, guild_id, role_key)
         return {"ok": True}
 
     return await run_query(_q)
@@ -718,11 +746,13 @@ async def update_auto_delete(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         upsert_auto_delete_rule(
             ctx.db_path,
-            ctx.guild_id,
+            guild_id,
             int(channel_id),
             body.max_age_seconds,
             body.interval_seconds,
@@ -739,9 +769,11 @@ async def remove_auto_delete(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
-        remove_auto_delete_rule(ctx.db_path, ctx.guild_id, int(channel_id))
+        remove_auto_delete_rule(ctx.db_path, guild_id, int(channel_id))
         return {"ok": True}
 
     return await run_query(_q)

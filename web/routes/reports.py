@@ -13,6 +13,7 @@ from services.reports_data import MemberSnapshot
 from web.auth import AuthenticatedUser
 from web.deps import (
     cached_run_query,
+    get_active_guild_id,
     get_ctx,
     invalidate_report_cache,
     require_perms,
@@ -20,6 +21,7 @@ from web.deps import (
 )
 from web.schemas import (
     ActivityResponse,
+    AnimatedHeatmapResponse,
     BurstRankingResponse,
     ChannelComparisonResponse,
     GreeterResponseResponse,
@@ -47,8 +49,8 @@ async def clear_cache(
     request: Request,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    ctx = get_ctx(request)
-    removed = invalidate_report_cache(guild_id=ctx.guild_id)
+    guild_id = get_active_guild_id(request)
+    removed = invalidate_report_cache(guild_id=guild_id)
     return {"cleared": removed}
 
 
@@ -60,6 +62,8 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
     """
     if not entries:
         return
+
+    _guild_id = guild.id if guild else 0
 
     # Collect all IDs that need resolving
     unresolved: set[int] = set()
@@ -77,7 +81,7 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
     # DB fallback for any still-unresolved IDs
     if unresolved:
         with ctx.open_db() as conn:
-            known = get_known_users_bulk(conn, ctx.guild_id, list(unresolved))
+            known = get_known_users_bulk(conn, _guild_id, list(unresolved))
         for entry in entries:
             for id_field, name_field in id_name_pairs:
                 if entry.get(name_field):
@@ -98,6 +102,7 @@ async def role_growth(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
     role_filter: set[str] | None = None
     if roles is not None:
@@ -106,12 +111,12 @@ async def role_growth(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_role_growth_data(
-                conn, ctx.guild_id, resolution, role_filter, utc_offset_hours=tz
+                conn, guild_id, resolution, role_filter, utc_offset_hours=tz
             )
 
     return await cached_run_query(
         "role-growth",
-        ctx.guild_id,
+        guild_id,
         {"resolution": resolution, "roles": roles},
         _q,
     )
@@ -130,6 +135,7 @@ async def message_cadence(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     ch_id = int(channel_id) if channel_id else None
     tz = getattr(ctx, "tz_offset_hours", 0.0)
 
@@ -137,7 +143,7 @@ async def message_cadence(
         with ctx.open_db() as conn:
             return reports_data.get_message_cadence_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 resolution,
                 tz,
                 ch_id,
@@ -145,7 +151,7 @@ async def message_cadence(
 
     return await cached_run_query(
         "message-cadence",
-        ctx.guild_id,
+        guild_id,
         {"resolution": resolution, "channel_id": channel_id},
         _q,
     )
@@ -161,10 +167,11 @@ async def join_times(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
 
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     if guild is not None:
         members = [
@@ -184,7 +191,7 @@ async def join_times(
                 # Prefer invite_edges if populated
                 rows = conn.execute(
                     "SELECT invitee_id, joined_at FROM invite_edges WHERE guild_id = ?",
-                    (ctx.guild_id,),
+                    (guild_id,),
                 ).fetchall()
                 if rows:
                     return [
@@ -203,7 +210,7 @@ async def join_times(
                        FROM role_events
                        WHERE guild_id = ? AND action = 'grant'
                        GROUP BY user_id""",
-                    (ctx.guild_id,),
+                    (guild_id,),
                 ).fetchall()
                 return [
                     MemberSnapshot(
@@ -223,7 +230,7 @@ async def join_times(
 
     return await cached_run_query(
         "join-times",
-        ctx.guild_id,
+        guild_id,
         {"resolution": resolution},
         _q,
     )
@@ -241,6 +248,7 @@ async def nsfw_gender(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
 
     if channel_id:
@@ -248,7 +256,7 @@ async def nsfw_gender(
     else:
         # Auto-discover NSFW channels from live guild cache
         bot = getattr(ctx, "bot", None)
-        guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+        guild = bot.get_guild(guild_id) if bot is not None else None
         if guild is not None:
             target_ids = [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)]
         else:
@@ -264,7 +272,7 @@ async def nsfw_gender(
                             ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
                         WHERE m.guild_id = ?
                         """,
-                        (ctx.guild_id,),
+                        (guild_id,),
                     ).fetchall()
                     return [int(r[0]) for r in rows]
 
@@ -283,7 +291,7 @@ async def nsfw_gender(
         with ctx.open_db() as conn:
             return reports_data.get_nsfw_gender_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 resolution,
                 target_ids,
                 tz,
@@ -292,7 +300,7 @@ async def nsfw_gender(
 
     return await cached_run_query(
         "nsfw-gender",
-        ctx.guild_id,
+        guild_id,
         {"resolution": resolution, "media_only": media_only, "channel_id": channel_id},
         _q,
     )
@@ -308,6 +316,7 @@ async def message_rate(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     days = max(1, min(365, days))
     tz = getattr(ctx, "tz_offset_hours", 0.0)
 
@@ -315,14 +324,14 @@ async def message_rate(
         with ctx.open_db() as conn:
             return reports_data.get_message_rate_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 days,
                 tz,
             )
 
     return await cached_run_query(
         "message-rate",
-        ctx.guild_id,
+        guild_id,
         {"days": days},
         _q,
     )
@@ -338,8 +347,9 @@ async def greeter_response(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     welcome_channel_id = getattr(ctx, "welcome_channel_id", 0)
     greeter_role_id = getattr(ctx, "greeter_role_id", 0)
@@ -374,7 +384,7 @@ async def greeter_response(
                     )
                     LIMIT 1
                     """,
-                    (ctx.guild_id, ctx.guild_id),
+                    (guild_id, guild_id),
                 ).fetchone()
                 if role_name_row:
                     rows = conn.execute(
@@ -382,7 +392,7 @@ async def greeter_response(
                         SELECT user_id FROM role_events
                         WHERE guild_id = ? AND role_name = ? AND action = 'grant'
                         """,
-                        (ctx.guild_id, role_name_row[0]),
+                        (guild_id, role_name_row[0]),
                     ).fetchall()
                     greeter_ids = {int(r[0]) for r in rows}
 
@@ -395,7 +405,7 @@ async def greeter_response(
                     WHERE guild_id = ? AND channel_id = ?
                     GROUP BY author_id HAVING cnt >= 5
                     """,
-                    (ctx.guild_id, welcome_channel_id),
+                    (guild_id, welcome_channel_id),
                 ).fetchall()
                 greeter_ids = {int(r[0]) for r in rows}
 
@@ -405,7 +415,7 @@ async def greeter_response(
             # Join times: invite_edges first, then role_events first-grant fallback
             rows = conn.execute(
                 "SELECT invitee_id, joined_at FROM invite_edges WHERE guild_id = ? AND joined_at >= ?",
-                (ctx.guild_id, cutoff_ts),
+                (guild_id, cutoff_ts),
             ).fetchall()
             for r in rows:
                 join_map[int(r[0])] = float(r[1])
@@ -417,7 +427,7 @@ async def greeter_response(
                        FROM role_events
                        WHERE guild_id = ? AND action = 'grant' AND granted_at >= ?
                        GROUP BY user_id""",
-                    (ctx.guild_id, cutoff_ts),
+                    (guild_id, cutoff_ts),
                 ).fetchall()
                 for r in rows:
                     join_map[int(r[0])] = float(r[1])
@@ -436,7 +446,7 @@ async def greeter_response(
 
             data = reports_data.get_greeter_response_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 welcome_channel_id,
                 greeter_ids,
                 join_map,
@@ -448,7 +458,7 @@ async def greeter_response(
 
     result = await cached_run_query(
         "greeter-response",
-        ctx.guild_id,
+        guild_id,
         {"days": days},
         _q,
     )
@@ -483,6 +493,7 @@ async def activity(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
     uid = int(user_id) if user_id else None
     cid = int(channel_id) if channel_id else None
@@ -491,7 +502,7 @@ async def activity(
         with ctx.open_db() as conn:
             return reports_data.get_activity_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 resolution,
                 tz,
                 mode=mode,
@@ -501,7 +512,7 @@ async def activity(
 
     return await cached_run_query(
         "activity",
-        ctx.guild_id,
+        guild_id,
         {
             "resolution": resolution,
             "mode": mode,
@@ -523,21 +534,22 @@ async def invite_effectiveness(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_invite_effectiveness_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 days=days,
                 active_days=active_days,
             )
 
     result = await cached_run_query(
         "invite-effectiveness",
-        ctx.guild_id,
+        guild_id,
         {"days": days, "active_days": active_days},
         _q,
     )
@@ -558,21 +570,22 @@ async def interaction_graph(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_interaction_graph_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 days=days,
                 limit=min(limit, 100),
             )
 
     result = await cached_run_query(
         "interaction-graph",
-        ctx.guild_id,
+        guild_id,
         {"days": days, "limit": limit},
         _q,
     )
@@ -605,21 +618,22 @@ async def retention(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_retention_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 period_days=period_days,
                 min_previous=min_previous,
             )
 
     result = await cached_run_query(
         "retention",
-        ctx.guild_id,
+        guild_id,
         {"period_days": period_days, "min_previous": min_previous},
         _q,
     )
@@ -637,22 +651,23 @@ async def voice_activity(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     tz = getattr(ctx, "tz_offset_hours", 0.0)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_voice_activity_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 days=days,
                 utc_offset_hours=tz,
             )
 
     result = await cached_run_query(
         "voice-activity",
-        ctx.guild_id,
+        guild_id,
         {"days": days},
         _q,
     )
@@ -670,16 +685,17 @@ async def xp_leaderboard(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
-            return reports_data.get_xp_leaderboard_data(conn, ctx.guild_id, days=days)
+            return reports_data.get_xp_leaderboard_data(conn, guild_id, days=days)
 
     result = await cached_run_query(
         "xp-leaderboard",
-        ctx.guild_id,
+        guild_id,
         {"days": days},
         _q,
     )
@@ -697,20 +713,21 @@ async def reaction_analytics(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_reaction_analytics_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 days=days,
             )
 
     result = await cached_run_query(
         "reaction-analytics",
-        ctx.guild_id,
+        guild_id,
         {"days": days},
         _q,
     )
@@ -732,21 +749,22 @@ async def message_rate_drops(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_message_rate_drops_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 period_days=period_days,
                 min_previous=min_previous,
             )
 
     result = await cached_run_query(
         "message-rate-drops",
-        ctx.guild_id,
+        guild_id,
         {"period_days": period_days, "min_previous": min_previous},
         _q,
     )
@@ -765,21 +783,22 @@ async def burst_ranking(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_burst_ranking_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 min_sessions=min_sessions,
                 days=days,
             )
 
     result = await cached_run_query(
         "burst-ranking",
-        ctx.guild_id,
+        guild_id,
         {"min_sessions": min_sessions, "days": days},
         _q,
     )
@@ -797,20 +816,21 @@ async def channel_comparison(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_channel_comparison_data(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 days=max(1, min(365, days)),
             )
 
     result = await cached_run_query(
         "channel-comparison",
-        ctx.guild_id,
+        guild_id,
         {"days": days},
         _q,
     )
@@ -826,7 +846,7 @@ async def channel_comparison(
             unresolved_ids.append(int(ch_row["channel_id"]))
         if unresolved_ids:
             with ctx.open_db() as conn:
-                known = get_known_channels_bulk(conn, ctx.guild_id, unresolved_ids)
+                known = get_known_channels_bulk(conn, guild_id, unresolved_ids)
             for ch_row in result["channels"]:
                 if not ch_row.get("channel_name"):
                     cid = int(ch_row["channel_id"])
@@ -867,8 +887,9 @@ async def quality_score(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot is not None else None
+    guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
@@ -882,13 +903,13 @@ async def quality_score(
                     FROM messages WHERE guild_id = ?
                     GROUP BY author_id
                     """,
-                    (ctx.guild_id,),
+                    (guild_id,),
                 ).fetchall()
                 members = [_FakeMember(int(r[0]), float(r[1])) for r in rows]
 
             scores = compute_quality_scores(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 members,
                 window_days=days,
                 min_active_days=min_active_days,
@@ -914,7 +935,7 @@ async def quality_score(
 
     result = await cached_run_query(
         "quality-score",
-        ctx.guild_id,
+        guild_id,
         {"days": days, "min_active_days": min_active_days},
         _q,
         ttl=300,
@@ -939,7 +960,8 @@ async def time_to_level_5(
     from xp_system import get_time_to_level_details, xp_required_for_level
 
     ctx = get_ctx(request)
-    guild = ctx.bot.get_guild(ctx.guild_id) if ctx.bot else None
+    guild_id = get_active_guild_id(request)
+    guild = ctx.bot.get_guild(guild_id) if ctx.bot else None
 
     since_ts: float | None = None
     if days is not None:
@@ -948,7 +970,7 @@ async def time_to_level_5(
     def _q():
         with ctx.open_db() as conn:
             details = get_time_to_level_details(
-                conn, ctx.guild_id, 5, since_ts=since_ts
+                conn, guild_id, 5, since_ts=since_ts
             )
 
         if not details:
@@ -1008,7 +1030,7 @@ async def time_to_level_5(
 
     result = await cached_run_query(
         "time-to-level-5",
-        ctx.guild_id,
+        guild_id,
         {"days": days},
         _q,
         ttl=300,
@@ -1016,4 +1038,41 @@ async def time_to_level_5(
 
     _resolve_names(ctx, guild, result.get("members", []), ("user_id", "display_name"))
 
+    return result
+
+
+# ── Animated interaction heatmap ──────────────────────────────────────────
+
+
+@router.get("/interaction-heatmap", response_model=AnimatedHeatmapResponse)
+async def interaction_heatmap(
+    request: Request,
+    resolution: Literal["day", "week"] = "week",
+    days: int = 90,
+    top_n: int = 20,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            return reports_data.get_animated_heatmap_data(
+                conn,
+                guild_id,
+                resolution=resolution,
+                days=days,
+                top_n=top_n,
+            )
+
+    result = await cached_run_query(
+        "interaction-heatmap",
+        guild_id,
+        {"resolution": resolution, "days": days, "top_n": top_n},
+        _q,
+        ttl=300,
+    )
+    _resolve_names(ctx, guild, result.get("users", []), ("user_id", "user_name"))
     return result

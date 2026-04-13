@@ -7,7 +7,7 @@ Each ``GET /api/health/{tile}`` endpoint returns full deep-dive data.
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -28,7 +28,7 @@ from services.health_metrics import (
 from services.health_service import get_cached, set_cached
 from services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web.auth import AuthenticatedUser
-from web.deps import get_ctx, require_perms, run_query
+from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 
 router = APIRouter()
 
@@ -118,8 +118,9 @@ async def health_tiles(
     user: AuthenticatedUser = Depends(require_perms(set())),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
     is_admin = "admin" in user.perms
     is_mod = "moderator" in user.perms
@@ -139,11 +140,11 @@ async def health_tiles(
             status_bar = {
                 "active_users_1h": conn.execute(
                     "SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id=? AND ts>=?",
-                    (ctx.guild_id, int(time.time() - 3600)),
+                    (guild_id, int(time.time() - 3600)),
                 ).fetchone()[0],
                 "active_channels_1h": conn.execute(
                     "SELECT COUNT(DISTINCT channel_id) FROM messages WHERE guild_id=? AND ts>=?",
-                    (ctx.guild_id, int(time.time() - 3600)),
+                    (guild_id, int(time.time() - 3600)),
                 ).fetchone()[0],
                 "voice_active": extras["voice_active"],
                 "recent_joins_today": sum(
@@ -157,15 +158,15 @@ async def health_tiles(
             # --- Tiles visible to all authenticated users (admin + mod) ---
             if is_admin or is_mod:
                 if _want("dau_mau"):
-                    cached = get_cached(conn, ctx.guild_id, "dau_mau")
+                    cached = get_cached(conn, guild_id, "dau_mau")
                     if cached is None:
                         cached = compute_dau_mau(
                             conn,
-                            ctx.guild_id,
+                            guild_id,
                             member_count=extras["member_count"],
                             voice_active_count=extras["voice_active"],
                         )
-                        set_cached(conn, ctx.guild_id, "dau_mau", cached)
+                        set_cached(conn, guild_id, "dau_mau", cached)
                     tiles["dau_mau"] = {
                         "dau_mau": cached["dau_mau"],
                         "wau_mau": cached["wau_mau"],
@@ -176,10 +177,10 @@ async def health_tiles(
                     }
 
                 if _want("heatmap"):
-                    cached = get_cached(conn, ctx.guild_id, "heatmap")
+                    cached = get_cached(conn, guild_id, "heatmap")
                     if cached is None:
-                        cached = compute_heatmap(conn, ctx.guild_id)
-                        set_cached(conn, ctx.guild_id, "heatmap", cached)
+                        cached = compute_heatmap(conn, guild_id)
+                        set_cached(conn, guild_id, "heatmap", cached)
                     tiles["heatmap"] = {
                         "grid": cached["grid"],
                         "peak_slot": cached["peak_slot"],
@@ -189,14 +190,14 @@ async def health_tiles(
                     }
 
                 if _want("channel_health"):
-                    cached = get_cached(conn, ctx.guild_id, "channel_health")
+                    cached = get_cached(conn, guild_id, "channel_health")
                     if cached is None:
                         cached = compute_channel_health(
                             conn,
-                            ctx.guild_id,
+                            guild_id,
                             nsfw_channel_ids=extras["nsfw_ids"],
                         )
-                        set_cached(conn, ctx.guild_id, "channel_health", cached)
+                        set_cached(conn, guild_id, "channel_health", cached)
                     tiles["channel_health"] = {
                         "active_count": cached["active_count"],
                         "flagged_count": cached["flagged_count"],
@@ -205,14 +206,14 @@ async def health_tiles(
                     }
 
                 if _want("mod_workload"):
-                    cached = get_cached(conn, ctx.guild_id, "mod_workload")
+                    cached = get_cached(conn, guild_id, "mod_workload")
                     if cached is None:
                         cached = compute_mod_workload(
                             conn,
-                            ctx.guild_id,
+                            guild_id,
                             mod_ids=extras["mod_ids"],
                         )
-                        set_cached(conn, ctx.guild_id, "mod_workload", cached)
+                        set_cached(conn, guild_id, "mod_workload", cached)
                     if is_admin:
                         tiles["mod_workload"] = {
                             "median_response_time": cached["median_response_time"],
@@ -235,10 +236,10 @@ async def health_tiles(
                         }
 
                 if _want("incidents"):
-                    cached = get_cached(conn, ctx.guild_id, "incidents")
+                    cached = get_cached(conn, guild_id, "incidents")
                     if cached is None:
-                        cached = compute_incidents(conn, ctx.guild_id)
-                        set_cached(conn, ctx.guild_id, "incidents", cached)
+                        cached = compute_incidents(conn, guild_id)
+                        set_cached(conn, guild_id, "incidents", cached)
                     tiles["incidents"] = {
                         "active_count": cached["active_count"],
                         "badge": cached["badge"],
@@ -256,19 +257,19 @@ async def health_tiles(
                            WHERE ms.guild_id = ?
                              AND (ms.sentiment >= 0.5 OR ms.sentiment <= -0.5)
                            ORDER BY m.ts DESC LIMIT 8""",
-                        (ctx.guild_id,),
+                        (guild_id,),
                     ).fetchall()
                     pos_count = conn.execute(
                         "SELECT COUNT(*) FROM message_sentiment ms "
                         "JOIN messages m ON ms.message_id = m.message_id "
                         "WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 AND m.ts >= ?",
-                        (ctx.guild_id, time.time() - 86400),
+                        (guild_id, time.time() - 86400),
                     ).fetchone()[0]
                     neg_count = conn.execute(
                         "SELECT COUNT(*) FROM message_sentiment ms "
                         "JOIN messages m ON ms.message_id = m.message_id "
                         "WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 AND m.ts >= ?",
-                        (ctx.guild_id, time.time() - 86400),
+                        (guild_id, time.time() - 86400),
                     ).fetchone()[0]
                     tiles["sentiment_feed"] = {
                         "messages": [
@@ -287,13 +288,81 @@ async def health_tiles(
                         "negative_24h": neg_count,
                     }
 
+                if _want("message_feed"):
+                    cutoff_24h = time.time() - 86400
+                    mf_rows = conn.execute(
+                        """SELECT m.message_id, m.channel_id, m.author_id,
+                                  substr(m.content, 1, 120) AS content,
+                                  COALESCE(m.sentiment, 0) AS sentiment,
+                                  m.reply_to_id, m.ts,
+                                  COALESCE(rx.reaction_total, 0) AS reaction_count,
+                                  COALESCE(rp.reply_count, 0) AS reply_count
+                           FROM messages m
+                           LEFT JOIN (
+                               SELECT message_id, SUM(count) AS reaction_total
+                               FROM message_reactions GROUP BY message_id
+                           ) rx ON rx.message_id = m.message_id
+                           LEFT JOIN (
+                               SELECT reply_to_id, COUNT(*) AS reply_count
+                               FROM messages
+                               WHERE reply_to_id IS NOT NULL AND guild_id = ?
+                               GROUP BY reply_to_id
+                           ) rp ON rp.reply_to_id = m.message_id
+                           WHERE m.guild_id = ? AND m.ts >= ?
+                           ORDER BY (COALESCE(rx.reaction_total, 0) + COALESCE(rp.reply_count, 0)) DESC, m.ts DESC
+                           LIMIT 8""",
+                        (guild_id, guild_id, cutoff_24h),
+                    ).fetchall()
+                    total_24h = conn.execute(
+                        "SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ?",
+                        (guild_id, cutoff_24h),
+                    ).fetchone()[0]
+                    high_eng = conn.execute(
+                        """SELECT COUNT(*) FROM (
+                               SELECT m.message_id
+                               FROM messages m
+                               LEFT JOIN (
+                                   SELECT message_id, SUM(count) AS reaction_total
+                                   FROM message_reactions GROUP BY message_id
+                               ) rx ON rx.message_id = m.message_id
+                               LEFT JOIN (
+                                   SELECT reply_to_id, COUNT(*) AS reply_count
+                                   FROM messages
+                                   WHERE reply_to_id IS NOT NULL AND guild_id = ?
+                                   GROUP BY reply_to_id
+                               ) rp ON rp.reply_to_id = m.message_id
+                               WHERE m.guild_id = ? AND m.ts >= ?
+                                 AND (COALESCE(rx.reaction_total, 0) + COALESCE(rp.reply_count, 0)) >= 3
+                           )""",
+                        (guild_id, guild_id, cutoff_24h),
+                    ).fetchone()[0]
+                    tiles["message_feed"] = {
+                        "messages": [
+                            {
+                                "message_id": str(r["message_id"]),
+                                "channel_id": str(r["channel_id"]),
+                                "author_id": str(r["author_id"]),
+                                "content": r["content"],
+                                "sentiment": r["sentiment"],
+                                "is_reply": bool(r["reply_to_id"]),
+                                "engagement": r["reaction_count"] + r["reply_count"],
+                                "reaction_count": r["reaction_count"],
+                                "reply_count": r["reply_count"],
+                                "ts": r["ts"],
+                            }
+                            for r in mf_rows
+                        ],
+                        "total_24h": total_24h,
+                        "high_engagement_24h": high_eng,
+                    }
+
             # --- Admin-only tiles ---
             if is_admin:
                 if _want("gini"):
-                    cached = get_cached(conn, ctx.guild_id, "gini")
+                    cached = get_cached(conn, guild_id, "gini")
                     if cached is None:
-                        cached = compute_gini(conn, ctx.guild_id)
-                        set_cached(conn, ctx.guild_id, "gini", cached)
+                        cached = compute_gini(conn, guild_id)
+                        set_cached(conn, guild_id, "gini", cached)
                     tiles["gini"] = {
                         "gini": cached["gini"],
                         "badge": cached["badge"],
@@ -302,14 +371,14 @@ async def health_tiles(
                     }
 
                 if _want("social_graph"):
-                    cached = get_cached(conn, ctx.guild_id, "social_graph")
+                    cached = get_cached(conn, guild_id, "social_graph")
                     if cached is None:
                         cached = compute_social_graph(
                             conn,
-                            ctx.guild_id,
+                            guild_id,
                             nsfw_channel_ids=extras["nsfw_ids"],
                         )
-                        set_cached(conn, ctx.guild_id, "social_graph", cached)
+                        set_cached(conn, guild_id, "social_graph", cached)
                     tiles["social_graph"] = {
                         "clustering_coefficient": cached["clustering_coefficient"],
                         "badge": cached["badge"],
@@ -320,10 +389,61 @@ async def health_tiles(
                     }
 
                 if _want("sentiment"):
-                    cached = get_cached(conn, ctx.guild_id, "sentiment")
+                    cached = get_cached(conn, guild_id, "sentiment")
                     if cached is None:
-                        cached = compute_sentiment(conn, ctx.guild_id)
-                        set_cached(conn, ctx.guild_id, "sentiment", cached)
+                        cached = compute_sentiment(conn, guild_id)
+                        set_cached(conn, guild_id, "sentiment", cached)
+
+                    # Outlier messages: 1 sigma above / below the mean
+                    _avg = cached["avg_sentiment"]
+                    _std_row = conn.execute(
+                        "SELECT COALESCE(SQRT(AVG((ms.sentiment - ?) * (ms.sentiment - ?))), 0.3) AS sd "
+                        "FROM message_sentiment ms "
+                        "JOIN messages m ON ms.message_id = m.message_id "
+                        "WHERE ms.guild_id = ? AND m.ts >= ?",
+                        (_avg, _avg, guild_id, time.time() - 86400 * 30),
+                    ).fetchone()
+                    _sd = max(_std_row["sd"], 0.1)
+                    _hi = _avg + _sd
+                    _lo = _avg - _sd
+                    _top2 = conn.execute(
+                        """SELECT ms.message_id, ms.channel_id, m.author_id,
+                                  substr(m.content, 1, 100) AS content,
+                                  ms.sentiment, ms.emotion, m.ts
+                           FROM message_sentiment ms
+                           JOIN messages m ON ms.message_id = m.message_id
+                           WHERE ms.guild_id = ? AND ms.sentiment >= ?
+                           ORDER BY ms.sentiment DESC, m.ts DESC LIMIT 2""",
+                        (guild_id, _hi),
+                    ).fetchall()
+                    _bot2 = conn.execute(
+                        """SELECT ms.message_id, ms.channel_id, m.author_id,
+                                  substr(m.content, 1, 100) AS content,
+                                  ms.sentiment, ms.emotion, m.ts
+                           FROM message_sentiment ms
+                           JOIN messages m ON ms.message_id = m.message_id
+                           WHERE ms.guild_id = ? AND ms.sentiment <= ?
+                           ORDER BY ms.sentiment ASC, m.ts DESC LIMIT 2""",
+                        (guild_id, _lo),
+                    ).fetchall()
+
+                    def _outlier_row(r):
+                        return {
+                            "message_id": str(r["message_id"]),
+                            "channel_id": str(r["channel_id"]),
+                            "author_id": str(r["author_id"]),
+                            "content": r["content"],
+                            "sentiment": r["sentiment"],
+                            "emotion": r["emotion"],
+                            "ts": r["ts"],
+                        }
+
+                    _outliers = {
+                        "top": [_outlier_row(r) for r in _top2],
+                        "bottom": [_outlier_row(r) for r in _bot2],
+                        "threshold": round(_sd, 3),
+                    }
+
                     tiles["sentiment"] = {
                         "avg_sentiment": cached["avg_sentiment"],
                         "badge": cached["badge"],
@@ -331,17 +451,18 @@ async def health_tiles(
                         "spikes_7d": cached["spikes_7d"],
                         "pos_neg_ratio": cached["pos_neg_ratio"],
                         "sparkline": cached["sparkline"],
+                        "outliers": _outliers,
                     }
 
                 if _want("newcomer_funnel"):
-                    cached = get_cached(conn, ctx.guild_id, "newcomer_funnel")
+                    cached = get_cached(conn, guild_id, "newcomer_funnel")
                     if cached is None:
                         cached = compute_newcomer_funnel(
                             conn,
-                            ctx.guild_id,
+                            guild_id,
                             recent_join_ids=extras["recent_joins"],
                         )
-                        set_cached(conn, ctx.guild_id, "newcomer_funnel", cached)
+                        set_cached(conn, guild_id, "newcomer_funnel", cached)
                     tiles["newcomer_funnel"] = {
                         "activation_rate": cached["activation_rate"],
                         "badge": cached["badge"],
@@ -355,14 +476,14 @@ async def health_tiles(
                     }
 
                 if _want("cohort_retention"):
-                    cached = get_cached(conn, ctx.guild_id, "cohort_retention")
+                    cached = get_cached(conn, guild_id, "cohort_retention")
                     if cached is None:
                         cached = compute_cohort_retention(
                             conn,
-                            ctx.guild_id,
+                            guild_id,
                             join_times=extras["recent_joins"],
                         )
-                        set_cached(conn, ctx.guild_id, "cohort_retention", cached)
+                        set_cached(conn, guild_id, "cohort_retention", cached)
                     tiles["cohort_retention"] = {
                         "d7": cached["d7"],
                         "d30": cached["d30"],
@@ -371,10 +492,10 @@ async def health_tiles(
                     }
 
                 if _want("churn_risk"):
-                    cached = get_cached(conn, ctx.guild_id, "churn_risk")
+                    cached = get_cached(conn, guild_id, "churn_risk")
                     if cached is None:
-                        cached = compute_churn_risk(conn, ctx.guild_id)
-                        set_cached(conn, ctx.guild_id, "churn_risk", cached)
+                        cached = compute_churn_risk(conn, guild_id)
+                        set_cached(conn, guild_id, "churn_risk", cached)
                     tiles["churn_risk"] = {
                         "at_risk_count": cached["at_risk_count"],
                         "badge": cached["badge"],
@@ -409,21 +530,21 @@ async def health_tiles(
                         ),
                         ("heatmap", compute_heatmap, {}),
                     ]:
-                        if get_cached(conn, ctx.guild_id, dep_key) is None:
-                            dep_result = dep_fn(conn, ctx.guild_id, **dep_kw)
-                            set_cached(conn, ctx.guild_id, dep_key, dep_result)
+                        if get_cached(conn, guild_id, dep_key) is None:
+                            dep_result = dep_fn(conn, guild_id, **dep_kw)
+                            set_cached(conn, guild_id, dep_key, dep_result)
 
                     composite = compute_composite_health(
                         conn,
-                        ctx.guild_id,
-                        dau_mau_data=get_cached(conn, ctx.guild_id, "dau_mau"),
-                        gini_data=get_cached(conn, ctx.guild_id, "gini"),
-                        social_data=get_cached(conn, ctx.guild_id, "social_graph"),
-                        sentiment_data=get_cached(conn, ctx.guild_id, "sentiment"),
+                        guild_id,
+                        dau_mau_data=get_cached(conn, guild_id, "dau_mau"),
+                        gini_data=get_cached(conn, guild_id, "gini"),
+                        social_data=get_cached(conn, guild_id, "social_graph"),
+                        sentiment_data=get_cached(conn, guild_id, "sentiment"),
                         retention_data=get_cached(
-                            conn, ctx.guild_id, "cohort_retention"
+                            conn, guild_id, "cohort_retention"
                         ),
-                        heatmap_data=get_cached(conn, ctx.guild_id, "heatmap"),
+                        heatmap_data=get_cached(conn, guild_id, "heatmap"),
                     )
                     tiles["composite"] = {
                         "score": composite["score"],
@@ -440,8 +561,16 @@ async def health_tiles(
             if "sentiment_feed" in tiles:
                 for msg in tiles["sentiment_feed"].get("messages", []):
                     ch_ids.add(int(msg["channel_id"]))
+            if "message_feed" in tiles:
+                for msg in tiles["message_feed"].get("messages", []):
+                    ch_ids.add(int(msg["channel_id"]))
+            if "sentiment" in tiles:
+                for msg in tiles["sentiment"].get("outliers", {}).get("top", []):
+                    ch_ids.add(int(msg["channel_id"]))
+                for msg in tiles["sentiment"].get("outliers", {}).get("bottom", []):
+                    ch_ids.add(int(msg["channel_id"]))
             ch_names = (
-                _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids)
+                _resolve_channel_names(conn, guild, guild_id, ch_ids)
                 if ch_ids
                 else {}
             )
@@ -454,8 +583,16 @@ async def health_tiles(
             if "sentiment_feed" in tiles:
                 for msg in tiles["sentiment_feed"].get("messages", []):
                     mod_user_ids.add(int(msg["author_id"]))
+            if "message_feed" in tiles:
+                for msg in tiles["message_feed"].get("messages", []):
+                    mod_user_ids.add(int(msg["author_id"]))
+            if "sentiment" in tiles:
+                for msg in tiles["sentiment"].get("outliers", {}).get("top", []):
+                    mod_user_ids.add(int(msg["author_id"]))
+                for msg in tiles["sentiment"].get("outliers", {}).get("bottom", []):
+                    mod_user_ids.add(int(msg["author_id"]))
             user_names = (
-                _resolve_user_names(conn, guild, ctx.guild_id, mod_user_ids)
+                _resolve_user_names(conn, guild, guild_id, mod_user_ids)
                 if mod_user_ids
                 else {}
             )
@@ -481,15 +618,16 @@ async def health_dau_mau(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
     def _q():
         with ctx.open_db() as conn:
             return compute_dau_mau(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 member_count=extras["member_count"],
                 voice_active_count=extras["voice_active"],
             )
@@ -503,15 +641,16 @@ async def health_heatmap(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_heatmap(conn, ctx.guild_id)
+            data = compute_heatmap(conn, guild_id)
             # Resolve channel names
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
             bot = getattr(ctx, "bot", None)
-            guild = bot.get_guild(ctx.guild_id) if bot else None
-            ch_names = _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids)
+            guild = bot.get_guild(guild_id) if bot else None
+            ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["per_channel"]:
                 ch["channel_name"] = ch_names.get(int(ch["channel_id"]), "")
             return data
@@ -525,17 +664,18 @@ async def health_channel_health(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     nsfw_ids = (
         [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)] if guild else []
     )
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_channel_health(conn, ctx.guild_id, nsfw_channel_ids=nsfw_ids)
+            data = compute_channel_health(conn, guild_id, nsfw_channel_ids=nsfw_ids)
             ch_ids = {int(ch["channel_id"]) for ch in data["channels"]}
-            ch_names = _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids)
+            ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["channels"]:
                 ch["channel_name"] = ch_names.get(int(ch["channel_id"]), "")
             return data
@@ -549,14 +689,15 @@ async def health_gini(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_gini(conn, ctx.guild_id)
+            data = compute_gini(conn, guild_id)
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
-            ch_names = _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids)
+            ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["per_channel"]:
                 ch["channel_name"] = ch_names.get(int(ch["channel_id"]), "")
             return data
@@ -570,22 +711,23 @@ async def health_social_graph(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     nsfw_ids = (
         [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)] if guild else []
     )
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_social_graph(conn, ctx.guild_id, nsfw_channel_ids=nsfw_ids)
+            data = compute_social_graph(conn, guild_id, nsfw_channel_ids=nsfw_ids)
             # Resolve user names for bridge users and graph nodes
             user_ids = set()
             for b in data["bridge_users"]:
                 user_ids.add(int(b["user_id"]))
             for n in data["graph_nodes"]:
                 user_ids.add(int(n["id"]))
-            names = _resolve_user_names(conn, guild, ctx.guild_id, user_ids)
+            names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for b in data["bridge_users"]:
                 b["user_name"] = names.get(int(b["user_id"]), "")
             for n in data["graph_nodes"]:
@@ -601,14 +743,15 @@ async def health_sentiment(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_sentiment(conn, ctx.guild_id)
+            data = compute_sentiment(conn, guild_id)
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
-            ch_names = _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids)
+            ch_names = _resolve_channel_names(conn, guild, guild_id, ch_ids)
             for ch in data["per_channel"]:
                 ch["channel_name"] = ch_names.get(int(ch["channel_id"]), "")
             return data
@@ -622,8 +765,9 @@ async def health_sentiment_feed(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
@@ -635,19 +779,19 @@ async def health_sentiment_feed(
                    WHERE ms.guild_id = ?
                      AND (ms.sentiment >= 0.5 OR ms.sentiment <= -0.5)
                    ORDER BY m.ts DESC LIMIT 50""",
-                (ctx.guild_id,),
+                (guild_id,),
             ).fetchall()
             pos_count = conn.execute(
                 "SELECT COUNT(*) FROM message_sentiment ms "
                 "JOIN messages m ON ms.message_id = m.message_id "
                 "WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 AND m.ts >= ?",
-                (ctx.guild_id, time.time() - 86400),
+                (guild_id, time.time() - 86400),
             ).fetchone()[0]
             neg_count = conn.execute(
                 "SELECT COUNT(*) FROM message_sentiment ms "
                 "JOIN messages m ON ms.message_id = m.message_id "
                 "WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 AND m.ts >= ?",
-                (ctx.guild_id, time.time() - 86400),
+                (guild_id, time.time() - 86400),
             ).fetchone()[0]
             messages = [
                 {
@@ -664,12 +808,12 @@ async def health_sentiment_feed(
             ch_ids = {int(m["channel_id"]) for m in messages}
             user_ids = {int(m["author_id"]) for m in messages}
             ch_names = (
-                _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids)
+                _resolve_channel_names(conn, guild, guild_id, ch_ids)
                 if ch_ids
                 else {}
             )
             u_names = (
-                _resolve_user_names(conn, guild, ctx.guild_id, user_ids)
+                _resolve_user_names(conn, guild, guild_id, user_ids)
                 if user_ids
                 else {}
             )
@@ -685,21 +829,165 @@ async def health_sentiment_feed(
     return await run_query(_q)
 
 
+@router.get("/health/message-feed")
+async def health_message_feed(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    sentiment_min: float = Query(-1.0, ge=-1.0, le=1.0),
+    sentiment_max: float = Query(1.0, ge=-1.0, le=1.0),
+    engagement_min: int = Query(0, ge=0),
+    replies: Literal["all", "replies", "originals"] = "all",
+    connections_min: int = Query(0, ge=0),
+    hours: int = Query(168, ge=1, le=720),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            min_ts = time.time() - hours * 3600
+
+            # Build optional connections subquery
+            conn_join = ""
+            conn_select = "0 AS connections"
+            conn_where = ""
+            params: list[object] = []
+
+            if connections_min > 0:
+                conn_join = """
+                    LEFT JOIN (
+                        SELECT from_user_id AS user_id,
+                               COUNT(DISTINCT to_user_id) AS connection_count
+                        FROM user_interactions
+                        WHERE guild_id = ?
+                        GROUP BY from_user_id
+                    ) cn ON cn.user_id = m.author_id
+                """
+                conn_select = "COALESCE(cn.connection_count, 0) AS connections"
+                conn_where = f"AND COALESCE(cn.connection_count, 0) >= {int(connections_min)}"
+                params.append(guild_id)
+
+            reply_where = ""
+            if replies == "replies":
+                reply_where = "AND m.reply_to_id IS NOT NULL"
+            elif replies == "originals":
+                reply_where = "AND m.reply_to_id IS NULL"
+
+            base_sql = f"""
+                FROM messages m
+                LEFT JOIN (
+                    SELECT message_id, SUM(count) AS reaction_total
+                    FROM message_reactions GROUP BY message_id
+                ) rx ON rx.message_id = m.message_id
+                LEFT JOIN (
+                    SELECT reply_to_id, COUNT(*) AS reply_count
+                    FROM messages
+                    WHERE reply_to_id IS NOT NULL AND guild_id = ?
+                    GROUP BY reply_to_id
+                ) rp ON rp.reply_to_id = m.message_id
+                {conn_join}
+                WHERE m.guild_id = ?
+                  AND m.ts >= ?
+                  AND COALESCE(m.sentiment, 0) BETWEEN ? AND ?
+                  AND (COALESCE(rx.reaction_total, 0) + COALESCE(rp.reply_count, 0)) >= ?
+                  {reply_where}
+                  {conn_where}
+            """
+
+            # Params order: [connections_min params...], guild_id (reply sub), guild_id, min_ts, sentiment_min, sentiment_max, engagement_min
+            base_params = [
+                *params,
+                guild_id,
+                guild_id,
+                min_ts,
+                sentiment_min,
+                sentiment_max,
+                engagement_min,
+            ]
+
+            total = conn.execute(
+                f"SELECT COUNT(*) {base_sql}", base_params
+            ).fetchone()[0]
+
+            rows = conn.execute(
+                f"""SELECT m.message_id, m.channel_id, m.author_id,
+                           m.content,
+                           COALESCE(m.sentiment, 0) AS sentiment,
+                           m.emotion,
+                           m.reply_to_id, m.ts,
+                           COALESCE(rx.reaction_total, 0) AS reaction_count,
+                           COALESCE(rp.reply_count, 0) AS reply_count,
+                           {conn_select}
+                    {base_sql}
+                    ORDER BY (COALESCE(rx.reaction_total, 0) + COALESCE(rp.reply_count, 0)) DESC, m.ts DESC
+                    LIMIT ? OFFSET ?""",
+                [*base_params, limit, offset],
+            ).fetchall()
+
+            # Resolve names
+            ch_ids = {int(r["channel_id"]) for r in rows}
+            user_ids = {int(r["author_id"]) for r in rows}
+            ch_names = (
+                _resolve_channel_names(conn, guild, guild_id, ch_ids)
+                if ch_ids
+                else {}
+            )
+            u_names = (
+                _resolve_user_names(conn, guild, guild_id, user_ids)
+                if user_ids
+                else {}
+            )
+
+            messages = [
+                {
+                    "message_id": str(r["message_id"]),
+                    "channel_id": str(r["channel_id"]),
+                    "author_id": str(r["author_id"]),
+                    "content": r["content"] or "",
+                    "sentiment": r["sentiment"],
+                    "emotion": r["emotion"] or "",
+                    "is_reply": bool(r["reply_to_id"]),
+                    "engagement": r["reaction_count"] + r["reply_count"],
+                    "reaction_count": r["reaction_count"],
+                    "reply_count": r["reply_count"],
+                    "connections": r["connections"],
+                    "channel_name": ch_names.get(int(r["channel_id"]), ""),
+                    "author_name": u_names.get(int(r["author_id"]), ""),
+                    "ts": r["ts"],
+                }
+                for r in rows
+            ]
+
+            return {
+                "messages": messages,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+            }
+
+    return await run_query(_q)
+
+
 @router.get("/health/newcomer-funnel")
 async def health_newcomer_funnel(
     request: Request,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
     def _q():
         with ctx.open_db() as conn:
             return compute_newcomer_funnel(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 recent_join_ids=extras["recent_joins"],
             )
 
@@ -712,15 +1000,16 @@ async def health_cohort_retention(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
     def _q():
         with ctx.open_db() as conn:
             return compute_cohort_retention(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 join_times=extras["recent_joins"],
             )
 
@@ -733,14 +1022,15 @@ async def health_churn_risk(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_churn_risk(conn, ctx.guild_id)
+            data = compute_churn_risk(conn, guild_id)
             user_ids = {int(r["user_id"]) for r in data["at_risk"]}
-            names = _resolve_user_names(conn, guild, ctx.guild_id, user_ids)
+            names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for r in data["at_risk"]:
                 r["user_name"] = names.get(int(r["user_id"]), "")
             return data
@@ -754,15 +1044,16 @@ async def health_mod_workload(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_mod_workload(conn, ctx.guild_id, mod_ids=extras["mod_ids"])
+            data = compute_mod_workload(conn, guild_id, mod_ids=extras["mod_ids"])
             user_ids = {int(m["user_id"]) for m in data["mod_actions"]}
-            names = _resolve_user_names(conn, guild, ctx.guild_id, user_ids)
+            names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for m in data["mod_actions"]:
                 m["user_name"] = names.get(int(m["user_id"]), "")
             return data
@@ -776,17 +1067,18 @@ async def health_incidents(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_incidents(conn, ctx.guild_id)
+            data = compute_incidents(conn, guild_id)
             ch_ids = {
                 int(i["channel_id"]) for i in data["incident_log"] if i["channel_id"]
             }
             ch_names = (
-                _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids)
+                _resolve_channel_names(conn, guild, guild_id, ch_ids)
                 if ch_ids
                 else {}
             )
@@ -804,44 +1096,45 @@ async def health_composite_score(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
 
     def _q():
         with ctx.open_db() as conn:
-            dau_data = get_cached(conn, ctx.guild_id, "dau_mau") or compute_dau_mau(
+            dau_data = get_cached(conn, guild_id, "dau_mau") or compute_dau_mau(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 member_count=extras["member_count"],
                 voice_active_count=extras["voice_active"],
             )
-            gini_data = get_cached(conn, ctx.guild_id, "gini") or compute_gini(
-                conn, ctx.guild_id
+            gini_data = get_cached(conn, guild_id, "gini") or compute_gini(
+                conn, guild_id
             )
             social_data = get_cached(
-                conn, ctx.guild_id, "social_graph"
+                conn, guild_id, "social_graph"
             ) or compute_social_graph(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 nsfw_channel_ids=extras["nsfw_ids"],
             )
             sentiment_data = get_cached(
-                conn, ctx.guild_id, "sentiment"
-            ) or compute_sentiment(conn, ctx.guild_id)
+                conn, guild_id, "sentiment"
+            ) or compute_sentiment(conn, guild_id)
             retention_data = get_cached(
-                conn, ctx.guild_id, "cohort_retention"
+                conn, guild_id, "cohort_retention"
             ) or compute_cohort_retention(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 join_times=extras["recent_joins"],
             )
-            heatmap_data = get_cached(conn, ctx.guild_id, "heatmap") or compute_heatmap(
-                conn, ctx.guild_id
+            heatmap_data = get_cached(conn, guild_id, "heatmap") or compute_heatmap(
+                conn, guild_id
             )
             return compute_composite_health(
                 conn,
-                ctx.guild_id,
+                guild_id,
                 dau_mau_data=dau_data,
                 gini_data=gini_data,
                 social_data=social_data,

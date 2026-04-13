@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from db_utils import get_config_value
 from services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web.auth import AuthenticatedUser
-from web.deps import get_ctx, require_perms, run_query
+from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 
 router = APIRouter()
 
@@ -29,8 +29,9 @@ async def home_data(
     if fields:
         wanted = {f.strip() for f in fields.split(",") if f.strip()}
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     now = time.time()
     one_hour = now - 3600
@@ -132,11 +133,11 @@ async def home_data(
             if _need("messages"):
                 msgs_1h = conn.execute(
                     "SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ?",
-                    (ctx.guild_id, int(one_hour)),
+                    (guild_id, int(one_hour)),
                 ).fetchone()[0]
                 msgs_24h = conn.execute(
                     "SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ?",
-                    (ctx.guild_id, int(one_day)),
+                    (guild_id, int(one_day)),
                 ).fetchone()[0]
                 spark_rows = conn.execute(
                     """
@@ -145,12 +146,12 @@ async def home_data(
                     WHERE guild_id = ? AND ts >= ?
                     GROUP BY bucket ORDER BY bucket
                     """,
-                    (int(one_day), ctx.guild_id, int(one_day)),
+                    (int(one_day), guild_id, int(one_day)),
                 ).fetchall()
                 spark_map = {int(r[0]): int(r[1]) for r in spark_rows}
                 unique_today = conn.execute(
                     "SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id = ? AND ts >= ?",
-                    (ctx.guild_id, int(one_day)),
+                    (guild_id, int(one_day)),
                 ).fetchone()[0]
                 result.update(
                     msgs_1h=msgs_1h,
@@ -169,11 +170,11 @@ async def home_data(
                     placeholders = ",".join("?" * len(nsfw_channel_ids))
                     nsfw_1h = conn.execute(
                         f"SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})",
-                        [ctx.guild_id, int(one_hour)] + nsfw_channel_ids,
+                        [guild_id, int(one_hour)] + nsfw_channel_ids,
                     ).fetchone()[0]
                     nsfw_24h = conn.execute(
                         f"SELECT COUNT(*) FROM messages WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})",
-                        [ctx.guild_id, int(one_day)] + nsfw_channel_ids,
+                        [guild_id, int(one_day)] + nsfw_channel_ids,
                     ).fetchone()[0]
                     nsfw_spark_rows = conn.execute(
                         f"""
@@ -182,13 +183,13 @@ async def home_data(
                         WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})
                         GROUP BY bucket ORDER BY bucket
                         """,
-                        [int(one_day), ctx.guild_id, int(one_day)] + nsfw_channel_ids,
+                        [int(one_day), guild_id, int(one_day)] + nsfw_channel_ids,
                     ).fetchall()
                     nsfw_spark_map = {int(r[0]): int(r[1]) for r in nsfw_spark_rows}
                     nsfw_sparkline = [nsfw_spark_map.get(i, 0) for i in range(24)]
                     nsfw_unique = conn.execute(
                         f"SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})",
-                        [ctx.guild_id, int(one_day)] + nsfw_channel_ids,
+                        [guild_id, int(one_day)] + nsfw_channel_ids,
                     ).fetchone()[0]
                 result.update(
                     nsfw_1h=nsfw_1h,
@@ -207,7 +208,7 @@ async def home_data(
                     WHERE guild_id = ? AND ts >= ?
                     GROUP BY channel_id ORDER BY cnt DESC LIMIT 5
                     """,
-                    (ctx.guild_id, int(one_hour)),
+                    (guild_id, int(one_hour)),
                 ).fetchall()
                 top_channels = [
                     {"channel_id": str(r[0]), "channel_name": "", "count": int(r[1])}
@@ -225,7 +226,7 @@ async def home_data(
                     WHERE guild_id = ? AND ts >= ?
                     GROUP BY author_id ORDER BY cnt DESC LIMIT 5
                     """,
-                    (ctx.guild_id, int(one_hour)),
+                    (guild_id, int(one_hour)),
                 ).fetchall()
                 top_users = [
                     {"user_id": str(r[0]), "user_name": "", "count": int(r[1])}
@@ -237,11 +238,11 @@ async def home_data(
             if _need("xp"):
                 xp_today = conn.execute(
                     "SELECT COALESCE(SUM(amount), 0) FROM xp_events WHERE guild_id = ? AND created_at >= ?",
-                    (ctx.guild_id, one_day),
+                    (guild_id, one_day),
                 ).fetchone()[0]
                 xp_users_today = conn.execute(
                     "SELECT COUNT(DISTINCT user_id) FROM xp_events WHERE guild_id = ? AND created_at >= ?",
-                    (ctx.guild_id, one_day),
+                    (guild_id, one_day),
                 ).fetchone()[0]
                 result.update(
                     xp_today=round(xp_today, 1), xp_users_today=xp_users_today
@@ -251,15 +252,15 @@ async def home_data(
             if _need("moderation"):
                 result["active_jails"] = conn.execute(
                     "SELECT COUNT(*) FROM jails WHERE guild_id = ? AND status = 'active'",
-                    (ctx.guild_id,),
+                    (guild_id,),
                 ).fetchone()[0]
                 result["open_tickets"] = conn.execute(
                     "SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'open'",
-                    (ctx.guild_id,),
+                    (guild_id,),
                 ).fetchone()[0]
                 result["active_warnings"] = conn.execute(
                     "SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND revoked = 0",
-                    (ctx.guild_id,),
+                    (guild_id,),
                 ).fetchone()[0]
 
             # Recent mod actions
@@ -272,7 +273,7 @@ async def home_data(
                     WHERE guild_id = ?
                     ORDER BY created_at DESC LIMIT 5
                     """,
-                    (ctx.guild_id,),
+                    (guild_id,),
                 ).fetchall()
                 actions_list = [
                     {
@@ -316,7 +317,7 @@ async def home_data(
                     ORDER BY return_ts DESC
                     LIMIT 50
                     """,
-                    (ctx.guild_id, int(thirty_days_ago), int(seven_days_ago)),
+                    (guild_id, int(thirty_days_ago), int(seven_days_ago)),
                 ).fetchall()
                 return_candidates = [
                     {
@@ -361,9 +362,9 @@ async def home_data(
                     """
                     ack_params = (
                         values_params
-                        + [ctx.guild_id]
+                        + [guild_id]
                         + mod_list
-                        + [ctx.guild_id]
+                        + [guild_id]
                         + mod_list
                     )
                     ack_rows = conn.execute(ack_query, ack_params).fetchall()
@@ -397,7 +398,7 @@ async def home_data(
                     ORDER BY starts DESC
                     LIMIT 5
                     """,
-                    (ctx.guild_id, int(one_day), int(one_day)),
+                    (guild_id, int(one_day), int(one_day)),
                 ).fetchall()
                 conversation_starters = [
                     {
@@ -421,7 +422,7 @@ async def home_data(
                     ORDER BY unique_partners DESC
                     LIMIT 5
                     """,
-                    (ctx.guild_id, int(one_day)),
+                    (guild_id, int(one_day)),
                 ).fetchall()
                 social_butterflies = [
                     {
@@ -459,7 +460,7 @@ async def home_data(
                     ORDER BY ut.total DESC
                     LIMIT 5
                     """,
-                    (ctx.guild_id, int(one_day), ctx.guild_id, int(one_day)),
+                    (guild_id, int(one_day), guild_id, int(one_day)),
                 ).fetchall()
                 channel_loyalists = [
                     {
@@ -498,11 +499,11 @@ async def home_data(
             channel_names: dict[int, str] = {}
             if all_user_ids:
                 user_names = get_known_users_bulk(
-                    conn, ctx.guild_id, list(all_user_ids)
+                    conn, guild_id, list(all_user_ids)
                 )
             if all_channel_ids:
                 channel_names = get_known_channels_bulk(
-                    conn, ctx.guild_id, all_channel_ids
+                    conn, guild_id, all_channel_ids
                 )
 
             result["user_names"] = {str(k): v for k, v in user_names.items()}

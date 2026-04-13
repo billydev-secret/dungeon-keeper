@@ -26,6 +26,12 @@ def get_ctx(request: Request):
     return request.app.state.ctx
 
 
+def get_guild_id(request: Request) -> int:
+    """Return the active guild_id from the session, with fallback."""
+    from web.deps import get_active_guild_id
+    return get_active_guild_id(request)
+
+
 def get_auth(request: Request) -> DiscordOAuthAuth:
     return request.app.state.auth
 
@@ -51,7 +57,8 @@ async def get_current_user(
 
     ctx = request.app.state.ctx
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    active_guild_id = session.get("guild_id", ctx.guild_id)
+    guild = bot.get_guild(active_guild_id) if bot else None
 
     if guild:
         member = guild.get_member(user_id)

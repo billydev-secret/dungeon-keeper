@@ -53,7 +53,7 @@ from services.wellness_service import (
     user_now,
 )
 from web.auth import AuthenticatedUser
-from web.wellness_routes.deps import get_ctx, require_user
+from web.wellness_routes.deps import get_ctx, get_guild_id, require_user
 
 log = logging.getLogger("dungeonkeeper.wellness.web.api")
 
@@ -102,22 +102,23 @@ def _cap_to_dict(c) -> dict:
 async def wellness_me(
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     """Current user's wellness overview — streak, counts, settings."""
     with ctx.open_db() as conn:
-        wuser = get_wellness_user(conn, ctx.guild_id, user.user_id)
+        wuser = get_wellness_user(conn, guild_id, user.user_id)
         if wuser is None or not wuser.is_active:
             return {"opted_in": False}
 
         now_local = user_now(wuser.timezone)
         today_iso = now_local.date().isoformat()
-        streak = ensure_streak(conn, ctx.guild_id, user.user_id, today_iso)
-        caps = list_caps(conn, ctx.guild_id, user.user_id)
-        blackouts = list_blackouts(conn, ctx.guild_id, user.user_id)
+        streak = ensure_streak(conn, guild_id, user.user_id, today_iso)
+        caps = list_caps(conn, guild_id, user.user_id)
+        blackouts = list_blackouts(conn, guild_id, user.user_id)
         partnerships = list_partnerships(
-            conn, ctx.guild_id, user.user_id, accepted_only=False
+            conn, guild_id, user.user_id, accepted_only=False
         )
-        cfg = get_wellness_config(conn, ctx.guild_id)
+        cfg = get_wellness_config(conn, guild_id)
 
     nxt = next_milestone(streak.current_days)
     next_text = (
@@ -160,9 +161,10 @@ async def wellness_me(
 async def get_caps(
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
-        caps = list_caps(conn, ctx.guild_id, user.user_id)
+        caps = list_caps(conn, guild_id, user.user_id)
     return {
         "caps": [_cap_to_dict(c) for c in caps],
         "scopes": CAP_SCOPES,
@@ -205,13 +207,14 @@ async def xp_histogram(
     days: int = Query(30),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     if mode not in ("daily", "weekly"):
         return _err("mode must be 'daily' or 'weekly'")
     days = max(7, min(days, 180))
 
     with ctx.open_db() as conn:
-        wuser = get_wellness_user(conn, ctx.guild_id, user.user_id)
+        wuser = get_wellness_user(conn, guild_id, user.user_id)
         tz_name = wuser.timezone if wuser and wuser.timezone else "UTC"
         try:
             tz = ZoneInfo(tz_name)
@@ -222,7 +225,7 @@ async def xp_histogram(
         rows = conn.execute(
             "SELECT amount, created_at FROM xp_events "
             "WHERE guild_id = ? AND user_id = ? AND created_at >= ? ORDER BY created_at",
-            (ctx.guild_id, user.user_id, cutoff),
+            (guild_id, user.user_id, cutoff),
         ).fetchall()
 
     n_buckets = 24 if mode == "daily" else 7
@@ -267,9 +270,10 @@ async def xp_histogram(
 async def get_blackouts(
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
-        blackouts = list_blackouts(conn, ctx.guild_id, user.user_id)
+        blackouts = list_blackouts(conn, guild_id, user.user_id)
     return {
         "blackouts": [_blackout_to_dict(b) for b in blackouts],
         "templates": list(BLACKOUT_TEMPLATES.keys()),
@@ -280,9 +284,10 @@ async def get_blackouts(
 async def get_away(
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
-        wuser = get_wellness_user(conn, ctx.guild_id, user.user_id)
+        wuser = get_wellness_user(conn, guild_id, user.user_id)
     if wuser is None or not wuser.is_active:
         return {"opted_in": False}
     return {
@@ -297,14 +302,15 @@ async def get_away(
 async def get_partners(
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
         partnerships = list_partnerships(
-            conn, ctx.guild_id, user.user_id, accepted_only=False
+            conn, guild_id, user.user_id, accepted_only=False
         )
 
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     rows = []
     for p in partnerships:
@@ -330,9 +336,10 @@ async def get_partners(
 async def get_history(
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
-        rows = list_weekly_reports(conn, ctx.guild_id, user.user_id, limit=12)
+        rows = list_weekly_reports(conn, guild_id, user.user_id, limit=12)
 
     reports = []
     for r in rows:
@@ -360,10 +367,10 @@ def _err(message: str, status: int = 400) -> JSONResponse:
     return JSONResponse({"ok": False, "error": message}, status_code=status)
 
 
-def _require_active(ctx, user_id: int):
+def _require_active(ctx, guild_id: int, user_id: int):
     """Returns the WellnessUser if active, otherwise raises HTTPException 403."""
     with ctx.open_db() as conn:
-        wuser = get_wellness_user(conn, ctx.guild_id, user_id)
+        wuser = get_wellness_user(conn, guild_id, user_id)
     if wuser is None or not wuser.is_active:
         raise HTTPException(
             status_code=403, detail="You must opt in to wellness first."
@@ -379,8 +386,9 @@ async def update_settings(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
 
     timezone = payload.get("timezone")
     enforcement_level = payload.get("enforcement_level")
@@ -411,7 +419,7 @@ async def update_settings(
     with ctx.open_db() as conn:
         update_user_settings(
             conn,
-            ctx.guild_id,
+            guild_id,
             user.user_id,
             timezone=timezone if isinstance(timezone, str) and timezone else None,
             enforcement_level=enforcement_level,
@@ -430,8 +438,9 @@ async def pause(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
     try:
         minutes = int(payload.get("minutes", 0))
     except (TypeError, ValueError):
@@ -440,7 +449,7 @@ async def pause(
         return _err("minutes must be between 1 and 10080 (7 days)")
     until = time.time() + minutes * 60
     with ctx.open_db() as conn:
-        pause_user(conn, ctx.guild_id, user.user_id, until)
+        pause_user(conn, guild_id, user.user_id, until)
     return _ok(paused_until=until)
 
 
@@ -448,10 +457,11 @@ async def pause(
 async def resume(
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
     with ctx.open_db() as conn:
-        resume_user(conn, ctx.guild_id, user.user_id)
+        resume_user(conn, guild_id, user.user_id)
     return _ok()
 
 
@@ -463,8 +473,9 @@ async def create_cap(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
 
     label = str(payload.get("label", "")).strip()
     scope = str(payload.get("scope", "")).strip()
@@ -505,11 +516,11 @@ async def create_cap(
         cap_limit = max(bucket_limits)
 
     with ctx.open_db() as conn:
-        if find_cap_by_label(conn, ctx.guild_id, user.user_id, label):
+        if find_cap_by_label(conn, guild_id, user.user_id, label):
             return _err(f"a cap named '{label}' already exists")
         cap_id = add_cap(
             conn,
-            ctx.guild_id,
+            guild_id,
             user.user_id,
             label=label,
             scope=scope,
@@ -528,8 +539,9 @@ async def edit_cap(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
 
     bucket_limits = payload.get("bucket_limits")
     if bucket_limits is not None:
@@ -542,7 +554,7 @@ async def edit_cap(
             if (
                 cap is None
                 or cap.user_id != user.user_id
-                or cap.guild_id != ctx.guild_id
+                or cap.guild_id != guild_id
             ):
                 return _err("cap not found", status=404)
             expected_len = (
@@ -563,7 +575,7 @@ async def edit_cap(
         return _err("limit must be ≥ 1")
     with ctx.open_db() as conn:
         cap = get_cap(conn, cap_id)
-        if cap is None or cap.user_id != user.user_id or cap.guild_id != ctx.guild_id:
+        if cap is None or cap.user_id != user.user_id or cap.guild_id != guild_id:
             return _err("cap not found", status=404)
         update_cap_limit(conn, cap_id, new_limit)
     return _ok()
@@ -574,11 +586,12 @@ async def delete_cap(
     cap_id: int,
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
     with ctx.open_db() as conn:
         cap = get_cap(conn, cap_id)
-        if cap is None or cap.user_id != user.user_id or cap.guild_id != ctx.guild_id:
+        if cap is None or cap.user_id != user.user_id or cap.guild_id != guild_id:
             return _err("cap not found", status=404)
         remove_cap(conn, cap_id)
     return _ok()
@@ -628,8 +641,9 @@ async def create_blackout(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
 
     template_key = str(payload.get("template", "")).strip()
     start_minute: int | None
@@ -657,11 +671,11 @@ async def create_blackout(
             return _err("at least one day must be selected")
 
     with ctx.open_db() as conn:
-        if find_blackout_by_name(conn, ctx.guild_id, user.user_id, name):
+        if find_blackout_by_name(conn, guild_id, user.user_id, name):
             return _err(f"a blackout named '{name}' already exists")
         blackout_id = add_blackout(
             conn,
-            ctx.guild_id,
+            guild_id,
             user.user_id,
             name=name,
             start_minute=start_minute,
@@ -677,8 +691,9 @@ async def toggle_blackout_endpoint(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
     enabled = bool(payload.get("enabled", False))
     with ctx.open_db() as conn:
         # ownership check
@@ -689,7 +704,7 @@ async def toggle_blackout_endpoint(
         if (
             row is None
             or int(row["user_id"]) != user.user_id
-            or int(row["guild_id"]) != ctx.guild_id
+            or int(row["guild_id"]) != guild_id
         ):
             return _err("blackout not found", status=404)
         toggle_blackout(conn, blackout_id, enabled)
@@ -701,8 +716,9 @@ async def delete_blackout(
     blackout_id: int,
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
     with ctx.open_db() as conn:
         row = conn.execute(
             "SELECT user_id, guild_id FROM wellness_blackouts WHERE id = ?",
@@ -711,7 +727,7 @@ async def delete_blackout(
         if (
             row is None
             or int(row["user_id"]) != user.user_id
-            or int(row["guild_id"]) != ctx.guild_id
+            or int(row["guild_id"]) != guild_id
         ):
             return _err("blackout not found", status=404)
         remove_blackout(conn, blackout_id)
@@ -726,8 +742,9 @@ async def update_away(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
     enabled = bool(payload.get("enabled", False))
     message = payload.get("message")
     if message is not None:
@@ -737,7 +754,7 @@ async def update_away(
     with ctx.open_db() as conn:
         update_away_message(
             conn,
-            ctx.guild_id,
+            guild_id,
             user.user_id,
             enabled=enabled,
             message=message,
@@ -753,8 +770,9 @@ async def request_partner(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
     try:
         target_id = int(payload.get("user_id", 0))
     except (TypeError, ValueError):
@@ -766,10 +784,10 @@ async def request_partner(
 
     # Confirm target is also opted in
     with ctx.open_db() as conn:
-        target = get_wellness_user(conn, ctx.guild_id, target_id)
+        target = get_wellness_user(conn, guild_id, target_id)
         if target is None or not target.is_active:
             return _err("that user has not opted in to wellness")
-        partner = create_partner_request(conn, ctx.guild_id, user.user_id, target_id)
+        partner = create_partner_request(conn, guild_id, user.user_id, target_id)
     if partner is None:
         return _err("a partnership request already exists with that user")
 
@@ -808,11 +826,12 @@ async def delete_partnership(
     partner_id: int,
     user: AuthenticatedUser = Depends(require_user),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    _require_active(ctx, user.user_id)
+    _require_active(ctx, guild_id, user.user_id)
     with ctx.open_db() as conn:
         p = get_partnership(conn, partner_id)
-        if p is None or p.guild_id != ctx.guild_id:
+        if p is None or p.guild_id != guild_id:
             return _err("partnership not found", status=404)
         if user.user_id not in (p.user_a, p.user_b):
             return _err("not your partnership", status=403)

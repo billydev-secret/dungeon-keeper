@@ -39,6 +39,7 @@ from services.moderation import (
     get_jail_by_channel,
     get_jail_history,
     get_policies,
+    get_policies_by_ticket_id,
     get_policy_ticket,
     get_policy_ticket_by_channel,
     get_policy_votes,
@@ -580,6 +581,7 @@ class TicketDeleteButton(
             extra_meta={
                 "closed_by": member.id,
                 "close_reason": ticket.get("close_reason", ""),
+                "transcript_stage": "delete",
             },
         )
 
@@ -720,6 +722,9 @@ async def _handle_policy_vote(
             embed.set_field_at(2, name="Status", value="❌ Rejected", inline=True)
             view = discord.ui.View(timeout=None)  # No more buttons
             await interaction.response.edit_message(embed=embed, view=view)
+            await interaction.followup.send(
+                f"Your vote ({vote}) has been recorded.", ephemeral=True
+            )
             channel = interaction.channel
             vote_text = policy["vote_text"] or policy["title"]
             if isinstance(channel, discord.TextChannel):
@@ -727,6 +732,23 @@ async def _handle_policy_vote(
                     f"❌ **Policy rejected.** The proposal did not achieve unanimous support.\n"
                     f"**Rejected policy:** {vote_text}"
                 )
+                # Generate transcript before deleting
+                creator = guild.get_member(policy["creator_id"]) or member
+                await _collect_and_post_transcript(
+                    ctx,
+                    channel,
+                    record_type="policy_ticket",
+                    record_id=policy_id,
+                    user=creator,
+                    extra_meta={
+                        "resolution": "failed",
+                        "policy_title": policy["title"],
+                        "vote_yes": len(yes_ids),
+                        "vote_no": len(no_ids),
+                        "vote_abstain": len(abstain_ids),
+                    },
+                )
+                await channel.delete(reason=f"Policy #{policy_id} rejected")
             audit_embed = discord.Embed(
                 title="❌ Policy Rejected",
                 description=f"**{policy['title']}**\n📜 {vote_text}\n\nVote: {len(yes_ids)} yes, {len(no_ids)} no, {len(abstain_ids)} abstain",
@@ -763,6 +785,9 @@ async def _handle_policy_vote(
             embed.set_field_at(2, name="Status", value="✅ Adopted", inline=True)
             view = discord.ui.View(timeout=None)
             await interaction.response.edit_message(embed=embed, view=view)
+            await interaction.followup.send(
+                f"Your vote ({vote}) has been recorded.", ephemeral=True
+            )
             channel = interaction.channel
             if isinstance(channel, discord.TextChannel):
                 await channel.send(
@@ -770,6 +795,39 @@ async def _handle_policy_vote(
                     f"**Adopted policy:** {adopted_text}\n"
                     f"({len(yes_ids)} yes, {len(abstain_ids)} abstain)"
                 )
+                # List adopted policies
+                with ctx.open_db() as conn:
+                    adopted_policies = get_policies_by_ticket_id(conn, policy_id)
+                if adopted_policies:
+                    adopted_embed = discord.Embed(
+                        title="Adopted Policies",
+                        color=CLR_SUCCESS,
+                    )
+                    for p in adopted_policies:
+                        adopted_embed.add_field(
+                            name=p["title"],
+                            value=p["description"][:1024],
+                            inline=False,
+                        )
+                    await channel.send(embed=adopted_embed)
+                # Generate transcript before deleting
+                creator = guild.get_member(policy["creator_id"]) or member
+                await _collect_and_post_transcript(
+                    ctx,
+                    channel,
+                    record_type="policy_ticket",
+                    record_id=policy_id,
+                    user=creator,
+                    extra_meta={
+                        "resolution": "passed",
+                        "policy_title": policy["title"],
+                        "adopted_text": adopted_text,
+                        "vote_yes": len(yes_ids),
+                        "vote_no": 0,
+                        "vote_abstain": len(abstain_ids),
+                    },
+                )
+                await channel.delete(reason=f"Policy #{policy_id} adopted")
             audit_embed = discord.Embed(
                 title="✅ Policy Adopted",
                 description=f"**{policy['title']}**\n📜 {adopted_text}\n\nVote: {len(yes_ids)} yes, {len(abstain_ids)} abstain",
@@ -783,10 +841,9 @@ async def _handle_policy_vote(
         view.add_item(PolicyVoteNoButton(policy_id))
         view.add_item(PolicyVoteAbstainButton(policy_id))
         await interaction.response.edit_message(embed=embed, view=view)
-
-    await interaction.followup.send(
-        f"Your vote ({vote}) has been recorded.", ephemeral=True
-    )
+        await interaction.followup.send(
+            f"Your vote ({vote}) has been recorded.", ephemeral=True
+        )
 
 
 class PolicyVoteYesButton(
@@ -1066,6 +1123,21 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
                 close_msg += f"\n**Reason:** {reason}"
             await channel.send(
                 close_msg, allowed_mentions=discord.AllowedMentions.none()
+            )
+
+            # Generate close-time transcript
+            transcript_user = creator or guild.get_member(ticket["user_id"]) or member
+            await _collect_and_post_transcript(
+                ctx,
+                channel,
+                record_type="ticket",
+                record_id=self.ticket_id,
+                user=transcript_user,
+                extra_meta={
+                    "closed_by": member.id,
+                    "close_reason": reason,
+                    "transcript_stage": "close",
+                },
             )
 
             # DM creator
@@ -2267,6 +2339,42 @@ def register_jail_commands(bot: Bot, ctx: AppContext) -> None:
             if reason_text:
                 close_embed.add_field(name="Reason", value=reason_text, inline=False)
             await interaction.response.send_message(embed=close_embed)
+
+            # List any adopted policies from this proposal
+            with ctx.open_db() as conn:
+                adopted_policies = get_policies_by_ticket_id(conn, policy_id)
+            if adopted_policies:
+                adopted_embed = discord.Embed(
+                    title="Adopted Policies from This Proposal",
+                    color=CLR_SUCCESS,
+                )
+                for p in adopted_policies:
+                    adopted_embed.add_field(
+                        name=p["title"],
+                        value=p["description"][:1024],
+                        inline=False,
+                    )
+                await channel.send(embed=adopted_embed)
+
+            # Generate transcript before deleting
+            creator = guild.get_member(policy["creator_id"]) or member
+            await _collect_and_post_transcript(
+                ctx,
+                channel,
+                record_type="policy_ticket",
+                record_id=policy_id,
+                user=creator,
+                extra_meta={
+                    "resolution": "closed",
+                    "reason": reason_text,
+                    "policy_title": policy["title"],
+                    "adopted_policies": [
+                        {"id": p["id"], "title": p["title"], "description": p["description"]}
+                        for p in adopted_policies
+                    ],
+                },
+            )
+            await channel.delete(reason=f"Policy #{policy_id} closed by {member}")
 
         audit_embed = discord.Embed(
             title="📋 Policy Proposal Closed",

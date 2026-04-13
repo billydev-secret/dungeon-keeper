@@ -24,7 +24,7 @@ from services.wellness_service import (
     upsert_wellness_config,
 )
 from web.auth import AuthenticatedUser
-from web.wellness_routes.deps import get_ctx, require_manage_server
+from web.wellness_routes.deps import get_ctx, get_guild_id, require_manage_server
 
 log = logging.getLogger("dungeonkeeper.wellness.web.admin")
 
@@ -46,14 +46,15 @@ def _err(message: str, status: int = 400) -> JSONResponse:
 async def admin_dashboard_data(
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
-        cfg = get_wellness_config(conn, ctx.guild_id)
-        active = list_active_users(conn, ctx.guild_id)
-        exempt = list_exempt_channels(conn, ctx.guild_id)
+        cfg = get_wellness_config(conn, guild_id)
+        active = list_active_users(conn, guild_id)
+        exempt = list_exempt_channels(conn, guild_id)
 
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _channel_name(cid: int, label: str) -> str:
         if guild:
@@ -80,9 +81,10 @@ async def admin_dashboard_data(
 async def admin_defaults_data(
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
-        cfg = get_wellness_config(conn, ctx.guild_id)
+        cfg = get_wellness_config(conn, guild_id)
     return {
         "config": {
             "default_enforcement": cfg.default_enforcement if cfg else "gradual",
@@ -99,6 +101,7 @@ async def admin_defaults_save(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
     default_enforcement = payload.get("default_enforcement")
     crisis_resource_url = payload.get("crisis_resource_url")
@@ -110,7 +113,7 @@ async def admin_defaults_save(
     with ctx.open_db() as conn:
         upsert_wellness_config(
             conn,
-            ctx.guild_id,
+            guild_id,
             default_enforcement=default_enforcement,
             crisis_resource_url=str(crisis_resource_url)
             if crisis_resource_url is not None
@@ -123,12 +126,13 @@ async def admin_defaults_save(
 async def admin_users_data(
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
-        active = list_active_users(conn, ctx.guild_id)
+        active = list_active_users(conn, guild_id)
 
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     def _name(uid: int) -> str:
         if guild:
@@ -157,6 +161,7 @@ async def admin_pause_user(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
     import time
 
@@ -167,7 +172,7 @@ async def admin_pause_user(
     if minutes < 1 or minutes > 7 * 24 * 60:
         return _err("minutes must be between 1 and 10080")
     with ctx.open_db() as conn:
-        pause_user(conn, ctx.guild_id, user_id, time.time() + minutes * 60)
+        pause_user(conn, guild_id, user_id, time.time() + minutes * 60)
     return _ok()
 
 
@@ -176,9 +181,10 @@ async def admin_resume_user(
     user_id: int,
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
     with ctx.open_db() as conn:
-        resume_user(conn, ctx.guild_id, user_id)
+        resume_user(conn, guild_id, user_id)
     return _ok()
 
 
@@ -189,12 +195,13 @@ async def admin_resume_user(
 async def admin_exempt_data(
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ):
     with ctx.open_db() as conn:
-        exempt = list_exempt_channels(conn, ctx.guild_id)
+        exempt = list_exempt_channels(conn, guild_id)
 
     bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(ctx.guild_id) if bot else None
+    guild = bot.get_guild(guild_id) if bot else None
 
     rows = []
     for cid, label in exempt:
@@ -219,6 +226,7 @@ async def admin_exempt_add(
     payload: dict = Body(...),
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
     try:
         channel_id = int(payload.get("channel_id", 0))
@@ -228,7 +236,7 @@ async def admin_exempt_add(
         return _err("channel_id is required")
     label = str(payload.get("label", "")).strip() or f"#{channel_id}"
     with ctx.open_db() as conn:
-        add_exempt_channel(conn, ctx.guild_id, channel_id, label)
+        add_exempt_channel(conn, guild_id, channel_id, label)
     return _ok()
 
 
@@ -237,9 +245,10 @@ async def admin_exempt_remove(
     channel_id: int,
     user: AuthenticatedUser = Depends(require_manage_server),
     ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
     with ctx.open_db() as conn:
-        ok = remove_exempt_channel(conn, ctx.guild_id, channel_id)
+        ok = remove_exempt_channel(conn, guild_id, channel_id)
     if not ok:
         return _err("channel was not exempt", status=404)
     return _ok()

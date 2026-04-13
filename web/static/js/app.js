@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api } from "./api.js";
 
-const _moduleVer = "?v=10";
+const _moduleVer = "?v=11";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -19,6 +19,7 @@ const SECTIONS = [
         { id: "health-incidents",       label: "Incidents",          module: "./panels/health-incidents.js" },
         { id: "health-sentiment",       label: "Sentiment & Tone",  module: "./panels/health-sentiment.js" },
         { id: "health-sentiment-feed",  label: "Sentiment Feed",    module: "./panels/health-sentiment-feed.js" },
+        { id: "health-message-feed",   label: "Message Feed",       module: "./panels/health-message-feed.js" },
         { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
       ]},
       { heading: "General", items: [
@@ -42,6 +43,7 @@ const SECTIONS = [
         { id: "health-churn-risk",      label: "Churn Risk",         module: "./panels/health-churn-risk.js" },
         { id: "retention",            label: "Retention",             module: "./panels/retention.js" },
         { id: "interaction-graph",    label: "Interactions",          module: "./panels/interaction-graph.js" },
+        { id: "interaction-heatmap",  label: "Interaction Heatmap",   module: "./panels/interaction-heatmap.js" },
         { id: "connection-graph",     label: "Connection Graph",      module: "./panels/connection-graph.js" },
         { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js" },
         { id: "xp-leaderboard",       label: "XP Leaderboard",       module: "./panels/xp-leaderboard.js" },
@@ -115,7 +117,13 @@ let ALL_PAGES = SECTIONS.flatMap(allPages);
 let PAGE_TO_SECTION = {};
 
 function rebuildIndex() {
+  const isNonPrimaryGuild = primaryGuildId && window.__dk_user &&
+    window.__dk_user.guild_id !== primaryGuildId;
+
   visibleSections = SECTIONS.filter((sec) => {
+    // Hide Config for non-primary guilds (config tables are not guild-scoped)
+    if (sec.id === "config" && isNonPrimaryGuild) return false;
+
     const permOk = !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p));
     if (!permOk) return false;
     if (sec.roles && sec.roles.length > 0) {
@@ -137,6 +145,7 @@ rebuildIndex();
 // ── DOM refs ────────────────────────────────────────────────────────
 
 const topbarTabsEl = document.getElementById("topbar-tabs");
+const guildSelectEl = document.getElementById("guild-select");
 const sidebarEl = document.getElementById("sidebar");
 const sidebarItemsEl = document.getElementById("sidebar-items");
 const rootEl = document.getElementById("panel-root");
@@ -145,6 +154,7 @@ const sidebarToggleEl = document.getElementById("sidebar-toggle");
 const sidebarBackdropEl = document.getElementById("sidebar-backdrop");
 
 let currentPanel = null;
+let primaryGuildId = null;
 
 // ── Mobile sidebar toggle ──────────────────────────────────────────
 
@@ -265,25 +275,70 @@ async function mountPanel() {
 
 // ── Boot ────────────────────────────────────────────────────────────
 
+function applyMeData(me) {
+  userPerms = new Set(me.perms);
+  userRoleIds = new Set(me.role_ids || []);
+  userRoleNames = me.role_names || [];
+  primaryGuildId = me.primary_guild_id || me.guild_id;
+
+  window.__dk_user = {
+    user_id: me.user_id,
+    username: me.username,
+    perms: userPerms,
+    role_ids: userRoleIds,
+    role_names: userRoleNames,
+    guild_id: me.guild_id,
+    primary_guild_id: primaryGuildId,
+  };
+
+  // Hide Config section when viewing a non-primary guild
+  rebuildIndex();
+}
+
+function populateGuildPicker(guilds, activeId) {
+  guildSelectEl.innerHTML = "";
+  for (const g of guilds) {
+    const opt = document.createElement("option");
+    opt.value = g.id;
+    opt.textContent = g.name;
+    if (g.id === activeId) opt.selected = true;
+    guildSelectEl.appendChild(opt);
+  }
+  // Only show picker if user has access to more than one guild
+  guildSelectEl.style.display = guilds.length > 1 ? "" : "none";
+}
+
+async function switchGuild(newGuildId) {
+  try {
+    const res = await fetch(`/api/guilds/${newGuildId}/select`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    if (res.status === 401) { window.location = "/login"; return; }
+    if (!res.ok) return;
+    const me = await res.json();
+    applyMeData(me);
+    renderNav(parseHash().id);
+    mountPanel();
+  } catch (err) {
+    console.error("Guild switch failed:", err);
+  }
+}
+
 async function boot() {
   try {
     const me = await api("/api/me");
     if (!me) return; // redirecting to login
 
-    userPerms = new Set(me.perms);
-    userRoleIds = new Set(me.role_ids || []);
-    userRoleNames = me.role_names || [];
+    applyMeData(me);
 
-    // Expose user info globally so panel modules can access it.
-    window.__dk_user = {
-      user_id: me.user_id,
-      username: me.username,
-      perms: userPerms,
-      role_ids: userRoleIds,
-      role_names: userRoleNames,
-    };
-
-    rebuildIndex();
+    // Guild picker
+    if (me.guilds && me.guilds.length > 0) {
+      populateGuildPicker(me.guilds, me.guild_id);
+      guildSelectEl.addEventListener("change", () => {
+        switchGuild(guildSelectEl.value);
+      });
+    }
 
     meEl.textContent = me.username;
     if (me.user_id !== "0") {

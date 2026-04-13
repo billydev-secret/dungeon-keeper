@@ -149,26 +149,47 @@ async def callback(request: Request) -> RedirectResponse:
         user_id = int(user_data["id"])
         username = user_data.get("global_name") or user_data["username"]
 
-        # 3. Check guild membership + resolve permissions
+        # 3. Build mutual guild list + resolve permissions for active guild
         ctx = request.app.state.ctx
-        guild_id = ctx.guild_id
+        primary_guild_id = ctx.guild_id
         permission_bits = 0
 
         bot = getattr(ctx, "bot", None)
-        guild = bot.get_guild(guild_id) if bot else None
 
         role_ids: list[int] = []
         role_names: list[str] = []
+        mutual_guilds: list[dict] = []
 
-        if guild:
-            member = guild.get_member(user_id)
-            if not member:
+        if bot and bot.guilds:
+            # Build list of guilds the user shares with the bot
+            for g in bot.guilds:
+                member = g.get_member(user_id)
+                if member:
+                    mutual_guilds.append({
+                        "id": g.id,
+                        "name": g.name,
+                        "icon": str(g.icon.url) if g.icon else None,
+                    })
+
+            if not mutual_guilds:
                 return _login_redirect(
-                    "You must be a member of The Golden Meadow to use this dashboard."
+                    "You must share a server with the bot to use this dashboard."
                 )
-            permission_bits = member.guild_permissions.value
-            role_ids = [r.id for r in member.roles if not r.is_default()]
-            role_names = [r.name for r in member.roles if not r.is_default()]
+
+            # Default to primary guild if user is in it, else first mutual
+            if any(g["id"] == primary_guild_id for g in mutual_guilds):
+                active_guild_id = primary_guild_id
+            else:
+                active_guild_id = mutual_guilds[0]["id"]
+
+            # Resolve permissions for the active guild
+            active_guild = bot.get_guild(active_guild_id)
+            if active_guild:
+                member = active_guild.get_member(user_id)
+                if member:
+                    permission_bits = member.guild_permissions.value
+                    role_ids = [r.id for r in member.roles if not r.is_default()]
+                    role_names = [r.name for r in member.roles if not r.is_default()]
         else:
             # Standalone mode — check via user's guild list
             guilds_resp = await client.get(
@@ -178,15 +199,22 @@ async def callback(request: Request) -> RedirectResponse:
                 return _login_redirect(
                     "Login failed — could not verify guild membership."
                 )
+            # In standalone mode we only know about the primary guild
             guild_entry = next(
-                (g for g in guilds_resp.json() if int(g["id"]) == guild_id),
+                (g for g in guilds_resp.json() if int(g["id"]) == primary_guild_id),
                 None,
             )
             if not guild_entry:
                 return _login_redirect(
-                    "You must be a member of The Golden Meadow to use this dashboard."
+                    "You must share a server with the bot to use this dashboard."
                 )
             permission_bits = int(guild_entry.get("permissions", "0"))
+            active_guild_id = primary_guild_id
+            mutual_guilds = [{
+                "id": int(guild_entry["id"]),
+                "name": guild_entry.get("name", str(guild_entry["id"])),
+                "icon": None,
+            }]
 
     # 4. Create session cookie
     auth: DiscordOAuthAuth = request.app.state.auth  # type: ignore[assignment]
@@ -197,6 +225,8 @@ async def callback(request: Request) -> RedirectResponse:
         permission_bits=permission_bits,
         role_ids=role_ids,
         role_names=role_names,
+        guild_id=active_guild_id,
+        guilds=mutual_guilds,
     )
 
     _log.info(

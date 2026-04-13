@@ -12,7 +12,10 @@ export function mount(container) {
   const charts = [];
 
   async function load() {
-    const d = await api("/api/health/sentiment");
+    const [d, feed] = await Promise.all([
+      api("/api/health/sentiment"),
+      api("/api/health/sentiment-feed").catch(() => ({ messages: [] })),
+    ]);
     const panel = container.querySelector(".panel");
 
     const emotions = d.emotions || {};
@@ -20,6 +23,29 @@ export function mount(container) {
       .sort((a, b) => b[1] - a[1])
       .map(([name, pct]) => `<span class="emotion-tag">${name}: ${pct}%</span>`)
       .join(" ");
+
+    // Top / bottom scored messages from the feed
+    const feedMsgs = feed.messages || [];
+    const topMsgs = [...feedMsgs].sort((a, b) => b.sentiment - a.sentiment).slice(0, 5);
+    const bottomMsgs = [...feedMsgs].sort((a, b) => a.sentiment - b.sentiment).slice(0, 5);
+
+    function msgRow(m) {
+      const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
+      const scoreColor = m.sentiment >= 0 ? "var(--success, #7F8F3A)" : "var(--danger, #9E3B2E)";
+      const channel = m.channel_name ? "#" + esc(m.channel_name) : "";
+      const content = esc((m.content || "").slice(0, 100));
+      return `<tr>
+        <td style="color:${scoreColor};font-weight:600;white-space:nowrap;">${score}</td>
+        <td class="sf-panel-author">${esc(m.author_name || m.author_id || "")}</td>
+        <td class="sf-panel-channel">${channel}</td>
+        <td class="sf-panel-content" title="${esc(m.content || "")}">${content}</td>
+        <td style="white-space:nowrap;color:var(--text-dim);font-size:12px;">${fmtTime(m.ts)}</td>
+      </tr>`;
+    }
+
+    const topRows = topMsgs.map(msgRow).join("");
+    const bottomRows = bottomMsgs.map(msgRow).join("");
+    const msgTableHead = `<thead><tr><th>Score</th><th>Author</th><th>Channel</th><th>Content</th><th>Time</th></tr></thead>`;
 
     const spikeRows = (d.spike_log || []).map(s => `
       <tr>
@@ -82,6 +108,21 @@ export function mount(container) {
             <thead><tr><th>Time</th><th>Sentiment</th><th>Volume</th></tr></thead>
             <tbody>${spikeRows}</tbody>
           </table></div>` : '<div class="home-dim">No spikes this week</div>'}
+        </div>
+      </div>
+
+      <div class="home-grid" style="margin-top:14px;">
+        <div class="home-card">
+          <div class="home-card-label">Most Positive Messages</div>
+          <div class="home-card-sub" style="margin-bottom:6px;">Highest sentiment scores</div>
+          ${topRows ? `<div class="data-table-scroll"><table class="data-table">${msgTableHead}<tbody>${topRows}</tbody></table></div>`
+            : '<div class="home-dim">No scored messages yet</div>'}
+        </div>
+        <div class="home-card">
+          <div class="home-card-label">Most Negative Messages</div>
+          <div class="home-card-sub" style="margin-bottom:6px;">Lowest sentiment scores</div>
+          ${bottomRows ? `<div class="data-table-scroll"><table class="data-table">${msgTableHead}<tbody>${bottomRows}</tbody></table></div>`
+            : '<div class="home-dim">No scored messages yet</div>'}
         </div>
       </div>
     `;

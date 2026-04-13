@@ -93,6 +93,26 @@ def get_ctx(request: Request):
     return request.app.state.ctx
 
 
+def get_active_guild_id(request: Request) -> int:
+    """Return the active guild_id from the user's session cookie.
+
+    Falls back to ``ctx.guild_id`` for OpenAuth (LAN mode) or sessions
+    created before multi-guild support was added.
+    """
+    from web.auth import SESSION_COOKIE, DiscordOAuthAuth
+
+    auth = request.app.state.auth
+    if not isinstance(auth, DiscordOAuthAuth):
+        return request.app.state.ctx.guild_id
+
+    cookie = request.cookies.get(SESSION_COOKIE)
+    if cookie:
+        session = auth.read_session(cookie)
+        if session and "guild_id" in session:
+            return int(session["guild_id"])
+    return request.app.state.ctx.guild_id
+
+
 def get_auth(request: Request) -> AuthBackend:
     return request.app.state.auth
 

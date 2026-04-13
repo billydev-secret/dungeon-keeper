@@ -5,6 +5,12 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+class GuildInfo(BaseModel):
+    id: str
+    name: str
+    icon: str | None = None
+
+
 class MeResponse(BaseModel):
     user_id: str
     username: str
@@ -13,6 +19,8 @@ class MeResponse(BaseModel):
     role_names: list[str] = []
     guild_id: str
     guild_name: str | None = None
+    guilds: list[GuildInfo] = []
+    primary_guild_id: str | None = None
 
 
 class RoleMeta(BaseModel):
@@ -522,3 +530,24 @@ class ModerationStatsResponse(BaseModel):
     active_warnings: int
     total_warnings: int
     recent_actions: int
+
+
+# ── Animated interaction heatmap ────────────────────────────────────────
+
+
+class AnimatedHeatmapUser(BaseModel):
+    user_id: str
+    user_name: str = ""
+
+
+class AnimatedHeatmapFrame(BaseModel):
+    label: str
+    matrix: list[list[int]]
+
+
+class AnimatedHeatmapResponse(BaseModel):
+    resolution: str
+    window_label: str
+    users: list[AnimatedHeatmapUser]
+    frames: list[AnimatedHeatmapFrame]
+    global_max: int
