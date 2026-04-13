@@ -1,6 +1,8 @@
 // Dashboard boot + hash-based panel router.
 import { api } from "./api.js";
 
+const _moduleVer = "?v=9";
+
 // ── Section definitions ─────────────────────────────────────────────
 
 const SECTIONS = [
@@ -252,7 +254,7 @@ async function mountPanel() {
   rootEl.innerHTML = `<div class="panel"><div class="empty">Loading ${page.label}…</div></div>`;
 
   try {
-    const mod = await import(page.module);
+    const mod = await import(page.module + _moduleVer);
     currentPanel = mod.mount(rootEl, params) || null;
   } catch (err) {
     rootEl.innerHTML = `<div class="panel"><div class="error">Failed to load ${page.label}: ${err.message}</div></div>`;
