@@ -14,7 +14,6 @@ const SECTIONS = [
     id: "reports", label: "Reports", perms: ["admin"],
     groups: [
       { heading: "Health", items: [
-        { id: "health-dashboard",       label: "Dashboard",          module: "./panels/health-dashboard.js" },
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js" },
         { id: "health-heatmap",         label: "Activity Heatmap",   module: "./panels/health-heatmap.js" },
         { id: "health-channel-health",  label: "Channel Health",     module: "./panels/health-channel-health.js" },

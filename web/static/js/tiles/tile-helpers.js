@@ -57,3 +57,38 @@ export function fmtNum(n) {
   if (n >= 1000) return (n / 1000).toFixed(1) + "k";
   return String(n);
 }
+
+export function fmtAgo(ts) {
+  const s = Math.round(Date.now() / 1000 - ts);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+}
+
+export function presenceBar(p) {
+  const total = p.online + p.idle + p.dnd + p.offline;
+  if (!total) return "";
+  const pct = (v) => ((v / total) * 100).toFixed(1);
+  return `
+    <div class="home-presence-bar">
+      <div class="home-presence-seg" style="width:${pct(p.online)}%;background:#7F8F3A;" title="Online: ${p.online}"></div>
+      <div class="home-presence-seg" style="width:${pct(p.idle)}%;background:#E6B84C;" title="Idle: ${p.idle}"></div>
+      <div class="home-presence-seg" style="width:${pct(p.dnd)}%;background:#9E3B2E;" title="DND: ${p.dnd}"></div>
+      <div class="home-presence-seg" style="width:${pct(p.offline)}%;background:#949ba4;" title="Offline: ${p.offline}"></div>
+    </div>
+    <div class="home-presence-legend">
+      <span><i style="background:#7F8F3A;"></i> ${p.online} online</span>
+      <span><i style="background:#E6B84C;"></i> ${p.idle} idle</span>
+      <span><i style="background:#9E3B2E;"></i> ${p.dnd} dnd</span>
+      <span><i style="background:#949ba4;"></i> ${p.offline} offline</span>
+    </div>
+  `;
+}
+
+export const ACTION_LABELS = {
+  jail: "Jailed", unjail: "Unjailed", warn: "Warned", warn_revoke: "Revoked warning",
+  ticket_open: "Opened ticket", ticket_close: "Closed ticket", ticket_reopen: "Reopened ticket",
+  ticket_delete: "Deleted ticket", ticket_claim: "Claimed ticket", ticket_escalate: "Escalated ticket",
+  pull: "Pulled user", remove: "Removed user",
+};
