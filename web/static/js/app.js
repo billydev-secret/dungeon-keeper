@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api } from "./api.js";
 
-const _moduleVer = "?v=11";
+const _moduleVer = "?v=12";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -112,6 +112,7 @@ function allPages(section) {
 let userPerms = new Set();
 let userRoleIds = new Set();
 let userRoleNames = [];
+let primaryGuildId = null;
 let visibleSections = SECTIONS;
 let ALL_PAGES = SECTIONS.flatMap(allPages);
 let PAGE_TO_SECTION = {};
@@ -154,7 +155,6 @@ const sidebarToggleEl = document.getElementById("sidebar-toggle");
 const sidebarBackdropEl = document.getElementById("sidebar-backdrop");
 
 let currentPanel = null;
-let primaryGuildId = null;
 
 // ── Mobile sidebar toggle ──────────────────────────────────────────
 
