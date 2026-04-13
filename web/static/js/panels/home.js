@@ -134,9 +134,11 @@ export function mount(container) {
   async function load() {
     try {
       await fetchData();
-      render();
+      await render();
     } catch (err) {
-      container.querySelector(".panel").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      console.error("[home] load/render error:", err);
+      const panel = container.querySelector(".panel");
+      if (panel) panel.innerHTML = `<div class="error">${esc(String(err))}</div>`;
     }
   }
 

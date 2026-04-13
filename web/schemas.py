@@ -460,6 +460,10 @@ class AuditLogResponse(BaseModel):
 
 # ── Moderation: Summary stats ────────────────────────────────────────────
 
+class TranscriptResponse(BaseModel):
+    transcript: dict | None = None
+
+
 class ModerationStatsResponse(BaseModel):
     active_jails: int
     total_jails: int

@@ -15,7 +15,12 @@ import { esc } from "./tiles/tile-helpers.js";
 export async function renderGrid(gridEl, layout, data, opts = {}) {
   gridEl.innerHTML = "";
 
-  const renderers = await Promise.all(layout.map(id => loadRenderer(id)));
+  const renderers = await Promise.all(
+    layout.map(id => loadRenderer(id).catch(err => {
+      console.error(`[widget-grid] failed to load renderer for "${id}":`, err);
+      return null;
+    }))
+  );
 
   for (let i = 0; i < layout.length; i++) {
     const id = layout[i];

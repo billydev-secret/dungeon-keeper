@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { showTranscript } from "../transcript-modal.js";
 
 const STATUS_BADGE = {
   active:   '<span class="badge badge-danger">Active</span>',
@@ -75,7 +76,7 @@ export function mount(container) {
       }
 
       const rows = data.jails.map((j) => `
-        <tr>
+        <tr class="clickable-row" data-record-type="jail" data-record-id="${j.id}">
           <td>${STATUS_BADGE[j.status] || j.status}</td>
           <td class="user-cell">${esc(j.user_name || j.user_id)}</td>
           <td>${esc(j.moderator_name || j.moderator_id)}</td>
@@ -95,6 +96,10 @@ export function mount(container) {
           <tbody>${rows}</tbody>
         </table>
       `;
+      tableWrap.querySelector("tbody")?.addEventListener("click", (e) => {
+        const row = e.target.closest("tr.clickable-row");
+        if (row) showTranscript(row.dataset.recordType, row.dataset.recordId);
+      });
     } catch (err) {
       tableWrap.innerHTML = `<div class="error">${err.message}</div>`;
     }

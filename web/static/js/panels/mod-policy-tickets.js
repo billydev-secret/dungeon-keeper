@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { showTranscript } from "../transcript-modal.js";
 
 const STATUS_BADGE = {
   open:   '<span class="badge badge-info">Open</span>',
@@ -76,7 +77,7 @@ export function mount(container) {
             : fmtAge(t.created_at) + " ago";
 
         return `
-          <tr>
+          <tr class="clickable-row" data-record-type="policy_ticket" data-record-id="${t.id}">
             <td>${badge}</td>
             <td>#${t.id}</td>
             <td class="user-cell">${esc(t.creator_name || t.creator_id)}</td>
@@ -97,6 +98,10 @@ export function mount(container) {
           <tbody>${rows}</tbody>
         </table>
       `;
+      tableWrap.querySelector("tbody")?.addEventListener("click", (e) => {
+        const row = e.target.closest("tr.clickable-row");
+        if (row) showTranscript(row.dataset.recordType, row.dataset.recordId);
+      });
     } catch (err) {
       tableWrap.innerHTML = `<div class="error">${err.message}</div>`;
     }

@@ -4,9 +4,10 @@ from __future__ import annotations
 import json
 import time
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from services.message_store import get_known_users_bulk
+from services.moderation import get_transcript
 from web.auth import AuthenticatedUser
 from web.deps import get_ctx, require_perms, run_query
 from web.schemas import (
@@ -15,6 +16,7 @@ from web.schemas import (
     ModerationStatsResponse,
     PolicyTicketsResponse,
     TicketsResponse,
+    TranscriptResponse,
     WarningsResponse,
 )
 
@@ -287,6 +289,30 @@ async def list_policy_tickets(
     _resolve_names(ctx, guild, result["policy_tickets"],
                    ("creator_id", "creator_name"))
     return result
+
+
+# ── Transcript ────────────────────────────────────────────────────────────
+
+_VALID_RECORD_TYPES = ("ticket", "jail", "policy_ticket")
+
+
+@router.get("/moderation/transcript", response_model=TranscriptResponse)
+async def transcript(
+    request: Request,
+    record_type: str,
+    record_id: int,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    if record_type not in _VALID_RECORD_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid record_type: {record_type}")
+
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return {"transcript": get_transcript(conn, record_type, record_id)}
+
+    return await run_query(_q)
 
 
 # ── Audit log ─────────────────────────────────────────────────────────────
