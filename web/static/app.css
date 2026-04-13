@@ -1358,6 +1358,9 @@ html, body {
   grid-template-columns: repeat(24, 1fr);
   gap: 1px;
 }
+.heatmap-mini-grid .heatmap-cell {
+  min-width: 0;
+}
 
 /* Funnel — tile compact */
 .funnel-mini { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }
