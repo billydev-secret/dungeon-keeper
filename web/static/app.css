@@ -871,17 +871,17 @@ html, body {
 
 /* Edit toggle & reset */
 .home-edit-toggle {
-  background: none;
-  border: 1px solid var(--grid);
-  color: var(--text-dim);
+  background: var(--bg-alt);
+  border: 1px solid var(--text-dim);
+  color: var(--text);
   border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 12px;
+  padding: 3px 10px;
+  font-size: 13px;
   cursor: pointer;
   margin-left: 10px;
   vertical-align: middle;
 }
-.home-edit-toggle:hover { color: var(--text); border-color: var(--text-dim); }
+.home-edit-toggle:hover { color: var(--accent); border-color: var(--accent); }
 .home-reset-btn {
   background: none;
   border: 1px solid var(--grid);
