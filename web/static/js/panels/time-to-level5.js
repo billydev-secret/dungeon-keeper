@@ -15,11 +15,13 @@ export function mount(container, initialParams) {
       </div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
+      <div data-members style="margin-top:16px;"></div>
     </div>
   `;
 
   const daysEl = container.querySelector('[data-control="days"]');
   const statsEl = container.querySelector("[data-stats]");
+  const membersEl = container.querySelector("[data-members]");
   let chart = null;
 
   async function refresh() {
@@ -41,6 +43,7 @@ export function mount(container, initialParams) {
       const wrap = container.querySelector(".chart-wrap");
       if (!data.histogram.length || data.count === 0) {
         wrap.innerHTML = `<div class="empty">No time-to-level-5 data for the selected period.</div>`;
+        membersEl.innerHTML = "";
         return;
       }
       wrap.innerHTML = "<canvas data-chart></canvas>";
@@ -51,8 +54,25 @@ export function mount(container, initialParams) {
         xLabel: "Days",
         yLabel: "Members",
       });
+
+      if (data.members && data.members.length) {
+        const rows = data.members
+          .map(
+            (m) =>
+              `<tr><td>${m.display_name}</td><td>${m.first_at}</td><td>${m.reached_at}</td><td>${m.days}d</td></tr>`
+          )
+          .join("");
+        membersEl.innerHTML = `
+          <table class="data-table">
+            <thead><tr><th>Member</th><th>First Active</th><th>Reached Lv5</th><th>Duration</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+      } else {
+        membersEl.innerHTML = "";
+      }
     } catch (err) {
       statsEl.textContent = "";
+      membersEl.innerHTML = "";
       container.querySelector(".chart-wrap").innerHTML = `<div class="error">${err.message}</div>`;
     }
   }

@@ -306,6 +306,10 @@ html, body {
 .data-table thead th.sort-asc::after  { content: " \25B2"; font-size: 10px; }
 .data-table thead th.sort-desc::after { content: " \25BC"; font-size: 10px; }
 .data-table tbody tr:hover { background: var(--hover); }
+.data-table tbody tr.ch-row-dormant,
+.data-table tbody tr.ch-row-archive { opacity: 0.5; }
+.data-table tbody tr.ch-row-dormant:hover,
+.data-table tbody tr.ch-row-archive:hover { opacity: 0.8; }
 
 /* ── Time slider ──────────────────────────────────────────────────── */
 

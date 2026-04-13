@@ -130,6 +130,14 @@ class GreeterResponseResponse(BaseModel):
 
 # ── Time to level 5 ───────────────────────────────────────────────────
 
+class TimeToLevel5Member(BaseModel):
+    user_id: int
+    display_name: str
+    first_at: str
+    reached_at: str
+    days: float
+
+
 class TimeToLevel5Response(BaseModel):
     window_label: str
     count: int
@@ -139,6 +147,7 @@ class TimeToLevel5Response(BaseModel):
     mode_days: int
     xp_required: float
     histogram: list[ResponseBucketSchema]
+    members: list[TimeToLevel5Member]
 
 
 # ── Activity ────────────────────────────────────────────────────────────

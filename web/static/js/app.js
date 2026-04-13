@@ -15,21 +15,15 @@ const SECTIONS = [
   {
     id: "reports", label: "Reports", perms: ["admin"],
     groups: [
-      { heading: "Health", items: [
-        { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js" },
-        { id: "health-heatmap",         label: "Activity Heatmap",   module: "./panels/health-heatmap.js" },
-        { id: "health-channel-health",  label: "Channel Health",     module: "./panels/health-channel-health.js" },
-        { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
-        { id: "health-social-graph",    label: "Social Graph",       module: "./panels/health-social-graph.js" },
-        { id: "health-sentiment",       label: "Sentiment & Tone",   module: "./panels/health-sentiment.js" },
-        { id: "health-newcomer-funnel", label: "Newcomer Funnel",    module: "./panels/health-newcomer-funnel.js" },
-        { id: "health-cohort-retention",label: "Cohort Retention",   module: "./panels/health-cohort-retention.js" },
-        { id: "health-churn-risk",      label: "Churn Risk",         module: "./panels/health-churn-risk.js" },
-        { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
+      { heading: "Moderation", items: [
         { id: "health-incidents",       label: "Incidents",          module: "./panels/health-incidents.js" },
-        { id: "health-composite-score", label: "Health Score",       module: "./panels/health-composite-score.js" },
+        { id: "health-sentiment",       label: "Sentiment & Tone",  module: "./panels/health-sentiment.js" },
+        { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
       ]},
       { heading: "General", items: [
+        { id: "health-heatmap",         label: "Activity Heatmap",   module: "./panels/health-heatmap.js" },
+        { id: "health-channel-health",  label: "Channel Health",     module: "./panels/health-channel-health.js" },
+        { id: "health-composite-score", label: "Health Score",       module: "./panels/health-composite-score.js" },
         { id: "activity",             label: "Activity",             module: "./panels/activity.js" },
         { id: "role-growth",          label: "Role Growth",          module: "./panels/role-growth.js" },
         { id: "channel-comparison",   label: "Channels",              module: "./panels/channel-comparison.js" },
@@ -41,6 +35,10 @@ const SECTIONS = [
         { id: "burst-ranking",        label: "Burst Ranking",         module: "./panels/burst-ranking.js" },
       ]},
       { heading: "People", items: [
+        { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js" },
+        { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
+        { id: "health-social-graph",    label: "Social Graph",       module: "./panels/health-social-graph.js" },
+        { id: "health-churn-risk",      label: "Churn Risk",         module: "./panels/health-churn-risk.js" },
         { id: "retention",            label: "Retention",             module: "./panels/retention.js" },
         { id: "interaction-graph",    label: "Interactions",          module: "./panels/interaction-graph.js" },
         { id: "connection-graph",     label: "Connection Graph",      module: "./panels/connection-graph.js" },
@@ -51,6 +49,8 @@ const SECTIONS = [
         { id: "quality-score",        label: "Quality Score",        module: "./panels/quality-score.js" },
       ]},
       { heading: "Greeter", items: [
+        { id: "health-newcomer-funnel", label: "Newcomer Funnel",    module: "./panels/health-newcomer-funnel.js" },
+        { id: "health-cohort-retention",label: "Cohort Retention",   module: "./panels/health-cohort-retention.js" },
         { id: "greeter-response",     label: "Greeter Response",     module: "./panels/greeter-response.js" },
         { id: "time-to-level5",       label: "Time to Level 5",      module: "./panels/time-to-level5.js" },
         { id: "invite-effectiveness", label: "Invite Effectiveness", module: "./panels/invite-effectiveness.js" },

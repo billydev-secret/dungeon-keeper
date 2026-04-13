@@ -93,6 +93,7 @@ export function mount(container, initialParams) {
       <div data-legend style="margin-top:4px; font-size:11px; color:#949ba4;">
         Drag nodes · Scroll to zoom · Pan background · Node size = interactions · Edge width = weight
       </div>
+      <div data-isolates style="margin-top:8px;"></div>
     </div>
   `;
 
@@ -109,9 +110,12 @@ export function mount(container, initialParams) {
 
   let memberFS = filterSelect("Loading…", []);
   container.querySelector('[data-slot="member"]').appendChild(memberFS.el);
+  const isolatesEl = container.querySelector("[data-isolates]");
+  let allMembers = [];
 
   // Load member list
   api("/api/meta/members", {}).then((members) => {
+    allMembers = members;
     const opts = members.map((m) => ({ id: m.id, label: m.display_name || m.name }));
     const fs = filterSelect("Type to filter…", opts);
     if (initialParams.member) fs.id = initialParams.member;
@@ -791,6 +795,20 @@ export function mount(container, initialParams) {
     else if (currentLayout === "hierarchical") positionHierarchical();
 
     animate();
+
+    // Show isolates — members with no interactions in the graph
+    if (allMembers.length && cachedData) {
+      const graphIds = new Set(cachedData.nodes.map((n) => n.user_id));
+      const isolates = allMembers.filter((m) => !graphIds.has(m.id));
+      if (isolates.length) {
+        const names = isolates.map((m) => esc(m.display_name || m.name)).join(", ");
+        isolatesEl.innerHTML = `<details><summary style="cursor:pointer; color:#949ba4; font-size:12px;">Isolates \u2014 ${isolates.length} member${isolates.length === 1 ? "" : "s"} with no recorded interactions</summary><div style="margin-top:4px; font-size:12px; color:#dbdee1; line-height:1.6;">${names}</div></details>`;
+      } else {
+        isolatesEl.innerHTML = "";
+      }
+    } else {
+      isolatesEl.innerHTML = "";
+    }
   }
 
   // Controls: fetch when data source changes, rebuild when filters change

@@ -815,9 +815,10 @@ async def time_to_level_5(
     from collections import Counter
     from datetime import datetime, timedelta, timezone
 
-    from xp_system import get_time_to_level_seconds, xp_required_for_level
+    from xp_system import get_time_to_level_details, xp_required_for_level
 
     ctx = get_ctx(request)
+    guild = ctx.bot.get_guild(ctx.guild_id) if ctx.bot else None
 
     since_ts: float | None = None
     if days is not None:
@@ -825,9 +826,9 @@ async def time_to_level_5(
 
     def _q():
         with ctx.open_db() as conn:
-            durations = get_time_to_level_seconds(conn, ctx.guild_id, 5, since_ts=since_ts)
+            details = get_time_to_level_details(conn, ctx.guild_id, 5, since_ts=since_ts)
 
-        if not durations:
+        if not details:
             return {
                 "window_label": f"Last {days} Days" if days else "All Time",
                 "count": 0,
@@ -837,8 +838,10 @@ async def time_to_level_5(
                 "mode_days": 0,
                 "xp_required": xp_required_for_level(5),
                 "histogram": [],
+                "members": [],
             }
 
+        durations = [d["seconds"] for d in details]
         days_list = [s / 86400.0 for s in durations]
         mean_d = statistics.mean(days_list)
         median_d = statistics.median(days_list)
@@ -853,6 +856,17 @@ async def time_to_level_5(
         for d in range(0, max_day + 1):
             histogram.append({"label": f"{d}d", "count": counts.get(d, 0)})
 
+        members = [
+            {
+                "user_id": d["user_id"],
+                "display_name": str(d["user_id"]),
+                "first_at": datetime.fromtimestamp(d["first_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                "reached_at": datetime.fromtimestamp(d["reached_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                "days": round(d["seconds"] / 86400.0, 1),
+            }
+            for d in details
+        ]
+
         return {
             "window_label": f"Last {days} Days" if days else "All Time",
             "count": len(durations),
@@ -862,10 +876,15 @@ async def time_to_level_5(
             "mode_days": mode_d,
             "xp_required": xp_required_for_level(5),
             "histogram": histogram,
+            "members": members,
         }
 
-    return await cached_run_query(
+    result = await cached_run_query(
         "time-to-level-5", ctx.guild_id,
         {"days": days},
         _q, ttl=300,
     )
+
+    _resolve_names(ctx, guild, result.get("members", []), ("user_id", "display_name"))
+
+    return result

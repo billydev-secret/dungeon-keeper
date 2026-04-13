@@ -1070,6 +1070,72 @@ def get_time_to_level_seconds(
     return [float(row[0]) for row in rows]
 
 
+def get_time_to_level_details(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    target_level: int,
+    settings: XpSettings = DEFAULT_XP_SETTINGS,
+    *,
+    since_ts: float | None = None,
+) -> list[dict]:
+    """Return per-user details for reaching target_level.
+
+    Each dict has: user_id, first_at (unix ts), reached_at (unix ts), seconds.
+    """
+    xp_threshold = xp_required_for_level(target_level, settings)
+
+    since_clause = ""
+    params: list[object] = [guild_id, guild_id, xp_threshold]
+    if since_ts is not None:
+        since_clause = " AND lr.reached_at >= ?"
+        params.append(since_ts)
+
+    rows = conn.execute(
+        f"""
+        WITH running AS (
+            SELECT
+                user_id,
+                created_at,
+                SUM(amount) OVER (
+                    PARTITION BY user_id ORDER BY created_at
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                ) AS cumulative_xp
+            FROM xp_events
+            WHERE guild_id = ?
+        ),
+        first_event AS (
+            SELECT user_id, MIN(created_at) AS first_at
+            FROM xp_events
+            WHERE guild_id = ?
+            GROUP BY user_id
+        ),
+        level_reached AS (
+            SELECT user_id, MIN(created_at) AS reached_at
+            FROM running
+            WHERE cumulative_xp >= ?
+            GROUP BY user_id
+        )
+        SELECT lr.user_id, fe.first_at, lr.reached_at,
+               lr.reached_at - fe.first_at AS seconds_to_level
+        FROM level_reached lr
+        JOIN first_event fe ON fe.user_id = lr.user_id
+        WHERE seconds_to_level >= 0{since_clause}
+        ORDER BY seconds_to_level ASC
+        """,
+        params,
+    ).fetchall()
+
+    return [
+        {
+            "user_id": int(row[0]),
+            "first_at": float(row[1]),
+            "reached_at": float(row[2]),
+            "seconds": float(row[3]),
+        }
+        for row in rows
+    ]
+
+
 def get_oldest_xp_event_timestamp(
     conn: sqlite3.Connection,
     guild_id: int,
