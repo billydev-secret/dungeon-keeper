@@ -6,6 +6,7 @@ plus per-user and per-server defaults. All require Manage Server permission.
 The admin command for `/wellness-admin setup` follows the role+category+channel
 creation pattern from `commands/jail_commands.py:700-753`.
 """
+
 from __future__ import annotations
 
 import logging
@@ -56,17 +57,21 @@ CRISIS_RESOURCES_DEFAULT = (
 # Permission helper
 # ---------------------------------------------------------------------------
 
+
 def _check_admin(interaction: discord.Interaction) -> bool:
     """Return True if the user has Manage Server."""
     member = interaction.user
     if not isinstance(member, discord.Member):
         return False
-    return member.guild_permissions.manage_guild or member.guild_permissions.administrator
+    return (
+        member.guild_permissions.manage_guild or member.guild_permissions.administrator
+    )
 
 
 # ---------------------------------------------------------------------------
 # Setup helpers
 # ---------------------------------------------------------------------------
+
 
 async def _create_wellness_channel(
     guild: discord.Guild,
@@ -114,10 +119,11 @@ async def _create_wellness_channel(
 # Command registration
 # ---------------------------------------------------------------------------
 
-def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
+
+def register_wellness_admin_commands(bot: Bot, ctx: AppContext) -> None:
     admin_group = app_commands.Group(
         name="wellness-admin",
-        description="Wellness Guardian admin tools.",
+        description="Server-wide wellness setup, defaults, and admin overrides.",
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
@@ -125,12 +131,12 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @admin_group.command(
         name="setup",
-        description="Create the wellness role and channel.",
+        description="Create the wellness role and channel for your server.",
     )
     @app_commands.describe(
-        role_name="Name for the wellness role (default: Wellness Guardian)",
-        channel_name="Name for the wellness channel (default: wellness)",
-        crisis_resource_url="URL or text for crisis resources (shown in channel topic)",
+        role_name="Name for the wellness role.",
+        channel_name="Name for the wellness channel.",
+        crisis_resource_url="Crisis resource link or text shown in the channel topic.",
     )
     async def setup_cmd(
         interaction: discord.Interaction,
@@ -201,7 +207,9 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
             return
 
-        crisis_text = (crisis_resource_url or "").strip() or (existing.crisis_resource_url if existing else "")
+        crisis_text = (crisis_resource_url or "").strip() or (
+            existing.crisis_resource_url if existing else ""
+        )
 
         if channel is None:
             try:
@@ -243,18 +251,20 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @admin_group.command(
         name="defaults",
-        description="Set server defaults for new wellness participants.",
+        description="Set the default enforcement level and crisis resources for new opt-ins.",
     )
     @app_commands.describe(
-        default_enforcement="Default enforcement level for new opt-ins.",
-        crisis_resource_url="URL or text for the crisis resource link.",
+        default_enforcement="Enforcement style applied to new participants.",
+        crisis_resource_url="Crisis resource link or text.",
     )
-    @app_commands.choices(default_enforcement=[
-        app_commands.Choice(name="Gentle reminders", value="gentle"),
-        app_commands.Choice(name="Cooldown breaks", value="cooldown"),
-        app_commands.Choice(name="Slow mode", value="slow_mode"),
-        app_commands.Choice(name="Gradual (recommended)", value="gradual"),
-    ])
+    @app_commands.choices(
+        default_enforcement=[
+            app_commands.Choice(name="Gentle reminders", value="gentle"),
+            app_commands.Choice(name="Cooldown breaks", value="cooldown"),
+            app_commands.Choice(name="Slow mode", value="slow_mode"),
+            app_commands.Choice(name="Gradual (recommended)", value="gradual"),
+        ]
+    )
     async def defaults_cmd(
         interaction: discord.Interaction,
         default_enforcement: app_commands.Choice[str] | None = None,
@@ -280,7 +290,9 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
             upsert_wellness_config(
                 conn,
                 guild.id,
-                default_enforcement=default_enforcement.value if default_enforcement else None,
+                default_enforcement=default_enforcement.value
+                if default_enforcement
+                else None,
                 crisis_resource_url=crisis_resource_url,
             )
 
@@ -298,14 +310,16 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     exempt_group = app_commands.Group(
         name="exempt",
-        description="Manage channels exempt from wellness caps.",
+        description="Channels where wellness caps don't count messages.",
         parent=admin_group,
     )
 
-    @exempt_group.command(name="add", description="Mark a channel as exempt from wellness caps.")
+    @exempt_group.command(
+        name="add", description="Mark a channel as exempt from wellness caps."
+    )
     @app_commands.describe(
-        channel="Channel to flag as exempt.",
-        label="Optional label (e.g. 'support', 'wellness').",
+        channel="Channel to exempt.",
+        label="Optional label like 'support' or 'wellness'.",
     )
     async def exempt_add_cmd(
         interaction: discord.Interaction,
@@ -327,8 +341,10 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
             ephemeral=True,
         )
 
-    @exempt_group.command(name="remove", description="Remove an exemption from a channel.")
-    @app_commands.describe(channel="Channel to un-flag.")
+    @exempt_group.command(
+        name="remove", description="Stop exempting a channel from wellness caps."
+    )
+    @app_commands.describe(channel="Channel to un-exempt.")
     async def exempt_remove_cmd(
         interaction: discord.Interaction,
         channel: discord.TextChannel,
@@ -388,12 +404,13 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     cap_admin_group = app_commands.Group(
         name="cap",
-        description="Manage caps on behalf of a user.",
+        description="Create, edit, or remove message caps for a user.",
         parent=admin_group,
     )
 
     async def _admin_user_cap_label_autocomplete(
-        interaction: discord.Interaction, current: str,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         # Pull the @user param from the interaction so we can list their caps.
         target_id: int | None = None
@@ -415,7 +432,9 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
                 out.append(app_commands.Choice(name=c.label[:100], value=c.label))
         return out[:25]
 
-    @cap_admin_group.command(name="add", description="Create a cap on behalf of a user.")
+    @cap_admin_group.command(
+        name="add", description="Create a cap on behalf of a user."
+    )
     @app_commands.describe(
         user="User to create the cap for.",
         label="Friendly name for this cap.",
@@ -426,17 +445,21 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
         category="Required if scope is 'category'.",
         exclude_exempt="If true (default), exempt channels don't count.",
     )
-    @app_commands.choices(scope=[
-        app_commands.Choice(name="Global", value="global"),
-        app_commands.Choice(name="Channel", value="channel"),
-        app_commands.Choice(name="Category", value="category"),
-        app_commands.Choice(name="Voice (coming soon)", value="voice"),
-    ])
-    @app_commands.choices(window=[
-        app_commands.Choice(name="Hourly", value="hourly"),
-        app_commands.Choice(name="Daily", value="daily"),
-        app_commands.Choice(name="Weekly", value="weekly"),
-    ])
+    @app_commands.choices(
+        scope=[
+            app_commands.Choice(name="Global", value="global"),
+            app_commands.Choice(name="Channel", value="channel"),
+            app_commands.Choice(name="Category", value="category"),
+            app_commands.Choice(name="Voice (coming soon)", value="voice"),
+        ]
+    )
+    @app_commands.choices(
+        window=[
+            app_commands.Choice(name="Hourly", value="hourly"),
+            app_commands.Choice(name="Daily", value="daily"),
+            app_commands.Choice(name="Weekly", value="weekly"),
+        ]
+    )
     async def admin_cap_add_cmd(
         interaction: discord.Interaction,
         user: discord.Member,
@@ -511,7 +534,9 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
         )
 
     @cap_admin_group.command(name="edit", description="Edit a user's cap limit.")
-    @app_commands.describe(user="Cap owner.", label="Cap to edit.", new_limit="New limit.")
+    @app_commands.describe(
+        user="Cap owner.", label="Cap to edit.", new_limit="New limit."
+    )
     @app_commands.autocomplete(label=_admin_user_cap_label_autocomplete)
     async def admin_cap_edit_cmd(
         interaction: discord.Interaction,
@@ -572,12 +597,13 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     blackout_admin_group = app_commands.Group(
         name="blackout",
-        description="Manage blackouts on behalf of a user.",
+        description="Create or remove blackout schedules for a user.",
         parent=admin_group,
     )
 
     async def _admin_user_blackout_name_autocomplete(
-        interaction: discord.Interaction, current: str,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         target_id: int | None = None
         if interaction.data and "options" in interaction.data:
@@ -598,7 +624,9 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
                 out.append(app_commands.Choice(name=b.name[:100], value=b.name))
         return out[:25]
 
-    @blackout_admin_group.command(name="add", description="Create a blackout on behalf of a user.")
+    @blackout_admin_group.command(
+        name="add", description="Create a blackout on behalf of a user."
+    )
     @app_commands.describe(
         user="User to schedule the blackout for.",
         name="Friendly name (e.g. 'sleep').",
@@ -614,7 +642,12 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
         end_time: str,
         days: str = "all",
     ) -> None:
-        from commands.wellness_commands import parse_time_to_minute, parse_days_mask, _format_minute, _format_days_mask
+        from commands.wellness_commands import (
+            _format_days_mask,
+            _format_minute,
+            parse_days_mask,
+            parse_time_to_minute,
+        )
 
         if not _check_admin(interaction):
             await interaction.response.send_message(
@@ -668,7 +701,9 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
             ephemeral=True,
         )
 
-    @blackout_admin_group.command(name="remove", description="Remove a user's blackout.")
+    @blackout_admin_group.command(
+        name="remove", description="Remove a user's blackout."
+    )
     @app_commands.describe(user="Blackout owner.", name="Blackout name.")
     @app_commands.autocomplete(name=_admin_user_blackout_name_autocomplete)
     async def admin_blackout_remove_cmd(
@@ -699,7 +734,7 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /wellness-admin dashboard ──────────────────────────────────────
     @admin_group.command(
         name="dashboard",
-        description="Show server-wide wellness stats.",
+        description="Overview of participants, caps, blackouts, partnerships, and streaks.",
     )
     async def admin_dashboard_cmd(interaction: discord.Interaction) -> None:
         if not _check_admin(interaction):
@@ -788,13 +823,13 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ── /wellness-admin settings @user ─────────────────────────────────
     @admin_group.command(
         name="settings",
-        description="Adjust a user's wellness settings on their behalf.",
+        description="Change a user's wellness settings on their behalf.",
     )
     @app_commands.describe(
-        user="The wellness participant to update.",
-        enforcement_level="New enforcement style.",
-        notifications_pref="Notification delivery preference.",
-        public_commitment="Show on the active list?",
+        user="Wellness participant to update.",
+        enforcement_level="Enforcement style.",
+        notifications_pref="How they receive notifications.",
+        public_commitment="Whether they appear on the active list.",
         daily_reset_hour="Local hour (0-23) when daily caps reset.",
     )
     @app_commands.choices(
@@ -836,9 +871,15 @@ def register_wellness_admin_commands(bot: "Bot", ctx: "AppContext") -> None:
                 )
                 return
             update_user_settings(
-                conn, guild.id, user.id,
-                enforcement_level=enforcement_level.value if enforcement_level else None,
-                notifications_pref=notifications_pref.value if notifications_pref else None,
+                conn,
+                guild.id,
+                user.id,
+                enforcement_level=enforcement_level.value
+                if enforcement_level
+                else None,
+                notifications_pref=notifications_pref.value
+                if notifications_pref
+                else None,
                 public_commitment=public_commitment,
                 daily_reset_hour=daily_reset_hour,
             )

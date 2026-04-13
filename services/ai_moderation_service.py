@@ -1,4 +1,5 @@
 """AI-powered moderation helpers using the Anthropic API."""
+
 from __future__ import annotations
 
 import logging
@@ -34,7 +35,10 @@ async def _chat(
     if log.isEnabledFor(logging.DEBUG):
         log.debug(
             "Anthropic request model=%s thinking=%s system=%.500s user=%.500s",
-            model, use_thinking, system, user_content,
+            model,
+            use_thinking,
+            system,
+            user_content,
         )
     kwargs: dict = {
         "model": model,
@@ -55,9 +59,9 @@ async def _chat(
     return "".join(parts).strip()
 
 
-_MAX_MSG_CHARS = 400   # truncate individual messages to avoid token bloat
-_CONTEXT_WINDOW = 4    # messages before/after each target message to include
-_MAX_USER_MSGS = 200   # stop collecting after this many target-user messages
+_MAX_MSG_CHARS = 400  # truncate individual messages to avoid token bloat
+_CONTEXT_WINDOW = 4  # messages before/after each target message to include
+_MAX_USER_MSGS = 200  # stop collecting after this many target-user messages
 
 _WATCH_CHECK_SYSTEM = (
     "You are a Discord moderation assistant. Determine whether the message below violates any "
@@ -187,7 +191,9 @@ def _ts_fmt(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
 
 
-def _resolve_name(guild: discord.Guild, name_cache: dict[int, str], author_id: int) -> str:
+def _resolve_name(
+    guild: discord.Guild, name_cache: dict[int, str], author_id: int
+) -> str:
     if author_id not in name_cache:
         m = guild.get_member(author_id)
         name_cache[author_id] = m.display_name if m else f"User {author_id}"
@@ -205,7 +211,9 @@ def _channel_label(guild: discord.Guild, channel_id: int) -> str:
     return name
 
 
-def _fetch_attachment_map(conn: sqlite3.Connection, message_ids: set[int]) -> dict[int, list[str]]:
+def _fetch_attachment_map(
+    conn: sqlite3.Connection, message_ids: set[int]
+) -> dict[int, list[str]]:
     """Return {message_id: [url, ...]} for the given message IDs."""
     if not message_ids:
         return {}
@@ -220,7 +228,9 @@ def _fetch_attachment_map(conn: sqlite3.Connection, message_ids: set[int]) -> di
     return result
 
 
-def _fetch_mention_map(conn: sqlite3.Connection, message_ids: set[int]) -> dict[int, list[int]]:
+def _fetch_mention_map(
+    conn: sqlite3.Connection, message_ids: set[int]
+) -> dict[int, list[int]]:
     """Return {message_id: [user_id, ...]} for the given message IDs."""
     if not message_ids:
         return {}
@@ -247,7 +257,9 @@ def _attachment_note(urls: list[str]) -> str:
 
 
 def _mention_note(
-    user_ids: list[int], guild: discord.Guild, name_cache: dict[int, str],
+    user_ids: list[int],
+    guild: discord.Guild,
+    name_cache: dict[int, str],
 ) -> str:
     """Summarise mentions as a compact inline note."""
     if not user_ids:
@@ -275,7 +287,9 @@ def _fetch_user_context_from_db(
 
     Returns (formatted_lines, user_message_count, channels_checked).
     """
-    cutoff_ts = int((datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp())
+    cutoff_ts = int(
+        (datetime.now(timezone.utc) - timedelta(days=lookback_days)).timestamp()
+    )
 
     channel_rows = conn.execute(
         "SELECT channel_id, MAX(ts) AS latest FROM messages "
@@ -321,9 +335,7 @@ def _fetch_user_context_from_db(
         target_ids: set[int] = {batch[i][0] for i in target_indices}
 
         # Messages that reply TO the target user
-        reply_to_target: set[int] = {
-            r[0] for r in batch if r[3] in target_ids
-        }
+        reply_to_target: set[int] = {r[0] for r in batch if r[3] in target_ids}
 
         include: set[int] = set()
         for i in target_indices:
@@ -397,13 +409,17 @@ async def ai_review_user(
             f"last {days} days:\n\n" + "\n".join(lines)
         )
 
-    analysis = await _chat(
-        client, model=model,
-        system=system,
-        user_content=body,
-        max_tokens=16000,
-        use_thinking=True,
-    ) or "No analysis returned."
+    analysis = (
+        await _chat(
+            client,
+            model=model,
+            system=system,
+            user_content=body,
+            max_tokens=16000,
+            use_thinking=True,
+        )
+        or "No analysis returned."
+    )
     return AiModerationResult(
         analysis=analysis,
         message_count=user_msg_count,
@@ -440,7 +456,7 @@ async def ai_scan_channel(
     if not rows:
         return AiModerationResult(
             analysis=f"No messages found in #{channel_name} in the local archive. "
-                     "Run `/interaction_scan` to populate it.",
+            "Run `/interaction_scan` to populate it.",
             message_count=0,
             channels_checked=1,
         )
@@ -461,15 +477,23 @@ async def ai_scan_channel(
             reply_note = f" [↩ replying to {_resolve_name(guild, name_cache, id_to_author[reply_to_id])}]"
         extras = _attachment_note(attach_map.get(msg_id, []))
         extras += _mention_note(mention_map.get(msg_id, []), guild, name_cache)
-        lines.append(f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}{extras}")
+        lines.append(
+            f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}{extras}"
+        )
 
-    analysis = await _chat(
-        client, model=model,
-        system=system,
-        user_content="\n".join(lines),
-        max_tokens=2048,
-    ) or "No analysis returned."
-    return AiModerationResult(analysis=analysis, message_count=len(rows), channels_checked=1)
+    analysis = (
+        await _chat(
+            client,
+            model=model,
+            system=system,
+            user_content="\n".join(lines),
+            max_tokens=2048,
+        )
+        or "No analysis returned."
+    )
+    return AiModerationResult(
+        analysis=analysis, message_count=len(rows), channels_checked=1
+    )
 
 
 async def ai_check_watched_message(
@@ -477,7 +501,7 @@ async def ai_check_watched_message(
     message: discord.Message,
     *,
     model: str | None = None,
-    db_path: "Path | None" = None,
+    db_path: Path | None = None,
 ) -> tuple[bool, str]:
     """
     Check a single live message against server rules.
@@ -491,8 +515,16 @@ async def ai_check_watched_message(
     )
 
     if model is None:
-        model = get_command_model_from_path(db_path, "ai_prompt_watch_check") if db_path else DEFAULT_MOD_MODEL
-    system = get_prompt_from_path(db_path, "ai_prompt_watch_check") if db_path else _WATCH_CHECK_SYSTEM
+        model = (
+            get_command_model_from_path(db_path, "ai_prompt_watch_check")
+            if db_path
+            else DEFAULT_MOD_MODEL
+        )
+    system = (
+        get_prompt_from_path(db_path, "ai_prompt_watch_check")
+        if db_path
+        else _WATCH_CHECK_SYSTEM
+    )
 
     ts = message.created_at.strftime("%Y-%m-%d %H:%M") if message.created_at else "?"
     channel_name = getattr(message.channel, "name", str(message.channel.id))
@@ -500,13 +532,14 @@ async def ai_check_watched_message(
     prompt = f"[{ts}] #{channel_name} | {message.author.display_name}: {content}"
 
     reply = await _chat(
-        client, model=model,
+        client,
+        model=model,
         system=system,
         user_content=prompt,
         max_tokens=256,
     )
     is_violation = reply.upper().startswith("VIOLATION")
-    reason = reply[len("VIOLATION:"):].strip() if is_violation else ""
+    reason = reply[len("VIOLATION:") :].strip() if is_violation else ""
     return is_violation, reason
 
 
@@ -526,7 +559,9 @@ async def ai_query_channel(
         model = get_command_model(conn, "ai_prompt_query_channel")
     system = get_prompt(conn, "ai_prompt_query_channel")
 
-    cutoff_ts = int((datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp())
+    cutoff_ts = int(
+        (datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp()
+    )
 
     rows = conn.execute(
         "SELECT message_id, author_id, content, reply_to_id, ts "
@@ -541,7 +576,7 @@ async def ai_query_channel(
     if not rows:
         return AiModerationResult(
             analysis=f"No messages found in #{channel_name} in the last {label} in the local archive. "
-                     "Run `/interaction_scan` to populate it.",
+            "Run `/interaction_scan` to populate it.",
             message_count=0,
             channels_checked=1,
         )
@@ -562,18 +597,26 @@ async def ai_query_channel(
             reply_note = f" [↩ replying to {_resolve_name(guild, name_cache, id_to_author[reply_to_id])}]"
         extras = _attachment_note(attach_map.get(msg_id, []))
         extras += _mention_note(mention_map.get(msg_id, []), guild, name_cache)
-        lines.append(f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}{extras}")
+        lines.append(
+            f"[{_ts_fmt(ts)[11:16]}] {name}{reply_note}: {content_str}{extras}"
+        )
 
     prompt = f"Moderator question: {question}\n\n" + "\n".join(lines)
 
-    analysis = await _chat(
-        client, model=model,
-        system=system,
-        user_content=prompt,
-        max_tokens=16000,
-        use_thinking=True,
-    ) or "No analysis returned."
-    return AiModerationResult(analysis=analysis, message_count=len(rows), channels_checked=1)
+    analysis = (
+        await _chat(
+            client,
+            model=model,
+            system=system,
+            user_content=prompt,
+            max_tokens=16000,
+            use_thinking=True,
+        )
+        or "No analysis returned."
+    )
+    return AiModerationResult(
+        analysis=analysis, message_count=len(rows), channels_checked=1
+    )
 
 
 async def ai_query_user(
@@ -606,13 +649,17 @@ async def ai_query_user(
 
     prompt = f"Moderator question: {question}\n\n{body}"
 
-    analysis = await _chat(
-        client, model=model,
-        system=system,
-        user_content=prompt,
-        max_tokens=16000,
-        use_thinking=True,
-    ) or "No analysis returned."
+    analysis = (
+        await _chat(
+            client,
+            model=model,
+            system=system,
+            user_content=prompt,
+            max_tokens=16000,
+            use_thinking=True,
+        )
+        or "No analysis returned."
+    )
     return AiModerationResult(
         analysis=analysis,
         message_count=user_msg_count,

@@ -1,4 +1,5 @@
 """XP system service layer - business logic for XP awards and level progression."""
+
 from __future__ import annotations
 
 import logging
@@ -17,7 +18,6 @@ from xp_system import (
 )
 
 if TYPE_CHECKING:
-
     GuildTextLike = discord.TextChannel | discord.Thread
 
 log = logging.getLogger("dungeonkeeper.xp_service")
@@ -79,7 +79,9 @@ async def maybe_grant_level_role(
         return
 
     try:
-        await member.add_roles(role, reason=f"Reached level {settings.role_grant_level}")
+        await member.add_roles(
+            role, reason=f"Reached level {settings.role_grant_level}"
+        )
         log.info(
             "Granted level %s reward role %s to %s.",
             settings.role_grant_level,
@@ -89,6 +91,7 @@ async def maybe_grant_level_role(
         if db_path is not None:
             from db_utils import open_db
             from xp_system import log_role_event
+
             with open_db(db_path) as conn:
                 log_role_event(conn, member.guild.id, member.id, role.name, "grant")
     except discord.Forbidden:
@@ -278,7 +281,9 @@ async def handle_level_progress(
     )
 
     if award.new_level >= settings.role_grant_level:
-        await maybe_grant_level_role(member, award.new_level, level_5_role_id, settings, db_path)
+        await maybe_grant_level_role(
+            member, award.new_level, level_5_role_id, settings, db_path
+        )
 
     if award.new_level > award.old_level:
         await maybe_log_level_ups(
@@ -316,5 +321,3 @@ async def handle_level_progress(
                 award.old_level,
                 award.new_level,
             )
-
-

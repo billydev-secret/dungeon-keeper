@@ -8,6 +8,7 @@ Commands (all mod-only, under the /watch group):
   /watch remove — stop watching a member
   /watch list   — list members you are currently watching
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -48,15 +49,15 @@ def load_watched_users(conn: sqlite3.Connection, guild_id: int) -> dict[int, set
 def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
     watch_group = app_commands.Group(
         name="watch",
-        description="Monitor member activity — their public posts are DM'd to you.",
+        description="Silently monitor a member's public messages via DM.",
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
     @watch_group.command(
         name="add",
-        description="Watch a user — their public posts will be DM'd to you.",
+        description="Start watching a member. Their messages are forwarded to your DMs.",
     )
-    @app_commands.describe(user="The server member to watch.")
+    @app_commands.describe(user="Member to watch.")
     async def watch_add(interaction: discord.Interaction, user: discord.Member):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -65,11 +66,15 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
             return
 
         if user.bot:
-            await interaction.response.send_message("You cannot watch bots.", ephemeral=True)
+            await interaction.response.send_message(
+                "You cannot watch bots.", ephemeral=True
+            )
             return
 
         if user.id == interaction.user.id:
-            await interaction.response.send_message("You cannot watch yourself.", ephemeral=True)
+            await interaction.response.send_message(
+                "You cannot watch yourself.", ephemeral=True
+            )
             return
 
         guild_id = interaction.guild_id
@@ -94,9 +99,9 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
 
     @watch_group.command(
         name="remove",
-        description="Stop watching a user.",
+        description="Stop watching a member.",
     )
-    @app_commands.describe(user="The server member to stop watching.")
+    @app_commands.describe(user="Member to stop watching.")
     async def watch_remove(interaction: discord.Interaction, user: discord.Member):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -125,7 +130,7 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
 
     @watch_group.command(
         name="list",
-        description="Show the users you are currently watching.",
+        description="List everyone you are currently watching.",
     )
     async def watch_list(interaction: discord.Interaction):
         if not ctx.is_mod(interaction):
@@ -137,7 +142,9 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
         watcher_id = interaction.user.id
         guild = interaction.guild
 
-        watched_ids = [uid for uid, watchers in ctx.watched_users.items() if watcher_id in watchers]
+        watched_ids = [
+            uid for uid, watchers in ctx.watched_users.items() if watcher_id in watchers
+        ]
 
         if not watched_ids:
             await interaction.response.send_message(

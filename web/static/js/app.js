@@ -253,7 +253,7 @@ async function mountPanel() {
   if (currentPanel && currentPanel.unmount) {
     try { currentPanel.unmount(); } catch (_) {}
   }
-  rootEl.innerHTML = `<div class="panel"><div class="empty">Loading ${page.label}…</div></div>`;
+  rootEl.innerHTML = `<div class="panel"><div class="panel-loading">Loading ${page.label}…</div></div>`;
 
   try {
     const mod = await import(page.module + _moduleVer);

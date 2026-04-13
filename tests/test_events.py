@@ -1,4 +1,5 @@
 """Tests for Discord event handlers."""
+
 from __future__ import annotations
 
 import asyncio
@@ -152,7 +153,13 @@ class OnMessageTests(unittest.TestCase):
     @patch("handlers.events.award_message_xp", new_callable=AsyncMock)
     @patch("handlers.events.enforce_spoiler_requirement", new_callable=AsyncMock)
     def test_message_tracked_when_rule_exists(
-        self, mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_track, mock_level
+        self,
+        mock_spoiler,
+        mock_award,
+        mock_rule_exists,
+        mock_activity,
+        mock_track,
+        mock_level,
     ):
         mock_spoiler.return_value = False
         mock_award.return_value = None
@@ -160,7 +167,7 @@ class OnMessageTests(unittest.TestCase):
         _run(self.on_message(msg))
         mock_track.assert_called_once()
         args = mock_track.call_args[0]
-        self.assertEqual(args[2], 10)   # channel_id
+        self.assertEqual(args[2], 10)  # channel_id
         self.assertEqual(args[3], 999)  # message_id
 
     @patch("handlers.events.handle_level_progress", new_callable=AsyncMock)

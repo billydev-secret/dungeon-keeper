@@ -1,4 +1,5 @@
 """Welcome and leave message preview commands."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -14,11 +15,11 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 
-def register_welcome_commands(bot: "Bot", ctx: "AppContext") -> None:
+def register_welcome_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="welcome_preview",
-        description="Preview the welcome message using your own profile.",
+        description="See what the welcome message looks like using your profile.",
     )
     async def welcome_preview(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
@@ -42,11 +43,13 @@ def register_welcome_commands(bot: "Bot", ctx: "AppContext") -> None:
         if ctx.welcome_ping_role_id > 0:
             channel_note += f"  Pings <@&{ctx.welcome_ping_role_id}>."
         embed = build_welcome_embed(member, ctx.welcome_message)
-        await interaction.response.send_message(channel_note, embed=embed, ephemeral=True)
+        await interaction.response.send_message(
+            channel_note, embed=embed, ephemeral=True
+        )
 
     @bot.tree.command(
         name="leave_preview",
-        description="Preview the leave message using your own profile.",
+        description="See what the leave message looks like using your profile.",
     )
     async def leave_preview(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
@@ -68,4 +71,6 @@ def register_welcome_commands(bot: "Bot", ctx: "AppContext") -> None:
             else "No leave channel set — use `/config welcome` first."
         )
         embed = build_leave_embed(member, ctx.leave_message)
-        await interaction.response.send_message(channel_note, embed=embed, ephemeral=True)
+        await interaction.response.send_message(
+            channel_note, embed=embed, ephemeral=True
+        )

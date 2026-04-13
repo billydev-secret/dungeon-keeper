@@ -6,6 +6,7 @@ stay in sync. Functions here are synchronous and do NOT touch ``discord.py``
 objects — callers snapshot any required Discord state on the event loop before
 dispatching to ``asyncio.to_thread``.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -29,7 +30,6 @@ from services.activity_graphs import (
     query_xp_histogram,
 )
 
-
 # ---------------------------------------------------------------------------
 # Window label lookups
 # ---------------------------------------------------------------------------
@@ -45,9 +45,30 @@ _WINDOW_LABELS: dict[str, str] = {
 
 _DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 _HOD_LABELS = [
-    "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am",
-    "8am", "9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm",
-    "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
+    "12am",
+    "1am",
+    "2am",
+    "3am",
+    "4am",
+    "5am",
+    "6am",
+    "7am",
+    "8am",
+    "9am",
+    "10am",
+    "11am",
+    "12pm",
+    "1pm",
+    "2pm",
+    "3pm",
+    "4pm",
+    "5pm",
+    "6pm",
+    "7pm",
+    "8pm",
+    "9pm",
+    "10pm",
+    "11pm",
 ]
 
 _GENDER_COLORS: dict[str, str] = {
@@ -74,6 +95,7 @@ _RESPONSE_BUCKETS: list[tuple[float, str]] = [
 # MemberSnapshot — thread-safe stand-in for discord.Member
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class MemberSnapshot:
     user_id: int
@@ -86,6 +108,7 @@ class MemberSnapshot:
 # ---------------------------------------------------------------------------
 # Role growth
 # ---------------------------------------------------------------------------
+
 
 class RoleGrowthSeries(TypedDict):
     role: str
@@ -106,7 +129,9 @@ def get_role_growth_data(
     role_filter: set[str] | None,
     utc_offset_hours: float = 0,
 ) -> RoleGrowthData:
-    labels, role_counts = query_role_growth(conn, guild_id, resolution, utc_offset_hours=utc_offset_hours)
+    labels, role_counts = query_role_growth(
+        conn, guild_id, resolution, utc_offset_hours=utc_offset_hours
+    )
 
     if role_filter is not None:
         role_counts = {
@@ -130,6 +155,7 @@ def get_role_growth_data(
 # ---------------------------------------------------------------------------
 # Message cadence
 # ---------------------------------------------------------------------------
+
 
 class CadenceBucketDict(TypedDict):
     label: str
@@ -155,7 +181,9 @@ def get_message_cadence_data(
     channel_id: int | None,
 ) -> MessageCadenceData:
     buckets = query_message_cadence(
-        conn, guild_id, resolution,
+        conn,
+        guild_id,
+        resolution,
         utc_offset_hours=utc_offset_hours,
         channel_id=channel_id,
     )
@@ -180,6 +208,7 @@ def get_message_cadence_data(
 # ---------------------------------------------------------------------------
 # Join times
 # ---------------------------------------------------------------------------
+
 
 class JoinTimesData(TypedDict):
     resolution: str
@@ -220,6 +249,7 @@ def get_join_times_data(
 # NSFW gender activity
 # ---------------------------------------------------------------------------
 
+
 class GenderSeries(TypedDict):
     gender: str
     counts: list[int]
@@ -243,7 +273,10 @@ def get_nsfw_gender_data(
     media_only: bool,
 ) -> NsfwGenderData:
     labels, gender_counts = query_nsfw_gender_activity(
-        conn, guild_id, resolution, channel_ids,
+        conn,
+        guild_id,
+        resolution,
+        channel_ids,
         utc_offset_hours=utc_offset_hours,
         media_only=media_only,
     )
@@ -264,6 +297,7 @@ def get_nsfw_gender_data(
 # Message rate (10-min buckets over 24h)
 # ---------------------------------------------------------------------------
 
+
 class MessageRateData(TypedDict):
     days: int
     tz_label: str
@@ -278,7 +312,10 @@ def get_message_rate_data(
     utc_offset_hours: float,
 ) -> MessageRateData:
     counts = query_message_rate_10min(
-        conn, guild_id, days, utc_offset_hours=utc_offset_hours,
+        conn,
+        guild_id,
+        days,
+        utc_offset_hours=utc_offset_hours,
     )
     tz_label = f"UTC{utc_offset_hours:+g}" if utc_offset_hours else "UTC"
     return {
@@ -292,6 +329,7 @@ def get_message_rate_data(
 # ---------------------------------------------------------------------------
 # Greeter response times
 # ---------------------------------------------------------------------------
+
 
 class ResponseBucket(TypedDict):
     label: str
@@ -364,12 +402,14 @@ def _query_greeter_response_details(
             author_id, msg_ts = greeter_times[scan]
             if author_id != user_id:
                 delta = msg_ts - joined_at
-                entries.append({
-                    "user_id": str(user_id),
-                    "joined_at": joined_at,
-                    "response_seconds": delta,
-                    "greeter_id": str(author_id),
-                })
+                entries.append(
+                    {
+                        "user_id": str(user_id),
+                        "joined_at": joined_at,
+                        "response_seconds": delta,
+                        "greeter_id": str(author_id),
+                    }
+                )
                 # Consume this message and all prior ones up to it
                 msg_idx = scan + 1
                 break
@@ -386,7 +426,11 @@ def get_greeter_response_data(
     join_times: dict[int, float],
 ) -> GreeterResponseData:
     entries = _query_greeter_response_details(
-        conn, guild_id, welcome_channel_id, greeter_ids, join_times,
+        conn,
+        guild_id,
+        welcome_channel_id,
+        greeter_ids,
+        join_times,
     )
     response_times = [e["response_seconds"] for e in entries]
 
@@ -420,6 +464,7 @@ def get_greeter_response_data(
 # Activity (messages / XP)
 # ---------------------------------------------------------------------------
 
+
 class ActivityData(TypedDict):
     resolution: str
     window_label: str
@@ -447,8 +492,11 @@ def get_activity_data(
     if mode == "xp":
         if resolution in ("hour_of_day", "day_of_week"):
             labels, xp_totals = query_xp_histogram(
-                conn, guild_id, resolution,  # type: ignore[arg-type]
-                user_id=user_id, channel_id=channel_id,
+                conn,
+                guild_id,
+                resolution,  # type: ignore[arg-type]
+                user_id=user_id,
+                channel_id=channel_id,
                 utc_offset_hours=utc_offset_hours,
             )
             counts: list[float] = xp_totals
@@ -456,8 +504,11 @@ def get_activity_data(
             show_members = False
         else:
             labels, xp_totals, member_counts = query_xp_activity(
-                conn, guild_id, resolution,
-                user_id=user_id, channel_id=channel_id,
+                conn,
+                guild_id,
+                resolution,
+                user_id=user_id,
+                channel_id=channel_id,
                 utc_offset_hours=utc_offset_hours,
             )
             counts = xp_totals
@@ -465,8 +516,11 @@ def get_activity_data(
     else:
         if resolution in ("hour_of_day", "day_of_week"):
             labels, msg_counts = query_message_histogram(
-                conn, guild_id, resolution,  # type: ignore[arg-type]
-                user_id=user_id, channel_id=channel_id,
+                conn,
+                guild_id,
+                resolution,  # type: ignore[arg-type]
+                user_id=user_id,
+                channel_id=channel_id,
                 utc_offset_hours=utc_offset_hours,
             )
             counts = [float(c) for c in msg_counts]
@@ -474,8 +528,11 @@ def get_activity_data(
             show_members = False
         else:
             labels, msg_counts, member_counts = query_message_activity(
-                conn, guild_id, resolution,
-                user_id=user_id, channel_id=channel_id,
+                conn,
+                guild_id,
+                resolution,
+                user_id=user_id,
+                channel_id=channel_id,
                 utc_offset_hours=utc_offset_hours,
             )
             counts = [float(c) for c in msg_counts]
@@ -497,6 +554,7 @@ def get_activity_data(
 # ---------------------------------------------------------------------------
 # Invite effectiveness
 # ---------------------------------------------------------------------------
+
 
 class InviterRow(TypedDict):
     inviter_id: str
@@ -540,8 +598,10 @@ def get_invite_effectiveness_data(
 
     if not rows:
         return {
-            "total_invites": 0, "total_active": 0,
-            "overall_retention_pct": 0.0, "inviters": [],
+            "total_invites": 0,
+            "total_active": 0,
+            "overall_retention_pct": 0.0,
+            "inviters": [],
         }
 
     # Check which invitees are still active
@@ -569,20 +629,24 @@ def get_invite_effectiveness_data(
         active = sum(1 for i in invitees if i in active_set)
         total_invites += count
         total_active += active
-        inviters.append({
-            "inviter_id": str(inviter_id),
-            "inviter_name": "",
-            "invite_count": count,
-            "still_active": active,
-            "retention_pct": round(active / count * 100, 1) if count else 0.0,
-        })
+        inviters.append(
+            {
+                "inviter_id": str(inviter_id),
+                "inviter_name": "",
+                "invite_count": count,
+                "still_active": active,
+                "retention_pct": round(active / count * 100, 1) if count else 0.0,
+            }
+        )
 
     inviters.sort(key=lambda r: r["invite_count"], reverse=True)
 
     return {
         "total_invites": total_invites,
         "total_active": total_active,
-        "overall_retention_pct": round(total_active / total_invites * 100, 1) if total_invites else 0.0,
+        "overall_retention_pct": round(total_active / total_invites * 100, 1)
+        if total_invites
+        else 0.0,
         "inviters": inviters,
     }
 
@@ -590,6 +654,7 @@ def get_invite_effectiveness_data(
 # ---------------------------------------------------------------------------
 # Interaction graph (social network)
 # ---------------------------------------------------------------------------
+
 
 class InteractionEdge(TypedDict):
     from_id: str
@@ -657,11 +722,15 @@ def get_interaction_graph_data(
         node_in[to_id] = node_in.get(to_id, 0) + weight
         node_partners.setdefault(from_id, set()).add(to_id)
         node_partners.setdefault(to_id, set()).add(from_id)
-        edges.append({
-            "from_id": str(from_id), "from_name": "",
-            "to_id": str(to_id), "to_name": "",
-            "weight": weight,
-        })
+        edges.append(
+            {
+                "from_id": str(from_id),
+                "from_name": "",
+                "to_id": str(to_id),
+                "to_name": "",
+                "weight": weight,
+            }
+        )
 
     # Top pairs: merge bidirectional
     pair_weights: dict[tuple[int, int], int] = {}
@@ -672,26 +741,37 @@ def get_interaction_graph_data(
         key = (min(a, b), max(a, b))
         pair_weights[key] = pair_weights.get(key, 0) + w
     top_pairs: list[InteractionEdge] = []
-    for (a, b), w in sorted(pair_weights.items(), key=lambda x: x[1], reverse=True)[:limit]:
-        top_pairs.append({
-            "from_id": str(a), "from_name": "",
-            "to_id": str(b), "to_name": "",
-            "weight": w,
-        })
+    for (a, b), w in sorted(pair_weights.items(), key=lambda x: x[1], reverse=True)[
+        :limit
+    ]:
+        top_pairs.append(
+            {
+                "from_id": str(a),
+                "from_name": "",
+                "to_id": str(b),
+                "to_name": "",
+                "weight": w,
+            }
+        )
 
     all_ids = set(node_out.keys()) | set(node_in.keys())
     nodes: list[InteractionNode] = []
-    for uid in sorted(all_ids, key=lambda u: node_out.get(u, 0) + node_in.get(u, 0), reverse=True)[:limit]:
-        nodes.append({
-            "user_id": str(uid), "user_name": "",
-            "total_outbound": node_out.get(uid, 0),
-            "total_inbound": node_in.get(uid, 0),
-            "unique_partners": len(node_partners.get(uid, set())),
-        })
+    for uid in sorted(
+        all_ids, key=lambda u: node_out.get(u, 0) + node_in.get(u, 0), reverse=True
+    )[:limit]:
+        nodes.append(
+            {
+                "user_id": str(uid),
+                "user_name": "",
+                "total_outbound": node_out.get(uid, 0),
+                "total_inbound": node_in.get(uid, 0),
+                "unique_partners": len(node_partners.get(uid, set())),
+            }
+        )
 
     return {
         "nodes": nodes,
-        "edges": edges[:limit * 2],
+        "edges": edges[: limit * 2],
         "top_pairs": top_pairs,
     }
 
@@ -699,6 +779,7 @@ def get_interaction_graph_data(
 # ---------------------------------------------------------------------------
 # Member retention / dropoff
 # ---------------------------------------------------------------------------
+
 
 class RetentionEntry(TypedDict):
     user_id: str
@@ -730,8 +811,11 @@ def get_retention_data(
 ) -> RetentionData:
     period_seconds = period_days * 86400
     profiles = query_dropoff_profiles(
-        conn, guild_id, period_seconds,
-        min_previous=min_previous, limit=limit,
+        conn,
+        guild_id,
+        period_seconds,
+        min_previous=min_previous,
+        limit=limit,
     )
 
     # Server-wide activity ratio for normalization (from first profile)
@@ -749,19 +833,21 @@ def get_retention_data(
         else:
             adjusted_ratio = member_ratio
         normalized_drop_pct = round(max(0, (1 - adjusted_ratio)) * 100, 1)
-        entries.append({
-            "user_id": str(p.user_id),
-            "user_name": "",
-            "msgs_prev": p.msgs_prev,
-            "msgs_recent": p.msgs_recent,
-            "drop_pct": drop_pct,
-            "normalized_drop_pct": normalized_drop_pct,
-            "days_active_prev": p.days_prev,
-            "days_active_recent": p.days_recent,
-            "last_seen_ts": p.last_seen_ts,
-            "level": p.level,
-            "total_xp": p.total_xp,
-        })
+        entries.append(
+            {
+                "user_id": str(p.user_id),
+                "user_name": "",
+                "msgs_prev": p.msgs_prev,
+                "msgs_recent": p.msgs_recent,
+                "drop_pct": drop_pct,
+                "normalized_drop_pct": normalized_drop_pct,
+                "days_active_prev": p.days_prev,
+                "days_active_recent": p.days_recent,
+                "last_seen_ts": p.last_seen_ts,
+                "level": p.level,
+                "total_xp": p.total_xp,
+            }
+        )
 
     server_change_pct = round((server_ratio - 1) * 100, 1)
 
@@ -776,6 +862,7 @@ def get_retention_data(
 # ---------------------------------------------------------------------------
 # Voice activity
 # ---------------------------------------------------------------------------
+
 
 class VoiceUserRow(TypedDict):
     user_id: str
@@ -867,13 +954,15 @@ def get_voice_activity_data(
         uid = int(r[0])
         minutes = int(r[1])
         sessions = session_counts.get(uid, 1)
-        top_users.append({
-            "user_id": str(uid),
-            "user_name": "",
-            "total_minutes": float(minutes),
-            "session_count": sessions,
-            "avg_minutes": round(minutes / max(sessions, 1), 1),
-        })
+        top_users.append(
+            {
+                "user_id": str(uid),
+                "user_name": "",
+                "total_minutes": float(minutes),
+                "session_count": sessions,
+                "avg_minutes": round(minutes / max(sessions, 1), 1),
+            }
+        )
 
     # By hour of day
     hour_rows = conn.execute(
@@ -891,11 +980,13 @@ def get_voice_activity_data(
     by_hour: list[VoiceHourBucket] = []
     hour_map = {int(r[0]): int(r[1]) for r in hour_rows}
     for h in range(24):
-        by_hour.append({
-            "hour": h,
-            "label": _HOD_LABELS[h],
-            "total_minutes": float(hour_map.get(h, 0)),
-        })
+        by_hour.append(
+            {
+                "hour": h,
+                "label": _HOD_LABELS[h],
+                "total_minutes": float(hour_map.get(h, 0)),
+            }
+        )
 
     # Totals
     total_row = conn.execute(
@@ -940,6 +1031,7 @@ def get_voice_activity_data(
 # XP leaderboard / distribution
 # ---------------------------------------------------------------------------
 
+
 class XpUserRow(TypedDict):
     user_id: str
     user_name: str
@@ -970,6 +1062,7 @@ def get_xp_leaderboard_data(
     days: int | None = None,
 ) -> XpLeaderboardData:
     import time as _time
+
     since = int(_time.time() - days * 86400) if days else 0
 
     if days:
@@ -1021,16 +1114,18 @@ def get_xp_leaderboard_data(
     for r in top_rows:
         uid = int(r[0])
         sources = xp_by_source.get(uid, {})
-        leaderboard.append({
-            "user_id": str(uid),
-            "user_name": "",
-            "level": int(r[1]),
-            "total_xp": float(r[2]),
-            "text_xp": sources.get("text", 0.0),
-            "voice_xp": sources.get("voice", 0.0),
-            "reply_xp": sources.get("reply", 0.0),
-            "react_xp": sources.get("image_react", 0.0),
-        })
+        leaderboard.append(
+            {
+                "user_id": str(uid),
+                "user_name": "",
+                "level": int(r[1]),
+                "total_xp": float(r[2]),
+                "text_xp": sources.get("text", 0.0),
+                "voice_xp": sources.get("voice", 0.0),
+                "reply_xp": sources.get("reply", 0.0),
+                "react_xp": sources.get("image_react", 0.0),
+            }
+        )
 
     # Level distribution (always all-time)
     level_rows = conn.execute(
@@ -1068,7 +1163,8 @@ def get_xp_leaderboard_data(
     source_totals = {str(r[0]): float(r[1]) for r in source_rows}
 
     total_row = conn.execute(
-        "SELECT COUNT(*) FROM member_xp WHERE guild_id = ?", (guild_id,),
+        "SELECT COUNT(*) FROM member_xp WHERE guild_id = ?",
+        (guild_id,),
     ).fetchone()
 
     return {
@@ -1082,6 +1178,7 @@ def get_xp_leaderboard_data(
 # ---------------------------------------------------------------------------
 # Reaction analytics
 # ---------------------------------------------------------------------------
+
 
 class EmojiRow(TypedDict):
     emoji: str
@@ -1197,6 +1294,7 @@ def get_reaction_analytics_data(
 # Message rate drops
 # ---------------------------------------------------------------------------
 
+
 class RateDropEntry(TypedDict):
     user_id: str
     user_name: str
@@ -1243,8 +1341,11 @@ def get_message_rate_drops_data(
     server_drop_pct = round((1 - server_ratio) * 100, 1)
 
     drops = query_message_rate_drops(
-        conn, guild_id, period_seconds,
-        min_previous=min_previous, limit=limit,
+        conn,
+        guild_id,
+        period_seconds,
+        min_previous=min_previous,
+        limit=limit,
     )
 
     entries: list[RateDropEntry] = []
@@ -1253,14 +1354,16 @@ def get_message_rate_drops_data(
         # Adjusted: what we'd expect if user followed server trend
         expected = prev_count * server_ratio
         adjusted = round((1 - recent_count / max(expected, 1)) * 100, 1)
-        entries.append({
-            "user_id": str(user_id),
-            "user_name": "",
-            "prev_count": prev_count,
-            "recent_count": recent_count,
-            "drop_pct": drop_pct,
-            "adjusted_drop_pct": adjusted,
-        })
+        entries.append(
+            {
+                "user_id": str(user_id),
+                "user_name": "",
+                "prev_count": prev_count,
+                "recent_count": recent_count,
+                "drop_pct": drop_pct,
+                "adjusted_drop_pct": adjusted,
+            }
+        )
 
     return {
         "period_days": period_days,
@@ -1274,6 +1377,7 @@ def get_message_rate_drops_data(
 # ---------------------------------------------------------------------------
 # Burst ranking
 # ---------------------------------------------------------------------------
+
 
 class BurstEntry(TypedDict):
     user_id: str
@@ -1299,14 +1403,16 @@ def get_burst_ranking_data(
 
     entries: list[BurstEntry] = []
     for user_id, pre_avg, post_avg, n_sessions in results[:limit]:
-        entries.append({
-            "user_id": str(user_id),
-            "user_name": "",
-            "pre_avg": round(pre_avg, 2),
-            "post_avg": round(post_avg, 2),
-            "increase": round(post_avg - pre_avg, 2),
-            "sessions": n_sessions,
-        })
+        entries.append(
+            {
+                "user_id": str(user_id),
+                "user_name": "",
+                "pre_avg": round(pre_avg, 2),
+                "post_avg": round(post_avg, 2),
+                "increase": round(post_avg - pre_avg, 2),
+                "sessions": n_sessions,
+            }
+        )
 
     return {"entries": entries}
 
@@ -1314,6 +1420,7 @@ def get_burst_ranking_data(
 # ---------------------------------------------------------------------------
 # Channel comparison
 # ---------------------------------------------------------------------------
+
 
 class ChannelRow(TypedDict):
     channel_id: str
@@ -1357,15 +1464,21 @@ def get_channel_comparison_data(
     for r in rows:
         recent = int(r[3])
         prev = int(r[4])
-        trend = round((recent - prev) / max(prev, 1) * 100, 1) if prev > 0 else (100.0 if recent > 0 else 0.0)
-        channels.append({
-            "channel_id": str(r[0]),
-            "channel_name": "",
-            "message_count": int(r[1]),
-            "unique_authors": int(r[2]),
-            "recent_count": recent,
-            "prev_count": prev,
-            "trend_pct": trend,
-        })
+        trend = (
+            round((recent - prev) / max(prev, 1) * 100, 1)
+            if prev > 0
+            else (100.0 if recent > 0 else 0.0)
+        )
+        channels.append(
+            {
+                "channel_id": str(r[0]),
+                "channel_name": "",
+                "message_count": int(r[1]),
+                "unique_authors": int(r[2]),
+                "recent_count": recent,
+                "prev_count": prev,
+                "trend_pct": trend,
+            }
+        )
 
     return {"channels": channels}

@@ -1,4 +1,5 @@
 """Event handlers for the Discord bot."""
+
 from __future__ import annotations
 
 import asyncio
@@ -11,9 +12,14 @@ import discord
 from anthropic import AsyncAnthropic
 from discord import app_commands
 
+from commands.jail_commands import check_jail_rejoin
 from post_monitoring import enforce_spoiler_requirement
 from services.ai_moderation_service import ai_check_watched_message
-from services.auto_delete_service import auto_delete_rule_exists, track_auto_delete_message
+from services.auto_delete_service import (
+    auto_delete_rule_exists,
+    track_auto_delete_message,
+)
+from services.incident_detection import velocity_tracker
 from services.interaction_graph import record_interactions
 from services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from services.message_store import (
@@ -25,11 +31,9 @@ from services.message_store import (
     upsert_known_channel,
     upsert_known_user,
 )
-from services.sentiment_service import score_text
 from services.message_xp_service import award_image_reaction_xp, award_message_xp
-from commands.jail_commands import check_jail_rejoin
+from services.sentiment_service import score_text
 from services.welcome_service import build_leave_embed, build_welcome_embed
-from services.incident_detection import velocity_tracker
 from services.wellness_enforcement import wellness_on_message
 from services.xp_service import handle_level_progress
 from xp_system import count_xp_events, log_role_event, record_member_activity
@@ -42,7 +46,9 @@ log = logging.getLogger("dungeonkeeper.events")
 
 def register_events(bot: Bot, ctx: AppContext) -> None:
     _anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-    _anthropic_client = AsyncAnthropic(api_key=_anthropic_api_key) if _anthropic_api_key else None
+    _anthropic_client = (
+        AsyncAnthropic(api_key=_anthropic_api_key) if _anthropic_api_key else None
+    )
 
     @bot.event
     async def on_ready():
@@ -64,7 +70,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
         log.info(
             "In Guild %s (ID: %s, guarding: %s)",
-            _guild_name, ctx.guild_id,
+            _guild_name,
+            ctx.guild_id,
             [_ch(c) for c in ctx.spoiler_required_channels],
         )
         log.info(
@@ -84,19 +91,27 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 for m in _guild.members:
                     if not m.bot:
                         upsert_known_user(
-                            conn, guild_id=_guild.id, user_id=m.id,
-                            username=str(m), display_name=m.display_name,
+                            conn,
+                            guild_id=_guild.id,
+                            user_id=m.id,
+                            username=str(m),
+                            display_name=m.display_name,
                             ts=now_ts,
                         )
                 for ch in _guild.channels:
                     if hasattr(ch, "name"):
                         upsert_known_channel(
-                            conn, guild_id=_guild.id, channel_id=ch.id,
-                            channel_name=ch.name, ts=now_ts,
+                            conn,
+                            guild_id=_guild.id,
+                            channel_id=ch.id,
+                            channel_name=ch.name,
+                            ts=now_ts,
                         )
-            log.info("Backfilled %d known users and %d known channels.",
-                     sum(1 for m in _guild.members if not m.bot),
-                     len(_guild.channels))
+            log.info(
+                "Backfilled %d known users and %d known channels.",
+                sum(1 for m in _guild.members if not m.bot),
+                len(_guild.channels),
+            )
         if ctx.guild_id:
             with ctx.open_db() as conn:
                 log.debug(
@@ -110,7 +125,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if message.author.bot or not message.guild:
             return
 
-        message_ts = message.created_at.timestamp() if message.created_at else time.time()
+        message_ts = (
+            message.created_at.timestamp() if message.created_at else time.time()
+        )
         spoiler_deleted = await enforce_spoiler_requirement(
             message,
             spoiler_required_channels=ctx.spoiler_required_channels,
@@ -123,7 +140,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if message.reference and message.reference.message_id:
             reply_to_id = message.reference.message_id
 
-        mention_ids = [u.id for u in message.mentions if not u.bot and u.id != message.author.id]
+        mention_ids = [
+            u.id for u in message.mentions if not u.bot and u.id != message.author.id
+        ]
         attachment_urls = [a.url for a in message.attachments]
 
         if spoiler_deleted:
@@ -175,8 +194,14 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     "INSERT OR IGNORE INTO message_sentiment "
                     "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (message.id, message.guild.id, message.channel.id,
-                     sentiment, emotion, message_ts),
+                    (
+                        message.id,
+                        message.guild.id,
+                        message.channel.id,
+                        sentiment,
+                        emotion,
+                        message_ts,
+                    ),
                 )
 
             upsert_known_user(
@@ -198,19 +223,32 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
             # Record reply and mention interactions for the connection web
             interaction_targets = [uid for uid in mention_ids]
-            if reply_to_id and message.reference and isinstance(message.reference.resolved, discord.Message):
+            if (
+                reply_to_id
+                and message.reference
+                and isinstance(message.reference.resolved, discord.Message)
+            ):
                 ref = message.reference.resolved
-                if not ref.author.bot and ref.author.id != message.author.id and ref.author.id not in interaction_targets:
+                if (
+                    not ref.author.bot
+                    and ref.author.id != message.author.id
+                    and ref.author.id not in interaction_targets
+                ):
                     interaction_targets.insert(0, ref.author.id)
             if interaction_targets:
                 record_interactions(
-                    conn, message.guild.id, message.author.id, interaction_targets,
+                    conn,
+                    message.guild.id,
+                    message.author.id,
+                    interaction_targets,
                     ts=int(message_ts),
                     message_id=message.id,
                 )
 
             # Health dashboard: track message velocity for anomaly detection
-            velocity_tracker.record_message(conn, message.guild.id, message.channel.id, ts=message_ts)
+            velocity_tracker.record_message(
+                conn, message.guild.id, message.channel.id, ts=message_ts
+            )
 
         result = await award_message_xp(
             message,
@@ -245,11 +283,14 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         reason = ""
         if _anthropic_client is not None:
             try:
-                is_violation, reason = await ai_check_watched_message(_anthropic_client, message, db_path=ctx.db_path)
+                is_violation, reason = await ai_check_watched_message(
+                    _anthropic_client, message, db_path=ctx.db_path
+                )
             except Exception as exc:
                 log.warning(
                     "AI watch check failed for %s: %s — notifying anyway.",
-                    message.author.display_name, exc,
+                    message.author.display_name,
+                    exc,
                 )
                 is_violation = True  # fail open: DM watchers if the AI check errors
             if not is_violation:
@@ -261,9 +302,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         body = message.content or "*[no text content]*"
         attachment_lines = "\n".join(a.url for a in message.attachments)
         rule_line = f"\n⚠️ **Rule concern:** {reason}" if reason else ""
-        footer = (
-            f"{attachment_lines}\n" if attachment_lines else ""
-        ) + (
+        footer = (f"{attachment_lines}\n" if attachment_lines else "") + (
             f"— **{message.author.display_name}** (@{message.author.name}) "
             f"in **{guild_name}** / #{channel_name}\n"
             f"{message.jump_url}"
@@ -276,7 +315,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             except discord.HTTPException as exc:
                 log.warning(
                     "Could not fetch watcher (id=%s) while relaying post from %s: %s",
-                    watcher_id, message.author.display_name, exc,
+                    watcher_id,
+                    message.author.display_name,
+                    exc,
                 )
                 continue
             try:
@@ -284,7 +325,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             except (discord.Forbidden, discord.HTTPException) as exc:
                 log.warning(
                     "Could not DM watcher %s for watched user %s: %s",
-                    watcher.display_name, message.author.display_name, exc,
+                    watcher.display_name,
+                    message.author.display_name,
+                    exc,
                 )
 
     @bot.event
@@ -302,9 +345,14 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 )
                 break
             except discord.HTTPException as exc:
-                if exc.status < 500 or asyncio.get_event_loop().time() + delay > deadline:
+                if (
+                    exc.status < 500
+                    or asyncio.get_event_loop().time() + delay > deadline
+                ):
                     raise
-                log.warning("award_image_reaction_xp got %s, retrying in %ss", exc.status, delay)
+                log.warning(
+                    "award_image_reaction_xp got %s, retrying in %ss", exc.status, delay
+                )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 16)
         if result is not None:
@@ -350,6 +398,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if payload.guild_id is None:
             return
         from services.auto_delete_service import remove_tracked_auto_delete_message
+
         remove_tracked_auto_delete_message(
             ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
         )
@@ -377,10 +426,14 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         with ctx.open_db() as conn:
             for role in after.roles:
                 if role.id not in before_ids:
-                    log_role_event(conn, after.guild.id, after.id, role.name, "grant", ts=now)
+                    log_role_event(
+                        conn, after.guild.id, after.id, role.name, "grant", ts=now
+                    )
             for role in before.roles:
                 if role.id not in after_ids:
-                    log_role_event(conn, after.guild.id, after.id, role.name, "remove", ts=now)
+                    log_role_event(
+                        conn, after.guild.id, after.id, role.name, "remove", ts=now
+                    )
 
     @bot.event
     async def on_member_join(member: discord.Member) -> None:
@@ -392,17 +445,32 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if inviter_id is not None:
             with ctx.open_db() as conn:
                 record_invite(conn, member.guild.id, inviter_id, member.id, invite_code)
-            log.info("Invite tracked: %s invited by %s (code: %s)", member, inviter_id, invite_code)
+            log.info(
+                "Invite tracked: %s invited by %s (code: %s)",
+                member,
+                inviter_id,
+                invite_code,
+            )
 
         # Welcome message
         if ctx.welcome_channel_id > 0:
             channel = member.guild.get_channel(ctx.welcome_channel_id)
             if isinstance(channel, discord.TextChannel):
                 try:
-                    ping = f"<@&{ctx.welcome_ping_role_id}>" if ctx.welcome_ping_role_id > 0 else None
-                    await channel.send(content=ping, embed=build_welcome_embed(member, ctx.welcome_message))
+                    ping = (
+                        f"<@&{ctx.welcome_ping_role_id}>"
+                        if ctx.welcome_ping_role_id > 0
+                        else None
+                    )
+                    await channel.send(
+                        content=ping,
+                        embed=build_welcome_embed(member, ctx.welcome_message),
+                    )
                 except discord.Forbidden:
-                    log.warning("Missing permission to send welcome message in #%s.", channel.name)
+                    log.warning(
+                        "Missing permission to send welcome message in #%s.",
+                        channel.name,
+                    )
                     await _dm_admin_permission_warning(
                         member.guild,
                         f"Missing permission to send welcome messages in <#{ctx.welcome_channel_id}>.",
@@ -417,10 +485,12 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 try:
                     await greeter_channel.send(f"@here - {member.mention} has arrived")
                 except discord.Forbidden:
-                    log.warning("Missing permission to send greeter ping in #%s.", greeter_channel.name)
+                    log.warning(
+                        "Missing permission to send greeter ping in #%s.",
+                        greeter_channel.name,
+                    )
                 except discord.HTTPException as exc:
                     log.error("Failed to send greeter chat ping: %s", exc)
-
 
     @bot.event
     async def on_member_remove(member: discord.Member) -> None:
@@ -432,7 +502,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         try:
             await channel.send(embed=build_leave_embed(member, ctx.leave_message))
         except discord.Forbidden:
-            log.warning("Missing permission to send leave message in #%s.", channel.name)
+            log.warning(
+                "Missing permission to send leave message in #%s.", channel.name
+            )
             await _dm_admin_permission_warning(
                 member.guild,
                 f"Missing permission to send leave messages in <#{ctx.leave_channel_id}>.",
@@ -445,6 +517,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         if payload.guild_id is None:
             return
         from services.auto_delete_service import remove_tracked_auto_delete_messages
+
         remove_tracked_auto_delete_messages(
             ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
         )
@@ -453,7 +526,10 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
     @bot.event
     async def on_interaction(interaction: discord.Interaction) -> None:
-        if interaction.type == discord.InteractionType.application_command and interaction.data:
+        if (
+            interaction.type == discord.InteractionType.application_command
+            and interaction.data
+        ):
             data: dict = interaction.data  # type: ignore[assignment]
             cmd = data.get("name", "?")
             opts: list[dict] = data.get("options") or []
@@ -503,6 +579,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         log.exception("Unhandled app command error: %s", error)
         try:
             if not interaction.response.is_done():
-                await interaction.response.send_message("Command failed. Please try again.", ephemeral=True)
+                await interaction.response.send_message(
+                    "Command failed. Please try again.", ephemeral=True
+                )
         except discord.HTTPException:
             pass

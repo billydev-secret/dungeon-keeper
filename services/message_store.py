@@ -6,6 +6,7 @@ reaction counts so they can be queried by other services (AI review, etc.).
 All writes are idempotent — safe to call from both the live event handler
 and the /interaction_scan backfill without creating duplicates.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -35,12 +36,15 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE messages ADD COLUMN emotion TEXT")
 
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_messages_guild_ts "
-        "ON messages (guild_id, ts)"
+        "CREATE INDEX IF NOT EXISTS idx_messages_guild_ts ON messages (guild_id, ts)"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_author "
         "ON messages (guild_id, author_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_channel_ts "
+        "ON messages (guild_id, channel_id, ts)"
     )
 
     conn.execute(
@@ -63,8 +67,7 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mentions_user "
-        "ON message_mentions (user_id)"
+        "CREATE INDEX IF NOT EXISTS idx_mentions_user ON message_mentions (user_id)"
     )
 
     conn.execute(
@@ -242,7 +245,17 @@ def store_message(
             (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts, sentiment, emotion)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts, sentiment, emotion),
+        (
+            message_id,
+            guild_id,
+            channel_id,
+            author_id,
+            content,
+            reply_to_id,
+            ts,
+            sentiment,
+            emotion,
+        ),
     )
     for url in attachment_urls:
         conn.execute(
@@ -388,7 +401,7 @@ def query_last_substantive_activity(
     batch_size = 800
 
     for i in range(0, len(user_ids), batch_size):
-        batch = user_ids[i:i + batch_size]
+        batch = user_ids[i : i + batch_size]
         ph = ",".join("?" for _ in batch)
 
         channel_clause = ""
@@ -413,7 +426,9 @@ def query_last_substantive_activity(
             uid = int(row["author_id"])
             if uid in activity_map:
                 continue
-            if exclude_gif_only and _is_gif_only(row["content"], bool(row["has_attach"])):
+            if exclude_gif_only and _is_gif_only(
+                row["content"], bool(row["has_attach"])
+            ):
                 continue
             activity_map[uid] = MemberActivity(
                 user_id=uid,

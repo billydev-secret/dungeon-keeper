@@ -6,6 +6,7 @@ Provides a single mod-only slash command:
 
 Uses the local message archive populated by /interaction_scan and on_message.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,9 +26,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.drama")
 
-_MSG_PREVIEW = 90   # max chars shown per message in the report
-_EVENTS_PER_PERSON = 2   # example entry events shown per ranked person
-_VICTIMS_PER_EVENT = 3   # silenced users shown per event
+_MSG_PREVIEW = 90  # max chars shown per message in the report
+_EVENTS_PER_PERSON = 2  # example entry events shown per ranked person
+_VICTIMS_PER_EVENT = 3  # silenced users shown per event
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +47,7 @@ _EntryEvent = tuple[int, int, int, str | None, list[_VictimMsg]]
 # ---------------------------------------------------------------------------
 # Core analysis
 # ---------------------------------------------------------------------------
+
 
 def _analyze_chilling_effect(
     conn: sqlite3.Connection,
@@ -82,7 +84,9 @@ def _analyze_chilling_effect(
 
     # Group (ts, author_id, message_id, content) by channel
     # Using a list of tuples: (ts, author_id, message_id, content)
-    msgs_by_channel: dict[int, list[tuple[int, int, int, str | None]]] = defaultdict(list)
+    msgs_by_channel: dict[int, list[tuple[int, int, int, str | None]]] = defaultdict(
+        list
+    )
     for row in rows:
         msgs_by_channel[int(row[0])].append(
             (int(row[2]), int(row[1]), int(row[3]), row[4])
@@ -104,7 +108,9 @@ def _analyze_chilling_effect(
 
             # Scan backward for [ts - window, ts): capture each other user's
             # most recent message (the one they'll be "silenced" from).
-            last_before: dict[int, tuple[int, str | None]] = {}  # victim -> (ts, content)
+            last_before: dict[
+                int, tuple[int, str | None]
+            ] = {}  # victim -> (ts, content)
             for j in range(i - 1, -1, -1):
                 jts, jauthor, _jmid, jcontent = ch_msgs[j]
                 if jts < ts - window_seconds:
@@ -156,20 +162,21 @@ def _preview(text: str | None, limit: int = _MSG_PREVIEW) -> str:
 # Command registration
 # ---------------------------------------------------------------------------
 
-def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
+
+def register_drama_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="chilling_effect",
-        description="Find members whose arrival in a channel causes others to stop posting.",
+        description="Who makes others go quiet when they show up? Correlation-based analysis.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        lookback_days="Days of message history to analyse (default 30).",
-        entry_gap_minutes="Minutes of silence before counting someone as 'arriving' (default 30).",
-        window_minutes="Activity window (minutes) measured before and after each arrival (default 15).",
-        min_entries="Minimum arrivals needed to include someone in the report (default 3).",
-        top="How many members to show (default 10).",
-        channel="Limit to a specific channel (default: all channels).",
+        lookback_days="Days of history to analyze.",
+        entry_gap_minutes="Minutes of silence before someone counts as 'arriving'.",
+        window_minutes="Minutes of activity to measure before and after each arrival.",
+        min_entries="Minimum arrivals needed to include someone.",
+        top="How many members to show.",
+        channel="Limit to one channel. Omit for all channels.",
     )
     async def chilling_effect(
         interaction: discord.Interaction,
@@ -211,6 +218,7 @@ def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
                     window_seconds=window_minutes * 60,
                     channel_id=_ch_id,
                 )
+
         events, channel_count = await asyncio.to_thread(_analyze)
 
         # Aggregate events per entrant
@@ -241,7 +249,7 @@ def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
             await send_ephemeral_text(
                 interaction,
                 header + f"No member had ≥{min_entries} qualifying arrivals. "
-                         "Try lowering `min_entries`, widening the window, or running `/interaction_scan`.",
+                "Try lowering `min_entries`, widening the window, or running `/interaction_scan`.",
             )
             return
 
@@ -250,7 +258,9 @@ def register_drama_commands(bot: "Bot", ctx: "AppContext") -> None:
             member = guild.get_member(uid)
             name = member.display_name if member else f"User {uid}"
 
-            lines.append(f"**{rank}. {name}** — {cnt} arrivals · avg **{avg:.1f}** silenced/arrival")
+            lines.append(
+                f"**{rank}. {name}** — {cnt} arrivals · avg **{avg:.1f}** silenced/arrival"
+            )
 
             # Show the most impactful example events (most victims first)
             examples = sorted(

@@ -181,7 +181,7 @@ export function mount(container) {
     panel.innerHTML = `
       <header>
         <h2>Activity Heatmap</h2>
-        <div class="subtitle">Message density by hour and day of week (30-day average)</div>
+        <div class="subtitle">When your server is most active, by hour and day (30-day average)</div>
       </header>
 
       <div class="home-grid">

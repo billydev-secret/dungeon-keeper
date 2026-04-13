@@ -203,7 +203,9 @@ class MemberActivity:
     created_at: float
 
 
-def is_channel_xp_eligible(channel_id: int, parent_id: int | None, excluded_channel_ids: set[int]) -> bool:
+def is_channel_xp_eligible(
+    channel_id: int, parent_id: int | None, excluded_channel_ids: set[int]
+) -> bool:
     """Return True if the channel (or its parent thread) is not in the XP exclusion list."""
     if channel_id in excluded_channel_ids:
         return False
@@ -255,7 +257,9 @@ def normalize_message_content(text: str) -> str:
     return COLLAPSE_WHITESPACE_RE.sub(" ", stripped)
 
 
-def cooldown_multiplier(seconds_since_last_message: float | None, settings: XpSettings = DEFAULT_XP_SETTINGS) -> float:
+def cooldown_multiplier(
+    seconds_since_last_message: float | None, settings: XpSettings = DEFAULT_XP_SETTINGS
+) -> float:
     """Return an XP multiplier (0–1) based on how quickly the user posted again.
 
     None (first message or no prior timestamp) → 1.0 (no penalty).
@@ -265,14 +269,18 @@ def cooldown_multiplier(seconds_since_last_message: float | None, settings: XpSe
     if seconds_since_last_message is None:
         return 1.0
 
-    for threshold, multiplier in zip(settings.cooldown_thresholds_seconds, settings.cooldown_multipliers):
+    for threshold, multiplier in zip(
+        settings.cooldown_thresholds_seconds, settings.cooldown_multipliers
+    ):
         if seconds_since_last_message < threshold:
             return multiplier
 
     return 1.0
 
 
-def pair_multiplier(pair_streak: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> float:
+def pair_multiplier(
+    pair_streak: int, settings: XpSettings = DEFAULT_XP_SETTINGS
+) -> float:
     """Return a reduced XP multiplier when two users have been exclusively messaging each other.
 
     Once the alternating streak between a pair exceeds ``pair_streak_threshold``,
@@ -308,7 +316,9 @@ def calculate_message_xp(
     )
 
 
-def xp_required_for_level(level: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> float:
+def xp_required_for_level(
+    level: int, settings: XpSettings = DEFAULT_XP_SETTINGS
+) -> float:
     """Return the total XP required to reach ``level``.
 
     Uses a quadratic curve: ``factor × (level - 1)²``.  Level 1 always requires 0 XP.
@@ -333,7 +343,9 @@ def level_for_xp(total_xp: float, settings: XpSettings = DEFAULT_XP_SETTINGS) ->
     return int(math.sqrt(total_xp / factor)) + 1
 
 
-def role_grant_due(previous_level: int, new_level: int, settings: XpSettings = DEFAULT_XP_SETTINGS) -> bool:
+def role_grant_due(
+    previous_level: int, new_level: int, settings: XpSettings = DEFAULT_XP_SETTINGS
+) -> bool:
     """Return True if this level-up crosses the role-grant threshold for the first time."""
     return previous_level < settings.role_grant_level <= new_level
 
@@ -493,7 +505,9 @@ def get_member_xp_state(
         (guild_id, user_id),
     ).fetchone()
     if not row:
-        return MemberXpState(total_xp=0.0, level=1, last_message_at=None, last_message_norm=None)
+        return MemberXpState(
+            total_xp=0.0, level=1, last_message_at=None, last_message_norm=None
+        )
 
     total_xp = float(row["total_xp"])
     return MemberXpState(
@@ -527,8 +541,12 @@ def apply_xp_award(
     old_level = state.level
     new_total_xp = round(state.total_xp + max(0.0, xp_delta), 2)
     new_level = level_for_xp(new_total_xp, settings)
-    last_message_at = state.last_message_at if message_timestamp is None else message_timestamp
-    last_message_norm = state.last_message_norm if message_norm is None else message_norm
+    last_message_at = (
+        state.last_message_at if message_timestamp is None else message_timestamp
+    )
+    last_message_norm = (
+        state.last_message_norm if message_norm is None else message_norm
+    )
 
     conn.execute(
         """
@@ -547,14 +565,23 @@ def apply_xp_award(
             last_message_at = excluded.last_message_at,
             last_message_norm = excluded.last_message_norm
         """,
-        (guild_id, user_id, new_total_xp, new_level, last_message_at, last_message_norm),
+        (
+            guild_id,
+            user_id,
+            new_total_xp,
+            new_level,
+            last_message_at,
+            last_message_norm,
+        ),
     )
 
     positive_xp = round(max(0.0, xp_delta), 2)
     if positive_xp > 0 and event_source:
         created_at = event_timestamp
         if created_at is None:
-            created_at = message_timestamp if message_timestamp is not None else time.time()
+            created_at = (
+                message_timestamp if message_timestamp is not None else time.time()
+            )
         conn.execute(
             """
             INSERT INTO xp_events (guild_id, user_id, source, amount, created_at, channel_id)
@@ -595,7 +622,9 @@ def record_xp_event(
     )
 
 
-def is_message_processed(conn: sqlite3.Connection, guild_id: int, message_id: int) -> bool:
+def is_message_processed(
+    conn: sqlite3.Connection, guild_id: int, message_id: int
+) -> bool:
     row = conn.execute(
         """
         SELECT 1
@@ -669,7 +698,7 @@ def get_member_last_activity_map(
         return {}
 
     def batched_ids(values: list[int], batch_size: int = 800) -> list[list[int]]:
-        return [values[i:i + batch_size] for i in range(0, len(values), batch_size)]
+        return [values[i : i + batch_size] for i in range(0, len(values), batch_size)]
 
     activity_map: dict[int, MemberActivity] = {}
 
@@ -767,10 +796,14 @@ def update_pair_state(state: PairState | None, author_id: int) -> tuple[PairStat
     else:
         streak = 1
 
-    return PairState(last_author_id=author_id, active_pair=pair, alternating_streak=streak), streak
+    return PairState(
+        last_author_id=author_id, active_pair=pair, alternating_streak=streak
+    ), streak
 
 
-def get_voice_session(conn: sqlite3.Connection, guild_id: int, user_id: int) -> VoiceSession | None:
+def get_voice_session(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> VoiceSession | None:
     row = conn.execute(
         """
         SELECT guild_id, user_id, channel_id, session_started_at, qualified_since, awarded_intervals

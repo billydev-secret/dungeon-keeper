@@ -2,6 +2,7 @@
 
 All output is ephemeral (admin-only, invisible to regular members).
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -9,7 +10,12 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from services.gender_service import VALID_GENDERS, get_gender, get_unclassified_member_ids, set_gender
+from services.gender_service import (
+    VALID_GENDERS,
+    get_gender,
+    get_unclassified_member_ids,
+    set_gender,
+)
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -18,6 +24,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Interactive classification view — walks through members one at a time
 # ---------------------------------------------------------------------------
+
 
 class _ClassifyView(discord.ui.View):
     """Ephemeral view that shows one unclassified member with gender buttons."""
@@ -53,13 +60,17 @@ class _ClassifyView(discord.ui.View):
             self.add_item(btn)
 
         skip_btn: discord.ui.Button[_ClassifyView] = discord.ui.Button(
-            label="Skip", style=discord.ButtonStyle.secondary, row=1,
+            label="Skip",
+            style=discord.ButtonStyle.secondary,
+            row=1,
         )
         skip_btn.callback = self._on_skip  # type: ignore[assignment]
         self.add_item(skip_btn)
 
         stop_btn: discord.ui.Button[_ClassifyView] = discord.ui.Button(
-            label="Done", style=discord.ButtonStyle.secondary, row=1,
+            label="Done",
+            style=discord.ButtonStyle.secondary,
+            row=1,
         )
         stop_btn.callback = self._on_stop  # type: ignore[assignment]
         self.add_item(stop_btn)
@@ -72,10 +83,16 @@ class _ClassifyView(discord.ui.View):
     def _build_embed(self) -> discord.Embed:
         member = self._current_member()
         if member is None:
-            return discord.Embed(description="No more members to classify.", color=discord.Color.green())
+            return discord.Embed(
+                description="No more members to classify.", color=discord.Color.green()
+            )
         remaining = self._total - self._index
         account_age_days = (discord.utils.utcnow() - member.created_at).days
-        joined_days = (discord.utils.utcnow() - member.joined_at).days if member.joined_at else "?"
+        joined_days = (
+            (discord.utils.utcnow() - member.joined_at).days
+            if member.joined_at
+            else "?"
+        )
         embed = discord.Embed(
             title=f"Classify Member ({remaining} remaining)",
             description=(
@@ -96,7 +113,10 @@ class _ClassifyView(discord.ui.View):
             member = self._current_member()
             if member is None:
                 await interaction.response.edit_message(
-                    embed=discord.Embed(description="No more members to classify.", color=discord.Color.green()),
+                    embed=discord.Embed(
+                        description="No more members to classify.",
+                        color=discord.Color.green(),
+                    ),
                     view=None,
                 )
                 return
@@ -105,11 +125,17 @@ class _ClassifyView(discord.ui.View):
             self._index += 1
             if self._index >= len(self._unclassified):
                 await interaction.response.edit_message(
-                    embed=discord.Embed(description="All done — no more unclassified members.", color=discord.Color.green()),
+                    embed=discord.Embed(
+                        description="All done — no more unclassified members.",
+                        color=discord.Color.green(),
+                    ),
                     view=None,
                 )
             else:
-                await interaction.response.edit_message(embed=self._build_embed(), view=self)
+                await interaction.response.edit_message(
+                    embed=self._build_embed(), view=self
+                )
+
         return _callback
 
     async def _on_skip(self, interaction: discord.Interaction) -> None:
@@ -119,11 +145,16 @@ class _ClassifyView(discord.ui.View):
         self._index += 1
         if self._index >= len(self._unclassified):
             await interaction.response.edit_message(
-                embed=discord.Embed(description="Reached the end of the list.", color=discord.Color.green()),
+                embed=discord.Embed(
+                    description="Reached the end of the list.",
+                    color=discord.Color.green(),
+                ),
                 view=None,
             )
         else:
-            await interaction.response.edit_message(embed=self._build_embed(), view=self)
+            await interaction.response.edit_message(
+                embed=self._build_embed(), view=self
+            )
 
     async def _on_stop(self, interaction: discord.Interaction) -> None:
         if interaction.user.id != self._invoker_id:
@@ -131,7 +162,10 @@ class _ClassifyView(discord.ui.View):
             return
         classified = self._index
         await interaction.response.edit_message(
-            embed=discord.Embed(description=f"Stopped — classified {classified} member(s) this session.", color=discord.Color.green()),
+            embed=discord.Embed(
+                description=f"Stopped — classified {classified} member(s) this session.",
+                color=discord.Color.green(),
+            ),
             view=None,
         )
         self.stop()
@@ -141,20 +175,25 @@ class _ClassifyView(discord.ui.View):
 # Commands
 # ---------------------------------------------------------------------------
 
+
 def register_gender_commands(bot: Bot, ctx: AppContext) -> None:
     gender_group = app_commands.Group(
         name="gender",
-        description="Classify member gender for NSFW analytics.",
+        description="Tag members by gender for the NSFW analytics breakdown.",
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
-    @gender_group.command(name="set", description="Set or update a member's gender classification.")
-    @app_commands.describe(member="The member to classify.", gender="Gender to assign.")
-    @app_commands.choices(gender=[
-        app_commands.Choice(name="Male", value="male"),
-        app_commands.Choice(name="Female", value="female"),
-        app_commands.Choice(name="Non-binary", value="nonbinary"),
-    ])
+    @gender_group.command(
+        name="set", description="Set or change a member's gender tag."
+    )
+    @app_commands.describe(member="Member to classify.", gender="Gender to assign.")
+    @app_commands.choices(
+        gender=[
+            app_commands.Choice(name="Male", value="male"),
+            app_commands.Choice(name="Female", value="female"),
+            app_commands.Choice(name="Non-binary", value="nonbinary"),
+        ]
+    )
     async def gender_set(
         interaction: discord.Interaction,
         member: discord.Member,
@@ -178,8 +217,10 @@ def register_gender_commands(bot: Bot, ctx: AppContext) -> None:
                 ephemeral=True,
             )
 
-    @gender_group.command(name="check", description="Check a member's current gender classification.")
-    @app_commands.describe(member="The member to check.")
+    @gender_group.command(
+        name="check", description="See a member's current gender tag."
+    )
+    @app_commands.describe(member="Member to check.")
     async def gender_check(interaction: discord.Interaction, member: discord.Member):
         guild_id = interaction.guild_id
         if guild_id is None:
@@ -198,11 +239,16 @@ def register_gender_commands(bot: Bot, ctx: AppContext) -> None:
                 ephemeral=True,
             )
 
-    @gender_group.command(name="classify", description="Walk through unclassified members one at a time.")
+    @gender_group.command(
+        name="classify",
+        description="Step through unclassified members one by one with buttons.",
+    )
     async def gender_classify(interaction: discord.Interaction):
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         all_ids = [m.id for m in guild.members if not m.bot]
@@ -211,12 +257,16 @@ def register_gender_commands(bot: Bot, ctx: AppContext) -> None:
             unclassified = get_unclassified_member_ids(conn, guild.id, all_ids)
 
         if not unclassified:
-            await interaction.response.send_message("All members have been classified.", ephemeral=True)
+            await interaction.response.send_message(
+                "All members have been classified.", ephemeral=True
+            )
             return
 
         view = _ClassifyView(ctx, guild, unclassified, 0, interaction.user.id)
         await interaction.response.send_message(
-            embed=view._build_embed(), view=view, ephemeral=True,
+            embed=view._build_embed(),
+            view=view,
+            ephemeral=True,
         )
 
     bot.tree.add_command(gender_group)

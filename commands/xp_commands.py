@@ -9,9 +9,11 @@ Commands:
 
 Grant allowlist management is handled via /config xp → Manage Grant Allowlist.
 """
+
 from __future__ import annotations
 
 import asyncio
+import io
 import statistics
 import time
 from collections import Counter
@@ -20,8 +22,6 @@ from typing import TYPE_CHECKING, Literal
 
 import discord
 from discord import app_commands
-
-import io
 
 from services.activity_graphs import render_level_histogram
 from services.xp_service import handle_level_progress, maybe_grant_level_role
@@ -90,14 +90,36 @@ async def _collect_backfill_channels(
     return channels
 
 
-def _resolve_leaderboard_timescale(timescale: str) -> tuple[str, str, discord.Color, float | None]:
+def _resolve_leaderboard_timescale(
+    timescale: str,
+) -> tuple[str, str, discord.Color, float | None]:
     now_ts = time.time()
     mapping = {
-        "hour": ("Hourly", "Last 60 minutes", discord.Color.dark_teal(), now_ts - 60 * 60),
+        "hour": (
+            "Hourly",
+            "Last 60 minutes",
+            discord.Color.dark_teal(),
+            now_ts - 60 * 60,
+        ),
         "day": ("Daily", "Last 24 hours", discord.Color.blue(), now_ts - 24 * 60 * 60),
-        "week": ("Weekly", "Last 7 days", discord.Color.teal(), now_ts - 7 * 24 * 60 * 60),
-        "month": ("Monthly", "Last 30 days", discord.Color.orange(), now_ts - 30 * 24 * 60 * 60),
-        "year": ("Yearly", "Last 365 days", discord.Color.brand_green(), now_ts - 365 * 24 * 60 * 60),
+        "week": (
+            "Weekly",
+            "Last 7 days",
+            discord.Color.teal(),
+            now_ts - 7 * 24 * 60 * 60,
+        ),
+        "month": (
+            "Monthly",
+            "Last 30 days",
+            discord.Color.orange(),
+            now_ts - 30 * 24 * 60 * 60,
+        ),
+        "year": (
+            "Yearly",
+            "Last 365 days",
+            discord.Color.brand_green(),
+            now_ts - 365 * 24 * 60 * 60,
+        ),
         "alltime": ("All-Time", "Since tracking began", discord.Color.gold(), None),
     }
     return mapping[timescale]
@@ -126,7 +148,9 @@ def _format_xp_leaderboard_lines(
     return "\n".join(lines)
 
 
-def _format_xp_distribution_summary(member_count: int, median_xp: float, stddev_xp: float) -> str:
+def _format_xp_distribution_summary(
+    member_count: int, median_xp: float, stddev_xp: float
+) -> str:
     return (
         "**Distribution**\n"
         f"Members: **{member_count}**\n"
@@ -159,11 +183,19 @@ def _build_xp_leaderboard_embed(
 
     with ctx.open_db() as conn:
         for field_name, icon, source_key, empty_text in source_specs:
-            entries = get_xp_leaderboard(conn, guild.id, source_key, since_ts=cutoff, limit=5)
-            distribution = get_xp_distribution_stats(conn, guild.id, source_key, since_ts=cutoff)
-            standing = get_user_xp_standing(conn, guild.id, source_key, caller.id, since_ts=cutoff)
+            entries = get_xp_leaderboard(
+                conn, guild.id, source_key, since_ts=cutoff, limit=5
+            )
+            distribution = get_xp_distribution_stats(
+                conn, guild.id, source_key, since_ts=cutoff
+            )
+            standing = get_user_xp_standing(
+                conn, guild.id, source_key, caller.id, since_ts=cutoff
+            )
             stats_line = _format_xp_distribution_summary(
-                distribution.member_count, distribution.median_xp, distribution.stddev_xp
+                distribution.member_count,
+                distribution.median_xp,
+                distribution.stddev_xp,
             )
             if standing.rank is None:
                 user_line = f"Your standing: {caller.mention} has no tracked XP here."
@@ -171,7 +203,9 @@ def _build_xp_leaderboard_embed(
                 user_line = f"Your standing: #{standing.rank} {caller.mention} with `{standing.xp:.2f} XP`"
             embed.add_field(
                 name=f"{icon} {field_name}",
-                value=_format_xp_leaderboard_lines(guild, entries, stats_line, empty_text, user_line),
+                value=_format_xp_leaderboard_lines(
+                    guild, entries, stats_line, empty_text, user_line
+                ),
                 inline=True,
             )
 
@@ -182,16 +216,22 @@ def _build_xp_leaderboard_embed(
 def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
     @bot.tree.command(
         name="xp_leaderboards",
-        description="Show top 5 XP earners for a selected timescale, plus your standing.",
+        description="Top XP earners by source (text, voice, replies, images) and your rank.",
     )
-    @app_commands.describe(timescale="Choose the leaderboard window.")
+    @app_commands.describe(
+        timescale="Time window — hour, day, week, month, year, or alltime."
+    )
     async def xp_leaderboards(
         interaction: discord.Interaction,
-        timescale: Literal["hour", "day", "week", "month", "year", "alltime"] = "alltime",
+        timescale: Literal[
+            "hour", "day", "week", "month", "year", "alltime"
+        ] = "alltime",
     ):
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         caller = (
@@ -213,6 +253,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                 has_events = has_any_xp_events(conn, guild.id)
                 has_xp = has_any_member_xp(conn, guild.id) if not has_events else False
                 return has_events, has_xp
+
         has_events, has_xp = await asyncio.to_thread(_check_xp)
 
         if not has_events:
@@ -227,21 +268,38 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                 description=description,
                 color=discord.Color.blurple(),
             )
-            embed.add_field(name="💬 Text", value="No tracked text XP yet.", inline=True)
-            embed.add_field(name="↩️ Replies", value="No tracked reply XP yet.", inline=True)
-            embed.add_field(name="🎙️ Voice", value="No tracked voice XP yet.", inline=True)
-            embed.add_field(name="🖼️ Image Reacts", value="No tracked image react XP yet.", inline=True)
+            embed.add_field(
+                name="💬 Text", value="No tracked text XP yet.", inline=True
+            )
+            embed.add_field(
+                name="↩️ Replies", value="No tracked reply XP yet.", inline=True
+            )
+            embed.add_field(
+                name="🎙️ Voice", value="No tracked voice XP yet.", inline=True
+            )
+            embed.add_field(
+                name="🖼️ Image Reacts",
+                value="No tracked image react XP yet.",
+                inline=True,
+            )
             embed.set_footer(text="Top 5 by XP source and time window")
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         embed = await asyncio.to_thread(
-            _build_xp_leaderboard_embed, ctx, guild, caller, window_name, subtitle, color, cutoff,
+            _build_xp_leaderboard_embed,
+            ctx,
+            guild,
+            caller,
+            window_name,
+            subtitle,
+            color,
+            cutoff,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @bot.tree.command(name="xp_give", description="Give a member 20 XP.")
-    @app_commands.describe(member="Member to receive the XP.")
+    @bot.tree.command(name="xp_give", description="Award 20 XP to a member.")
+    @app_commands.describe(member="Who to give the XP to.")
     async def xp_give(interaction: discord.Interaction, member: discord.Member):
         if not ctx.can_use_xp_grant(interaction):
             await interaction.response.send_message(
@@ -251,15 +309,21 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         if member.bot:
-            await interaction.response.send_message("Bots cannot receive XP grants.", ephemeral=True)
+            await interaction.response.send_message(
+                "Bots cannot receive XP grants.", ephemeral=True
+            )
             return
 
         if member.id == interaction.user.id:
-            await interaction.response.send_message("You can't grant XP to yourself.", ephemeral=True)
+            await interaction.response.send_message(
+                "You can't grant XP to yourself.", ephemeral=True
+            )
             return
 
         now_ts = time.time()
@@ -291,7 +355,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="xp_excluded_channels",
-        description="List channels and threads where XP is currently disabled.",
+        description="Show which channels have XP earning turned off.",
     )
     @app_commands.default_permissions(manage_guild=True)
     async def xp_excluded_channels(interaction: discord.Interaction):
@@ -302,7 +366,9 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             return
 
         if not ctx.xp_excluded_channel_ids:
-            await interaction.response.send_message("XP is currently enabled in all channels.", ephemeral=True)
+            await interaction.response.send_message(
+                "XP is currently enabled in all channels.", ephemeral=True
+            )
             return
 
         guild = interaction.guild
@@ -311,14 +377,16 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             channel = guild.get_channel(channel_id) if guild else None
             labels.append(channel.mention if channel else f"`{channel_id}`")
 
-        await interaction.response.send_message("XP excluded in: " + ", ".join(labels), ephemeral=True)
+        await interaction.response.send_message(
+            "XP excluded in: " + ", ".join(labels), ephemeral=True
+        )
 
     @bot.tree.command(
         name="xp_backfill_history",
-        description="Scan message history to fill gaps in XP and activity tracking.",
+        description="Scan past messages and award any missing XP. Run once after setup.",
     )
     @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(days="How many days back to scan. Use 0 for all available history.")
+    @app_commands.describe(days="Days of history to scan. 0 = everything available.")
     async def xp_backfill_history(
         interaction: discord.Interaction,
         days: app_commands.Range[int, 0, 3650] = 0,
@@ -331,7 +399,9 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -357,7 +427,9 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
             for channel in all_channels:
                 channel_id: int | None = getattr(channel, "id", None)
                 parent_id = getattr(channel, "parent_id", None)
-                if channel_id is None or not is_channel_xp_eligible(channel_id, parent_id, ctx.xp_excluded_channel_ids):
+                if channel_id is None or not is_channel_xp_eligible(
+                    channel_id, parent_id, ctx.xp_excluded_channel_ids
+                ):
                     continue
 
                 if me and not channel.permissions_for(me).read_message_history:
@@ -383,7 +455,8 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                         # during backfill to avoid per-message API calls at scale.
                         resolved_ref = (
                             message.reference.resolved
-                            if message.reference and isinstance(message.reference.resolved, discord.Message)
+                            if message.reference
+                            and isinstance(message.reference.resolved, discord.Message)
                             else None
                         )
                         is_reply_to_human = bool(
@@ -392,7 +465,11 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                             and resolved_ref.author.id != message.author.id
                         )
 
-                        now_ts = message.created_at.timestamp() if message.created_at else time.time()
+                        now_ts = (
+                            message.created_at.timestamp()
+                            if message.created_at
+                            else time.time()
+                        )
                         normalized_content = normalize_message_content(message.content)
                         channel_pair_state, pair_streak = update_pair_state(
                             channel_pair_state, message.author.id
@@ -402,7 +479,9 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                         prior_ts = None
                         prior_norm = None
                         if message.author.id in backfill_user_state:
-                            prior_ts, prior_norm = backfill_user_state[message.author.id]
+                            prior_ts, prior_norm = backfill_user_state[
+                                message.author.id
+                            ]
 
                         breakdown = calculate_message_xp(
                             MessageXpContext(
@@ -410,7 +489,8 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                                 seconds_since_last_message=(
                                     None if prior_ts is None else now_ts - prior_ts
                                 ),
-                                is_duplicate=bool(normalized_content) and normalized_content == prior_norm,
+                                is_duplicate=bool(normalized_content)
+                                and normalized_content == prior_norm,
                                 is_reply_to_human=is_reply_to_human,
                                 pair_streak=pair_streak,
                             ),
@@ -435,8 +515,24 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                                 2,
                             )
                         text_award = round(max(0.0, award.awarded_xp - reply_award), 2)
-                        record_xp_event(conn, guild.id, message.author.id, XP_SOURCE_TEXT, text_award, now_ts, channel_id=message.channel.id)
-                        record_xp_event(conn, guild.id, message.author.id, XP_SOURCE_REPLY, reply_award, now_ts, channel_id=message.channel.id)
+                        record_xp_event(
+                            conn,
+                            guild.id,
+                            message.author.id,
+                            XP_SOURCE_TEXT,
+                            text_award,
+                            now_ts,
+                            channel_id=message.channel.id,
+                        )
+                        record_xp_event(
+                            conn,
+                            guild.id,
+                            message.author.id,
+                            XP_SOURCE_REPLY,
+                            reply_award,
+                            now_ts,
+                            channel_id=message.channel.id,
+                        )
                         mark_message_processed(
                             conn,
                             guild.id,
@@ -454,7 +550,10 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                             now_ts,
                         )
 
-                        backfill_user_state[message.author.id] = (now_ts, normalized_content)
+                        backfill_user_state[message.author.id] = (
+                            now_ts,
+                            normalized_content,
+                        )
                         stats["messages_processed"] += 1
                         if award.awarded_xp > 0:
                             stats["messages_awarded"] += 1
@@ -464,13 +563,19 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                                 if isinstance(message.author, discord.Member)
                                 else guild.get_member(message.author.id)
                             )
-                            if m and award.new_level >= DEFAULT_XP_SETTINGS.role_grant_level:
+                            if (
+                                m
+                                and award.new_level
+                                >= DEFAULT_XP_SETTINGS.role_grant_level
+                            ):
                                 granted_members[m.id] = m
                 except discord.Forbidden:
                     continue
 
         for m in granted_members.values():
-            await maybe_grant_level_role(m, DEFAULT_XP_SETTINGS.role_grant_level, ctx.level_5_role_id)
+            await maybe_grant_level_role(
+                m, DEFAULT_XP_SETTINGS.role_grant_level, ctx.level_5_role_id
+            )
 
         window_label = "all available history" if days == 0 else f"last {days} days"
         await interaction.followup.send(
@@ -488,11 +593,11 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="xp_level_review",
-        description="Show how long it takes members to reach a given level (avg, mode, std dev).",
+        description="Histogram of how long members take to reach a level.",
     )
     @app_commands.describe(
-        level="The level to measure time-to-reach for (minimum 2).",
-        days="Only include members who reached the level in the last N days.",
+        level="Target level to measure (minimum 2).",
+        days="Only count members who hit this level within the last N days.",
     )
     async def xp_level_review(
         interaction: discord.Interaction,
@@ -507,24 +612,32 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
 
         since_ts: float | None = None
         if days is not None:
-            from datetime import datetime, timezone, timedelta
+            from datetime import datetime, timedelta, timezone
+
             since_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
 
         def _query_durations():
             with ctx.open_db() as conn:
-                return get_time_to_level_seconds(conn, guild.id, level, since_ts=since_ts)
+                return get_time_to_level_seconds(
+                    conn, guild.id, level, since_ts=since_ts
+                )
+
         durations = await asyncio.to_thread(_query_durations)
 
         if not durations:
             xp_needed = xp_required_for_level(level)
-            qualifier = f" in the last {days} day{'s' if days != 1 else ''}" if days else ""
+            qualifier = (
+                f" in the last {days} day{'s' if days != 1 else ''}" if days else ""
+            )
             await interaction.followup.send(
                 f"No members have reached level {level}{qualifier} "
                 f"({xp_needed:.0f} XP required).",
@@ -557,9 +670,13 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
         )
 
         png = await asyncio.to_thread(
-            render_level_histogram, durations,
-            target_level=level, xp_required=xp_needed,
-            mean_s=mean_s, stddev_s=stddev_s, modal_days=modal_days,
+            render_level_histogram,
+            durations,
+            target_level=level,
+            xp_required=xp_needed,
+            mean_s=mean_s,
+            stddev_s=stddev_s,
+            modal_days=modal_days,
         )
         file = discord.File(io.BytesIO(png), filename=f"level_{level}_histogram.png")
         await interaction.followup.send(caption, file=file, ephemeral=True)

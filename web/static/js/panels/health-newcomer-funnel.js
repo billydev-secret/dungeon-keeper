@@ -42,15 +42,24 @@ export function mount(container) {
 
     panel.innerHTML = `
       <header>
-        <h2>Newcomer Activation Funnel</h2>
+        <h2>Newcomer Funnel</h2>
         <div class="subtitle">Activation rate: ${d.activation_rate}%</div>
       </header>
+
+      <details class="panel-about" style="margin:8px 0 14px;">
+        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
+        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+          Tracks new members through five onboarding milestones: joining, sending a first message, receiving a reply, visiting 3+ channels, and returning after 7 days.
+          The <strong style="color:var(--text-normal, #dbdee1);">activation rate</strong> is the percentage who make it all the way through.
+          Big drop-offs between steps reveal where your onboarding experience loses people.
+        </div>
+      </details>
 
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Activation Rate</div>
           <div class="home-card-big">${d.activation_rate}%</div>
-          <div class="home-card-sub">Full funnel completion</div>
+          <div class="home-card-sub">Newcomers who complete all onboarding steps</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Time to First Message</div>

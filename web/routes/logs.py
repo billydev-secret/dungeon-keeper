@@ -1,10 +1,11 @@
 """Live log streaming via Server-Sent Events."""
+
 from __future__ import annotations
 
 import asyncio
 import collections
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse

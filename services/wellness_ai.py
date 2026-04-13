@@ -8,6 +8,7 @@ The system prompt is intentionally tight: warm, concise, no gamification, no
 references to specific channels or content. The generated text is shown to
 the user inside the weekly report DM, so the tone has to match spec §12.
 """
+
 from __future__ import annotations
 
 import logging
@@ -28,9 +29,9 @@ _ENCOURAGEMENT_SYSTEM = (
     "Discord user's weekly wellness summary. Tone: like a supportive friend, "
     "not a coach or app. Rules:\n"
     "  - 1–2 sentences total. Never longer.\n"
-    "  - Speak directly to the user (\"you\").\n"
+    '  - Speak directly to the user ("you").\n'
     "  - Match the warmth in spec §12: validating, never judgemental.\n"
-    "  - No gamification language (\"streak\", \"points\", \"score\", \"win\").\n"
+    '  - No gamification language ("streak", "points", "score", "win").\n'
     "  - No references to specific channels, messages, or content.\n"
     "  - No emojis except 💚 (at most one, optional).\n"
     "  - If the user had a tough week, validate the difficulty without minimizing.\n"
@@ -38,18 +39,12 @@ _ENCOURAGEMENT_SYSTEM = (
     "Output the note text only — no preamble, no quotation marks, no sign-off."
 )
 
-_FALLBACK_GOOD = (
-    "You showed up for yourself this week — that matters more than any number on a screen. 💚"
-)
-_FALLBACK_TOUGH = (
-    "Some weeks are harder than others, and that's okay. Tomorrow is another chance to be gentle with yourself. 💚"
-)
-_FALLBACK_NEUTRAL = (
-    "Thanks for being part of this. Whatever this week looked like, you're showing up — and that counts. 💚"
-)
+_FALLBACK_GOOD = "You showed up for yourself this week — that matters more than any number on a screen. 💚"
+_FALLBACK_TOUGH = "Some weeks are harder than others, and that's okay. Tomorrow is another chance to be gentle with yourself. 💚"
+_FALLBACK_NEUTRAL = "Thanks for being part of this. Whatever this week looked like, you're showing up — and that counts. 💚"
 
 
-def _client() -> "AsyncAnthropic | None":
+def _client() -> AsyncAnthropic | None:
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         return None
@@ -61,7 +56,9 @@ def _client() -> "AsyncAnthropic | None":
     return AsyncAnthropic(api_key=api_key)
 
 
-def _fallback_text(streak_days: int, is_personal_best: bool, compliance_pct: int) -> str:
+def _fallback_text(
+    streak_days: int, is_personal_best: bool, compliance_pct: int
+) -> str:
     if is_personal_best or compliance_pct >= 80:
         return _FALLBACK_GOOD
     if compliance_pct < 40 or streak_days <= 1:
@@ -74,7 +71,7 @@ async def generate_weekly_encouragement(
     streak_days: int,
     is_personal_best: bool,
     compliance_pct: int,
-    db_path: "Path | None" = None,
+    db_path: Path | None = None,
 ) -> str:
     """Return a 1–2 sentence encouragement note for the user's weekly summary.
 
@@ -89,6 +86,7 @@ async def generate_weekly_encouragement(
     system = _ENCOURAGEMENT_SYSTEM
     if db_path is not None:
         from services.ai_config import get_command_model_from_path, get_prompt_from_path
+
         model = get_command_model_from_path(db_path, "ai_prompt_wellness_encouragement")
         system = get_prompt_from_path(db_path, "ai_prompt_wellness_encouragement")
 
@@ -104,6 +102,7 @@ async def generate_weekly_encouragement(
 
     try:
         from anthropic.types import TextBlock
+
         async with client.messages.stream(
             model=model,
             system=system,

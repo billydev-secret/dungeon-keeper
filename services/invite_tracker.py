@@ -6,11 +6,13 @@ Provides:
   - DB storage of invite relationships
   - Query function returning edges compatible with render_connection_web()
 """
+
 from __future__ import annotations
 
 import logging
 import sqlite3
 import time as _time
+
 import discord
 
 log = logging.getLogger("dungeonkeeper.invite_tracker")
@@ -19,6 +21,7 @@ log = logging.getLogger("dungeonkeeper.invite_tracker")
 # ---------------------------------------------------------------------------
 # DB
 # ---------------------------------------------------------------------------
+
 
 def init_invite_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -86,9 +89,15 @@ async def refresh_invite_cache(guild: discord.Guild) -> None:
     try:
         invites = await guild.invites()
         _invite_cache[guild.id] = {inv.code: inv.uses or 0 for inv in invites}
-        log.info("Invite cache refreshed for %s: %d invites tracked.", guild.name, len(invites))
+        log.info(
+            "Invite cache refreshed for %s: %d invites tracked.",
+            guild.name,
+            len(invites),
+        )
     except discord.Forbidden:
-        log.warning("Missing Manage Server permission to cache invites for %s.", guild.name)
+        log.warning(
+            "Missing Manage Server permission to cache invites for %s.", guild.name
+        )
     except discord.HTTPException as exc:
         log.warning("Failed to fetch invites for %s: %s", guild.name, exc)
 

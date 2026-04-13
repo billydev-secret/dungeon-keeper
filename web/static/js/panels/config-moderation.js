@@ -39,7 +39,7 @@ export function mount(container) {
           <div class="field">
             <label>Transcript Channel</label>
             <select name="transcript_channel_id">${channelSelect(channels, m.transcript_channel_id)}</select>
-            <div class="field-hint">Channel for jail/ticket transcripts (falls back to log channel)</div>
+            <div class="field-hint">Where transcripts are posted (falls back to log channel if empty)</div>
           </div>
           <div class="field">
             <label>Mod Role IDs</label>

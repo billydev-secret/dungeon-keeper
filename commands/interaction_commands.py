@@ -5,6 +5,7 @@ Commands:
   /interaction_heatmap  — adjacency-matrix heatmap of interactions
   /interaction_scan     — backfill interaction history from message history
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,29 +34,31 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.interaction_commands")
 
 
-def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
+def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="connection_web",
-        description="Show the web of replies and mentions between server members.",
+        description="Network graph of who replies to and mentions whom.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        member="Focus on this member's direct connections only.",
-        timescale="Time window to consider (default: all time).",
-        min_pct="Hide edges that are less than this % of either user's total interactions (default 5).",
-        layers="When focusing on a member, how many layers of connections to expand (default 2).",
-        limit="Max number of members to include in server-wide view (default 40).",
-        spread="How spread out the graph is — higher = more space between nodes (default 1.0).",
-        max_per_node="Keep only the top N edges per node by weight. 0 = no limit (default 0).",
+        member="Focus on one person's connections. Omit for server-wide.",
+        timescale="How far back to look: hour, day, week, month, or all time.",
+        min_pct="Hide weak links below this % of a user's total interactions.",
+        layers="Hops to expand from the focused member (1-5).",
+        limit="Max members in the server-wide view.",
+        spread="Visual spacing between nodes. Higher = more spread out.",
+        max_per_node="Keep only the top N strongest connections per person. 0 = no limit.",
     )
-    @app_commands.choices(timescale=[
-        app_commands.Choice(name="hour",  value="hour"),
-        app_commands.Choice(name="day",   value="day"),
-        app_commands.Choice(name="week",  value="week"),
-        app_commands.Choice(name="month", value="month"),
-        app_commands.Choice(name="all time", value="all"),
-    ])
+    @app_commands.choices(
+        timescale=[
+            app_commands.Choice(name="hour", value="hour"),
+            app_commands.Choice(name="day", value="day"),
+            app_commands.Choice(name="week", value="week"),
+            app_commands.Choice(name="month", value="month"),
+            app_commands.Choice(name="all time", value="all"),
+        ]
+    )
     async def connection_web(
         interaction: discord.Interaction,
         member: discord.User | None = None,
@@ -80,17 +83,28 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        _TIMESCALE_SECONDS = {"hour": 3600, "day": 86400, "week": 604800, "month": 2592000}
-        after_ts = int(_time.time()) - _TIMESCALE_SECONDS[timescale] if timescale in _TIMESCALE_SECONDS else None
+        _TIMESCALE_SECONDS = {
+            "hour": 3600,
+            "day": 86400,
+            "week": 604800,
+            "month": 2592000,
+        }
+        after_ts = (
+            int(_time.time()) - _TIMESCALE_SECONDS[timescale]
+            if timescale in _TIMESCALE_SECONDS
+            else None
+        )
 
         def _query_web():
             with ctx.open_db() as conn:
                 return query_connection_web(
-                    conn, guild.id,
+                    conn,
+                    guild.id,
                     min_weight=1,
                     limit_users=limit,
                     after_ts=after_ts,
                 )
+
         all_edges = await asyncio.to_thread(_query_web)
 
         # Total interaction weight per node — used for percentage filtering
@@ -133,7 +147,8 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
 
             # Collect every edge whose both endpoints are included and pass the threshold
             edges = [
-                (u, v, w) for u, v, w in all_edges
+                (u, v, w)
+                for u, v, w in all_edges
                 if u in included_ids and v in included_ids and _pct_passes(u, v, w)
             ]
             no_data_msg = (
@@ -159,9 +174,12 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                 adj.setdefault(v, []).append((u, v, w))
             for node, ne in adj.items():
                 ne.sort(key=lambda e: e[2], reverse=True)
-                node_top[node] = {(ev if eu == node else eu) for eu, ev, _ in ne[:max_per_node]}
+                node_top[node] = {
+                    (ev if eu == node else eu) for eu, ev, _ in ne[:max_per_node]
+                }
             edges = [
-                (u, v, w) for u, v, w in edges
+                (u, v, w)
+                for u, v, w in edges
                 if v in node_top.get(u, set()) and u in node_top.get(v, set())
             ]
 
@@ -181,7 +199,9 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                         continue
                     reachable.add(cur)
                     stack.extend(_adj.get(cur, set()) - reachable)
-                edges = [(u, v, w) for u, v, w in edges if u in reachable and v in reachable]
+                edges = [
+                    (u, v, w) for u, v, w in edges if u in reachable and v in reachable
+                ]
 
         if not edges:
             await interaction.followup.send(no_data_msg, ephemeral=True)
@@ -193,7 +213,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
         name_map: dict[int, str] = {}
         for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i:i + 100]
+            batch = candidate_ids[i : i + 100]
             try:
                 fetched = await guild.query_members(user_ids=batch, limit=100)
                 for m in fetched:
@@ -236,12 +256,12 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="interaction_scan",
-        description="Scan message history to build the reply/mention interaction graph.",
+        description="Backfill the interaction graph from message history. Run once after setup.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        days="How many days back to scan. Use 0 for all available history.",
-        reset="Clear all existing interaction data for this server before scanning (fixes inflated counts).",
+        days="Days of history to scan. 0 = everything available.",
+        reset="Wipe existing data first (use if counts look inflated from repeat scans).",
     )
     async def interaction_scan(
         interaction: discord.Interaction,
@@ -263,6 +283,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         from datetime import datetime, timedelta, timezone
+
         now_dt = datetime.now(timezone.utc)
         after_dt = None if days == 0 else now_dt - timedelta(days=days)
 
@@ -317,7 +338,8 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                             else None
                         )
                         mention_ids = [
-                            u.id for u in message.mentions
+                            u.id
+                            for u in message.mentions
                             if not u.bot and u.id != message.author.id
                         ]
 
@@ -335,7 +357,9 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                         )
 
                         for reaction in message.reactions:
-                            set_reaction_count(conn, message.id, str(reaction.emoji), reaction.count)
+                            set_reaction_count(
+                                conn, message.id, str(reaction.emoji), reaction.count
+                            )
 
                         # Interaction graph targets
                         targets: list[int] = list(mention_ids)
@@ -343,12 +367,19 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                             message.reference.resolved, discord.Message
                         ):
                             ref = message.reference.resolved
-                            if not ref.author.bot and ref.author.id != message.author.id and ref.author.id not in targets:
+                            if (
+                                not ref.author.bot
+                                and ref.author.id != message.author.id
+                                and ref.author.id not in targets
+                            ):
                                 targets.insert(0, ref.author.id)
 
                         if targets:
                             record_interactions(
-                                conn, guild.id, message.author.id, targets,
+                                conn,
+                                guild.id,
+                                message.author.id,
+                                targets,
                                 ts=msg_ts,
                                 message_id=message.id,
                             )
@@ -357,7 +388,11 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     log.warning("Could not scan channel #%s: %s", ch.name, exc)
 
-        window_label = "all available history" if days == 0 else f"last {days} day{'s' if days != 1 else ''}"
+        window_label = (
+            "all available history"
+            if days == 0
+            else f"last {days} day{'s' if days != 1 else ''}"
+        )
         reset_note = " (existing data was cleared first)" if reset else ""
         await interaction.followup.send(
             f"Interaction scan complete for {window_label}{reset_note}.\n"
@@ -369,21 +404,23 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="interaction_heatmap",
-        description="Show a heatmap of reply/mention interactions between server members.",
+        description="Matrix heatmap of who interacts with whom via replies and mentions.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        timescale="Time window to consider (default: all time).",
-        min_pct="Hide edges that are less than this % of either user's total interactions (default 5).",
-        limit="Max number of members to include (default 30).",
+        timescale="How far back to look: hour, day, week, month, or all time.",
+        min_pct="Hide weak links below this % of a user's total interactions.",
+        limit="Max members to include.",
     )
-    @app_commands.choices(timescale=[
-        app_commands.Choice(name="hour",  value="hour"),
-        app_commands.Choice(name="day",   value="day"),
-        app_commands.Choice(name="week",  value="week"),
-        app_commands.Choice(name="month", value="month"),
-        app_commands.Choice(name="all time", value="all"),
-    ])
+    @app_commands.choices(
+        timescale=[
+            app_commands.Choice(name="hour", value="hour"),
+            app_commands.Choice(name="day", value="day"),
+            app_commands.Choice(name="week", value="week"),
+            app_commands.Choice(name="month", value="month"),
+            app_commands.Choice(name="all time", value="all"),
+        ]
+    )
     async def interaction_heatmap(
         interaction: discord.Interaction,
         timescale: str = "all",
@@ -404,17 +441,28 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        _TIMESCALE_SECONDS = {"hour": 3600, "day": 86400, "week": 604800, "month": 2592000}
-        after_ts = int(_time.time()) - _TIMESCALE_SECONDS[timescale] if timescale in _TIMESCALE_SECONDS else None
+        _TIMESCALE_SECONDS = {
+            "hour": 3600,
+            "day": 86400,
+            "week": 604800,
+            "month": 2592000,
+        }
+        after_ts = (
+            int(_time.time()) - _TIMESCALE_SECONDS[timescale]
+            if timescale in _TIMESCALE_SECONDS
+            else None
+        )
 
         def _query_heatmap():
             with ctx.open_db() as conn:
                 return query_connection_web(
-                    conn, guild.id,
+                    conn,
+                    guild.id,
                     min_weight=1,
                     limit_users=limit,
                     after_ts=after_ts,
                 )
+
         all_edges = await asyncio.to_thread(_query_heatmap)
 
         # Percentage filtering (same logic as connection_web)
@@ -425,7 +473,8 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         threshold = min_pct / 100.0
         edges = [
-            (u, v, w) for u, v, w in all_edges
+            (u, v, w)
+            for u, v, w in all_edges
             if w >= threshold * min(node_total.get(u, 1), node_total.get(v, 1))
         ]
 
@@ -442,7 +491,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
         name_map: dict[int, str] = {}
         for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i:i + 100]
+            batch = candidate_ids[i : i + 100]
             try:
                 fetched = await guild.query_members(user_ids=batch, limit=100)
                 for m in fetched:
@@ -473,18 +522,20 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
             ),
         )
         await interaction.followup.send(
-            file=discord.File(io.BytesIO(chart_bytes), filename="interaction_heatmap.png"),
+            file=discord.File(
+                io.BytesIO(chart_bytes), filename="interaction_heatmap.png"
+            ),
             ephemeral=True,
         )
 
     @bot.tree.command(
         name="invite_web",
-        description="Show who invited whom as a network graph.",
+        description="Network graph of who invited whom.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        member="Focus on this member's invite tree only.",
-        spread="How spread out the graph is (default 1.0).",
+        member="Focus on one person's invite tree. Omit for everyone.",
+        spread="Visual spacing between nodes. Higher = more spread out.",
     )
     async def invite_web(
         interaction: discord.Interaction,
@@ -493,13 +544,15 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
     ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True,
+                "You don't have permission to use this command.",
+                ephemeral=True,
             )
             return
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True,
+                "This command only works in a server.",
+                ephemeral=True,
             )
             return
 
@@ -508,6 +561,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         def _query_invites():
             with ctx.open_db() as conn:
                 return query_invite_web(conn, guild.id)
+
         all_edges = await asyncio.to_thread(_query_invites)
 
         if member is not None:
@@ -516,14 +570,16 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
             changed = True
             while changed:
                 changed = False
-                for u, v, w in all_edges:
+                for u, v, _w in all_edges:
                     if u in included and v not in included:
                         included.add(v)
                         changed = True
                     elif v in included and u not in included:
                         included.add(u)
                         changed = True
-            edges = [(u, v, w) for u, v, w in all_edges if u in included and v in included]
+            edges = [
+                (u, v, w) for u, v, w in all_edges if u in included and v in included
+            ]
         else:
             edges = all_edges
 
@@ -538,7 +594,7 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
         name_map: dict[int, str] = {}
         for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i:i + 100]
+            batch = candidate_ids[i : i + 100]
             try:
                 fetched = await guild.query_members(user_ids=batch, limit=100)
                 for m in fetched:
@@ -561,7 +617,8 @@ def register_interaction_commands(bot: "Bot", ctx: "AppContext") -> None:
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
         if not edges:
             await interaction.followup.send(
-                "No invite edges with resolvable users found.", ephemeral=True,
+                "No invite edges with resolvable users found.",
+                ephemeral=True,
             )
             return
 

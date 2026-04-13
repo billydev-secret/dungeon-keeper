@@ -4,6 +4,7 @@ Records current display names, then shuffles nicknames among members who
 have been active in at least 3 of the last 5 days.  A restore option sets
 everyone back to their original name.
 """
+
 from __future__ import annotations
 
 import logging
@@ -71,6 +72,7 @@ def _derangement(items: list[str], own: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
+
 
 def _init_table(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -159,20 +161,23 @@ def _excluded_user_ids(conn: sqlite3.Connection, guild_id: int) -> set[int]:
 # Command
 # ---------------------------------------------------------------------------
 
-def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
+
+def register_foolsday_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="foolsday",
-        description="April Fools name shuffle — randomise or restore member nicknames.",
+        description="Shuffle or restore member nicknames for April Fools.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        action="shuffle = randomise names, restore = set names back to original.",
+        action="shuffle = randomize names, restore = put them back.",
     )
-    @app_commands.choices(action=[
-        app_commands.Choice(name="shuffle", value="shuffle"),
-        app_commands.Choice(name="restore", value="restore"),
-    ])
+    @app_commands.choices(
+        action=[
+            app_commands.Choice(name="shuffle", value="shuffle"),
+            app_commands.Choice(name="restore", value="restore"),
+        ]
+    )
     async def foolsday(
         interaction: discord.Interaction,
         action: str,
@@ -198,7 +203,11 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             if action == "shuffle":
                 # Find active members
                 active_ids = _active_user_ids(conn, guild.id)
-                log.info("Foolsday shuffle initiated by %s — %d active user(s) found", interaction.user, len(active_ids))
+                log.info(
+                    "Foolsday shuffle initiated by %s — %d active user(s) found",
+                    interaction.user,
+                    len(active_ids),
+                )
                 if len(active_ids) < 2:
                     await interaction.followup.send(
                         "Not enough active members to shuffle (need at least 2).",
@@ -232,7 +241,11 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
                 log.info(
                     "Foolsday candidates: %d renameable, %d excluded, %d bots/missing, %d above bot role, owner skipped=%s",
-                    len(candidates), skipped_excluded, skipped_bot, skipped_role, skipped_owner,
+                    len(candidates),
+                    skipped_excluded,
+                    skipped_bot,
+                    skipped_role,
+                    skipped_owner,
                 )
 
                 if len(candidates) < 2:
@@ -256,24 +269,42 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 failed = 0
                 for member, new_name in zip(candidates, names):
                     try:
-                        log.debug("Renaming %s (%d): %r -> %r", member, member.id, member.display_name, new_name)
-                        await member.edit(nick=new_name, reason="April Fools name shuffle")
+                        log.debug(
+                            "Renaming %s (%d): %r -> %r",
+                            member,
+                            member.id,
+                            member.display_name,
+                            new_name,
+                        )
+                        await member.edit(
+                            nick=new_name, reason="April Fools name shuffle"
+                        )
                         renamed += 1
                     except (discord.Forbidden, discord.HTTPException) as exc:
-                        log.warning("Could not rename %s (%d): %s", member, member.id, exc)
+                        log.warning(
+                            "Could not rename %s (%d): %s", member, member.id, exc
+                        )
                         failed += 1
 
-                log.info("Foolsday shuffle complete: %d renamed, %d failed", renamed, failed)
+                log.info(
+                    "Foolsday shuffle complete: %d renamed, %d failed", renamed, failed
+                )
                 msg = f"Shuffled **{renamed}** member nicknames."
                 if failed:
-                    msg += f"\nFailed to rename **{failed}** members (permission issues)."
+                    msg += (
+                        f"\nFailed to rename **{failed}** members (permission issues)."
+                    )
                 msg += "\nUse `/foolsday action:restore` to undo."
                 await interaction.followup.send(msg, ephemeral=True)
 
             else:
                 # Restore
                 saved = _load_names(conn, guild.id)
-                log.info("Foolsday restore initiated by %s — %d saved name(s)", interaction.user, len(saved))
+                log.info(
+                    "Foolsday restore initiated by %s — %d saved name(s)",
+                    interaction.user,
+                    len(saved),
+                )
                 if not saved:
                     await interaction.followup.send(
                         "No saved names found — nothing to restore.",
@@ -291,14 +322,24 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                     # (i.e. they had no nickname before)
                     nick = None if original_name == m.name else original_name
                     try:
-                        log.debug("Restoring %s (%d): %r -> %r", m, m.id, m.display_name, original_name)
+                        log.debug(
+                            "Restoring %s (%d): %r -> %r",
+                            m,
+                            m.id,
+                            m.display_name,
+                            original_name,
+                        )
                         await m.edit(nick=nick, reason="April Fools restore")
                         restored += 1
                     except (discord.Forbidden, discord.HTTPException) as exc:
                         log.warning("Could not restore %s (%d): %s", m, m.id, exc)
                         failed += 1
 
-                log.info("Foolsday restore complete: %d restored, %d failed", restored, failed)
+                log.info(
+                    "Foolsday restore complete: %d restored, %d failed",
+                    restored,
+                    failed,
+                )
                 _clear_names(conn, guild.id)
 
                 msg = f"Restored **{restored}** member nicknames."
@@ -308,26 +349,40 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="foolsday_exclude",
-        description="Opt out of the April Fools name shuffle (mods can exclude others).",
+        description="Opt out of the name shuffle. Mods can exclude others.",
     )
-    @app_commands.describe(user="(Mod only) The member to exclude. Leave blank to exclude yourself.")
-    async def foolsday_exclude(interaction: discord.Interaction, user: discord.Member | None = None) -> None:
+    @app_commands.describe(user="Member to exclude. Leave blank to exclude yourself.")
+    async def foolsday_exclude(
+        interaction: discord.Interaction, user: discord.Member | None = None
+    ) -> None:
         # Non-mods can only exclude themselves
-        if user is not None and user.id != interaction.user.id and not ctx.is_mod(interaction):
+        if (
+            user is not None
+            and user.id != interaction.user.id
+            and not ctx.is_mod(interaction)
+        ):
             await interaction.response.send_message(
                 "You can only exclude yourself. Run `/foolsday_exclude` with no user to opt out.",
                 ephemeral=True,
             )
             return
 
-        target = user or (interaction.guild.get_member(interaction.user.id) if interaction.guild else None)
+        target = user or (
+            interaction.guild.get_member(interaction.user.id)
+            if interaction.guild
+            else None
+        )
         if target is None:
-            await interaction.response.send_message("Could not resolve member.", ephemeral=True)
+            await interaction.response.send_message(
+                "Could not resolve member.", ephemeral=True
+            )
             return
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -349,16 +404,29 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 # Restore the excluded user to their original name
                 nick = None if original_name == target.name else original_name
                 try:
-                    log.info("Foolsday exclude: restoring %s (%d) to %r", target, target.id, original_name)
-                    await target.edit(nick=nick, reason="April Fools — excluded, restoring original name")
+                    log.info(
+                        "Foolsday exclude: restoring %s (%d) to %r",
+                        target,
+                        target.id,
+                        original_name,
+                    )
+                    await target.edit(
+                        nick=nick,
+                        reason="April Fools — excluded, restoring original name",
+                    )
                     details.append(f"Restored {target.mention} to their original name.")
                 except (discord.Forbidden, discord.HTTPException) as exc:
-                    log.warning("Foolsday exclude: could not restore %s (%d): %s", target, target.id, exc)
+                    log.warning(
+                        "Foolsday exclude: could not restore %s (%d): %s",
+                        target,
+                        target.id,
+                        exc,
+                    )
                     details.append(f"Could not restore {target.mention}'s name: {exc}")
 
                 # Find whoever is currently wearing the excluded user's original name
                 # and give them the name the excluded user was wearing
-                for uid, orig in saved.items():
+                for uid in saved:
                     if uid == target.id:
                         continue
                     m = guild.get_member(uid)
@@ -368,12 +436,25 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                         try:
                             log.info(
                                 "Foolsday exclude: reassigning %s (%d) from %r to %r",
-                                m, m.id, m.display_name, current_nick,
+                                m,
+                                m.id,
+                                m.display_name,
+                                current_nick,
                             )
-                            await m.edit(nick=current_nick, reason="April Fools — reassigned after exclusion")
-                            details.append(f"Reassigned {m.mention} to a different name.")
+                            await m.edit(
+                                nick=current_nick,
+                                reason="April Fools — reassigned after exclusion",
+                            )
+                            details.append(
+                                f"Reassigned {m.mention} to a different name."
+                            )
                         except (discord.Forbidden, discord.HTTPException) as exc:
-                            log.warning("Foolsday exclude: could not reassign %s (%d): %s", m, m.id, exc)
+                            log.warning(
+                                "Foolsday exclude: could not reassign %s (%d): %s",
+                                m,
+                                m.id,
+                                exc,
+                            )
                             details.append(f"Could not reassign {m.mention}: {exc}")
                         break
 
@@ -391,25 +472,39 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="foolsday_join",
-        description="Join the active April Fools name shuffle (mods can add others).",
+        description="Join the active name shuffle. Mods can add others.",
     )
-    @app_commands.describe(user="(Mod only) The member to add. Leave blank to join yourself.")
-    async def foolsday_join(interaction: discord.Interaction, user: discord.Member | None = None) -> None:
-        if user is not None and user.id != interaction.user.id and not ctx.is_mod(interaction):
+    @app_commands.describe(user="Member to add. Leave blank to join yourself.")
+    async def foolsday_join(
+        interaction: discord.Interaction, user: discord.Member | None = None
+    ) -> None:
+        if (
+            user is not None
+            and user.id != interaction.user.id
+            and not ctx.is_mod(interaction)
+        ):
             await interaction.response.send_message(
                 "You can only add yourself. Run `/foolsday_join` with no user to opt in.",
                 ephemeral=True,
             )
             return
 
-        target = user or (interaction.guild.get_member(interaction.user.id) if interaction.guild else None)
+        target = user or (
+            interaction.guild.get_member(interaction.user.id)
+            if interaction.guild
+            else None
+        )
         if target is None:
-            await interaction.response.send_message("Could not resolve member.", ephemeral=True)
+            await interaction.response.send_message(
+                "Could not resolve member.", ephemeral=True
+            )
             return
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -426,10 +521,14 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 return
 
             original_for_target = saved.get(target.id)
-            if original_for_target is not None and target.display_name != original_for_target:
+            if (
+                original_for_target is not None
+                and target.display_name != original_for_target
+            ):
                 # Already in the shuffle and actually renamed
                 await interaction.followup.send(
-                    f"{target.mention} is already in the shuffle.", ephemeral=True,
+                    f"{target.mention} is already in the shuffle.",
+                    ephemeral=True,
                 )
                 return
 
@@ -451,7 +550,8 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
             if not swap_candidates:
                 await interaction.followup.send(
-                    "No active participants to swap with.", ephemeral=True,
+                    "No active participants to swap with.",
+                    ephemeral=True,
                 )
                 return
 
@@ -469,33 +569,67 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             # Swap: target gets partner's current nick, partner gets target's original
             details: list[str] = []
             try:
-                log.debug("Foolsday join: %s (%d) %r -> %r", target, target.id, target_original, partner_current)
-                await target.edit(nick=partner_current, reason="April Fools — joined shuffle")
+                log.debug(
+                    "Foolsday join: %s (%d) %r -> %r",
+                    target,
+                    target.id,
+                    target_original,
+                    partner_current,
+                )
+                await target.edit(
+                    nick=partner_current, reason="April Fools — joined shuffle"
+                )
                 details.append(f"{target.mention} joined the shuffle.")
             except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Foolsday join: could not rename %s (%d): %s", target, target.id, exc)
+                log.warning(
+                    "Foolsday join: could not rename %s (%d): %s",
+                    target,
+                    target.id,
+                    exc,
+                )
                 details.append(f"Could not rename {target.mention}: {exc}")
 
             try:
-                log.debug("Foolsday join: swapping %s (%d) %r -> %r", partner, partner.id, partner_current, target_original)
-                await partner.edit(nick=target_original, reason="April Fools — swapped after new join")
+                log.debug(
+                    "Foolsday join: swapping %s (%d) %r -> %r",
+                    partner,
+                    partner.id,
+                    partner_current,
+                    target_original,
+                )
+                await partner.edit(
+                    nick=target_original, reason="April Fools — swapped after new join"
+                )
                 details.append(f"Swapped {partner.mention} to a new name.")
             except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Foolsday join: could not rename %s (%d): %s", partner, partner.id, exc)
+                log.warning(
+                    "Foolsday join: could not rename %s (%d): %s",
+                    partner,
+                    partner.id,
+                    exc,
+                )
                 details.append(f"Could not rename {partner.mention}: {exc}")
 
-            log.info("Foolsday: %s added %s (%d) to shuffle, swapped with %s (%d)",
-                     interaction.user, target, target.id, partner, partner.id)
+            log.info(
+                "Foolsday: %s added %s (%d) to shuffle, swapped with %s (%d)",
+                interaction.user,
+                target,
+                target.id,
+                partner,
+                partner.id,
+            )
 
         await interaction.followup.send("\n".join(details), ephemeral=True)
 
     @bot.tree.command(
         name="foolsday_include",
-        description="Remove a user from the April Fools exclusion list.",
+        description="Remove someone from the exclusion list so they rejoin the shuffle.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(user="The member to include again.")
-    async def foolsday_include(interaction: discord.Interaction, user: discord.Member) -> None:
+    async def foolsday_include(
+        interaction: discord.Interaction, user: discord.Member
+    ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
@@ -503,7 +637,9 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             return
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         with ctx.open_db() as conn:
@@ -513,11 +649,14 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 (guild.id, user.id),
             )
         log.info("Foolsday: %s re-included %s (%d)", interaction.user, user, user.id)
-        await interaction.response.send_message(f"{user.mention} is no longer excluded from foolsday shuffle.", ephemeral=True)
+        await interaction.response.send_message(
+            f"{user.mention} is no longer excluded from foolsday shuffle.",
+            ephemeral=True,
+        )
 
     @bot.tree.command(
         name="foolsday_exclusions",
-        description="List users excluded from the April Fools name shuffle.",
+        description="Show who is excluded from the name shuffle.",
     )
     @app_commands.default_permissions(manage_guild=True)
     async def foolsday_exclusions(interaction: discord.Interaction) -> None:
@@ -528,7 +667,9 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             return
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         with ctx.open_db() as conn:
@@ -536,7 +677,9 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             excluded = _excluded_user_ids(conn, guild.id)
 
         if not excluded:
-            await interaction.response.send_message("No users are excluded.", ephemeral=True)
+            await interaction.response.send_message(
+                "No users are excluded.", ephemeral=True
+            )
             return
 
         lines: list[str] = []
@@ -553,16 +696,29 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
     # ------------------------------------------------------------------
 
     class _RepairSelect(discord.ui.Select["_RepairView"]):
-        def __init__(self, options: list[discord.SelectOption], repair_view: "_RepairView"):
-            super().__init__(placeholder="Pick the user this name belongs to…", options=options)
+        def __init__(
+            self, options: list[discord.SelectOption], repair_view: _RepairView
+        ):
+            super().__init__(
+                placeholder="Pick the user this name belongs to…", options=options
+            )
             self.repair_view = repair_view
 
         async def callback(self, interaction: discord.Interaction) -> None:
             await self.repair_view.handle_select(interaction, self.values[0])
 
     class _RepairPageButton(discord.ui.Button["_RepairView"]):
-        def __init__(self, label: str, repair_view: "_RepairView", direction: int, *, disabled: bool = False):
-            super().__init__(label=label, style=discord.ButtonStyle.secondary, disabled=disabled)
+        def __init__(
+            self,
+            label: str,
+            repair_view: _RepairView,
+            direction: int,
+            *,
+            disabled: bool = False,
+        ):
+            super().__init__(
+                label=label, style=discord.ButtonStyle.secondary, disabled=disabled
+            )
             self.repair_view = repair_view
             self.direction = direction
 
@@ -570,7 +726,7 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             await self.repair_view.handle_page(interaction, self.direction)
 
     class _RepairSkipButton(discord.ui.Button["_RepairView"]):
-        def __init__(self, repair_view: "_RepairView"):
+        def __init__(self, repair_view: _RepairView):
             super().__init__(label="Skip", style=discord.ButtonStyle.danger)
             self.repair_view = repair_view
 
@@ -634,11 +790,21 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
             # Pagination buttons if needed
             if self._total_pages > 1:
-                self.add_item(_RepairPageButton("◀ Prev", self, -1, disabled=self.page == 0))
-                self.add_item(_RepairPageButton("Next ▶", self, 1, disabled=self.page >= self._total_pages - 1))
+                self.add_item(
+                    _RepairPageButton("◀ Prev", self, -1, disabled=self.page == 0)
+                )
+                self.add_item(
+                    _RepairPageButton(
+                        "Next ▶", self, 1, disabled=self.page >= self._total_pages - 1
+                    )
+                )
 
         def _prompt(self) -> str:
-            page_info = f" (page {self.page + 1}/{self._total_pages})" if self._total_pages > 1 else ""
+            page_info = (
+                f" (page {self.page + 1}/{self._total_pages})"
+                if self._total_pages > 1
+                else ""
+            )
             return (
                 f"**Name {self.index + 1} of {len(self.names)}**\n"
                 f"# `{self.names[self.index]}`\n"
@@ -650,22 +816,31 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             for name, uid in self.assignments.items():
                 lines.append(f"- `{name}` → <@{uid}>")
             if self.skipped:
-                lines.append(f"\n**Skipped ({len(self.skipped)}):** " + ", ".join(f"`{n}`" for n in self.skipped))
+                lines.append(
+                    f"\n**Skipped ({len(self.skipped)}):** "
+                    + ", ".join(f"`{n}`" for n in self.skipped)
+                )
             return "\n".join(lines)
 
-        async def handle_select(self, interaction: discord.Interaction, value: str) -> None:
+        async def handle_select(
+            self, interaction: discord.Interaction, value: str
+        ) -> None:
             if value == "none":
                 await interaction.response.defer()
                 return
             chosen = self.member_map.get(value)
             if chosen is None:
-                await interaction.response.edit_message(content="User not found.\n\n" + self._prompt(), view=self)
+                await interaction.response.edit_message(
+                    content="User not found.\n\n" + self._prompt(), view=self
+                )
                 return
 
             name = self.names[self.index]
 
             if chosen.id in self.assignments.values():
-                already = next(n for n, uid in self.assignments.items() if uid == chosen.id)
+                already = next(
+                    n for n, uid in self.assignments.items() if uid == chosen.id
+                )
                 await interaction.response.edit_message(
                     content=(
                         f"**{chosen.name}** was already assigned to `{already}`.\n"
@@ -683,12 +858,24 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             if member is not None:
                 nick = None if name == member.name else name
                 try:
-                    await member.edit(nick=nick, reason="April Fools repair — restoring original name")
+                    await member.edit(
+                        nick=nick, reason="April Fools repair — restoring original name"
+                    )
                     self.restored += 1
-                    log.info("Foolsday repair: restored %s (%d) to %r", member, member.id, name)
+                    log.info(
+                        "Foolsday repair: restored %s (%d) to %r",
+                        member,
+                        member.id,
+                        name,
+                    )
                 except (discord.Forbidden, discord.HTTPException) as exc:
                     self.failed += 1
-                    log.warning("Foolsday repair: could not restore %s (%d): %s", member, member.id, exc)
+                    log.warning(
+                        "Foolsday repair: could not restore %s (%d): %s",
+                        member,
+                        member.id,
+                        exc,
+                    )
 
             # Update DB immediately
             with self.open_db_fn() as conn:
@@ -711,20 +898,30 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             if self.index < len(self.names):
                 self.page = 0
                 self._rebuild_select()
-                await interaction.response.edit_message(content=self._prompt(), view=self)
+                await interaction.response.edit_message(
+                    content=self._prompt(), view=self
+                )
             else:
                 self.stop()
-                await interaction.response.edit_message(content="Applying fixes…", view=None)
+                await interaction.response.edit_message(
+                    content="Applying fixes…", view=None
+                )
                 await self._apply(interaction)
 
-        async def handle_page(self, interaction: discord.Interaction, direction: int) -> None:
+        async def handle_page(
+            self, interaction: discord.Interaction, direction: int
+        ) -> None:
             self.page = max(0, min(self._total_pages - 1, self.page + direction))
             self._rebuild_select()
             await interaction.response.edit_message(content=self._prompt(), view=self)
 
         async def _apply(self, interaction: discord.Interaction) -> None:
-            log.info("Foolsday repair complete: %d restored, %d failed, %d skipped",
-                     self.restored, self.failed, len(self.skipped))
+            log.info(
+                "Foolsday repair complete: %d restored, %d failed, %d skipped",
+                self.restored,
+                self.failed,
+                len(self.skipped),
+            )
             summary = self._summary()
             summary += f"\n\nRestored **{self.restored}** nicknames."
             if self.failed:
@@ -733,23 +930,34 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             await interaction.edit_original_response(content=summary)
 
         async def on_timeout(self) -> None:
-            log.info("Foolsday repair timed out at name %d/%d", self.index + 1, len(self.names))
+            log.info(
+                "Foolsday repair timed out at name %d/%d",
+                self.index + 1,
+                len(self.names),
+            )
 
     @bot.tree.command(
         name="foolsday_samename",
-        description="Set everyone in the shuffle to the same random name (or a custom one).",
+        description="Give every shuffled member the same name. Random or custom.",
     )
     @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(name="Custom name to use. Leave blank for a random name from the pool.")
-    async def foolsday_samename(interaction: discord.Interaction, name: str | None = None) -> None:
+    @app_commands.describe(
+        name="Custom name to use. Leave blank for a random name from the pool."
+    )
+    async def foolsday_samename(
+        interaction: discord.Interaction, name: str | None = None
+    ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True,
+                "You don't have permission to use this command.",
+                ephemeral=True,
             )
             return
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -760,7 +968,8 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         if not saved:
             await interaction.followup.send(
-                "No shuffle is currently active.", ephemeral=True,
+                "No shuffle is currently active.",
+                ephemeral=True,
             )
             return
 
@@ -791,11 +1000,18 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 await m.edit(nick=name, reason="April Fools — same name mode")
                 renamed += 1
             except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Foolsday samename: could not rename %s (%d): %s", m, m.id, exc)
+                log.warning(
+                    "Foolsday samename: could not rename %s (%d): %s", m, m.id, exc
+                )
                 failed += 1
 
-        log.info("Foolsday samename: set %d members to %r (%d failed), initiated by %s",
-                 renamed, name, failed, interaction.user)
+        log.info(
+            "Foolsday samename: set %d members to %r (%d failed), initiated by %s",
+            renamed,
+            name,
+            failed,
+            interaction.user,
+        )
 
         msg = f"Set **{renamed}** members to `{name}`."
         if failed:
@@ -805,18 +1021,21 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="foolsday_repair",
-        description="Restore original nicknames for any member the bot has renamed.",
+        description="Fix broken name mappings by walking through each one.",
     )
     @app_commands.default_permissions(manage_guild=True)
     async def foolsday_repair(interaction: discord.Interaction) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True,
+                "You don't have permission to use this command.",
+                ephemeral=True,
             )
             return
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         # Gather all renameable members (no activity filter)
@@ -834,7 +1053,8 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         if not members:
             await interaction.response.send_message(
-                "No renameable members found.", ephemeral=True,
+                "No renameable members found.",
+                ephemeral=True,
             )
             return
 
@@ -904,12 +1124,16 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
                 continue
 
             try:
-                await m.edit(nick=original_nick, reason="April Fools repair — audit log restore")
+                await m.edit(
+                    nick=original_nick, reason="April Fools repair — audit log restore"
+                )
                 restored += 1
                 display_orig = original_nick or f"(no nickname / {m.name})"
                 lines.append(f"- **{m.name}** → `{display_orig}`")
             except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Foolsday repair: could not restore %s (%d): %s", m, m.id, exc)
+                log.warning(
+                    "Foolsday repair: could not restore %s (%d): %s", m, m.id, exc
+                )
                 failed += 1
                 lines.append(f"- **{m.name}** — failed: {exc}")
 
@@ -917,8 +1141,13 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
             _init_table(conn)
             _clear_names(conn, guild.id)
 
-        log.info("Foolsday repair (audit log): %d restored, %d failed, %d skipped, %d not in audit log",
-                 restored, failed, skipped, len(member_ids) - len(oldest_change))
+        log.info(
+            "Foolsday repair (audit log): %d restored, %d failed, %d skipped, %d not in audit log",
+            restored,
+            failed,
+            skipped,
+            len(member_ids) - len(oldest_change),
+        )
 
         summary = (
             f"**Audit Log Repair Complete**\n"
@@ -931,8 +1160,9 @@ def register_foolsday_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         await _send_chunked_ephemeral(interaction, summary)
 
-
-    async def _send_chunked_ephemeral(interaction: discord.Interaction, text: str) -> None:
+    async def _send_chunked_ephemeral(
+        interaction: discord.Interaction, text: str
+    ) -> None:
         """Send a long ephemeral followup, splitting on newlines if needed."""
         while text:
             if len(text) <= 1900:

@@ -1,4 +1,5 @@
 """AI config endpoints — view/edit models, prompts, and run prompt tests."""
+
 from __future__ import annotations
 
 import os
@@ -17,6 +18,7 @@ router = APIRouter()
 
 
 # ── GET: full AI config snapshot ──────────────────────────────────────
+
 
 @router.get("/ai")
 async def get_ai_config(
@@ -39,16 +41,20 @@ async def get_ai_config(
             prompts = []
             for info in list_prompts():
                 text, is_override = get_prompt_with_source(conn, info.key)
-                cmd_model, model_is_override = get_command_model_with_source(conn, info.key)
-                prompts.append({
-                    "key": info.key,
-                    "label": info.label,
-                    "description": info.description,
-                    "text": text,
-                    "is_override": is_override,
-                    "model": cmd_model,
-                    "model_is_override": model_is_override,
-                })
+                cmd_model, model_is_override = get_command_model_with_source(
+                    conn, info.key
+                )
+                prompts.append(
+                    {
+                        "key": info.key,
+                        "label": info.label,
+                        "description": info.description,
+                        "text": text,
+                        "is_override": is_override,
+                        "model": cmd_model,
+                        "model_is_override": model_is_override,
+                    }
+                )
 
             return {
                 "mod_model": get_mod_model(conn),
@@ -62,6 +68,7 @@ async def get_ai_config(
 
 
 # ── PUT: update models ────────────────────────────────────────────────
+
 
 class ModelUpdate(BaseModel):
     mod_model: str | None = None
@@ -91,6 +98,7 @@ async def update_models(
 
 # ── PUT: update per-command model ─────────────────────────────────────
 
+
 class CommandModelUpdate(BaseModel):
     model: str  # empty string clears the override
 
@@ -117,6 +125,7 @@ async def update_command_model(
 
 
 # ── PUT: update a single prompt ───────────────────────────────────────
+
 
 class PromptUpdate(BaseModel):
     text: str
@@ -145,6 +154,7 @@ async def update_prompt(
 
 # ── DELETE: reset a prompt to its default ─────────────────────────────
 
+
 @router.delete("/ai/prompts/{prompt_key}")
 async def reset_prompt(
     prompt_key: str,
@@ -154,7 +164,8 @@ async def reset_prompt(
     ctx = get_ctx(request)
 
     def _q():
-        from services.ai_config import get_prompt_info, reset_prompt as _reset
+        from services.ai_config import get_prompt_info
+        from services.ai_config import reset_prompt as _reset
 
         if get_prompt_info(prompt_key) is None:
             return {"ok": False, "detail": f"Unknown prompt key: {prompt_key}"}
@@ -166,6 +177,7 @@ async def reset_prompt(
 
 
 # ── POST: test-run a prompt ───────────────────────────────────────────
+
 
 class PromptTest(BaseModel):
     system: str
@@ -189,10 +201,13 @@ async def test_prompt(
     # Determine which model to use
     model = body.model
     if not model:
+
         def _get_model():
             from services.ai_config import get_mod_model
+
             with ctx.open_db() as conn:
                 return get_mod_model(conn)
+
         model = await run_query(_get_model)
 
     from anthropic import AsyncAnthropic

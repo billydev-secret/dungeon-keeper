@@ -6,7 +6,7 @@ export function mount(container, initialParams) {
     <div class="panel">
       <header>
         <h2>Time to Level 5</h2>
-        <div class="subtitle">How long it takes members to reach level 5 (role grant threshold)</div>
+        <div class="subtitle">How long members take to reach level 5</div>
       </header>
       <div class="controls">
         <label>Days (empty = all time)

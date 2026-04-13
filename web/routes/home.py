@@ -1,8 +1,8 @@
 """Home dashboard endpoint — aggregates live guild + DB stats into a single payload."""
+
 from __future__ import annotations
 
 import time
-
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -59,14 +59,16 @@ async def home_data(
         for vc in guild.voice_channels:
             members_in = [m for m in vc.members if not m.bot]
             if members_in:
-                voice_channels.append({
-                    "channel_name": vc.name,
-                    "channel_id": str(vc.id),
-                    "members": [
-                        {"user_id": str(m.id), "user_name": m.display_name}
-                        for m in members_in
-                    ],
-                })
+                voice_channels.append(
+                    {
+                        "channel_name": vc.name,
+                        "channel_id": str(vc.id),
+                        "members": [
+                            {"user_id": str(m.id), "user_name": m.display_name}
+                            for m in members_in
+                        ],
+                    }
+                )
 
     # Collect NSFW channel IDs from live guild cache
     nsfw_channel_ids: list[int] = []
@@ -104,7 +106,9 @@ async def home_data(
             _mod_raw = get_config_value(_conn_cfg, "mod_role_ids", "")
             _admin_raw = get_config_value(_conn_cfg, "admin_role_ids", "")
         _configured_mod_roles = {
-            int(x) for x in (_mod_raw + "," + _admin_raw).split(",") if x.strip().isdigit()
+            int(x)
+            for x in (_mod_raw + "," + _admin_raw).split(",")
+            if x.strip().isdigit()
         }
         for _m in guild.members:
             if _m.bot:
@@ -149,7 +153,8 @@ async def home_data(
                     (ctx.guild_id, int(one_day)),
                 ).fetchone()[0]
                 result.update(
-                    msgs_1h=msgs_1h, msgs_24h=msgs_24h,
+                    msgs_1h=msgs_1h,
+                    msgs_24h=msgs_24h,
                     msg_sparkline=[spark_map.get(i, 0) for i in range(24)],
                     unique_today=unique_today,
                 )
@@ -185,7 +190,12 @@ async def home_data(
                         f"SELECT COUNT(DISTINCT author_id) FROM messages WHERE guild_id = ? AND ts >= ? AND channel_id IN ({placeholders})",
                         [ctx.guild_id, int(one_day)] + nsfw_channel_ids,
                     ).fetchone()[0]
-                result.update(nsfw_1h=nsfw_1h, nsfw_24h=nsfw_24h, nsfw_sparkline=nsfw_sparkline, nsfw_unique=nsfw_unique)
+                result.update(
+                    nsfw_1h=nsfw_1h,
+                    nsfw_24h=nsfw_24h,
+                    nsfw_sparkline=nsfw_sparkline,
+                    nsfw_unique=nsfw_unique,
+                )
 
             # Top channels
             top_channels: list[dict] = []
@@ -233,18 +243,23 @@ async def home_data(
                     "SELECT COUNT(DISTINCT user_id) FROM xp_events WHERE guild_id = ? AND created_at >= ?",
                     (ctx.guild_id, one_day),
                 ).fetchone()[0]
-                result.update(xp_today=round(xp_today, 1), xp_users_today=xp_users_today)
+                result.update(
+                    xp_today=round(xp_today, 1), xp_users_today=xp_users_today
+                )
 
             # Moderation snapshot
             if _need("moderation"):
                 result["active_jails"] = conn.execute(
-                    "SELECT COUNT(*) FROM jails WHERE guild_id = ? AND status = 'active'", (ctx.guild_id,),
+                    "SELECT COUNT(*) FROM jails WHERE guild_id = ? AND status = 'active'",
+                    (ctx.guild_id,),
                 ).fetchone()[0]
                 result["open_tickets"] = conn.execute(
-                    "SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'open'", (ctx.guild_id,),
+                    "SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'open'",
+                    (ctx.guild_id,),
                 ).fetchone()[0]
                 result["active_warnings"] = conn.execute(
-                    "SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND revoked = 0", (ctx.guild_id,),
+                    "SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND revoked = 0",
+                    (ctx.guild_id,),
                 ).fetchone()[0]
 
             # Recent mod actions
@@ -304,7 +319,11 @@ async def home_data(
                     (ctx.guild_id, int(thirty_days_ago), int(seven_days_ago)),
                 ).fetchall()
                 return_candidates = [
-                    {"author_id": int(r["author_id"]), "return_ts": int(r["return_ts"]), "gap": int(r["gap"])}
+                    {
+                        "author_id": int(r["author_id"]),
+                        "return_ts": int(r["return_ts"]),
+                        "gap": int(r["gap"]),
+                    }
                     for r in return_rows
                 ]
                 acknowledged: set[int] = set()
@@ -341,13 +360,22 @@ async def home_data(
                         )
                     """
                     ack_params = (
-                        values_params + [ctx.guild_id] + mod_list + [ctx.guild_id] + mod_list
+                        values_params
+                        + [ctx.guild_id]
+                        + mod_list
+                        + [ctx.guild_id]
+                        + mod_list
                     )
                     ack_rows = conn.execute(ack_query, ack_params).fetchall()
                     acknowledged = {int(r[0]) for r in ack_rows}
                 returned_users = [
-                    {"user_id": str(c["author_id"]), "user_name": "", "gap_hours": round(c["gap"] / 3600, 1)}
-                    for c in return_candidates if c["author_id"] not in acknowledged
+                    {
+                        "user_id": str(c["author_id"]),
+                        "user_name": "",
+                        "gap_hours": round(c["gap"] / 3600, 1),
+                    }
+                    for c in return_candidates
+                    if c["author_id"] not in acknowledged
                 ][:5]
                 result["returned_users"] = returned_users
 
@@ -372,7 +400,11 @@ async def home_data(
                     (ctx.guild_id, int(one_day), int(one_day)),
                 ).fetchall()
                 conversation_starters = [
-                    {"user_id": str(r["author_id"]), "user_name": "", "starts": int(r["starts"])}
+                    {
+                        "user_id": str(r["author_id"]),
+                        "user_name": "",
+                        "starts": int(r["starts"]),
+                    }
                     for r in starter_rows
                 ]
                 result["conversation_starters"] = conversation_starters
@@ -392,7 +424,11 @@ async def home_data(
                     (ctx.guild_id, int(one_day)),
                 ).fetchall()
                 social_butterflies = [
-                    {"user_id": str(r["user_id"]), "user_name": "", "unique": int(r["unique_partners"])}
+                    {
+                        "user_id": str(r["user_id"]),
+                        "user_name": "",
+                        "unique": int(r["unique_partners"]),
+                    }
                     for r in butterfly_rows
                 ]
                 result["social_butterflies"] = social_butterflies
@@ -427,9 +463,12 @@ async def home_data(
                 ).fetchall()
                 channel_loyalists = [
                     {
-                        "user_id": str(r["author_id"]), "user_name": "",
-                        "channel_id": str(r["channel_id"]), "channel_name": "",
-                        "pct": round(r["pct"] * 100), "count": int(r["ch_count"]),
+                        "user_id": str(r["author_id"]),
+                        "user_name": "",
+                        "channel_id": str(r["channel_id"]),
+                        "channel_name": "",
+                        "pct": round(r["pct"] * 100),
+                        "count": int(r["ch_count"]),
                     }
                     for r in loyalty_rows
                 ]
@@ -458,9 +497,13 @@ async def home_data(
             user_names: dict[int, str] = {}
             channel_names: dict[int, str] = {}
             if all_user_ids:
-                user_names = get_known_users_bulk(conn, ctx.guild_id, list(all_user_ids))
+                user_names = get_known_users_bulk(
+                    conn, ctx.guild_id, list(all_user_ids)
+                )
             if all_channel_ids:
-                channel_names = get_known_channels_bulk(conn, ctx.guild_id, all_channel_ids)
+                channel_names = get_known_channels_bulk(
+                    conn, ctx.guild_id, all_channel_ids
+                )
 
             result["user_names"] = {str(k): v for k, v in user_names.items()}
             result["channel_names"] = {str(k): v for k, v in channel_names.items()}
@@ -497,7 +540,11 @@ async def home_data(
             a["target_name"] = _resolve_user(a["target_id"])
     for ru in db_data.get("returned_users", []):
         ru["user_name"] = _resolve_user(ru["user_id"])
-    for item in db_data.get("conversation_starters", []) + db_data.get("social_butterflies", []) + db_data.get("channel_loyalists", []):
+    for item in (
+        db_data.get("conversation_starters", [])
+        + db_data.get("social_butterflies", [])
+        + db_data.get("channel_loyalists", [])
+    ):
         item["user_name"] = _resolve_user(item["user_id"])
     for cl in db_data.get("channel_loyalists", []):
         cl["channel_name"] = _resolve_channel(cl["channel_id"])

@@ -1,4 +1,5 @@
 """Welcome and leave message formatting."""
+
 from __future__ import annotations
 
 import discord
@@ -16,8 +17,7 @@ PLACEHOLDER_HELP = (
 def _resolve(template: str, member: discord.Member) -> str:
     guild = member.guild
     return (
-        template
-        .replace("{member}", member.mention)
+        template.replace("{member}", member.mention)
         .replace("{member_name}", member.display_name)
         .replace("{member_id}", str(member.id))
         .replace("{server}", guild.name)
@@ -30,7 +30,9 @@ def build_welcome_embed(member: discord.Member, message_template: str) -> discor
         description=_resolve(message_template, member),
         color=discord.Color.blurple(),
     )
-    embed.set_author(name=f"Welcome, {member.display_name}!", icon_url=member.display_avatar.url)
+    embed.set_author(
+        name=f"Welcome, {member.display_name}!", icon_url=member.display_avatar.url
+    )
     if member.guild.icon:
         embed.set_thumbnail(url=member.guild.icon.url)
     member_count = member.guild.member_count or 0
@@ -43,7 +45,9 @@ def build_leave_embed(member: discord.Member, message_template: str) -> discord.
         description=_resolve(message_template, member),
         color=discord.Color.dark_grey(),
     )
-    embed.set_author(name=f"{member.display_name} left", icon_url=member.display_avatar.url)
+    embed.set_author(
+        name=f"{member.display_name} left", icon_url=member.display_avatar.url
+    )
     member_count = member.guild.member_count or 0
     embed.set_footer(text=f"{member.guild.name} · {member_count} members remaining")
     return embed

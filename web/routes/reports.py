@@ -1,4 +1,5 @@
 """Report endpoints — one per chart/table report."""
+
 from __future__ import annotations
 
 from typing import Literal
@@ -10,7 +11,13 @@ from services.member_quality_score import compute_quality_scores
 from services.message_store import get_known_channels_bulk, get_known_users_bulk
 from services.reports_data import MemberSnapshot
 from web.auth import AuthenticatedUser
-from web.deps import cached_run_query, get_ctx, invalidate_report_cache, require_perms, run_query
+from web.deps import (
+    cached_run_query,
+    get_ctx,
+    invalidate_report_cache,
+    require_perms,
+    run_query,
+)
 from web.schemas import (
     ActivityResponse,
     BurstRankingResponse,
@@ -82,6 +89,7 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
 
 # ── Role growth ──────────────────────────────────────────────────────────
 
+
 @router.get("/role-growth", response_model=RoleGrowthResponse)
 async def role_growth(
     request: Request,
@@ -102,7 +110,8 @@ async def role_growth(
             )
 
     return await cached_run_query(
-        "role-growth", ctx.guild_id,
+        "role-growth",
+        ctx.guild_id,
         {"resolution": resolution, "roles": roles},
         _q,
     )
@@ -110,10 +119,13 @@ async def role_growth(
 
 # ── Message cadence ──────────────────────────────────────────────────────
 
+
 @router.get("/message-cadence", response_model=MessageCadenceResponse)
 async def message_cadence(
     request: Request,
-    resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "hour",
+    resolution: Literal[
+        "hour", "day", "week", "month", "hour_of_day", "day_of_week"
+    ] = "hour",
     channel_id: str | None = None,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
@@ -124,17 +136,23 @@ async def message_cadence(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_message_cadence_data(
-                conn, ctx.guild_id, resolution, tz, ch_id,
+                conn,
+                ctx.guild_id,
+                resolution,
+                tz,
+                ch_id,
             )
 
     return await cached_run_query(
-        "message-cadence", ctx.guild_id,
+        "message-cadence",
+        ctx.guild_id,
         {"resolution": resolution, "channel_id": channel_id},
         _q,
     )
 
 
 # ── Join times ───────────────────────────────────────────────────────────
+
 
 @router.get("/join-times", response_model=JoinTimesResponse)
 async def join_times(
@@ -171,8 +189,11 @@ async def join_times(
                 if rows:
                     return [
                         MemberSnapshot(
-                            user_id=int(r[0]), display_name=str(r[0]), is_bot=False,
-                            joined_at=float(r[1]), role_ids=(),
+                            user_id=int(r[0]),
+                            display_name=str(r[0]),
+                            is_bot=False,
+                            joined_at=float(r[1]),
+                            role_ids=(),
                         )
                         for r in rows
                     ]
@@ -186,24 +207,30 @@ async def join_times(
                 ).fetchall()
                 return [
                     MemberSnapshot(
-                        user_id=int(r[0]), display_name=str(r[0]), is_bot=False,
-                        joined_at=float(r[1]), role_ids=(),
+                        user_id=int(r[0]),
+                        display_name=str(r[0]),
+                        is_bot=False,
+                        joined_at=float(r[1]),
+                        role_ids=(),
                     )
                     for r in rows
                 ]
+
         members = await run_query(_load_members)
 
     def _q():
         return reports_data.get_join_times_data(members, resolution, tz)
 
     return await cached_run_query(
-        "join-times", ctx.guild_id,
+        "join-times",
+        ctx.guild_id,
         {"resolution": resolution},
         _q,
     )
 
 
 # ── NSFW gender activity ────────────────────────────────────────────────
+
 
 @router.get("/nsfw-gender", response_model=NsfwGenderResponse)
 async def nsfw_gender(
@@ -223,9 +250,7 @@ async def nsfw_gender(
         bot = getattr(ctx, "bot", None)
         guild = bot.get_guild(ctx.guild_id) if bot is not None else None
         if guild is not None:
-            target_ids = [
-                ch.id for ch in guild.channels if getattr(ch, "nsfw", False)
-            ]
+            target_ids = [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)]
         else:
             # Standalone fallback: use all channels that have gender-tagged
             # posts — these are the channels the query would return data for.
@@ -242,28 +267,39 @@ async def nsfw_gender(
                         (ctx.guild_id,),
                     ).fetchall()
                     return [int(r[0]) for r in rows]
+
             target_ids = await run_query(_discover)
 
     if not target_ids:
         return NsfwGenderResponse(
-            resolution=resolution, window_label="", media_only=media_only,
-            labels=[], series=[],
+            resolution=resolution,
+            window_label="",
+            media_only=media_only,
+            labels=[],
+            series=[],
         )
 
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_nsfw_gender_data(
-                conn, ctx.guild_id, resolution, target_ids, tz, media_only,
+                conn,
+                ctx.guild_id,
+                resolution,
+                target_ids,
+                tz,
+                media_only,
             )
 
     return await cached_run_query(
-        "nsfw-gender", ctx.guild_id,
+        "nsfw-gender",
+        ctx.guild_id,
         {"resolution": resolution, "media_only": media_only, "channel_id": channel_id},
         _q,
     )
 
 
 # ── Message rate ─────────────────────────────────────────────────────────
+
 
 @router.get("/message-rate", response_model=MessageRateResponse)
 async def message_rate(
@@ -278,17 +314,22 @@ async def message_rate(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_message_rate_data(
-                conn, ctx.guild_id, days, tz,
+                conn,
+                ctx.guild_id,
+                days,
+                tz,
             )
 
     return await cached_run_query(
-        "message-rate", ctx.guild_id,
+        "message-rate",
+        ctx.guild_id,
         {"days": days},
         _q,
     )
 
 
 # ── Greeter response ────────────────────────────────────────────────────
+
 
 @router.get("/greeter-response", response_model=GreeterResponseResponse)
 async def greeter_response(
@@ -394,7 +435,11 @@ async def greeter_response(
                 return None
 
             data = reports_data.get_greeter_response_data(
-                conn, ctx.guild_id, welcome_channel_id, greeter_ids, join_map,
+                conn,
+                ctx.guild_id,
+                welcome_channel_id,
+                greeter_ids,
+                join_map,
             )
 
         if days is not None:
@@ -402,24 +447,36 @@ async def greeter_response(
         return data
 
     result = await cached_run_query(
-        "greeter-response", ctx.guild_id,
+        "greeter-response",
+        ctx.guild_id,
         {"days": days},
         _q,
     )
     if result is None or result["count"] == 0:
-        raise HTTPException(status_code=404, detail="No greeter response data found for the selected period.")
+        raise HTTPException(
+            status_code=404,
+            detail="No greeter response data found for the selected period.",
+        )
 
-    _resolve_names(ctx, guild, result.get("entries", []),
-                   ("user_id", "user_name"), ("greeter_id", "greeter_name"))
+    _resolve_names(
+        ctx,
+        guild,
+        result.get("entries", []),
+        ("user_id", "user_name"),
+        ("greeter_id", "greeter_name"),
+    )
     return result
 
 
 # ── Activity ────────────────────────────────────────────────────────────
 
+
 @router.get("/activity", response_model=ActivityResponse)
 async def activity(
     request: Request,
-    resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
+    resolution: Literal[
+        "hour", "day", "week", "month", "hour_of_day", "day_of_week"
+    ] = "day",
     mode: Literal["messages", "xp"] = "xp",
     user_id: str | None = None,
     channel_id: str | None = None,
@@ -433,19 +490,30 @@ async def activity(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_activity_data(
-                conn, ctx.guild_id, resolution, tz,
-                mode=mode, user_id=uid, channel_id=cid,
+                conn,
+                ctx.guild_id,
+                resolution,
+                tz,
+                mode=mode,
+                user_id=uid,
+                channel_id=cid,
             )
 
     return await cached_run_query(
-        "activity", ctx.guild_id,
-        {"resolution": resolution, "mode": mode, "user_id": user_id, "channel_id": channel_id},
+        "activity",
+        ctx.guild_id,
+        {
+            "resolution": resolution,
+            "mode": mode,
+            "user_id": user_id,
+            "channel_id": channel_id,
+        },
         _q,
     )
 
 
-
 # ── Invite effectiveness ───────────────────────────────────────────────
+
 
 @router.get("/invite-effectiveness", response_model=InviteEffectivenessResponse)
 async def invite_effectiveness(
@@ -461,20 +529,26 @@ async def invite_effectiveness(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_invite_effectiveness_data(
-                conn, ctx.guild_id, days=days, active_days=active_days,
+                conn,
+                ctx.guild_id,
+                days=days,
+                active_days=active_days,
             )
 
     result = await cached_run_query(
-        "invite-effectiveness", ctx.guild_id,
+        "invite-effectiveness",
+        ctx.guild_id,
         {"days": days, "active_days": active_days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("inviters", []),
-                   ("inviter_id", "inviter_name"))
+    _resolve_names(
+        ctx, guild, result.get("inviters", []), ("inviter_id", "inviter_name")
+    )
     return result
 
 
 # ── Interaction graph ──────────────────────────────────────────────────
+
 
 @router.get("/interaction-graph", response_model=InteractionGraphResponse)
 async def interaction_graph(
@@ -490,24 +564,38 @@ async def interaction_graph(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_interaction_graph_data(
-                conn, ctx.guild_id, days=days, limit=min(limit, 100),
+                conn,
+                ctx.guild_id,
+                days=days,
+                limit=min(limit, 100),
             )
 
     result = await cached_run_query(
-        "interaction-graph", ctx.guild_id,
+        "interaction-graph",
+        ctx.guild_id,
         {"days": days, "limit": limit},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("nodes", []),
-                   ("user_id", "user_name"))
-    _resolve_names(ctx, guild, result.get("edges", []),
-                   ("from_id", "from_name"), ("to_id", "to_name"))
-    _resolve_names(ctx, guild, result.get("top_pairs", []),
-                   ("from_id", "from_name"), ("to_id", "to_name"))
+    _resolve_names(ctx, guild, result.get("nodes", []), ("user_id", "user_name"))
+    _resolve_names(
+        ctx,
+        guild,
+        result.get("edges", []),
+        ("from_id", "from_name"),
+        ("to_id", "to_name"),
+    )
+    _resolve_names(
+        ctx,
+        guild,
+        result.get("top_pairs", []),
+        ("from_id", "from_name"),
+        ("to_id", "to_name"),
+    )
     return result
 
 
 # ── Member retention ───────────────────────────────────────────────────
+
 
 @router.get("/retention", response_model=RetentionResponse)
 async def retention(
@@ -523,21 +611,24 @@ async def retention(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_retention_data(
-                conn, ctx.guild_id, period_days=period_days,
+                conn,
+                ctx.guild_id,
+                period_days=period_days,
                 min_previous=min_previous,
             )
 
     result = await cached_run_query(
-        "retention", ctx.guild_id,
+        "retention",
+        ctx.guild_id,
         {"period_days": period_days, "min_previous": min_previous},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("entries", []),
-                   ("user_id", "user_name"))
+    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
 # ── Voice activity ─────────────────────────────────────────────────────
+
 
 @router.get("/voice-activity", response_model=VoiceActivityResponse)
 async def voice_activity(
@@ -553,20 +644,24 @@ async def voice_activity(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_voice_activity_data(
-                conn, ctx.guild_id, days=days, utc_offset_hours=tz,
+                conn,
+                ctx.guild_id,
+                days=days,
+                utc_offset_hours=tz,
             )
 
     result = await cached_run_query(
-        "voice-activity", ctx.guild_id,
+        "voice-activity",
+        ctx.guild_id,
         {"days": days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("top_users", []),
-                   ("user_id", "user_name"))
+    _resolve_names(ctx, guild, result.get("top_users", []), ("user_id", "user_name"))
     return result
 
 
 # ── XP leaderboard ────────────────────────────────────────────────────
+
 
 @router.get("/xp-leaderboard", response_model=XpLeaderboardResponse)
 async def xp_leaderboard(
@@ -583,16 +678,17 @@ async def xp_leaderboard(
             return reports_data.get_xp_leaderboard_data(conn, ctx.guild_id, days=days)
 
     result = await cached_run_query(
-        "xp-leaderboard", ctx.guild_id,
+        "xp-leaderboard",
+        ctx.guild_id,
         {"days": days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("leaderboard", []),
-                   ("user_id", "user_name"))
+    _resolve_names(ctx, guild, result.get("leaderboard", []), ("user_id", "user_name"))
     return result
 
 
 # ── Reaction analytics ─────────────────────────────────────────────────
+
 
 @router.get("/reaction-analytics", response_model=ReactionAnalyticsResponse)
 async def reaction_analytics(
@@ -607,22 +703,26 @@ async def reaction_analytics(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_reaction_analytics_data(
-                conn, ctx.guild_id, days=days,
+                conn,
+                ctx.guild_id,
+                days=days,
             )
 
     result = await cached_run_query(
-        "reaction-analytics", ctx.guild_id,
+        "reaction-analytics",
+        ctx.guild_id,
         {"days": days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("top_givers", []),
-                   ("user_id", "user_name"))
-    _resolve_names(ctx, guild, result.get("top_receivers", []),
-                   ("user_id", "user_name"))
+    _resolve_names(ctx, guild, result.get("top_givers", []), ("user_id", "user_name"))
+    _resolve_names(
+        ctx, guild, result.get("top_receivers", []), ("user_id", "user_name")
+    )
     return result
 
 
 # ── Message rate drops ─────────────────────────────────────────────────
+
 
 @router.get("/message-rate-drops", response_model=MessageRateDropsResponse)
 async def message_rate_drops(
@@ -638,21 +738,24 @@ async def message_rate_drops(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_message_rate_drops_data(
-                conn, ctx.guild_id, period_days=period_days,
+                conn,
+                ctx.guild_id,
+                period_days=period_days,
                 min_previous=min_previous,
             )
 
     result = await cached_run_query(
-        "message-rate-drops", ctx.guild_id,
+        "message-rate-drops",
+        ctx.guild_id,
         {"period_days": period_days, "min_previous": min_previous},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("entries", []),
-                   ("user_id", "user_name"))
+    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
 # ── Burst ranking ──────────────────────────────────────────────────────
+
 
 @router.get("/burst-ranking", response_model=BurstRankingResponse)
 async def burst_ranking(
@@ -668,20 +771,24 @@ async def burst_ranking(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_burst_ranking_data(
-                conn, ctx.guild_id, min_sessions=min_sessions, days=days,
+                conn,
+                ctx.guild_id,
+                min_sessions=min_sessions,
+                days=days,
             )
 
     result = await cached_run_query(
-        "burst-ranking", ctx.guild_id,
+        "burst-ranking",
+        ctx.guild_id,
         {"min_sessions": min_sessions, "days": days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("entries", []),
-                   ("user_id", "user_name"))
+    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
 # ── Channel comparison ─────────────────────────────────────────────────
+
 
 @router.get("/channel-comparison", response_model=ChannelComparisonResponse)
 async def channel_comparison(
@@ -696,11 +803,14 @@ async def channel_comparison(
     def _q():
         with ctx.open_db() as conn:
             return reports_data.get_channel_comparison_data(
-                conn, ctx.guild_id, days=max(1, min(365, days)),
+                conn,
+                ctx.guild_id,
+                days=max(1, min(365, days)),
             )
 
     result = await cached_run_query(
-        "channel-comparison", ctx.guild_id,
+        "channel-comparison",
+        ctx.guild_id,
         {"days": days},
         _q,
     )
@@ -727,19 +837,23 @@ async def channel_comparison(
 
 # ── Quality score ─────────────────────────────────────────────────────
 
+
 class _FakeMember:
     """Lightweight stand-in for discord.Member used when the bot is offline."""
+
     __slots__ = ("id", "bot", "joined_at")
 
     id: int
     bot: bool
-    joined_at: "object"
+    joined_at: object
 
     def __init__(self, user_id: int, joined_at_ts: float | None):
         self.id = user_id
         self.bot = False
         if joined_at_ts is not None:
-            from datetime import datetime as _dt, timezone as _tz
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
+
             self.joined_at = _dt.fromtimestamp(joined_at_ts, tz=_tz.utc)
         else:
             self.joined_at = None
@@ -773,37 +887,44 @@ async def quality_score(
                 members = [_FakeMember(int(r[0]), float(r[1])) for r in rows]
 
             scores = compute_quality_scores(
-                conn, ctx.guild_id, members,
-                window_days=days, min_active_days=min_active_days,
+                conn,
+                ctx.guild_id,
+                members,
+                window_days=days,
+                min_active_days=min_active_days,
             )
             entries = []
             for s in scores:
-                entries.append({
-                    "user_id": str(s.user_id),
-                    "user_name": "",
-                    "final_score": s.final_score,
-                    "engagement_given": s.engagement_given,
-                    "consistency_recency": s.consistency_recency,
-                    "content_resonance": s.content_resonance,
-                    "posting_activity": s.posting_activity,
-                    "status": s.status,
-                    "active_days": s.active_days,
-                    "active_weeks": s.active_weeks,
-                })
+                entries.append(
+                    {
+                        "user_id": str(s.user_id),
+                        "user_name": "",
+                        "final_score": s.final_score,
+                        "engagement_given": s.engagement_given,
+                        "consistency_recency": s.consistency_recency,
+                        "content_resonance": s.content_resonance,
+                        "posting_activity": s.posting_activity,
+                        "status": s.status,
+                        "active_days": s.active_days,
+                        "active_weeks": s.active_weeks,
+                    }
+                )
             scored = sum(1 for e in entries if e["status"] == "Active")
             return {"total_scored": scored, "entries": entries}
 
     result = await cached_run_query(
-        "quality-score", ctx.guild_id,
+        "quality-score",
+        ctx.guild_id,
         {"days": days, "min_active_days": min_active_days},
-        _q, ttl=300,
+        _q,
+        ttl=300,
     )
-    _resolve_names(ctx, guild, result.get("entries", []),
-                   ("user_id", "user_name"))
+    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
 # ── Time to level 5 ────────────────────────────────────────────────────
+
 
 @router.get("/time-to-level-5", response_model=TimeToLevel5Response)
 async def time_to_level_5(
@@ -826,7 +947,9 @@ async def time_to_level_5(
 
     def _q():
         with ctx.open_db() as conn:
-            details = get_time_to_level_details(conn, ctx.guild_id, 5, since_ts=since_ts)
+            details = get_time_to_level_details(
+                conn, ctx.guild_id, 5, since_ts=since_ts
+            )
 
         if not details:
             return {
@@ -860,8 +983,12 @@ async def time_to_level_5(
             {
                 "user_id": d["user_id"],
                 "display_name": str(d["user_id"]),
-                "first_at": datetime.fromtimestamp(d["first_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
-                "reached_at": datetime.fromtimestamp(d["reached_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M"),
+                "first_at": datetime.fromtimestamp(
+                    d["first_at"], tz=timezone.utc
+                ).strftime("%Y-%m-%d %H:%M"),
+                "reached_at": datetime.fromtimestamp(
+                    d["reached_at"], tz=timezone.utc
+                ).strftime("%Y-%m-%d %H:%M"),
                 "days": round(d["seconds"] / 86400.0, 1),
             }
             for d in details
@@ -880,9 +1007,11 @@ async def time_to_level_5(
         }
 
     result = await cached_run_query(
-        "time-to-level-5", ctx.guild_id,
+        "time-to-level-5",
+        ctx.guild_id,
         {"days": days},
-        _q, ttl=300,
+        _q,
+        ttl=300,
     )
 
     _resolve_names(ctx, guild, result.get("members", []), ("user_id", "display_name"))

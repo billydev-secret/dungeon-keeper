@@ -52,7 +52,7 @@ export function mount(container, initialParams) {
     <div class="panel">
       <header>
         <h2>Quality Score</h2>
-        <div class="subtitle">Member engagement quality — weighted composite of engagement, consistency, resonance, and posting</div>
+        <div class="subtitle">How meaningfully each member participates</div>
       </header>
       <div class="controls">
         <label>Period

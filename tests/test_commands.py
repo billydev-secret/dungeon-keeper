@@ -1,4 +1,5 @@
 """Tests for slash command handlers."""
+
 from __future__ import annotations
 
 import asyncio
@@ -71,29 +72,63 @@ def _make_interaction(
 def _make_ctx(**kwargs) -> MagicMock:
     ctx = MagicMock()
     ctx.is_mod = MagicMock(return_value=kwargs.get("is_mod", False))
-    ctx.can_grant_denizen = MagicMock(return_value=kwargs.get("can_grant_denizen", False))
+    ctx.can_grant_denizen = MagicMock(
+        return_value=kwargs.get("can_grant_denizen", False)
+    )
     ctx.can_use_xp_grant = MagicMock(return_value=kwargs.get("can_use_xp_grant", False))
     actor = MagicMock()
     actor.id = kwargs.get("actor_id", 100)
     ctx.get_interaction_member = MagicMock(return_value=actor)
-    ctx.grant_roles = kwargs.get("grant_roles", {
-        "denizen": {"label": "Denizen", "role_id": kwargs.get("denizen_role_id", 0),
-                    "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
-        "nsfw": {"label": "NSFW", "role_id": 0,
-                 "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
-        "veteran": {"label": "Veteran", "role_id": 0,
-                    "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
-        "kink": {"label": "Kink", "role_id": 0,
-                 "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
-        "goldengirl": {"label": "Golden Girl", "role_id": 0,
-                       "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
-    })
-    ctx.can_use_grant_role = MagicMock(return_value=kwargs.get("can_grant_denizen", False))
+    ctx.grant_roles = kwargs.get(
+        "grant_roles",
+        {
+            "denizen": {
+                "label": "Denizen",
+                "role_id": kwargs.get("denizen_role_id", 0),
+                "log_channel_id": 0,
+                "announce_channel_id": 0,
+                "grant_message": "",
+            },
+            "nsfw": {
+                "label": "NSFW",
+                "role_id": 0,
+                "log_channel_id": 0,
+                "announce_channel_id": 0,
+                "grant_message": "",
+            },
+            "veteran": {
+                "label": "Veteran",
+                "role_id": 0,
+                "log_channel_id": 0,
+                "announce_channel_id": 0,
+                "grant_message": "",
+            },
+            "kink": {
+                "label": "Kink",
+                "role_id": 0,
+                "log_channel_id": 0,
+                "announce_channel_id": 0,
+                "grant_message": "",
+            },
+            "goldengirl": {
+                "label": "Golden Girl",
+                "role_id": 0,
+                "log_channel_id": 0,
+                "announce_channel_id": 0,
+                "grant_message": "",
+            },
+        },
+    )
+    ctx.can_use_grant_role = MagicMock(
+        return_value=kwargs.get("can_grant_denizen", False)
+    )
     ctx.greeter_role_id = kwargs.get("greeter_role_id", 0)
     ctx.spoiler_required_channels = kwargs.get("spoiler_required_channels", set())
     ctx.xp_excluded_channel_ids = kwargs.get("xp_excluded_channel_ids", set())
     ctx.xp_grant_allowed_user_ids = kwargs.get("xp_grant_allowed_user_ids", set())
-    ctx.get_xp_config_target_channel = MagicMock(return_value=kwargs.get("target_channel"))
+    ctx.get_xp_config_target_channel = MagicMock(
+        return_value=kwargs.get("target_channel")
+    )
     ctx.add_config_id_value = MagicMock(return_value=set())
     ctx.remove_config_id_value = MagicMock(return_value=set())
     ctx.set_config_value = MagicMock(return_value="0")
@@ -112,10 +147,10 @@ class _MockRole:
         self.name = name
         self.mention = f"<@&{role_id}>"
 
-    def __ge__(self, other: "_MockRole") -> bool:
+    def __ge__(self, other: _MockRole) -> bool:
         return self.position >= other.position
 
-    def __lt__(self, other: "_MockRole") -> bool:
+    def __lt__(self, other: _MockRole) -> bool:
         return self.position < other.position
 
 
@@ -186,14 +221,18 @@ class GrantCommandTests(unittest.TestCase):
         self.ctx.grant_roles["denizen"]["role_id"] = 0
         ix = _make_interaction(guild=MagicMock())
         _run(self.grant(ix, _make_member()))
-        self.assertIn("not configured", ix.response.send_message.call_args[0][0].lower())
+        self.assertIn(
+            "not configured", ix.response.send_message.call_args[0][0].lower()
+        )
 
     def test_role_not_found_denied(self):
         guild = MagicMock()
         guild.get_role = MagicMock(return_value=None)
         ix = _make_interaction(guild=guild)
         _run(self.grant(ix, _make_member()))
-        self.assertIn("no longer exists", ix.response.send_message.call_args[0][0].lower())
+        self.assertIn(
+            "no longer exists", ix.response.send_message.call_args[0][0].lower()
+        )
 
     def test_member_already_has_role_denied(self):
         denizen_role = _MockRole(position=1, role_id=999)
@@ -218,14 +257,18 @@ class GrantCommandTests(unittest.TestCase):
         guild.me.top_role = _MockRole(position=5)
         ix = _make_interaction(guild=guild)
         _run(self.grant(ix, _make_member()))
-        self.assertIn("above my highest role", ix.response.send_message.call_args[0][0].lower())
+        self.assertIn(
+            "above my highest role", ix.response.send_message.call_args[0][0].lower()
+        )
 
     def test_forbidden_on_add_roles_handled(self):
         denizen_role = _MockRole(position=1, role_id=999)
         guild = self._guild_with_role(denizen_role)
         ix = _make_interaction(guild=guild)
         member = _make_member()
-        forbidden = discord.Forbidden(MagicMock(status=403, reason="Forbidden"), "Missing Permissions")
+        forbidden = discord.Forbidden(
+            MagicMock(status=403, reason="Forbidden"), "Missing Permissions"
+        )
         member.add_roles = AsyncMock(side_effect=forbidden)
         _run(self.grant(ix, member))
         ix.response.defer.assert_awaited_once()
@@ -241,7 +284,6 @@ class GrantCommandTests(unittest.TestCase):
         ix.response.defer.assert_awaited_once()
         ix.followup.send.assert_awaited_once()
         self.assertIn("granted", ix.followup.send.call_args[0][0].lower())
-
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +368,7 @@ class XpConfigCommandSuccessTests(unittest.TestCase):
         ch.mention = f"<#{channel_id}>"
         return ch
 
+
 # ---------------------------------------------------------------------------
 # Help command tests
 # ---------------------------------------------------------------------------
@@ -335,7 +378,9 @@ class HelpCommandTests(unittest.TestCase):
     def _run_help(self, *, is_mod: bool, can_grant: bool, can_xp: bool) -> list[str]:
         """Return the list of section names shown in the help dropdown."""
         cap = _CommandCapture()
-        ctx = _make_ctx(is_mod=is_mod, can_grant_denizen=can_grant, can_use_xp_grant=can_xp)
+        ctx = _make_ctx(
+            is_mod=is_mod, can_grant_denizen=can_grant, can_use_xp_grant=can_xp
+        )
         register_mod_commands(cap.bot, ctx)
         ix = _make_interaction()
         _run(cap.get("help")(ix))

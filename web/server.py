@@ -5,17 +5,18 @@ The launcher coroutine ``serve_forever`` is designed to be appended to
 event loop, reuses ``AppContext`` / ``ctx.open_db()``, and reads live
 ``ctx.bot.get_guild(...)`` data.
 """
+
 from __future__ import annotations
 
 import logging
 import os
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
-import uvicorn
 
 from services.auto_delete_service import init_auto_delete_tables
 from services.booster_roles import init_booster_role_tables
@@ -41,7 +42,9 @@ def _auto_detect_auth(guild_id: int) -> AuthBackend:
         _log.info("Discord OAuth2 authentication enabled (client_id=%s)", client_id)
         return DiscordOAuthAuth(session_secret, guild_id)
 
-    _log.info("Open authentication (LAN mode) — set DISCORD_CLIENT_ID + SESSION_SECRET to enable OAuth")
+    _log.info(
+        "Open authentication (LAN mode) — set DISCORD_CLIENT_ID + SESSION_SECRET to enable OAuth"
+    )
     return OpenAuth()
 
 
@@ -77,7 +80,9 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(meta_routes.router, prefix="/api", tags=["meta"])
     app.include_router(reports_routes.router, prefix="/api/reports", tags=["reports"])
     app.include_router(config_routes.router, prefix="/api", tags=["config"])
-    app.include_router(ai_config_routes.router, prefix="/api/config", tags=["ai-config"])
+    app.include_router(
+        ai_config_routes.router, prefix="/api/config", tags=["ai-config"]
+    )
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])
@@ -88,11 +93,13 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(health_routes.router, prefix="/api", tags=["health"])
 
     # ── Wellness routes ─────────────────────────────────────────────
-    from web.wellness_routes import api as wellness_api
     from web.wellness_routes import admin as wellness_admin
+    from web.wellness_routes import api as wellness_api
 
     app.include_router(wellness_api.router, prefix="/api/wellness", tags=["wellness"])
-    app.include_router(wellness_admin.router, prefix="/api/wellness/admin", tags=["wellness-admin"])
+    app.include_router(
+        wellness_admin.router, prefix="/api/wellness/admin", tags=["wellness-admin"]
+    )
 
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()
@@ -101,7 +108,9 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     class _NoCacheJS(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
             response = await call_next(request)
-            if request.url.path.startswith("/static/") and request.url.path.endswith((".js", ".css")):
+            if request.url.path.startswith("/static/") and request.url.path.endswith(
+                (".js", ".css")
+            ):
                 response.headers["Cache-Control"] = "no-cache"
             return response
 

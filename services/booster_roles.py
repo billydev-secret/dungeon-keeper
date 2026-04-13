@@ -1,4 +1,5 @@
 """Booster cosmetic role picker — persistent panel with mutually exclusive roles."""
+
 from __future__ import annotations
 
 import io
@@ -21,6 +22,7 @@ log = logging.getLogger("dungeonkeeper.booster_roles")
 # ---------------------------------------------------------------------------
 # DB schema
 # ---------------------------------------------------------------------------
+
 
 class BoosterRoleRow(TypedDict):
     role_key: str
@@ -65,8 +67,10 @@ def init_booster_role_tables(conn: sqlite3.Connection) -> None:
 # DB helpers
 # ---------------------------------------------------------------------------
 
+
 def get_booster_roles(
-    conn: sqlite3.Connection, guild_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
 ) -> list[BoosterRoleRow]:
     rows = conn.execute(
         "SELECT role_key, label, role_id, image_path, sort_order "
@@ -75,8 +79,11 @@ def get_booster_roles(
     ).fetchall()
     return [
         BoosterRoleRow(
-            role_key=r["role_key"], label=r["label"], role_id=r["role_id"],
-            image_path=r["image_path"], sort_order=r["sort_order"],
+            role_key=r["role_key"],
+            label=r["label"],
+            role_id=r["role_id"],
+            image_path=r["image_path"],
+            sort_order=r["sort_order"],
         )
         for r in rows
     ]
@@ -106,7 +113,9 @@ def upsert_booster_role(
 
 
 def delete_booster_role(
-    conn: sqlite3.Connection, guild_id: int, role_key: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    role_key: str,
 ) -> bool:
     cursor = conn.execute(
         "DELETE FROM booster_roles WHERE guild_id = ? AND role_key = ?",
@@ -116,7 +125,8 @@ def delete_booster_role(
 
 
 def get_booster_panel_refs(
-    conn: sqlite3.Connection, guild_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
 ) -> list[tuple[int, int]]:
     rows = conn.execute(
         "SELECT channel_id, message_id FROM booster_panel_messages WHERE guild_id = ?",
@@ -141,6 +151,7 @@ def replace_booster_panel_refs(
 # Persistent button via DynamicItem
 # ---------------------------------------------------------------------------
 
+
 class BoosterRoleDynamicButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=r"booster_role:(?P<key>.+)",
@@ -164,7 +175,7 @@ class BoosterRoleDynamicButton(
         item: discord.ui.Button,
         match: discord.utils.MISSING,  # type: ignore[assignment]
         /,
-    ) -> "BoosterRoleDynamicButton":
+    ) -> BoosterRoleDynamicButton:
         key = (item.custom_id or "").removeprefix("booster_role:")
         return cls(key)
 
@@ -173,13 +184,15 @@ class BoosterRoleDynamicButton(
         member = interaction.user
         if guild is None or not isinstance(member, discord.Member):
             await interaction.response.send_message(
-                "This only works in a server.", ephemeral=True,
+                "This only works in a server.",
+                ephemeral=True,
             )
             return
 
         if member.premium_since is None:
             await interaction.response.send_message(
-                "Only server boosters can pick a cosmetic role.", ephemeral=True,
+                "Only server boosters can pick a cosmetic role.",
+                ephemeral=True,
             )
             return
 
@@ -192,23 +205,28 @@ class BoosterRoleDynamicButton(
         target = next((r for r in roles if r["role_key"] == self.key), None)
         if target is None:
             await interaction.response.send_message(
-                "This role option no longer exists.", ephemeral=True,
+                "This role option no longer exists.",
+                ephemeral=True,
             )
             return
 
         target_role = guild.get_role(target["role_id"])
         if target_role is None:
             await interaction.response.send_message(
-                "The configured role no longer exists in this server.", ephemeral=True,
+                "The configured role no longer exists in this server.",
+                ephemeral=True,
             )
             return
 
         all_role_ids = {r["role_id"] for r in roles if r["role_id"] > 0}
-        to_remove = [r for r in member.roles if r.id in all_role_ids and r.id != target_role.id]
+        to_remove = [
+            r for r in member.roles if r.id in all_role_ids and r.id != target_role.id
+        ]
 
         if target_role in member.roles and not to_remove:
             await interaction.response.send_message(
-                f"You already have {target_role.mention}.", ephemeral=True,
+                f"You already have {target_role.mention}.",
+                ephemeral=True,
             )
             return
 
@@ -216,23 +234,28 @@ class BoosterRoleDynamicButton(
 
         try:
             if to_remove:
-                await member.remove_roles(*to_remove, reason="Booster cosmetic role switch")
+                await member.remove_roles(
+                    *to_remove, reason="Booster cosmetic role switch"
+                )
             if target_role not in member.roles:
                 await member.add_roles(target_role, reason="Booster cosmetic role pick")
         except (discord.Forbidden, discord.HTTPException) as exc:
             await interaction.followup.send(
-                f"Failed to update roles: {exc}", ephemeral=True,
+                f"Failed to update roles: {exc}",
+                ephemeral=True,
             )
             return
 
         await interaction.followup.send(
-            f"You now have {target_role.mention}!", ephemeral=True,
+            f"You now have {target_role.mention}!",
+            ephemeral=True,
         )
 
 
 # ---------------------------------------------------------------------------
 # Panel builder
 # ---------------------------------------------------------------------------
+
 
 def _safe_filename(name: str, ext: str) -> str:
     """Sanitise a name into a Discord-safe attachment filename."""
@@ -252,7 +275,13 @@ def _make_role_file(role: BoosterRoleRow) -> discord.File | None:
     filename = _safe_filename(role["role_key"], ext)
     with open(image_path, "rb") as fp:
         data = fp.read()
-    log.info("Booster role %r: attaching %s as %s (%d bytes)", role["role_key"], image_path, filename, len(data))
+    log.info(
+        "Booster role %r: attaching %s as %s (%d bytes)",
+        role["role_key"],
+        image_path,
+        filename,
+        len(data),
+    )
     return discord.File(io.BytesIO(data), filename=filename)
 
 
@@ -307,7 +336,8 @@ async def post_or_update_booster_panel(
     # Store all message refs for cleanup later
     with open_db(db_path) as conn:
         replace_booster_panel_refs(
-            conn, guild.id,
+            conn,
+            guild.id,
             [(channel.id, m.id) for m in messages],
         )
     log.info("Posted %d booster panel messages in #%s", len(messages), channel.name)
@@ -318,6 +348,7 @@ async def post_or_update_booster_panel(
 # Swatch sync — scan directory, create/delete roles to match files
 # ---------------------------------------------------------------------------
 
+
 def _parse_swatch_filename(filename: str) -> tuple[str, str, str] | None:
     """Parse ``ColorName_HEX1_HEX2.ext`` → (label, hex1, hex2) or None."""
     stem = os.path.splitext(filename)[0]
@@ -326,7 +357,9 @@ def _parse_swatch_filename(filename: str) -> tuple[str, str, str] | None:
         return None
     hex2 = parts[-1]
     hex1 = parts[-2]
-    if not (re.fullmatch(r"[0-9A-Fa-f]{6}", hex1) and re.fullmatch(r"[0-9A-Fa-f]{6}", hex2)):
+    if not (
+        re.fullmatch(r"[0-9A-Fa-f]{6}", hex1) and re.fullmatch(r"[0-9A-Fa-f]{6}", hex2)
+    ):
         return None
     label = " ".join(parts[:-2])
     return label, hex1, hex2
@@ -377,7 +410,12 @@ async def sync_swatches(
             continue
         label, hex1, hex2 = parsed
         role_key = label.lower().replace(" ", "_")
-        found[role_key] = (label, hex1, os.path.join(swatch_dir, entry), _hex_sort_key(hex1, hex2))
+        found[role_key] = (
+            label,
+            hex1,
+            os.path.join(swatch_dir, entry),
+            _hex_sort_key(hex1, hex2),
+        )
 
     with open_db(db_path) as conn:
         existing = get_booster_roles(conn, guild.id)
@@ -397,22 +435,34 @@ async def sync_swatches(
             if old["image_path"] != file_path or old["sort_order"] != skey:
                 with open_db(db_path) as conn:
                     upsert_booster_role(
-                        conn, guild.id, key,
-                        label=old["label"], role_id=old["role_id"],
-                        image_path=file_path, sort_order=skey,
+                        conn,
+                        guild.id,
+                        key,
+                        label=old["label"],
+                        role_id=old["role_id"],
+                        image_path=file_path,
+                        sort_order=skey,
                     )
             continue
         color = discord.Color(int(hex_color, 16))
-        role = await guild.create_role(name=label, color=color, reason="Booster swatch sync")
+        role = await guild.create_role(
+            name=label, color=color, reason="Booster swatch sync"
+        )
         new_roles.append(role)
         with open_db(db_path) as conn:
             upsert_booster_role(
-                conn, guild.id, key,
-                label=label, role_id=role.id,
-                image_path=file_path, sort_order=skey,
+                conn,
+                guild.id,
+                key,
+                label=label,
+                role_id=role.id,
+                image_path=file_path,
+                sort_order=skey,
             )
         created.append(label)
-        log.info("Created booster role %r (id=%d, color=#%s)", label, role.id, hex_color)
+        log.info(
+            "Created booster role %r (id=%d, color=#%s)", label, role.id, hex_color
+        )
 
     # Position new roles right under the anchor
     if anchor and new_roles:
@@ -420,7 +470,12 @@ async def sync_swatches(
         positions: dict[discord.abc.Snowflake, int] = {r: target_pos for r in new_roles}
         try:
             await guild.edit_role_positions(positions=positions)
-            log.info("Moved %d new booster roles below %r (pos %d)", len(new_roles), anchor.name, target_pos)
+            log.info(
+                "Moved %d new booster roles below %r (pos %d)",
+                len(new_roles),
+                anchor.name,
+                target_pos,
+            )
         except discord.HTTPException as exc:
             log.warning("Could not reposition booster roles: %s", exc)
 
@@ -433,9 +488,13 @@ async def sync_swatches(
             if discord_role is not None:
                 try:
                     await discord_role.delete(reason="Booster swatch removed")
-                    log.info("Deleted booster role %r (id=%d)", row["label"], row["role_id"])
+                    log.info(
+                        "Deleted booster role %r (id=%d)", row["label"], row["role_id"]
+                    )
                 except (discord.Forbidden, discord.HTTPException) as exc:
-                    log.warning("Could not delete booster role %r: %s", row["label"], exc)
+                    log.warning(
+                        "Could not delete booster role %r: %s", row["label"], exc
+                    )
         with open_db(db_path) as conn:
             delete_booster_role(conn, guild.id, key)
         removed.append(row["label"])

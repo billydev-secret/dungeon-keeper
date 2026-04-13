@@ -7,7 +7,8 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Coroutine, TypeAlias, TypedDict
+from typing import Any, TypeAlias, TypedDict
+from collections.abc import Callable, Coroutine
 
 import discord
 
@@ -33,7 +34,9 @@ def _parse_int_config(raw_value: str, *, key: str, default: int = 0) -> int:
     try:
         return int(normalized)
     except ValueError:
-        logging.warning("Invalid integer config for %s: %r; using %s.", key, raw_value, default)
+        logging.warning(
+            "Invalid integer config for %s: %r; using %s.", key, raw_value, default
+        )
         return default
 
 
@@ -45,7 +48,9 @@ def _parse_float_config(raw_value: str, *, key: str, default: float = 0.0) -> fl
     try:
         return float(normalized)
     except ValueError:
-        logging.warning("Invalid float config for %s: %r; using %s.", key, raw_value, default)
+        logging.warning(
+            "Invalid float config for %s: %r; using %s.", key, raw_value, default
+        )
         return default
 
 
@@ -74,9 +79,13 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
     from services.welcome_service import DEFAULT_LEAVE_MESSAGE, DEFAULT_WELCOME_MESSAGE
 
     with open_db(db_path) as conn:
-        guild_id = _parse_int_config(get_config_value(conn, "guild_id", "0"), key="guild_id")
+        guild_id = _parse_int_config(
+            get_config_value(conn, "guild_id", "0"), key="guild_id"
+        )
         if guild_id == 0:
-            guild_id = _parse_int_config(os.environ.get("GUILD_ID", "0"), key="GUILD_ID")
+            guild_id = _parse_int_config(
+                os.environ.get("GUILD_ID", "0"), key="GUILD_ID"
+            )
 
         db_debug = get_config_value(conn, "debug", "")
         if db_debug:
@@ -87,36 +96,55 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
         return {
             "guild_id": guild_id,
             "debug": debug,
-            "mod_channel_id": _parse_int_config(get_config_value(conn, "mod_channel_id", "0"),
-                                                key="mod_channel_id"),
-            "xp_level_5_role_id": _parse_int_config(get_config_value(conn, "xp_level_5_role_id", "0"),
-                                                    key="xp_level_5_role_id"),
+            "mod_channel_id": _parse_int_config(
+                get_config_value(conn, "mod_channel_id", "0"), key="mod_channel_id"
+            ),
+            "xp_level_5_role_id": _parse_int_config(
+                get_config_value(conn, "xp_level_5_role_id", "0"),
+                key="xp_level_5_role_id",
+            ),
             "xp_level_5_log_channel_id": _parse_int_config(
-                get_config_value(conn, "xp_level_5_log_channel_id", "0"), key="xp_level_5_log_channel_id"
+                get_config_value(conn, "xp_level_5_log_channel_id", "0"),
+                key="xp_level_5_log_channel_id",
             ),
             "xp_level_up_log_channel_id": _parse_int_config(
-                get_config_value(conn, "xp_level_up_log_channel_id", "0"), key="xp_level_up_log_channel_id"
+                get_config_value(conn, "xp_level_up_log_channel_id", "0"),
+                key="xp_level_up_log_channel_id",
             ),
-            "greeter_role_id": _parse_int_config(get_config_value(conn, "greeter_role_id", "0"),
-                                                 key="greeter_role_id"),
+            "greeter_role_id": _parse_int_config(
+                get_config_value(conn, "greeter_role_id", "0"), key="greeter_role_id"
+            ),
             "greeter_chat_channel_id": _parse_int_config(
-                get_config_value(conn, "greeter_chat_channel_id", "0"), key="greeter_chat_channel_id"
+                get_config_value(conn, "greeter_chat_channel_id", "0"),
+                key="greeter_chat_channel_id",
             ),
-            "spoiler_required_channels": get_config_id_set(conn, "spoiler_required_channels"),
+            "spoiler_required_channels": get_config_id_set(
+                conn, "spoiler_required_channels"
+            ),
             "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
-            "xp_grant_allowed_user_ids": get_config_id_set(conn, "xp_grant_allowed_user_ids"),
-            "xp_excluded_channel_ids": get_config_id_set(conn, "xp_excluded_channel_ids"),
-            "welcome_channel_id": _parse_int_config(
-                get_config_value(conn, "welcome_channel_id", "0"), key="welcome_channel_id"
+            "xp_grant_allowed_user_ids": get_config_id_set(
+                conn, "xp_grant_allowed_user_ids"
             ),
-            "welcome_message": get_config_value(conn, "welcome_message", DEFAULT_WELCOME_MESSAGE),
+            "xp_excluded_channel_ids": get_config_id_set(
+                conn, "xp_excluded_channel_ids"
+            ),
+            "welcome_channel_id": _parse_int_config(
+                get_config_value(conn, "welcome_channel_id", "0"),
+                key="welcome_channel_id",
+            ),
+            "welcome_message": get_config_value(
+                conn, "welcome_message", DEFAULT_WELCOME_MESSAGE
+            ),
             "welcome_ping_role_id": _parse_int_config(
-                get_config_value(conn, "welcome_ping_role_id", "0"), key="welcome_ping_role_id"
+                get_config_value(conn, "welcome_ping_role_id", "0"),
+                key="welcome_ping_role_id",
             ),
             "leave_channel_id": _parse_int_config(
                 get_config_value(conn, "leave_channel_id", "0"), key="leave_channel_id"
             ),
-            "leave_message": get_config_value(conn, "leave_message", DEFAULT_LEAVE_MESSAGE),
+            "leave_message": get_config_value(
+                conn, "leave_message", DEFAULT_LEAVE_MESSAGE
+            ),
             "tz_offset_hours": _parse_float_config(
                 get_config_value(conn, "tz_offset_hours", "0"), key="tz_offset_hours"
             ),
@@ -135,13 +163,17 @@ class Bot(discord.Client):
     async def setup_hook(self) -> None:
         if self.debug:
             if self.guild_id <= 0:
-                print("WARNING: debug=True but guild_id is not configured; skipping guild command sync.")
+                print(
+                    "WARNING: debug=True but guild_id is not configured; skipping guild command sync."
+                )
             else:
                 guild = discord.Object(id=self.guild_id)
                 try:
                     self.tree.copy_global_to(guild=guild)
                     synced = await self.tree.sync(guild=guild)
-                    print(f"Synced {len(synced)} commands to development guild {self.guild_id}.")
+                    print(
+                        f"Synced {len(synced)} commands to development guild {self.guild_id}."
+                    )
                     # Clear any stale global commands so they don't appear alongside guild commands.
                     self.tree.clear_commands(guild=None)
                     await self.tree.sync()
@@ -163,7 +195,9 @@ class Bot(discord.Client):
                     await self.tree.sync(guild=guild)
                     print(f"Cleared stale guild commands for {self.guild_id}.")
                 except discord.HTTPException as exc:
-                    print(f"WARNING: could not clear guild commands for {self.guild_id}: {exc}")
+                    print(
+                        f"WARNING: could not clear guild commands for {self.guild_id}: {exc}"
+                    )
 
         for factory in self.startup_task_factories:
             self.startup_tasks.append(asyncio.create_task(factory()))
@@ -207,13 +241,17 @@ class AppContext:
 
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
-            conn.execute("INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)", (bucket,
-                                                                                            value))
+            conn.execute(
+                "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
+                (bucket, value),
+            )
             return get_config_id_set(conn, bucket)
 
     def remove_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
-            conn.execute("DELETE FROM config_ids WHERE bucket = ? AND value = ?", (bucket, value))
+            conn.execute(
+                "DELETE FROM config_ids WHERE bucket = ? AND value = ?", (bucket, value)
+            )
             return get_config_id_set(conn, bucket)
 
     def set_config_value(self, key: str, value: str) -> str:
@@ -228,7 +266,9 @@ class AppContext:
             )
             return get_config_value(conn, key, value)
 
-    def get_interaction_member(self, interaction: discord.Interaction) -> discord.Member | None:
+    def get_interaction_member(
+        self, interaction: discord.Interaction
+    ) -> discord.Member | None:
         user = interaction.user
         if isinstance(user, discord.Member):
             return user
@@ -244,7 +284,9 @@ class AppContext:
             return None
         return guild.get_member(bot_user.id)
 
-    def get_guild_channel_or_thread(self, guild: discord.Guild, channel_id: int) -> GuildTextLike | None:
+    def get_guild_channel_or_thread(
+        self, guild: discord.Guild, channel_id: int
+    ) -> GuildTextLike | None:
         resolver = getattr(guild, "get_channel_or_thread", None)
         if callable(resolver):
             channel = resolver(channel_id)
@@ -262,7 +304,9 @@ class AppContext:
 
         return None
 
-    def get_xp_config_target_channel(self, interaction: discord.Interaction) -> GuildTextLike | None:
+    def get_xp_config_target_channel(
+        self, interaction: discord.Interaction
+    ) -> GuildTextLike | None:
         channel = interaction.channel
         if isinstance(channel, (discord.TextChannel, discord.Thread)):
             return channel
@@ -279,9 +323,7 @@ class AppContext:
             mod_raw = get_config_value(conn, "mod_role_ids", "")
             admin_raw = get_config_value(conn, "admin_role_ids", "")
         configured = {
-            int(x)
-            for x in f"{mod_raw},{admin_raw}".split(",")
-            if x.strip().isdigit()
+            int(x) for x in f"{mod_raw},{admin_raw}".split(",") if x.strip().isdigit()
         }
         return bool(configured & {r.id for r in member.roles})
 
@@ -314,7 +356,9 @@ class AppContext:
                     return True
         return False
 
-    def can_use_grant_role(self, interaction: discord.Interaction, grant_name: str) -> bool:
+    def can_use_grant_role(
+        self, interaction: discord.Interaction, grant_name: str
+    ) -> bool:
         if self.is_mod(interaction):
             return True
         member = self.get_interaction_member(interaction)
@@ -331,4 +375,5 @@ class AppContext:
 
     def get_member_last_activity_map(self, conn, guild_id: int, user_ids: list[int]):
         from xp_system import get_member_last_activity_map
+
         return get_member_last_activity_map(conn, guild_id, user_ids)

@@ -5,6 +5,7 @@ with a configurable TTL.  API endpoints read from cache first and fall back to
 live computation on a miss.  A periodic batch job refreshes the cache every
 15 minutes.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,6 +19,7 @@ log = logging.getLogger("dungeonkeeper.health")
 # ---------------------------------------------------------------------------
 # Table initialization
 # ---------------------------------------------------------------------------
+
 
 def init_health_tables(conn: sqlite3.Connection) -> None:
     conn.executescript("""

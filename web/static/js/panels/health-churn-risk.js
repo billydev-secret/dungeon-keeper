@@ -43,14 +43,28 @@ export function mount(container) {
 
     panel.innerHTML = `
       <header>
-        <h2>Churn Risk Early Warning</h2>
+        <h2>Churn Risk</h2>
         <div class="subtitle">${d.at_risk_count} members at risk</div>
       </header>
+
+      <details class="panel-about" style="margin:8px 0 14px;">
+        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
+        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+          Each member gets a risk score (0–100) based on five signals:
+          <strong style="color:var(--text-normal, #dbdee1);">Frequency</strong> — are they posting less often?
+          <strong style="color:var(--text-normal, #dbdee1);">Channels</strong> — are they visiting fewer channels?
+          <strong style="color:var(--text-normal, #dbdee1);">Reciprocity</strong> — are fewer people replying to them?
+          <strong style="color:var(--text-normal, #dbdee1);">Sentiment</strong> — has their tone turned negative?
+          <strong style="color:var(--text-normal, #dbdee1);">Gap</strong> — how long since they were last seen?
+          Members in the <em>critical</em> tier (80+) are likely about to leave.
+        </div>
+      </details>
 
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">At-Risk Members</div>
           <div class="home-card-big">${d.at_risk_count}</div>
+          <div class="home-card-sub">Showing signs of disengagement</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Critical</div>
@@ -74,12 +88,14 @@ export function mount(container) {
         <div class="chart-wrap" style="height:260px"><canvas id="risk-dist-chart"></canvas></div>
       </div>
 
-      <div class="home-card home-card-wide" style="margin-top:14px;overflow-x:auto;">
+      <div class="home-card home-card-wide" style="margin-top:14px;">
         <div class="home-card-label">At-Risk Members</div>
+        <div class="data-table-scroll">
         <table class="data-table">
           <thead><tr><th>Member</th><th>Tier</th><th>Score</th><th>Signal Breakdown</th><th>Last Seen</th></tr></thead>
           <tbody>${riskRows || '<tr><td colspan="5" class="home-dim">No at-risk members</td></tr>'}</tbody>
         </table>
+        </div>
       </div>
     `;
 

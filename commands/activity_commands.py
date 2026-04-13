@@ -6,6 +6,7 @@ Commands:
   /session_burst   — per-member session burst profile (activity after a 20-min absence)
   /burst_ranking   — server-wide ranking of highest/lowest session burst increase
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -36,21 +37,23 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 
-def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
+def register_activity_commands(bot: Bot, ctx: AppContext) -> None:
     @bot.tree.command(
         name="activity",
-        description="Show a message or XP activity chart for the server or a specific member.",
+        description="Bar chart of messages or XP over time for the server, a member, or a channel.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        resolution="Time resolution for the chart buckets.",
-        member="Show activity for this member only (default: whole server).",
-        channel="Filter activity to a specific channel.",
-        mode="Chart messages or XP earned (default: messages).",
+        resolution="Bucket size: hour, day, week, month, hour_of_day, or day_of_week.",
+        member="Scope to one member. Omit for server-wide.",
+        channel="Scope to one channel.",
+        mode="Chart messages or XP earned.",
     )
     async def activity(
         interaction: discord.Interaction,
-        resolution: Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week"] = "day",
+        resolution: Literal[
+            "hour", "day", "week", "month", "hour_of_day", "day_of_week"
+        ] = "day",
         member: discord.User | None = None,
         channel: discord.TextChannel | None = None,
         mode: Literal["messages", "xp"] = "xp",
@@ -90,42 +93,74 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         channel_id = channel.id if channel is not None else None
 
         if mode == "xp":
+
             def _query_xp():
                 with ctx.open_db() as conn:
                     if resolution in ("hour_of_day", "day_of_week"):
                         _labels, _xp_totals = query_xp_histogram(
-                            conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
-                            user_id=user_id, channel_id=channel_id,
+                            conn,
+                            guild.id,
+                            cast(Literal["hour_of_day", "day_of_week"], resolution),
+                            user_id=user_id,
+                            channel_id=channel_id,
                             utc_offset_hours=utc_offset,
                         )
                         return _labels, _xp_totals, [], False
                     else:
                         _labels, _xp_totals, _member_counts = query_xp_activity(
-                            conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
+                            conn,
+                            guild.id,
+                            resolution,
+                            user_id=user_id,
+                            channel_id=channel_id,
                             utc_offset_hours=utc_offset,
                         )
-                        return _labels, _xp_totals, _member_counts, member is None and channel is None
-            labels, counts, member_counts, show_members = await asyncio.to_thread(_query_xp)
+                        return (
+                            _labels,
+                            _xp_totals,
+                            _member_counts,
+                            member is None and channel is None,
+                        )
+
+            labels, counts, member_counts, show_members = await asyncio.to_thread(
+                _query_xp
+            )
             y_label = "XP Earned"
             bar_label = "XP"
             empty_msg = f"No XP activity recorded for the {window_label.lower()}."
         else:
+
             def _query_activity():
                 with ctx.open_db() as conn:
                     if resolution in ("hour_of_day", "day_of_week"):
                         _labels, _msg_counts = query_message_histogram(
-                            conn, guild.id, cast(Literal["hour_of_day", "day_of_week"], resolution),
-                            user_id=user_id, channel_id=channel_id,
+                            conn,
+                            guild.id,
+                            cast(Literal["hour_of_day", "day_of_week"], resolution),
+                            user_id=user_id,
+                            channel_id=channel_id,
                             utc_offset_hours=utc_offset,
                         )
                         return _labels, _msg_counts, [], False
                     else:
                         _labels, _msg_counts, _member_counts = query_message_activity(
-                            conn, guild.id, resolution, user_id=user_id, channel_id=channel_id,
+                            conn,
+                            guild.id,
+                            resolution,
+                            user_id=user_id,
+                            channel_id=channel_id,
                             utc_offset_hours=utc_offset,
                         )
-                        return _labels, _msg_counts, _member_counts, member is None and channel is None
-            labels, counts, member_counts, show_members = await asyncio.to_thread(_query_activity)
+                        return (
+                            _labels,
+                            _msg_counts,
+                            _member_counts,
+                            member is None and channel is None,
+                        )
+
+            labels, counts, member_counts, show_members = await asyncio.to_thread(
+                _query_activity
+            )
             y_label = "Messages"
             bar_label = "Messages"
             empty_msg = f"No message activity recorded for the {window_label.lower()}."
@@ -136,9 +171,14 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         chart_bytes = await asyncio.to_thread(
             render_activity_chart,
-            labels, counts, member_counts,
-            title=title, resolution=resolution, show_members=show_members,
-            y_label=y_label, bar_label=bar_label,
+            labels,
+            counts,
+            member_counts,
+            title=title,
+            resolution=resolution,
+            show_members=show_members,
+            y_label=y_label,
+            bar_label=bar_label,
         )
 
         await interaction.followup.send(
@@ -182,10 +222,14 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     def _vs_baseline(p: DropoffProfile, baseline_label: str = "server") -> str:
         """User's msg drop relative to the baseline trend."""
-        srv_pct = ((p.server_msgs_recent - p.server_msgs_prev) / p.server_msgs_prev * 100
-                   if p.server_msgs_prev else 0.0)
-        usr_pct = ((p.msgs_recent - p.msgs_prev) / p.msgs_prev * 100
-                   if p.msgs_prev else 0.0)
+        srv_pct = (
+            (p.server_msgs_recent - p.server_msgs_prev) / p.server_msgs_prev * 100
+            if p.server_msgs_prev
+            else 0.0
+        )
+        usr_pct = (
+            (p.msgs_recent - p.msgs_prev) / p.msgs_prev * 100 if p.msgs_prev else 0.0
+        )
         diff = round(usr_pct - srv_pct)
         return f"{diff:+d}pp vs {baseline_label}"
 
@@ -197,7 +241,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         )
 
     def _fmt_compact(
-        rank: int, p: DropoffProfile, guild: discord.Guild,
+        rank: int,
+        p: DropoffProfile,
+        guild: discord.Guild,
         baseline_label: str = "server",
     ) -> str:
         """Format one user as a name line plus a compact monospace table."""
@@ -207,14 +253,21 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         voice_row = ""
         if p.voice_xp_prev or p.voice_xp_recent:
-            voice_row = "\n" + _tbl_row("Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f")
+            voice_row = "\n" + _tbl_row(
+                "Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f"
+            )
 
         table = (
             _tbl_row("Msgs", p.msgs_prev, p.msgs_recent)
-            + "\n" + _tbl_row("Days", p.days_prev, p.days_recent, suffix=f" /{p.days_in_window}")
+            + "\n"
+            + _tbl_row(
+                "Days", p.days_prev, p.days_recent, suffix=f" /{p.days_in_window}"
+            )
             + voice_row
-            + "\n" + _tbl_row("Channels", p.channels_prev, p.channels_recent)
-            + "\n" + _tbl_row("Partners", p.partners_prev, p.partners_recent)
+            + "\n"
+            + _tbl_row("Channels", p.channels_prev, p.channels_recent)
+            + "\n"
+            + _tbl_row("Partners", p.partners_prev, p.partners_recent)
         )
         vs = _vs_baseline(p, baseline_label)
 
@@ -224,7 +277,13 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         ch = guild.get_channel(cid)
         return f"#{ch.name}" if ch and hasattr(ch, "name") else f"#{cid}"
 
-    def _tbl_row(label: str, prev: int | float, recent: int | float, fmt: str = "g", suffix: str = "") -> str:
+    def _tbl_row(
+        label: str,
+        prev: int | float,
+        recent: int | float,
+        fmt: str = "g",
+        suffix: str = "",
+    ) -> str:
         """One row of a compact comparison table (fits ~36 char mobile width)."""
         p = f"{prev:{fmt}}"
         r = f"{recent:{fmt}}"
@@ -232,7 +291,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         return f"{label:<12s}{p:>5s}\u2192{r:>5s} {pct:>6s}{suffix}"
 
     def _fmt_detail(
-        p: DropoffProfile, guild: discord.Guild, period_label: str,
+        p: DropoffProfile,
+        guild: discord.Guild,
+        period_label: str,
         baseline_label: str = "server",
     ) -> discord.Embed:
         """Build a full-detail embed for a single user."""
@@ -241,7 +302,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         bl_title = baseline_label.capitalize()
 
         srv_trend = _pct(p.server_msgs_prev, p.server_msgs_recent)
-        lvl_note = f"  \u00b7  Level {p.level} ({p.total_xp:,.0f} XP)" if p.level else ""
+        lvl_note = (
+            f"  \u00b7  Level {p.level} ({p.total_xp:,.0f} XP)" if p.level else ""
+        )
         embed = discord.Embed(
             title=f"Engagement Profile \u2014 {name}",
             description=(
@@ -259,7 +322,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         activity_rows = [
             header,
             _tbl_row("Msgs", p.msgs_prev, p.msgs_recent),
-            _tbl_row("Days", p.days_prev, p.days_recent, suffix=f" /{p.days_in_window}"),
+            _tbl_row(
+                "Days", p.days_prev, p.days_recent, suffix=f" /{p.days_in_window}"
+            ),
             _tbl_row("Channels", p.channels_prev, p.channels_recent),
         ]
         extras = f"\n{_vs_baseline(p, baseline_label)}"
@@ -276,13 +341,26 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         # XP table
         xp_rows = [header]
         if p.text_xp_prev or p.text_xp_recent:
-            xp_rows.append(_tbl_row("Text XP", p.text_xp_prev, p.text_xp_recent, fmt=".0f"))
+            xp_rows.append(
+                _tbl_row("Text XP", p.text_xp_prev, p.text_xp_recent, fmt=".0f")
+            )
         if p.reply_xp_prev or p.reply_xp_recent:
-            xp_rows.append(_tbl_row("Reply XP", p.reply_xp_prev, p.reply_xp_recent, fmt=".0f"))
+            xp_rows.append(
+                _tbl_row("Reply XP", p.reply_xp_prev, p.reply_xp_recent, fmt=".0f")
+            )
         if p.voice_xp_prev or p.voice_xp_recent:
-            xp_rows.append(_tbl_row("Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f"))
+            xp_rows.append(
+                _tbl_row("Voice XP", p.voice_xp_prev, p.voice_xp_recent, fmt=".0f")
+            )
         if p.image_react_xp_prev or p.image_react_xp_recent:
-            xp_rows.append(_tbl_row("Img Rx XP", p.image_react_xp_prev, p.image_react_xp_recent, fmt=".0f"))
+            xp_rows.append(
+                _tbl_row(
+                    "Img Rx XP",
+                    p.image_react_xp_prev,
+                    p.image_react_xp_recent,
+                    fmt=".0f",
+                )
+            )
         if len(xp_rows) > 1:
             embed.add_field(
                 name="XP Breakdown",
@@ -292,7 +370,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         # Conversations table
         reply_pct_prev = round(p.replies_prev / p.msgs_prev * 100) if p.msgs_prev else 0
-        reply_pct_recent = round(p.replies_recent / p.msgs_recent * 100) if p.msgs_recent else 0
+        reply_pct_recent = (
+            round(p.replies_recent / p.msgs_recent * 100) if p.msgs_recent else 0
+        )
         convo_rows = [
             header,
             _tbl_row("Replies", p.replies_prev, p.replies_recent),
@@ -300,7 +380,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             _tbl_row("Avg len", round(p.avg_len_prev), round(p.avg_len_recent)),
         ]
         if p.deep_convos_prev or p.deep_convos_recent:
-            convo_rows.append(_tbl_row("Deep threads", p.deep_convos_prev, p.deep_convos_recent))
+            convo_rows.append(
+                _tbl_row("Deep threads", p.deep_convos_prev, p.deep_convos_recent)
+            )
         extras_c = f"\nReply rate: {reply_pct_prev}% \u2192 {reply_pct_recent}%"
         embed.add_field(
             name="Conversations",
@@ -324,11 +406,15 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         # Content table
         content_rows = [header]
         if p.attachments_prev or p.attachments_recent:
-            content_rows.append(_tbl_row("Attachments", p.attachments_prev, p.attachments_recent))
+            content_rows.append(
+                _tbl_row("Attachments", p.attachments_prev, p.attachments_recent)
+            )
         if p.reactions_prev or p.reactions_recent:
             rpm_prev = p.reactions_prev / p.msgs_prev if p.msgs_prev else 0
             rpm_recent = p.reactions_recent / p.msgs_recent if p.msgs_recent else 0
-            content_rows.append(_tbl_row("Reactions", p.reactions_prev, p.reactions_recent))
+            content_rows.append(
+                _tbl_row("Reactions", p.reactions_prev, p.reactions_recent)
+            )
             content_rows.append(f"{'  per msg':<12s}{rpm_prev:>5.1f}{rpm_recent:>6.1f}")
         if len(content_rows) > 1:
             embed.add_field(
@@ -344,21 +430,37 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
                 left_names = ", ".join(_ch_name(guild, c) for c in p.channels_left[:8])
                 migration_lines.append(f"Left: {left_names}")
             if p.channels_joined:
-                joined_names = ", ".join(_ch_name(guild, c) for c in p.channels_joined[:8])
+                joined_names = ", ".join(
+                    _ch_name(guild, c) for c in p.channels_joined[:8]
+                )
                 migration_lines.append(f"Joined: {joined_names}")
             if p.channels_stayed:
-                stayed_names = ", ".join(_ch_name(guild, c) for c in p.channels_stayed[:8])
+                stayed_names = ", ".join(
+                    _ch_name(guild, c) for c in p.channels_stayed[:8]
+                )
                 migration_lines.append(f"Active: {stayed_names}")
-            embed.add_field(name="Channel Migration", value="\n".join(migration_lines), inline=False)
+            embed.add_field(
+                name="Channel Migration", value="\n".join(migration_lines), inline=False
+            )
 
         # Patterns table
         pattern_rows = []
         if p.peak_hour_prev is not None or p.peak_hour_recent is not None:
-            h_prev = _HOD_LABELS[p.peak_hour_prev] if p.peak_hour_prev is not None else "\u2014"
-            h_recent = _HOD_LABELS[p.peak_hour_recent] if p.peak_hour_recent is not None else "\u2014"
+            h_prev = (
+                _HOD_LABELS[p.peak_hour_prev]
+                if p.peak_hour_prev is not None
+                else "\u2014"
+            )
+            h_recent = (
+                _HOD_LABELS[p.peak_hour_recent]
+                if p.peak_hour_recent is not None
+                else "\u2014"
+            )
             pattern_rows.append(f"{'Peak hour':<12s}{h_prev:>5s}\u2192{h_recent:>5s}")
         if p.msgs_prev or p.msgs_recent:
-            pattern_rows.append(f"{'Weekday %':<12s}{p.weekday_pct_prev:>4.0f}%\u2192{p.weekday_pct_recent:>4.0f}%")
+            pattern_rows.append(
+                f"{'Weekday %':<12s}{p.weekday_pct_prev:>4.0f}%\u2192{p.weekday_pct_recent:>4.0f}%"
+            )
         if pattern_rows:
             embed.add_field(
                 name="Patterns",
@@ -372,14 +474,14 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="dropoff",
-        description="Show members with the largest drop in engagement between two equal time windows.",
+        description="Members whose engagement dropped the most between two consecutive periods.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        period="Length of each comparison window.",
-        limit="Number of members to show (1\u201325, default 10).",
-        channel="Restrict candidate selection to a specific channel.",
-        member="Show a detailed engagement profile for one member instead of the ranked list.",
+        period="Window size to compare: day, week, or month.",
+        limit="How many members to show (1-25).",
+        channel="Only look at activity in this channel.",
+        member="Get a full engagement profile for one person instead of the ranked list.",
     )
     async def dropoff(
         interaction: discord.Interaction,
@@ -411,10 +513,14 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         def _query_dropoff():
             with ctx.open_db() as conn:
                 return query_dropoff_profiles(
-                    conn, guild.id, period_secs,
-                    channel_id=channel_id, limit=limit,
+                    conn,
+                    guild.id,
+                    period_secs,
+                    channel_id=channel_id,
+                    limit=limit,
                     target_user_id=_target_uid,
                 )
+
         profiles = await asyncio.to_thread(_query_dropoff)
 
         # ── detail view (single member) ───────────────────────────────────
@@ -463,10 +569,10 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="session_burst",
-        description="Show a member's message activity profile after returning from a 20-min absence.",
+        description="How active is someone in the hour after they come back from a break?",
     )
     @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(member="The member to profile.")
+    @app_commands.describe(member="Member to profile.")
     async def session_burst(
         interaction: discord.Interaction,
         member: discord.User,
@@ -490,7 +596,10 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         def _query_burst():
             with ctx.open_db() as conn:
                 return query_session_burst(conn, guild.id, _member_id)
-        pre_sessions, post_sessions, overall_rate = await asyncio.to_thread(_query_burst)
+
+        pre_sessions, post_sessions, overall_rate = await asyncio.to_thread(
+            _query_burst
+        )
 
         if not post_sessions:
             await interaction.followup.send(
@@ -502,7 +611,9 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         chart_bytes = await asyncio.to_thread(
             render_session_burst_chart,
-            pre_sessions, post_sessions, overall_rate,
+            pre_sessions,
+            post_sessions,
+            overall_rate,
             user_display_name=member.display_name,
         )
         await interaction.followup.send(
@@ -512,11 +623,11 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @bot.tree.command(
         name="burst_ranking",
-        description="Show which members have the highest and lowest session burst increase server-wide.",
+        description="Who sparks conversation when they show up vs. who posts quietly?",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        limit="Number of members to show at each end (1–15, default 5).",
+        limit="How many to show at each end of the ranking (1-15).",
     )
     async def burst_ranking(
         interaction: discord.Interaction,
@@ -539,6 +650,7 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
         def _query_ranking():
             with ctx.open_db() as conn:
                 return query_burst_ranking(conn, guild.id)
+
         ranking = await asyncio.to_thread(_query_ranking)
 
         if not ranking:
@@ -557,7 +669,10 @@ def register_activity_commands(bot: "Bot", ctx: "AppContext") -> None:
             entries.append((name, pre_avg, post_avg, n_sessions))
 
         chart_bytes = await asyncio.to_thread(
-            render_burst_ranking_chart, entries, limit=limit, guild_name=guild.name,
+            render_burst_ranking_chart,
+            entries,
+            limit=limit,
+            guild_name=guild.name,
         )
         await interaction.followup.send(
             file=discord.File(io.BytesIO(chart_bytes), filename="burst_ranking.png"),

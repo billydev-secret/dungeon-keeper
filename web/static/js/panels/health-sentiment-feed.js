@@ -56,7 +56,7 @@ export function mount(container) {
     panel.innerHTML = `
       <header>
         <h2>Sentiment Feed</h2>
-        <div class="subtitle">Recent messages with strong positive or negative VADER scores</div>
+        <div class="subtitle">Recent messages with strong positive or negative sentiment</div>
       </header>
 
       <div class="home-grid">
@@ -73,13 +73,14 @@ export function mount(container) {
       </div>
 
       <div class="home-grid">
-        <div class="home-card home-card-wide" style="overflow-x:auto;">
+        <div class="home-card home-card-wide">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
             <div class="home-card-label" style="margin:0;">Messages</div>
             <button class="sf-filter-btn ${activeBtn("all")}" data-filter="all">All</button>
             <button class="sf-filter-btn ${activeBtn("positive")}" data-filter="positive">Positive</button>
             <button class="sf-filter-btn ${activeBtn("negative")}" data-filter="negative">Negative</button>
           </div>
+          <div class="data-table-scroll">
           <table class="data-table">
             <thead><tr>
               <th>Score</th><th>Emotion</th><th>Author</th>
@@ -87,6 +88,7 @@ export function mount(container) {
             </tr></thead>
             <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:var(--text-dim)">No messages</td></tr>'}</tbody>
           </table>
+          </div>
         </div>
       </div>
     `;

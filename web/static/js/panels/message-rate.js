@@ -7,7 +7,7 @@ export function mount(container, initialParams) {
     <div class="panel">
       <header>
         <h2>Message Rate</h2>
-        <div class="subtitle">Messages per 10-minute interval across the day (averaged per day)</div>
+        <div class="subtitle">Average message volume in 10-minute windows throughout the day</div>
       </header>
       <div class="controls">
         <label>Days to average

@@ -8,6 +8,7 @@ an ``incident_events`` row is written.
 Baseline computation and other batch-oriented anomaly checks are handled by
 ``update_baselines`` (called from the periodic health batch job).
 """
+
 from __future__ import annotations
 
 import json
@@ -80,7 +81,9 @@ class VelocityTracker:
 
         # Check for anomaly: current rate > mean + 3*stddev
         threshold = mean + 3 * stddev
-        if current_rate > threshold and current_rate > 5:  # minimum 5 msg/min to trigger
+        if (
+            current_rate > threshold and current_rate > 5
+        ):  # minimum 5 msg/min to trigger
             # Cooldown check
             last = self._last_incident.get(guild_id, 0)
             if ts - last < self._INCIDENT_COOLDOWN:
@@ -92,12 +95,14 @@ class VelocityTracker:
                 "event_type": "velocity_spike",
                 "severity": "warning" if current_rate < threshold * 1.5 else "critical",
                 "channel_id": channel_id,
-                "details_json": json.dumps({
-                    "current_rate": round(current_rate, 1),
-                    "baseline_mean": round(mean, 1),
-                    "baseline_stddev": round(stddev, 1),
-                    "threshold": round(threshold, 1),
-                }),
+                "details_json": json.dumps(
+                    {
+                        "current_rate": round(current_rate, 1),
+                        "baseline_mean": round(mean, 1),
+                        "baseline_stddev": round(stddev, 1),
+                        "threshold": round(threshold, 1),
+                    }
+                ),
                 "detected_at": ts,
             }
 
@@ -106,14 +111,22 @@ class VelocityTracker:
                 "INSERT INTO incident_events "
                 "(guild_id, event_type, severity, channel_id, details_json, detected_at) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (incident["guild_id"], incident["event_type"], incident["severity"],
-                 incident["channel_id"], incident["details_json"], incident["detected_at"]),
+                (
+                    incident["guild_id"],
+                    incident["event_type"],
+                    incident["severity"],
+                    incident["channel_id"],
+                    incident["details_json"],
+                    incident["detected_at"],
+                ),
             )
             conn.commit()
 
             log.warning(
                 "Velocity spike detected in guild %s: %.1f msgs/min (threshold: %.1f)",
-                guild_id, current_rate, threshold,
+                guild_id,
+                current_rate,
+                threshold,
             )
             return incident
 
@@ -127,7 +140,10 @@ class VelocityTracker:
         ).fetchall()
         baselines: dict[tuple[int, int], tuple[float, float]] = {}
         for r in rows:
-            baselines[(r["hour_of_day"], r["day_of_week"])] = (r["mean_rate"], r["stddev_rate"])
+            baselines[(r["hour_of_day"], r["day_of_week"])] = (
+                r["mean_rate"],
+                r["stddev_rate"],
+            )
         self._baselines[guild_id] = baselines
         self._baseline_loaded[guild_id] = time.time()
 
@@ -163,11 +179,13 @@ def check_join_raid(
             "event_type": "raid_attempt",
             "severity": "critical",
             "channel_id": None,
-            "details_json": json.dumps({
-                "new_accounts_2min": recent_new,
-                "trigger_member_id": str(member_id),
-                "account_age_days": round(account_age_days, 1),
-            }),
+            "details_json": json.dumps(
+                {
+                    "new_accounts_2min": recent_new,
+                    "trigger_member_id": str(member_id),
+                    "account_age_days": round(account_age_days, 1),
+                }
+            ),
             "detected_at": ts,
         }
         conn.execute(
@@ -177,7 +195,11 @@ def check_join_raid(
             (guild_id, "raid_attempt", "critical", None, incident["details_json"], ts),
         )
         conn.commit()
-        log.warning("Possible raid detected in guild %s: %d new accounts in 2 min", guild_id, recent_new)
+        log.warning(
+            "Possible raid detected in guild %s: %d new accounts in 2 min",
+            guild_id,
+            recent_new,
+        )
         return incident
     return None
 
@@ -227,7 +249,9 @@ def update_baselines(conn: sqlite3.Connection, guild_id: int) -> None:
         )
 
     conn.commit()
-    log.debug("Updated velocity baselines for guild %s (%d slots)", guild_id, len(rates))
+    log.debug(
+        "Updated velocity baselines for guild %s (%d slots)", guild_id, len(rates)
+    )
 
 
 # Singleton tracker shared across the bot process

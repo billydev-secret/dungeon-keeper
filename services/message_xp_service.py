@@ -1,4 +1,5 @@
 """Message XP award service - handles XP from text messages and reactions."""
+
 from __future__ import annotations
 
 import logging
@@ -81,12 +82,16 @@ async def award_message_xp(
 
     with open_db(db_path) as conn:
         state = get_member_xp_state(conn, message.guild.id, message.author.id, settings)
-        is_duplicate = bool(normalized_content) and normalized_content == state.last_message_norm
+        is_duplicate = (
+            bool(normalized_content) and normalized_content == state.last_message_norm
+        )
         breakdown = calculate_message_xp(
             MessageXpContext(
                 content=message.content,
                 seconds_since_last_message=(
-                    None if state.last_message_at is None else now_ts - state.last_message_at
+                    None
+                    if state.last_message_at is None
+                    else now_ts - state.last_message_at
                 ),
                 is_duplicate=is_duplicate,
                 is_reply_to_human=is_reply_to_human,

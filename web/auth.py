@@ -7,6 +7,7 @@ Ships with two backends:
   Resolves permissions per-request from the bot's guild member cache (live)
   or from stored OAuth data (standalone fallback).
 """
+
 from __future__ import annotations
 
 import logging
@@ -68,7 +69,9 @@ class OpenAuth:
         )
 
 
-_MOD_BITS = _MANAGE_GUILD | _KICK_MEMBERS | _BAN_MEMBERS | _MANAGE_MESSAGES | _MANAGE_ROLES
+_MOD_BITS = (
+    _MANAGE_GUILD | _KICK_MEMBERS | _BAN_MEMBERS | _MANAGE_MESSAGES | _MANAGE_ROLES
+)
 
 
 def resolve_discord_perms(permission_bits: int) -> frozenset[str]:
@@ -105,6 +108,7 @@ class DiscordOAuthAuth:
 
     def __init__(self, session_secret: str, guild_id: int) -> None:
         from itsdangerous import URLSafeTimedSerializer
+
         self._serializer = URLSafeTimedSerializer(session_secret)
         self._guild_id = guild_id
 
@@ -120,18 +124,21 @@ class DiscordOAuthAuth:
         role_names: list[str] | None = None,
     ) -> str:
         """Create a signed, timestamped session cookie value."""
-        return self._serializer.dumps({
-            "uid": user_id,
-            "name": username,
-            "token": access_token,
-            "perms_bits": permission_bits,
-            "role_ids": role_ids or [],
-            "role_names": role_names or [],
-        })
+        return self._serializer.dumps(
+            {
+                "uid": user_id,
+                "name": username,
+                "token": access_token,
+                "perms_bits": permission_bits,
+                "role_ids": role_ids or [],
+                "role_names": role_names or [],
+            }
+        )
 
     def read_session(self, cookie: str) -> dict | None:
         """Decode and verify a session cookie. Returns None on failure."""
         from itsdangerous import BadSignature
+
         try:
             return self._serializer.loads(cookie, max_age=SESSION_MAX_AGE)  # type: ignore[no-any-return]
         except (BadSignature, Exception):

@@ -37,7 +37,9 @@ class NormalizeMessageContentTests(unittest.TestCase):
         self.assertEqual(normalize_message_content("Hello, World!"), "hello world")
 
     def test_removes_urls(self):
-        self.assertEqual(normalize_message_content("check https://example.com out"), "check out")
+        self.assertEqual(
+            normalize_message_content("check https://example.com out"), "check out"
+        )
 
     def test_empty_string(self):
         self.assertEqual(normalize_message_content(""), "")
@@ -79,11 +81,15 @@ class PairMultiplierTests(unittest.TestCase):
 
     def test_at_threshold_applies_multiplier(self):
         at = DEFAULT_XP_SETTINGS.pair_streak_threshold
-        self.assertEqual(pair_multiplier(at), DEFAULT_XP_SETTINGS.pair_streak_multiplier)
+        self.assertEqual(
+            pair_multiplier(at), DEFAULT_XP_SETTINGS.pair_streak_multiplier
+        )
 
     def test_above_threshold_applies_multiplier(self):
         above = DEFAULT_XP_SETTINGS.pair_streak_threshold + 5
-        self.assertEqual(pair_multiplier(above), DEFAULT_XP_SETTINGS.pair_streak_multiplier)
+        self.assertEqual(
+            pair_multiplier(above), DEFAULT_XP_SETTINGS.pair_streak_multiplier
+        )
 
     def test_zero_streak_returns_one(self):
         self.assertEqual(pair_multiplier(0), 1.0)
@@ -152,11 +158,15 @@ class CompletedVoiceIntervalsTests(unittest.TestCase):
 
     def test_not_enough_time_returns_zero(self):
         session = self._session(qualified_since=1000.0)
-        self.assertEqual(completed_voice_intervals(session, now_ts=1000.0 + self.interval - 1), 0)
+        self.assertEqual(
+            completed_voice_intervals(session, now_ts=1000.0 + self.interval - 1), 0
+        )
 
     def test_exactly_one_interval_returns_one(self):
         session = self._session(qualified_since=1000.0)
-        self.assertEqual(completed_voice_intervals(session, now_ts=1000.0 + self.interval), 1)
+        self.assertEqual(
+            completed_voice_intervals(session, now_ts=1000.0 + self.interval), 1
+        )
 
     def test_already_awarded_intervals_are_subtracted(self):
         session = self._session(qualified_since=1000.0, awarded_intervals=2)
@@ -176,7 +186,15 @@ class VoiceSessionDbTests(unittest.TestCase):
 
     def test_set_and_get_session(self):
         conn = make_conn()
-        set_voice_session(conn, 1, 10, 100, session_started_at=500.0, qualified_since=600.0, awarded_intervals=3)
+        set_voice_session(
+            conn,
+            1,
+            10,
+            100,
+            session_started_at=500.0,
+            qualified_since=600.0,
+            awarded_intervals=3,
+        )
         session = get_voice_session(conn, guild_id=1, user_id=10)
         self.assertIsNotNone(session)
         self.assertEqual(session.channel_id, 100)
@@ -187,14 +205,18 @@ class VoiceSessionDbTests(unittest.TestCase):
     def test_set_session_upserts(self):
         conn = make_conn()
         set_voice_session(conn, 1, 10, 100, session_started_at=500.0)
-        set_voice_session(conn, 1, 10, 200, session_started_at=999.0, awarded_intervals=7)
+        set_voice_session(
+            conn, 1, 10, 200, session_started_at=999.0, awarded_intervals=7
+        )
         session = get_voice_session(conn, guild_id=1, user_id=10)
         self.assertEqual(session.channel_id, 200)
         self.assertEqual(session.awarded_intervals, 7)
 
     def test_qualified_since_can_be_none(self):
         conn = make_conn()
-        set_voice_session(conn, 1, 10, 100, session_started_at=500.0, qualified_since=None)
+        set_voice_session(
+            conn, 1, 10, 100, session_started_at=500.0, qualified_since=None
+        )
         session = get_voice_session(conn, guild_id=1, user_id=10)
         self.assertIsNone(session.qualified_since)
 
@@ -226,12 +248,26 @@ class XpAggregateQueryTests(unittest.TestCase):
 
     def test_has_any_xp_events_true_after_event(self):
         conn = make_conn()
-        record_xp_event(conn, guild_id=1, user_id=1, source=XP_SOURCE_TEXT, amount=5.0, created_at=100.0)
+        record_xp_event(
+            conn,
+            guild_id=1,
+            user_id=1,
+            source=XP_SOURCE_TEXT,
+            amount=5.0,
+            created_at=100.0,
+        )
         self.assertTrue(has_any_xp_events(conn, guild_id=1))
 
     def test_has_any_xp_events_scoped_to_guild(self):
         conn = make_conn()
-        record_xp_event(conn, guild_id=1, user_id=1, source=XP_SOURCE_TEXT, amount=5.0, created_at=100.0)
+        record_xp_event(
+            conn,
+            guild_id=1,
+            user_id=1,
+            source=XP_SOURCE_TEXT,
+            amount=5.0,
+            created_at=100.0,
+        )
         self.assertFalse(has_any_xp_events(conn, guild_id=2))
 
     def test_has_any_member_xp_false_when_empty(self):
@@ -240,12 +276,16 @@ class XpAggregateQueryTests(unittest.TestCase):
 
     def test_has_any_member_xp_true_after_award(self):
         conn = make_conn()
-        apply_xp_award(conn, guild_id=1, user_id=1, xp_delta=10.0, settings=DEFAULT_XP_SETTINGS)
+        apply_xp_award(
+            conn, guild_id=1, user_id=1, xp_delta=10.0, settings=DEFAULT_XP_SETTINGS
+        )
         self.assertTrue(has_any_member_xp(conn, guild_id=1))
 
     def test_has_any_member_xp_scoped_to_guild(self):
         conn = make_conn()
-        apply_xp_award(conn, guild_id=1, user_id=1, xp_delta=10.0, settings=DEFAULT_XP_SETTINGS)
+        apply_xp_award(
+            conn, guild_id=1, user_id=1, xp_delta=10.0, settings=DEFAULT_XP_SETTINGS
+        )
         self.assertFalse(has_any_member_xp(conn, guild_id=2))
 
     def test_count_xp_events_empty(self):
@@ -254,9 +294,30 @@ class XpAggregateQueryTests(unittest.TestCase):
 
     def test_count_xp_events_counts_all_sources(self):
         conn = make_conn()
-        record_xp_event(conn, guild_id=1, user_id=1, source=XP_SOURCE_TEXT, amount=5.0, created_at=100.0)
-        record_xp_event(conn, guild_id=1, user_id=1, source=XP_SOURCE_VOICE, amount=3.0, created_at=200.0)
-        record_xp_event(conn, guild_id=2, user_id=1, source=XP_SOURCE_TEXT, amount=1.0, created_at=300.0)
+        record_xp_event(
+            conn,
+            guild_id=1,
+            user_id=1,
+            source=XP_SOURCE_TEXT,
+            amount=5.0,
+            created_at=100.0,
+        )
+        record_xp_event(
+            conn,
+            guild_id=1,
+            user_id=1,
+            source=XP_SOURCE_VOICE,
+            amount=3.0,
+            created_at=200.0,
+        )
+        record_xp_event(
+            conn,
+            guild_id=2,
+            user_id=1,
+            source=XP_SOURCE_TEXT,
+            amount=1.0,
+            created_at=300.0,
+        )
         self.assertEqual(count_xp_events(conn, guild_id=1), 2)
         self.assertEqual(count_xp_events(conn, guild_id=2), 1)
 

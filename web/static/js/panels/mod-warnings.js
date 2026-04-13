@@ -12,7 +12,7 @@ export function mount(container) {
     <div class="panel">
       <header>
         <h2>Warnings</h2>
-        <div class="subtitle">User warnings issued by moderators</div>
+        <div class="subtitle">Active and expired warnings</div>
       </header>
       <div class="controls">
         <label><input type="checkbox" data-control="active-only"> Active only</label>

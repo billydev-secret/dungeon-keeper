@@ -5,6 +5,7 @@ Stores pairwise interaction weights and renders network charts:
   - Radial ego layout (focused-member view)
   - Adjacency heatmap (/interaction_heatmap)
 """
+
 from __future__ import annotations
 
 import io
@@ -29,10 +30,10 @@ _layout_executor = ThreadPoolExecutor(max_workers=4)
 # freetype crash, so we allow only that range plus common punctuation.
 _UNRENDERABLE_RE = re.compile(
     "["
-    "\U00010000-\U0010FFFF"  # supplementary planes (emoji, etc.)
-    "\u0250-\u2DFF"          # extended Latin and everything up to CJK
-    "\u2E00-\uFDFF"          # misc punctuation through Arabic
-    "\uFE00-\uFFFF"          # variation selectors, specials
+    "\U00010000-\U0010ffff"  # supplementary planes (emoji, etc.)
+    "\u0250-\u2dff"  # extended Latin and everything up to CJK
+    "\u2e00-\ufdff"  # misc punctuation through Arabic
+    "\ufe00-\uffff"  # variation selectors, specials
     "]+",
     flags=re.UNICODE,
 )
@@ -61,6 +62,7 @@ _EDGE_COLOR = "#99aab5"
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
+
 
 def init_interaction_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -235,14 +237,13 @@ def query_connection_web(
         key = (min(u, v), max(u, v))
         merged[key] = merged.get(key, 0) + w
 
-    return [
-        (u, v, w) for (u, v), w in merged.items() if w >= min_weight and u != v
-    ]
+    return [(u, v, w) for (u, v), w in merged.items() if w >= min_weight and u != v]
 
 
 # ---------------------------------------------------------------------------
 # Connected-component helpers
 # ---------------------------------------------------------------------------
+
 
 def _find_components(
     node_ids: list[int],
@@ -274,6 +275,7 @@ def _find_components(
 # ---------------------------------------------------------------------------
 # Community detection (Louvain-style label propagation)
 # ---------------------------------------------------------------------------
+
 
 def _detect_communities(
     node_ids: list[int],
@@ -338,6 +340,7 @@ _COMMUNITY_COLORS = [
 # ---------------------------------------------------------------------------
 # Radial / ego layout
 # ---------------------------------------------------------------------------
+
 
 def _radial_layout(
     focus_id: int,
@@ -429,6 +432,7 @@ def _radial_layout(
 # Spring layout
 # ---------------------------------------------------------------------------
 
+
 def _run_fr(
     node_ids: list[int],
     pos: dict[int, list[float]],
@@ -504,9 +508,9 @@ def _layout_energy(
             d = math.sqrt(dx * dx + dy * dy) or 1e-6
             key = (min(u, v), max(u, v))
             if key in edge_pairs:
-                energy += (d - k) ** 2      # edge: penalise deviation from k
+                energy += (d - k) ** 2  # edge: penalise deviation from k
             else:
-                energy += k * k / d         # non-edge: penalise closeness
+                energy += k * k / d  # non-edge: penalise closeness
     return energy
 
 
@@ -514,12 +518,22 @@ def _layout_energy(
 # Crossing minimization helpers
 # ---------------------------------------------------------------------------
 
+
 def _segments_cross(
-    ax: float, ay: float, bx: float, by: float,
-    cx: float, cy: float, dx: float, dy: float,
+    ax: float,
+    ay: float,
+    bx: float,
+    by: float,
+    cx: float,
+    cy: float,
+    dx: float,
+    dy: float,
 ) -> bool:
     """Return True if segment AB properly crosses segment CD."""
-    def _side(ox: float, oy: float, px: float, py: float, qx: float, qy: float) -> float:
+
+    def _side(
+        ox: float, oy: float, px: float, py: float, qx: float, qy: float
+    ) -> float:
         return (px - ox) * (qy - oy) - (py - oy) * (qx - ox)
 
     d1 = _side(cx, cy, dx, dy, ax, ay)
@@ -544,7 +558,9 @@ def _count_crossings(
             u2, v2 = edge_list[j]
             if u1 in (u2, v2) or v1 in (u2, v2):
                 continue
-            if _segments_cross(ax, ay, bx, by, pos[u2][0], pos[u2][1], pos[v2][0], pos[v2][1]):
+            if _segments_cross(
+                ax, ay, bx, by, pos[u2][0], pos[u2][1], pos[v2][0], pos[v2][1]
+            ):
                 count += 1
     return count
 
@@ -570,7 +586,9 @@ def _incident_crossings(
             u2, v2 = edge_list[j]
             if u1 in (u2, v2) or v1 in (u2, v2):
                 continue
-            if _segments_cross(ax, ay, bx, by, pos[u2][0], pos[u2][1], pos[v2][0], pos[v2][1]):
+            if _segments_cross(
+                ax, ay, bx, by, pos[u2][0], pos[u2][1], pos[v2][0], pos[v2][1]
+            ):
                 count += 1
     return count
 
@@ -606,7 +624,8 @@ def _swap_to_reduce_crossings(
                 u, v = node_ids[i], node_ids[j]
                 uv_edge = (min(u, v), max(u, v))
                 incident = [
-                    k for k in (adj_set[u] | adj_set[v])
+                    k
+                    for k in (adj_set[u] | adj_set[v])
                     if edge_list[k] != uv_edge  # skip the invariant u-v edge
                 ]
                 if not incident:
@@ -674,8 +693,10 @@ def _nudge_to_reduce_crossings(
                 r = ring_r * r_mult
                 for i in range(12):
                     angle = 2 * math.pi * i / 12
-                    pos[nid] = [orig_x + r * math.cos(angle),
-                                orig_y + r * math.sin(angle)]
+                    pos[nid] = [
+                        orig_x + r * math.cos(angle),
+                        orig_y + r * math.sin(angle),
+                    ]
                     c = _incident_crossings(pos, edge_list, incident)
                     if c < best_c:
                         best_c = c
@@ -725,6 +746,7 @@ def _spring_layout(
 
     def _one_restart(restart: int) -> tuple[dict[int, list[float]], tuple[int, float]]:
         import random as _rand
+
         # Restart 0 is deterministic (repeatable baseline); the rest use
         # entropy-seeded RNG so each call explores different regions of the
         # search space instead of always revisiting the same fixed seeds.
@@ -751,7 +773,7 @@ def _spring_layout(
         return pos, (crossings, energy)
 
     best_pos: dict[int, list[float]] | None = None
-    best_score: tuple[int, float] = (2 ** 31, float("inf"))
+    best_score: tuple[int, float] = (2**31, float("inf"))
 
     futures = [_layout_executor.submit(_one_restart, r) for r in range(restarts)]
     for fut in as_completed(futures):
@@ -769,6 +791,7 @@ def _spring_layout(
 # ---------------------------------------------------------------------------
 # Multi-component packing
 # ---------------------------------------------------------------------------
+
 
 def _pack_component_layouts(
     component_layouts: list[tuple[list[int], dict[int, tuple[float, float]]]],
@@ -828,10 +851,10 @@ def _pack_component_layouts(
         weights = [math.sqrt(len(nodes)) for nodes, _ in normed]
         total_w = sum(weights)
         x_cursor = -1.0
-        for (nodes, unit), w in zip(normed, weights):
+        for (_nodes, unit), w in zip(normed, weights):
             cell_w = 2.0 * w / total_w
             cell_cx = x_cursor + cell_w * 0.5
-            hw = cell_w * 0.5 * 0.82   # 82% fill — gap between components
+            hw = cell_w * 0.5 * 0.82  # 82% fill — gap between components
             for nid, (x, y) in unit.items():
                 result[nid] = (cell_cx + x * hw, y * 0.82)
             x_cursor += cell_w
@@ -841,7 +864,7 @@ def _pack_component_layouts(
         rows = math.ceil(n / cols)
         cell_w = 2.0 / cols
         cell_h = 2.0 / rows
-        for i, (nodes, unit) in enumerate(normed):
+        for i, (_nodes, unit) in enumerate(normed):
             col = i % cols
             row = i // cols
             cell_cx = -1.0 + cell_w * (col + 0.5)
@@ -858,13 +881,13 @@ def _pack_component_layouts(
 # Chart renderer
 # ---------------------------------------------------------------------------
 
-_NODE_FOCUS = "#eb459e"      # pink  — focused user
+_NODE_FOCUS = "#eb459e"  # pink  — focused user
 _NODE_SECONDARY = "#57f287"  # green — 2nd-level connections
 
 # Label placement metrics for a 12×12 figure with ±1.5 data-unit axes:
 # 1 data unit = 4 in, 1 in = 72 pt, DejaVu Sans glyph ≈ 0.6 em wide.
-_LABEL_CW = 0.017   # data-unit width per character at 8 pt
-_LABEL_LH = 0.033   # data-unit line height at 8 pt
+_LABEL_CW = 0.017  # data-unit width per character at 8 pt
+_LABEL_LH = 0.033  # data-unit line height at 8 pt
 
 
 def _place_labels(
@@ -935,7 +958,8 @@ def _place_labels(
                         / (math.hypot(pos_n[nb][0] - x, pos_n[nb][1] - y) + 1e-9)
                         for nb in nbrs
                     )
-                    if nbrs else db  # isolated nodes: prefer upward
+                    if nbrs
+                    else db  # isolated nodes: prefer upward
                 )
 
                 # Heavy per-box penalty for each overlapping placed label.
@@ -1039,10 +1063,13 @@ def _community_clustered_layout(
         ys = [layout[n][1] for n in nodes]
         icx = sum(xs) / len(xs)
         icy = sum(ys) / len(ys)
-        max_r = max(
-            math.sqrt((layout[n][0] - icx) ** 2 + (layout[n][1] - icy) ** 2)
-            for n in nodes
-        ) or 1.0
+        max_r = (
+            max(
+                math.sqrt((layout[n][0] - icx) ** 2 + (layout[n][1] - icy) ** 2)
+                for n in nodes
+            )
+            or 1.0
+        )
 
         scale = radius / max_r
         for nid in nodes:
@@ -1115,7 +1142,9 @@ def render_connection_web(
         # Need circle diameter >= max(text_w, text_h).
         diameter = max(text_w, text_h)
         min_s = math.pi * (diameter / 2) ** 2
-        vol_s = (300 if nid == focus_user_id else 120) + 600 * (node_vol.get(nid, 1) / max_vol)
+        vol_s = (300 if nid == focus_user_id else 120) + 600 * (
+            node_vol.get(nid, 1) / max_vol
+        )
         node_size[nid] = max(min_s, vol_s)
 
     # Push apart overlapping nodes — sizes may now exceed the layout spacing.
@@ -1237,9 +1266,14 @@ def render_connection_web(
             longest_seg = max(visible, key=lambda s: s[1] - s[0])
             mt = (longest_seg[0] + longest_seg[1]) / 2
             ax.text(
-                xu + dx * mt, yu + dy * mt, str(w),
-                ha="center", va="center",
-                color=_TEXT, fontsize=6, alpha=0.7,
+                xu + dx * mt,
+                yu + dy * mt,
+                str(w),
+                ha="center",
+                va="center",
+                color=_TEXT,
+                fontsize=6,
+                alpha=0.7,
                 zorder=3,
             )
 
@@ -1258,7 +1292,9 @@ def render_connection_web(
         x, y = pos_n[nid]
         is_focus = nid == focus_user_id
         ax.scatter(
-            x, y, s=node_size[nid],
+            x,
+            y,
+            s=node_size[nid],
             color=_node_color(nid),
             alpha=0.8,
             zorder=4,
@@ -1266,9 +1302,11 @@ def render_connection_web(
             linewidths=1.5 if is_focus else 0.8,
         )
         ax.text(
-            x, y,
+            x,
+            y,
             wrapped_labels[nid],
-            ha="center", va="center",
+            ha="center",
+            va="center",
             color=_BG,
             fontsize=font_sizes[nid],
             fontweight="bold",
@@ -1291,14 +1329,31 @@ def render_connection_web(
     # Legend
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
+
     legend_elements: list = [
-        Line2D([0], [0], color=_EDGE_COLOR, linewidth=1, label="few interactions", alpha=0.4),
-        Line2D([0], [0], color=_EDGE_COLOR, linewidth=4, label="many interactions", alpha=0.9),
+        Line2D(
+            [0],
+            [0],
+            color=_EDGE_COLOR,
+            linewidth=1,
+            label="few interactions",
+            alpha=0.4,
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=_EDGE_COLOR,
+            linewidth=4,
+            label="many interactions",
+            alpha=0.9,
+        ),
     ]
     if focus_user_id is not None:
         legend_elements.append(Patch(color=_NODE_FOCUS, label="focused member"))
     if second_level_ids:
-        legend_elements.append(Patch(color=_NODE_SECONDARY, label="2nd-level connections"))
+        legend_elements.append(
+            Patch(color=_NODE_SECONDARY, label="2nd-level connections")
+        )
     if communities is not None:
         n_comms = len(set(communities.values()))
         if n_comms > 1:
@@ -1310,8 +1365,11 @@ def render_connection_web(
                 )
     ax.legend(
         handles=legend_elements,
-        facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT,
-        fontsize=9, loc="lower right",
+        facecolor=_BG,
+        edgecolor=_GRID,
+        labelcolor=_TEXT,
+        fontsize=9,
+        loc="lower right",
     )
 
     plt.tight_layout(pad=0.5)
@@ -1325,6 +1383,7 @@ def render_connection_web(
 # ---------------------------------------------------------------------------
 # Heatmap renderer
 # ---------------------------------------------------------------------------
+
 
 def render_interaction_heatmap(
     edges: list[tuple[int, int, int]],
@@ -1393,8 +1452,11 @@ def render_interaction_heatmap(
                 v = matrix[i][j]
                 if v > 0:
                     ax.text(
-                        j, i, str(v),
-                        ha="center", va="center",
+                        j,
+                        i,
+                        str(v),
+                        ha="center",
+                        va="center",
                         color=_TEXT if v < data.max() * 0.7 else "#000000",
                         fontsize=val_fontsize,
                         fontweight="bold",
@@ -1408,7 +1470,9 @@ def render_interaction_heatmap(
 
     ax.set_title(
         f"{guild_name} — Interaction Heatmap  (replies + mentions)",
-        color=_TEXT, fontsize=14, pad=12,
+        color=_TEXT,
+        fontsize=14,
+        pad=12,
     )
 
     plt.tight_layout(pad=1.0)

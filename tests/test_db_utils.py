@@ -3,7 +3,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from db_utils import get_config_id_set, get_config_value, init_config_db, open_db, parse_bool
+from db_utils import (
+    get_config_id_set,
+    get_config_value,
+    init_config_db,
+    open_db,
+    parse_bool,
+)
 
 
 class ParseBoolTests(unittest.TestCase):

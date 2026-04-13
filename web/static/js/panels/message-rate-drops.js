@@ -7,7 +7,7 @@ export function mount(container, initialParams) {
     <div class="panel">
       <header>
         <h2>Message Rate Drops</h2>
-        <div class="subtitle">Members whose message rate declined between two equal windows</div>
+        <div class="subtitle">Members whose message rate dropped recently</div>
       </header>
       <div class="controls">
         <label>Period (days)

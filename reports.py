@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
+from services import reports_data
 from services.activity_graphs import (
     Resolution,
     render_greeter_response_chart,
@@ -15,7 +16,6 @@ from services.activity_graphs import (
     render_role_growth_chart,
 )
 from services.auto_delete_service import parse_duration_seconds
-from services import reports_data
 from xp_system import log_role_event
 
 if TYPE_CHECKING:
@@ -56,8 +56,7 @@ def format_member_activity_line(member: discord.Member, activity) -> str:
     created_at = int(activity.created_at)
     if getattr(activity, "channel_id", 0) <= 0:
         return (
-            f"{member.display_name} - last seen <t:{created_at}:R> "
-            f"(<t:{created_at}:f>)"
+            f"{member.display_name} - last seen <t:{created_at}:R> (<t:{created_at}:f>)"
         )
     return (
         f"{member.display_name} - last seen <t:{created_at}:R> "
@@ -68,7 +67,7 @@ def format_member_activity_line(member: discord.Member, activity) -> str:
 def register_reports(bot: Bot, ctx: AppContext) -> None:
     report_group = app_commands.Group(
         name="report",
-        description="Member activity and role membership reports.",
+        description="Charts and tables about member activity, roles, and engagement.",
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
@@ -82,46 +81,65 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
     report_group.interaction_check = _report_admin_check  # type: ignore[method-assign]
 
-    @report_group.command(name="list_role", description="List members who currently have a role.")
-    @app_commands.describe(role="The role to inspect")
+    @report_group.command(
+        name="list_role", description="List every member who currently has a role."
+    )
+    @app_commands.describe(role="Role to list members of.")
     async def list_role(interaction: discord.Interaction, role: discord.Role):
         if not role.members:
-            await interaction.response.send_message(f"No members found in **{role.name}**.", ephemeral=True)
+            await interaction.response.send_message(
+                f"No members found in **{role.name}**.", ephemeral=True
+            )
             return
         output = "\n".join(member.display_name for member in role.members)
         if len(output) > 1900:
             output = output[:1900] + "\n... (truncated)"
-        await interaction.response.send_message(f"**Members in {role.name}:**\n{output}", ephemeral=True)
+        await interaction.response.send_message(
+            f"**Members in {role.name}:**\n{output}", ephemeral=True
+        )
 
-    @report_group.command(name="inactive_role", description="Report role members inactive for N days.")
-    @app_commands.describe(role="Role to analyze", days="Number of days to check (default 7)")
+    @report_group.command(
+        name="inactive_role",
+        description="Members of a role who haven't posted in N days.",
+    )
+    @app_commands.describe(role="Role to check.", days="Days of inactivity.")
     async def inactive_role(
-        interaction: discord.Interaction, role: discord.Role, days: app_commands.Range[int, 1, 60] = 7
+        interaction: discord.Interaction,
+        role: discord.Role,
+        days: app_commands.Range[int, 1, 60] = 7,
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
             return
         await interaction.response.defer(ephemeral=True)
 
         guild = interaction.guild
         if guild is None:
-            await interaction.followup.send("This command only works in a server.", ephemeral=True)
+            await interaction.followup.send(
+                "This command only works in a server.", ephemeral=True
+            )
             return
         cutoff = discord.utils.utcnow() - timedelta(days=days)
         cutoff_ts = cutoff.timestamp()
-        role_members = sorted(role.members, key=lambda current: current.display_name.lower())
+        role_members = sorted(
+            role.members, key=lambda current: current.display_name.lower()
+        )
         role_member_ids = [current.id for current in role_members]
 
         def _fetch_inactive_role():
             with ctx.open_db() as conn:
                 return ctx.get_member_last_activity_map(conn, guild.id, role_member_ids)
+
         activities = await asyncio.to_thread(_fetch_inactive_role)
 
         inactive_members = [
             current
             for current in role_members
-            if activities.get(current.id) is None or activities[current.id].created_at < cutoff_ts
+            if activities.get(current.id) is None
+            or activities[current.id].created_at < cutoff_ts
         ]
         total = len(role_members)
         inactive_count = len(inactive_members)
@@ -150,30 +168,35 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
     @report_group.command(
         name="oldest_sfw",
-        description="Show members without spicy access who have the oldest last messages.",
+        description="Members without NSFW access, ranked by how long since they last posted.",
     )
-    @app_commands.describe(count="How many members to show (default 10)")
+    @app_commands.describe(count="How many members to show.")
     async def oldest_sfw(
         interaction: discord.Interaction,
         count: app_commands.Range[int, 1, 50] = 10,
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
 
         guild = interaction.guild
         if guild is None:
-            await interaction.followup.send("This command only works in a server.", ephemeral=True)
+            await interaction.followup.send(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         nsfw_cfg = ctx.grant_roles.get("nsfw")
         nsfw_role_id = nsfw_cfg["role_id"] if nsfw_cfg else 0
         nsfw_role = guild.get_role(nsfw_role_id) if nsfw_role_id else None
         sfw_members = [
-            m for m in guild.members
+            m
+            for m in guild.members
             if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
         ]
         sfw_member_ids = [m.id for m in sfw_members]
@@ -181,6 +204,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         def _fetch_oldest_sfw():
             with ctx.open_db() as conn:
                 return ctx.get_member_last_activity_map(conn, guild.id, sfw_member_ids)
+
         activities = await asyncio.to_thread(_fetch_oldest_sfw)
 
         sorted_members = sorted(
@@ -195,14 +219,19 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             f"Total without spicy access: {len(sfw_members)}\n"
             f"----------------------------------\n"
         )
-        block = "\n".join(format_member_activity_line(m, activities.get(m.id)) for m in top)
+        block = "\n".join(
+            format_member_activity_line(m, activities.get(m.id)) for m in top
+        )
         await send_ephemeral_text(interaction, header + block)
 
-    @report_group.command(name="inactive", description="Show all server members inactive for a given period.")
+    @report_group.command(
+        name="inactive",
+        description="All server members who haven't posted in a given period.",
+    )
     @app_commands.describe(
-        time_period="How long without a message counts as inactive, e.g. 7d, 2h, 30m",
+        time_period="Inactivity threshold, e.g. 7d, 2h, 30m.",
         channel="Only count activity in this channel.",
-        exclude_gif_only="Ignore members whose only recent activity is GIF/image links.",
+        exclude_gif_only="Ignore members whose only posts are GIF/image links.",
     )
     async def inactive(
         interaction: discord.Interaction,
@@ -212,18 +241,23 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
             return
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         seconds = parse_duration_seconds(time_period)
         if seconds is None:
             await interaction.response.send_message(
-                "Invalid time period. Use a value like `7d`, `2h`, `30m`, or `1d12h`.", ephemeral=True
+                "Invalid time period. Use a value like `7d`, `2h`, `30m`, or `1d12h`.",
+                ephemeral=True,
             )
             return
 
@@ -235,24 +269,36 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         if channel is not None or exclude_gif_only:
             from services.message_store import query_last_substantive_activity
+
             _ch_id = channel.id if channel else None
 
             def _fetch_inactive():
                 with ctx.open_db() as conn:
                     return query_last_substantive_activity(
-                        conn, guild.id, all_member_ids,
+                        conn,
+                        guild.id,
+                        all_member_ids,
                         channel_id=_ch_id,
                         exclude_gif_only=exclude_gif_only,
                     )
         else:
+
             def _fetch_inactive():
                 with ctx.open_db() as conn:
-                    return ctx.get_member_last_activity_map(conn, guild.id, all_member_ids)
+                    return ctx.get_member_last_activity_map(
+                        conn, guild.id, all_member_ids
+                    )
+
         activities = await asyncio.to_thread(_fetch_inactive)
 
         inactive_members = sorted(
-            [m for m in all_members if activities.get(m.id) is None or activities[m.id].created_at < cutoff_ts],
-            key=lambda m: (activities[m.id].created_at if m.id in activities else 0),
+            [
+                m
+                for m in all_members
+                if activities.get(m.id) is None
+                or activities[m.id].created_at < cutoff_ts
+            ],
+            key=lambda m: activities[m.id].created_at if m.id in activities else 0,
         )
 
         total = len(all_members)
@@ -285,16 +331,20 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             )
         await send_ephemeral_text(interaction, summary)
 
-    @report_group.command(name="role_growth", description="Chart role membership over time.")
-    @app_commands.describe(
-        resolution="Time resolution: day (30d), week (12wk), month (12mo)",
-        roles="Comma-separated role names to include (default: all)",
+    @report_group.command(
+        name="role_growth", description="Chart of cumulative role grants over time."
     )
-    @app_commands.choices(resolution=[
-        app_commands.Choice(name="Daily (last 30 days)", value="day"),
-        app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
-        app_commands.Choice(name="Monthly (last 12 months)", value="month"),
-    ])
+    @app_commands.describe(
+        resolution="Bucket size: day (30d), week (12wk), or month (12mo).",
+        roles="Comma-separated role names to chart. Omit for all.",
+    )
+    @app_commands.choices(
+        resolution=[
+            app_commands.Choice(name="Daily (last 30 days)", value="day"),
+            app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
+            app_commands.Choice(name="Monthly (last 12 months)", value="month"),
+        ]
+    )
     async def role_growth(
         interaction: discord.Interaction,
         resolution: app_commands.Choice[str] | None = None,
@@ -302,7 +352,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -315,39 +367,50 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         def _fetch():
             with ctx.open_db() as conn:
-                return reports_data.get_role_growth_data(conn, ctx.guild_id, res, role_filter)
+                return reports_data.get_role_growth_data(
+                    conn, ctx.guild_id, res, role_filter
+                )
+
         data = await asyncio.to_thread(_fetch)
 
         if not data["series"]:
-            await interaction.followup.send("No role grant history recorded yet.", ephemeral=True)
+            await interaction.followup.send(
+                "No role grant history recorded yet.", ephemeral=True
+            )
             return
 
         role_counts = {s["role"]: s["counts"] for s in data["series"]}
         chart_bytes = await asyncio.to_thread(
-            render_role_growth_chart, data["labels"], role_counts,
+            render_role_growth_chart,
+            data["labels"],
+            role_counts,
             title=f"Role Growth — {data['window_label']}",
         )
         await interaction.followup.send(
-            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="role_growth.png"),
+            file=discord.File(
+                fp=__import__("io").BytesIO(chart_bytes), filename="role_growth.png"
+            ),
             ephemeral=True,
         )
 
     @report_group.command(
         name="message_cadence",
-        description="Chart average, mode, and 80th percentile time between messages.",
+        description="Candlestick chart of time between messages. Green = speeding up, pink = slowing.",
     )
     @app_commands.describe(
-        resolution="Time resolution: hourly (24h), daily (30d), weekly (12wk), monthly (12mo)",
-        channel="Restrict to a specific channel.",
+        resolution="Bucket size: hourly (24h), daily (30d), weekly (12wk), or monthly (12mo).",
+        channel="Scope to one channel.",
     )
-    @app_commands.choices(resolution=[
-        app_commands.Choice(name="Hourly (last 24 hours)", value="hour"),
-        app_commands.Choice(name="Daily (last 30 days)", value="day"),
-        app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
-        app_commands.Choice(name="Monthly (last 12 months)", value="month"),
-        app_commands.Choice(name="By Hour of Day", value="hour_of_day"),
-        app_commands.Choice(name="By Day of Week", value="day_of_week"),
-    ])
+    @app_commands.choices(
+        resolution=[
+            app_commands.Choice(name="Hourly (last 24 hours)", value="hour"),
+            app_commands.Choice(name="Daily (last 30 days)", value="day"),
+            app_commands.Choice(name="Weekly (last 12 weeks)", value="week"),
+            app_commands.Choice(name="Monthly (last 12 months)", value="month"),
+            app_commands.Choice(name="By Hour of Day", value="hour_of_day"),
+            app_commands.Choice(name="By Day of Week", value="day_of_week"),
+        ]
+    )
     async def message_cadence(
         interaction: discord.Interaction,
         resolution: app_commands.Choice[str] | None = None,
@@ -355,7 +418,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -369,49 +434,63 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         def _fetch():
             with ctx.open_db() as conn:
                 return reports_data.get_message_cadence_data(
-                    conn, ctx.guild_id, res, ctx.tz_offset_hours, channel_id,
+                    conn,
+                    ctx.guild_id,
+                    res,
+                    ctx.tz_offset_hours,
+                    channel_id,
                 )
+
         data = await asyncio.to_thread(_fetch)
 
         if not data["buckets"] or all(b["median_gap"] == 0 for b in data["buckets"]):
-            await interaction.followup.send(f"No message data found{scope} for this period.", ephemeral=True)
+            await interaction.followup.send(
+                f"No message data found{scope} for this period.", ephemeral=True
+            )
             return
 
-        cadence_objs = [
-            CadenceBucket(**b) for b in data["buckets"]
-        ]
+        cadence_objs = [CadenceBucket(**b) for b in data["buckets"]]
         chart_bytes = await asyncio.to_thread(
-            render_message_cadence_chart, cadence_objs,
+            render_message_cadence_chart,
+            cadence_objs,
             title=f"Message Cadence{scope} — {data['window_label']}",
         )
         await interaction.followup.send(
-            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="message_cadence.png"),
+            file=discord.File(
+                fp=__import__("io").BytesIO(chart_bytes), filename="message_cadence.png"
+            ),
             ephemeral=True,
         )
 
     @report_group.command(
         name="join_times",
-        description="Histogram of when members joined the server.",
+        description="When do new members join? Histogram by hour of day or day of week.",
     )
     @app_commands.describe(
         resolution="Group by hour of day or day of week.",
     )
-    @app_commands.choices(resolution=[
-        app_commands.Choice(name="By Hour of Day", value="hour_of_day"),
-        app_commands.Choice(name="By Day of Week", value="day_of_week"),
-    ])
+    @app_commands.choices(
+        resolution=[
+            app_commands.Choice(name="By Hour of Day", value="hour_of_day"),
+            app_commands.Choice(name="By Day of Week", value="day_of_week"),
+        ]
+    )
     async def join_times(
         interaction: discord.Interaction,
         resolution: app_commands.Choice[str] | None = None,
     ):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_guild:
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
             return
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -423,7 +502,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         members = [
             MemberSnapshot(
-                user_id=m.id, display_name=m.display_name, is_bot=m.bot,
+                user_id=m.id,
+                display_name=m.display_name,
+                is_bot=m.bot,
                 joined_at=m.joined_at.timestamp() if m.joined_at else None,
                 role_ids=tuple(r.id for r in m.roles),
             )
@@ -432,14 +513,19 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         def _fetch():
             return reports_data.get_join_times_data(members, res, ctx.tz_offset_hours)
+
         data = await asyncio.to_thread(_fetch)
 
         title_label = "By Hour of Day" if res == "hour_of_day" else "By Day of Week"
         chart_bytes = await asyncio.to_thread(
-            render_join_histogram, data["labels"], data["counts"], f"Member Joins — {title_label}",
+            render_join_histogram,
+            data["labels"],
+            data["counts"],
+            f"Member Joins — {title_label}",
         )
 
         import io as _io
+
         await interaction.followup.send(
             file=discord.File(fp=_io.BytesIO(chart_bytes), filename="join_times.png"),
             ephemeral=True,
@@ -447,17 +533,21 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
     @report_group.command(
         name="promotion_review",
-        description="Members above level 5 without spicy access — flags inactivity-pruned users.",
+        description="Members past level 5 who still lack NSFW access. Flags pruned users.",
     )
     async def promotion_review(interaction: discord.Interaction):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
-            await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+            await interaction.response.send_message(
+                "You do not have permission to use this command.", ephemeral=True
+            )
             return
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -467,11 +557,14 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         nsfw_role = guild.get_role(nsfw_role_id) if nsfw_role_id else None
         # Members without the NSFW role (excluding bots)
         candidates = [
-            m for m in guild.members
+            m
+            for m in guild.members
             if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
         ]
         if not candidates:
-            await interaction.followup.send("No members found without spicy access.", ephemeral=True)
+            await interaction.followup.send(
+                "No members found without spicy access.", ephemeral=True
+            )
             return
 
         candidate_ids = [m.id for m in candidates]
@@ -483,7 +576,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 levels: dict[int, tuple[int, float]] = {}
                 batch_size = 800
                 for i in range(0, len(candidate_ids), batch_size):
-                    batch = candidate_ids[i:i + batch_size]
+                    batch = candidate_ids[i : i + batch_size]
                     placeholders = ", ".join("?" for _ in batch)
                     rows = conn.execute(
                         f"SELECT user_id, level, total_xp FROM member_xp "
@@ -491,16 +584,21 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                         [guild.id, *batch],
                     ).fetchall()
                     for row in rows:
-                        levels[int(row["user_id"])] = (int(row["level"]), float(row["total_xp"]))
+                        levels[int(row["user_id"])] = (
+                            int(row["level"]),
+                            float(row["total_xp"]),
+                        )
 
-                eligible_ids = [m.id for m in candidates if levels.get(m.id, (1, 0))[0] > 5]
+                eligible_ids = [
+                    m.id for m in candidates if levels.get(m.id, (1, 0))[0] > 5
+                ]
                 if not eligible_ids:
                     return levels, {}, {}
 
                 pruned_users: dict[int, float] = {}
                 if nsfw_role_name:
                     for i in range(0, len(eligible_ids), batch_size):
-                        batch = eligible_ids[i:i + batch_size]
+                        batch = eligible_ids[i : i + batch_size]
                         placeholders = ", ".join("?" for _ in batch)
                         rows = conn.execute(
                             f"SELECT user_id, action, granted_at FROM role_events "
@@ -517,7 +615,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                                 if row["action"] == "remove":
                                     pruned_users[uid] = float(row["granted_at"])
 
-                activities = ctx.get_member_last_activity_map(conn, guild.id, eligible_ids)
+                activities = ctx.get_member_last_activity_map(
+                    conn, guild.id, eligible_ids
+                )
                 return levels, pruned_users, activities
 
         levels, pruned_users, activities = await asyncio.to_thread(_query_promotion)
@@ -530,7 +630,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             return
 
         # Sort by level descending, then XP descending
-        eligible.sort(key=lambda m: (-levels.get(m.id, (1, 0))[0], -levels.get(m.id, (1, 0))[1]))
+        eligible.sort(
+            key=lambda m: (-levels.get(m.id, (1, 0))[0], -levels.get(m.id, (1, 0))[1])
+        )
 
         nsfw_label = nsfw_role.name if nsfw_role else "spicy role (not configured)"
         header = (
@@ -563,9 +665,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
     @report_group.command(
         name="quality_scores",
-        description="Ranked member quality scores with component breakdowns.",
+        description="Ranked member quality scores — engagement, consistency, resonance, activity.",
     )
-    @app_commands.describe(limit="Number of scored members to show (default 10).")
+    @app_commands.describe(limit="How many members to show.")
     async def quality_scores(
         interaction: discord.Interaction,
         limit: app_commands.Range[int, 1, 100] = 10,
@@ -579,7 +681,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -597,6 +701,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         def _compute():
             with ctx.open_db() as conn:
                 return compute_quality_scores(conn, guild.id, _members)
+
         scores = await asyncio.to_thread(_compute)
 
         if not scores:
@@ -640,7 +745,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 out.append(ch)
                 w += cw
             name = "".join(out).strip() or "?"
-            vw = sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in name)
+            vw = sum(
+                2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in name
+            )
             return name + " " * (width - vw)
 
         COL = 14
@@ -652,7 +759,11 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         for rank, s in enumerate(shown, 1):
             m = guild.get_member(s.user_id)
-            is_new = m is not None and m.joined_at is not None and (discord.utils.utcnow() - m.joined_at).days < 30
+            is_new = (
+                m is not None
+                and m.joined_at is not None
+                and (discord.utils.utcnow() - m.joined_at).days < 30
+            )
             raw = m.display_name if m else f"User {s.user_id}"
             if is_new:
                 raw = f"*{raw}"
@@ -670,7 +781,8 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             if s.tenure_buffer_days > 0:
                 last += f"+{s.tenure_buffer_days}"
             tbl.append(
-                f"{rank:>2} {name} {tot:>3} {eng:>3} {cr:>3} {res:>3} {pst:>3} {last:>{ACT_W}}")
+                f"{rank:>2} {name} {tot:>3} {eng:>3} {cr:>3} {res:>3} {pst:>3} {last:>{ACT_W}}"
+            )
 
         table_text = "```\n" + "\n".join(tbl) + "\n```"
 
@@ -683,6 +795,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         # Compact footer sections
         footer_parts: list[str] = []
+
         def _name(uid: int) -> str:
             m = guild.get_member(uid)
             return m.display_name if m else f"User {uid}"
@@ -702,7 +815,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         if footer_parts:
             embed.add_field(name="\u200b", value="\n".join(footer_parts), inline=False)
 
-        embed.set_footer(text="* < 30d tenure \u00b7 Eng=Engagement \u00b7 C&R=Consistency & Recency \u00b7 Res=Resonance \u00b7 Pst=Posts \u00b7 Seen=Last Active")
+        embed.set_footer(
+            text="* < 30d tenure \u00b7 Eng=Engagement \u00b7 C&R=Consistency & Recency \u00b7 Res=Resonance \u00b7 Pst=Posts \u00b7 Seen=Last Active"
+        )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -712,13 +827,13 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
     @report_group.command(
         name="nsfw_gender",
-        description="Chart channel posting broken down by gender.",
+        description="NSFW posting broken down by gender — bars or ratio line chart.",
     )
     @app_commands.describe(
-        resolution="Time resolution: daily (30d), weekly (12wk), monthly (12mo)",
-        display="Chart style: stacked bars or ratio line chart.",
-        media_only="Only count messages with image/video attachments (no GIFs).",
-        channel="Limit to a specific channel (default: all NSFW channels).",
+        resolution="Bucket size: daily (30d), weekly (12wk), or monthly (12mo).",
+        display="Chart style: bar (stacked) or line (ratio).",
+        media_only="Only count image/video posts, not text.",
+        channel="Scope to one channel. Omit for all NSFW channels.",
     )
     @app_commands.choices(
         resolution=[
@@ -747,7 +862,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -765,25 +882,33 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             channel_label = f"#{channel.name}"
         else:
             target_channel_ids = [
-                ch.id for ch in guild.channels
-                if getattr(ch, "nsfw", False)
+                ch.id for ch in guild.channels if getattr(ch, "nsfw", False)
             ]
             channel_label = "NSFW Channels"
 
         if not target_channel_ids:
-            await interaction.followup.send("No matching channels found.", ephemeral=True)
+            await interaction.followup.send(
+                "No matching channels found.", ephemeral=True
+            )
             return
 
         def _fetch():
             with ctx.open_db() as conn:
                 return reports_data.get_nsfw_gender_data(
-                    conn, ctx.guild_id, res, target_channel_ids,
-                    ctx.tz_offset_hours, media_only,
+                    conn,
+                    ctx.guild_id,
+                    res,
+                    target_channel_ids,
+                    ctx.tz_offset_hours,
+                    media_only,
                 )
+
         data = await asyncio.to_thread(_fetch)
 
         if not data["series"]:
-            await interaction.followup.send("No posting data found for this period.", ephemeral=True)
+            await interaction.followup.send(
+                "No posting data found for this period.", ephemeral=True
+            )
             return
 
         gender_counts = {s["gender"]: s["counts"] for s in data["series"]}
@@ -799,19 +924,24 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             renderer = render_nsfw_gender_chart
 
         chart_bytes = await asyncio.to_thread(
-            renderer, data["labels"], gender_counts, title=title,
+            renderer,
+            data["labels"],
+            gender_counts,
+            title=title,
         )
         await interaction.followup.send(
-            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="nsfw_gender.png"),
+            file=discord.File(
+                fp=__import__("io").BytesIO(chart_bytes), filename="nsfw_gender.png"
+            ),
             ephemeral=True,
         )
 
     @report_group.command(
         name="message_rate",
-        description="Chart messages per 10-minute interval across the day, averaged over N days.",
+        description="When is the server actually busy? Average messages per 10-min slot across the day.",
     )
     @app_commands.describe(
-        days="How many days of history to average over (default: 7).",
+        days="Days of history to average over.",
     )
     async def message_rate(
         interaction: discord.Interaction,
@@ -820,7 +950,8 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
             await interaction.response.send_message(
-                "You do not have permission to use this command.", ephemeral=True,
+                "You do not have permission to use this command.",
+                ephemeral=True,
             )
             return
 
@@ -829,33 +960,41 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         def _fetch():
             with ctx.open_db() as conn:
                 return reports_data.get_message_rate_data(
-                    conn, ctx.guild_id, days, ctx.tz_offset_hours,
+                    conn,
+                    ctx.guild_id,
+                    days,
+                    ctx.tz_offset_hours,
                 )
 
         data = await asyncio.to_thread(_fetch)
 
         if not any(c > 0 for c in data["buckets"]):
             await interaction.followup.send(
-                "No message activity recorded for the selected window.", ephemeral=True,
+                "No message activity recorded for the selected window.",
+                ephemeral=True,
             )
             return
 
         day_label = "day" if days == 1 else f"{days} days"
         chart_bytes = await asyncio.to_thread(
-            render_message_rate_chart, data["buckets"], days,
+            render_message_rate_chart,
+            data["buckets"],
+            days,
             title=f"Message Rate \u2014 Last {day_label} ({data['tz_label']})",
         )
         await interaction.followup.send(
-            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="message_rate.png"),
+            file=discord.File(
+                fp=__import__("io").BytesIO(chart_bytes), filename="message_rate.png"
+            ),
             ephemeral=True,
         )
 
     @report_group.command(
         name="greeter_response",
-        description="Chart how long new members wait for their first greeter message.",
+        description="How long do new members wait before a greeter says hello?",
     )
     @app_commands.describe(
-        days="Only include joins from the last N days (default: all).",
+        days="Only include joins from the last N days. Omit for all.",
     )
     async def greeter_response(
         interaction: discord.Interaction,
@@ -864,25 +1003,32 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
             await interaction.response.send_message(
-                "You do not have permission to use this command.", ephemeral=True,
+                "You do not have permission to use this command.",
+                ephemeral=True,
             )
             return
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         if ctx.welcome_channel_id <= 0:
             await interaction.response.send_message(
-                "No welcome channel is configured.", ephemeral=True,
+                "No welcome channel is configured.",
+                ephemeral=True,
             )
             return
 
-        greeter_role = guild.get_role(ctx.greeter_role_id) if ctx.greeter_role_id else None
+        greeter_role = (
+            guild.get_role(ctx.greeter_role_id) if ctx.greeter_role_id else None
+        )
         if not greeter_role or not greeter_role.members:
             await interaction.response.send_message(
-                "No greeter role is configured or the role has no members.", ephemeral=True,
+                "No greeter role is configured or the role has no members.",
+                ephemeral=True,
             )
             return
 
@@ -913,14 +1059,19 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                         join_times[m.id] = ts
 
                 return reports_data.get_greeter_response_data(
-                    conn, guild.id, ctx.welcome_channel_id, greeter_ids, join_times,
+                    conn,
+                    guild.id,
+                    ctx.welcome_channel_id,
+                    greeter_ids,
+                    join_times,
                 )
 
         data = await asyncio.to_thread(_fetch)
 
         if data["count"] == 0:
             await interaction.followup.send(
-                "No greeter response data found for the selected period.", ephemeral=True,
+                "No greeter response data found for the selected period.",
+                ephemeral=True,
             )
             return
 
@@ -928,29 +1079,36 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             data["window_label"] = f"Last {days} Days"
 
         chart_bytes = await asyncio.to_thread(
-            render_greeter_response_chart, data["response_times_seconds"],
+            render_greeter_response_chart,
+            data["response_times_seconds"],
             title=f"Greeter Response Time \u2014 {data['window_label']}",
         )
         await interaction.followup.send(
-            file=discord.File(fp=__import__("io").BytesIO(chart_bytes), filename="greeter_response.png"),
+            file=discord.File(
+                fp=__import__("io").BytesIO(chart_bytes),
+                filename="greeter_response.png",
+            ),
             ephemeral=True,
         )
 
     @report_group.command(
         name="backfill_roles",
-        description="Sync role_events with current server state so the role growth graph is accurate.",
+        description="Sync the role event log with current server state. Run after bulk role edits.",
     )
     async def backfill_roles(interaction: discord.Interaction):
         member = ctx.get_interaction_member(interaction)
         if member is None or not member.guild_permissions.manage_roles:
             await interaction.response.send_message(
-                "You do not have permission to use this command.", ephemeral=True,
+                "You do not have permission to use this command.",
+                ephemeral=True,
             )
             return
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -991,13 +1149,17 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                         # Backdate to member join time if available
                         m = guild.get_member(user_id)
                         ts = m.joined_at.timestamp() if m and m.joined_at else now_ts
-                        log_role_event(conn, guild.id, user_id, role_name, "grant", ts=ts)
+                        log_role_event(
+                            conn, guild.id, user_id, role_name, "grant", ts=ts
+                        )
                         grants_added += 1
 
                 # Users the DB thinks have a role but they don't — insert remove
                 for (user_id, role_name), net in db_state.items():
                     if net > 0 and (user_id, role_name) not in live_pairs:
-                        log_role_event(conn, guild.id, user_id, role_name, "remove", ts=now_ts)
+                        log_role_event(
+                            conn, guild.id, user_id, role_name, "remove", ts=now_ts
+                        )
                         removes_added += 1
 
             return grants_added, removes_added
@@ -1019,7 +1181,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
     leave_group = app_commands.Group(
         name="quality_leave",
-        description="Manage leave of absence for quality scoring.",
+        description="Pause quality scoring for members on leave of absence.",
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
@@ -1028,11 +1190,13 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         member="Member to put on leave.",
         days="Duration of leave in days (30, 60, or 90).",
     )
-    @app_commands.choices(days=[
-        app_commands.Choice(name="30 days", value=30),
-        app_commands.Choice(name="60 days", value=60),
-        app_commands.Choice(name="90 days", value=90),
-    ])
+    @app_commands.choices(
+        days=[
+            app_commands.Choice(name="30 days", value=30),
+            app_commands.Choice(name="60 days", value=60),
+            app_commands.Choice(name="90 days", value=90),
+        ]
+    )
     async def leave_add(
         interaction: discord.Interaction,
         member: discord.Member,
@@ -1056,7 +1220,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             ephemeral=True,
         )
 
-    @leave_group.command(name="remove", description="Remove a member's leave of absence.")
+    @leave_group.command(
+        name="remove", description="Remove a member's leave of absence."
+    )
     @app_commands.describe(member="Member to remove from leave.")
     async def leave_remove(interaction: discord.Interaction, member: discord.Member):
         if not ctx.is_mod(interaction):
@@ -1079,7 +1245,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 f"{member.mention} was not on leave.", ephemeral=True
             )
 
-    @leave_group.command(name="list", description="List all members on leave of absence.")
+    @leave_group.command(
+        name="list", description="List all members on leave of absence."
+    )
     async def leave_list(interaction: discord.Interaction):
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -1089,7 +1257,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         from services.member_quality_score import get_leaves
@@ -1098,21 +1268,24 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             leaves = get_leaves(conn, ctx.guild_id)
 
         if not leaves:
-            await interaction.response.send_message("No members on leave.", ephemeral=True)
+            await interaction.response.send_message(
+                "No members on leave.", ephemeral=True
+            )
             return
 
         now_ts = discord.utils.utcnow().timestamp()
         lines = ["**Members on Leave of Absence**\n"]
-        for uid, (start_ts, end_ts) in leaves.items():
+        for uid, (_start_ts, end_ts) in leaves.items():
             m = guild.get_member(uid)
             name = m.display_name if m else f"User {uid}"
             remaining = max(0, int((end_ts - now_ts) / 86400))
             if end_ts < now_ts:
                 lines.append(f"  {name} — **expired** (ended <t:{int(end_ts)}:R>)")
             else:
-                lines.append(f"  {name} — {remaining}d remaining (ends <t:{int(end_ts)}:R>)")
+                lines.append(
+                    f"  {name} — {remaining}d remaining (ends <t:{int(end_ts)}:R>)"
+                )
 
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     bot.tree.add_command(leave_group)
-

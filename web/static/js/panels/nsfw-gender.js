@@ -13,7 +13,7 @@ export function mount(container, initialParams) {
     <div class="panel">
       <header>
         <h2>NSFW by Gender</h2>
-        <div class="subtitle">Channel posting broken down by gender</div>
+        <div class="subtitle">NSFW channel activity split by gender tag</div>
       </header>
       <div class="controls">
         <label>Resolution

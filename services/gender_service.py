@@ -1,4 +1,5 @@
 """Gender classification service — mods assign gender to members for NSFW analytics."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -10,6 +11,7 @@ VALID_GENDERS = ("male", "female", "nonbinary")
 # ---------------------------------------------------------------------------
 # Database
 # ---------------------------------------------------------------------------
+
 
 def init_gender_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -58,14 +60,16 @@ def get_gender(conn: sqlite3.Connection, guild_id: int, user_id: int) -> str | N
 
 
 def get_gender_map(
-    conn: sqlite3.Connection, guild_id: int, user_ids: list[int],
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_ids: list[int],
 ) -> dict[int, str]:
     if not user_ids:
         return {}
     result: dict[int, str] = {}
     batch_size = 800
     for i in range(0, len(user_ids), batch_size):
-        batch = user_ids[i:i + batch_size]
+        batch = user_ids[i : i + batch_size]
         placeholders = ", ".join("?" for _ in batch)
         rows = conn.execute(
             f"SELECT user_id, gender FROM member_gender "
@@ -78,14 +82,16 @@ def get_gender_map(
 
 
 def get_unclassified_member_ids(
-    conn: sqlite3.Connection, guild_id: int, all_member_ids: list[int],
+    conn: sqlite3.Connection,
+    guild_id: int,
+    all_member_ids: list[int],
 ) -> list[int]:
     if not all_member_ids:
         return []
     classified: set[int] = set()
     batch_size = 800
     for i in range(0, len(all_member_ids), batch_size):
-        batch = all_member_ids[i:i + batch_size]
+        batch = all_member_ids[i : i + batch_size]
         placeholders = ", ".join("?" for _ in batch)
         rows = conn.execute(
             f"SELECT user_id FROM member_gender "

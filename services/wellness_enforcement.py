@@ -27,6 +27,7 @@ delete the message. Instead we fall back to allowing the message and posting
 an ephemeral note (or just allowing if even that fails) — silent message
 destruction would be a trust killer.
 """
+
 from __future__ import annotations
 
 import enum
@@ -58,8 +59,8 @@ from services.wellness_service import (
     set_cooldown,
     update_slow_mode_last_message,
     user_now,
-    window_start_for,
     window_start_epoch,
+    window_start_for,
 )
 
 log = logging.getLogger("dungeonkeeper.wellness.enforcement")
@@ -67,6 +68,7 @@ log = logging.getLogger("dungeonkeeper.wellness.enforcement")
 
 class Action(enum.IntEnum):
     """Enforcement action ordered by severity. Higher number = more strict."""
+
     ALLOW = 0
     NUDGE = 1
     COOLDOWN = 2
@@ -153,7 +155,9 @@ def decide_action(
 
     if active_blackout is not None:
         if user.enforcement_level == "gradual":
-            day_epoch = int(now_local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+            day_epoch = int(
+                now_local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            )
             overage = increment_blackout_overage(conn, active_blackout.id, day_epoch)
             if overage <= 1:
                 action = Action.NUDGE
@@ -163,7 +167,9 @@ def decide_action(
                 action = Action.FRICTION
         else:
             action = _enforcement_to_action(user.enforcement_level)
-        return EnforcementDecision(action, [], blackout=active_blackout, reason="blackout")
+        return EnforcementDecision(
+            action, [], blackout=active_blackout, reason="blackout"
+        )
 
     # Cap evaluation
     caps = list_caps(conn, guild_id, user.user_id)
@@ -215,7 +221,10 @@ def decide_action(
 # Per-user friction tracking
 # ---------------------------------------------------------------------------
 
-def _friction_blocks_message(conn, guild_id: int, user_id: int, slow_mode_rate: int, now: float) -> tuple[bool, float]:
+
+def _friction_blocks_message(
+    conn, guild_id: int, user_id: int, slow_mode_rate: int, now: float
+) -> tuple[bool, float]:
     """Check if active slow mode blocks this message. Returns (blocked, seconds_until_allowed)."""
     state = get_slow_mode(conn, guild_id, user_id)
     if state is None or state.active_until_ts <= now:
@@ -227,7 +236,12 @@ def _friction_blocks_message(conn, guild_id: int, user_id: int, slow_mode_rate: 
 
 
 def _arm_friction_for_caps(
-    conn, guild_id: int, user_id: int, cap_hits: list[WellnessCap], now_local, daily_reset_hour: int,
+    conn,
+    guild_id: int,
+    user_id: int,
+    cap_hits: list[WellnessCap],
+    now_local,
+    daily_reset_hour: int,
 ) -> None:
     """Arm slow-mode active_until_ts to the latest window end across all hit caps."""
     latest_end = 0.0
@@ -260,8 +274,13 @@ def _arm_friction_for_caps(
 # DM helpers
 # ---------------------------------------------------------------------------
 
-async def _try_dm(user: discord.User | discord.Member, *, content: str | None = None,
-                  embed: discord.Embed | None = None) -> bool:
+
+async def _try_dm(
+    user: discord.User | discord.Member,
+    *,
+    content: str | None = None,
+    embed: discord.Embed | None = None,
+) -> bool:
     try:
         kwargs: dict = {}
         if content:
@@ -288,6 +307,7 @@ def _format_seconds(seconds: float) -> str:
 # ---------------------------------------------------------------------------
 # Top-level message hook
 # ---------------------------------------------------------------------------
+
 
 async def wellness_on_message(ctx, message: discord.Message) -> bool:
     """Hook called from handlers/events.py:127. Returns True if the message
@@ -317,7 +337,11 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
 
             # 1. Slow mode pre-check (friction already armed by previous overage)
             blocked, wait_seconds = _friction_blocks_message(
-                conn, guild.id, author.id, user.slow_mode_rate_seconds, now,
+                conn,
+                guild.id,
+                author.id,
+                user.slow_mode_rate_seconds,
+                now,
             )
             if blocked:
                 # Try to delete + DM. If DM fails, do NOT delete.
@@ -336,7 +360,9 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                     ),
                 )
                 if not dm_ok:
-                    log.info("wellness: friction skipped (DM closed) for user %s", author.id)
+                    log.info(
+                        "wellness: friction skipped (DM closed) for user %s", author.id
+                    )
                     return False
                 try:
                     await message.delete()
@@ -380,7 +406,12 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                     return False
                 # Arm slow mode for the duration of the cap window(s)
                 _arm_friction_for_caps(
-                    conn, guild.id, author.id, decision.cap_hits, now_local, user.daily_reset_hour,
+                    conn,
+                    guild.id,
+                    author.id,
+                    decision.cap_hits,
+                    now_local,
+                    user.daily_reset_hour,
                 )
                 # Try to DM first; only delete if DM succeeded
                 dm_ok = await _try_dm(
@@ -397,7 +428,9 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                     ),
                 )
                 if not dm_ok:
-                    log.info("wellness: friction skipped (DM closed) for user %s", author.id)
+                    log.info(
+                        "wellness: friction skipped (DM closed) for user %s", author.id
+                    )
                     return False
                 try:
                     await message.delete()
@@ -432,9 +465,16 @@ def _truncate(s: str | None, n: int) -> str:
 # Notification helpers
 # ---------------------------------------------------------------------------
 
+
 def _effective_cap_limit(cap: WellnessCap, now_local) -> int:
     if cap.bucket_limits:
-        idx = now_local.hour if cap.window == "daily" else now_local.weekday() if cap.window == "weekly" else None
+        idx = (
+            now_local.hour
+            if cap.window == "daily"
+            else now_local.weekday()
+            if cap.window == "weekly"
+            else None
+        )
         if idx is not None and 0 <= idx < len(cap.bucket_limits):
             return cap.bucket_limits[idx]
     return cap.cap_limit
@@ -444,7 +484,13 @@ def _format_cap_summary(cap: WellnessCap, count: int) -> str:
     return f"{count}/{cap.cap_limit} {cap.window}"
 
 
-async def _send_nudge(ctx, conn, message: discord.Message, user: WellnessUser, decision: EnforcementDecision) -> None:
+async def _send_nudge(
+    ctx,
+    conn,
+    message: discord.Message,
+    user: WellnessUser,
+    decision: EnforcementDecision,
+) -> None:
     """Send a 'heads up' message via the user's notifications_pref. Suppress if recently nudged."""
     now = time.time()
     if user.last_nudge_at and (now - user.last_nudge_at) < NUDGE_SUPPRESSION_SECONDS:
@@ -464,7 +510,9 @@ async def _send_nudge(ctx, conn, message: discord.Message, user: WellnessUser, d
     await _deliver_user_notice(message, user, desc)
 
 
-async def _send_cooldown(ctx, message: discord.Message, user: WellnessUser, decision: EnforcementDecision) -> None:
+async def _send_cooldown(
+    ctx, message: discord.Message, user: WellnessUser, decision: EnforcementDecision
+) -> None:
     desc = (
         "☕ Time for a 5-minute breather. "
         "Stretch, hydrate, look out a window. You can keep posting — this is just a gentle pause."
@@ -472,7 +520,9 @@ async def _send_cooldown(ctx, message: discord.Message, user: WellnessUser, deci
     await _deliver_user_notice(message, user, desc)
 
 
-async def _deliver_user_notice(message: discord.Message, user: WellnessUser, text: str) -> None:
+async def _deliver_user_notice(
+    message: discord.Message, user: WellnessUser, text: str
+) -> None:
     """Deliver per the user's notifications_pref (ephemeral / dm / both)."""
     pref = user.notifications_pref
     sent_ephemeral = False
@@ -481,7 +531,9 @@ async def _deliver_user_notice(message: discord.Message, user: WellnessUser, tex
         try:
             sent = await message.channel.send(
                 f"{message.author.mention} {text}",
-                allowed_mentions=discord.AllowedMentions(users=[message.author], roles=False, everyone=False),
+                allowed_mentions=discord.AllowedMentions(
+                    users=[message.author], roles=False, everyone=False
+                ),
                 delete_after=30,
             )
             sent_ephemeral = sent is not None
@@ -555,9 +607,14 @@ async def _handle_away_mentions(ctx, message: discord.Message) -> None:
                 content=message.author.mention,
                 embed=embed,
                 allowed_mentions=discord.AllowedMentions(
-                    users=[message.author], roles=False, everyone=False,
+                    users=[message.author],
+                    roles=False,
+                    everyone=False,
                 ),
             )
         except (discord.Forbidden, discord.HTTPException):
-            log.debug("wellness: failed to post away reply for %s in #%s",
-                      mentioned.id, getattr(message.channel, 'name', '?'))
+            log.debug(
+                "wellness: failed to post away reply for %s in #%s",
+                mentioned.id,
+                getattr(message.channel, "name", "?"),
+            )

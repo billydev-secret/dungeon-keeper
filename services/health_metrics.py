@@ -4,6 +4,7 @@ Every function is synchronous, touches only the SQLite database (no discord.py
 objects), and returns a plain ``dict`` suitable for JSON serialisation.  Callers
 run them via ``asyncio.to_thread`` / ``run_query``.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -12,7 +13,6 @@ import time
 from collections import defaultdict
 from collections.abc import Sequence
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -20,6 +20,7 @@ from collections.abc import Sequence
 _DAY = 86400
 _WEEK = 7 * _DAY
 _MONTH = 30 * _DAY
+
 
 def _ts(days_ago: int = 0, *, now: float | None = None) -> int:
     return int((now or time.time()) - days_ago * _DAY)
@@ -53,11 +54,15 @@ def _lorenz_points(values: list[float], num_points: int = 20) -> list[dict]:
     step = max(1, n // num_points)
     cum = 0.0
     for i in range(0, n, step):
-        cum += sum(sorted_vals[max(0, i - step + 1):i + 1]) if i > 0 else sorted_vals[0]
-        points.append({
-            "x": round((i + 1) / n * 100, 1),
-            "y": round(cum / total * 100, 1),
-        })
+        cum += (
+            sum(sorted_vals[max(0, i - step + 1) : i + 1]) if i > 0 else sorted_vals[0]
+        )
+        points.append(
+            {
+                "x": round((i + 1) / n * 100, 1),
+                "y": round(cum / total * 100, 1),
+            }
+        )
     # Ensure the final point
     if points[-1]["x"] != 100.0:
         points.append({"x": 100.0, "y": 100.0})
@@ -80,10 +85,15 @@ def _pct(num: float, den: float) -> float:
 # 1. DAU / MAU stickiness
 # ---------------------------------------------------------------------------
 
-def compute_dau_mau(conn: sqlite3.Connection, guild_id: int, *,
-                    now: float | None = None,
-                    member_count: int = 0,
-                    voice_active_count: int = 0) -> dict:
+
+def compute_dau_mau(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    member_count: int = 0,
+    voice_active_count: int = 0,
+) -> dict:
     now = now or time.time()
 
     # DAU / WAU / MAU counts
@@ -199,13 +209,22 @@ def compute_dau_mau(conn: sqlite3.Connection, guild_id: int, *,
     ).fetchall()
     dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     dow_map = {r["dow"]: r["cnt"] for r in dow_rows}
-    day_of_week = [{"day": dow_names[i], "avg_dau": round(dow_map.get(i, 0) / 4.3, 1)} for i in range(7)]
+    day_of_week = [
+        {"day": dow_names[i], "avg_dau": round(dow_map.get(i, 0) / 4.3, 1)}
+        for i in range(7)
+    ]
 
-    badge = _badge(dau_mau, [(10, "critical"), (20, "needs_work"), (30, "healthy"), (100, "excellent")])
+    badge = _badge(
+        dau_mau,
+        [(10, "critical"), (20, "needs_work"), (30, "healthy"), (100, "excellent")],
+    )
 
     return {
-        "dau": dau, "wau": wau, "mau": mau,
-        "dau_mau": dau_mau, "wau_mau": wau_mau,
+        "dau": dau,
+        "wau": wau,
+        "mau": mau,
+        "dau_mau": dau_mau,
+        "wau_mau": wau_mau,
         "badge": badge,
         "sparkline": sparkline,
         "funnel": funnel,
@@ -219,8 +238,10 @@ def compute_dau_mau(conn: sqlite3.Connection, guild_id: int, *,
 # 2. Activity heatmap
 # ---------------------------------------------------------------------------
 
-def compute_heatmap(conn: sqlite3.Connection, guild_id: int, *,
-                    now: float | None = None) -> dict:
+
+def compute_heatmap(
+    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
 
@@ -285,7 +306,7 @@ def compute_heatmap(conn: sqlite3.Connection, guild_id: int, *,
 
     top_channels = sorted(ch_totals, key=lambda c: ch_totals[c], reverse=True)[:10]
     per_channel = [
-        {"channel_id": str(cid), "grid": ch_grids.get(cid, [[0]*24]*7)}
+        {"channel_id": str(cid), "grid": ch_grids.get(cid, [[0] * 24] * 7)}
         for cid in top_channels
     ]
 
@@ -304,9 +325,14 @@ def compute_heatmap(conn: sqlite3.Connection, guild_id: int, *,
 # 3. Channel health
 # ---------------------------------------------------------------------------
 
-def compute_channel_health(conn: sqlite3.Connection, guild_id: int, *,
-                           now: float | None = None,
-                           nsfw_channel_ids: list[int] | None = None) -> dict:
+
+def compute_channel_health(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    nsfw_channel_ids: list[int] | None = None,
+) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
     nsfw_ids = set(nsfw_channel_ids or [])
@@ -373,7 +399,13 @@ def compute_channel_health(conn: sqlite3.Connection, guild_id: int, *,
         user_score = min(100, unique * 10)  # 10 unique = 100
         depth_score = min(100, depth * 25)  # depth 4 = 100
         equity_score = max(0, (1 - gini) * 100)
-        composite = round(vol_score * 0.3 + user_score * 0.25 + depth_score * 0.25 + equity_score * 0.2, 1)
+        composite = round(
+            vol_score * 0.3
+            + user_score * 0.25
+            + depth_score * 0.25
+            + equity_score * 0.2,
+            1,
+        )
 
         last_ts = last_msg_map.get(cid, 0)
         age = now - last_ts if last_ts else float("inf")
@@ -392,16 +424,18 @@ def compute_channel_health(conn: sqlite3.Connection, guild_id: int, *,
             status = "healthy"
             active_count += 1
 
-        channels.append({
-            "channel_id": str(cid),
-            "score": composite,
-            "msgs_per_day": msgs_per_day,
-            "unique_weekly_users": unique,
-            "avg_thread_depth": depth,
-            "gini": round(gini, 3),
-            "status": status,
-            "is_nsfw": cid in nsfw_ids,
-        })
+        channels.append(
+            {
+                "channel_id": str(cid),
+                "score": composite,
+                "msgs_per_day": msgs_per_day,
+                "unique_weekly_users": unique,
+                "avg_thread_depth": depth,
+                "gini": round(gini, 3),
+                "status": status,
+                "is_nsfw": cid in nsfw_ids,
+            }
+        )
 
     channels.sort(key=lambda c: c["score"], reverse=True)
 
@@ -419,8 +453,10 @@ def compute_channel_health(conn: sqlite3.Connection, guild_id: int, *,
 # 4. Participation Gini coefficient
 # ---------------------------------------------------------------------------
 
-def compute_gini(conn: sqlite3.Connection, guild_id: int, *,
-                 now: float | None = None) -> dict:
+
+def compute_gini(
+    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
 
@@ -466,8 +502,11 @@ def compute_gini(conn: sqlite3.Connection, guild_id: int, *,
             power += 1
 
     tiers = {
-        "lurker": lurkers, "light": light, "moderate": moderate,
-        "active": active, "power": power,
+        "lurker": lurkers,
+        "light": light,
+        "moderate": moderate,
+        "active": active,
+        "power": power,
     }
 
     # 30-day sparkline (weekly Gini)
@@ -497,7 +536,11 @@ def compute_gini(conn: sqlite3.Connection, guild_id: int, *,
     ch_totals = {cid: sum(vals) for cid, vals in ch_counts.items()}
     top_chs = sorted(ch_totals, key=lambda c: ch_totals[c], reverse=True)[:10]
     per_channel = [
-        {"channel_id": str(cid), "gini": round(_gini(ch_counts[cid]), 3), "msgs": ch_totals[cid]}
+        {
+            "channel_id": str(cid),
+            "gini": round(_gini(ch_counts[cid]), 3),
+            "msgs": ch_totals[cid],
+        }
         for cid in top_chs
     ]
 
@@ -518,7 +561,9 @@ def compute_gini(conn: sqlite3.Connection, guild_id: int, *,
            GROUP BY user_id""",
         (guild_id, thirty_days_ago),
     ).fetchall()
-    voice_map: dict[int, float] = {r["user_id"]: float(r["intervals"]) for r in voice_rows}
+    voice_map: dict[int, float] = {
+        r["user_id"]: float(r["intervals"]) for r in voice_rows
+    }
 
     all_users = set(r["author_id"] for r in rows)
     all_users.update(react_map.keys())
@@ -540,7 +585,10 @@ def compute_gini(conn: sqlite3.Connection, guild_id: int, *,
     xp_vals = [r["total_xp"] for r in xp_rows]
     xp_gini = round(_gini(xp_vals), 3)
 
-    badge = _badge(gini_val, [(0.50, "excellent"), (0.70, "healthy"), (0.85, "warning"), (1.0, "critical")])
+    badge = _badge(
+        gini_val,
+        [(0.50, "excellent"), (0.70, "healthy"), (0.85, "warning"), (1.0, "critical")],
+    )
 
     return {
         "gini": gini_val,
@@ -561,9 +609,14 @@ def compute_gini(conn: sqlite3.Connection, guild_id: int, *,
 # 5. Social graph health
 # ---------------------------------------------------------------------------
 
-def compute_social_graph(conn: sqlite3.Connection, guild_id: int, *,
-                         now: float | None = None,
-                         nsfw_channel_ids: list[int] | None = None) -> dict:
+
+def compute_social_graph(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    nsfw_channel_ids: list[int] | None = None,
+) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
     nsfw_ids = set(nsfw_channel_ids or [])
@@ -705,25 +758,34 @@ def compute_social_graph(conn: sqlite3.Connection, guild_id: int, *,
         clusters[lbl].append(node)
 
     cluster_info = sorted(
-        [{"id": i, "size": len(members)} for i, (_, members) in enumerate(
-            sorted(clusters.items(), key=lambda x: -len(x[1]))
-        )],
+        [
+            {"id": i, "size": len(members)}
+            for i, (_, members) in enumerate(
+                sorted(clusters.items(), key=lambda x: -len(x[1]))
+            )
+        ],
         key=lambda x: -x["size"],
     )[:10]
 
     # SFW/NSFW bridge: users active in both
     if nsfw_ids:
         nsfw_ph = ",".join("?" * len(nsfw_ids))
-        sfw_users = set(r[0] for r in conn.execute(
-            f"SELECT DISTINCT author_id FROM messages WHERE guild_id=? AND ts>=? "
-            f"AND channel_id NOT IN ({nsfw_ph})",
-            [guild_id, thirty_days_ago] + list(nsfw_ids),
-        ).fetchall())
-        nsfw_users = set(r[0] for r in conn.execute(
-            f"SELECT DISTINCT author_id FROM messages WHERE guild_id=? AND ts>=? "
-            f"AND channel_id IN ({nsfw_ph})",
-            [guild_id, thirty_days_ago] + list(nsfw_ids),
-        ).fetchall())
+        sfw_users = set(
+            r[0]
+            for r in conn.execute(
+                f"SELECT DISTINCT author_id FROM messages WHERE guild_id=? AND ts>=? "
+                f"AND channel_id NOT IN ({nsfw_ph})",
+                [guild_id, thirty_days_ago] + list(nsfw_ids),
+            ).fetchall()
+        )
+        nsfw_users = set(
+            r[0]
+            for r in conn.execute(
+                f"SELECT DISTINCT author_id FROM messages WHERE guild_id=? AND ts>=? "
+                f"AND channel_id IN ({nsfw_ph})",
+                [guild_id, thirty_days_ago] + list(nsfw_ids),
+            ).fetchall()
+        )
         bridge_both = len(sfw_users & nsfw_users)
         sfw_nsfw_bridge = _pct(bridge_both, len(sfw_users | nsfw_users))
     else:
@@ -743,7 +805,15 @@ def compute_social_graph(conn: sqlite3.Connection, guild_id: int, *,
         if u in top_set and v in top_set
     ]
 
-    badge = _badge(clustering_coeff, [(0.15, "critical"), (0.25, "needs_work"), (0.55, "healthy"), (1.0, "excellent")])
+    badge = _badge(
+        clustering_coeff,
+        [
+            (0.15, "critical"),
+            (0.25, "needs_work"),
+            (0.55, "healthy"),
+            (1.0, "excellent"),
+        ],
+    )
 
     return {
         "clustering_coefficient": clustering_coeff,
@@ -767,8 +837,10 @@ def compute_social_graph(conn: sqlite3.Connection, guild_id: int, *,
 # 6. Sentiment & tone
 # ---------------------------------------------------------------------------
 
-def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
-                      now: float | None = None) -> dict:
+
+def compute_sentiment(
+    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+) -> dict:
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
 
@@ -842,7 +914,11 @@ def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
         (guild_id, _ts(7, now=now)),
     ).fetchall()
     spikes = [
-        {"timestamp": r["window_start"], "avg_sentiment": round(r["avg_s"], 3), "msg_count": r["cnt"]}
+        {
+            "timestamp": r["window_start"],
+            "avg_sentiment": round(r["avg_s"], 3),
+            "msg_count": r["cnt"],
+        }
         for r in spike_rows
     ]
 
@@ -857,11 +933,18 @@ def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
         (guild_id, thirty_days_ago),
     ).fetchall()
     per_channel = [
-        {"channel_id": str(r["channel_id"]), "avg_sentiment": round(r["avg_s"], 3), "count": r["cnt"]}
+        {
+            "channel_id": str(r["channel_id"]),
+            "avg_sentiment": round(r["avg_s"], 3),
+            "count": r["cnt"],
+        }
         for r in ch_rows[:20]
     ]
 
-    badge = _badge(avg_sentiment, [(-0.1, "critical"), (0.0, "needs_work"), (0.2, "healthy"), (1.0, "excellent")])
+    badge = _badge(
+        avg_sentiment,
+        [(-0.1, "critical"), (0.0, "needs_work"), (0.2, "healthy"), (1.0, "excellent")],
+    )
 
     return {
         "avg_sentiment": avg_sentiment,
@@ -880,9 +963,14 @@ def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
 # 7. Newcomer activation funnel
 # ---------------------------------------------------------------------------
 
-def compute_newcomer_funnel(conn: sqlite3.Connection, guild_id: int, *,
-                            now: float | None = None,
-                            recent_join_ids: dict[int, float] | None = None) -> dict:
+
+def compute_newcomer_funnel(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    recent_join_ids: dict[int, float] | None = None,
+) -> dict:
     """*recent_join_ids* maps user_id -> join_timestamp for members who joined
     in the last 90 days (sourced from guild cache by the caller)."""
     now = now or time.time()
@@ -900,9 +988,15 @@ def compute_newcomer_funnel(conn: sqlite3.Connection, guild_id: int, *,
 
     if not recent_join_ids:
         return {
-            "activation_rate": 0, "badge": "no_data",
-            "funnel": {"joined": 0, "first_message": 0, "first_reply": 0,
-                       "three_channels": 0, "d7_return": 0},
+            "activation_rate": 0,
+            "badge": "no_data",
+            "funnel": {
+                "joined": 0,
+                "first_message": 0,
+                "first_reply": 0,
+                "three_channels": 0,
+                "d7_return": 0,
+            },
             "time_to_first_msg": {"median_hours": 0, "distribution": []},
             "first_response_latency": {"median_minutes": 0},
             "cohorts": [],
@@ -971,7 +1065,9 @@ def compute_newcomer_funnel(conn: sqlite3.Connection, guild_id: int, *,
     }
 
     median_ttfm = round(statistics.median(ttfm_hours), 1) if ttfm_hours else 0
-    median_latency = round(statistics.median(response_latencies), 1) if response_latencies else 0
+    median_latency = (
+        round(statistics.median(response_latencies), 1) if response_latencies else 0
+    )
 
     # Time-to-first-message distribution
     ttfm_dist = {"under_1h": 0, "1_4h": 0, "4_24h": 0, "24_48h": 0, "over_48h": 0}
@@ -987,7 +1083,10 @@ def compute_newcomer_funnel(conn: sqlite3.Connection, guild_id: int, *,
         else:
             ttfm_dist["over_48h"] += 1
 
-    badge = _badge(activation_rate, [(20, "critical"), (30, "needs_work"), (40, "healthy"), (100, "excellent")])
+    badge = _badge(
+        activation_rate,
+        [(20, "critical"), (30, "needs_work"), (40, "healthy"), (100, "excellent")],
+    )
 
     return {
         "activation_rate": activation_rate,
@@ -1003,9 +1102,14 @@ def compute_newcomer_funnel(conn: sqlite3.Connection, guild_id: int, *,
 # 8. Cohort retention curves
 # ---------------------------------------------------------------------------
 
-def compute_cohort_retention(conn: sqlite3.Connection, guild_id: int, *,
-                             now: float | None = None,
-                             join_times: dict[int, float] | None = None) -> dict:
+
+def compute_cohort_retention(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    join_times: dict[int, float] | None = None,
+) -> dict:
     now = now or time.time()
     if not join_times:
         join_times = {}
@@ -1028,7 +1132,14 @@ def compute_cohort_retention(conn: sqlite3.Connection, guild_id: int, *,
             join_times[r["author_id"]] = r["first_ts"]
 
     if not join_times:
-        return {"d7": 0, "d30": 0, "d90": 0, "badge": "no_data", "cohorts": [], "heatmap": []}
+        return {
+            "d7": 0,
+            "d30": 0,
+            "d90": 0,
+            "badge": "no_data",
+            "cohorts": [],
+            "heatmap": [],
+        }
 
     # Group into weekly cohorts
     cohorts: dict[str, list[tuple[int, float]]] = defaultdict(list)
@@ -1070,10 +1181,15 @@ def compute_cohort_retention(conn: sqlite3.Connection, guild_id: int, *,
     d30 = latest.get("d30", 0)
     d90 = latest.get("d90", 0)
 
-    badge = _badge(float(d7), [(40, "critical"), (50, "needs_work"), (60, "healthy"), (100, "excellent")])
+    badge = _badge(
+        float(d7),
+        [(40, "critical"), (50, "needs_work"), (60, "healthy"), (100, "excellent")],
+    )
 
     return {
-        "d7": d7, "d30": d30, "d90": d90,
+        "d7": d7,
+        "d30": d30,
+        "d90": d90,
         "badge": badge,
         "latest_cohort_size": latest.get("size", 0),
         "cohorts": cohort_results,
@@ -1084,8 +1200,10 @@ def compute_cohort_retention(conn: sqlite3.Connection, guild_id: int, *,
 # 9. Churn risk early warning
 # ---------------------------------------------------------------------------
 
-def compute_churn_risk(conn: sqlite3.Connection, guild_id: int, *,
-                       now: float | None = None) -> dict:
+
+def compute_churn_risk(
+    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+) -> dict:
     now = now or time.time()
 
     # Get all users active in last 60 days
@@ -1164,7 +1282,9 @@ def compute_churn_risk(conn: sqlite3.Connection, guild_id: int, *,
             "WHERE m.guild_id=? AND m.author_id=? AND ms.computed_at>=? AND ms.computed_at<?",
             (guild_id, uid, _ts(14, now=now), _ts(7, now=now)),
         ).fetchone()
-        prev_sent = prev_sent_row[0] if prev_sent_row and prev_sent_row[0] is not None else 0
+        prev_sent = (
+            prev_sent_row[0] if prev_sent_row and prev_sent_row[0] is not None else 0
+        )
         sent_decline = max(0, prev_sent - recent_sent) / 2  # normalize to 0-1 range
 
         # Signal 5: Visit gaps (10%) — longest gap in last 30d
@@ -1184,11 +1304,14 @@ def compute_churn_risk(conn: sqlite3.Connection, guild_id: int, *,
 
         # Composite score (0-100)
         score = round(
-            (freq_decline * 0.30 +
-             ch_narrow * 0.25 +
-             recip_loss * 0.20 +
-             sent_decline * 0.15 +
-             gap_score * 0.10) * 100
+            (
+                freq_decline * 0.30
+                + ch_narrow * 0.25
+                + recip_loss * 0.20
+                + sent_decline * 0.15
+                + gap_score * 0.10
+            )
+            * 100
         )
         score = min(100, max(0, score))
 
@@ -1196,20 +1319,24 @@ def compute_churn_risk(conn: sqlite3.Connection, guild_id: int, *,
         risk_distribution[bucket] += 1
 
         if score >= 30:
-            tier = "critical" if score >= 80 else "declining" if score >= 50 else "watch"
-            at_risk.append({
-                "user_id": str(uid),
-                "score": score,
-                "tier": tier,
-                "signals": {
-                    "frequency": round(freq_decline * 100),
-                    "channels": round(ch_narrow * 100),
-                    "reciprocity": round(recip_loss * 100),
-                    "sentiment": round(sent_decline * 100),
-                    "gap": round(gap_score * 100),
-                },
-                "last_seen": msg_ts_rows[-1]["ts"] if msg_ts_rows else 0,
-            })
+            tier = (
+                "critical" if score >= 80 else "declining" if score >= 50 else "watch"
+            )
+            at_risk.append(
+                {
+                    "user_id": str(uid),
+                    "score": score,
+                    "tier": tier,
+                    "signals": {
+                        "frequency": round(freq_decline * 100),
+                        "channels": round(ch_narrow * 100),
+                        "reciprocity": round(recip_loss * 100),
+                        "sentiment": round(sent_decline * 100),
+                        "gap": round(gap_score * 100),
+                    },
+                    "last_seen": msg_ts_rows[-1]["ts"] if msg_ts_rows else 0,
+                }
+            )
 
     at_risk.sort(key=lambda x: x["score"], reverse=True)
 
@@ -1234,9 +1361,14 @@ def compute_churn_risk(conn: sqlite3.Connection, guild_id: int, *,
 # 10. Moderator workload
 # ---------------------------------------------------------------------------
 
-def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
-                         now: float | None = None,
-                         mod_ids: list[int] | None = None) -> dict:
+
+def compute_mod_workload(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: float | None = None,
+    mod_ids: list[int] | None = None,
+) -> dict:
     now = now or time.time()
     seven_days_ago = _ts(7, now=now)
     thirty_days_ago = _ts(30, now=now)
@@ -1293,7 +1425,8 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
     # Per-mod action counts (7d)
     mod_rows = conn.execute(
         "SELECT actor_id, COUNT(*) AS cnt FROM audit_log "
-        "WHERE guild_id=? AND created_at>=?" + mod_filter
+        "WHERE guild_id=? AND created_at>=?"
+        + mod_filter
         + " GROUP BY actor_id ORDER BY cnt DESC",
         (guild_id, seven_days_ago) + mod_params,
     ).fetchall()
@@ -1306,7 +1439,9 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
         msg_rows = conn.execute(
             "SELECT author_id, COUNT(*) AS cnt FROM messages "
             "WHERE guild_id=? AND ts>=? AND channel_id IN ("
-            + ch_placeholders + ")" + mod_filter_author
+            + ch_placeholders
+            + ")"
+            + mod_filter_author
             + " GROUP BY author_id",
             (guild_id, seven_days_ago) + tuple(mod_channel_ids) + mod_params,
         ).fetchall()
@@ -1318,12 +1453,14 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
     for mid in all_mod_ids:
         acts = action_by_mod.get(mid, 0)
         msgs = msg_by_mod.get(mid, 0)
-        mod_actions.append({
-            "user_id": str(mid),
-            "count": acts + msgs,
-            "actions": acts,
-            "messages": msgs,
-        })
+        mod_actions.append(
+            {
+                "user_id": str(mid),
+                "count": acts + msgs,
+                "actions": acts,
+                "messages": msgs,
+            }
+        )
     mod_actions.sort(key=lambda m: m["count"], reverse=True)  # type: ignore[arg-type,return-value]
 
     total_messages = sum(msg_by_mod.values())
@@ -1351,12 +1488,17 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
             response_times.append(rt)
 
     median_rt = round(statistics.median(response_times), 1) if response_times else 0
-    p95_rt = round(sorted(response_times)[int(len(response_times) * 0.95)], 1) if len(response_times) >= 5 else median_rt
+    p95_rt = (
+        round(sorted(response_times)[int(len(response_times) * 0.95)], 1)
+        if len(response_times) >= 5
+        else median_rt
+    )
 
     # Action type breakdown (mod-only when filtered)
     type_rows = conn.execute(
         "SELECT action, COUNT(*) AS cnt FROM audit_log "
-        "WHERE guild_id=? AND created_at>=?" + mod_filter
+        "WHERE guild_id=? AND created_at>=?"
+        + mod_filter
         + " GROUP BY action ORDER BY cnt DESC",
         (guild_id, seven_days_ago) + mod_params,
     ).fetchall()
@@ -1397,7 +1539,10 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
     ).fetchone()[0]
     recidivism_rate = _pct(recid, warned_users) if warned_users else 0
 
-    badge = _badge(median_rt, [(3, "excellent"), (5, "healthy"), (10, "needs_work"), (9999, "critical")])
+    badge = _badge(
+        median_rt,
+        [(3, "excellent"), (5, "healthy"), (10, "needs_work"), (9999, "critical")],
+    )
 
     return {
         "median_response_time": median_rt,
@@ -1418,8 +1563,10 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
 # 11. Incident detection (reads from incident_events + baselines)
 # ---------------------------------------------------------------------------
 
-def compute_incidents(conn: sqlite3.Connection, guild_id: int, *,
-                      now: float | None = None) -> dict:
+
+def compute_incidents(
+    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
+) -> dict:
     now = now or time.time()
     seven_days_ago = _ts(7, now=now)
 
@@ -1445,7 +1592,9 @@ def compute_incidents(conn: sqlite3.Connection, guild_id: int, *,
             "channel_id": str(r["channel_id"]) if r["channel_id"] else None,
             "detected_at": r["detected_at"],
             "resolved_at": r["resolved_at"],
-            "duration_min": round((r["resolved_at"] - r["detected_at"]) / 60, 1) if r["resolved_at"] else None,
+            "duration_min": round((r["resolved_at"] - r["detected_at"]) / 60, 1)
+            if r["resolved_at"]
+            else None,
         }
         for r in log_rows
     ]
@@ -1484,6 +1633,7 @@ def compute_incidents(conn: sqlite3.Connection, guild_id: int, *,
 # 12. Composite health score
 # ---------------------------------------------------------------------------
 
+
 def compute_composite_health(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -1516,7 +1666,9 @@ def compute_composite_health(
 
     # Distribution (15%) — based on inverse Gini
     gini_val = (gini_data or {}).get("gini", 0.85)
-    distribution_score = max(0, min(100, round((1 - gini_val) * 150)))  # 0.33 gini = 100
+    distribution_score = max(
+        0, min(100, round((1 - gini_val) * 150))
+    )  # 0.33 gini = 100
 
     # Network (15%) — based on clustering coefficient
     clustering = (social_data or {}).get("clustering_coefficient", 0)
@@ -1528,16 +1680,18 @@ def compute_composite_health(
 
     # Sentiment (15%) — based on avg sentiment
     avg_sent = (sentiment_data or {}).get("avg_sentiment", 0)
-    sentiment_score = max(0, min(100, round((avg_sent + 0.5) * 100)))  # -0.5 to +0.5 -> 0-100
+    sentiment_score = max(
+        0, min(100, round((avg_sent + 0.5) * 100))
+    )  # -0.5 to +0.5 -> 0-100
 
     # Weighted composite
     composite = round(
-        activity_score * 0.20 +
-        engagement_score * 0.20 +
-        distribution_score * 0.15 +
-        network_score * 0.15 +
-        retention_score * 0.15 +
-        sentiment_score * 0.15
+        activity_score * 0.20
+        + engagement_score * 0.20
+        + distribution_score * 0.15
+        + network_score * 0.15
+        + retention_score * 0.15
+        + sentiment_score * 0.15
     )
 
     dimensions = [
@@ -1562,12 +1716,16 @@ def compute_composite_health(
     }
     for dim in sorted_dims[:3]:
         if dim["score"] < 80:
-            recommendations.append({
-                "dimension": dim["name"],
-                "score": dim["score"],
-                "action": interventions.get(dim["name"], ""),
-                "estimated_impact": round((80 - dim["score"]) * dim["weight"] / 100, 1),
-            })
+            recommendations.append(
+                {
+                    "dimension": dim["name"],
+                    "score": dim["score"],
+                    "action": interventions.get(dim["name"], ""),
+                    "estimated_impact": round(
+                        (80 - dim["score"]) * dim["weight"] / 100, 1
+                    ),
+                }
+            )
 
     if composite >= 80:
         badge = "excellent"

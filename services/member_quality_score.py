@@ -8,6 +8,7 @@ Produces a ranked list with four component scores:
 
 Members never see scores. Output is mod-only.
 """
+
 from __future__ import annotations
 
 import math
@@ -53,10 +54,10 @@ TENURE_12MO_BUFFER = 60
 
 # Initiative multipliers
 INITIATIVE_TIERS = [
-    (0.60, 1.10),   # 60%+ initiated
-    (0.40, 1.00),   # 40-60%
-    (0.20, 0.92),   # 20-40%
-    (0.00, 0.85),   # under 20%
+    (0.60, 1.10),  # 60%+ initiated
+    (0.40, 1.00),  # 40-60%
+    (0.20, 0.92),  # 20-40%
+    (0.00, 0.85),  # under 20%
 ]
 
 # Status labels
@@ -69,6 +70,7 @@ STATUS_LEAVE = "Leave of Absence"
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class QualityScore:
@@ -89,6 +91,7 @@ class QualityScore:
 # Leave of absence tables
 # ---------------------------------------------------------------------------
 
+
 def init_quality_score_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -103,8 +106,13 @@ def init_quality_score_tables(conn: sqlite3.Connection) -> None:
     )
 
 
-def add_leave(conn: sqlite3.Connection, guild_id: int, user_id: int,
-              start_ts: float, end_ts: float) -> None:
+def add_leave(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    start_ts: float,
+    end_ts: float,
+) -> None:
     conn.execute(
         """
         INSERT INTO quality_score_leaves (guild_id, user_id, start_ts, end_ts)
@@ -123,7 +131,9 @@ def remove_leave(conn: sqlite3.Connection, guild_id: int, user_id: int) -> bool:
     return (cur.rowcount or 0) > 0
 
 
-def get_leaves(conn: sqlite3.Connection, guild_id: int) -> dict[int, tuple[float, float]]:
+def get_leaves(
+    conn: sqlite3.Connection, guild_id: int
+) -> dict[int, tuple[float, float]]:
     """Return {user_id: (start_ts, end_ts)} for all active leaves."""
     rows = conn.execute(
         "SELECT user_id, start_ts, end_ts FROM quality_score_leaves WHERE guild_id = ?",
@@ -135,6 +145,7 @@ def get_leaves(conn: sqlite3.Connection, guild_id: int) -> dict[int, tuple[float
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _percentile_ranks(values: list[float]) -> list[float]:
     """Compute percentile rank (0-1) for each value in the list."""
@@ -172,8 +183,13 @@ def _initiative_multiplier(initiated_ratio: float) -> float:
     return 0.85
 
 
-def _tenure_buffer(joined_at: datetime | None, now: datetime,
-                   conn: sqlite3.Connection, guild_id: int, user_id: int) -> int:
+def _tenure_buffer(
+    joined_at: datetime | None,
+    now: datetime,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+) -> int:
     """Compute tenure buffer days based on join date and historical activity."""
     if joined_at is None:
         return 0
@@ -206,6 +222,7 @@ def _tenure_buffer(joined_at: datetime | None, now: datetime,
 # Core algorithm
 # ---------------------------------------------------------------------------
 
+
 def compute_quality_scores(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -223,7 +240,9 @@ def compute_quality_scores(
         now = datetime.now(timezone.utc)
     now_ts = now.timestamp()
     _window_days = window_days if window_days is not None else WINDOW_DAYS
-    _min_active_days = min_active_days if min_active_days is not None else MIN_ACTIVE_DAYS
+    _min_active_days = (
+        min_active_days if min_active_days is not None else MIN_ACTIVE_DAYS
+    )
     window_start = now_ts - (_window_days * 86400)
 
     # Fetch leaves
@@ -243,22 +262,40 @@ def compute_quality_scores(
         if m.id in leaves:
             _start, end = leaves[m.id]
             if end >= now_ts:
-                results.append(QualityScore(
-                    user_id=m.id, final_score=0, engagement_given=0,
-                    consistency_recency=0, content_resonance=0, posting_activity=0,
-                    last_active_ts=0, status=STATUS_LEAVE, tenure_buffer_days=0,
-                    active_days=0, active_weeks=0,
-                ))
+                results.append(
+                    QualityScore(
+                        user_id=m.id,
+                        final_score=0,
+                        engagement_given=0,
+                        consistency_recency=0,
+                        content_resonance=0,
+                        posting_activity=0,
+                        last_active_ts=0,
+                        status=STATUS_LEAVE,
+                        tenure_buffer_days=0,
+                        active_days=0,
+                        active_weeks=0,
+                    )
+                )
                 continue
 
         # Onboarding
         if m.joined_at and (now - m.joined_at).days < ONBOARDING_DAYS:
-            results.append(QualityScore(
-                user_id=m.id, final_score=0, engagement_given=0,
-                consistency_recency=0, content_resonance=0, posting_activity=0,
-                last_active_ts=0, status=STATUS_ONBOARDING, tenure_buffer_days=0,
-                active_days=0, active_weeks=0,
-            ))
+            results.append(
+                QualityScore(
+                    user_id=m.id,
+                    final_score=0,
+                    engagement_given=0,
+                    consistency_recency=0,
+                    content_resonance=0,
+                    posting_activity=0,
+                    last_active_ts=0,
+                    status=STATUS_ONBOARDING,
+                    tenure_buffer_days=0,
+                    active_days=0,
+                    active_weeks=0,
+                )
+            )
             continue
 
         scored_ids.append(m.id)
@@ -323,16 +360,20 @@ def compute_quality_scores(
         uid = int(row["author_id"])
         msg_author_map[int(row["message_id"])] = uid
         if uid in id_set:
-            msgs_by_author[uid].append({
-                "message_id": int(row["message_id"]),
-                "ts": int(row["ts"]),
-                "content": row["content"],
-                "reply_to_id": row["reply_to_id"],
-                "channel_id": int(row["channel_id"]),
-            })
+            msgs_by_author[uid].append(
+                {
+                    "message_id": int(row["message_id"]),
+                    "ts": int(row["ts"]),
+                    "content": row["content"],
+                    "reply_to_id": row["reply_to_id"],
+                    "channel_id": int(row["channel_id"]),
+                }
+            )
 
     # Reaction log data
-    reactions_given: dict[int, list[tuple[int, int]]] = defaultdict(list)  # reactor -> [(author, ts)]
+    reactions_given: dict[int, list[tuple[int, int]]] = defaultdict(
+        list
+    )  # reactor -> [(author, ts)]
     for row in react_rows:
         rid = int(row["reactor_id"])
         if rid in id_set:
@@ -420,26 +461,37 @@ def compute_quality_scores(
 
         # Reaction rate (per active day), with anti-gaming
         reaction_credit = 0.0
-        daily_reaction_targets: dict[int, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+        daily_reaction_targets: dict[int, dict[int, int]] = defaultdict(
+            lambda: defaultdict(int)
+        )
         for target, ts in user_reactions:
             day = _day_key(ts)
             daily_reaction_targets[day][target] += 1
 
         for day_targets in daily_reaction_targets.values():
-            for _target, count in day_targets.items():
+            for count in day_targets.values():
                 if count <= REACTION_SAME_PERSON_HALF:
                     reaction_credit += count
                 elif count <= REACTION_SAME_PERSON_CAP:
-                    reaction_credit += REACTION_SAME_PERSON_HALF + (count - REACTION_SAME_PERSON_HALF) * 0.5
+                    reaction_credit += (
+                        REACTION_SAME_PERSON_HALF
+                        + (count - REACTION_SAME_PERSON_HALF) * 0.5
+                    )
                 else:
-                    reaction_credit += REACTION_SAME_PERSON_HALF + (REACTION_SAME_PERSON_CAP - REACTION_SAME_PERSON_HALF) * 0.5
+                    reaction_credit += (
+                        REACTION_SAME_PERSON_HALF
+                        + (REACTION_SAME_PERSON_CAP - REACTION_SAME_PERSON_HALF) * 0.5
+                    )
 
-        reaction_rates[idx] = (reaction_credit / n_active_days) if n_active_days > 0 else 0.0
+        reaction_rates[idx] = (
+            (reaction_credit / n_active_days) if n_active_days > 0 else 0.0
+        )
 
         # Reply ratio
         total_msgs = len(user_msgs)
         qualifying_replies = sum(
-            1 for msg in user_msgs
+            1
+            for msg in user_msgs
             if msg["reply_to_id"] is not None
             and msg["content"] is not None
             and len(msg["content"]) >= MIN_REPLY_CHARS
@@ -485,8 +537,14 @@ def compute_quality_scores(
         _m = member_map.get(uid)
         _joined_ts = _m.joined_at.timestamp() if _m and _m.joined_at else 0.0
         _weeks_in_window = max(1, _window_days // 7)
-        _tenure_wks = max(1.0, (now_ts - _joined_ts) / (7 * 86400)) if _joined_ts else float(_weeks_in_window)
-        consistency_values[idx] = n_active_weeks / min(float(_weeks_in_window), _tenure_wks)
+        _tenure_wks = (
+            max(1.0, (now_ts - _joined_ts) / (7 * 86400))
+            if _joined_ts
+            else float(_weeks_in_window)
+        )
+        consistency_values[idx] = n_active_weeks / min(
+            float(_weeks_in_window), _tenure_wks
+        )
 
         # -- Content Resonance --
         # "Posts" = messages with attachment OR conversation starters (non-replies)
@@ -518,10 +576,10 @@ def compute_quality_scores(
 
         capped_posts = sum(
             min(v, ATTACHMENT_DAILY_CAP) for v in daily_attachments.values()
-        ) + sum(
-            min(v, STARTER_DAILY_CAP) for v in daily_starters.values()
+        ) + sum(min(v, STARTER_DAILY_CAP) for v in daily_starters.values())
+        posting_rates[idx] = (
+            (capped_posts / n_active_days) if n_active_days > 0 else 0.0
         )
-        posting_rates[idx] = (capped_posts / n_active_days) if n_active_days > 0 else 0.0
 
     # ------------------------------------------------------------------
     # Percentile ranking
@@ -548,13 +606,21 @@ def compute_quality_scores(
     for idx, uid in enumerate(scored_ids):
         # Check minimum active days
         if active_days_arr[idx] < _min_active_days:
-            results.append(QualityScore(
-                user_id=uid, final_score=0, engagement_given=0,
-                consistency_recency=0, content_resonance=0, posting_activity=0,
-                last_active_ts=last_active[idx], status=STATUS_INSUFFICIENT,
-                tenure_buffer_days=0, active_days=active_days_arr[idx],
-                active_weeks=active_weeks_arr[idx],
-            ))
+            results.append(
+                QualityScore(
+                    user_id=uid,
+                    final_score=0,
+                    engagement_given=0,
+                    consistency_recency=0,
+                    content_resonance=0,
+                    posting_activity=0,
+                    last_active_ts=last_active[idx],
+                    status=STATUS_INSUFFICIENT,
+                    tenure_buffer_days=0,
+                    active_days=active_days_arr[idx],
+                    active_weeks=active_weeks_arr[idx],
+                )
+            )
             continue
 
         # Engagement Given
@@ -563,13 +629,19 @@ def compute_quality_scores(
         engagement = min(engagement_raw * initiative_mult, 1.1)
 
         # Consistency & Recency
-        consistency_recency = recency_values[idx] * 0.60 + consistency_values[idx] * 0.40
+        consistency_recency = (
+            recency_values[idx] * 0.60 + consistency_values[idx] * 0.40
+        )
 
         # Content Resonance
         resonance = resonance_pctile[idx]
 
         # Posting Activity (floor 0.25 for non-posters)
-        posting = max(posting_rate_pctile[idx], 0.25) if posting_rates[idx] == 0 else posting_rate_pctile[idx]
+        posting = (
+            max(posting_rate_pctile[idx], 0.25)
+            if posting_rates[idx] == 0
+            else posting_rate_pctile[idx]
+        )
 
         # Final weighted score
         final = (
@@ -582,22 +654,28 @@ def compute_quality_scores(
         # Tenure buffer
         mbr = member_map.get(uid)
         buffer_days = _tenure_buffer(
-            mbr.joined_at if mbr else None, now, conn, guild_id, uid,
+            mbr.joined_at if mbr else None,
+            now,
+            conn,
+            guild_id,
+            uid,
         )
 
-        scored_results.append(QualityScore(
-            user_id=uid,
-            final_score=round(final, 4),
-            engagement_given=round(engagement, 4),
-            consistency_recency=round(consistency_recency, 4),
-            content_resonance=round(resonance, 4),
-            posting_activity=round(posting, 4),
-            last_active_ts=last_active[idx],
-            status=STATUS_ACTIVE,
-            tenure_buffer_days=buffer_days,
-            active_days=active_days_arr[idx],
-            active_weeks=active_weeks_arr[idx],
-        ))
+        scored_results.append(
+            QualityScore(
+                user_id=uid,
+                final_score=round(final, 4),
+                engagement_given=round(engagement, 4),
+                consistency_recency=round(consistency_recency, 4),
+                content_resonance=round(resonance, 4),
+                posting_activity=round(posting, 4),
+                last_active_ts=last_active[idx],
+                status=STATUS_ACTIVE,
+                tenure_buffer_days=buffer_days,
+                active_days=active_days_arr[idx],
+                active_weeks=active_weeks_arr[idx],
+            )
+        )
 
     # Sort scored by final_score descending
     scored_results.sort(key=lambda s: s.final_score, reverse=True)

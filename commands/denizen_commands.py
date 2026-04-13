@@ -1,4 +1,5 @@
 """Role grant commands — single /grant command driven from the grant_roles DB table."""
+
 from __future__ import annotations
 
 import logging
@@ -23,8 +24,7 @@ def _resolve_grant_message(
     interaction: discord.Interaction,
 ) -> str:
     return (
-        template
-        .replace("{member}", member.mention)
+        template.replace("{member}", member.mention)
         .replace("{member_name}", member.display_name)
         .replace("{role}", role.mention)
         .replace("{role_name}", role.name)
@@ -39,31 +39,41 @@ async def _execute_grant(
     log_channel_id: int,
     announce_channel_id: int,
     grant_message: str,
-    ctx: "AppContext",
+    ctx: AppContext,
 ) -> None:
     """Shared grant logic for all role-grant commands."""
     guild = interaction.guild
     if guild is None:
-        await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+        await interaction.response.send_message(
+            "This command only works in a server.", ephemeral=True
+        )
         return
 
     actor = ctx.get_interaction_member(interaction)
 
     if member.bot:
-        await interaction.response.send_message("Bots can't receive this role.", ephemeral=True)
+        await interaction.response.send_message(
+            "Bots can't receive this role.", ephemeral=True
+        )
         return
 
     if actor is not None and member.id == actor.id and not ctx.is_mod(interaction):
-        await interaction.response.send_message("You can't grant this role to yourself.", ephemeral=True)
+        await interaction.response.send_message(
+            "You can't grant this role to yourself.", ephemeral=True
+        )
         return
 
     if role_id <= 0:
-        await interaction.response.send_message("This role is not configured yet.", ephemeral=True)
+        await interaction.response.send_message(
+            "This role is not configured yet.", ephemeral=True
+        )
         return
 
     role = guild.get_role(role_id)
     if role is None:
-        await interaction.response.send_message("The configured role no longer exists.", ephemeral=True)
+        await interaction.response.send_message(
+            "The configured role no longer exists.", ephemeral=True
+        )
         return
 
     if role in member.roles:
@@ -74,7 +84,9 @@ async def _execute_grant(
 
     bot_member = get_bot_member(guild)
     if bot_member is None:
-        await interaction.response.send_message("Bot member context is unavailable right now.", ephemeral=True)
+        await interaction.response.send_message(
+            "Bot member context is unavailable right now.", ephemeral=True
+        )
         return
 
     if not bot_member.guild_permissions.manage_roles:
@@ -85,7 +97,8 @@ async def _execute_grant(
 
     if role >= bot_member.top_role:
         await interaction.response.send_message(
-            f"I can't grant {role.mention} because it is above my highest role.", ephemeral=True
+            f"I can't grant {role.mention} because it is above my highest role.",
+            ephemeral=True,
         )
         return
 
@@ -93,14 +106,18 @@ async def _execute_grant(
     await interaction.response.defer(ephemeral=True)
 
     try:
-        await member.add_roles(role, reason=f"Granted by {interaction.user} via slash command")
+        await member.add_roles(
+            role, reason=f"Granted by {interaction.user} via slash command"
+        )
     except discord.Forbidden:
         await interaction.followup.send(
-            f"I couldn't grant {role.mention}. Check my role hierarchy and permissions.", ephemeral=True
+            f"I couldn't grant {role.mention}. Check my role hierarchy and permissions.",
+            ephemeral=True,
         )
         return
 
     from xp_system import log_role_event
+
     with ctx.open_db() as db_conn:
         log_role_event(db_conn, guild.id, member.id, role.name, "grant")
 
@@ -129,24 +146,32 @@ async def _execute_grant(
             )
 
 
-def register_denizen_commands(bot: "Bot", ctx: "AppContext") -> None:
+def register_denizen_commands(bot: Bot, ctx: AppContext) -> None:
 
     async def _role_autocomplete(
-        interaction: discord.Interaction, current: str,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         choices: list[app_commands.Choice[str]] = []
         for key, cfg in ctx.grant_roles.items():
-            if current.lower() in key.lower() or current.lower() in cfg["label"].lower():
+            if (
+                current.lower() in key.lower()
+                or current.lower() in cfg["label"].lower()
+            ):
                 choices.append(app_commands.Choice(name=cfg["label"], value=key))
         return choices[:25]
 
-    @bot.tree.command(name="grant", description="Grant a role to a member.")
+    @bot.tree.command(
+        name="grant", description="Give a configured community role to a member."
+    )
     @app_commands.describe(
-        role="Which role to grant.",
+        role="Role to grant (from your configured grant roles).",
         member="Member to receive the role.",
     )
     @app_commands.autocomplete(role=_role_autocomplete)
-    async def grant_cmd(interaction: discord.Interaction, role: str, member: discord.Member) -> None:
+    async def grant_cmd(
+        interaction: discord.Interaction, role: str, member: discord.Member
+    ) -> None:
         if not ctx.can_use_grant_role(interaction, role):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
@@ -154,10 +179,13 @@ def register_denizen_commands(bot: "Bot", ctx: "AppContext") -> None:
             return
         cfg = ctx.grant_roles.get(role)
         if cfg is None:
-            await interaction.response.send_message("This grant role is not configured.", ephemeral=True)
+            await interaction.response.send_message(
+                "This grant role is not configured.", ephemeral=True
+            )
             return
         await _execute_grant(
-            interaction, member,
+            interaction,
+            member,
             role_id=cfg["role_id"],
             log_channel_id=cfg["log_channel_id"],
             announce_channel_id=cfg["announce_channel_id"],

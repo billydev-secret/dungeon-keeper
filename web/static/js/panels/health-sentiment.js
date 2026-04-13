@@ -35,6 +35,15 @@ export function mount(container) {
         <div class="subtitle">Emotional temperature of the community</div>
       </header>
 
+      <details class="panel-about" style="margin:8px 0 14px;">
+        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
+        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+          Messages are scored from &minus;1 (very negative) to +1 (very positive) using automated sentiment analysis.
+          The <strong style="color:var(--text-normal, #dbdee1);">positive-to-negative ratio</strong> is a quick health check — above 3:1 is a good sign.
+          <strong style="color:var(--text-normal, #dbdee1);">Negative spikes</strong> flag time windows where the average tone dropped sharply, which often correlates with drama or conflict.
+        </div>
+      </details>
+
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Average Sentiment</div>
@@ -49,6 +58,7 @@ export function mount(container) {
         <div class="home-card">
           <div class="home-card-label">Negative Spikes (7d)</div>
           <div class="home-card-big">${d.spikes_7d}</div>
+          <div class="home-card-sub">Sudden drops in average tone</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Emotion Categories</div>
@@ -68,10 +78,10 @@ export function mount(container) {
         </div>
         <div class="home-card">
           <div class="home-card-label">Negative Spike Log</div>
-          ${spikeRows ? `<table class="data-table">
+          ${spikeRows ? `<div class="data-table-scroll"><table class="data-table">
             <thead><tr><th>Time</th><th>Sentiment</th><th>Volume</th></tr></thead>
             <tbody>${spikeRows}</tbody>
-          </table>` : '<div class="home-dim">No spikes this week</div>'}
+          </table></div>` : '<div class="home-dim">No spikes this week</div>'}
         </div>
       </div>
     `;

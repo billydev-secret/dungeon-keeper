@@ -5,6 +5,7 @@ the BoosterRoleDynamicButton pattern (services/booster_roles.py:144), we
 register two DynamicItem subclasses on the bot. They look up the partnership
 record by ID embedded in the button's custom_id.
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,8 +46,12 @@ class WellnessPartnerAcceptButton(
 
     @classmethod
     async def from_custom_id(  # type: ignore[override]
-        cls, interaction, item, match, /,
-    ) -> "WellnessPartnerAcceptButton":
+        cls,
+        interaction,
+        item,
+        match,
+        /,
+    ) -> WellnessPartnerAcceptButton:
         return cls(int(match["pid"]))
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -67,13 +72,15 @@ class WellnessPartnerAcceptButton(
             # Only the non-requester can accept
             if interaction.user.id == partnership.requester_id:
                 await interaction.response.send_message(
-                    "You can't accept your own request.", ephemeral=True,
+                    "You can't accept your own request.",
+                    ephemeral=True,
                 )
                 return
             target_id = partnership.other(partnership.requester_id)
             if interaction.user.id != target_id:
                 await interaction.response.send_message(
-                    "This request isn't for you.", ephemeral=True,
+                    "This request isn't for you.",
+                    ephemeral=True,
                 )
                 return
             accept_partner_request(conn, self.partner_id)
@@ -116,8 +123,12 @@ class WellnessPartnerDeclineButton(
 
     @classmethod
     async def from_custom_id(  # type: ignore[override]
-        cls, interaction, item, match, /,
-    ) -> "WellnessPartnerDeclineButton":
+        cls,
+        interaction,
+        item,
+        match,
+        /,
+    ) -> WellnessPartnerDeclineButton:
         return cls(int(match["pid"]))
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -138,7 +149,8 @@ class WellnessPartnerDeclineButton(
             target_id = partnership.other(partnership.requester_id)
             if interaction.user.id != target_id:
                 await interaction.response.send_message(
-                    "This request isn't for you.", ephemeral=True,
+                    "This request isn't for you.",
+                    ephemeral=True,
                 )
                 return
             dissolve_partnership(conn, self.partner_id)

@@ -10,6 +10,7 @@ Environment:
     DASHBOARD_PORT   (default 8080)
     GUILD_ID         (fallback if config table has no guild_id row)
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -19,8 +20,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
 import uvicorn
+from dotenv import load_dotenv
 
 from db_utils import get_config_value, open_db
 from services.message_store import init_known_channels_table, init_known_users_table
@@ -82,7 +83,9 @@ def main() -> None:
 
     guild_id = _resolve_guild_id(db_path)
     if guild_id == 0:
-        log.warning("No guild_id configured; role-growth and other queries will return empty.")
+        log.warning(
+            "No guild_id configured; role-growth and other queries will return empty."
+        )
 
     tz_offset = 0.0
     with open_db(db_path) as conn:
@@ -110,7 +113,9 @@ def main() -> None:
             pass
 
     ctx = StandaloneContext(
-        db_path=db_path, guild_id=guild_id, bot=_NullBot(),
+        db_path=db_path,
+        guild_id=guild_id,
+        bot=_NullBot(),
         tz_offset_hours=tz_offset,
         welcome_channel_id=welcome_channel_id,
         greeter_role_id=greeter_role_id,
@@ -123,8 +128,13 @@ def main() -> None:
     port = int(os.getenv("DASHBOARD_PORT", "8080"))
 
     app = create_app(ctx)
-    log.info("Standalone dashboard starting on http://%s:%d (db=%s, guild=%d)",
-             host, port, db_path, guild_id)
+    log.info(
+        "Standalone dashboard starting on http://%s:%d (db=%s, guild=%d)",
+        host,
+        port,
+        db_path,
+        guild_id,
+    )
     uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
 
 

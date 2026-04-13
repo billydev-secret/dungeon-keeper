@@ -1,4 +1,5 @@
 """Inactivity prune service - removes a role from members inactive for N days, running at midnight."""
+
 from __future__ import annotations
 
 import asyncio
@@ -7,6 +8,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
 import discord
 
 from db_utils import open_db
@@ -18,6 +20,7 @@ log = logging.getLogger("dungeonkeeper.inactivity_prune")
 # ---------------------------------------------------------------------------
 # Table init
 # ---------------------------------------------------------------------------
+
 
 def init_inactivity_prune_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
@@ -44,7 +47,10 @@ def init_inactivity_prune_tables(conn: sqlite3.Connection) -> None:
 # Rule CRUD
 # ---------------------------------------------------------------------------
 
-def upsert_prune_rule(db_path: Path, guild_id: int, role_id: int, inactivity_days: int) -> None:
+
+def upsert_prune_rule(
+    db_path: Path, guild_id: int, role_id: int, inactivity_days: int
+) -> None:
     with open_db(db_path) as conn:
         conn.execute(
             """
@@ -86,6 +92,7 @@ def list_all_prune_rules(db_path: Path) -> list[sqlite3.Row]:
 # Exception list CRUD
 # ---------------------------------------------------------------------------
 
+
 def add_prune_exception(db_path: Path, guild_id: int, user_id: int) -> None:
     with open_db(db_path) as conn:
         conn.execute(
@@ -116,6 +123,7 @@ def get_prune_exception_ids(db_path: Path, guild_id: int) -> set[int]:
 # Prune logic
 # ---------------------------------------------------------------------------
 
+
 async def run_prune_for_guild(
     bot: discord.Client,
     db_path: Path,
@@ -132,7 +140,11 @@ async def run_prune_for_guild(
 
     role = guild.get_role(role_id)
     if role is None:
-        log.warning("Inactivity prune: role %s not found in guild %s; skipping.", role_id, guild.name)
+        log.warning(
+            "Inactivity prune: role %s not found in guild %s; skipping.",
+            role_id,
+            guild.name,
+        )
         return
 
     exceptions = get_prune_exception_ids(db_path, guild_id)
@@ -157,13 +169,26 @@ async def run_prune_for_guild(
             if now < next_action_at:
                 await asyncio.sleep(next_action_at - now)
             try:
-                await member.remove_roles(role, reason=f"Inactivity prune: no activity in {inactivity_days} days")
+                await member.remove_roles(
+                    role,
+                    reason=f"Inactivity prune: no activity in {inactivity_days} days",
+                )
                 pruned.append(member)
             except discord.Forbidden:
-                log.warning("Inactivity prune: missing permission to remove role from %s (%s).", member, member.id)
+                log.warning(
+                    "Inactivity prune: missing permission to remove role from %s (%s).",
+                    member,
+                    member.id,
+                )
             except discord.HTTPException as exc:
-                log.warning("Inactivity prune: HTTP error removing role from %s: %s", member, exc)
-            next_action_at = time.monotonic() + AUTO_DELETE_SETTINGS.role_modify_pause_seconds
+                log.warning(
+                    "Inactivity prune: HTTP error removing role from %s: %s",
+                    member,
+                    exc,
+                )
+            next_action_at = (
+                time.monotonic() + AUTO_DELETE_SETTINGS.role_modify_pause_seconds
+            )
 
     if pruned:
         log.info(
@@ -179,10 +204,14 @@ async def run_prune_for_guild(
 # Midnight scheduling loop
 # ---------------------------------------------------------------------------
 
+
 def _seconds_until_next_midnight_utc() -> float:
     from datetime import timedelta
+
     now = datetime.now(timezone.utc)
-    next_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    next_midnight = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     return (next_midnight - now).total_seconds()
 
 
@@ -191,7 +220,9 @@ async def inactivity_prune_loop(bot: discord.Client, db_path: Path) -> None:
 
     while not bot.is_closed():
         sleep_secs = _seconds_until_next_midnight_utc()
-        log.info("Inactivity prune: next run in %.0f seconds (midnight UTC).", sleep_secs)
+        log.info(
+            "Inactivity prune: next run in %.0f seconds (midnight UTC).", sleep_secs
+        )
         await asyncio.sleep(sleep_secs)
 
         rules = list_all_prune_rules(db_path)

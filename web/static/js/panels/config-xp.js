@@ -51,7 +51,7 @@ export function mount(container) {
             <div class="field">
               <label>XP per Word</label>
               <input type="number" name="message_word_xp" step="0.01" min="0" value="${xp.message_word_xp}" />
-              <div class="field-hint">XP earned per qualified word in a message (default 0.08)</div>
+              <div class="field-hint">XP per word in a message (default 0.08)</div>
             </div>
             <div class="field">
               <label>Reply Bonus XP</label>
@@ -73,7 +73,7 @@ export function mount(container) {
             <div class="field">
               <label>Cooldown Multipliers</label>
               <input type="text" name="cooldown_multipliers" value="${xp.cooldown_multipliers}" />
-              <div class="field-hint">3 comma-separated multipliers applied at each threshold (default 0.35,0.6,0.85)</div>
+              <div class="field-hint">XP multiplier at each cooldown tier (default 0.35,0.6,0.85)</div>
             </div>
 
             <h4 style="margin:12px 0 6px; font-size:0.85rem; color:var(--text-muted, #949ba4);">Anti-Farm</h4>
@@ -85,7 +85,7 @@ export function mount(container) {
             <div class="field">
               <label>Pair Streak Threshold</label>
               <input type="number" name="pair_streak_threshold" step="1" min="1" value="${xp.pair_streak_threshold}" />
-              <div class="field-hint">Alternating messages before farming penalty kicks in (default 4)</div>
+              <div class="field-hint">Back-and-forth messages before the farming penalty starts (default 4)</div>
             </div>
             <div class="field">
               <label>Pair Streak Multiplier</label>
@@ -114,12 +114,12 @@ export function mount(container) {
             <div class="field">
               <label>Manual Grant XP</label>
               <input type="number" name="manual_grant_xp" step="0.1" min="0" value="${xp.manual_grant_xp}" />
-              <div class="field-hint">XP awarded per /xp_give grant (default 20)</div>
+              <div class="field-hint">XP given per /xp grant command (default 20)</div>
             </div>
             <div class="field">
               <label>Level Curve Factor</label>
               <input type="number" name="level_curve_factor" step="0.1" min="0.1" value="${xp.level_curve_factor}" />
-              <div class="field-hint">Quadratic factor: XP for level = factor &times; (level &minus; 1)&sup2; (default 15.6)</div>
+              <div class="field-hint">Steepness of the level curve — higher means slower leveling (default 15.6)</div>
             </div>
           </details>
 

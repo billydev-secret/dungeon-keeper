@@ -29,24 +29,36 @@ export function mount(container) {
 
     panel.innerHTML = `
       <header>
-        <h2>Social Graph Health</h2>
+        <h2>Social Graph</h2>
         <div class="subtitle">${d.node_count} nodes &middot; ${d.edge_count} edges</div>
       </header>
+
+      <details class="panel-about" style="margin:8px 0 14px;">
+        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
+        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+          This maps who interacts with whom based on replies and mentions.
+          <strong style="color:var(--text-normal, #dbdee1);">Clustering</strong> shows how much people form tight friend groups — too high means cliques, too low means no real bonds.
+          <strong style="color:var(--text-normal, #dbdee1);">Density</strong> is the fraction of all possible connections that actually exist.
+          <strong style="color:var(--text-normal, #dbdee1);">Reciprocity</strong> measures two-way conversations — high means people talk <em>with</em> each other, not just <em>at</em> each other.
+          <strong style="color:var(--text-normal, #dbdee1);">Bridge users</strong> connect otherwise separate groups and keep the community from fracturing into silos.
+        </div>
+      </details>
 
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Clustering</div>
           <div class="home-card-big">${d.clustering_coefficient}</div>
-          <div class="home-card-sub">Target: 0.25 - 0.55</div>
+          <div class="home-card-sub">Friend-group tightness (target: 0.25–0.55)</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Density</div>
           <div class="home-card-big">${d.network_density}</div>
+          <div class="home-card-sub">How tightly connected everyone is (0–1)</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Reciprocity</div>
           <div class="home-card-big">${d.reciprocity}</div>
-          <div class="home-card-sub">Target: &gt;0.35</div>
+          <div class="home-card-sub">How often interactions go both ways (target: &gt;0.35)</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Bridge Users</div>
@@ -67,7 +79,7 @@ export function mount(container) {
 
       <div class="home-grid" style="margin-top:14px;">
         <div class="home-card">
-          <div class="home-card-label">Bridge Users (Betweenness)</div>
+          <div class="home-card-label">Top Bridge Users</div>
           <table class="data-table">
             <thead><tr><th>#</th><th>User</th><th>Betweenness</th></tr></thead>
             <tbody>${bridgeRows}</tbody>

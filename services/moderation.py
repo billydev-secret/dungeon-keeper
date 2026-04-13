@@ -2,6 +2,7 @@
 
 Implements the moderation system described in dungeon_keeper_jail_ticket_spec.md.
 """
+
 from __future__ import annotations
 
 import json
@@ -65,6 +66,7 @@ def fmt_duration(seconds: int) -> str:
 # Database schema
 # ---------------------------------------------------------------------------
 
+
 def init_moderation_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -109,8 +111,7 @@ def init_moderation_tables(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_tickets_active "
-        "ON tickets (guild_id, status)"
+        "CREATE INDEX IF NOT EXISTS idx_tickets_active ON tickets (guild_id, status)"
     )
     conn.execute(
         """
@@ -141,8 +142,7 @@ def init_moderation_tables(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_warnings_user "
-        "ON warnings (guild_id, user_id)"
+        "CREATE INDEX IF NOT EXISTS idx_warnings_user ON warnings (guild_id, user_id)"
     )
     conn.execute(
         """
@@ -223,15 +223,13 @@ def init_moderation_tables(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_policies_guild "
-        "ON policies (guild_id)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_policies_guild ON policies (guild_id)")
 
 
 # ---------------------------------------------------------------------------
 # Typed row helpers
 # ---------------------------------------------------------------------------
+
 
 class JailRow(TypedDict):
     id: int
@@ -312,6 +310,7 @@ class PolicyRow(TypedDict):
 # Jail DB operations
 # ---------------------------------------------------------------------------
 
+
 def create_jail(
     conn: sqlite3.Connection,
     *,
@@ -331,14 +330,24 @@ def create_jail(
                            channel_id, created_at, expires_at, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
         """,
-        (guild_id, user_id, moderator_id, reason,
-         json.dumps(stored_roles), channel_id, now, expires_at),
+        (
+            guild_id,
+            user_id,
+            moderator_id,
+            reason,
+            json.dumps(stored_roles),
+            channel_id,
+            now,
+            expires_at,
+        ),
     )
     return cur.lastrowid  # type: ignore[return-value]
 
 
 def get_active_jail(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> JailRow | None:
     row = conn.execute(
         "SELECT * FROM jails WHERE guild_id = ? AND user_id = ? AND status = 'active'",
@@ -348,7 +357,8 @@ def get_active_jail(
 
 
 def get_jail_by_channel(
-    conn: sqlite3.Connection, channel_id: int,
+    conn: sqlite3.Connection,
+    channel_id: int,
 ) -> JailRow | None:
     row = conn.execute(
         "SELECT * FROM jails WHERE channel_id = ? AND status = 'active'",
@@ -367,7 +377,10 @@ def get_expired_jails(conn: sqlite3.Connection, guild_id: int) -> list[JailRow]:
 
 
 def release_jail(
-    conn: sqlite3.Connection, jail_id: int, *, reason: str,
+    conn: sqlite3.Connection,
+    jail_id: int,
+    *,
+    reason: str,
 ) -> None:
     now = time.time()
     conn.execute(
@@ -377,7 +390,9 @@ def release_jail(
 
 
 def get_jail_history(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> list[JailRow]:
     rows = conn.execute(
         "SELECT * FROM jails WHERE guild_id = ? AND user_id = ? ORDER BY created_at DESC",
@@ -389,6 +404,7 @@ def get_jail_history(
 # ---------------------------------------------------------------------------
 # Ticket DB operations
 # ---------------------------------------------------------------------------
+
 
 def create_ticket(
     conn: sqlite3.Connection,
@@ -412,7 +428,8 @@ def create_ticket(
 
 
 def get_ticket_by_channel(
-    conn: sqlite3.Connection, channel_id: int,
+    conn: sqlite3.Connection,
+    channel_id: int,
 ) -> TicketRow | None:
     row = conn.execute(
         "SELECT * FROM tickets WHERE channel_id = ? AND status IN ('open', 'closed')",
@@ -422,7 +439,11 @@ def get_ticket_by_channel(
 
 
 def close_ticket(
-    conn: sqlite3.Connection, ticket_id: int, *, closed_by: int, reason: str,
+    conn: sqlite3.Connection,
+    ticket_id: int,
+    *,
+    closed_by: int,
+    reason: str,
 ) -> None:
     now = time.time()
     conn.execute(
@@ -461,7 +482,9 @@ def escalate_ticket(conn: sqlite3.Connection, ticket_id: int) -> None:
 
 
 def get_ticket_history(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> list[TicketRow]:
     rows = conn.execute(
         "SELECT * FROM tickets WHERE guild_id = ? AND user_id = ? ORDER BY created_at DESC",
@@ -471,7 +494,10 @@ def get_ticket_history(
 
 
 def add_ticket_participant(
-    conn: sqlite3.Connection, ticket_id: int, user_id: int, added_by: int,
+    conn: sqlite3.Connection,
+    ticket_id: int,
+    user_id: int,
+    added_by: int,
 ) -> None:
     now = time.time()
     conn.execute(
@@ -485,7 +511,9 @@ def add_ticket_participant(
 
 
 def remove_ticket_participant(
-    conn: sqlite3.Connection, ticket_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    ticket_id: int,
+    user_id: int,
 ) -> None:
     now = time.time()
     conn.execute(
@@ -497,6 +525,7 @@ def remove_ticket_participant(
 # ---------------------------------------------------------------------------
 # Warning DB operations
 # ---------------------------------------------------------------------------
+
 
 def create_warning(
     conn: sqlite3.Connection,
@@ -515,7 +544,9 @@ def create_warning(
 
 
 def get_active_warning_count(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> int:
     row = conn.execute(
         "SELECT COUNT(*) AS cnt FROM warnings WHERE guild_id = ? AND user_id = ? AND revoked = 0",
@@ -525,7 +556,9 @@ def get_active_warning_count(
 
 
 def get_warnings(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> list[WarningRow]:
     rows = conn.execute(
         "SELECT * FROM warnings WHERE guild_id = ? AND user_id = ? ORDER BY created_at DESC",
@@ -535,7 +568,11 @@ def get_warnings(
 
 
 def revoke_warning(
-    conn: sqlite3.Connection, warning_id: int, *, revoked_by: int, reason: str,
+    conn: sqlite3.Connection,
+    warning_id: int,
+    *,
+    revoked_by: int,
+    reason: str,
 ) -> bool:
     now = time.time()
     cur = conn.execute(
@@ -548,6 +585,7 @@ def revoke_warning(
 # ---------------------------------------------------------------------------
 # Audit log
 # ---------------------------------------------------------------------------
+
 
 def write_audit(
     conn: sqlite3.Connection,
@@ -570,6 +608,7 @@ def write_audit(
 # Transcripts
 # ---------------------------------------------------------------------------
 
+
 def store_transcript(
     conn: sqlite3.Connection,
     *,
@@ -587,7 +626,9 @@ def store_transcript(
 
 
 def get_transcript(
-    conn: sqlite3.Connection, record_type: str, record_id: int,
+    conn: sqlite3.Connection,
+    record_type: str,
+    record_id: int,
 ) -> dict[str, Any] | None:
     row = conn.execute(
         "SELECT content FROM transcripts WHERE record_type = ? AND record_id = ? ORDER BY created_at DESC LIMIT 1",
@@ -599,6 +640,7 @@ def get_transcript(
 # ---------------------------------------------------------------------------
 # Transcript generation from Discord channel
 # ---------------------------------------------------------------------------
+
 
 async def generate_transcript(
     channel,  # discord.TextChannel
@@ -645,6 +687,7 @@ async def generate_transcript(
 # Policy ticket DB operations
 # ---------------------------------------------------------------------------
 
+
 def create_policy_ticket(
     conn: sqlite3.Connection,
     *,
@@ -667,7 +710,8 @@ def create_policy_ticket(
 
 
 def get_policy_ticket_by_channel(
-    conn: sqlite3.Connection, channel_id: int,
+    conn: sqlite3.Connection,
+    channel_id: int,
 ) -> PolicyTicketRow | None:
     row = conn.execute(
         "SELECT * FROM policy_tickets WHERE channel_id = ? AND status IN ('open', 'voting')",
@@ -677,7 +721,8 @@ def get_policy_ticket_by_channel(
 
 
 def get_policy_ticket(
-    conn: sqlite3.Connection, policy_id: int,
+    conn: sqlite3.Connection,
+    policy_id: int,
 ) -> PolicyTicketRow | None:
     row = conn.execute(
         "SELECT * FROM policy_tickets WHERE id = ?",
@@ -686,7 +731,9 @@ def get_policy_ticket(
     return dict(row) if row else None  # type: ignore[return-value]
 
 
-def start_policy_vote(conn: sqlite3.Connection, policy_id: int, *, vote_text: str) -> None:
+def start_policy_vote(
+    conn: sqlite3.Connection, policy_id: int, *, vote_text: str
+) -> None:
     now = time.time()
     conn.execute(
         "UPDATE policy_tickets SET status = 'voting', vote_text = ?, vote_started_at = ? WHERE id = ?",
@@ -714,7 +761,8 @@ def cast_policy_vote(
 
 
 def get_policy_votes(
-    conn: sqlite3.Connection, policy_id: int,
+    conn: sqlite3.Connection,
+    policy_id: int,
 ) -> list[PolicyVoteRow]:
     rows = conn.execute(
         "SELECT * FROM policy_votes WHERE policy_id = ?",
@@ -724,7 +772,10 @@ def get_policy_votes(
 
 
 def resolve_policy_vote(
-    conn: sqlite3.Connection, policy_id: int, *, status: str,
+    conn: sqlite3.Connection,
+    policy_id: int,
+    *,
+    status: str,
 ) -> None:
     now = time.time()
     conn.execute(
@@ -734,7 +785,8 @@ def resolve_policy_vote(
 
 
 def close_policy_ticket(
-    conn: sqlite3.Connection, policy_id: int,
+    conn: sqlite3.Connection,
+    policy_id: int,
 ) -> None:
     conn.execute(
         "UPDATE policy_tickets SET status = 'closed' WHERE id = ?",
@@ -762,7 +814,8 @@ def add_policy(
 
 
 def get_policies(
-    conn: sqlite3.Connection, guild_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
 ) -> list[PolicyRow]:
     rows = conn.execute(
         "SELECT * FROM policies WHERE guild_id = ? ORDER BY passed_at DESC",

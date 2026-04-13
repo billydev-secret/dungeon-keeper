@@ -1,4 +1,5 @@
 """Pydantic response models for the dashboard API."""
+
 from __future__ import annotations
 
 from pydantic import BaseModel
@@ -39,6 +40,7 @@ class ChannelMeta(BaseModel):
 
 # ── Role growth ──────────────────────────────────────────────────────────
 
+
 class RoleGrowthSeries(BaseModel):
     role: str
     counts: list[int]
@@ -52,6 +54,7 @@ class RoleGrowthResponse(BaseModel):
 
 
 # ── Message cadence ──────────────────────────────────────────────────────
+
 
 class CadenceBucketSchema(BaseModel):
     label: str
@@ -71,6 +74,7 @@ class MessageCadenceResponse(BaseModel):
 
 # ── Join times ───────────────────────────────────────────────────────────
 
+
 class JoinTimesResponse(BaseModel):
     resolution: str
     labels: list[str]
@@ -78,6 +82,7 @@ class JoinTimesResponse(BaseModel):
 
 
 # ── NSFW gender activity ────────────────────────────────────────────────
+
 
 class GenderSeriesSchema(BaseModel):
     gender: str
@@ -95,6 +100,7 @@ class NsfwGenderResponse(BaseModel):
 
 # ── Message rate ─────────────────────────────────────────────────────────
 
+
 class MessageRateResponse(BaseModel):
     days: int
     tz_label: str
@@ -103,6 +109,7 @@ class MessageRateResponse(BaseModel):
 
 
 # ── Greeter response ────────────────────────────────────────────────────
+
 
 class ResponseBucketSchema(BaseModel):
     label: str
@@ -130,6 +137,7 @@ class GreeterResponseResponse(BaseModel):
 
 # ── Time to level 5 ───────────────────────────────────────────────────
 
+
 class TimeToLevel5Member(BaseModel):
     user_id: int
     display_name: str
@@ -152,6 +160,7 @@ class TimeToLevel5Response(BaseModel):
 
 # ── Activity ────────────────────────────────────────────────────────────
 
+
 class ActivityResponse(BaseModel):
     resolution: str
     window_label: str
@@ -165,6 +174,7 @@ class ActivityResponse(BaseModel):
 
 
 # ── Invite effectiveness ───────────────────────────────────────────────
+
 
 class InviterRowSchema(BaseModel):
     inviter_id: str
@@ -182,6 +192,7 @@ class InviteEffectivenessResponse(BaseModel):
 
 
 # ── Interaction graph ──────────────────────────────────────────────────
+
 
 class InteractionEdgeSchema(BaseModel):
     from_id: str
@@ -207,6 +218,7 @@ class InteractionGraphResponse(BaseModel):
 
 # ── Member retention ───────────────────────────────────────────────────
 
+
 class RetentionEntrySchema(BaseModel):
     user_id: str
     user_name: str = ""
@@ -229,6 +241,7 @@ class RetentionResponse(BaseModel):
 
 
 # ── Voice activity ─────────────────────────────────────────────────────
+
 
 class VoiceUserRowSchema(BaseModel):
     user_id: str
@@ -253,6 +266,7 @@ class VoiceActivityResponse(BaseModel):
 
 
 # ── XP leaderboard ────────────────────────────────────────────────────
+
 
 class XpUserRowSchema(BaseModel):
     user_id: str
@@ -279,6 +293,7 @@ class XpLeaderboardResponse(BaseModel):
 
 # ── Reaction analytics ─────────────────────────────────────────────────
 
+
 class EmojiRowSchema(BaseModel):
     emoji: str
     total_count: int
@@ -300,6 +315,7 @@ class ReactionAnalyticsResponse(BaseModel):
 
 # ── Message rate drops ─────────────────────────────────────────────────
 
+
 class RateDropEntrySchema(BaseModel):
     user_id: str
     user_name: str = ""
@@ -319,6 +335,7 @@ class MessageRateDropsResponse(BaseModel):
 
 # ── Burst ranking ──────────────────────────────────────────────────────
 
+
 class BurstEntrySchema(BaseModel):
     user_id: str
     user_name: str = ""
@@ -333,6 +350,7 @@ class BurstRankingResponse(BaseModel):
 
 
 # ── Channel comparison ─────────────────────────────────────────────────
+
 
 class ChannelRowSchema(BaseModel):
     channel_id: str
@@ -349,6 +367,7 @@ class ChannelComparisonResponse(BaseModel):
 
 
 # ── Quality score ─────────────────────────────────────────────────────
+
 
 class QualityScoreEntrySchema(BaseModel):
     user_id: str
@@ -369,6 +388,7 @@ class QualityScoreResponse(BaseModel):
 
 
 # ── Moderation: Jails ────────────────────────────────────────────────────
+
 
 class JailEntrySchema(BaseModel):
     id: int
@@ -392,6 +412,7 @@ class JailsResponse(BaseModel):
 
 
 # ── Moderation: Tickets ──────────────────────────────────────────────────
+
 
 class TicketEntrySchema(BaseModel):
     id: int
@@ -419,6 +440,7 @@ class TicketsResponse(BaseModel):
 
 # ── Moderation: Warnings ─────────────────────────────────────────────────
 
+
 class WarningEntrySchema(BaseModel):
     id: int
     user_id: str
@@ -441,6 +463,7 @@ class WarningsResponse(BaseModel):
 
 
 # ── Moderation: Policy Tickets ───────────────────────────────────────────
+
 
 class PolicyTicketEntrySchema(BaseModel):
     id: int
@@ -466,6 +489,7 @@ class PolicyTicketsResponse(BaseModel):
 
 # ── Moderation: Audit log ────────────────────────────────────────────────
 
+
 class AuditEntrySchema(BaseModel):
     id: int
     action: str
@@ -483,6 +507,7 @@ class AuditLogResponse(BaseModel):
 
 
 # ── Moderation: Summary stats ────────────────────────────────────────────
+
 
 class TranscriptResponse(BaseModel):
     transcript: dict | None = None

@@ -69,7 +69,7 @@ function render(container, rules, channels) {
     <div class="panel" style="overflow-y:auto;">
       <header>
         <h2>Auto-Delete Schedules</h2>
-        <div class="subtitle">Manage recurring message cleanup per channel.</div>
+        <div class="subtitle">Recurring message cleanup per channel</div>
       </header>
       <div data-rules>${rules.length ? rules.map(ruleRow).join("") : '<div class="empty">No auto-delete schedules configured.</div>'}</div>
       <hr style="margin:24px 0; border-color:var(--border);" />

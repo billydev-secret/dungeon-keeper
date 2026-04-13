@@ -1,4 +1,5 @@
 """Voice XP award service - handles XP from voice channel participation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -83,7 +84,10 @@ async def process_voice_xp_tick(
                         continue
 
                     if not qualifies:
-                        if session.qualified_since is not None or session.awarded_intervals != 0:
+                        if (
+                            session.qualified_since is not None
+                            or session.awarded_intervals != 0
+                        ):
                             set_voice_session(
                                 conn,
                                 guild.id,

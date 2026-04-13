@@ -42,7 +42,7 @@ function render(container, boosterRoles, roles) {
     <div class="panel" style="overflow-y:auto;">
       <header>
         <h2>Booster Roles</h2>
-        <div class="subtitle">Manage cosmetic booster roles. Swatch sync is only available via the Discord <code>/config booster</code> command.</div>
+        <div class="subtitle">Custom color roles for server boosters. Use <code>/config booster</code> in Discord to sync swatches.</div>
       </header>
       <div data-roles>${boosterRoles.length ? boosterRoles.map(roleCard).join("") : '<div class="empty">No booster roles configured.</div>'}</div>
       <hr style="margin:24px 0; border-color:var(--border);" />

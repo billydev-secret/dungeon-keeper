@@ -4,14 +4,20 @@ Reads the shared `dk_session` cookie set by the dashboard's OAuth flow on
 port 8080. Browsers scope cookies by host (not port) so the same cookie
 authenticates users on both 8079 and 8080.
 """
+
 from __future__ import annotations
 
 import logging
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from fastapi import Depends, HTTPException, Request, status
 
-from web.auth import SESSION_COOKIE, AuthenticatedUser, DiscordOAuthAuth, resolve_discord_perms
+from web.auth import (
+    SESSION_COOKIE,
+    AuthenticatedUser,
+    DiscordOAuthAuth,
+    resolve_discord_perms,
+)
 
 log = logging.getLogger("dungeonkeeper.wellness.web.deps")
 
@@ -70,16 +76,22 @@ async def require_user(
     user: AuthenticatedUser | None = Depends(get_current_user),
 ) -> AuthenticatedUser:
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required"
+        )
     return user
 
 
 def require_perms(required: set[str]) -> Callable[..., Awaitable[AuthenticatedUser]]:
     required_frozen = frozenset(required)
 
-    async def _dep(user: AuthenticatedUser = Depends(require_user)) -> AuthenticatedUser:
+    async def _dep(
+        user: AuthenticatedUser = Depends(require_user),
+    ) -> AuthenticatedUser:
         if not required_frozen.issubset(user.perms):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+            )
         return user
 
     return _dep

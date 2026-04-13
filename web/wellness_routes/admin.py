@@ -3,6 +3,7 @@
 All routes here require the `manage_server` permission resolved from the
 Discord MANAGE_GUILD bit (see web/auth.py::resolve_discord_perms).
 """
+
 from __future__ import annotations
 
 import logging
@@ -40,6 +41,7 @@ def _err(message: str, status: int = 400) -> JSONResponse:
 
 # ── Read endpoints ─────────────────────────────────────────────────────
 
+
 @router.get("/dashboard")
 async def admin_dashboard_data(
     user: AuthenticatedUser = Depends(require_manage_server),
@@ -68,7 +70,9 @@ async def admin_dashboard_data(
         "config": {
             "default_enforcement": cfg.default_enforcement if cfg else "gradual",
             "crisis_resource_url": cfg.crisis_resource_url if cfg else "",
-        } if cfg else None,
+        }
+        if cfg
+        else None,
     }
 
 
@@ -83,7 +87,9 @@ async def admin_defaults_data(
         "config": {
             "default_enforcement": cfg.default_enforcement if cfg else "gradual",
             "crisis_resource_url": cfg.crisis_resource_url if cfg else "",
-        } if cfg else None,
+        }
+        if cfg
+        else None,
         "enforcement_levels": ENFORCEMENT_LEVELS,
     }
 
@@ -96,13 +102,19 @@ async def admin_defaults_save(
 ) -> JSONResponse:
     default_enforcement = payload.get("default_enforcement")
     crisis_resource_url = payload.get("crisis_resource_url")
-    if default_enforcement is not None and default_enforcement not in ENFORCEMENT_LEVELS:
+    if (
+        default_enforcement is not None
+        and default_enforcement not in ENFORCEMENT_LEVELS
+    ):
         return _err("invalid enforcement level")
     with ctx.open_db() as conn:
         upsert_wellness_config(
-            conn, ctx.guild_id,
+            conn,
+            ctx.guild_id,
             default_enforcement=default_enforcement,
-            crisis_resource_url=str(crisis_resource_url) if crisis_resource_url is not None else None,
+            crisis_resource_url=str(crisis_resource_url)
+            if crisis_resource_url is not None
+            else None,
         )
     return _ok()
 
@@ -147,6 +159,7 @@ async def admin_pause_user(
     ctx=Depends(get_ctx),
 ) -> JSONResponse:
     import time
+
     try:
         minutes = int(payload.get("minutes", 0))
     except (TypeError, ValueError):
@@ -170,6 +183,7 @@ async def admin_resume_user(
 
 
 # ── Exempt channels ─────────────────────────────────────────────────────
+
 
 @router.get("/exempt")
 async def admin_exempt_data(

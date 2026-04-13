@@ -10,15 +10,15 @@ A small per-prompt metadata table (``_PROMPTS``) powers the read-any,
 write-any API the web UI depends on. Adding a new editable prompt is a
 matter of appending a single entry here.
 """
+
 from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from db_utils import get_config_value, open_db
-
 
 # ── Model defaults ─────────────────────────────────────────────────────
 
@@ -39,42 +39,49 @@ _WELLNESS_MODEL_KEY = "ai_wellness_model"
 
 # ── Prompt registry ────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class PromptInfo:
-    key: str                 # config key used for storage
-    label: str               # human-readable name shown in the dashboard
-    description: str         # one-line description
+    key: str  # config key used for storage
+    label: str  # human-readable name shown in the dashboard
+    description: str  # one-line description
     default_factory: Callable[[], str]  # returns the baked-in default
-    model_key: str = ""      # per-command model override key (empty = use global)
+    model_key: str = ""  # per-command model override key (empty = use global)
 
 
 def _default_watch_check() -> str:
     from services.ai_moderation_service import _WATCH_CHECK_SYSTEM
+
     return _WATCH_CHECK_SYSTEM
 
 
 def _default_review() -> str:
     from services.ai_moderation_service import _REVIEW_SYSTEM
+
     return _REVIEW_SYSTEM
 
 
 def _default_scan() -> str:
     from services.ai_moderation_service import _SCAN_SYSTEM
+
     return _SCAN_SYSTEM
 
 
 def _default_query_user() -> str:
     from services.ai_moderation_service import _QUERY_SYSTEM
+
     return _QUERY_SYSTEM
 
 
 def _default_query_channel() -> str:
     from services.ai_moderation_service import _CHANNEL_QUERY_SYSTEM
+
     return _CHANNEL_QUERY_SYSTEM
 
 
 def _default_wellness() -> str:
     from services.wellness_ai import _ENCOURAGEMENT_SYSTEM
+
     return _ENCOURAGEMENT_SYSTEM
 
 
@@ -137,12 +144,18 @@ def get_prompt_info(key: str) -> PromptInfo | None:
 
 # ── Read helpers ───────────────────────────────────────────────────────
 
+
 def get_mod_model(conn: sqlite3.Connection) -> str:
-    return get_config_value(conn, _MOD_MODEL_KEY, DEFAULT_MOD_MODEL) or DEFAULT_MOD_MODEL
+    return (
+        get_config_value(conn, _MOD_MODEL_KEY, DEFAULT_MOD_MODEL) or DEFAULT_MOD_MODEL
+    )
 
 
 def get_wellness_model(conn: sqlite3.Connection) -> str:
-    return get_config_value(conn, _WELLNESS_MODEL_KEY, DEFAULT_WELLNESS_MODEL) or DEFAULT_WELLNESS_MODEL
+    return (
+        get_config_value(conn, _WELLNESS_MODEL_KEY, DEFAULT_WELLNESS_MODEL)
+        or DEFAULT_WELLNESS_MODEL
+    )
 
 
 def get_command_model(conn: sqlite3.Connection, prompt_key: str) -> str:
@@ -163,7 +176,8 @@ def get_command_model(conn: sqlite3.Connection, prompt_key: str) -> str:
 
 
 def get_command_model_with_source(
-    conn: sqlite3.Connection, prompt_key: str,
+    conn: sqlite3.Connection,
+    prompt_key: str,
 ) -> tuple[str, bool]:
     """Return ``(model, is_per_command)``.
 
@@ -213,6 +227,7 @@ def get_prompt_with_source(conn: sqlite3.Connection, key: str) -> tuple[str, boo
 # Variants that open the database themselves, for service code paths that
 # only have a ``db_path`` (e.g. ``wellness_ai``).
 
+
 def get_mod_model_from_path(db_path: Path) -> str:
     try:
         with open_db(db_path) as conn:
@@ -239,6 +254,7 @@ def get_prompt_from_path(db_path: Path, key: str) -> str:
 
 
 # ── Write helpers ──────────────────────────────────────────────────────
+
 
 def set_config(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.execute(

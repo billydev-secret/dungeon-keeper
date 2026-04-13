@@ -1,4 +1,5 @@
 """Metadata endpoints: /api/me, /api/meta/* lookups, and /api/system/stats."""
+
 from __future__ import annotations
 
 import time
@@ -8,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 
 from web.auth import AuthenticatedUser
 from web.deps import get_ctx, require_perms, run_query
-from web.schemas import ChannelMeta, MeResponse, MemberMeta, RoleMeta
+from web.schemas import ChannelMeta, MemberMeta, MeResponse, RoleMeta
 
 router = APIRouter()
 
@@ -69,7 +70,9 @@ async def meta_roles(
         ).fetchall()
     return [
         RoleMeta(
-            id=str(abs(hash(r[0])) % (10**18)),  # synthetic stable id; frontend filters by name
+            id=str(
+                abs(hash(r[0])) % (10**18)
+            ),  # synthetic stable id; frontend filters by name
             name=str(r[0]),
             color="#99aab5",
             member_count=max(0, int(r[1] or 0)),
@@ -197,8 +200,12 @@ async def system_stats(
         }
         if elapsed > 0 and name in _prev_net:
             prev = _prev_net[name]
-            entry["send_rate"] = max(0, (counters.bytes_sent - prev["bytes_sent"])) / elapsed
-            entry["recv_rate"] = max(0, (counters.bytes_recv - prev["bytes_recv"])) / elapsed
+            entry["send_rate"] = (
+                max(0, (counters.bytes_sent - prev["bytes_sent"])) / elapsed
+            )
+            entry["recv_rate"] = (
+                max(0, (counters.bytes_recv - prev["bytes_recv"])) / elapsed
+            )
         else:
             entry["send_rate"] = 0
             entry["recv_rate"] = 0

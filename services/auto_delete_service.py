@@ -1,4 +1,5 @@
 """Auto-delete service - manages scheduled message deletion in channels."""
+
 from __future__ import annotations
 
 import asyncio
@@ -211,7 +212,9 @@ def remove_tracked_auto_delete_messages(
         )
 
 
-_BULK_DELETE_MAX_AGE = 13 * 24 * 3600  # 13-day buffer before Discord's hard 14-day cutoff
+_BULK_DELETE_MAX_AGE = (
+    13 * 24 * 3600
+)  # 13-day buffer before Discord's hard 14-day cutoff
 _BULK_CHUNK = 100
 
 
@@ -272,7 +275,8 @@ async def delete_tracked_messages_older_than(
 
     log.info(
         "Auto-delete #%s: starting, %s messages due",
-        channel_name, grand_total,
+        channel_name,
+        grand_total,
     )
 
     while True:
@@ -291,24 +295,32 @@ async def delete_tracked_messages_older_than(
         # Bulk-delete recent messages in chunks of 100
         abort = False
         for i in range(0, len(bulk), _BULK_CHUNK):
-            chunk_ids = [mid for mid, _ in bulk[i:i + _BULK_CHUNK]]
+            chunk_ids = [mid for mid, _ in bulk[i : i + _BULK_CHUNK]]
             partials = [channel.get_partial_message(mid) for mid in chunk_ids]
             try:
                 await channel.delete_messages(partials, reason=reason)
                 total_deleted += len(chunk_ids)
-                remove_tracked_auto_delete_messages(db_path, guild_id, channel.id, set(chunk_ids))
+                remove_tracked_auto_delete_messages(
+                    db_path, guild_id, channel.id, set(chunk_ids)
+                )
             except discord.Forbidden:
                 total_failed += len(chunk_ids)
                 elapsed = time.monotonic() - start_time
                 log.info(
                     "Auto-delete #%s: forbidden after %.1fs, %s/%s deleted, %s failed",
-                    channel_name, elapsed, total_deleted, grand_total, total_failed,
+                    channel_name,
+                    elapsed,
+                    total_deleted,
+                    grand_total,
+                    total_failed,
                 )
                 return grand_total, total_deleted, total_failed
             except discord.HTTPException:
                 total_failed += len(chunk_ids)
                 # Remove from tracking to avoid infinite retry
-                remove_tracked_auto_delete_messages(db_path, guild_id, channel.id, set(chunk_ids))
+                remove_tracked_auto_delete_messages(
+                    db_path, guild_id, channel.id, set(chunk_ids)
+                )
 
             if i + _BULK_CHUNK < len(bulk):
                 await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
@@ -329,7 +341,9 @@ async def delete_tracked_messages_older_than(
                     await partial.delete()
                 total_deleted += 1
                 remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
-                next_delete_at = time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
+                next_delete_at = (
+                    time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
+                )
             except discord.NotFound:
                 remove_tracked_auto_delete_message(db_path, guild_id, channel.id, mid)
             except discord.Forbidden:
@@ -345,14 +359,20 @@ async def delete_tracked_messages_older_than(
 
         log.info(
             "Auto-delete #%s: %s/%s deleted (%.1fs elapsed)",
-            channel_name, total_deleted, grand_total,
+            channel_name,
+            total_deleted,
+            grand_total,
             time.monotonic() - start_time,
         )
 
     elapsed = time.monotonic() - start_time
     log.info(
         "Auto-delete #%s: done in %.1fs, %s/%s deleted, %s failed",
-        channel_name, elapsed, total_deleted, grand_total, total_failed,
+        channel_name,
+        elapsed,
+        total_deleted,
+        grand_total,
+        total_failed,
     )
     return grand_total, total_deleted, total_failed
 
@@ -525,7 +545,11 @@ async def _scan_and_delete_channel_history(
                 if not await _flush_bulk():
                     log.info(
                         "Auto-delete scan #%s: forbidden after %.1fs, %s/%s deleted, %s failed",
-                        channel_name, time.monotonic() - start_time, deleted, scanned, failed,
+                        channel_name,
+                        time.monotonic() - start_time,
+                        deleted,
+                        scanned,
+                        failed,
                     )
                     return deleted, failed
         else:
@@ -536,7 +560,10 @@ async def _scan_and_delete_channel_history(
 
     log.info(
         "Auto-delete scan #%s: starting, %s messages found (%s bulk, %s old)",
-        channel_name, scanned, scanned - len(old_batch), len(old_batch),
+        channel_name,
+        scanned,
+        scanned - len(old_batch),
+        len(old_batch),
     )
 
     # Flush any remaining bulk messages
@@ -556,7 +583,9 @@ async def _scan_and_delete_channel_history(
             except TypeError:
                 await partial.delete()
             deleted += 1
-            next_delete_at = time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
+            next_delete_at = (
+                time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
+            )
         except discord.NotFound:
             pass
         except discord.Forbidden:
@@ -568,14 +597,20 @@ async def _scan_and_delete_channel_history(
         if old_processed % 50 == 0:
             log.info(
                 "Auto-delete scan #%s: %s/%s deleted (%.1fs elapsed)",
-                channel_name, deleted, scanned,
+                channel_name,
+                deleted,
+                scanned,
                 time.monotonic() - start_time,
             )
 
     elapsed = time.monotonic() - start_time
     log.info(
         "Auto-delete scan #%s: done in %.1fs, %s/%s deleted, %s failed",
-        channel_name, elapsed, deleted, scanned, failed,
+        channel_name,
+        elapsed,
+        deleted,
+        scanned,
+        failed,
     )
     return deleted, failed
 

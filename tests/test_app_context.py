@@ -17,7 +17,9 @@ class BotSetupHookTests(unittest.TestCase):
 
         bot.tree.sync.assert_not_called()
         self.assertTrue(print_mock.called)
-        self.assertIn("skipping guild command sync", print_mock.call_args_list[0][0][0].lower())
+        self.assertIn(
+            "skipping guild command sync", print_mock.call_args_list[0][0][0].lower()
+        )
 
     def test_setup_hook_handles_forbidden_during_debug_guild_sync(self):
         bot = Bot(intents=discord.Intents.none(), debug=True, guild_id=123)
@@ -31,7 +33,9 @@ class BotSetupHookTests(unittest.TestCase):
             asyncio.run(bot.close())
 
         bot.tree.sync.assert_called_once()
-        printed_text = "\n".join(str(call.args[0]) for call in print_mock.call_args_list if call.args)
+        printed_text = "\n".join(
+            str(call.args[0]) for call in print_mock.call_args_list if call.args
+        )
         self.assertIn("missing access", printed_text.lower())
 
 

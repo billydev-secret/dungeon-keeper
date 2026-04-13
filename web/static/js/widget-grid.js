@@ -77,9 +77,10 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
 
     card.appendChild(content);
 
-    // Health tile click-through (not in edit mode)
+    // Tile click-through to report page (not in edit mode)
     if (!opts.editMode && widget.nav) {
       card.style.cursor = "pointer";
+      card.classList.add("home-card-clickable");
       card.addEventListener("click", () => {
         window.location.hash = `#/${widget.nav}`;
       });

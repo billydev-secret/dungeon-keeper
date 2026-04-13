@@ -1,4 +1,5 @@
 """Message search endpoints — search and read back stored messages."""
+
 from __future__ import annotations
 
 import re
@@ -18,12 +19,22 @@ async def search_messages(
     request: Request,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
     author: str | None = Query(None, description="Filter by author user ID"),
-    mentions: str | None = Query(None, description="Filter to messages that mention this user ID"),
-    reply_to: str | None = Query(None, description="Filter to messages that are replies to this user ID"),
+    mentions: str | None = Query(
+        None, description="Filter to messages that mention this user ID"
+    ),
+    reply_to: str | None = Query(
+        None, description="Filter to messages that are replies to this user ID"
+    ),
     channel: str | None = Query(None, description="Filter by channel ID"),
-    regex: str | None = Query(None, description="PCRE-style regex to match against message content"),
-    before: int | None = Query(None, description="Only messages before this unix timestamp"),
-    after: int | None = Query(None, description="Only messages after this unix timestamp"),
+    regex: str | None = Query(
+        None, description="PCRE-style regex to match against message content"
+    ),
+    before: int | None = Query(
+        None, description="Only messages before this unix timestamp"
+    ),
+    after: int | None = Query(
+        None, description="Only messages after this unix timestamp"
+    ),
     sort: Literal["newest", "oldest"] = "newest",
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
@@ -49,7 +60,8 @@ async def search_messages(
         guild = ctx.bot.get_guild(ctx.guild_id) if ctx.bot else None
         if guild:
             matches = [
-                m.id for m in guild.members
+                m.id
+                for m in guild.members
                 if value.lower() in m.display_name.lower()
                 or value.lower() in m.name.lower()
             ]
@@ -70,7 +82,13 @@ async def search_messages(
             if author:
                 author_ids = _resolve_user(conn, author)
                 if not author_ids:
-                    return {"messages": [], "total": 0, "page": 1, "per_page": per_page, "pages": 1}
+                    return {
+                        "messages": [],
+                        "total": 0,
+                        "page": 1,
+                        "per_page": per_page,
+                        "pages": 1,
+                    }
                 if len(author_ids) == 1:
                     clauses.append("m.author_id = ?")
                     params.append(author_ids[0])
@@ -84,7 +102,13 @@ async def search_messages(
             if reply_to:
                 reply_to_ids = _resolve_user(conn, reply_to)
                 if not reply_to_ids:
-                    return {"messages": [], "total": 0, "page": 1, "per_page": per_page, "pages": 1}
+                    return {
+                        "messages": [],
+                        "total": 0,
+                        "page": 1,
+                        "per_page": per_page,
+                        "pages": 1,
+                    }
                 rt_placeholders = ",".join("?" * len(reply_to_ids))
                 clauses.append(f"""
                     m.reply_to_id IN (
@@ -96,7 +120,13 @@ async def search_messages(
             if mentions:
                 mention_ids = _resolve_user(conn, mentions)
                 if not mention_ids:
-                    return {"messages": [], "total": 0, "page": 1, "per_page": per_page, "pages": 1}
+                    return {
+                        "messages": [],
+                        "total": 0,
+                        "page": 1,
+                        "per_page": per_page,
+                        "pages": 1,
+                    }
                 mn_placeholders = ",".join("?" * len(mention_ids))
                 clauses.append(f"""
                     m.message_id IN (
@@ -157,9 +187,9 @@ async def search_messages(
             reply_msg_ids: list[int] = []
 
             for r in page_rows:
-                user_ids.add(r[2])       # author_id
-                channel_ids.add(r[1])    # channel_id
-                if r[4]:                 # reply_to_id
+                user_ids.add(r[2])  # author_id
+                channel_ids.add(r[1])  # channel_id
+                if r[4]:  # reply_to_id
                     reply_msg_ids.append(r[4])
 
             # Resolve reply targets to author IDs
@@ -196,7 +226,9 @@ async def search_messages(
                         channel_names[cid] = ch.name
             still_needed_ch = channel_ids - set(channel_names.keys())
             if still_needed_ch:
-                known_ch = get_known_channels_bulk(conn, ctx.guild_id, list(still_needed_ch))
+                known_ch = get_known_channels_bulk(
+                    conn, ctx.guild_id, list(still_needed_ch)
+                )
                 channel_names.update(known_ch)
 
             # Resolve attachment URLs for these messages
@@ -216,19 +248,25 @@ async def search_messages(
             for r in page_rows:
                 msg_id, ch_id, auth_id, content, reply_id, ts = r
                 reply_author_id = reply_authors.get(reply_id) if reply_id else None
-                results.append({
-                    "message_id": str(msg_id),
-                    "channel_id": str(ch_id),
-                    "channel_name": channel_names.get(ch_id, ""),
-                    "author_id": str(auth_id),
-                    "author_name": user_names.get(auth_id, ""),
-                    "content": content or "",
-                    "reply_to_id": str(reply_id) if reply_id else None,
-                    "reply_to_author_id": str(reply_author_id) if reply_author_id else None,
-                    "reply_to_author_name": user_names.get(reply_author_id, "") if reply_author_id else None,
-                    "attachments": attachments.get(msg_id, []),
-                    "ts": ts,
-                })
+                results.append(
+                    {
+                        "message_id": str(msg_id),
+                        "channel_id": str(ch_id),
+                        "channel_name": channel_names.get(ch_id, ""),
+                        "author_id": str(auth_id),
+                        "author_name": user_names.get(auth_id, ""),
+                        "content": content or "",
+                        "reply_to_id": str(reply_id) if reply_id else None,
+                        "reply_to_author_id": str(reply_author_id)
+                        if reply_author_id
+                        else None,
+                        "reply_to_author_name": user_names.get(reply_author_id, "")
+                        if reply_author_id
+                        else None,
+                        "attachments": attachments.get(msg_id, []),
+                        "ts": ts,
+                    }
+                )
 
             return {
                 "messages": results,

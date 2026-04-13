@@ -3,6 +3,7 @@
 Runs periodically to score un-analysed messages.  Results are stored in the
 ``message_sentiment`` table for consumption by the health dashboard.
 """
+
 from __future__ import annotations
 
 import logging
@@ -19,7 +20,10 @@ def _get_analyzer():
     global _analyzer
     if _analyzer is None:
         try:
-            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer  # type: ignore[import-untyped]
+            from vaderSentiment.vaderSentiment import (  # type: ignore[import-untyped]
+                SentimentIntensityAnalyzer,
+            )
+
             _analyzer = SentimentIntensityAnalyzer()
         except ImportError:
             log.warning("vaderSentiment not installed — sentiment analysis disabled")
@@ -92,14 +96,16 @@ def analyze_batch(
         scores = analyzer.polarity_scores(text)
         compound = scores["compound"]
         emotion = _classify_emotion(compound, scores["pos"], scores["neg"])
-        insert_data.append((
-            r["message_id"],
-            guild_id,
-            r["channel_id"],
-            round(compound, 4),
-            emotion,
-            now,
-        ))
+        insert_data.append(
+            (
+                r["message_id"],
+                guild_id,
+                r["channel_id"],
+                round(compound, 4),
+                emotion,
+                now,
+            )
+        )
         scored += 1
 
     if insert_data:

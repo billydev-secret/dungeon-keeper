@@ -7,7 +7,7 @@ export function mount(container, initialParams) {
     <div class="panel">
       <header>
         <h2>Member Retention</h2>
-        <div class="subtitle">Members whose activity dropped between two consecutive periods</div>
+        <div class="subtitle">Members who slowed down or stopped posting</div>
       </header>
       <div class="controls">
         <label>Period (days)

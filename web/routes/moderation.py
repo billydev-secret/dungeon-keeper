@@ -1,4 +1,5 @@
 """Moderation endpoints — jails, tickets, warnings, audit log."""
+
 from __future__ import annotations
 
 import json
@@ -51,6 +52,7 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
 
 # ── Summary stats ─────────────────────────────────────────────────────────
 
+
 @router.get("/moderation/stats", response_model=ModerationStatsResponse)
 async def moderation_stats(
     request: Request,
@@ -61,23 +63,48 @@ async def moderation_stats(
 
     def _q():
         with ctx.open_db() as conn:
+
             def r(sql, *a):
                 return conn.execute(sql, a).fetchone()[0]
+
             return {
-                "active_jails": r("SELECT COUNT(*) FROM jails WHERE guild_id = ? AND status = 'active'", ctx.guild_id),
-                "total_jails": r("SELECT COUNT(*) FROM jails WHERE guild_id = ?", ctx.guild_id),
-                "open_tickets": r("SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'open'", ctx.guild_id),
-                "closed_tickets": r("SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'closed'", ctx.guild_id),
-                "total_tickets": r("SELECT COUNT(*) FROM tickets WHERE guild_id = ?", ctx.guild_id),
-                "active_warnings": r("SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND revoked = 0", ctx.guild_id),
-                "total_warnings": r("SELECT COUNT(*) FROM warnings WHERE guild_id = ?", ctx.guild_id),
-                "recent_actions": r("SELECT COUNT(*) FROM audit_log WHERE guild_id = ? AND created_at >= ?", ctx.guild_id, one_week_ago),
+                "active_jails": r(
+                    "SELECT COUNT(*) FROM jails WHERE guild_id = ? AND status = 'active'",
+                    ctx.guild_id,
+                ),
+                "total_jails": r(
+                    "SELECT COUNT(*) FROM jails WHERE guild_id = ?", ctx.guild_id
+                ),
+                "open_tickets": r(
+                    "SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'open'",
+                    ctx.guild_id,
+                ),
+                "closed_tickets": r(
+                    "SELECT COUNT(*) FROM tickets WHERE guild_id = ? AND status = 'closed'",
+                    ctx.guild_id,
+                ),
+                "total_tickets": r(
+                    "SELECT COUNT(*) FROM tickets WHERE guild_id = ?", ctx.guild_id
+                ),
+                "active_warnings": r(
+                    "SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND revoked = 0",
+                    ctx.guild_id,
+                ),
+                "total_warnings": r(
+                    "SELECT COUNT(*) FROM warnings WHERE guild_id = ?", ctx.guild_id
+                ),
+                "recent_actions": r(
+                    "SELECT COUNT(*) FROM audit_log WHERE guild_id = ? AND created_at >= ?",
+                    ctx.guild_id,
+                    one_week_ago,
+                ),
             }
 
     return await run_query(_q)
 
 
 # ── Jails ─────────────────────────────────────────────────────────────────
+
 
 @router.get("/moderation/jails", response_model=JailsResponse)
 async def list_jails(
@@ -107,28 +134,36 @@ async def list_jails(
             ).fetchall()
             jails = []
             for r in rows:
-                jails.append({
-                    "id": r["id"],
-                    "user_id": str(r["user_id"]),
-                    "moderator_id": str(r["moderator_id"]),
-                    "reason": r["reason"],
-                    "status": r["status"],
-                    "created_at": r["created_at"],
-                    "expires_at": r["expires_at"],
-                    "released_at": r["released_at"],
-                    "release_reason": r["release_reason"],
-                    "channel_id": str(r["channel_id"]) if r["channel_id"] else "",
-                })
+                jails.append(
+                    {
+                        "id": r["id"],
+                        "user_id": str(r["user_id"]),
+                        "moderator_id": str(r["moderator_id"]),
+                        "reason": r["reason"],
+                        "status": r["status"],
+                        "created_at": r["created_at"],
+                        "expires_at": r["expires_at"],
+                        "released_at": r["released_at"],
+                        "release_reason": r["release_reason"],
+                        "channel_id": str(r["channel_id"]) if r["channel_id"] else "",
+                    }
+                )
             active = sum(1 for j in jails if j["status"] == "active")
             return {"active_count": active, "total_count": len(jails), "jails": jails}
 
     result = await run_query(_q)
-    _resolve_names(ctx, guild, result["jails"],
-                   ("user_id", "user_name"), ("moderator_id", "moderator_name"))
+    _resolve_names(
+        ctx,
+        guild,
+        result["jails"],
+        ("user_id", "user_name"),
+        ("moderator_id", "moderator_name"),
+    )
     return result
 
 
 # ── Tickets ───────────────────────────────────────────────────────────────
+
 
 @router.get("/moderation/tickets", response_model=TicketsResponse)
 async def list_tickets(
@@ -162,31 +197,44 @@ async def list_tickets(
             ).fetchall()
             tickets = []
             for r in rows:
-                tickets.append({
-                    "id": r["id"],
-                    "user_id": str(r["user_id"]),
-                    "description": r["description"],
-                    "status": r["status"],
-                    "claimer_id": str(r["claimer_id"]) if r["claimer_id"] else None,
-                    "escalated": bool(r["escalated"]),
-                    "created_at": r["created_at"],
-                    "closed_at": r["closed_at"],
-                    "closed_by": str(r["closed_by"]) if r["closed_by"] else None,
-                    "close_reason": r["close_reason"],
-                    "channel_id": str(r["channel_id"]) if r["channel_id"] else "",
-                })
+                tickets.append(
+                    {
+                        "id": r["id"],
+                        "user_id": str(r["user_id"]),
+                        "description": r["description"],
+                        "status": r["status"],
+                        "claimer_id": str(r["claimer_id"]) if r["claimer_id"] else None,
+                        "escalated": bool(r["escalated"]),
+                        "created_at": r["created_at"],
+                        "closed_at": r["closed_at"],
+                        "closed_by": str(r["closed_by"]) if r["closed_by"] else None,
+                        "close_reason": r["close_reason"],
+                        "channel_id": str(r["channel_id"]) if r["channel_id"] else "",
+                    }
+                )
             open_c = sum(1 for t in tickets if t["status"] == "open")
             closed_c = sum(1 for t in tickets if t["status"] == "closed")
-            return {"open_count": open_c, "closed_count": closed_c, "total_count": len(tickets), "tickets": tickets}
+            return {
+                "open_count": open_c,
+                "closed_count": closed_c,
+                "total_count": len(tickets),
+                "tickets": tickets,
+            }
 
     result = await run_query(_q)
-    _resolve_names(ctx, guild, result["tickets"],
-                   ("user_id", "user_name"), ("claimer_id", "claimer_name"),
-                   ("closed_by", "closer_name"))
+    _resolve_names(
+        ctx,
+        guild,
+        result["tickets"],
+        ("user_id", "user_name"),
+        ("claimer_id", "claimer_name"),
+        ("closed_by", "closer_name"),
+    )
     return result
 
 
 # ── Warnings ──────────────────────────────────────────────────────────────
+
 
 @router.get("/moderation/warnings", response_model=WarningsResponse)
 async def list_warnings(
@@ -215,28 +263,40 @@ async def list_warnings(
             ).fetchall()
             warnings = []
             for r in rows:
-                warnings.append({
-                    "id": r["id"],
-                    "user_id": str(r["user_id"]),
-                    "moderator_id": str(r["moderator_id"]),
-                    "reason": r["reason"],
-                    "created_at": r["created_at"],
-                    "revoked": bool(r["revoked"]),
-                    "revoked_at": r["revoked_at"],
-                    "revoked_by": str(r["revoked_by"]) if r["revoked_by"] else None,
-                    "revoke_reason": r["revoke_reason"],
-                })
+                warnings.append(
+                    {
+                        "id": r["id"],
+                        "user_id": str(r["user_id"]),
+                        "moderator_id": str(r["moderator_id"]),
+                        "reason": r["reason"],
+                        "created_at": r["created_at"],
+                        "revoked": bool(r["revoked"]),
+                        "revoked_at": r["revoked_at"],
+                        "revoked_by": str(r["revoked_by"]) if r["revoked_by"] else None,
+                        "revoke_reason": r["revoke_reason"],
+                    }
+                )
             active = sum(1 for w in warnings if not w["revoked"])
-            return {"active_count": active, "total_count": len(warnings), "warnings": warnings}
+            return {
+                "active_count": active,
+                "total_count": len(warnings),
+                "warnings": warnings,
+            }
 
     result = await run_query(_q)
-    _resolve_names(ctx, guild, result["warnings"],
-                   ("user_id", "user_name"), ("moderator_id", "moderator_name"),
-                   ("revoked_by", "revoker_name"))
+    _resolve_names(
+        ctx,
+        guild,
+        result["warnings"],
+        ("user_id", "user_name"),
+        ("moderator_id", "moderator_name"),
+        ("revoked_by", "revoker_name"),
+    )
     return result
 
 
 # ── Policy Tickets ────────────────────────────────────────────────────────
+
 
 @router.get("/moderation/policy-tickets", response_model=PolicyTicketsResponse)
 async def list_policy_tickets(
@@ -262,18 +322,20 @@ async def list_policy_tickets(
             ).fetchall()
             tickets = []
             for r in rows:
-                tickets.append({
-                    "id": r["id"],
-                    "creator_id": str(r["creator_id"]),
-                    "title": r["title"],
-                    "description": r["description"],
-                    "status": r["status"],
-                    "vote_text": r["vote_text"],
-                    "channel_id": str(r["channel_id"]) if r["channel_id"] else "",
-                    "created_at": r["created_at"],
-                    "vote_started_at": r["vote_started_at"],
-                    "vote_ended_at": r["vote_ended_at"],
-                })
+                tickets.append(
+                    {
+                        "id": r["id"],
+                        "creator_id": str(r["creator_id"]),
+                        "title": r["title"],
+                        "description": r["description"],
+                        "status": r["status"],
+                        "vote_text": r["vote_text"],
+                        "channel_id": str(r["channel_id"]) if r["channel_id"] else "",
+                        "created_at": r["created_at"],
+                        "vote_started_at": r["vote_started_at"],
+                        "vote_ended_at": r["vote_ended_at"],
+                    }
+                )
             open_c = sum(1 for t in tickets if t["status"] == "open")
             voting_c = sum(1 for t in tickets if t["status"] == "voting")
             closed_c = sum(1 for t in tickets if t["status"] == "closed")
@@ -286,8 +348,7 @@ async def list_policy_tickets(
             }
 
     result = await run_query(_q)
-    _resolve_names(ctx, guild, result["policy_tickets"],
-                   ("creator_id", "creator_name"))
+    _resolve_names(ctx, guild, result["policy_tickets"], ("creator_id", "creator_name"))
     return result
 
 
@@ -304,7 +365,9 @@ async def transcript(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     if record_type not in _VALID_RECORD_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid record_type: {record_type}")
+        raise HTTPException(
+            status_code=400, detail=f"Invalid record_type: {record_type}"
+        )
 
     ctx = get_ctx(request)
 
@@ -316,6 +379,7 @@ async def transcript(
 
 
 # ── Audit log ─────────────────────────────────────────────────────────────
+
 
 @router.get("/moderation/audit", response_model=AuditLogResponse)
 async def audit_log(
@@ -338,7 +402,8 @@ async def audit_log(
                 params.append(action)
             where = " AND ".join(clauses)
             total = conn.execute(
-                f"SELECT COUNT(*) FROM audit_log WHERE {where}", params,
+                f"SELECT COUNT(*) FROM audit_log WHERE {where}",
+                params,
             ).fetchone()[0]
             rows = conn.execute(
                 f"SELECT * FROM audit_log WHERE {where} ORDER BY created_at DESC LIMIT ?",
@@ -346,17 +411,24 @@ async def audit_log(
             ).fetchall()
             entries = []
             for r in rows:
-                entries.append({
-                    "id": r["id"],
-                    "action": r["action"],
-                    "actor_id": str(r["actor_id"]),
-                    "target_id": str(r["target_id"]) if r["target_id"] else None,
-                    "extra": json.loads(r["extra"]) if r["extra"] else {},
-                    "created_at": r["created_at"],
-                })
+                entries.append(
+                    {
+                        "id": r["id"],
+                        "action": r["action"],
+                        "actor_id": str(r["actor_id"]),
+                        "target_id": str(r["target_id"]) if r["target_id"] else None,
+                        "extra": json.loads(r["extra"]) if r["extra"] else {},
+                        "created_at": r["created_at"],
+                    }
+                )
             return {"total": total, "entries": entries}
 
     result = await run_query(_q)
-    _resolve_names(ctx, guild, result["entries"],
-                   ("actor_id", "actor_name"), ("target_id", "target_name"))
+    _resolve_names(
+        ctx,
+        guild,
+        result["entries"],
+        ("actor_id", "actor_name"),
+        ("target_id", "target_name"),
+    )
     return result

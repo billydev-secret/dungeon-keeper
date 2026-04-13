@@ -9,7 +9,9 @@ def attachment_is_image(attachment: discord.Attachment) -> bool:
     if attachment.content_type and attachment.content_type.startswith("image/"):
         return True
     filename = attachment.filename.lower()
-    return filename.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"))
+    return filename.endswith(
+        (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff")
+    )
 
 
 def message_has_qualifying_image(message: discord.Message) -> bool:
@@ -43,7 +45,11 @@ async def enforce_spoiler_requirement(
             continue
 
         try:
-            log.info("Deleting spoilerless image from %s: %s", message.author, message.content)
+            log.info(
+                "Deleting spoilerless image from %s: %s",
+                message.author,
+                message.content,
+            )
             await message.delete()
             await message.channel.send(
                 "Beep Boop - friendly bot helper: Images in this channel must be marked as spoiler.",

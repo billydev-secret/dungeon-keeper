@@ -2,6 +2,7 @@
 
 Onboarding, settings, pause/resume, caps, blackouts, away, and partner commands.
 """
+
 from __future__ import annotations
 
 import logging
@@ -31,10 +32,10 @@ from services.wellness_service import (
     get_partnership,
     get_wellness_config,
     get_wellness_user,
+    lift_slow_mode,
     list_blackouts,
     list_caps,
     list_partnerships,
-    lift_slow_mode,
     next_milestone,
     opt_in_user,
     opt_out_user,
@@ -124,13 +125,23 @@ def parse_time_to_minute(text: str) -> int | None:
 
 
 _DAY_NAME_TO_INDEX = {
-    "mon": 0, "monday": 0,
-    "tue": 1, "tuesday": 1, "tues": 1,
-    "wed": 2, "wednesday": 2,
-    "thu": 3, "thursday": 3, "thur": 3, "thurs": 3,
-    "fri": 4, "friday": 4,
-    "sat": 5, "saturday": 5,
-    "sun": 6, "sunday": 6,
+    "mon": 0,
+    "monday": 0,
+    "tue": 1,
+    "tuesday": 1,
+    "tues": 1,
+    "wed": 2,
+    "wednesday": 2,
+    "thu": 3,
+    "thursday": 3,
+    "thur": 3,
+    "thurs": 3,
+    "fri": 4,
+    "friday": 4,
+    "sat": 5,
+    "saturday": 5,
+    "sun": 6,
+    "sunday": 6,
 }
 
 
@@ -181,10 +192,11 @@ def _format_minute(m: int) -> str:
 # Setup wizard view
 # ---------------------------------------------------------------------------
 
+
 class _SetupWizardView(discord.ui.View):
     """Two-step wizard: timezone → enforcement level → finish."""
 
-    def __init__(self, ctx: "AppContext", invoker_id: int) -> None:
+    def __init__(self, ctx: AppContext, invoker_id: int) -> None:
         super().__init__(timeout=300)
         self._ctx = ctx
         self._invoker_id = invoker_id
@@ -282,7 +294,8 @@ class _SetupWizardView(discord.ui.View):
             self.add_item(self._enf_select)
         self._step = 2
         await interaction.response.edit_message(
-            embed=self._build_step2_embed(), view=self,
+            embed=self._build_step2_embed(),
+            view=self,
         )
 
     async def _on_enf_pick(self, interaction: discord.Interaction) -> None:
@@ -292,7 +305,9 @@ class _SetupWizardView(discord.ui.View):
         self._enforcement = self._enf_select.values[0]
         guild = interaction.guild
         if guild is None or self._timezone is None:
-            await interaction.response.edit_message(content="Setup failed.", embed=None, view=None)
+            await interaction.response.edit_message(
+                content="Setup failed.", embed=None, view=None
+            )
             return
 
         try:
@@ -302,12 +317,15 @@ class _SetupWizardView(discord.ui.View):
             try:
                 await interaction.response.edit_message(
                     content="⚠️ Something went wrong during setup. Please try again.",
-                    embed=None, view=None,
+                    embed=None,
+                    view=None,
                 )
             except discord.NotFound:
                 pass
 
-    async def _finish_setup(self, interaction: discord.Interaction, guild: discord.Guild) -> None:
+    async def _finish_setup(
+        self, interaction: discord.Interaction, guild: discord.Guild
+    ) -> None:
         assert self._timezone is not None
         assert self._enforcement is not None
 
@@ -336,7 +354,9 @@ class _SetupWizardView(discord.ui.View):
         member = guild.get_member(interaction.user.id)
         if member is None:
             await interaction.response.edit_message(
-                content="Could not resolve your member record.", embed=None, view=None,
+                content="Could not resolve your member record.",
+                embed=None,
+                view=None,
             )
             return
 
@@ -368,7 +388,9 @@ class _SetupWizardView(discord.ui.View):
         # Disable selects
         self._tz_select.disabled = True
         self._enf_select.disabled = True
-        self._enf_select.placeholder = f"Enforcement: {ENFORCEMENT_LABELS[self._enforcement]}"
+        self._enf_select.placeholder = (
+            f"Enforcement: {ENFORCEMENT_LABELS[self._enforcement]}"
+        )
 
         await interaction.response.edit_message(
             embed=self._build_done_embed(member),
@@ -381,11 +403,18 @@ class _SetupWizardView(discord.ui.View):
 # Settings view
 # ---------------------------------------------------------------------------
 
+
 class _SettingsView(discord.ui.View):
     """Lightweight settings editor — enforcement level + notifications + commit toggle."""
 
-    def __init__(self, ctx: "AppContext", invoker_id: int, current_enforcement: str,
-                 current_notifications: str, current_public: bool) -> None:
+    def __init__(
+        self,
+        ctx: AppContext,
+        invoker_id: int,
+        current_enforcement: str,
+        current_notifications: str,
+        current_public: bool,
+    ) -> None:
         super().__init__(timeout=300)
         self._ctx = ctx
         self._invoker_id = invoker_id
@@ -431,8 +460,12 @@ class _SettingsView(discord.ui.View):
         self.add_item(notif_select)
 
         commit_btn: discord.ui.Button[discord.ui.View] = discord.ui.Button(
-            label="Public commitment: ON" if current_public else "Public commitment: OFF",
-            style=discord.ButtonStyle.success if current_public else discord.ButtonStyle.secondary,
+            label="Public commitment: ON"
+            if current_public
+            else "Public commitment: OFF",
+            style=discord.ButtonStyle.success
+            if current_public
+            else discord.ButtonStyle.secondary,
             row=2,
         )
         commit_btn.callback = self._make_commit_cb(current_public)  # type: ignore[assignment]
@@ -458,6 +491,7 @@ class _SettingsView(discord.ui.View):
                 f"✅ Enforcement set to **{ENFORCEMENT_LABELS[value]}**.",
                 ephemeral=True,
             )
+
         return cb
 
     def _make_notifications_cb(self):
@@ -477,6 +511,7 @@ class _SettingsView(discord.ui.View):
                 f"✅ Notifications set to **{value}**.",
                 ephemeral=True,
             )
+
         return cb
 
     def _make_commit_cb(self, current: bool):
@@ -498,6 +533,7 @@ class _SettingsView(discord.ui.View):
                 else "✅ You've been removed from the **Active in Commitment** list.",
                 ephemeral=True,
             )
+
         return cb
 
 
@@ -505,7 +541,8 @@ class _SettingsView(discord.ui.View):
 # Common helpers used by all wellness commands
 # ---------------------------------------------------------------------------
 
-def require_active_user(ctx: "AppContext", interaction: discord.Interaction):
+
+def require_active_user(ctx: AppContext, interaction: discord.Interaction):
     """Return the WellnessUser if the invoker has opted in, else None."""
     if interaction.guild_id is None:
         return None
@@ -520,15 +557,18 @@ def require_active_user(ctx: "AppContext", interaction: discord.Interaction):
 # Command registration
 # ---------------------------------------------------------------------------
 
-def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
+
+def register_wellness_commands(bot: Bot, ctx: AppContext) -> None:
     wellness_group = app_commands.Group(
         name="wellness",
-        description="Wellness Guardian — set healthy boundaries on your own terms.",
+        description="Set message caps, blackout hours, and healthy boundaries for yourself.",
     )
 
     # ── /wellness setup ───────────────────────────────────────────────────
 
-    @wellness_group.command(name="setup", description="Opt in to Wellness Guardian.")
+    @wellness_group.command(
+        name="setup", description="Opt in — pick your timezone and enforcement style."
+    )
     async def setup_cmd(interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
@@ -554,7 +594,10 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     # ── /wellness optout ──────────────────────────────────────────────────
 
-    @wellness_group.command(name="optout", description="Leave Wellness Guardian (settings kept 30 days).")
+    @wellness_group.command(
+        name="optout",
+        description="Leave Wellness Guardian. Your settings are kept for 30 days.",
+    )
     async def optout_cmd(interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
@@ -593,7 +636,7 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @wellness_group.command(
         name="settings",
-        description="Adjust your enforcement level, notifications, and commitment toggle.",
+        description="Change your enforcement level, notification style, or public visibility.",
     )
     async def settings_cmd(interaction: discord.Interaction) -> None:
         user = require_active_user(ctx, interaction)
@@ -630,9 +673,11 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     @wellness_group.command(
         name="pause",
-        description="Pause tracking and lift any active slow mode.",
+        description="Take a break from wellness tracking. Any active slow mode is lifted.",
     )
-    @app_commands.describe(duration="How long to pause (e.g. 24h, 3d, 30m). Leave blank for indefinite.")
+    @app_commands.describe(
+        duration="How long to pause (e.g. 24h, 3d, 30m). Leave blank for indefinite."
+    )
     async def pause_cmd(
         interaction: discord.Interaction,
         duration: str | None = None,
@@ -677,7 +722,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     # ── /wellness resume ──────────────────────────────────────────────────
 
-    @wellness_group.command(name="resume", description="Resume wellness tracking after a pause.")
+    @wellness_group.command(
+        name="resume", description="Pick up where you left off after a pause."
+    )
     async def resume_cmd(interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
@@ -700,12 +747,13 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     cap_group = app_commands.Group(
         name="cap",
-        description="Manage your message caps.",
+        description="Set limits on how many messages you send per window.",
         parent=wellness_group,
     )
 
     async def _user_cap_label_autocomplete(
-        interaction: discord.Interaction, current: str,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         if interaction.guild_id is None:
             return []
@@ -727,17 +775,21 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
         category="Required if scope is 'category'.",
         exclude_exempt="If true (default), exempt channels don't count.",
     )
-    @app_commands.choices(scope=[
-        app_commands.Choice(name="Global (all messages)", value="global"),
-        app_commands.Choice(name="Single channel", value="channel"),
-        app_commands.Choice(name="Category", value="category"),
-        app_commands.Choice(name="Voice (coming soon)", value="voice"),
-    ])
-    @app_commands.choices(window=[
-        app_commands.Choice(name="Hourly", value="hourly"),
-        app_commands.Choice(name="Daily", value="daily"),
-        app_commands.Choice(name="Weekly", value="weekly"),
-    ])
+    @app_commands.choices(
+        scope=[
+            app_commands.Choice(name="Global (all messages)", value="global"),
+            app_commands.Choice(name="Single channel", value="channel"),
+            app_commands.Choice(name="Category", value="category"),
+            app_commands.Choice(name="Voice (coming soon)", value="voice"),
+        ]
+    )
+    @app_commands.choices(
+        window=[
+            app_commands.Choice(name="Hourly", value="hourly"),
+            app_commands.Choice(name="Daily", value="daily"),
+            app_commands.Choice(name="Weekly", value="weekly"),
+        ]
+    )
     async def cap_add_cmd(
         interaction: discord.Interaction,
         label: str,
@@ -815,7 +867,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
             ephemeral=True,
         )
 
-    @cap_group.command(name="list", description="Show all your active caps with current counts.")
+    @cap_group.command(
+        name="list", description="Show all your active caps with current counts."
+    )
     async def cap_list_cmd(interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
@@ -842,7 +896,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
         lines: list[str] = []
         with ctx.open_db() as conn:
             for c in caps:
-                window_start = window_start_epoch(c.window, now_local, user.daily_reset_hour)
+                window_start = window_start_epoch(
+                    c.window, now_local, user.daily_reset_hour
+                )
                 count = get_cap_counter(conn, c.id, window_start)
                 bar_full = min(c.cap_limit, count)
                 bar = "█" * (bar_full * 10 // c.cap_limit if c.cap_limit > 0 else 0)
@@ -930,12 +986,13 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     blackout_group = app_commands.Group(
         name="blackout",
-        description="Schedule offline hours.",
+        description="Schedule times when you want to stay offline.",
         parent=wellness_group,
     )
 
     async def _user_blackout_name_autocomplete(
-        interaction: discord.Interaction, current: str,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         if interaction.guild_id is None:
             return []
@@ -947,7 +1004,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
                 out.append(app_commands.Choice(name=b.name[:100], value=b.name))
         return out[:25]
 
-    @blackout_group.command(name="add", description="Schedule a custom blackout window.")
+    @blackout_group.command(
+        name="add", description="Schedule a custom blackout window."
+    )
     @app_commands.describe(
         name="Friendly name for this blackout (e.g. 'sleep', 'focus').",
         start_time="Start in 24h HH:MM (your local time).",
@@ -1017,14 +1076,26 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
             ephemeral=True,
         )
 
-    @blackout_group.command(name="template", description="Apply a preset blackout template.")
+    @blackout_group.command(
+        name="template", description="Apply a preset blackout template."
+    )
     @app_commands.describe(template="Pick a preset.")
-    @app_commands.choices(template=[
-        app_commands.Choice(name="Night Owl (23:00–07:00, every day)", value="night_owl"),
-        app_commands.Choice(name="Work Hours (09:00–17:00, weekdays)", value="work_hours"),
-        app_commands.Choice(name="School Hours (08:00–15:00, weekdays)", value="school_hours"),
-        app_commands.Choice(name="Weekend Detox (all day Sat–Sun)", value="weekend_detox"),
-    ])
+    @app_commands.choices(
+        template=[
+            app_commands.Choice(
+                name="Night Owl (23:00–07:00, every day)", value="night_owl"
+            ),
+            app_commands.Choice(
+                name="Work Hours (09:00–17:00, weekdays)", value="work_hours"
+            ),
+            app_commands.Choice(
+                name="School Hours (08:00–15:00, weekdays)", value="school_hours"
+            ),
+            app_commands.Choice(
+                name="Weekend Detox (all day Sat–Sun)", value="weekend_detox"
+            ),
+        ]
+    )
     async def blackout_template_cmd(
         interaction: discord.Interaction,
         template: app_commands.Choice[str],
@@ -1044,7 +1115,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
             await interaction.response.send_message("Unknown template.", ephemeral=True)
             return
         with ctx.open_db() as conn:
-            existing = find_blackout_by_name(conn, guild.id, interaction.user.id, tpl["name"])
+            existing = find_blackout_by_name(
+                conn, guild.id, interaction.user.id, tpl["name"]
+            )
             if existing:
                 await interaction.response.send_message(
                     f"You already have a blackout named **{tpl['name']}**.",
@@ -1104,7 +1177,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @blackout_group.command(name="toggle", description="Enable or disable a blackout.")
-    @app_commands.describe(name="Blackout name.", enabled="Set to true to enable, false to pause.")
+    @app_commands.describe(
+        name="Blackout name.", enabled="Set to true to enable, false to pause."
+    )
     @app_commands.autocomplete(name=_user_blackout_name_autocomplete)
     async def blackout_toggle_cmd(
         interaction: discord.Interaction,
@@ -1168,7 +1243,7 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     away_group = app_commands.Group(
         name="away",
-        description="Auto-reply when someone @-mentions you while you're stepping back.",
+        description="Auto-reply when someone mentions you while you're away.",
         parent=wellness_group,
     )
 
@@ -1178,7 +1253,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
         "I'll get back to you when I'm back. 💚"
     )
 
-    def _render_away_preview(text: str, member: discord.Member | discord.User) -> discord.Embed:
+    def _render_away_preview(
+        text: str, member: discord.Member | discord.User
+    ) -> discord.Embed:
         return discord.Embed(
             title=f"💚 {member.display_name} is away",
             description=text or AWAY_DEFAULT_TEXT,
@@ -1210,7 +1287,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
             )
             return
         with ctx.open_db() as conn:
-            update_away_message(conn, guild.id, interaction.user.id, enabled=True, message=message)
+            update_away_message(
+                conn, guild.id, interaction.user.id, enabled=True, message=message
+            )
             updated = get_wellness_user(conn, guild.id, interaction.user.id)
         text = (updated.away_message if updated else "") or AWAY_DEFAULT_TEXT
         embed = _render_away_preview(text, interaction.user)
@@ -1235,7 +1314,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
             "💚 Away mode is off. Welcome back!", ephemeral=True
         )
 
-    @away_group.command(name="set", description="Update your away message text without toggling state.")
+    @away_group.command(
+        name="set", description="Update your away message text without toggling state."
+    )
     @app_commands.describe(
         message=f"New away message (max {AWAY_MESSAGE_MAX} chars).",
     )
@@ -1261,15 +1342,21 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
             return
         with ctx.open_db() as conn:
             update_away_message(
-                conn, guild.id, interaction.user.id,
-                enabled=user.away_enabled, message=message,
+                conn,
+                guild.id,
+                interaction.user.id,
+                enabled=user.away_enabled,
+                message=message,
             )
         embed = _render_away_preview(message, interaction.user)
         state = "ON" if user.away_enabled else "OFF"
         embed.set_footer(text=f"Saved. Away mode is currently {state}.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @away_group.command(name="preview", description="Preview what others will see when they mention you.")
+    @away_group.command(
+        name="preview",
+        description="Preview what others will see when they mention you.",
+    )
     async def away_preview_cmd(interaction: discord.Interaction) -> None:
         user = require_active_user(ctx, interaction)
         if user is None:
@@ -1288,11 +1375,14 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
     partner_group = app_commands.Group(
         name="partner",
-        description="Accountability partnerships — opt-in mutual support.",
+        description="Pair up with a friend for mutual accountability.",
         parent=wellness_group,
     )
 
-    @partner_group.command(name="request", description="Send a partnership request to another opted-in member.")
+    @partner_group.command(
+        name="request",
+        description="Send a partnership request to another opted-in member.",
+    )
     @app_commands.describe(member="The person you'd like to be partners with.")
     async def partner_request_cmd(
         interaction: discord.Interaction,
@@ -1326,7 +1416,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
                     ephemeral=True,
                 )
                 return
-            partnership = create_partner_request(conn, guild.id, interaction.user.id, member.id)
+            partnership = create_partner_request(
+                conn, guild.id, interaction.user.id, member.id
+            )
         if partnership is None:
             await interaction.response.send_message(
                 f"There's already a request or partnership with {member.display_name}.",
@@ -1363,7 +1455,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
             ephemeral=True,
         )
 
-    @partner_group.command(name="list", description="Show your accountability partners.")
+    @partner_group.command(
+        name="list", description="Show your accountability partners."
+    )
     async def partner_list_cmd(interaction: discord.Interaction) -> None:
         guild = interaction.guild
         if guild is None:
@@ -1377,7 +1471,10 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
             return
         with ctx.open_db() as conn:
             partnerships = list_partnerships(
-                conn, guild.id, interaction.user.id, accepted_only=False,
+                conn,
+                guild.id,
+                interaction.user.id,
+                accepted_only=False,
             )
         if not partnerships:
             await interaction.response.send_message(
@@ -1419,13 +1516,17 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     async def _partner_autocomplete(
-        interaction: discord.Interaction, current: str,
+        interaction: discord.Interaction,
+        current: str,
     ) -> list[app_commands.Choice[str]]:
         if interaction.guild_id is None or interaction.guild is None:
             return []
         with ctx.open_db() as conn:
             partnerships = list_partnerships(
-                conn, interaction.guild_id, interaction.user.id, accepted_only=False,
+                conn,
+                interaction.guild_id,
+                interaction.user.id,
+                accepted_only=False,
             )
         choices: list[app_commands.Choice[str]] = []
         for p in partnerships:
@@ -1436,7 +1537,9 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
                 choices.append(app_commands.Choice(name=name[:100], value=str(p.id)))
         return choices[:25]
 
-    @partner_group.command(name="dissolve", description="End an accountability partnership (or cancel a pending request).")
+    @partner_group.command(
+        name="dissolve", description="End a partnership or cancel a pending request."
+    )
     @app_commands.describe(partner="The partnership to end.")
     @app_commands.autocomplete(partner=_partner_autocomplete)
     async def partner_dissolve_cmd(
@@ -1525,14 +1628,18 @@ def register_wellness_commands(bot: "Bot", ctx: "AppContext") -> None:
 
         if streak.last_violation_date == today_iso:
             lines.append("")
-            lines.append("*You had a slip today — that's okay. Streak decay is gentle (10%).*")
+            lines.append(
+                "*You had a slip today — that's okay. Streak decay is gentle (10%).*"
+            )
 
         embed = discord.Embed(
             title="💚 Your Wellness Streak",
             description="\n".join(lines),
             color=discord.Color.from_str("#7BC97B"),
         )
-        embed.set_footer(text="Streaks decay by ~10% on slips — they never reset to zero.")
+        embed.set_footer(
+            text="Streaks decay by ~10% on slips — they never reset to zero."
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     bot.tree.add_command(wellness_group)

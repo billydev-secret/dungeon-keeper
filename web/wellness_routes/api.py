@@ -5,6 +5,7 @@ mutates/reads state via `services.wellness_service`, and returns JSON.
 Write endpoints return `{ok: true, ...}` or `{ok: false, error: "..."}`.
 Read endpoints return the data directly.
 """
+
 from __future__ import annotations
 
 import json
@@ -65,9 +66,7 @@ _DAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"]
 
 
 def _blackout_to_dict(b) -> dict:
-    days_str = "".join(
-        _DAY_LETTERS[i] for i in range(7) if b.days_mask & (1 << i)
-    )
+    days_str = "".join(_DAY_LETTERS[i] for i in range(7) if b.days_mask & (1 << i))
     return {
         "id": b.id,
         "name": b.name,
@@ -98,6 +97,7 @@ def _cap_to_dict(c) -> dict:
 
 # ── Read (GET) endpoints ──────────────────────────────────────────────
 
+
 @router.get("/me")
 async def wellness_me(
     user: AuthenticatedUser = Depends(require_user),
@@ -114,11 +114,17 @@ async def wellness_me(
         streak = ensure_streak(conn, ctx.guild_id, user.user_id, today_iso)
         caps = list_caps(conn, ctx.guild_id, user.user_id)
         blackouts = list_blackouts(conn, ctx.guild_id, user.user_id)
-        partnerships = list_partnerships(conn, ctx.guild_id, user.user_id, accepted_only=False)
+        partnerships = list_partnerships(
+            conn, ctx.guild_id, user.user_id, accepted_only=False
+        )
         cfg = get_wellness_config(conn, ctx.guild_id)
 
     nxt = next_milestone(streak.current_days)
-    next_text = f"{nxt[1]} {nxt[0]} days ({nxt[0] - streak.current_days} to go)" if nxt else "Top tier"
+    next_text = (
+        f"{nxt[1]} {nxt[0]} days ({nxt[0] - streak.current_days} to go)"
+        if nxt
+        else "Top tier"
+    )
 
     return {
         "opted_in": True,
@@ -141,7 +147,9 @@ async def wellness_me(
         "caps_count": len(caps),
         "blackouts_count": len([b for b in blackouts if b.enabled]),
         "partners_count": len([p for p in partnerships if p.status == "accepted"]),
-        "pending_partners_count": len([p for p in partnerships if p.status == "pending"]),
+        "pending_partners_count": len(
+            [p for p in partnerships if p.status == "pending"]
+        ),
         "crisis_resource_url": cfg.crisis_resource_url if cfg else "",
         "enforcement_levels": ENFORCEMENT_LEVELS,
         "notification_prefs": NOTIFICATION_PREFS,
@@ -163,9 +171,30 @@ async def get_caps(
 
 
 _HOUR_LABELS = [
-    "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am",
-    "8am", "9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm",
-    "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
+    "12am",
+    "1am",
+    "2am",
+    "3am",
+    "4am",
+    "5am",
+    "6am",
+    "7am",
+    "8am",
+    "9am",
+    "10am",
+    "11am",
+    "12pm",
+    "1pm",
+    "2pm",
+    "3pm",
+    "4pm",
+    "5pm",
+    "6pm",
+    "7pm",
+    "8pm",
+    "9pm",
+    "10pm",
+    "11pm",
 ]
 _DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -216,13 +245,15 @@ async def xp_histogram(
     buckets = []
     for i in range(n_buckets):
         avg = round(totals[i] / distinct_periods, 1)
-        buckets.append({
-            "index": i,
-            "label": labels[i],
-            "avg_xp": avg,
-            "total_xp": round(totals[i], 1),
-            "count": counts[i],
-        })
+        buckets.append(
+            {
+                "index": i,
+                "label": labels[i],
+                "avg_xp": avg,
+                "total_xp": round(totals[i], 1),
+                "count": counts[i],
+            }
+        )
 
     return {
         "mode": mode,
@@ -268,7 +299,9 @@ async def get_partners(
     ctx=Depends(get_ctx),
 ):
     with ctx.open_db() as conn:
-        partnerships = list_partnerships(conn, ctx.guild_id, user.user_id, accepted_only=False)
+        partnerships = list_partnerships(
+            conn, ctx.guild_id, user.user_id, accepted_only=False
+        )
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(ctx.guild_id) if bot else None
@@ -281,13 +314,15 @@ async def get_partners(
             m = guild.get_member(other_id)
             if m:
                 name = m.display_name
-        rows.append({
-            "id": p.id,
-            "other_id": other_id,
-            "other_name": name,
-            "status": p.status,
-            "is_requester": p.requester_id == user.user_id,
-        })
+        rows.append(
+            {
+                "id": p.id,
+                "other_id": other_id,
+                "other_name": name,
+                "status": p.status,
+                "is_requester": p.requester_id == user.user_id,
+            }
+        )
     return {"partnerships": rows}
 
 
@@ -305,13 +340,15 @@ async def get_history(
             report_data = json.loads(r["report_json"])
         except (ValueError, TypeError):
             report_data = {}
-        reports.append({
-            "iso_year": int(r["iso_year"]),
-            "iso_week": int(r["iso_week"]),
-            "week_start": str(r["week_start"]),
-            "ai_text": str(r["ai_text"]),
-            "summary": report_data,
-        })
+        reports.append(
+            {
+                "iso_year": int(r["iso_year"]),
+                "iso_week": int(r["iso_week"]),
+                "week_start": str(r["week_start"]),
+                "ai_text": str(r["ai_text"]),
+                "summary": report_data,
+            }
+        )
     return {"reports": reports}
 
 
@@ -328,11 +365,14 @@ def _require_active(ctx, user_id: int):
     with ctx.open_db() as conn:
         wuser = get_wellness_user(conn, ctx.guild_id, user_id)
     if wuser is None or not wuser.is_active:
-        raise HTTPException(status_code=403, detail="You must opt in to wellness first.")
+        raise HTTPException(
+            status_code=403, detail="You must opt in to wellness first."
+        )
     return wuser
 
 
 # ── Settings ────────────────────────────────────────────────────────────
+
 
 @router.post("/settings")
 async def update_settings(
@@ -370,11 +410,15 @@ async def update_settings(
 
     with ctx.open_db() as conn:
         update_user_settings(
-            conn, ctx.guild_id, user.user_id,
+            conn,
+            ctx.guild_id,
+            user.user_id,
             timezone=timezone if isinstance(timezone, str) and timezone else None,
             enforcement_level=enforcement_level,
             notifications_pref=notifications_pref,
-            public_commitment=bool(public_commitment) if public_commitment is not None else None,
+            public_commitment=bool(public_commitment)
+            if public_commitment is not None
+            else None,
             daily_reset_hour=daily_reset_hour,
             slow_mode_rate_seconds=slow_mode_rate_seconds,
         )
@@ -413,6 +457,7 @@ async def resume(
 
 # ── Caps ────────────────────────────────────────────────────────────────
 
+
 @router.post("/caps")
 async def create_cap(
     payload: dict = Body(...),
@@ -448,20 +493,30 @@ async def create_cap(
     # Optional per-bucket limits (list of ints)
     bucket_limits = payload.get("bucket_limits")
     if bucket_limits is not None:
-        if not isinstance(bucket_limits, list) or not all(isinstance(v, int) and v >= 1 for v in bucket_limits):
+        if not isinstance(bucket_limits, list) or not all(
+            isinstance(v, int) and v >= 1 for v in bucket_limits
+        ):
             return _err("bucket_limits must be a list of positive integers")
         expected_len = 24 if window == "daily" else 7 if window == "weekly" else 0
         if expected_len and len(bucket_limits) != expected_len:
-            return _err(f"bucket_limits must have {expected_len} entries for {window} window")
+            return _err(
+                f"bucket_limits must have {expected_len} entries for {window} window"
+            )
         cap_limit = max(bucket_limits)
 
     with ctx.open_db() as conn:
         if find_cap_by_label(conn, ctx.guild_id, user.user_id, label):
             return _err(f"a cap named '{label}' already exists")
         cap_id = add_cap(
-            conn, ctx.guild_id, user.user_id,
-            label=label, scope=scope, scope_target_id=scope_target_id,
-            window=window, cap_limit=cap_limit, exclude_exempt=exclude_exempt,
+            conn,
+            ctx.guild_id,
+            user.user_id,
+            label=label,
+            scope=scope,
+            scope_target_id=scope_target_id,
+            window=window,
+            cap_limit=cap_limit,
+            exclude_exempt=exclude_exempt,
             bucket_limits=bucket_limits,
         )
     return _ok(id=cap_id)
@@ -478,15 +533,25 @@ async def edit_cap(
 
     bucket_limits = payload.get("bucket_limits")
     if bucket_limits is not None:
-        if not isinstance(bucket_limits, list) or not all(isinstance(v, int) and v >= 1 for v in bucket_limits):
+        if not isinstance(bucket_limits, list) or not all(
+            isinstance(v, int) and v >= 1 for v in bucket_limits
+        ):
             return _err("bucket_limits must be a list of positive integers")
         with ctx.open_db() as conn:
             cap = get_cap(conn, cap_id)
-            if cap is None or cap.user_id != user.user_id or cap.guild_id != ctx.guild_id:
+            if (
+                cap is None
+                or cap.user_id != user.user_id
+                or cap.guild_id != ctx.guild_id
+            ):
                 return _err("cap not found", status=404)
-            expected_len = 24 if cap.window == "daily" else 7 if cap.window == "weekly" else 0
+            expected_len = (
+                24 if cap.window == "daily" else 7 if cap.window == "weekly" else 0
+            )
             if expected_len and len(bucket_limits) != expected_len:
-                return _err(f"bucket_limits must have {expected_len} entries for {cap.window} window")
+                return _err(
+                    f"bucket_limits must have {expected_len} entries for {cap.window} window"
+                )
             update_cap_bucket_limits(conn, cap_id, bucket_limits)
         return _ok()
 
@@ -522,7 +587,13 @@ async def delete_cap(
 # ── Blackouts ───────────────────────────────────────────────────────────
 
 _DAY_NAME_TO_BIT = {
-    "mon": 1, "tue": 2, "wed": 4, "thu": 8, "fri": 16, "sat": 32, "sun": 64,
+    "mon": 1,
+    "tue": 2,
+    "wed": 4,
+    "thu": 8,
+    "fri": 16,
+    "sat": 32,
+    "sun": 64,
 }
 
 
@@ -589,8 +660,13 @@ async def create_blackout(
         if find_blackout_by_name(conn, ctx.guild_id, user.user_id, name):
             return _err(f"a blackout named '{name}' already exists")
         blackout_id = add_blackout(
-            conn, ctx.guild_id, user.user_id,
-            name=name, start_minute=start_minute, end_minute=end_minute, days_mask=days_mask,
+            conn,
+            ctx.guild_id,
+            user.user_id,
+            name=name,
+            start_minute=start_minute,
+            end_minute=end_minute,
+            days_mask=days_mask,
         )
     return _ok(id=blackout_id)
 
@@ -610,7 +686,11 @@ async def toggle_blackout_endpoint(
             "SELECT user_id, guild_id FROM wellness_blackouts WHERE id = ?",
             (blackout_id,),
         ).fetchone()
-        if row is None or int(row["user_id"]) != user.user_id or int(row["guild_id"]) != ctx.guild_id:
+        if (
+            row is None
+            or int(row["user_id"]) != user.user_id
+            or int(row["guild_id"]) != ctx.guild_id
+        ):
             return _err("blackout not found", status=404)
         toggle_blackout(conn, blackout_id, enabled)
     return _ok(enabled=enabled)
@@ -628,13 +708,18 @@ async def delete_blackout(
             "SELECT user_id, guild_id FROM wellness_blackouts WHERE id = ?",
             (blackout_id,),
         ).fetchone()
-        if row is None or int(row["user_id"]) != user.user_id or int(row["guild_id"]) != ctx.guild_id:
+        if (
+            row is None
+            or int(row["user_id"]) != user.user_id
+            or int(row["guild_id"]) != ctx.guild_id
+        ):
             return _err("blackout not found", status=404)
         remove_blackout(conn, blackout_id)
     return _ok()
 
 
 # ── Away message ────────────────────────────────────────────────────────
+
 
 @router.post("/away")
 async def update_away(
@@ -651,13 +736,17 @@ async def update_away(
             return _err(f"message must be ≤ {AWAY_MESSAGE_MAX_LEN} characters")
     with ctx.open_db() as conn:
         update_away_message(
-            conn, ctx.guild_id, user.user_id,
-            enabled=enabled, message=message,
+            conn,
+            ctx.guild_id,
+            user.user_id,
+            enabled=enabled,
+            message=message,
         )
     return _ok()
 
 
 # ── Partners ────────────────────────────────────────────────────────────
+
 
 @router.post("/partners/request")
 async def request_partner(
@@ -690,6 +779,7 @@ async def request_partner(
     if bot:
         try:
             from services.wellness_partners import make_partner_request_view
+
             target_user = bot.get_user(target_id) or await bot.fetch_user(target_id)
             view = make_partner_request_view(partner.id)
             try:

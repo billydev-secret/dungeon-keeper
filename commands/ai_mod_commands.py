@@ -8,6 +8,7 @@ Provides four slash commands (all mod-only, all ephemeral, under the /ai group):
 
 Requires ANTHROPIC_API_KEY to be set in the bot's environment.
 """
+
 from __future__ import annotations
 
 import os
@@ -38,17 +39,17 @@ def _anthropic_client() -> AsyncAnthropic | None:
 def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
     ai_group = app_commands.Group(
         name="ai",
-        description="AI-powered moderation tools (requires ANTHROPIC_API_KEY).",
+        description="AI-powered moderation — review members, scan channels, ask questions.",
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
     @ai_group.command(
         name="review",
-        description="AI review of a user's recent messages for rule violations or concerns.",
+        description="AI flags rule violations and concerning patterns in a member's recent messages.",
     )
     @app_commands.describe(
-        user="The member to review.",
-        days="How many days of message history to scan (default 7).",
+        user="Member to review.",
+        days="Days of history to scan.",
     )
     async def ai_review(
         interaction: discord.Interaction,
@@ -88,9 +89,9 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
     @ai_group.command(
         name="scan",
-        description="AI scan of recent messages in this channel for rule violations or concerns.",
+        description="AI scans the last N messages in this channel for rule violations.",
     )
-    @app_commands.describe(count="How many recent messages to scan (default 50).")
+    @app_commands.describe(count="Number of recent messages to scan.")
     async def ai_scan(
         interaction: discord.Interaction,
         count: app_commands.Range[int, 10, 200] = 50,
@@ -117,7 +118,9 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
@@ -129,12 +132,12 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
     @ai_group.command(
         name="channel",
-        description="Ask the AI a question about recent activity in a channel.",
+        description="Ask the AI a free-form question about what happened in a channel.",
     )
     @app_commands.describe(
-        question="Your question about the channel's recent activity.",
-        minutes="How many minutes of history to include (default 60, max 1440).",
-        channel="Channel to query — defaults to the current channel.",
+        question="What do you want to know?",
+        minutes="Minutes of history to include (up to 1440 = 24h).",
+        channel="Channel to query. Defaults to this one.",
     )
     async def ai_channel(
         interaction: discord.Interaction,
@@ -164,13 +167,17 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
         guild = interaction.guild
         if not guild:
-            await interaction.response.send_message("This command only works in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
         with ctx.open_db() as conn:
-            result = await ai_query_channel(client, conn, guild, target, question, minutes=minutes)
+            result = await ai_query_channel(
+                client, conn, guild, target, question, minutes=minutes
+            )
         channel_name = getattr(target, "name", str(target.id))
         label = f"{minutes} minute{'s' if minutes != 1 else ''}"
         header = (
@@ -181,12 +188,12 @@ def register_ai_mod_commands(bot: Bot, ctx: AppContext) -> None:
 
     @ai_group.command(
         name="query",
-        description="Ask the AI a specific question about a user based on their recent messages.",
+        description="Ask the AI a specific question about a member's message history.",
     )
     @app_commands.describe(
-        user="The member to investigate.",
-        question="Your specific question or investigation prompt.",
-        days="How many days of history to pull (default 14).",
+        user="Member to investigate.",
+        question="What do you want to know about this member?",
+        days="Days of history to include.",
     )
     async def ai_query(
         interaction: discord.Interaction,

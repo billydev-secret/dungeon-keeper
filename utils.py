@@ -1,4 +1,5 @@
 """Utility functions for the Discord bot."""
+
 from __future__ import annotations
 
 from typing import TypeAlias

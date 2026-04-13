@@ -34,11 +34,20 @@ export function mount(container) {
         <div class="subtitle">${d.total_actions_7d} total activity this week</div>
       </header>
 
+      <details class="panel-about" style="margin:8px 0 14px;">
+        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
+        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+          Combines audit-log actions (jails, warns, ticket ops) with mod-channel messages to give a full picture of who's active.
+          <strong style="color:var(--text-normal, #dbdee1);">Workload Gini</strong> shows whether the work is shared evenly — close to 1 means one mod is doing almost everything.
+          <strong style="color:var(--text-normal, #dbdee1);">Escalation rate</strong> tracks how often warnings lead to jails. <strong style="color:var(--text-normal, #dbdee1);">Recidivism</strong> tracks repeat offenders within 14 days.
+        </div>
+      </details>
+
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Median Response Time</div>
           <div class="home-card-big">${d.median_response_time}m</div>
-          <div class="home-card-sub">P95: ${d.p95_response_time}m</div>
+          <div class="home-card-sub">Time to first mod action. P95: ${d.p95_response_time}m</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Total Activity (7d)</div>
@@ -76,17 +85,21 @@ export function mount(container) {
       <div class="home-grid" style="margin-top:14px;">
         <div class="home-card">
           <div class="home-card-label">Moderator Leaderboard</div>
+          <div class="data-table-scroll">
           <table class="data-table">
             <thead><tr><th>#</th><th>Moderator</th><th>Total</th><th>Actions</th><th>Messages</th></tr></thead>
             <tbody>${modRows || '<tr><td colspan="5" class="home-dim">No data</td></tr>'}</tbody>
           </table>
+          </div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Action Types</div>
+          <div class="data-table-scroll">
           <table class="data-table">
             <thead><tr><th>Action</th><th>Count</th></tr></thead>
             <tbody>${actionRows || '<tr><td colspan="2" class="home-dim">No data</td></tr>'}</tbody>
           </table>
+          </div>
         </div>
       </div>
     `;

@@ -51,6 +51,7 @@ def get_config_id_set(conn: sqlite3.Connection, bucket: str) -> set[int]:
 # Grant roles
 # ---------------------------------------------------------------------------
 
+
 class GrantRoleConfig(TypedDict):
     grant_name: str
     label: str
@@ -108,7 +109,9 @@ def migrate_grant_roles(conn: sqlite3.Connection, guild_id: int) -> None:
     for grant_name, label in _DEFAULT_GRANT_ROLES:
         role_id = int(get_config_value(conn, f"{grant_name}_role_id", "0") or 0)
         log_ch = int(get_config_value(conn, f"{grant_name}_log_channel_id", "0") or 0)
-        ann_ch = int(get_config_value(conn, f"{grant_name}_announce_channel_id", "0") or 0)
+        ann_ch = int(
+            get_config_value(conn, f"{grant_name}_announce_channel_id", "0") or 0
+        )
         msg = get_config_value(conn, f"{grant_name}_grant_message", "")
         conn.execute(
             """
@@ -129,7 +132,9 @@ def migrate_grant_roles(conn: sqlite3.Connection, guild_id: int) -> None:
             )
 
 
-def get_grant_roles(conn: sqlite3.Connection, guild_id: int) -> dict[str, GrantRoleConfig]:
+def get_grant_roles(
+    conn: sqlite3.Connection, guild_id: int
+) -> dict[str, GrantRoleConfig]:
     rows = conn.execute(
         "SELECT grant_name, label, role_id, log_channel_id, announce_channel_id, grant_message "
         "FROM grant_roles WHERE guild_id = ?",
@@ -170,7 +175,15 @@ def upsert_grant_role(
             announce_channel_id=excluded.announce_channel_id,
             grant_message=excluded.grant_message
         """,
-        (guild_id, grant_name, label, role_id, log_channel_id, announce_channel_id, grant_message),
+        (
+            guild_id,
+            grant_name,
+            label,
+            role_id,
+            log_channel_id,
+            announce_channel_id,
+            grant_message,
+        ),
     )
 
 
@@ -187,7 +200,9 @@ def delete_grant_role(conn: sqlite3.Connection, guild_id: int, grant_name: str) 
 
 
 def get_grant_permissions(
-    conn: sqlite3.Connection, guild_id: int, grant_name: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    grant_name: str,
 ) -> list[tuple[str, int]]:
     rows = conn.execute(
         "SELECT entity_type, entity_id FROM grant_role_permissions WHERE guild_id = ? AND grant_name = ?",
@@ -197,7 +212,11 @@ def get_grant_permissions(
 
 
 def add_grant_permission(
-    conn: sqlite3.Connection, guild_id: int, grant_name: str, entity_type: str, entity_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    grant_name: str,
+    entity_type: str,
+    entity_id: int,
 ) -> bool:
     cur = conn.execute(
         "INSERT OR IGNORE INTO grant_role_permissions (guild_id, grant_name, entity_type, entity_id) VALUES (?, ?, ?, ?)",
@@ -207,7 +226,11 @@ def add_grant_permission(
 
 
 def remove_grant_permission(
-    conn: sqlite3.Connection, guild_id: int, grant_name: str, entity_type: str, entity_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    grant_name: str,
+    entity_type: str,
+    entity_id: int,
 ) -> bool:
     cur = conn.execute(
         "DELETE FROM grant_role_permissions WHERE guild_id = ? AND grant_name = ? AND entity_type = ? AND entity_id = ?",
@@ -217,7 +240,11 @@ def remove_grant_permission(
 
 
 def can_use_grant(
-    conn: sqlite3.Connection, guild_id: int, grant_name: str, member_id: int, role_ids: list[int],
+    conn: sqlite3.Connection,
+    guild_id: int,
+    grant_name: str,
+    member_id: int,
+    role_ids: list[int],
 ) -> bool:
     """Check if a member (by ID and their role IDs) has permission for a grant role."""
     # Check user permission

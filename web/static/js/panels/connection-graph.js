@@ -72,10 +72,10 @@ export function mount(container, initialParams) {
         </label>
         <label>Focus member <span data-slot="member" style="display:inline-block;vertical-align:middle;"></span></label>
         <label>Min edge %
-          <input type="number" data-control="min_pct" min="0" max="100" value="${initialParams.min_pct || 5}" title="Hide edges below this % of either node's total" />
+          <input type="number" data-control="min_pct" min="0" max="100" value="${initialParams.min_pct || 5}" title="Hide weak connections below this %" />
         </label>
         <label>Layers
-          <input type="number" data-control="layers" min="1" max="5" value="${initialParams.layers || 2}" title="Expansion depth from focused member" />
+          <input type="number" data-control="layers" min="1" max="5" value="${initialParams.layers || 2}" title="How many hops out from the focused member" />
         </label>
         <label>Max nodes
           <input type="number" data-control="limit" min="5" max="100" value="${initialParams.limit || 40}" />
@@ -84,7 +84,7 @@ export function mount(container, initialParams) {
           <input type="range" data-control="spread" min="0.5" max="3" step="0.1" value="${initialParams.spread || 1.0}" style="width:80px;" />
         </label>
         <label>Max edges/node
-          <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 3}" title="0 = no limit" />
+          <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 3}" title="Max connections per person (0 = no limit)" />
         </label>
       </div>
       <div data-graph-wrap style="position:relative; flex:1; min-height:300px; min-width:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">

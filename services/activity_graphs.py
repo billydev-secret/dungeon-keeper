@@ -1,13 +1,14 @@
 """Activity graph generation — message counts bucketed by time resolution."""
+
 from __future__ import annotations
 
 import bisect
-from dataclasses import dataclass
 import io
 import sqlite3
 import statistics
-from itertools import groupby
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import groupby
 from typing import Literal
 
 import matplotlib
@@ -20,9 +21,30 @@ Resolution = Literal["hour", "day", "week", "month", "hour_of_day", "day_of_week
 
 _DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 _HOD_LABELS = [
-    "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am",
-    "8am", "9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm",
-    "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
+    "12am",
+    "1am",
+    "2am",
+    "3am",
+    "4am",
+    "5am",
+    "6am",
+    "7am",
+    "8am",
+    "9am",
+    "10am",
+    "11am",
+    "12pm",
+    "1pm",
+    "2pm",
+    "3pm",
+    "4pm",
+    "5pm",
+    "6pm",
+    "7pm",
+    "8pm",
+    "9pm",
+    "10pm",
+    "11pm",
 ]
 
 # Discord dark theme palette
@@ -38,7 +60,9 @@ _GRID = "#40444b"
 # ---------------------------------------------------------------------------
 
 
-def _hour_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple[str, str]], float]:
+def _hour_buckets(
+    now: datetime, utc_offset_hours: float = 0
+) -> tuple[list[tuple[str, str]], float]:
     """24 hourly buckets ending at the current hour."""
     offset = timedelta(hours=utc_offset_hours)
     local_now = now + offset
@@ -47,12 +71,14 @@ def _hour_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tupl
     for i in range(24):
         dt = start + timedelta(hours=i)
         key = (dt - offset).strftime("%Y-%m-%d %H")  # key in UTC for SQL match
-        label = dt.strftime("%a %H:%M")               # label in local time
+        label = dt.strftime("%a %H:%M")  # label in local time
         buckets.append((key, label))
     return buckets, (start - offset).timestamp()
 
 
-def _day_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple[str, str]], float]:
+def _day_buckets(
+    now: datetime, utc_offset_hours: float = 0
+) -> tuple[list[tuple[str, str]], float]:
     """30 rolling 24-hour buckets ending at *now*.
 
     Each bucket spans exactly 24 hours.  The last bucket ends at *now*,
@@ -72,7 +98,9 @@ def _day_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple
     return buckets, start_ts
 
 
-def _week_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple[str, str]], float]:
+def _week_buckets(
+    now: datetime, utc_offset_hours: float = 0
+) -> tuple[list[tuple[str, str]], float]:
     """12 weekly buckets (Monday-based) ending this week."""
     offset = timedelta(hours=utc_offset_hours)
     local_now = now + offset
@@ -90,7 +118,9 @@ def _week_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tupl
     return buckets, (start - offset).timestamp()
 
 
-def _month_buckets(now: datetime, utc_offset_hours: float = 0) -> tuple[list[tuple[str, str]], float]:
+def _month_buckets(
+    now: datetime, utc_offset_hours: float = 0
+) -> tuple[list[tuple[str, str]], float]:
     """12 monthly buckets ending this month."""
     offset = timedelta(hours=utc_offset_hours)
     local_now = now + offset
@@ -179,7 +209,9 @@ def query_message_activity(
     now = datetime.now(timezone.utc)
     bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
     offset_secs = int(utc_offset_hours * 3600)
-    bucket_expr = _strftime_expr(resolution, since_ts=since_ts, utc_offset_secs=offset_secs)
+    bucket_expr = _strftime_expr(
+        resolution, since_ts=since_ts, utc_offset_secs=offset_secs
+    )
 
     params: list[object] = [guild_id, since_ts]
     where = "guild_id = ? AND created_at >= ?"
@@ -284,7 +316,9 @@ def query_xp_activity(
     now = datetime.now(timezone.utc)
     bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
     offset_secs = int(utc_offset_hours * 3600)
-    bucket_expr = _strftime_expr(resolution, since_ts=since_ts, utc_offset_secs=offset_secs)
+    bucket_expr = _strftime_expr(
+        resolution, since_ts=since_ts, utc_offset_secs=offset_secs
+    )
 
     params: list[object] = [guild_id, since_ts]
     where = "guild_id = ? AND created_at >= ?"
@@ -573,8 +607,12 @@ def query_dropoff_profiles(
         ]
     else:
         candidates = query_message_rate_drops(
-            conn, guild_id, period_seconds,
-            channel_id=channel_id, min_previous=min_previous, limit=limit,
+            conn,
+            guild_id,
+            period_seconds,
+            channel_id=channel_id,
+            min_previous=min_previous,
+            limit=limit,
         )
 
     if not candidates:
@@ -616,10 +654,14 @@ def query_dropoff_profiles(
         total_prev = float(r[10]) or 1.0
         total_recent = float(r[12]) or 1.0
         msg_data[uid] = {
-            "ch_p": int(r[1]), "ch_r": int(r[2]),
-            "re_p": int(r[3]), "re_r": int(r[4]),
-            "in_p": int(r[5]), "in_r": int(r[6]),
-            "al_p": float(r[7] or 0), "al_r": float(r[8] or 0),
+            "ch_p": int(r[1]),
+            "ch_r": int(r[2]),
+            "re_p": int(r[3]),
+            "re_r": int(r[4]),
+            "in_p": int(r[5]),
+            "in_r": int(r[6]),
+            "al_p": float(r[7] or 0),
+            "al_r": float(r[8] or 0),
             "wd_p": float(r[9]) / total_prev * 100,
             "wd_r": float(r[11]) / total_recent * 100,
         }
@@ -911,34 +953,58 @@ def query_dropoff_profiles(
         reply_xp_p, reply_xp_r = xp.get("reply", (0.0, 0.0))
         img_p, img_r = xp.get("image_react", (0.0, 0.0))
 
-        profiles.append(DropoffProfile(
-            user_id=uid,
-            msgs_prev=mp, msgs_recent=mr,
-            voice_xp_prev=voice_p, voice_xp_recent=voice_r,
-            days_prev=dp, days_recent=dr, days_in_window=days_in_window,
-            channels_prev=md.get("ch_p", 0), channels_recent=md.get("ch_r", 0),
-            replies_prev=md.get("re_p", 0), replies_recent=md.get("re_r", 0),
-            initiations_prev=md.get("in_p", 0), initiations_recent=md.get("in_r", 0),
-            avg_len_prev=md.get("al_p", 0.0), avg_len_recent=md.get("al_r", 0.0),
-            partners_prev=om[0], partners_recent=om[1],
-            inbound_prev=ip, inbound_recent=ir_,
-            outbound_prev=om[2], outbound_recent=om[3],
-            attachments_prev=ap, attachments_recent=ar,
-            reactions_prev=rp, reactions_recent=rr,
-            peak_hour_prev=peaks.get(0), peak_hour_recent=peaks.get(1),
-            weekday_pct_prev=md.get("wd_p", 0.0), weekday_pct_recent=md.get("wd_r", 0.0),
-            longest_gap_secs=gap_map.get(uid, 0.0),
-            last_seen_ts=last_map.get(uid),
-            text_xp_prev=text_p, text_xp_recent=text_r,
-            reply_xp_prev=reply_xp_p, reply_xp_recent=reply_xp_r,
-            image_react_xp_prev=img_p, image_react_xp_recent=img_r,
-            level=lv, total_xp=txp,
-            channels_left=left, channels_joined=joined, channels_stayed=stayed,
-            deep_convos_prev=dd_p, deep_convos_recent=dd_r,
-            first_activity_day=first_map.get(uid),
-            server_msgs_prev=srv_prev,
-            server_msgs_recent=srv_recent,
-        ))
+        profiles.append(
+            DropoffProfile(
+                user_id=uid,
+                msgs_prev=mp,
+                msgs_recent=mr,
+                voice_xp_prev=voice_p,
+                voice_xp_recent=voice_r,
+                days_prev=dp,
+                days_recent=dr,
+                days_in_window=days_in_window,
+                channels_prev=md.get("ch_p", 0),
+                channels_recent=md.get("ch_r", 0),
+                replies_prev=md.get("re_p", 0),
+                replies_recent=md.get("re_r", 0),
+                initiations_prev=md.get("in_p", 0),
+                initiations_recent=md.get("in_r", 0),
+                avg_len_prev=md.get("al_p", 0.0),
+                avg_len_recent=md.get("al_r", 0.0),
+                partners_prev=om[0],
+                partners_recent=om[1],
+                inbound_prev=ip,
+                inbound_recent=ir_,
+                outbound_prev=om[2],
+                outbound_recent=om[3],
+                attachments_prev=ap,
+                attachments_recent=ar,
+                reactions_prev=rp,
+                reactions_recent=rr,
+                peak_hour_prev=peaks.get(0),
+                peak_hour_recent=peaks.get(1),
+                weekday_pct_prev=md.get("wd_p", 0.0),
+                weekday_pct_recent=md.get("wd_r", 0.0),
+                longest_gap_secs=gap_map.get(uid, 0.0),
+                last_seen_ts=last_map.get(uid),
+                text_xp_prev=text_p,
+                text_xp_recent=text_r,
+                reply_xp_prev=reply_xp_p,
+                reply_xp_recent=reply_xp_r,
+                image_react_xp_prev=img_p,
+                image_react_xp_recent=img_r,
+                level=lv,
+                total_xp=txp,
+                channels_left=left,
+                channels_joined=joined,
+                channels_stayed=stayed,
+                deep_convos_prev=dd_p,
+                deep_convos_recent=dd_r,
+                first_activity_day=first_map.get(uid),
+                server_msgs_prev=srv_prev,
+                server_msgs_recent=srv_recent,
+            )
+        )
 
     return profiles
 
@@ -1080,7 +1146,9 @@ def render_activity_chart(
         tick_labels_visible = labels
 
     ax1.set_xticks(tick_positions)
-    ax1.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax1.set_xticklabels(
+        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
+    )
     ax1.tick_params(axis="y", colors=_TEXT, labelsize=8)
     ax1.tick_params(length=0)
 
@@ -1089,7 +1157,9 @@ def render_activity_chart(
 
     ax1.set_title(title, color=_TEXT, fontsize=13, pad=10)
     ax1.set_ylabel(y_label, color=_TEXT, fontsize=9)
-    is_int_data = all(isinstance(v, int) or (isinstance(v, float) and v == int(v)) for v in msg_counts)
+    is_int_data = all(
+        isinstance(v, int) or (isinstance(v, float) and v == int(v)) for v in msg_counts
+    )
     if is_int_data:
         ax1.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
@@ -1135,7 +1205,9 @@ def query_role_growth(
     now = datetime.now(timezone.utc)
     bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
     offset_secs = int(utc_offset_hours * 3600)
-    bucket_expr = _strftime_expr(resolution, col="granted_at", since_ts=since_ts, utc_offset_secs=offset_secs)
+    bucket_expr = _strftime_expr(
+        resolution, col="granted_at", since_ts=since_ts, utc_offset_secs=offset_secs
+    )
 
     # Net role count (grants minus removals) before the window — per-role baselines
     baseline_rows = conn.execute(
@@ -1198,8 +1270,16 @@ def render_role_growth_chart(
     x = list(range(n))
     for i, (role_name, counts) in enumerate(role_counts.items()):
         color = _ROLE_COLORS[i % len(_ROLE_COLORS)]
-        ax.plot(x, counts, color=color, linewidth=2, marker="o", markersize=3,
-                label=role_name, zorder=2)
+        ax.plot(
+            x,
+            counts,
+            color=color,
+            linewidth=2,
+            marker="o",
+            markersize=3,
+            label=role_name,
+            zorder=2,
+        )
 
     max_visible = 20
     if n > max_visible:
@@ -1211,7 +1291,9 @@ def render_role_growth_chart(
         tick_labels_visible = labels
 
     ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.set_xticklabels(
+        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
+    )
     ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
     ax.tick_params(length=0)
 
@@ -1239,7 +1321,7 @@ def render_role_growth_chart(
 # Session burst profile
 # ---------------------------------------------------------------------------
 
-_IDLE_THRESHOLD_SECONDS = 20 * 60   # 20 minutes defines a session boundary
+_IDLE_THRESHOLD_SECONDS = 20 * 60  # 20 minutes defines a session boundary
 _PRE_WINDOW_MINUTES = 20
 _POST_WINDOW_MINUTES = 60
 _BIN_MINUTES = 2
@@ -1366,7 +1448,10 @@ def render_session_burst_chart(
     mean_post = _mean_bins(post_sessions)
 
     # X positions: pre bins are negative, post bins are positive
-    x_pre = [(-_PRE_WINDOW_MINUTES + i * _BIN_MINUTES + _BIN_MINUTES / 2) for i in range(n_pre)]
+    x_pre = [
+        (-_PRE_WINDOW_MINUTES + i * _BIN_MINUTES + _BIN_MINUTES / 2)
+        for i in range(n_pre)
+    ]
     x_post = [(i * _BIN_MINUTES + _BIN_MINUTES / 2) for i in range(n_post)]
 
     fig_width = max(11, (n_pre + n_post) * 0.45)
@@ -1375,9 +1460,23 @@ def render_session_burst_chart(
     ax.set_facecolor(_BG)
 
     # Pre-session bars (muted colour)
-    ax.bar(x_pre, mean_pre, width=_BIN_MINUTES * 0.85, color="#4e5058", zorder=2, label="Server activity (pre)")
+    ax.bar(
+        x_pre,
+        mean_pre,
+        width=_BIN_MINUTES * 0.85,
+        color="#4e5058",
+        zorder=2,
+        label="Server activity (pre)",
+    )
     # Post-session bars
-    ax.bar(x_post, mean_post, width=_BIN_MINUTES * 0.85, color=_BAR, zorder=2, label="Server activity (post)")
+    ax.bar(
+        x_post,
+        mean_post,
+        width=_BIN_MINUTES * 0.85,
+        color=_BAR,
+        zorder=2,
+        label="Server activity (post)",
+    )
 
     # Individual session lines (faint), capped at 20 to keep the chart readable
     if n_sessions <= 20:
@@ -1396,7 +1495,14 @@ def render_session_burst_chart(
     )
 
     # Session-start marker
-    ax.axvline(0, color=_BAR_ACCENT, linewidth=2, linestyle="-", label="Session start", zorder=4)
+    ax.axvline(
+        0,
+        color=_BAR_ACCENT,
+        linewidth=2,
+        linestyle="-",
+        label="Session start",
+        zorder=4,
+    )
 
     # Shade the pre-window to make it visually distinct
     ax.axvspan(-_PRE_WINDOW_MINUTES, 0, alpha=0.06, color=_TEXT, zorder=0)
@@ -1432,6 +1538,7 @@ def render_session_burst_chart(
 # Burst ranking — highest / lowest burst increase across all users
 # ---------------------------------------------------------------------------
 
+
 def query_burst_ranking(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -1453,6 +1560,7 @@ def query_burst_ranking(
     params: list[object] = [guild_id]
     if days is not None:
         import time as _time
+
         cutoff_ts = _time.time() - days * 86400
         cutoff_clause = "AND created_at >= ?"
         params.append(cutoff_ts)
@@ -1572,7 +1680,11 @@ def render_burst_ranking_chart(
     y = list(range(len(names)))
     bars = ax.barh(y, values, color=colors, height=0.7, zorder=2)
 
-    val_range = (max(values) - min(values)) if len(values) > 1 else (abs(values[0]) if values else 1.0)
+    val_range = (
+        (max(values) - min(values))
+        if len(values) > 1
+        else (abs(values[0]) if values else 1.0)
+    )
     nudge = val_range * 0.012 or 0.01
 
     for bar, n in zip(bars, n_sessions_list):
@@ -1592,7 +1704,11 @@ def render_burst_ranking_chart(
 
     ax.set_yticks(y)
     ax.set_yticklabels(names, color=_TEXT, fontsize=9)
-    ax.set_xlabel(f"Burst increase (msg / {_BIN_MINUTES} min, post - pre session avg)", color=_TEXT, fontsize=9)
+    ax.set_xlabel(
+        f"Burst increase (msg / {_BIN_MINUTES} min, post - pre session avg)",
+        color=_TEXT,
+        fontsize=9,
+    )
     ax.set_title(
         f"{guild_name} - Session Burst Ranking",
         color=_TEXT,
@@ -1608,10 +1724,19 @@ def render_burst_ranking_chart(
         spine.set_visible(False)
 
     from matplotlib.patches import Patch
+
     legend_handles = [Patch(color=_BAR, label=f"Top {limit} highest burst")]
     if bottom:
-        legend_handles.append(Patch(color=_BAR_ACCENT, label=f"Bottom {limit} lowest burst"))
-    ax.legend(handles=legend_handles, facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+        legend_handles.append(
+            Patch(color=_BAR_ACCENT, label=f"Bottom {limit} lowest burst")
+        )
+    ax.legend(
+        handles=legend_handles,
+        facecolor=_BG,
+        edgecolor=_GRID,
+        labelcolor=_TEXT,
+        fontsize=9,
+    )
 
     plt.tight_layout(pad=1.2)
     buf = io.BytesIO()
@@ -1625,14 +1750,15 @@ def render_burst_ranking_chart(
 # Message cadence — inter-message time stats over time
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class CadenceBucket:
     label: str
-    min_gap: float     # wick low
-    p20_gap: float     # body low (open)
+    min_gap: float  # wick low
+    p20_gap: float  # body low (open)
     median_gap: float  # body mid
-    p80_gap: float     # body high (close)
-    max_gap: float     # wick high
+    p80_gap: float  # body high (close)
+    max_gap: float  # wick high
 
 
 def query_message_cadence(
@@ -1689,17 +1815,28 @@ def query_message_cadence(
         for i in range(n_bins):
             gaps = gap_buckets[i]
             if not gaps:
-                results.append(CadenceBucket(label=labels_list[i], min_gap=0, p20_gap=0, median_gap=0, p80_gap=0, max_gap=0))
+                results.append(
+                    CadenceBucket(
+                        label=labels_list[i],
+                        min_gap=0,
+                        p20_gap=0,
+                        median_gap=0,
+                        p80_gap=0,
+                        max_gap=0,
+                    )
+                )
                 continue
             sg = sorted(gaps)
-            results.append(CadenceBucket(
-                label=labels_list[i],
-                min_gap=sg[0],
-                p20_gap=sg[int(len(sg) * 0.2)],
-                median_gap=float(statistics.median(sg)),
-                p80_gap=sg[int(len(sg) * 0.8)],
-                max_gap=sg[-1],
-            ))
+            results.append(
+                CadenceBucket(
+                    label=labels_list[i],
+                    min_gap=sg[0],
+                    p20_gap=sg[int(len(sg) * 0.2)],
+                    median_gap=float(statistics.median(sg)),
+                    p80_gap=sg[int(len(sg) * 0.8)],
+                    max_gap=sg[-1],
+                )
+            )
         return results
 
     # Time-series resolutions
@@ -1750,18 +1887,29 @@ def query_message_cadence(
     for i, (_key, label) in enumerate(buckets):
         gaps = ts_gap_buckets[i]
         if not gaps:
-            results2.append(CadenceBucket(label=label, min_gap=0, p20_gap=0, median_gap=0, p80_gap=0, max_gap=0))
+            results2.append(
+                CadenceBucket(
+                    label=label,
+                    min_gap=0,
+                    p20_gap=0,
+                    median_gap=0,
+                    p80_gap=0,
+                    max_gap=0,
+                )
+            )
             continue
 
         sg = sorted(gaps)
-        results2.append(CadenceBucket(
-            label=label,
-            min_gap=sg[0],
-            p20_gap=sg[int(len(sg) * 0.2)],
-            median_gap=float(statistics.median(sg)),
-            p80_gap=sg[int(len(sg) * 0.8)],
-            max_gap=sg[-1],
-        ))
+        results2.append(
+            CadenceBucket(
+                label=label,
+                min_gap=sg[0],
+                p20_gap=sg[int(len(sg) * 0.2)],
+                median_gap=float(statistics.median(sg)),
+                p80_gap=sg[int(len(sg) * 0.8)],
+                max_gap=sg[-1],
+            )
+        )
 
     return results2
 
@@ -1787,8 +1935,8 @@ def render_message_cadence_chart(
 
     body_width = 0.5
     wick_color = "#72767d"
-    color_down = "#57f287"   # green — median decreased (faster chat)
-    color_up = "#eb459e"     # pink — median increased (slower chat)
+    color_down = "#57f287"  # green — median decreased (faster chat)
+    color_up = "#eb459e"  # pink — median increased (slower chat)
 
     prev_median = None
     for i, b in enumerate(buckets):
@@ -1808,13 +1956,25 @@ def render_message_cadence_chart(
         # Body: p20 to p80
         body_bottom = b.p20_gap
         body_height = b.p80_gap - b.p20_gap
-        ax.bar(i, body_height, bottom=body_bottom, width=body_width,
-               color=color, edgecolor=color, linewidth=0.5, zorder=3)
+        ax.bar(
+            i,
+            body_height,
+            bottom=body_bottom,
+            width=body_width,
+            color=color,
+            edgecolor=color,
+            linewidth=0.5,
+            zorder=3,
+        )
 
         # Median tick
-        ax.plot([i - body_width / 2, i + body_width / 2],
-                [b.median_gap, b.median_gap],
-                color=_TEXT, linewidth=1.5, zorder=4)
+        ax.plot(
+            [i - body_width / 2, i + body_width / 2],
+            [b.median_gap, b.median_gap],
+            color=_TEXT,
+            linewidth=1.5,
+            zorder=4,
+        )
 
         prev_median = b.median_gap
 
@@ -1829,7 +1989,9 @@ def render_message_cadence_chart(
         tick_labels_visible = labels
 
     ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.set_xticklabels(
+        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
+    )
     ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
     ax.tick_params(length=0)
 
@@ -1843,11 +2005,18 @@ def render_message_cadence_chart(
         spine.set_visible(False)
 
     from matplotlib.patches import Patch
+
     legend_handles = [
         Patch(color=color_down, label="Median \u2193 (faster)"),
         Patch(color=color_up, label="Median \u2191 (slower)"),
     ]
-    ax.legend(handles=legend_handles, facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
+    ax.legend(
+        handles=legend_handles,
+        facecolor=_BG,
+        edgecolor=_GRID,
+        labelcolor=_TEXT,
+        fontsize=9,
+    )
 
     plt.tight_layout(pad=1.2)
     buf = io.BytesIO()
@@ -1887,7 +2056,9 @@ def render_join_histogram(
         tick_labels_visible = labels
 
     ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.set_xticklabels(
+        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
+    )
     ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
     ax.tick_params(length=0)
 
@@ -1913,18 +2084,26 @@ def render_join_histogram(
 # ---------------------------------------------------------------------------
 
 _GENDER_COLORS = {
-    "male": "#5865f2",      # blurple
-    "female": "#eb459e",    # pink
-    "nonbinary": "#57f287", # green
-    "unknown": "#72767d",   # grey
+    "male": "#5865f2",  # blurple
+    "female": "#eb459e",  # pink
+    "nonbinary": "#57f287",  # green
+    "unknown": "#72767d",  # grey
 }
 
 _GENDER_ORDER = ["male", "female", "nonbinary", "unknown"]
 
 
 _MEDIA_EXTENSIONS = {
-    ".jpg", ".jpeg", ".png", ".webp", ".bmp",
-    ".mp4", ".mov", ".webm", ".avi", ".mkv",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".bmp",
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".avi",
+    ".mkv",
 }
 
 
@@ -1961,7 +2140,9 @@ def query_nsfw_gender_activity(
         # Use messages + message_attachments; ts column is integer epoch
         # Discord CDN URLs have query params after extension, so we strip
         # them by extracting the path portion before '?' for matching.
-        bucket_expr = _strftime_expr(resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs)
+        bucket_expr = _strftime_expr(
+            resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs
+        )
         # _url_path strips query params: "foo.jpg?ex=abc" -> "foo.jpg"
         _url_path = (
             "CASE WHEN INSTR(ma.url, '?') > 0 "
@@ -1990,7 +2171,9 @@ def query_nsfw_gender_activity(
             params,
         ).fetchall()
     else:
-        bucket_expr = _strftime_expr(resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs)
+        bucket_expr = _strftime_expr(
+            resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs
+        )
         rows = conn.execute(
             f"""
             SELECT
@@ -2050,7 +2233,9 @@ def render_nsfw_gender_chart(
         values = np.array(gender_counts[gender], dtype=float)
         color = _GENDER_COLORS.get(gender, _GENDER_COLORS["unknown"])
         ax.bar(
-            x, values, bar_width,
+            x,
+            values,
+            bar_width,
             bottom=bottom,
             color=color,
             label=gender.capitalize(),
@@ -2069,7 +2254,9 @@ def render_nsfw_gender_chart(
         tick_labels_visible = labels
 
     ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.set_xticklabels(
+        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
+    )
     ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
     ax.tick_params(length=0)
 
@@ -2126,7 +2313,8 @@ def render_nsfw_gender_line_chart(
         pct = values / totals * 100
         color = _GENDER_COLORS.get(gender, _GENDER_COLORS["unknown"])
         ax.plot(
-            x, pct,
+            x,
+            pct,
             color=color,
             linewidth=2,
             marker="o",
@@ -2145,7 +2333,9 @@ def render_nsfw_gender_line_chart(
         tick_labels_visible = labels
 
     ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8)
+    ax.set_xticklabels(
+        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
+    )
     ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
     ax.tick_params(length=0)
 
@@ -2250,8 +2440,13 @@ def render_greeter_response_chart(
     for bar, count in zip(bars, bucket_counts):
         if count > 0:
             ax.text(
-                bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
-                str(count), ha="center", va="bottom", color=_TEXT, fontsize=8,
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.3,
+                str(count),
+                ha="center",
+                va="bottom",
+                color=_TEXT,
+                fontsize=8,
             )
 
     ax.set_xticks(x)
@@ -2281,8 +2476,12 @@ def render_greeter_response_chart(
 
         ax.annotate(
             f"median {_fmt_dur(med)}  \u00b7  mean {_fmt_dur(avg)}  \u00b7  n={len(response_times)}",
-            xy=(0.5, 1.0), xycoords="axes fraction", ha="center", va="bottom",
-            fontsize=9, color=_BAR_ACCENT,
+            xy=(0.5, 1.0),
+            xycoords="axes fraction",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+            color=_BAR_ACCENT,
         )
 
     plt.tight_layout(pad=1.2)
@@ -2296,6 +2495,7 @@ def render_greeter_response_chart(
 # ---------------------------------------------------------------------------
 # Message rate (10-minute time-of-day buckets)
 # ---------------------------------------------------------------------------
+
 
 def query_message_rate_10min(
     conn: sqlite3.Connection,

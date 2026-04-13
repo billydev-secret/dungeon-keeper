@@ -53,6 +53,16 @@ export function mount(container) {
         <div class="subtitle">${d.active_count} active &middot; ${d.flagged_count} flagged &middot; ${d.dormant_count} dormant &middot; ${d.archive_count || 0} archive candidates</div>
       </header>
 
+      <details class="panel-about" style="margin:8px 0 14px;">
+        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
+        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+          Each channel gets a health score (0–100) based on message volume, unique users, conversation depth, and activity distribution.
+          <strong style="color:var(--text-normal, #dbdee1);">Healthy</strong> channels have regular activity from multiple people.
+          <strong style="color:var(--text-normal, #dbdee1);">Flagged</strong> channels are still active but declining or dominated by very few people.
+          <strong style="color:var(--text-normal, #dbdee1);">Dormant</strong> channels have little to no recent activity. <strong style="color:var(--text-normal, #dbdee1);">Archive candidates</strong> have been dead long enough to consider removing.
+        </div>
+      </details>
+
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Active Channels</div>
@@ -95,8 +105,9 @@ export function mount(container) {
       </div>
 
       <div class="home-grid">
-        <div class="home-card home-card-wide" style="overflow-x:auto;">
+        <div class="home-card home-card-wide">
           <div class="home-card-label">Channel Roster</div>
+          <div class="data-table-scroll">
           <table class="data-table">
             <thead><tr>
               <th>Channel</th><th>Status</th><th>Score</th><th>Msgs/day</th>
@@ -104,6 +115,7 @@ export function mount(container) {
             </tr></thead>
             <tbody>${tableRows}</tbody>
           </table>
+          </div>
         </div>
       </div>
     `;

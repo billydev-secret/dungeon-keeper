@@ -14,6 +14,7 @@ Three loops run as startup task factories:
 3. wellness_active_list_loop — hourly rebuild of #active-in-commitment pinned
    embed + milestone celebration posts.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,13 +42,13 @@ from services.wellness_service import (
     has_weekly_report,
     increment_streak_day,
     insert_weekly_report,
+    lift_slow_mode,
     list_active_blackout_markers,
     list_active_users,
     list_blackouts,
     list_committed_users_with_streaks,
     list_expired_slow_mode,
     list_uncelebrated_milestones,
-    lift_slow_mode,
     mark_badge_celebrated,
     mark_blackout_active,
     resume_user,
@@ -58,8 +59,12 @@ from services.wellness_service import (
 log = logging.getLogger("dungeonkeeper.wellness.scheduler")
 
 
-async def _try_dm(user: discord.User | discord.Member, *, content: str | None = None,
-                  embed: discord.Embed | None = None) -> bool:
+async def _try_dm(
+    user: discord.User | discord.Member,
+    *,
+    content: str | None = None,
+    embed: discord.Embed | None = None,
+) -> bool:
     try:
         kwargs: dict = {}
         if content:
@@ -87,7 +92,9 @@ async def _process_blackout_transitions(bot: discord.Client, db_path: Path) -> N
                 continue
             with open_db(db_path) as conn:
                 blackouts = list_blackouts(conn, guild.id, u.user_id)
-                active_marker_ids = set(list_active_blackout_markers(conn, guild.id, u.user_id))
+                active_marker_ids = set(
+                    list_active_blackout_markers(conn, guild.id, u.user_id)
+                )
             now_local = user_now(u.timezone)
             currently_active_ids: set[int] = set()
             newly_active: list[WellnessBlackout] = []
@@ -109,7 +116,9 @@ async def _process_blackout_transitions(bot: discord.Client, db_path: Path) -> N
                     clear_blackout_active(conn, guild.id, u.user_id, bid)
 
 
-async def _send_blackout_entry_dm(member: discord.Member, blackout: WellnessBlackout) -> None:
+async def _send_blackout_entry_dm(
+    member: discord.Member, blackout: WellnessBlackout
+) -> None:
     embed = discord.Embed(
         title=f"🌙 {blackout.name} blackout started",
         description=(
@@ -178,6 +187,7 @@ async def _credit_clean_days(bot: discord.Client, db_path: Path) -> None:
 # Public loop
 # ---------------------------------------------------------------------------
 
+
 async def wellness_tick_loop(bot: discord.Client, db_path: Path) -> None:
     """Background task — runs every 60 seconds."""
     await bot.wait_until_ready()
@@ -210,7 +220,8 @@ _ACTIVE_MAX_ENTRIES = 25  # Discord embed description stays comfortable
 
 
 def _build_active_embed(
-    guild: discord.Guild, entries: list[tuple[int, WellnessStreak]],
+    guild: discord.Guild,
+    entries: list[tuple[int, WellnessStreak]],
 ) -> discord.Embed:
     if not entries:
         embed = discord.Embed(
@@ -229,7 +240,9 @@ def _build_active_embed(
         member = guild.get_member(user_id)
         name = member.display_name if member else f"User {user_id}"
         badge = streak.current_badge or "🌱"
-        lines.append(f"{badge} **{name}** — {streak.current_days} day{'s' if streak.current_days != 1 else ''}")
+        lines.append(
+            f"{badge} **{name}** — {streak.current_days} day{'s' if streak.current_days != 1 else ''}"
+        )
 
     remainder = max(0, len(entries) - _ACTIVE_MAX_ENTRIES)
     desc = "\n".join(lines)
@@ -245,7 +258,9 @@ def _build_active_embed(
     return embed
 
 
-async def _rebuild_active_list_for_guild(bot: discord.Client, db_path: Path, guild: discord.Guild) -> None:
+async def _rebuild_active_list_for_guild(
+    bot: discord.Client, db_path: Path, guild: discord.Guild
+) -> None:
     with open_db(db_path) as conn:
         cfg = get_wellness_config(conn, guild.id)
         if cfg is None or not cfg.channel_id:
@@ -296,7 +311,9 @@ async def _rebuild_active_list_for_guild(bot: discord.Client, db_path: Path, gui
         upsert_wellness_config(conn, guild.id, active_list_message_id=new_message.id)
 
 
-async def _post_milestone_celebrations(bot: discord.Client, db_path: Path, guild: discord.Guild) -> None:
+async def _post_milestone_celebrations(
+    bot: discord.Client, db_path: Path, guild: discord.Guild
+) -> None:
     """Post celebration messages for users whose badge upgraded since last check."""
     with open_db(db_path) as conn:
         cfg = get_wellness_config(conn, guild.id)
@@ -323,7 +340,9 @@ async def _post_milestone_celebrations(bot: discord.Client, db_path: Path, guild
             continue
 
         # Ignore downgrades (decay dropping badge tier) — only celebrate upgrades
-        if streak.celebrated_badge and _badge_rank(new_badge) <= _badge_rank(streak.celebrated_badge):
+        if streak.celebrated_badge and _badge_rank(new_badge) <= _badge_rank(
+            streak.celebrated_badge
+        ):
             with open_db(db_path) as conn:
                 mark_badge_celebrated(conn, guild.id, user_id, new_badge)
             continue
@@ -340,11 +359,18 @@ async def _post_milestone_celebrations(bot: discord.Client, db_path: Path, guild
             color=_ACTIVE_EMBED_COLOR,
         )
         try:
-            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions(
-                users=[member] if member else False, roles=False, everyone=False,
-            ))
+            await channel.send(
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(
+                    users=[member] if member else False,
+                    roles=False,
+                    everyone=False,
+                ),
+            )
         except (discord.Forbidden, discord.HTTPException):
-            log.debug("wellness: failed to post milestone celebration in guild %s", guild.id)
+            log.debug(
+                "wellness: failed to post milestone celebration in guild %s", guild.id
+            )
             continue
 
         with open_db(db_path) as conn:
@@ -385,7 +411,9 @@ _WEEKLY_REPORT_COLOR = discord.Color.from_str("#7BC97B")
 
 
 def _build_weekly_report_embed(
-    user_display: str, summary: dict, ai_text: str,
+    user_display: str,
+    summary: dict,
+    ai_text: str,
 ) -> discord.Embed:
     badge = summary.get("badge") or "🌱"
     week_start = summary.get("week_start", "")
@@ -398,7 +426,9 @@ def _build_weekly_report_embed(
 
     body = (
         f"**Week of {week_start} → {week_end}**\n\n"
-        f"{badge} Current streak: **{cur} days**" + (" *(personal best!)*" if is_pb else "") + "\n"
+        f"{badge} Current streak: **{cur} days**"
+        + (" *(personal best!)*" if is_pb else "")
+        + "\n"
         f"💚 Personal best: **{pb} days**\n"
         f"🌿 Clean days this week: **{clean}/7** ({pct}%)\n\n"
         f"{ai_text}"
@@ -416,12 +446,15 @@ def _iso_week_for(now_local) -> tuple[int, int, str]:
     """Return (iso_year, iso_week, week_start_iso) for the user's now."""
     iso_year, iso_week, _iso_weekday = now_local.isocalendar()
     # Compute Monday of this ISO week
-    week_start = (now_local.date() - timedelta(days=now_local.weekday()))
+    week_start = now_local.date() - timedelta(days=now_local.weekday())
     return iso_year, iso_week, week_start.isoformat()
 
 
 async def _generate_and_send_weekly_report(
-    bot: discord.Client, db_path: Path, guild: discord.Guild, user,
+    bot: discord.Client,
+    db_path: Path,
+    guild: discord.Guild,
+    user,
 ) -> bool:
     """Compute, generate, DM, and archive a single user's weekly report.
 
@@ -496,7 +529,8 @@ async def wellness_weekly_report_loop(bot: discord.Client, db_path: Path) -> Non
                     except Exception:
                         log.exception(
                             "wellness_weekly_report_loop: failed for guild=%s user=%s",
-                            guild.id, u.user_id,
+                            guild.id,
+                            u.user_id,
                         )
         except Exception:
             log.exception("wellness_weekly_report_loop top-level error")

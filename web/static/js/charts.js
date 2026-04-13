@@ -25,17 +25,48 @@ Chart.defaults.color = TEXT;
 Chart.defaults.borderColor = GRID;
 Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
 
+const ZOOM_OPTIONS = {
+  zoom: {
+    wheel: { enabled: true },
+    pinch: { enabled: true },
+    mode: "x",
+  },
+  pan: {
+    enabled: true,
+    mode: "x",
+  },
+  limits: {
+    x: { minRange: 2 },
+  },
+};
+
 const COMMON_OPTIONS = {
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
     tooltip: { backgroundColor: "#18191c", borderColor: GRID, borderWidth: 1 },
+    zoom: ZOOM_OPTIONS,
   },
   scales: {
     x: { grid: { color: GRID }, ticks: { color: TEXT, maxRotation: 45, minRotation: 0 } },
     y: { grid: { color: GRID }, ticks: { color: TEXT, precision: 0 }, beginAtZero: true },
   },
 };
+
+/** Attach a reset-zoom button to a chart's parent container. */
+export function addResetZoom(chart) {
+  const wrap = chart.canvas.parentElement;
+  if (!wrap || wrap.querySelector(".chart-reset-zoom")) return;
+  const btn = document.createElement("button");
+  btn.className = "chart-reset-zoom";
+  btn.textContent = "Reset Zoom";
+  btn.title = "Double-click chart or press this button to reset zoom";
+  btn.addEventListener("click", () => chart.resetZoom());
+  wrap.style.position = "relative";
+  wrap.appendChild(btn);
+  // Also allow double-click on canvas to reset
+  chart.canvas.addEventListener("dblclick", () => chart.resetZoom());
+}
 
 function merge(base, overrides) {
   // Shallow-ish merge good enough for chart options
@@ -65,7 +96,7 @@ export function makeLineChart(canvas, { labels, series, title }) {
     tension: 0.15,
   }));
 
-  return new Chart(canvas, {
+  const chart = new Chart(canvas, {
     type: "line",
     data: { labels, datasets },
     options: merge(COMMON_OPTIONS, {
@@ -76,13 +107,15 @@ export function makeLineChart(canvas, { labels, series, title }) {
       },
     }),
   });
+  addResetZoom(chart);
+  return chart;
 }
 
 
 // ── Bar chart (simple) ──────────────────────────────────────────────────
 
 export function makeBarChart(canvas, { labels, data, title, xLabel, yLabel, color }) {
-  return new Chart(canvas, {
+  const chart = new Chart(canvas, {
     type: "bar",
     data: {
       labels,
@@ -105,6 +138,8 @@ export function makeBarChart(canvas, { labels, data, title, xLabel, yLabel, colo
       },
     }),
   });
+  addResetZoom(chart);
+  return chart;
 }
 
 
@@ -118,7 +153,7 @@ export function makeStackedBarChart(canvas, { labels, series, title }) {
     borderWidth: 0,
   }));
 
-  return new Chart(canvas, {
+  const chart = new Chart(canvas, {
     type: "bar",
     data: { labels, datasets },
     options: merge(COMMON_OPTIONS, {
@@ -133,6 +168,8 @@ export function makeStackedBarChart(canvas, { labels, series, title }) {
       },
     }),
   });
+  addResetZoom(chart);
+  return chart;
 }
 
 
@@ -143,7 +180,7 @@ export function makeHorizontalBarChart(canvas, { labels, data, title, xLabel, yL
   const minHeight = Math.max(200, labels.length * 28 + 60);
   canvas.parentElement.style.minHeight = `${minHeight}px`;
 
-  return new Chart(canvas, {
+  const chart = new Chart(canvas, {
     type: "bar",
     data: {
       labels,
@@ -167,6 +204,8 @@ export function makeHorizontalBarChart(canvas, { labels, data, title, xLabel, yL
       },
     }),
   });
+  addResetZoom(chart);
+  return chart;
 }
 
 
@@ -199,13 +238,13 @@ export function makeDoughnutChart(canvas, { labels, data, title, colors }) {
 
 // ── Floating bar / candlestick (message cadence) ────────────────────────
 
-export function makeCandlestickChart(canvas, { buckets, title }) {
+export function makeCandlestickChart(canvas, { buckets, title, noZoom }) {
   // Chart.js "floating bars": data as [low, high] pairs.
   // We draw the body (p20 → p80) as a thick bar, the wick (min → max) as a
   // thin bar behind it, and mark the median with a line annotation.
   const labels = buckets.map((b) => b.label);
 
-  return new Chart(canvas, {
+  const chart = new Chart(canvas, {
     type: "bar",
     data: {
       labels,
@@ -290,4 +329,6 @@ export function makeCandlestickChart(canvas, { buckets, title }) {
       },
     }),
   });
+  addResetZoom(chart);
+  return chart;
 }

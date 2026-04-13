@@ -1,4 +1,5 @@
 """FastAPI dependency-injection factories for the dashboard."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +7,8 @@ import hashlib
 import json
 import logging
 import time
-from typing import Awaitable, Callable, TypeVar
+from typing import TypeVar
+from collections.abc import Awaitable, Callable
 
 from fastapi import Depends, HTTPException, Request, status
 
@@ -56,7 +58,9 @@ async def cached_run_query(
     return result  # type: ignore[return-value]
 
 
-def invalidate_report_cache(name: str | None = None, guild_id: int | None = None) -> int:
+def invalidate_report_cache(
+    name: str | None = None, guild_id: int | None = None
+) -> int:
     """Drop cached entries. With no args, clears everything.
 
     Returns the number of entries removed.
@@ -75,7 +79,7 @@ def invalidate_report_cache(name: str | None = None, guild_id: int | None = None
     # We need to check each key — rebuild and compare partial JSON isn't
     # practical, so just iterate and match the raw dict values.
     to_remove = []
-    for key, (_, result) in list(_report_cache.items()):
+    for key, (_ts, _result) in list(_report_cache.items()):
         to_remove.append(key)  # conservative: nuke matching guild/name
     # For a targeted clear, rebuild keys from scratch isn't feasible with
     # hashed keys, so just clear everything for now (still fast).
@@ -116,9 +120,13 @@ def require_perms(required: set[str]) -> Callable[..., Awaitable[AuthenticatedUs
     ) -> AuthenticatedUser:
         user = await auth.authenticate(request)
         if user is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+            )
         if not required_frozen.issubset(user.perms):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions"
+            )
         return user
 
     return _dep

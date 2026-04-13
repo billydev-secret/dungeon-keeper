@@ -7,6 +7,7 @@ and services/wellness_scheduler.py. Slash commands import from here for CRUD.
 All timezone-sensitive math goes through user_now() / window_start_for() so
 windows are derived lazily on every message — never from a loop reset.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,8 +35,8 @@ DEFAULT_TIMEZONE = "UTC"
 
 NUDGE_SUPPRESSION_SECONDS = 300  # spec §4.1: 5 minutes
 COOLDOWN_DURATION_SECONDS = 300  # spec §4.2: 5-minute breather
-AWAY_RATE_LIMIT_SECONDS = 1800   # spec §4.6: once per channel per 30 min
-AWAY_MESSAGE_MAX_LEN = 500       # spec §4.6: editor character limit
+AWAY_RATE_LIMIT_SECONDS = 1800  # spec §4.6: once per channel per 30 min
+AWAY_MESSAGE_MAX_LEN = 500  # spec §4.6: editor character limit
 SETTINGS_RETENTION_SECONDS = 30 * 86400  # spec §3: 30 days post-optout
 
 # Milestone badges (earned days → badge emoji). Order matters for upgrades.
@@ -57,6 +58,7 @@ WEEKEND_MASK = 32 + 64  # Sat+Sun
 # ---------------------------------------------------------------------------
 # Schema
 # ---------------------------------------------------------------------------
+
 
 def init_wellness_tables(conn: sqlite3.Connection) -> None:
     """Create all wellness_* tables. Idempotent — safe to call on every startup."""
@@ -105,7 +107,9 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
     )
 
     # Migration: add bucket_limits to wellness_caps
-    _cap_cols = {row[1] for row in conn.execute("PRAGMA table_info(wellness_caps)").fetchall()}
+    _cap_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(wellness_caps)").fetchall()
+    }
     if "bucket_limits" not in _cap_cols:
         conn.execute("ALTER TABLE wellness_caps ADD COLUMN bucket_limits TEXT")
 
@@ -205,7 +209,9 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
     )
     # Idempotent migration for pre-Phase-E schemas
     try:
-        conn.execute("ALTER TABLE wellness_streaks ADD COLUMN celebrated_badge TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            "ALTER TABLE wellness_streaks ADD COLUMN celebrated_badge TEXT NOT NULL DEFAULT ''"
+        )
     except sqlite3.OperationalError:
         pass  # already added
 
@@ -306,6 +312,7 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
 # Timezone helpers
 # ---------------------------------------------------------------------------
 
+
 def safe_zone(tz_name: str | None) -> ZoneInfo:
     """Resolve a tz string to a ZoneInfo, falling back to UTC on bad input."""
     if not tz_name:
@@ -321,7 +328,9 @@ def user_now(tz_name: str | None) -> datetime:
     return datetime.now(safe_zone(tz_name))
 
 
-def window_start_for(window: str, now_local: datetime, daily_reset_hour: int = 0) -> datetime:
+def window_start_for(
+    window: str, now_local: datetime, daily_reset_hour: int = 0
+) -> datetime:
     """Return the start of the current window in the user's local time.
 
     - hourly: top of the current hour
@@ -331,12 +340,16 @@ def window_start_for(window: str, now_local: datetime, daily_reset_hour: int = 0
     if window == "hourly":
         return now_local.replace(minute=0, second=0, microsecond=0)
     if window == "daily":
-        anchor = now_local.replace(hour=daily_reset_hour, minute=0, second=0, microsecond=0)
+        anchor = now_local.replace(
+            hour=daily_reset_hour, minute=0, second=0, microsecond=0
+        )
         if now_local < anchor:
             anchor -= timedelta(days=1)
         return anchor
     if window == "weekly":
-        anchor = now_local.replace(hour=daily_reset_hour, minute=0, second=0, microsecond=0)
+        anchor = now_local.replace(
+            hour=daily_reset_hour, minute=0, second=0, microsecond=0
+        )
         if now_local < anchor:
             anchor -= timedelta(days=1)
         days_since_monday = anchor.weekday()  # Mon=0
@@ -344,7 +357,9 @@ def window_start_for(window: str, now_local: datetime, daily_reset_hour: int = 0
     raise ValueError(f"Unknown window: {window!r}")
 
 
-def window_start_epoch(window: str, now_local: datetime, daily_reset_hour: int = 0) -> int:
+def window_start_epoch(
+    window: str, now_local: datetime, daily_reset_hour: int = 0
+) -> int:
     """Same as window_start_for but returns an epoch second integer for storage."""
     return int(window_start_for(window, now_local, daily_reset_hour).timestamp())
 
@@ -352,6 +367,7 @@ def window_start_epoch(window: str, now_local: datetime, daily_reset_hour: int =
 # ---------------------------------------------------------------------------
 # wellness_users CRUD
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class WellnessUser:
@@ -372,7 +388,7 @@ class WellnessUser:
     last_nudge_at: float | None
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "WellnessUser":
+    def from_row(cls, row: sqlite3.Row) -> WellnessUser:
         return cls(
             guild_id=int(row["guild_id"]),
             user_id=int(row["user_id"]),
@@ -402,7 +418,9 @@ class WellnessUser:
 
 
 def get_wellness_user(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> WellnessUser | None:
     row = conn.execute(
         "SELECT * FROM wellness_users WHERE guild_id = ? AND user_id = ?",
@@ -442,8 +460,13 @@ def opt_in_user(
             opted_out_at       = NULL
         """,
         (
-            guild_id, user_id, timezone, enforcement_level, notifications_pref,
-            DEFAULT_SLOW_MODE_RATE_SECONDS, now,
+            guild_id,
+            user_id,
+            timezone,
+            enforcement_level,
+            notifications_pref,
+            DEFAULT_SLOW_MODE_RATE_SECONDS,
+            now,
         ),
     )
     user = get_wellness_user(conn, guild_id, user_id)
@@ -517,7 +540,10 @@ def update_user_settings(
 
 
 def pause_user(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, until: float,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    until: float,
 ) -> None:
     conn.execute(
         "UPDATE wellness_users SET paused_until = ? WHERE guild_id = ? AND user_id = ?",
@@ -537,7 +563,10 @@ def resume_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
 
 
 def set_cooldown(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, until: float,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    until: float,
 ) -> None:
     conn.execute(
         "UPDATE wellness_users SET cooldown_until = ? WHERE guild_id = ? AND user_id = ?",
@@ -560,7 +589,9 @@ def list_active_users(conn: sqlite3.Connection, guild_id: int) -> list[WellnessU
     return [WellnessUser.from_row(r) for r in rows]
 
 
-def gc_opted_out_users(conn: sqlite3.Connection, retention_seconds: int = SETTINGS_RETENTION_SECONDS) -> int:
+def gc_opted_out_users(
+    conn: sqlite3.Connection, retention_seconds: int = SETTINGS_RETENTION_SECONDS
+) -> int:
     """Delete users opted out longer than retention. Returns number deleted."""
     cutoff = time.time() - retention_seconds
     rows = conn.execute(
@@ -571,25 +602,51 @@ def gc_opted_out_users(conn: sqlite3.Connection, retention_seconds: int = SETTIN
         return 0
     for row in rows:
         gid, uid = int(row["guild_id"]), int(row["user_id"])
-        conn.execute("DELETE FROM wellness_users WHERE guild_id = ? AND user_id = ?", (gid, uid))
-        conn.execute("DELETE FROM wellness_caps WHERE guild_id = ? AND user_id = ?", (gid, uid))
-        conn.execute("DELETE FROM wellness_blackouts WHERE guild_id = ? AND user_id = ?", (gid, uid))
-        conn.execute("DELETE FROM wellness_blackout_active WHERE guild_id = ? AND user_id = ?", (gid, uid))
-        conn.execute("DELETE FROM wellness_slow_mode WHERE guild_id = ? AND user_id = ?", (gid, uid))
-        conn.execute("DELETE FROM wellness_streaks WHERE guild_id = ? AND user_id = ?", (gid, uid))
-        conn.execute("DELETE FROM wellness_streak_history WHERE guild_id = ? AND user_id = ?", (gid, uid))
+        conn.execute(
+            "DELETE FROM wellness_users WHERE guild_id = ? AND user_id = ?", (gid, uid)
+        )
+        conn.execute(
+            "DELETE FROM wellness_caps WHERE guild_id = ? AND user_id = ?", (gid, uid)
+        )
+        conn.execute(
+            "DELETE FROM wellness_blackouts WHERE guild_id = ? AND user_id = ?",
+            (gid, uid),
+        )
+        conn.execute(
+            "DELETE FROM wellness_blackout_active WHERE guild_id = ? AND user_id = ?",
+            (gid, uid),
+        )
+        conn.execute(
+            "DELETE FROM wellness_slow_mode WHERE guild_id = ? AND user_id = ?",
+            (gid, uid),
+        )
+        conn.execute(
+            "DELETE FROM wellness_streaks WHERE guild_id = ? AND user_id = ?",
+            (gid, uid),
+        )
+        conn.execute(
+            "DELETE FROM wellness_streak_history WHERE guild_id = ? AND user_id = ?",
+            (gid, uid),
+        )
         conn.execute(
             "DELETE FROM wellness_partners WHERE guild_id = ? AND (user_a = ? OR user_b = ?)",
             (gid, uid, uid),
         )
-        conn.execute("DELETE FROM wellness_away_rate_limit WHERE guild_id = ? AND user_id = ?", (gid, uid))
-        conn.execute("DELETE FROM wellness_weekly_reports WHERE guild_id = ? AND user_id = ?", (gid, uid))
+        conn.execute(
+            "DELETE FROM wellness_away_rate_limit WHERE guild_id = ? AND user_id = ?",
+            (gid, uid),
+        )
+        conn.execute(
+            "DELETE FROM wellness_weekly_reports WHERE guild_id = ? AND user_id = ?",
+            (gid, uid),
+        )
     return len(rows)
 
 
 # ---------------------------------------------------------------------------
 # wellness_config (per-guild singleton)
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class WellnessConfig:
@@ -601,7 +658,7 @@ class WellnessConfig:
     default_enforcement: str
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "WellnessConfig":
+    def from_row(cls, row: sqlite3.Row) -> WellnessConfig:
         return cls(
             guild_id=int(row["guild_id"]),
             role_id=int(row["role_id"]),
@@ -612,9 +669,12 @@ class WellnessConfig:
         )
 
 
-def get_wellness_config(conn: sqlite3.Connection, guild_id: int) -> WellnessConfig | None:
+def get_wellness_config(
+    conn: sqlite3.Connection, guild_id: int
+) -> WellnessConfig | None:
     row = conn.execute(
-        "SELECT * FROM wellness_config WHERE guild_id = ?", (guild_id,),
+        "SELECT * FROM wellness_config WHERE guild_id = ?",
+        (guild_id,),
     ).fetchone()
     return WellnessConfig.from_row(row) if row else None
 
@@ -672,6 +732,7 @@ def upsert_wellness_config(
 # Caps
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class WellnessCap:
     id: int
@@ -687,7 +748,7 @@ class WellnessCap:
     bucket_limits: list[int] | None = None
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "WellnessCap":
+    def from_row(cls, row: sqlite3.Row) -> WellnessCap:
         raw_bl = row["bucket_limits"] if "bucket_limits" in row.keys() else None
         return cls(
             id=int(row["id"]),
@@ -730,12 +791,25 @@ def add_cap(
             (guild_id, user_id, label, scope, scope_target_id, window, cap_limit, exclude_exempt, created_at, bucket_limits)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (guild_id, user_id, label, scope, scope_target_id, window, cap_limit, 1 if exclude_exempt else 0, time.time(), bl_json),
+        (
+            guild_id,
+            user_id,
+            label,
+            scope,
+            scope_target_id,
+            window,
+            cap_limit,
+            1 if exclude_exempt else 0,
+            time.time(),
+            bl_json,
+        ),
     )
     return int(cur.lastrowid or 0)
 
 
-def list_caps(conn: sqlite3.Connection, guild_id: int, user_id: int) -> list[WellnessCap]:
+def list_caps(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> list[WellnessCap]:
     rows = conn.execute(
         "SELECT * FROM wellness_caps WHERE guild_id = ? AND user_id = ? ORDER BY id",
         (guild_id, user_id),
@@ -749,7 +823,10 @@ def get_cap(conn: sqlite3.Connection, cap_id: int) -> WellnessCap | None:
 
 
 def find_cap_by_label(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, label: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    label: str,
 ) -> WellnessCap | None:
     row = conn.execute(
         "SELECT * FROM wellness_caps WHERE guild_id = ? AND user_id = ? AND label = ? LIMIT 1",
@@ -762,13 +839,16 @@ def update_cap_limit(conn: sqlite3.Connection, cap_id: int, new_limit: int) -> b
     if new_limit < 1:
         return False
     cur = conn.execute(
-        "UPDATE wellness_caps SET cap_limit = ? WHERE id = ?", (new_limit, cap_id),
+        "UPDATE wellness_caps SET cap_limit = ? WHERE id = ?",
+        (new_limit, cap_id),
     )
     return (cur.rowcount or 0) > 0
 
 
 def update_cap_bucket_limits(
-    conn: sqlite3.Connection, cap_id: int, bucket_limits: list[int] | None,
+    conn: sqlite3.Connection,
+    cap_id: int,
+    bucket_limits: list[int] | None,
 ) -> bool:
     bl_json = json.dumps(bucket_limits) if bucket_limits else None
     cap_limit = max(bucket_limits) if bucket_limits else None
@@ -779,7 +859,8 @@ def update_cap_bucket_limits(
         )
     else:
         cur = conn.execute(
-            "UPDATE wellness_caps SET bucket_limits = NULL WHERE id = ?", (cap_id,),
+            "UPDATE wellness_caps SET bucket_limits = NULL WHERE id = ?",
+            (cap_id,),
         )
     return (cur.rowcount or 0) > 0
 
@@ -792,7 +873,9 @@ def remove_cap(conn: sqlite3.Connection, cap_id: int) -> bool:
 
 
 def increment_cap_counter(
-    conn: sqlite3.Connection, cap_id: int, window_start_epoch_value: int,
+    conn: sqlite3.Connection,
+    cap_id: int,
+    window_start_epoch_value: int,
 ) -> int:
     """Atomically bump (cap_id, window_start) and return the new count."""
     conn.execute(
@@ -811,7 +894,9 @@ def increment_cap_counter(
 
 
 def get_cap_counter(
-    conn: sqlite3.Connection, cap_id: int, window_start_epoch_value: int,
+    conn: sqlite3.Connection,
+    cap_id: int,
+    window_start_epoch_value: int,
 ) -> int:
     row = conn.execute(
         "SELECT count FROM wellness_cap_counters WHERE cap_id = ? AND window_start_epoch = ?",
@@ -821,7 +906,9 @@ def get_cap_counter(
 
 
 def increment_cap_overage(
-    conn: sqlite3.Connection, cap_id: int, window_start_epoch_value: int,
+    conn: sqlite3.Connection,
+    cap_id: int,
+    window_start_epoch_value: int,
 ) -> int:
     """Bump and return the new overage count for (cap, window)."""
     conn.execute(
@@ -840,7 +927,9 @@ def increment_cap_overage(
 
 
 def increment_blackout_overage(
-    conn: sqlite3.Connection, blackout_id: int, day_epoch: int,
+    conn: sqlite3.Connection,
+    blackout_id: int,
+    day_epoch: int,
 ) -> int:
     """Bump and return the new overage count for a blackout on a given day."""
     conn.execute(
@@ -858,18 +947,27 @@ def increment_blackout_overage(
     return int(row["overage_count"]) if row else 0
 
 
-def gc_old_cap_data(conn: sqlite3.Connection, older_than_seconds: int = 14 * 86400) -> int:
+def gc_old_cap_data(
+    conn: sqlite3.Connection, older_than_seconds: int = 14 * 86400
+) -> int:
     """Delete counter/overage rows older than the cutoff. Returns rows deleted."""
     cutoff = int(time.time() - older_than_seconds)
-    cur1 = conn.execute("DELETE FROM wellness_cap_counters WHERE window_start_epoch < ?", (cutoff,))
-    cur2 = conn.execute("DELETE FROM wellness_cap_overages WHERE window_start_epoch < ?", (cutoff,))
-    cur3 = conn.execute("DELETE FROM wellness_blackout_overages WHERE day_epoch < ?", (cutoff,))
+    cur1 = conn.execute(
+        "DELETE FROM wellness_cap_counters WHERE window_start_epoch < ?", (cutoff,)
+    )
+    cur2 = conn.execute(
+        "DELETE FROM wellness_cap_overages WHERE window_start_epoch < ?", (cutoff,)
+    )
+    cur3 = conn.execute(
+        "DELETE FROM wellness_blackout_overages WHERE day_epoch < ?", (cutoff,)
+    )
     return (cur1.rowcount or 0) + (cur2.rowcount or 0) + (cur3.rowcount or 0)
 
 
 # ---------------------------------------------------------------------------
 # Blackouts
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class WellnessBlackout:
@@ -884,7 +982,7 @@ class WellnessBlackout:
     created_at: float
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "WellnessBlackout":
+    def from_row(cls, row: sqlite3.Row) -> WellnessBlackout:
         return cls(
             id=int(row["id"]),
             guild_id=int(row["guild_id"]),
@@ -945,7 +1043,9 @@ def add_blackout(
 
 
 def list_blackouts(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> list[WellnessBlackout]:
     rows = conn.execute(
         "SELECT * FROM wellness_blackouts WHERE guild_id = ? AND user_id = ? ORDER BY id",
@@ -955,7 +1055,10 @@ def list_blackouts(
 
 
 def find_blackout_by_name(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, name: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    name: str,
 ) -> WellnessBlackout | None:
     row = conn.execute(
         "SELECT * FROM wellness_blackouts WHERE guild_id = ? AND user_id = ? AND name = ? LIMIT 1",
@@ -974,13 +1077,20 @@ def toggle_blackout(conn: sqlite3.Connection, blackout_id: int, enabled: bool) -
 
 def remove_blackout(conn: sqlite3.Connection, blackout_id: int) -> bool:
     cur = conn.execute("DELETE FROM wellness_blackouts WHERE id = ?", (blackout_id,))
-    conn.execute("DELETE FROM wellness_blackout_active WHERE blackout_id = ?", (blackout_id,))
-    conn.execute("DELETE FROM wellness_blackout_overages WHERE blackout_id = ?", (blackout_id,))
+    conn.execute(
+        "DELETE FROM wellness_blackout_active WHERE blackout_id = ?", (blackout_id,)
+    )
+    conn.execute(
+        "DELETE FROM wellness_blackout_overages WHERE blackout_id = ?", (blackout_id,)
+    )
     return (cur.rowcount or 0) > 0
 
 
 def mark_blackout_active(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, blackout_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    blackout_id: int,
 ) -> bool:
     """Returns True if newly inserted (i.e. blackout just started)."""
     cur = conn.execute(
@@ -991,7 +1101,10 @@ def mark_blackout_active(
 
 
 def clear_blackout_active(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, blackout_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    blackout_id: int,
 ) -> None:
     conn.execute(
         "DELETE FROM wellness_blackout_active WHERE guild_id = ? AND user_id = ? AND blackout_id = ?",
@@ -1000,7 +1113,9 @@ def clear_blackout_active(
 
 
 def list_active_blackout_markers(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> list[int]:
     rows = conn.execute(
         "SELECT blackout_id FROM wellness_blackout_active WHERE guild_id = ? AND user_id = ?",
@@ -1042,6 +1157,7 @@ BLACKOUT_TEMPLATES: dict[str, dict] = {
 # Slow mode (per-user global friction state)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class WellnessSlowMode:
     guild_id: int
@@ -1052,7 +1168,7 @@ class WellnessSlowMode:
     active_until_ts: float
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "WellnessSlowMode":
+    def from_row(cls, row: sqlite3.Row) -> WellnessSlowMode:
         return cls(
             guild_id=int(row["guild_id"]),
             user_id=int(row["user_id"]),
@@ -1064,7 +1180,9 @@ class WellnessSlowMode:
 
 
 def get_slow_mode(
-    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
 ) -> WellnessSlowMode | None:
     row = conn.execute(
         "SELECT * FROM wellness_slow_mode WHERE guild_id = ? AND user_id = ?",
@@ -1092,12 +1210,21 @@ def arm_slow_mode(
             triggered_window_start = excluded.triggered_window_start,
             active_until_ts        = MAX(wellness_slow_mode.active_until_ts, excluded.active_until_ts)
         """,
-        (guild_id, user_id, triggered_by_cap_id, triggered_window_start, active_until_ts),
+        (
+            guild_id,
+            user_id,
+            triggered_by_cap_id,
+            triggered_window_start,
+            active_until_ts,
+        ),
     )
 
 
 def update_slow_mode_last_message(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, ts: float,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    ts: float,
 ) -> None:
     conn.execute(
         "UPDATE wellness_slow_mode SET last_message_ts = ? WHERE guild_id = ? AND user_id = ?",
@@ -1112,7 +1239,9 @@ def lift_slow_mode(conn: sqlite3.Connection, guild_id: int, user_id: int) -> Non
     )
 
 
-def list_expired_slow_mode(conn: sqlite3.Connection, now: float) -> list[WellnessSlowMode]:
+def list_expired_slow_mode(
+    conn: sqlite3.Connection, now: float
+) -> list[WellnessSlowMode]:
     rows = conn.execute(
         "SELECT * FROM wellness_slow_mode WHERE active_until_ts > 0 AND active_until_ts <= ?",
         (now,),
@@ -1123,6 +1252,7 @@ def list_expired_slow_mode(conn: sqlite3.Connection, now: float) -> list[Wellnes
 # ---------------------------------------------------------------------------
 # Streaks
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class WellnessStreak:
@@ -1137,7 +1267,7 @@ class WellnessStreak:
     updated_at: float
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "WellnessStreak":
+    def from_row(cls, row: sqlite3.Row) -> WellnessStreak:
         return cls(
             guild_id=int(row["guild_id"]),
             user_id=int(row["user_id"]),
@@ -1146,12 +1276,16 @@ class WellnessStreak:
             streak_start_date=row["streak_start_date"],
             last_violation_date=row["last_violation_date"],
             current_badge=str(row["current_badge"]),
-            celebrated_badge=str(row["celebrated_badge"] if "celebrated_badge" in row.keys() else ""),
+            celebrated_badge=str(
+                row["celebrated_badge"] if "celebrated_badge" in row.keys() else ""
+            ),
             updated_at=float(row["updated_at"]),
         )
 
 
-def get_streak(conn: sqlite3.Connection, guild_id: int, user_id: int) -> WellnessStreak | None:
+def get_streak(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> WellnessStreak | None:
     row = conn.execute(
         "SELECT * FROM wellness_streaks WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
@@ -1160,7 +1294,10 @@ def get_streak(conn: sqlite3.Connection, guild_id: int, user_id: int) -> Wellnes
 
 
 def ensure_streak(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, today_iso: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    today_iso: str,
 ) -> WellnessStreak:
     existing = get_streak(conn, guild_id, user_id)
     if existing is not None:
@@ -1197,7 +1334,10 @@ def decay_streak(streak_days: int) -> int:
 
 
 def apply_streak_violation(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, today_iso: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    today_iso: str,
 ) -> tuple[int, int]:
     """Apply a violation to the user's streak. Returns (old_days, new_days).
 
@@ -1223,7 +1363,10 @@ def apply_streak_violation(
 
 
 def increment_streak_day(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, today_iso: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    today_iso: str,
 ) -> tuple[int, str, bool]:
     """Mark today as a clean day for the user. Returns (new_days, new_badge, badge_upgraded)."""
     streak = ensure_streak(conn, guild_id, user_id, today_iso)
@@ -1262,7 +1405,8 @@ def next_milestone(days: int) -> tuple[int, str] | None:
 
 
 def list_committed_users_with_streaks(
-    conn: sqlite3.Connection, guild_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
 ) -> list[tuple[int, WellnessStreak]]:
     """Return (user_id, streak) pairs for opted-in users with public_commitment=True.
 
@@ -1286,7 +1430,8 @@ def list_committed_users_with_streaks(
 
 
 def list_uncelebrated_milestones(
-    conn: sqlite3.Connection, guild_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
 ) -> list[tuple[int, WellnessStreak]]:
     """Return users whose current_badge differs from celebrated_badge (i.e. a
     badge change has not yet been announced). Only wellness users who are
@@ -1309,7 +1454,10 @@ def list_uncelebrated_milestones(
 
 
 def mark_badge_celebrated(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, badge: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    badge: str,
 ) -> None:
     conn.execute(
         "UPDATE wellness_streaks SET celebrated_badge = ? WHERE guild_id = ? AND user_id = ?",
@@ -1318,7 +1466,10 @@ def mark_badge_celebrated(
 
 
 def has_clean_day_credit(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, day_iso: str,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    day_iso: str,
 ) -> bool:
     row = conn.execute(
         "SELECT 1 FROM wellness_streak_history WHERE guild_id = ? AND user_id = ? AND day = ?",
@@ -1331,8 +1482,12 @@ def has_clean_day_credit(
 # Exempt channels
 # ---------------------------------------------------------------------------
 
+
 def add_exempt_channel(
-    conn: sqlite3.Connection, guild_id: int, channel_id: int, label: str = "",
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    label: str = "",
 ) -> None:
     conn.execute(
         """
@@ -1344,7 +1499,9 @@ def add_exempt_channel(
     )
 
 
-def remove_exempt_channel(conn: sqlite3.Connection, guild_id: int, channel_id: int) -> bool:
+def remove_exempt_channel(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int
+) -> bool:
     cur = conn.execute(
         "DELETE FROM wellness_exempt_channels WHERE guild_id = ? AND channel_id = ?",
         (guild_id, channel_id),
@@ -1352,7 +1509,9 @@ def remove_exempt_channel(conn: sqlite3.Connection, guild_id: int, channel_id: i
     return (cur.rowcount or 0) > 0
 
 
-def list_exempt_channels(conn: sqlite3.Connection, guild_id: int) -> list[tuple[int, str]]:
+def list_exempt_channels(
+    conn: sqlite3.Connection, guild_id: int
+) -> list[tuple[int, str]]:
     rows = conn.execute(
         "SELECT channel_id, label FROM wellness_exempt_channels WHERE guild_id = ? ORDER BY channel_id",
         (guild_id,),
@@ -1372,6 +1531,7 @@ def is_channel_exempt(conn: sqlite3.Connection, guild_id: int, channel_id: int) 
 # Partners
 # ---------------------------------------------------------------------------
 
+
 def _ordered_pair(a: int, b: int) -> tuple[int, int]:
     return (a, b) if a < b else (b, a)
 
@@ -1388,7 +1548,7 @@ class WellnessPartner:
     accepted_at: float | None
 
     @classmethod
-    def from_row(cls, row: sqlite3.Row) -> "WellnessPartner":
+    def from_row(cls, row: sqlite3.Row) -> WellnessPartner:
         return cls(
             id=int(row["id"]),
             guild_id=int(row["guild_id"]),
@@ -1405,7 +1565,10 @@ class WellnessPartner:
 
 
 def create_partner_request(
-    conn: sqlite3.Connection, guild_id: int, requester_id: int, target_id: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    requester_id: int,
+    target_id: int,
 ) -> WellnessPartner | None:
     """Create a pending partner request. Returns None if a request already exists."""
     if requester_id == target_id:
@@ -1444,17 +1607,23 @@ def dissolve_partnership(conn: sqlite3.Connection, partner_id: int) -> bool:
     return (cur.rowcount or 0) > 0
 
 
-def get_partnership(conn: sqlite3.Connection, partner_id: int) -> WellnessPartner | None:
-    row = conn.execute("SELECT * FROM wellness_partners WHERE id = ?", (partner_id,)).fetchone()
+def get_partnership(
+    conn: sqlite3.Connection, partner_id: int
+) -> WellnessPartner | None:
+    row = conn.execute(
+        "SELECT * FROM wellness_partners WHERE id = ?", (partner_id,)
+    ).fetchone()
     return WellnessPartner.from_row(row) if row else None
 
 
 def list_partnerships(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, *, accepted_only: bool = True,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    *,
+    accepted_only: bool = True,
 ) -> list[WellnessPartner]:
-    query = (
-        "SELECT * FROM wellness_partners WHERE guild_id = ? AND (user_a = ? OR user_b = ?)"
-    )
+    query = "SELECT * FROM wellness_partners WHERE guild_id = ? AND (user_a = ? OR user_b = ?)"
     params: list = [guild_id, user_id, user_id]
     if accepted_only:
         query += " AND status = 'accepted'"
@@ -1463,7 +1632,9 @@ def list_partnerships(
     return [WellnessPartner.from_row(r) for r in rows]
 
 
-def remove_user_partnerships(conn: sqlite3.Connection, guild_id: int, user_id: int) -> int:
+def remove_user_partnerships(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> int:
     cur = conn.execute(
         "DELETE FROM wellness_partners WHERE guild_id = ? AND (user_a = ? OR user_b = ?)",
         (guild_id, user_id, user_id),
@@ -1475,8 +1646,13 @@ def remove_user_partnerships(conn: sqlite3.Connection, guild_id: int, user_id: i
 # Away rate limit
 # ---------------------------------------------------------------------------
 
+
 def can_send_away(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, channel_id: int, now: float,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    channel_id: int,
+    now: float,
 ) -> bool:
     row = conn.execute(
         "SELECT last_sent_at FROM wellness_away_rate_limit WHERE guild_id = ? AND user_id = ? AND channel_id = ?",
@@ -1488,7 +1664,11 @@ def can_send_away(
 
 
 def record_away_sent(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, channel_id: int, now: float,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    channel_id: int,
+    now: float,
 ) -> None:
     conn.execute(
         """
@@ -1501,7 +1681,12 @@ def record_away_sent(
 
 
 def update_away_message(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, *, enabled: bool, message: str | None = None,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    *,
+    enabled: bool,
+    message: str | None = None,
 ) -> None:
     if message is None:
         conn.execute(
@@ -1519,8 +1704,13 @@ def update_away_message(
 # Weekly reports
 # ---------------------------------------------------------------------------
 
+
 def has_weekly_report(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, iso_year: int, iso_week: int,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    iso_year: int,
+    iso_week: int,
 ) -> bool:
     row = conn.execute(
         "SELECT 1 FROM wellness_weekly_reports WHERE guild_id = ? AND user_id = ? AND iso_year = ? AND iso_week = ?",
@@ -1530,7 +1720,10 @@ def has_weekly_report(
 
 
 def compute_weekly_summary(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, week_start: date,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    week_start: date,
 ) -> dict:
     """Build a structured summary of the user's last 7 days of wellness state.
 
@@ -1603,13 +1796,25 @@ def insert_weekly_report(
             (guild_id, user_id, iso_year, iso_week, week_start, report_json, ai_text, sent_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (guild_id, user_id, iso_year, iso_week, week_start, report_json, ai_text, time.time()),
+        (
+            guild_id,
+            user_id,
+            iso_year,
+            iso_week,
+            week_start,
+            report_json,
+            ai_text,
+            time.time(),
+        ),
     )
     return (cur.rowcount or 0) > 0
 
 
 def list_weekly_reports(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, limit: int = 12,
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    limit: int = 12,
 ) -> list[sqlite3.Row]:
     return conn.execute(
         """

@@ -16,7 +16,7 @@ export function mount(container, initialParams) {
     <div class="panel">
       <header>
         <h2>Message Cadence</h2>
-        <div class="subtitle">Time between messages — min, P20, median, P80, max (in minutes)</div>
+        <div class="subtitle">Gap between messages — spread from fastest to slowest</div>
       </header>
       <div class="controls">
         <label>Resolution
