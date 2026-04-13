@@ -772,10 +772,14 @@ def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
 
-    # Overall stats
+    # Overall stats — use message timestamp (m.ts) so backfilled scores
+    # are attributed to the day the message was actually sent, not the day
+    # the VADER score was computed.
     row = conn.execute(
-        "SELECT AVG(sentiment) AS avg_s, COUNT(*) AS cnt FROM message_sentiment "
-        "WHERE guild_id=? AND computed_at>=?",
+        "SELECT AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt "
+        "FROM message_sentiment ms "
+        "JOIN messages m ON ms.message_id = m.message_id "
+        "WHERE ms.guild_id=? AND m.ts>=?",
         (guild_id, thirty_days_ago),
     ).fetchone()
     avg_sentiment = round(row["avg_s"], 3) if row["avg_s"] is not None else 0
@@ -783,8 +787,11 @@ def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
 
     # Emotion category breakdown
     emotion_rows = conn.execute(
-        "SELECT emotion, COUNT(*) AS cnt FROM message_sentiment "
-        "WHERE guild_id=? AND computed_at>=? AND emotion IS NOT NULL GROUP BY emotion",
+        "SELECT ms.emotion, COUNT(*) AS cnt "
+        "FROM message_sentiment ms "
+        "JOIN messages m ON ms.message_id = m.message_id "
+        "WHERE ms.guild_id=? AND m.ts>=? AND ms.emotion IS NOT NULL "
+        "GROUP BY ms.emotion",
         (guild_id, thirty_days_ago),
     ).fetchall()
     emotions = {r["emotion"]: r["cnt"] for r in emotion_rows}
@@ -793,11 +800,15 @@ def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
 
     # Positive / negative ratio
     pos_count = conn.execute(
-        "SELECT COUNT(*) FROM message_sentiment WHERE guild_id=? AND computed_at>=? AND sentiment>0.05",
+        "SELECT COUNT(*) FROM message_sentiment ms "
+        "JOIN messages m ON ms.message_id = m.message_id "
+        "WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment>0.05",
         (guild_id, thirty_days_ago),
     ).fetchone()[0]
     neg_count = conn.execute(
-        "SELECT COUNT(*) FROM message_sentiment WHERE guild_id=? AND computed_at>=? AND sentiment<-0.05",
+        "SELECT COUNT(*) FROM message_sentiment ms "
+        "JOIN messages m ON ms.message_id = m.message_id "
+        "WHERE ms.guild_id=? AND m.ts>=? AND ms.sentiment<-0.05",
         (guild_id, thirty_days_ago),
     ).fetchone()[0]
     pos_neg_ratio = round(pos_count / neg_count, 1) if neg_count else 0
@@ -808,21 +819,23 @@ def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
         day_start = _ts(d + 1, now=now)
         day_end = _ts(d, now=now)
         r = conn.execute(
-            "SELECT AVG(sentiment) AS avg_s FROM message_sentiment "
-            "WHERE guild_id=? AND computed_at>=? AND computed_at<?",
+            "SELECT AVG(ms.sentiment) AS avg_s "
+            "FROM message_sentiment ms "
+            "JOIN messages m ON ms.message_id = m.message_id "
+            "WHERE ms.guild_id=? AND m.ts>=? AND m.ts<?",
             (guild_id, day_start, day_end),
         ).fetchone()
         sparkline.append(round(r["avg_s"], 3) if r["avg_s"] is not None else 0)
 
-    # Negative spikes: 5+ minute windows where avg sentiment < -0.3
-    # Detect from message_sentiment grouped into 5-min windows
+    # Negative spikes: 5-minute windows where avg sentiment < -0.3
     spike_rows = conn.execute(
-        """SELECT CAST(computed_at / 300 AS INTEGER) * 300 AS window_start,
-                  AVG(sentiment) AS avg_s,
+        """SELECT CAST(m.ts / 300 AS INTEGER) * 300 AS window_start,
+                  AVG(ms.sentiment) AS avg_s,
                   COUNT(*) AS cnt
-           FROM message_sentiment
-           WHERE guild_id=? AND computed_at>=?
-           GROUP BY CAST(computed_at / 300 AS INTEGER)
+           FROM message_sentiment ms
+           JOIN messages m ON ms.message_id = m.message_id
+           WHERE ms.guild_id=? AND m.ts>=?
+           GROUP BY CAST(m.ts / 300 AS INTEGER)
            HAVING avg_s < -0.3 AND cnt >= 3
            ORDER BY window_start DESC
            LIMIT 20""",
@@ -837,7 +850,8 @@ def compute_sentiment(conn: sqlite3.Connection, guild_id: int, *,
     ch_rows = conn.execute(
         """SELECT ms.channel_id, AVG(ms.sentiment) AS avg_s, COUNT(*) AS cnt
            FROM message_sentiment ms
-           WHERE ms.guild_id=? AND ms.computed_at>=?
+           JOIN messages m ON ms.message_id = m.message_id
+           WHERE ms.guild_id=? AND m.ts>=?
            GROUP BY ms.channel_id
            ORDER BY avg_s DESC""",
         (guild_id, thirty_days_ago),

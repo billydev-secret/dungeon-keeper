@@ -236,13 +236,15 @@ async def health_tiles(
                         (ctx.guild_id,),
                     ).fetchall()
                     pos_count = conn.execute(
-                        "SELECT COUNT(*) FROM message_sentiment "
-                        "WHERE guild_id = ? AND sentiment >= 0.5 AND computed_at >= ?",
+                        "SELECT COUNT(*) FROM message_sentiment ms "
+                        "JOIN messages m ON ms.message_id = m.message_id "
+                        "WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 AND m.ts >= ?",
                         (ctx.guild_id, time.time() - 86400),
                     ).fetchone()[0]
                     neg_count = conn.execute(
-                        "SELECT COUNT(*) FROM message_sentiment "
-                        "WHERE guild_id = ? AND sentiment <= -0.5 AND computed_at >= ?",
+                        "SELECT COUNT(*) FROM message_sentiment ms "
+                        "JOIN messages m ON ms.message_id = m.message_id "
+                        "WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 AND m.ts >= ?",
                         (ctx.guild_id, time.time() - 86400),
                     ).fetchone()[0]
                     tiles["sentiment_feed"] = {
@@ -563,13 +565,15 @@ async def health_sentiment_feed(
                 (ctx.guild_id,),
             ).fetchall()
             pos_count = conn.execute(
-                "SELECT COUNT(*) FROM message_sentiment "
-                "WHERE guild_id = ? AND sentiment >= 0.5 AND computed_at >= ?",
+                "SELECT COUNT(*) FROM message_sentiment ms "
+                "JOIN messages m ON ms.message_id = m.message_id "
+                "WHERE ms.guild_id = ? AND ms.sentiment >= 0.5 AND m.ts >= ?",
                 (ctx.guild_id, time.time() - 86400),
             ).fetchone()[0]
             neg_count = conn.execute(
-                "SELECT COUNT(*) FROM message_sentiment "
-                "WHERE guild_id = ? AND sentiment <= -0.5 AND computed_at >= ?",
+                "SELECT COUNT(*) FROM message_sentiment ms "
+                "JOIN messages m ON ms.message_id = m.message_id "
+                "WHERE ms.guild_id = ? AND ms.sentiment <= -0.5 AND m.ts >= ?",
                 (ctx.guild_id, time.time() - 86400),
             ).fetchone()[0]
             messages = [
