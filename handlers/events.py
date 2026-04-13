@@ -32,7 +32,7 @@ from services.welcome_service import build_leave_embed, build_welcome_embed
 from services.incident_detection import velocity_tracker
 from services.wellness_enforcement import wellness_on_message
 from services.xp_service import handle_level_progress
-from xp_system import DEFAULT_XP_SETTINGS, count_xp_events, log_role_event, record_member_activity
+from xp_system import count_xp_events, log_role_event, record_member_activity
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -69,10 +69,10 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         )
         log.info(
             "XP config loaded: level-%s role=%s level-up-log=%s level-%s-log=%s.",
-            DEFAULT_XP_SETTINGS.role_grant_level,
+            ctx.xp_settings.role_grant_level,
             _ro(ctx.level_5_role_id),
             _ch(ctx.level_up_log_channel_id),
-            DEFAULT_XP_SETTINGS.role_grant_level,
+            ctx.xp_settings.role_grant_level,
             _ch(ctx.level_5_log_channel_id),
         )
         log.debug("XP excluded channels: %s", sorted(ctx.xp_excluded_channel_ids))
@@ -218,6 +218,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             db_path=ctx.db_path,
             xp_pair_states=ctx.xp_pair_states,
             excluded_channel_ids=ctx.xp_excluded_channel_ids,
+            settings=ctx.xp_settings,
         )
         if result is not None and isinstance(message.author, discord.Member):
             await handle_level_progress(
@@ -227,6 +228,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 level_5_role_id=ctx.level_5_role_id,
                 level_up_log_channel_id=ctx.level_up_log_channel_id,
                 level_5_log_channel_id=ctx.level_5_log_channel_id,
+                settings=ctx.xp_settings,
                 db_path=ctx.db_path,
             )
 
@@ -296,6 +298,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     bot=bot,
                     db_path=ctx.db_path,
                     excluded_channel_ids=ctx.xp_excluded_channel_ids,
+                    settings=ctx.xp_settings,
                 )
                 break
             except discord.HTTPException as exc:
@@ -313,6 +316,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 level_5_role_id=ctx.level_5_role_id,
                 level_up_log_channel_id=ctx.level_up_log_channel_id,
                 level_5_log_channel_id=ctx.level_5_log_channel_id,
+                settings=ctx.xp_settings,
                 db_path=ctx.db_path,
             )
 

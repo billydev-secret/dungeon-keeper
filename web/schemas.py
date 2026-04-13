@@ -128,6 +128,19 @@ class GreeterResponseResponse(BaseModel):
     entries: list[GreeterResponseEntry] = []
 
 
+# ── Time to level 5 ───────────────────────────────────────────────────
+
+class TimeToLevel5Response(BaseModel):
+    window_label: str
+    count: int
+    mean_days: float
+    median_days: float
+    stddev_days: float
+    mode_days: int
+    xp_required: float
+    histogram: list[ResponseBucketSchema]
+
+
 # ── Activity ────────────────────────────────────────────────────────────
 
 class ActivityResponse(BaseModel):
@@ -191,6 +204,7 @@ class RetentionEntrySchema(BaseModel):
     msgs_prev: int
     msgs_recent: int
     drop_pct: float
+    normalized_drop_pct: float = 0.0
     days_active_prev: int
     days_active_recent: int
     last_seen_ts: float | None = None
@@ -201,6 +215,7 @@ class RetentionEntrySchema(BaseModel):
 class RetentionResponse(BaseModel):
     period_days: int
     total_dropoffs: int
+    server_activity_change_pct: float = 0.0
     entries: list[RetentionEntrySchema]
 
 

@@ -115,13 +115,20 @@ def compute_dau_mau(conn: sqlite3.Connection, guild_id: int, *,
         ).fetchone()[0]
         sparkline.append(cnt)
 
+    # Voice active: unique users with voice XP events in last 7 days
+    voice_7d = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) FROM xp_events "
+        "WHERE guild_id = ? AND source = 'voice' AND created_at >= ?",
+        (guild_id, now - 7 * _DAY),
+    ).fetchone()[0]
+
     # Engagement depth funnel
     funnel = {
         "total_members": member_count,
         "mau": mau,
         "wau": wau,
         "dau": dau,
-        "voice_active": voice_active_count,
+        "voice_active": voice_7d or voice_active_count,
     }
 
     # Active user composition: returning vs reactivated vs new (first 7 days)

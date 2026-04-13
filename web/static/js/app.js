@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api } from "./api.js";
 
-const _moduleVer = "?v=9";
+const _moduleVer = "?v=10";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -52,6 +52,7 @@ const SECTIONS = [
       ]},
       { heading: "Greeter", items: [
         { id: "greeter-response",     label: "Greeter Response",     module: "./panels/greeter-response.js" },
+        { id: "time-to-level5",       label: "Time to Level 5",      module: "./panels/time-to-level5.js" },
         { id: "invite-effectiveness", label: "Invite Effectiveness", module: "./panels/invite-effectiveness.js" },
         { id: "join-times",           label: "Join Times",           module: "./panels/join-times.js" },
       ]},

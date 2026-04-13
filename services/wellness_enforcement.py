@@ -178,7 +178,8 @@ def decide_action(
     for cap in applicable_caps:
         ws = window_start_epoch(cap.window, now_local, user.daily_reset_hour)
         prev_count = get_cap_counter(conn, cap.id, ws)
-        if prev_count >= cap.cap_limit:
+        effective_limit = _effective_cap_limit(cap, now_local)
+        if prev_count >= effective_limit:
             overage = increment_cap_overage(conn, cap.id, ws)
             cap_hits.append(cap)
             if overage == 1:
@@ -419,6 +420,14 @@ def _truncate(s: str | None, n: int) -> str:
 # ---------------------------------------------------------------------------
 # Notification helpers
 # ---------------------------------------------------------------------------
+
+def _effective_cap_limit(cap: WellnessCap, now_local) -> int:
+    if cap.bucket_limits:
+        idx = now_local.hour if cap.window == "daily" else now_local.weekday() if cap.window == "weekly" else None
+        if idx is not None and 0 <= idx < len(cap.bucket_limits):
+            return cap.bucket_limits[idx]
+    return cap.cap_limit
+
 
 def _format_cap_summary(cap: WellnessCap, count: int) -> str:
     return f"{count}/{cap.cap_limit} {cap.window}"

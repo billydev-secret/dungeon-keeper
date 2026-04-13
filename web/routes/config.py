@@ -28,6 +28,7 @@ from services.booster_roles import (
 from services.inactivity_prune_service import get_prune_rule as _get_prune_rule
 from web.auth import AuthenticatedUser
 from web.deps import get_ctx, require_perms, run_query
+from xp_system import DEFAULT_XP_SETTINGS, _XP_COEFF_PREFIX
 
 router = APIRouter()
 
@@ -56,6 +57,27 @@ def _float_val(conn, key: str, default: float = 0.0) -> float:
         return float(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _xp_coefficients(conn) -> dict:
+    """Read XP algorithm coefficients from the config table, with defaults."""
+    d = DEFAULT_XP_SETTINGS
+    p = _XP_COEFF_PREFIX
+    return {
+        "message_word_xp": _float_val(conn, f"{p}message_word_xp", d.message_word_xp),
+        "reply_bonus_xp": _float_val(conn, f"{p}reply_bonus_xp", d.reply_bonus_xp),
+        "image_reaction_received_xp": _float_val(conn, f"{p}image_reaction_received_xp", d.image_reaction_received_xp),
+        "cooldown_thresholds_seconds": _str_val(conn, f"{p}cooldown_thresholds_seconds", ",".join(str(v) for v in d.cooldown_thresholds_seconds)),
+        "cooldown_multipliers": _str_val(conn, f"{p}cooldown_multipliers", ",".join(str(v) for v in d.cooldown_multipliers)),
+        "duplicate_multiplier": _float_val(conn, f"{p}duplicate_multiplier", d.duplicate_multiplier),
+        "pair_streak_threshold": _int_val(conn, f"{p}pair_streak_threshold", d.pair_streak_threshold),
+        "pair_streak_multiplier": _float_val(conn, f"{p}pair_streak_multiplier", d.pair_streak_multiplier),
+        "voice_award_xp": _float_val(conn, f"{p}voice_award_xp", d.voice_award_xp),
+        "voice_interval_seconds": _int_val(conn, f"{p}voice_interval_seconds", d.voice_interval_seconds),
+        "voice_min_humans": _int_val(conn, f"{p}voice_min_humans", d.voice_min_humans),
+        "manual_grant_xp": _float_val(conn, f"{p}manual_grant_xp", d.manual_grant_xp),
+        "level_curve_factor": _float_val(conn, f"{p}level_curve_factor", d.level_curve_factor),
+    }
 
 
 # ── GET: full config snapshot ──────────────────────────────────────────
@@ -97,6 +119,8 @@ async def get_config(
                     "level_up_log_channel_id": str(_int_val(conn, "xp_level_up_log_channel_id")),
                     "xp_grant_allowed_user_ids": [str(i) for i in _id_set_list(conn, "xp_grant_allowed_user_ids")],
                     "xp_excluded_channel_ids": [str(i) for i in _id_set_list(conn, "xp_excluded_channel_ids")],
+                    # Algorithm coefficients (loaded with defaults)
+                    **_xp_coefficients(conn),
                 },
                 "prune": {
                     "role_id": str(prune_rule["role_id"]) if prune_rule else "0",
@@ -259,6 +283,20 @@ class XpConfigUpdate(BaseModel):
     level_up_log_channel_id: str | None = None
     xp_grant_allowed_user_ids: list[str] | None = None
     xp_excluded_channel_ids: list[str] | None = None
+    # Algorithm coefficients
+    message_word_xp: float | None = None
+    reply_bonus_xp: float | None = None
+    image_reaction_received_xp: float | None = None
+    cooldown_thresholds_seconds: str | None = None
+    cooldown_multipliers: str | None = None
+    duplicate_multiplier: float | None = None
+    pair_streak_threshold: int | None = None
+    pair_streak_multiplier: float | None = None
+    voice_award_xp: float | None = None
+    voice_interval_seconds: int | None = None
+    voice_min_humans: int | None = None
+    manual_grant_xp: float | None = None
+    level_curve_factor: float | None = None
 
 
 @router.put("/config/xp")
@@ -301,6 +339,27 @@ async def update_xp(
                     conn.execute("INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
                                  ("xp_excluded_channel_ids", int(cid)))
                 ctx.xp_excluded_channel_ids = {int(c) for c in body.xp_excluded_channel_ids}
+
+            # Persist algorithm coefficients
+            _COEFF_FIELDS = [
+                "message_word_xp", "reply_bonus_xp", "image_reaction_received_xp",
+                "cooldown_thresholds_seconds", "cooldown_multipliers",
+                "duplicate_multiplier", "pair_streak_threshold", "pair_streak_multiplier",
+                "voice_award_xp", "voice_interval_seconds", "voice_min_humans",
+                "manual_grant_xp", "level_curve_factor",
+            ]
+            for field_name in _COEFF_FIELDS:
+                val = getattr(body, field_name, None)
+                if val is not None:
+                    conn.execute(
+                        "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (f"{_XP_COEFF_PREFIX}{field_name}", str(val)),
+                    )
+
+            # Reload live XP settings on ctx
+            if hasattr(ctx, "reload_xp_settings"):
+                ctx.reload_xp_settings()
+
         return {"ok": True}
 
     return await run_query(_q)

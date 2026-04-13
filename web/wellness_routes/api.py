@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from services.wellness_service import (
@@ -44,6 +46,7 @@ from services.wellness_service import (
     resume_user,
     toggle_blackout,
     update_away_message,
+    update_cap_bucket_limits,
     update_cap_limit,
     update_user_settings,
     user_now,
@@ -79,7 +82,7 @@ def _blackout_to_dict(b) -> dict:
 
 
 def _cap_to_dict(c) -> dict:
-    return {
+    d = {
         "id": c.id,
         "label": c.label,
         "scope": c.scope,
@@ -88,6 +91,9 @@ def _cap_to_dict(c) -> dict:
         "limit": c.cap_limit,
         "exclude_exempt": c.exclude_exempt,
     }
+    if c.bucket_limits is not None:
+        d["bucket_limits"] = c.bucket_limits
+    return d
 
 
 # ── Read (GET) endpoints ──────────────────────────────────────────────
@@ -153,6 +159,76 @@ async def get_caps(
         "caps": [_cap_to_dict(c) for c in caps],
         "scopes": CAP_SCOPES,
         "windows": CAP_WINDOWS,
+    }
+
+
+_HOUR_LABELS = [
+    "12am", "1am", "2am", "3am", "4am", "5am", "6am", "7am",
+    "8am", "9am", "10am", "11am", "12pm", "1pm", "2pm", "3pm",
+    "4pm", "5pm", "6pm", "7pm", "8pm", "9pm", "10pm", "11pm",
+]
+_DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+@router.get("/xp-histogram")
+async def xp_histogram(
+    mode: str = Query("daily"),
+    days: int = Query(30),
+    user: AuthenticatedUser = Depends(require_user),
+    ctx=Depends(get_ctx),
+):
+    if mode not in ("daily", "weekly"):
+        return _err("mode must be 'daily' or 'weekly'")
+    days = max(7, min(days, 180))
+
+    with ctx.open_db() as conn:
+        wuser = get_wellness_user(conn, ctx.guild_id, user.user_id)
+        tz_name = wuser.timezone if wuser and wuser.timezone else "UTC"
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = ZoneInfo("UTC")
+
+        cutoff = time.time() - days * 86400
+        rows = conn.execute(
+            "SELECT amount, created_at FROM xp_events "
+            "WHERE guild_id = ? AND user_id = ? AND created_at >= ? ORDER BY created_at",
+            (ctx.guild_id, user.user_id, cutoff),
+        ).fetchall()
+
+    n_buckets = 24 if mode == "daily" else 7
+    labels = _HOUR_LABELS if mode == "daily" else _DAY_LABELS
+    totals = [0.0] * n_buckets
+    counts = [0] * n_buckets
+
+    for row in rows:
+        dt = datetime.fromtimestamp(float(row["created_at"]), tz=tz)
+        idx = dt.hour if mode == "daily" else dt.weekday()
+        totals[idx] += float(row["amount"])
+        counts[idx] += 1
+
+    # Compute number of distinct days/weeks covered for averaging
+    if mode == "daily":
+        distinct_periods = max(1, days)
+    else:
+        distinct_periods = max(1, days // 7)
+
+    buckets = []
+    for i in range(n_buckets):
+        avg = round(totals[i] / distinct_periods, 1)
+        buckets.append({
+            "index": i,
+            "label": labels[i],
+            "avg_xp": avg,
+            "total_xp": round(totals[i], 1),
+            "count": counts[i],
+        })
+
+    return {
+        "mode": mode,
+        "days_covered": days,
+        "total_events": len(rows),
+        "buckets": buckets,
     }
 
 
@@ -369,6 +445,16 @@ async def create_cap(
     if scope == "voice":
         return _err("voice scope is coming soon")
 
+    # Optional per-bucket limits (list of ints)
+    bucket_limits = payload.get("bucket_limits")
+    if bucket_limits is not None:
+        if not isinstance(bucket_limits, list) or not all(isinstance(v, int) and v >= 1 for v in bucket_limits):
+            return _err("bucket_limits must be a list of positive integers")
+        expected_len = 24 if window == "daily" else 7 if window == "weekly" else 0
+        if expected_len and len(bucket_limits) != expected_len:
+            return _err(f"bucket_limits must have {expected_len} entries for {window} window")
+        cap_limit = max(bucket_limits)
+
     with ctx.open_db() as conn:
         if find_cap_by_label(conn, ctx.guild_id, user.user_id, label):
             return _err(f"a cap named '{label}' already exists")
@@ -376,6 +462,7 @@ async def create_cap(
             conn, ctx.guild_id, user.user_id,
             label=label, scope=scope, scope_target_id=scope_target_id,
             window=window, cap_limit=cap_limit, exclude_exempt=exclude_exempt,
+            bucket_limits=bucket_limits,
         )
     return _ok(id=cap_id)
 
@@ -388,6 +475,21 @@ async def edit_cap(
     ctx=Depends(get_ctx),
 ) -> JSONResponse:
     _require_active(ctx, user.user_id)
+
+    bucket_limits = payload.get("bucket_limits")
+    if bucket_limits is not None:
+        if not isinstance(bucket_limits, list) or not all(isinstance(v, int) and v >= 1 for v in bucket_limits):
+            return _err("bucket_limits must be a list of positive integers")
+        with ctx.open_db() as conn:
+            cap = get_cap(conn, cap_id)
+            if cap is None or cap.user_id != user.user_id or cap.guild_id != ctx.guild_id:
+                return _err("cap not found", status=404)
+            expected_len = 24 if cap.window == "daily" else 7 if cap.window == "weekly" else 0
+            if expected_len and len(bucket_limits) != expected_len:
+                return _err(f"bucket_limits must have {expected_len} entries for {cap.window} window")
+            update_cap_bucket_limits(conn, cap_id, bucket_limits)
+        return _ok()
+
     try:
         new_limit = int(payload.get("limit", 0))
     except (TypeError, ValueError):

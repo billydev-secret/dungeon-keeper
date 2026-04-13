@@ -9,6 +9,7 @@ windows are derived lazily on every message — never from a loop reset.
 """
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 import time
@@ -102,6 +103,11 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_wellness_caps_user ON wellness_caps (guild_id, user_id)"
     )
+
+    # Migration: add bucket_limits to wellness_caps
+    _cap_cols = {row[1] for row in conn.execute("PRAGMA table_info(wellness_caps)").fetchall()}
+    if "bucket_limits" not in _cap_cols:
+        conn.execute("ALTER TABLE wellness_caps ADD COLUMN bucket_limits TEXT")
 
     conn.execute(
         """
@@ -667,9 +673,11 @@ class WellnessCap:
     cap_limit: int
     exclude_exempt: bool
     created_at: float
+    bucket_limits: list[int] | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "WellnessCap":
+        raw_bl = row["bucket_limits"] if "bucket_limits" in row.keys() else None
         return cls(
             id=int(row["id"]),
             guild_id=int(row["guild_id"]),
@@ -681,6 +689,7 @@ class WellnessCap:
             cap_limit=int(row["cap_limit"]),
             exclude_exempt=bool(row["exclude_exempt"]),
             created_at=float(row["created_at"]),
+            bucket_limits=json.loads(raw_bl) if raw_bl else None,
         )
 
 
@@ -695,6 +704,7 @@ def add_cap(
     window: str,
     cap_limit: int,
     exclude_exempt: bool = True,
+    bucket_limits: list[int] | None = None,
 ) -> int:
     if scope not in CAP_SCOPES:
         raise ValueError(f"invalid scope: {scope}")
@@ -702,13 +712,14 @@ def add_cap(
         raise ValueError(f"invalid window: {window}")
     if cap_limit < 1:
         raise ValueError("cap_limit must be >= 1")
+    bl_json = json.dumps(bucket_limits) if bucket_limits else None
     cur = conn.execute(
         """
         INSERT INTO wellness_caps
-            (guild_id, user_id, label, scope, scope_target_id, window, cap_limit, exclude_exempt, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (guild_id, user_id, label, scope, scope_target_id, window, cap_limit, exclude_exempt, created_at, bucket_limits)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (guild_id, user_id, label, scope, scope_target_id, window, cap_limit, 1 if exclude_exempt else 0, time.time()),
+        (guild_id, user_id, label, scope, scope_target_id, window, cap_limit, 1 if exclude_exempt else 0, time.time(), bl_json),
     )
     return int(cur.lastrowid or 0)
 
@@ -742,6 +753,23 @@ def update_cap_limit(conn: sqlite3.Connection, cap_id: int, new_limit: int) -> b
     cur = conn.execute(
         "UPDATE wellness_caps SET cap_limit = ? WHERE id = ?", (new_limit, cap_id),
     )
+    return (cur.rowcount or 0) > 0
+
+
+def update_cap_bucket_limits(
+    conn: sqlite3.Connection, cap_id: int, bucket_limits: list[int] | None,
+) -> bool:
+    bl_json = json.dumps(bucket_limits) if bucket_limits else None
+    cap_limit = max(bucket_limits) if bucket_limits else None
+    if cap_limit is not None:
+        cur = conn.execute(
+            "UPDATE wellness_caps SET bucket_limits = ?, cap_limit = ? WHERE id = ?",
+            (bl_json, cap_limit, cap_id),
+        )
+    else:
+        cur = conn.execute(
+            "UPDATE wellness_caps SET bucket_limits = NULL WHERE id = ?", (cap_id,),
+        )
     return (cur.rowcount or 0) > 0
 
 

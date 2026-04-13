@@ -706,6 +706,7 @@ class RetentionEntry(TypedDict):
     msgs_prev: int
     msgs_recent: int
     drop_pct: float
+    normalized_drop_pct: float
     days_active_prev: int
     days_active_recent: int
     last_seen_ts: float | None
@@ -716,6 +717,7 @@ class RetentionEntry(TypedDict):
 class RetentionData(TypedDict):
     period_days: int
     total_dropoffs: int
+    server_activity_change_pct: float
     entries: list[RetentionEntry]
 
 
@@ -732,15 +734,28 @@ def get_retention_data(
         min_previous=min_previous, limit=limit,
     )
 
+    # Server-wide activity ratio for normalization (from first profile)
+    srv_prev = profiles[0].server_msgs_prev if profiles else 0
+    srv_recent = profiles[0].server_msgs_recent if profiles else 0
+    server_ratio = srv_recent / max(srv_prev, 1)
+
     entries: list[RetentionEntry] = []
     for p in profiles:
         drop_pct = round((1 - p.msgs_recent / max(p.msgs_prev, 1)) * 100, 1)
+        # Normalized: adjust member's ratio by server-wide trend
+        member_ratio = p.msgs_recent / max(p.msgs_prev, 1)
+        if server_ratio > 0:
+            adjusted_ratio = member_ratio / server_ratio
+        else:
+            adjusted_ratio = member_ratio
+        normalized_drop_pct = round(max(0, (1 - adjusted_ratio)) * 100, 1)
         entries.append({
             "user_id": str(p.user_id),
             "user_name": "",
             "msgs_prev": p.msgs_prev,
             "msgs_recent": p.msgs_recent,
             "drop_pct": drop_pct,
+            "normalized_drop_pct": normalized_drop_pct,
             "days_active_prev": p.days_prev,
             "days_active_recent": p.days_recent,
             "last_seen_ts": p.last_seen_ts,
@@ -748,9 +763,12 @@ def get_retention_data(
             "total_xp": p.total_xp,
         })
 
+    server_change_pct = round((server_ratio - 1) * 100, 1)
+
     return {
         "period_days": period_days,
         "total_dropoffs": len(entries),
+        "server_activity_change_pct": server_change_pct,
         "entries": entries,
     }
 

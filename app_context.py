@@ -20,6 +20,7 @@ from db_utils import (
     open_db,
     parse_bool,
 )
+from xp_system import DEFAULT_XP_SETTINGS, XpSettings, load_xp_settings
 
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
@@ -191,12 +192,18 @@ class AppContext:
     leave_channel_id: int
     leave_message: str
     tz_offset_hours: float = 0.0
+    xp_settings: XpSettings = field(default_factory=lambda: DEFAULT_XP_SETTINGS)
     grant_roles: dict[str, GrantRoleConfig] = field(default_factory=dict)
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
     watched_users: dict[int, set[int]] = field(default_factory=dict)
 
     def open_db(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
         return open_db(self.db_path)
+
+    def reload_xp_settings(self) -> None:
+        """Reload XP algorithm coefficients from the config DB."""
+        with self.open_db() as conn:
+            self.xp_settings = load_xp_settings(conn)
 
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:

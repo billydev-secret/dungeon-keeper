@@ -213,7 +213,8 @@ html, body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .panel header { margin-bottom: 16px; }
@@ -1183,6 +1184,102 @@ html, body {
 .w-actions button { background: var(--bg-alt); border: 1px solid var(--grid); color: var(--text); padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
 .w-actions button:hover { border-color: var(--accent); }
 
+/* ── Wellness Histogram Caps ──────────────────────────────────────── */
+
+.w-histo-help { margin-bottom: 16px; }
+.w-histo-help p { font-size: 13px; color: var(--text-dim); line-height: 1.5; margin: 0 0 6px; }
+
+.w-histo-controls { display: flex; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
+.w-histo-controls .field { min-width: 140px; }
+.w-histo-controls label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 4px; }
+.w-histo-controls select {
+  background: var(--bg); border: 1px solid var(--grid); color: var(--text);
+  padding: 5px 8px; border-radius: 4px; font-size: 13px; width: 100%;
+}
+
+.w-histo-chart-wrap { position: relative; height: 220px; margin-bottom: 8px; }
+
+.w-histo-sliders {
+  display: grid;
+  grid-template-columns: repeat(var(--bucket-count, 24), 1fr);
+  gap: 0;
+  margin-bottom: 16px;
+  box-sizing: border-box;
+}
+
+.w-histo-slider-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.w-histo-slider-cell input[type="range"] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: slider-vertical;
+  height: 70px;
+  width: 18px;
+  background: transparent;
+  cursor: pointer;
+}
+.w-histo-slider-cell input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #B36A92;
+  border: 2px solid #1e1f22;
+  cursor: pointer;
+}
+.w-histo-slider-cell input[type="range"]::-webkit-slider-runnable-track {
+  width: 4px;
+  background: var(--grid);
+  border-radius: 2px;
+}
+.w-histo-slider-cell input[type="range"]::-moz-range-thumb {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #B36A92;
+  border: 2px solid #1e1f22;
+  cursor: pointer;
+}
+.w-histo-slider-cell input[type="range"]::-moz-range-track {
+  width: 4px;
+  background: var(--grid);
+  border-radius: 2px;
+}
+
+.w-histo-slider-val {
+  font-size: 10px;
+  color: #B36A92;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+}
+
+.w-histo-slider-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.w-histo-actions {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 20px;
+}
+.w-histo-actions button {
+  background: var(--accent); color: #000; border: none;
+  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
+}
+.w-histo-actions button:hover { background: var(--accent-hover); }
+.w-histo-actions .btn-secondary {
+  background: var(--bg-alt); color: var(--text); border: 1px solid var(--grid);
+}
+.w-histo-actions .btn-secondary:hover { border-color: var(--accent); }
+
+.w-histo-legacy { margin-top: 16px; }
+.w-histo-legacy summary { cursor: pointer; }
+.w-histo-legacy summary h3 { display: inline; font-size: 14px; color: var(--text-dim); }
+
 /* ── Health Dashboard ─────────────────────────────────────────────── */
 
 .health-status-bar {
@@ -1324,43 +1421,102 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Heatmap grid */
+/* Heatmap grid (legacy — used by tile) */
 .heatmap-container { overflow-x: auto; }
-.heatmap-grid {
-  display: grid;
-  gap: 2px;
-}
-.heatmap-cell {
-  border-radius: 2px;
-  min-width: 12px;
-  min-height: 12px;
-}
+.heatmap-grid { display: grid; gap: 2px; }
+.heatmap-cell { border-radius: 2px; min-width: 12px; min-height: 12px; }
 .heatmap-cell-full {
-  border-radius: 3px;
-  min-width: 28px;
-  min-height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  color: var(--text-dim);
+  border-radius: 3px; min-width: 28px; min-height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--text-dim);
 }
-.heatmap-label {
+.heatmap-label { font-size: 10px; color: var(--text-dim); text-align: center; padding: 2px; }
+.heatmap-mini-grid { display: grid; grid-template-columns: repeat(24, 1fr); gap: 1px; }
+.heatmap-mini-grid .heatmap-cell { min-width: 0; }
+
+/* Heatmap deep-dive page */
+.hm-grid-wrap { overflow-x: auto; }
+.hm-grid-label { font-size: 12px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.hm-table {
+  border-collapse: separate;
+  border-spacing: 2px;
+  width: 100%;
+}
+.hm-table th {
   font-size: 10px;
+  font-weight: 400;
   color: var(--text-dim);
+  padding: 2px 0;
   text-align: center;
-  padding: 2px;
+  white-space: nowrap;
+}
+.hm-day {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  padding-right: 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+.hm-cell {
+  border-radius: 3px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 6px 2px;
+  min-width: 28px;
+  height: 28px;
+  font-variant-numeric: tabular-nums;
+}
+.hm-cell-sm {
+  min-width: 16px;
+  height: 18px;
+  padding: 2px 1px;
+  font-size: 0;
 }
 
-/* Mini heatmap for tiles */
-.heatmap-mini-grid {
-  display: grid;
-  grid-template-columns: repeat(24, 1fr);
-  gap: 1px;
+/* Insights */
+.hm-insights { display: flex; flex-direction: column; gap: 8px; }
+.hm-insight { font-size: 13px; color: var(--text); line-height: 1.5; }
+.hm-insight b { color: var(--accent); }
+
+/* Hourly bar chart */
+.hm-bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 120px;
+  margin-top: 8px;
 }
-.heatmap-mini-grid .heatmap-cell {
-  min-width: 0;
+.hm-bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
 }
+.hm-bar-fill {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  min-height: 1px;
+  opacity: 0.8;
+}
+.hm-bar-label {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 3px;
+  height: 12px;
+}
+
+/* Day-of-week horizontal bar chart */
+.hm-dow-chart { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.hm-dow-row { display: flex; align-items: center; gap: 8px; }
+.hm-dow-label { font-size: 11px; font-weight: 600; color: var(--text-dim); width: 30px; text-align: right; }
+.hm-dow-track { flex: 1; height: 18px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+.hm-dow-fill { height: 100%; background: var(--accent); border-radius: 3px; opacity: 0.8; }
+.hm-dow-val { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; width: 40px; }
 
 /* Funnel — tile compact */
 .funnel-mini { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; }

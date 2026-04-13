@@ -13,7 +13,7 @@ export function mount(container) {
 
     const statusColors = { healthy: "var(--success)", flagged: "var(--warning)", dormant: "var(--text-dim)", archive: "var(--danger)" };
 
-    const tableRows = (d.channels || []).map(ch => `
+    const tableRows = (d.channels || []).filter(ch => ch.status === "healthy" || ch.status === "flagged").map(ch => `
       <tr>
         <td>#${esc(ch.channel_name || ch.channel_id)}</td>
         <td><span class="health-tile-badge" style="background:${statusColors[ch.status] || "var(--text-dim)"};font-size:11px;">${ch.status}</span></td>

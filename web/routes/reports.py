@@ -27,6 +27,7 @@ from web.schemas import (
     ReactionAnalyticsResponse,
     RetentionResponse,
     RoleGrowthResponse,
+    TimeToLevel5Response,
     VoiceActivityResponse,
     XpLeaderboardResponse,
 )
@@ -800,3 +801,71 @@ async def quality_score(
     _resolve_names(ctx, guild, result.get("entries", []),
                    ("user_id", "user_name"))
     return result
+
+
+# ── Time to level 5 ────────────────────────────────────────────────────
+
+@router.get("/time-to-level-5", response_model=TimeToLevel5Response)
+async def time_to_level_5(
+    request: Request,
+    days: int | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    import statistics
+    from collections import Counter
+    from datetime import datetime, timedelta, timezone
+
+    from xp_system import get_time_to_level_seconds, xp_required_for_level
+
+    ctx = get_ctx(request)
+
+    since_ts: float | None = None
+    if days is not None:
+        since_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+
+    def _q():
+        with ctx.open_db() as conn:
+            durations = get_time_to_level_seconds(conn, ctx.guild_id, 5, since_ts=since_ts)
+
+        if not durations:
+            return {
+                "window_label": f"Last {days} Days" if days else "All Time",
+                "count": 0,
+                "mean_days": 0.0,
+                "median_days": 0.0,
+                "stddev_days": 0.0,
+                "mode_days": 0,
+                "xp_required": xp_required_for_level(5),
+                "histogram": [],
+            }
+
+        days_list = [s / 86400.0 for s in durations]
+        mean_d = statistics.mean(days_list)
+        median_d = statistics.median(days_list)
+        stddev_d = statistics.pstdev(days_list) if len(days_list) > 1 else 0.0
+
+        day_ints = [int(d) for d in days_list]
+        counts = Counter(day_ints)
+        mode_d = counts.most_common(1)[0][0] if counts else 0
+
+        max_day = max(day_ints)
+        histogram = []
+        for d in range(0, max_day + 1):
+            histogram.append({"label": f"{d}d", "count": counts.get(d, 0)})
+
+        return {
+            "window_label": f"Last {days} Days" if days else "All Time",
+            "count": len(durations),
+            "mean_days": round(mean_d, 1),
+            "median_days": round(median_d, 1),
+            "stddev_days": round(stddev_d, 1),
+            "mode_days": mode_d,
+            "xp_required": xp_required_for_level(5),
+            "histogram": histogram,
+        }
+
+    return await cached_run_query(
+        "time-to-level-5", ctx.guild_id,
+        {"days": days},
+        _q, ttl=300,
+    )

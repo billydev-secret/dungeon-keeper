@@ -163,6 +163,7 @@ with open_db(DB_PATH) as _conn:
     ctx.watched_users = load_watched_users(_conn, _cfg["guild_id"])
 
 ctx.reload_grant_roles()
+ctx.reload_xp_settings()
 
 # ==============================
 # Event handlers + commands
@@ -205,10 +206,11 @@ async def _handle_level_progress_cb(member, award, source):
         level_5_role_id=ctx.level_5_role_id,
         level_up_log_channel_id=ctx.level_up_log_channel_id,
         level_5_log_channel_id=ctx.level_5_log_channel_id,
+        settings=ctx.xp_settings,
     )
 
 bot.startup_task_factories.append(
-    lambda: voice_xp_loop(bot, DB_PATH, _handle_level_progress_cb)
+    lambda: voice_xp_loop(bot, DB_PATH, _handle_level_progress_cb, settings=ctx.xp_settings)
 )
 
 bot.startup_task_factories.append(

@@ -34,6 +34,85 @@ class XpSettings:
 
 
 DEFAULT_XP_SETTINGS = XpSettings()
+
+# Keys used to persist XP coefficients in the config table.
+_XP_COEFF_PREFIX = "xp_coeff_"
+
+_FLOAT_COEFFS = [
+    "message_word_xp",
+    "reply_bonus_xp",
+    "image_reaction_received_xp",
+    "duplicate_multiplier",
+    "pair_streak_multiplier",
+    "voice_award_xp",
+    "manual_grant_xp",
+    "level_curve_factor",
+]
+
+_INT_COEFFS = [
+    "pair_streak_threshold",
+    "voice_interval_seconds",
+    "voice_min_humans",
+]
+
+_TUPLE_FLOAT_COEFFS = ["cooldown_multipliers"]
+_TUPLE_INT_COEFFS = ["cooldown_thresholds_seconds"]
+
+
+def load_xp_settings(conn: sqlite3.Connection) -> XpSettings:
+    """Build an XpSettings from stored config values, falling back to defaults."""
+    from db_utils import get_config_value
+
+    defaults = DEFAULT_XP_SETTINGS
+    kwargs: dict[str, object] = {}
+
+    for key in _FLOAT_COEFFS:
+        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "")
+        if raw:
+            try:
+                kwargs[key] = float(raw)
+            except ValueError:
+                pass
+
+    for key in _INT_COEFFS:
+        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "")
+        if raw:
+            try:
+                kwargs[key] = int(raw)
+            except ValueError:
+                pass
+
+    for key in _TUPLE_FLOAT_COEFFS:
+        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "")
+        if raw:
+            try:
+                vals = tuple(float(v.strip()) for v in raw.split(",") if v.strip())
+                default_len = len(getattr(defaults, key))
+                if len(vals) == default_len:
+                    kwargs[key] = vals
+            except ValueError:
+                pass
+
+    for key in _TUPLE_INT_COEFFS:
+        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "")
+        if raw:
+            try:
+                vals = tuple(int(v.strip()) for v in raw.split(",") if v.strip())
+                default_len = len(getattr(defaults, key))
+                if len(vals) == default_len:
+                    kwargs[key] = vals
+            except ValueError:
+                pass
+
+    if not kwargs:
+        return defaults
+    # Merge with defaults for any unset fields
+    for f in defaults.__dataclass_fields__:
+        if f not in kwargs:
+            kwargs[f] = getattr(defaults, f)
+    return XpSettings(**kwargs)  # type: ignore[arg-type]
+
+
 XP_SOURCE_TEXT = "text"
 XP_SOURCE_REPLY = "reply"
 XP_SOURCE_VOICE = "voice"
