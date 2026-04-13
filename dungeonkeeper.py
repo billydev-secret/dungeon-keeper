@@ -235,6 +235,39 @@ bot.startup_task_factories.append(
 
 
 # ==============================
+# Startup backfill — score messages missing calculated fields
+# ==============================
+async def _startup_backfill() -> None:
+    """One-time check on startup for messages missing VADER sentiment scores."""
+    import asyncio
+    await bot.wait_until_ready()
+
+    def _run():
+        from services.sentiment_service import backfill
+        with open_db(DB_PATH) as conn:
+            missing = conn.execute(
+                "SELECT COUNT(*) FROM messages m "
+                "LEFT JOIN message_sentiment ms ON m.message_id = ms.message_id "
+                "WHERE m.guild_id = ? AND ms.message_id IS NULL "
+                "AND m.content IS NOT NULL AND m.content != ''",
+                (ctx.guild_id,),
+            ).fetchone()[0]
+            if missing == 0:
+                log.info("Startup backfill: all messages have sentiment scores")
+                return
+            log.info("Startup backfill: %d messages missing sentiment scores, backfilling...", missing)
+            scored = backfill(conn, ctx.guild_id, max_messages=missing)
+            log.info("Startup backfill: scored %d messages", scored)
+
+    try:
+        await asyncio.to_thread(_run)
+    except Exception:
+        log.exception("Startup backfill failed")
+
+bot.startup_task_factories.append(lambda: _startup_backfill())
+
+
+# ==============================
 # Health dashboard batch loop
 # ==============================
 async def _health_batch_loop() -> None:
@@ -247,6 +280,7 @@ async def _health_batch_loop() -> None:
             _member_count = guild.member_count if guild else 0
             _voice_active = 0
             _nsfw_ids: list[int] = []
+            _mod_ids: list[int] = []
             _recent_joins: dict[int, float] = {}
             if guild:
                 import time as _t
@@ -254,6 +288,12 @@ async def _health_batch_loop() -> None:
                 for _vc in guild.voice_channels:
                     _voice_active += sum(1 for _m in _vc.members if not _m.bot)
                 _nsfw_ids = [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)]
+                for _m in guild.members:
+                    if _m.bot:
+                        continue
+                    _perms = _m.guild_permissions
+                    if _perms.administrator or _perms.manage_guild or _perms.kick_members or _perms.ban_members:
+                        _mod_ids.append(_m.id)
                 for _m in guild.members:
                     if not _m.bot and _m.joined_at:
                         _age = _now - _m.joined_at.timestamp()
@@ -295,7 +335,7 @@ async def _health_batch_loop() -> None:
                     set_cached(conn, ctx.guild_id, "cohort_retention", data)
                     data = compute_churn_risk(conn, ctx.guild_id)
                     set_cached(conn, ctx.guild_id, "churn_risk", data)
-                    data = compute_mod_workload(conn, ctx.guild_id)
+                    data = compute_mod_workload(conn, ctx.guild_id, mod_ids=_mod_ids)
                     set_cached(conn, ctx.guild_id, "mod_workload", data)
                     data = compute_incidents(conn, ctx.guild_id)
                     set_cached(conn, ctx.guild_id, "incidents", data)

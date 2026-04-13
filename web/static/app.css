@@ -874,6 +874,38 @@ html, body {
 .home-action-detail { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-action-time { color: var(--text-dim); font-size: 11px; margin-left: 10px; white-space: nowrap; }
 
+/* Sentiment feed tile */
+.sf-row {
+  display: flex;
+  align-items: flex-start;
+  padding: 4px 0;
+  font-size: 13px;
+  border-bottom: 1px solid var(--grid);
+  gap: 8px;
+}
+.sf-row:last-child { border-bottom: none; }
+.sf-score { font-weight: 600; min-width: 44px; font-size: 12px; flex-shrink: 0; }
+.sf-body { flex: 1; min-width: 0; }
+.sf-meta { display: block; font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-text { display: block; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-time { color: var(--text-dim); font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+
+/* Sentiment feed panel */
+.sf-panel-author { white-space: nowrap; }
+.sf-panel-channel { white-space: nowrap; color: var(--text-dim); }
+.sf-panel-content { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-filter-btn {
+  background: var(--bg-alt);
+  border: 1px solid var(--grid);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.sf-filter-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.sf-filter-btn.sf-filter-active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+
 /* Edit toggle & reset */
 .home-edit-toggle {
   background: var(--bg-alt);

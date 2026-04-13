@@ -184,8 +184,8 @@ export function mount(container) {
             borderColor: "#B36A92",
             backgroundColor: "#B36A9233",
             borderWidth: 2,
-            pointRadius: 4,
-            pointHoverRadius: 6,
+            pointRadius: 5,
+            pointHoverRadius: 8,
             stepped: "middle",
             fill: false,
             order: 1,
@@ -205,6 +205,82 @@ export function mount(container) {
         },
       },
     });
+
+    // ── Drag cap-limit points on the chart ─────────────────────
+    let dragIdx = -1;
+
+    function getPointIndex(e) {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const ds = chart.getDatasetMeta(1); // Cap Limit dataset
+      const hitRadius = 12;
+      for (let i = 0; i < ds.data.length; i++) {
+        const pt = ds.data[i];
+        if (Math.abs(pt.x - x) < hitRadius && Math.abs(pt.y - y) < hitRadius) return i;
+      }
+      return -1;
+    }
+
+    function yToValue(yPixel) {
+      const area = chart.chartArea;
+      const yScale = chart.scales.y;
+      const val = yScale.getValueForPixel(yPixel);
+      return Math.max(1, Math.round(val));
+    }
+
+    canvas.addEventListener("mousedown", (e) => {
+      const idx = getPointIndex(e);
+      if (idx >= 0) { dragIdx = idx; canvas.style.cursor = "grabbing"; }
+    });
+
+    canvas.addEventListener("mousemove", (e) => {
+      if (dragIdx >= 0) {
+        const rect = canvas.getBoundingClientRect();
+        const yPixel = e.clientY - rect.top;
+        const val = yToValue(yPixel);
+        sliderValues[dragIdx] = val;
+        chart.data.datasets[1].data[dragIdx] = val;
+        chart.update("none");
+        // Sync slider + label
+        const slider = container.querySelector(`[data-slider-idx="${dragIdx}"]`);
+        if (slider) slider.value = val;
+        const valLabel = container.querySelector(`[data-val-idx="${dragIdx}"]`);
+        if (valLabel) valLabel.textContent = val;
+      } else {
+        canvas.style.cursor = getPointIndex(e) >= 0 ? "grab" : "default";
+      }
+    });
+
+    canvas.addEventListener("mouseup", () => {
+      if (dragIdx >= 0) { dragIdx = -1; canvas.style.cursor = "default"; }
+    });
+    canvas.addEventListener("mouseleave", () => {
+      if (dragIdx >= 0) { dragIdx = -1; canvas.style.cursor = "default"; }
+    });
+
+    // Touch support for mobile
+    canvas.addEventListener("touchstart", (e) => {
+      const touch = e.touches[0];
+      const idx = getPointIndex(touch);
+      if (idx >= 0) { dragIdx = idx; e.preventDefault(); }
+    }, { passive: false });
+    canvas.addEventListener("touchmove", (e) => {
+      if (dragIdx < 0) return;
+      e.preventDefault();
+      const touch = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      const yPixel = touch.clientY - rect.top;
+      const val = yToValue(yPixel);
+      sliderValues[dragIdx] = val;
+      chart.data.datasets[1].data[dragIdx] = val;
+      chart.update("none");
+      const slider = container.querySelector(`[data-slider-idx="${dragIdx}"]`);
+      if (slider) slider.value = val;
+      const valLabel = container.querySelector(`[data-val-idx="${dragIdx}"]`);
+      if (valLabel) valLabel.textContent = val;
+    }, { passive: false });
+    canvas.addEventListener("touchend", () => { dragIdx = -1; });
 
     // ── Align slider row with chart area ─────────────────────────
     function alignSliders() {

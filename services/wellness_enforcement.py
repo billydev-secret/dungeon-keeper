@@ -48,6 +48,7 @@ from services.wellness_service import (
     get_cap_counter,
     get_slow_mode,
     get_wellness_user,
+    increment_blackout_overage,
     increment_cap_counter,
     increment_cap_overage,
     is_channel_exempt,
@@ -151,7 +152,17 @@ def decide_action(
             break
 
     if active_blackout is not None:
-        action = _enforcement_to_action(user.enforcement_level)
+        if user.enforcement_level == "gradual":
+            day_epoch = int(now_local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+            overage = increment_blackout_overage(conn, active_blackout.id, day_epoch)
+            if overage <= 1:
+                action = Action.NUDGE
+            elif overage == 2:
+                action = Action.COOLDOWN
+            else:
+                action = Action.FRICTION
+        else:
+            action = _enforcement_to_action(user.enforcement_level)
         return EnforcementDecision(action, [], blackout=active_blackout, reason="blackout")
 
     # Cap evaluation

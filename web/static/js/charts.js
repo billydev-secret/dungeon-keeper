@@ -266,12 +266,23 @@ export function makeCandlestickChart(canvas, { buckets, title }) {
           type: "logarithmic",
           reverse: true,
           grid: { color: GRID },
+          afterBuildTicks(axis) {
+            // Pseudo-decade ticks: 0.5s, 1s, 10s, 60s, 600s (in minutes)
+            axis.ticks = [
+              { value: 0.5 / 60 },   // 0.5s
+              { value: 1 / 60 },      // 1s
+              { value: 10 / 60 },     // 10s
+              { value: 1 },           // 60s
+              { value: 10 },          // 600s
+            ];
+          },
           ticks: {
             color: TEXT,
             callback(value) {
-              if (value < 1) return Math.round(value * 60) + "s";
-              if (value < 60) return Math.round(value) + "m";
-              return (value / 60).toFixed(1).replace(/\.0$/, "") + "h";
+              const secs = value * 60;
+              if (secs < 1) return secs.toFixed(1).replace(/\.0$/, "") + "s";
+              if (secs < 60) return Math.round(secs) + "s";
+              return Math.round(secs / 60) + "m";
             },
           },
           title: { display: true, text: "Time between messages (less = faster)", color: TEXT },

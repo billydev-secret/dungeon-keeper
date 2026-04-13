@@ -16,6 +16,8 @@ export function mount(container) {
         <td>${i + 1}</td>
         <td>${esc(m.user_name || m.user_id)}</td>
         <td>${m.count}</td>
+        <td>${m.actions ?? "—"}</td>
+        <td>${m.messages ?? "—"}</td>
       </tr>
     `).join("");
 
@@ -29,7 +31,7 @@ export function mount(container) {
     panel.innerHTML = `
       <header>
         <h2>Moderator Workload</h2>
-        <div class="subtitle">${d.total_actions_7d} actions this week</div>
+        <div class="subtitle">${d.total_actions_7d} total activity this week</div>
       </header>
 
       <div class="home-grid">
@@ -39,8 +41,9 @@ export function mount(container) {
           <div class="home-card-sub">P95: ${d.p95_response_time}m</div>
         </div>
         <div class="home-card">
-          <div class="home-card-label">Total Actions (7d)</div>
+          <div class="home-card-label">Total Activity (7d)</div>
           <div class="home-card-big">${d.total_actions_7d}</div>
+          <div class="home-card-sub">${d.total_audit_actions_7d ?? 0} actions · ${d.total_messages_7d ?? 0} messages</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Workload Gini</div>
@@ -61,7 +64,7 @@ export function mount(container) {
 
       <div class="home-grid" style="margin-top:14px;">
         <div class="home-card">
-          <div class="home-card-label">Actions per Moderator</div>
+          <div class="home-card-label">Activity per Moderator</div>
           <div class="chart-wrap" style="min-height:280px"><canvas id="mod-bar-chart"></canvas></div>
         </div>
         <div class="home-card">
@@ -74,8 +77,8 @@ export function mount(container) {
         <div class="home-card">
           <div class="home-card-label">Moderator Leaderboard</div>
           <table class="data-table">
-            <thead><tr><th>#</th><th>Moderator</th><th>Actions (7d)</th></tr></thead>
-            <tbody>${modRows || '<tr><td colspan="3" class="home-dim">No data</td></tr>'}</tbody>
+            <thead><tr><th>#</th><th>Moderator</th><th>Total</th><th>Actions</th><th>Messages</th></tr></thead>
+            <tbody>${modRows || '<tr><td colspan="5" class="home-dim">No data</td></tr>'}</tbody>
           </table>
         </div>
         <div class="home-card">
@@ -94,8 +97,8 @@ export function mount(container) {
       charts.push(makeHorizontalBarChart(modCanvas, {
         labels: d.mod_actions.map(m => m.user_name || m.user_id),
         data: d.mod_actions.map(m => m.count),
-        title: "Actions per Moderator (7d)",
-        xLabel: "Actions",
+        title: "Activity per Moderator (7d)",
+        xLabel: "Activity",
         colors: d.mod_actions.map((_, i) => ROLE_COLORS[i % ROLE_COLORS.length]),
       }));
     }

@@ -1227,22 +1227,96 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
     seven_days_ago = _ts(7, now=now)
     thirty_days_ago = _ts(30, now=now)
 
-    # Total actions (7d)
+    # Build mod filter clause
+    mod_set = set(mod_ids) if mod_ids else None
+    if mod_set:
+        placeholders = ",".join("?" for _ in mod_set)
+        mod_filter = f" AND actor_id IN ({placeholders})"
+        mod_filter_author = f" AND author_id IN ({placeholders})"
+        mod_params = tuple(mod_set)
+    else:
+        mod_filter = ""
+        mod_filter_author = ""
+        mod_params = ()
+
+    # Collect mod-related channel IDs: mod chat + ticket/jail/policy channels
+    mod_channel_ids: set[int] = set()
+    # mod_channel_id from config
+    _mc_row = conn.execute(
+        "SELECT value FROM config WHERE key='mod_channel_id'"
+    ).fetchone()
+    if _mc_row and _mc_row["value"] and _mc_row["value"] != "0":
+        try:
+            mod_channel_ids.add(int(_mc_row["value"]))
+        except ValueError:
+            pass
+    # Active ticket channels
+    for r in conn.execute(
+        "SELECT channel_id FROM tickets WHERE guild_id=? AND channel_id>0",
+        (guild_id,),
+    ).fetchall():
+        mod_channel_ids.add(r["channel_id"])
+    # Active jail channels
+    for r in conn.execute(
+        "SELECT channel_id FROM jails WHERE guild_id=? AND channel_id>0",
+        (guild_id,),
+    ).fetchall():
+        mod_channel_ids.add(r["channel_id"])
+    # Policy ticket channels
+    for r in conn.execute(
+        "SELECT channel_id FROM policy_tickets WHERE guild_id=? AND channel_id>0",
+        (guild_id,),
+    ).fetchall():
+        mod_channel_ids.add(r["channel_id"])
+
+    # Total actions (7d) — mod-only when mod_ids provided
     total_actions = conn.execute(
-        "SELECT COUNT(*) FROM audit_log WHERE guild_id=? AND created_at>=?",
-        (guild_id, seven_days_ago),
+        "SELECT COUNT(*) FROM audit_log WHERE guild_id=? AND created_at>=?"
+        + mod_filter,
+        (guild_id, seven_days_ago) + mod_params,
     ).fetchone()[0]
 
     # Per-mod action counts (7d)
     mod_rows = conn.execute(
         "SELECT actor_id, COUNT(*) AS cnt FROM audit_log "
-        "WHERE guild_id=? AND created_at>=? GROUP BY actor_id ORDER BY cnt DESC",
-        (guild_id, seven_days_ago),
+        "WHERE guild_id=? AND created_at>=?" + mod_filter
+        + " GROUP BY actor_id ORDER BY cnt DESC",
+        (guild_id, seven_days_ago) + mod_params,
     ).fetchall()
-    mod_actions = [{"user_id": str(r["actor_id"]), "count": r["cnt"]} for r in mod_rows]
+    action_by_mod: dict[int, int] = {r["actor_id"]: r["cnt"] for r in mod_rows}
+
+    # Per-mod message counts in mod channels (7d)
+    msg_by_mod: dict[int, int] = {}
+    if mod_channel_ids:
+        ch_placeholders = ",".join("?" for _ in mod_channel_ids)
+        msg_rows = conn.execute(
+            "SELECT author_id, COUNT(*) AS cnt FROM messages "
+            "WHERE guild_id=? AND ts>=? AND channel_id IN ("
+            + ch_placeholders + ")" + mod_filter_author
+            + " GROUP BY author_id",
+            (guild_id, seven_days_ago) + tuple(mod_channel_ids) + mod_params,
+        ).fetchall()
+        msg_by_mod = {r["author_id"]: r["cnt"] for r in msg_rows}
+
+    # Merge: total activity = audit actions + mod-channel messages
+    all_mod_ids = set(action_by_mod.keys()) | set(msg_by_mod.keys())
+    mod_actions = []
+    for mid in all_mod_ids:
+        acts = action_by_mod.get(mid, 0)
+        msgs = msg_by_mod.get(mid, 0)
+        mod_actions.append({
+            "user_id": str(mid),
+            "count": acts + msgs,
+            "actions": acts,
+            "messages": msgs,
+        })
+    mod_actions.sort(key=lambda m: m["count"], reverse=True)  # type: ignore[arg-type,return-value]
+
+    total_messages = sum(msg_by_mod.values())
+    total_activity = total_actions + total_messages
 
     # Workload Gini
-    action_counts = [r["cnt"] for r in mod_rows]
+    action_counts: list[float] = [m["count"] for m in mod_actions]  # type: ignore[misc]
     workload_gini = round(_gini(action_counts), 3) if action_counts else 0
 
     # Response times: time from ticket open to first mod action on it
@@ -1265,11 +1339,12 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
     median_rt = round(statistics.median(response_times), 1) if response_times else 0
     p95_rt = round(sorted(response_times)[int(len(response_times) * 0.95)], 1) if len(response_times) >= 5 else median_rt
 
-    # Action type breakdown
+    # Action type breakdown (mod-only when filtered)
     type_rows = conn.execute(
         "SELECT action, COUNT(*) AS cnt FROM audit_log "
-        "WHERE guild_id=? AND created_at>=? GROUP BY action ORDER BY cnt DESC",
-        (guild_id, seven_days_ago),
+        "WHERE guild_id=? AND created_at>=?" + mod_filter
+        + " GROUP BY action ORDER BY cnt DESC",
+        (guild_id, seven_days_ago) + mod_params,
     ).fetchall()
     action_types = [{"action": r["action"], "count": r["cnt"]} for r in type_rows]
 
@@ -1314,7 +1389,9 @@ def compute_mod_workload(conn: sqlite3.Connection, guild_id: int, *,
         "median_response_time": median_rt,
         "p95_response_time": p95_rt,
         "badge": badge,
-        "total_actions_7d": total_actions,
+        "total_actions_7d": total_activity,
+        "total_audit_actions_7d": total_actions,
+        "total_messages_7d": total_messages,
         "workload_gini": workload_gini,
         "mod_actions": mod_actions,
         "action_types": action_types,

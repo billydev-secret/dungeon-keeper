@@ -223,6 +223,45 @@ async def health_tiles(
                         "timeline": cached["timeline"],
                     }
 
+                if _want("sentiment_feed"):
+                    feed_rows = conn.execute(
+                        """SELECT ms.message_id, ms.channel_id, m.author_id,
+                                  substr(m.content, 1, 120) AS content,
+                                  ms.sentiment, ms.emotion, m.ts
+                           FROM message_sentiment ms
+                           JOIN messages m ON ms.message_id = m.message_id
+                           WHERE ms.guild_id = ?
+                             AND (ms.sentiment >= 0.5 OR ms.sentiment <= -0.5)
+                           ORDER BY m.ts DESC LIMIT 8""",
+                        (ctx.guild_id,),
+                    ).fetchall()
+                    pos_count = conn.execute(
+                        "SELECT COUNT(*) FROM message_sentiment "
+                        "WHERE guild_id = ? AND sentiment >= 0.5 AND computed_at >= ?",
+                        (ctx.guild_id, time.time() - 86400),
+                    ).fetchone()[0]
+                    neg_count = conn.execute(
+                        "SELECT COUNT(*) FROM message_sentiment "
+                        "WHERE guild_id = ? AND sentiment <= -0.5 AND computed_at >= ?",
+                        (ctx.guild_id, time.time() - 86400),
+                    ).fetchone()[0]
+                    tiles["sentiment_feed"] = {
+                        "messages": [
+                            {
+                                "message_id": str(r["message_id"]),
+                                "channel_id": str(r["channel_id"]),
+                                "author_id": str(r["author_id"]),
+                                "content": r["content"],
+                                "sentiment": r["sentiment"],
+                                "emotion": r["emotion"],
+                                "ts": r["ts"],
+                            }
+                            for r in feed_rows
+                        ],
+                        "positive_24h": pos_count,
+                        "negative_24h": neg_count,
+                    }
+
             # --- Admin-only tiles ---
             if is_admin:
                 if _want("gini"):
@@ -337,19 +376,25 @@ async def health_tiles(
                         "dimensions": composite["dimensions"],
                     }
 
-            # Resolve names for channel health top5
+            # Resolve names for channel health top5 + sentiment feed
             ch_ids = set()
             for tile_key in ("channel_health",):
                 if tile_key in tiles and "top5" in tiles[tile_key]:
                     for ch in tiles[tile_key]["top5"]:
                         ch_ids.add(int(ch["channel_id"]))
+            if "sentiment_feed" in tiles:
+                for msg in tiles["sentiment_feed"].get("messages", []):
+                    ch_ids.add(int(msg["channel_id"]))
             ch_names = _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids) if ch_ids else {}
 
-            # Resolve names for mod workload
+            # Resolve names for mod workload + sentiment feed
             mod_user_ids = set()
             if "mod_workload" in tiles:
                 for m in tiles["mod_workload"].get("mod_actions", []):
                     mod_user_ids.add(int(m["user_id"]))
+            if "sentiment_feed" in tiles:
+                for msg in tiles["sentiment_feed"].get("messages", []):
+                    mod_user_ids.add(int(msg["author_id"]))
             user_names = _resolve_user_names(conn, guild, ctx.guild_id, mod_user_ids) if mod_user_ids else {}
 
             return {
@@ -493,6 +538,64 @@ async def health_sentiment(
             for ch in data["per_channel"]:
                 ch["channel_name"] = ch_names.get(int(ch["channel_id"]), "")
             return data
+    return await run_query(_q)
+
+
+@router.get("/health/sentiment-feed")
+async def health_sentiment_feed(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(ctx.guild_id) if bot else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            rows = conn.execute(
+                """SELECT ms.message_id, ms.channel_id, m.author_id,
+                          m.content, ms.sentiment, ms.emotion, m.ts
+                   FROM message_sentiment ms
+                   JOIN messages m ON ms.message_id = m.message_id
+                   WHERE ms.guild_id = ?
+                     AND (ms.sentiment >= 0.5 OR ms.sentiment <= -0.5)
+                   ORDER BY m.ts DESC LIMIT 50""",
+                (ctx.guild_id,),
+            ).fetchall()
+            pos_count = conn.execute(
+                "SELECT COUNT(*) FROM message_sentiment "
+                "WHERE guild_id = ? AND sentiment >= 0.5 AND computed_at >= ?",
+                (ctx.guild_id, time.time() - 86400),
+            ).fetchone()[0]
+            neg_count = conn.execute(
+                "SELECT COUNT(*) FROM message_sentiment "
+                "WHERE guild_id = ? AND sentiment <= -0.5 AND computed_at >= ?",
+                (ctx.guild_id, time.time() - 86400),
+            ).fetchone()[0]
+            messages = [
+                {
+                    "message_id": str(r["message_id"]),
+                    "channel_id": str(r["channel_id"]),
+                    "author_id": str(r["author_id"]),
+                    "content": r["content"],
+                    "sentiment": r["sentiment"],
+                    "emotion": r["emotion"],
+                    "ts": r["ts"],
+                }
+                for r in rows
+            ]
+            ch_ids = {int(m["channel_id"]) for m in messages}
+            user_ids = {int(m["author_id"]) for m in messages}
+            ch_names = _resolve_channel_names(conn, guild, ctx.guild_id, ch_ids) if ch_ids else {}
+            u_names = _resolve_user_names(conn, guild, ctx.guild_id, user_ids) if user_ids else {}
+            for m in messages:
+                m["channel_name"] = ch_names.get(int(m["channel_id"]), "")
+                m["author_name"] = u_names.get(int(m["author_id"]), "")
+            return {
+                "messages": messages,
+                "positive_24h": pos_count,
+                "negative_24h": neg_count,
+            }
     return await run_query(_q)
 
 

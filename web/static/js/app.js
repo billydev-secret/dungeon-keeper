@@ -18,6 +18,7 @@ const SECTIONS = [
       { heading: "Moderation", items: [
         { id: "health-incidents",       label: "Incidents",          module: "./panels/health-incidents.js" },
         { id: "health-sentiment",       label: "Sentiment & Tone",  module: "./panels/health-sentiment.js" },
+        { id: "health-sentiment-feed",  label: "Sentiment Feed",    module: "./panels/health-sentiment-feed.js" },
         { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
       ]},
       { heading: "General", items: [

@@ -152,6 +152,17 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
 
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS wellness_blackout_overages (
+            blackout_id   INTEGER NOT NULL,
+            day_epoch     INTEGER NOT NULL,
+            overage_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (blackout_id, day_epoch)
+        )
+        """
+    )
+
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS wellness_blackout_active (
             guild_id    INTEGER NOT NULL,
             user_id     INTEGER NOT NULL,
@@ -828,12 +839,32 @@ def increment_cap_overage(
     return int(row["overage_count"]) if row else 0
 
 
+def increment_blackout_overage(
+    conn: sqlite3.Connection, blackout_id: int, day_epoch: int,
+) -> int:
+    """Bump and return the new overage count for a blackout on a given day."""
+    conn.execute(
+        """
+        INSERT INTO wellness_blackout_overages (blackout_id, day_epoch, overage_count)
+        VALUES (?, ?, 1)
+        ON CONFLICT(blackout_id, day_epoch) DO UPDATE SET overage_count = overage_count + 1
+        """,
+        (blackout_id, day_epoch),
+    )
+    row = conn.execute(
+        "SELECT overage_count FROM wellness_blackout_overages WHERE blackout_id = ? AND day_epoch = ?",
+        (blackout_id, day_epoch),
+    ).fetchone()
+    return int(row["overage_count"]) if row else 0
+
+
 def gc_old_cap_data(conn: sqlite3.Connection, older_than_seconds: int = 14 * 86400) -> int:
     """Delete counter/overage rows older than the cutoff. Returns rows deleted."""
     cutoff = int(time.time() - older_than_seconds)
     cur1 = conn.execute("DELETE FROM wellness_cap_counters WHERE window_start_epoch < ?", (cutoff,))
     cur2 = conn.execute("DELETE FROM wellness_cap_overages WHERE window_start_epoch < ?", (cutoff,))
-    return (cur1.rowcount or 0) + (cur2.rowcount or 0)
+    cur3 = conn.execute("DELETE FROM wellness_blackout_overages WHERE day_epoch < ?", (cutoff,))
+    return (cur1.rowcount or 0) + (cur2.rowcount or 0) + (cur3.rowcount or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -944,6 +975,7 @@ def toggle_blackout(conn: sqlite3.Connection, blackout_id: int, enabled: bool) -
 def remove_blackout(conn: sqlite3.Connection, blackout_id: int) -> bool:
     cur = conn.execute("DELETE FROM wellness_blackouts WHERE id = ?", (blackout_id,))
     conn.execute("DELETE FROM wellness_blackout_active WHERE blackout_id = ?", (blackout_id,))
+    conn.execute("DELETE FROM wellness_blackout_overages WHERE blackout_id = ?", (blackout_id,))
     return (cur.rowcount or 0) > 0
 
 

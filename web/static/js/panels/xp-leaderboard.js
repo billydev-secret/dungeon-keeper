@@ -30,6 +30,7 @@ export function mount(container, initialParams) {
         <div class="chart-wrap" style="flex:2;min-width:300px;"><canvas data-chart-levels></canvas></div>
         <div class="chart-wrap" style="flex:1;min-width:200px;"><canvas data-chart-sources></canvas></div>
       </div>
+      <div class="chart-wrap" style="margin-top:12px;min-height:220px;"><canvas data-chart-histogram></canvas></div>
       <div data-table-wrap style="margin-top:12px; max-height:400px; overflow-y:auto;"></div>
     </div>
   `;
@@ -39,6 +40,7 @@ export function mount(container, initialParams) {
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chartLevels = null;
   let chartSources = null;
+  let chartHistogram = null;
 
   if (initialParams.days) daysEl.value = initialParams.days;
 
@@ -57,6 +59,7 @@ export function mount(container, initialParams) {
       const data = await api("/api/reports/xp-leaderboard", params);
       if (chartLevels) { chartLevels.destroy(); chartLevels = null; }
       if (chartSources) { chartSources.destroy(); chartSources = null; }
+      if (chartHistogram) { chartHistogram.destroy(); chartHistogram = null; }
 
       const label = INTERVALS.find((i) => i.value === daysEl.value)?.label || "All Time";
       statsEl.textContent = `${data.total_users} users tracked · ${label}`;
@@ -83,6 +86,37 @@ export function mount(container, initialParams) {
           labels: srcLabels.map((s) => s.replace("_", " ")),
           data: srcLabels.map((s) => data.source_totals[s]),
           title: "XP by Source",
+        });
+      }
+
+      // XP histogram – 10 buckets each spanning 10% of the range
+      if (data.leaderboard.length > 1) {
+        const xpValues = data.leaderboard.map((r) => r.total_xp);
+        const minXp = Math.min(...xpValues);
+        const maxXp = Math.max(...xpValues);
+        const range = maxXp - minXp || 1;
+        const bucketCount = 10;
+        const bucketSize = range / bucketCount;
+        const buckets = Array(bucketCount).fill(0);
+        for (const xp of xpValues) {
+          let idx = Math.floor((xp - minXp) / bucketSize);
+          if (idx >= bucketCount) idx = bucketCount - 1;
+          buckets[idx]++;
+        }
+        const histLabels = buckets.map((_, i) => {
+          const lo = minXp + i * bucketSize;
+          const hi = lo + bucketSize;
+          return `${fmtXp(lo)}–${fmtXp(hi)}`;
+        });
+        const histWrap = container.querySelector("[data-chart-histogram]").parentElement;
+        histWrap.innerHTML = '<canvas data-chart-histogram></canvas>';
+        chartHistogram = makeBarChart(container.querySelector("[data-chart-histogram]"), {
+          labels: histLabels,
+          data: buckets,
+          title: "XP Distribution",
+          xLabel: "XP Range",
+          yLabel: "Members",
+          color: "#B36A92",
         });
       }
 
@@ -140,6 +174,7 @@ export function mount(container, initialParams) {
     unmount() {
       if (chartLevels) { chartLevels.destroy(); chartLevels = null; }
       if (chartSources) { chartSources.destroy(); chartSources = null; }
+      if (chartHistogram) { chartHistogram.destroy(); chartHistogram = null; }
     },
   };
 }

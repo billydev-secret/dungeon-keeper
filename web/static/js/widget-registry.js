@@ -31,6 +31,7 @@ const WIDGETS = [
   { id: "health-churn-risk",       label: "Churn Risk",          category: "Health", perms: ["admin"], source: "health", tileKey: "churn_risk",       wide: false, nav: "health-churn-risk",      needsNames: false },
   { id: "health-mod-workload",     label: "Mod Workload",        category: "Health", perms: ["admin"], source: "health", tileKey: "mod_workload",     wide: false, nav: "health-mod-workload",    needsNames: true  },
   { id: "health-incidents",        label: "Incidents",           category: "Health", perms: ["admin"], source: "health", tileKey: "incidents",        wide: false, nav: "health-incidents",       needsNames: false },
+  { id: "health-sentiment-feed",  label: "Sentiment Feed",      category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment-feed", needsNames: true  },
 ];
 
 // Keyed lookup
@@ -78,6 +79,7 @@ const TILE_LOADERS = {
   "health-churn-risk":      () => import("./tiles/churn-risk.js"),
   "health-mod-workload":    () => import("./tiles/mod-workload.js"),
   "health-incidents":       () => import("./tiles/incidents.js"),
+  "health-sentiment-feed": () => import("./tiles/sentiment-feed.js"),
 };
 
 // Cache resolved modules so we import each tile at most once
