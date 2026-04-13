@@ -348,7 +348,7 @@ async def home_data(
                 returned_users = [
                     {"user_id": str(c["author_id"]), "user_name": "", "gap_hours": round(c["gap"] / 3600, 1)}
                     for c in return_candidates if c["author_id"] not in acknowledged
-                ][:15]
+                ][:5]
                 result["returned_users"] = returned_users
 
             # Conversation starters
