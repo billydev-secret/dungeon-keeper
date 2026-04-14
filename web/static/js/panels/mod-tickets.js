@@ -269,43 +269,45 @@ const FILTERS = {
 
 export function mount(container) {
   container.innerHTML = `
-    <div class="panel-head">
-      <div>
-        <div class="kicker">Moderation · Tickets</div>
-        <h1 class="panel-title">Active <em>tickets</em></h1>
-        <div class="sub" style="font-size:13px;color:var(--ink-dim);margin-top:6px">
-          Flagged messages, auto-mod hits, and member reports awaiting review.
-        </div>
-      </div>
-    </div>
-
-    <div class="mod-stats" data-stats>
-      <div class="mod-stat open"><div class="lbl">Open</div><div class="v">—</div><div class="sub">loading…</div></div>
-      <div class="mod-stat claimed"><div class="lbl">Claimed</div><div class="v">—</div><div class="sub"></div></div>
-      <div class="mod-stat resolved"><div class="lbl">Closed</div><div class="v">—</div><div class="sub"></div></div>
-      <div class="mod-stat avg"><div class="lbl">Escalated</div><div class="v">—</div><div class="sub"></div></div>
-    </div>
-
-    <section class="mod-split">
-      <div class="ticket-list-wrap">
-        <div class="ticket-list-head">
-          <h3>Queue</h3>
-          <div class="ctrl-group" role="tablist" data-filter-group>
-            <button class="active" data-filter="open">Open</button>
-            <button data-filter="mine">Mine</button>
-            <button data-filter="closed">Closed</button>
-            <button data-filter="all">All</button>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <div class="kicker">Moderation · Tickets</div>
+          <h1 class="panel-title">Active <em>tickets</em></h1>
+          <div class="sub" style="font-size:13px;color:var(--ink-dim);margin-top:6px">
+            Flagged messages, auto-mod hits, and member reports awaiting review.
           </div>
         </div>
-        <div class="ticket-list" data-list>
-          <div class="empty">Loading…</div>
-        </div>
       </div>
 
-      <div class="ticket-detail" data-detail>
-        <div class="empty">Loading…</div>
+      <div class="mod-stats" data-stats>
+        <div class="mod-stat open"><div class="lbl">Open</div><div class="v">—</div><div class="sub">loading…</div></div>
+        <div class="mod-stat claimed"><div class="lbl">Claimed</div><div class="v">—</div><div class="sub"></div></div>
+        <div class="mod-stat resolved"><div class="lbl">Closed</div><div class="v">—</div><div class="sub"></div></div>
+        <div class="mod-stat avg"><div class="lbl">Escalated</div><div class="v">—</div><div class="sub"></div></div>
       </div>
-    </section>
+
+      <section class="mod-split">
+        <div class="ticket-list-wrap">
+          <div class="ticket-list-head">
+            <h3>Queue</h3>
+            <div class="ctrl-group" role="tablist" data-filter-group>
+              <button class="active" data-filter="open">Open</button>
+              <button data-filter="mine">Mine</button>
+              <button data-filter="closed">Closed</button>
+              <button data-filter="all">All</button>
+            </div>
+          </div>
+          <div class="ticket-list" data-list>
+            <div class="empty">Loading…</div>
+          </div>
+        </div>
+
+        <div class="ticket-detail" data-detail>
+          <div class="empty">Loading…</div>
+        </div>
+      </section>
+    </div>
   `;
 
   const statsEl = container.querySelector("[data-stats]");
