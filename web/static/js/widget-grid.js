@@ -1,8 +1,10 @@
 // Widget grid renderer — renders widgets in a CSS grid with optional edit mode.
-// Supports drag-and-drop reorder, remove, and add-widget picker.
+// Supports drag-and-drop reorder, remove, add-widget picker, and corner-drag resize.
 
 import { WIDGET_MAP, ALL_WIDGETS, loadRenderer } from "./widget-registry.js";
 import { esc } from "./tiles/tile-helpers.js";
+
+console.log("[widget-grid] resize-enabled build loaded");
 
 /**
  * Render the widget grid into a container.

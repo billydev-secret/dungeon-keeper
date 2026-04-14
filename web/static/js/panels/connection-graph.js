@@ -46,11 +46,26 @@ function filterSelect(placeholder, options) {
 
 export function mount(container, initialParams) {
   container.innerHTML = `
-    <div class="panel" style="display:flex; flex-direction:column; height:calc(100vh - 40px);">
+    <div class="panel" style="display:flex; flex-direction:column; min-height:calc(100vh - 40px);">
       <header>
         <h2>Connection Graph</h2>
         <div class="subtitle">Visual network of who interacts with whom</div>
       </header>
+
+      <details class="panel-about" style="margin:8px 0 10px;">
+        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About these metrics</summary>
+        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+          <strong style="color:var(--text-normal, #dbdee1);">Clustering</strong> is how much people form tight friend groups (target 0.25–0.55).
+          <strong style="color:var(--text-normal, #dbdee1);">Density</strong> is the fraction of all possible connections that exist.
+          <strong style="color:var(--text-normal, #dbdee1);">Reciprocity</strong> is how often interactions go both ways.
+          <strong style="color:var(--text-normal, #dbdee1);">Small-world</strong> is clustering ÷ density — >3 means tight local groups with short global paths.
+          <strong style="color:var(--text-normal, #dbdee1);">Avg path</strong> is the average hops between any two people.
+          <strong style="color:var(--text-normal, #dbdee1);">Bridge users</strong> connect otherwise separate groups.
+        </div>
+      </details>
+
+      <div data-scorecard class="home-grid" style="margin-bottom:10px;"></div>
+
       <div class="controls" style="flex-wrap:wrap;">
         <label>Layout
           <select data-control="layout">
@@ -70,6 +85,14 @@ export function mount(container, initialParams) {
             <option value="90">Last 90 days</option>
           </select>
         </label>
+        <label>Edge type
+          <select data-control="edge_type" disabled title="Requires log schema migration — replies/mentions/reactions aren't distinguished yet">
+            <option value="all">All</option>
+            <option value="reply">Replies</option>
+            <option value="mention">Mentions</option>
+            <option value="reaction">Reactions</option>
+          </select>
+        </label>
         <label>Focus member <span data-slot="member" style="display:inline-block;vertical-align:middle;"></span></label>
         <label>Min edge %
           <input type="number" data-control="min_pct" min="0" max="100" value="${initialParams.min_pct || 5}" title="Hide weak connections below this %" />
@@ -86,14 +109,19 @@ export function mount(container, initialParams) {
         <label>Max edges/node
           <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 3}" title="Max connections per person (0 = no limit)" />
         </label>
+        <label>Clusters
+          <span data-slot="cluster-filter" style="display:inline-block;vertical-align:middle;"></span>
+        </label>
       </div>
-      <div data-graph-wrap style="position:relative; flex:1; min-height:300px; min-width:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
+      <div data-graph-wrap style="position:relative; height:60vh; min-height:300px; min-width:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
         <canvas data-graph></canvas>
       </div>
       <div data-legend style="margin-top:4px; font-size:11px; color:#949ba4;">
-        Drag nodes · Scroll to zoom · Pan background · Node size = interactions · Edge width = weight
+        Drag nodes · Scroll to zoom · Pan background · Node size = interactions · Edge width = weight · Node color = detected community
       </div>
       <div data-isolates style="margin-top:8px;"></div>
+      <div data-metrics-tables class="home-grid" style="margin-top:14px;"></div>
+      <div data-heatmap style="margin-top:14px;"></div>
     </div>
   `;
 
@@ -104,9 +132,18 @@ export function mount(container, initialParams) {
   const limitEl       = container.querySelector('[data-control="limit"]');
   const spreadEl      = container.querySelector('[data-control="spread"]');
   const maxPerNodeEl  = container.querySelector('[data-control="max_per_node"]');
+  const scorecardEl   = container.querySelector("[data-scorecard]");
+  const metricsTablesEl = container.querySelector("[data-metrics-tables]");
+  const heatmapEl     = container.querySelector("[data-heatmap]");
+  const clusterFilterSlot = container.querySelector('[data-slot="cluster-filter"]');
   const wrap          = container.querySelector("[data-graph-wrap]");
   let canvas          = container.querySelector("[data-graph]");
   let ctx2d           = canvas.getContext("2d");
+
+  // Clusters hidden by the user (cluster_id values). Empty = show all.
+  const hiddenClusters = new Set();
+  // Cluster-id lookup keyed by user_id string, populated from API metrics.
+  let clusterByUser = {};
 
   let memberFS = filterSelect("Loading…", []);
   container.querySelector('[data-slot="member"]').appendChild(memberFS.el);
@@ -125,6 +162,12 @@ export function mount(container, initialParams) {
 
   layoutEl.value = initialParams.layout || "community";
   timescaleEl.value = initialParams.timescale || "";
+  if (initialParams.hidden_clusters) {
+    for (const cid of String(initialParams.hidden_clusters).split(",")) {
+      const n = parseInt(cid);
+      if (!isNaN(n)) hiddenClusters.add(n);
+    }
+  }
 
   let nodes = [];
   let edges = [];
@@ -545,7 +588,8 @@ export function mount(container, initialParams) {
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       const isHov = hovered && hovered._idx === i;
-      let color = NODE_CLR;
+      // Default to API-provided cluster for consistent coloring across layouts.
+      let color = COMMUNITY_COLORS[(n.cluster_id ?? 0) % COMMUNITY_COLORS.length];
       if (currentLayout === "community" && communityOf[i] !== undefined) {
         color = COMMUNITY_COLORS[communityOf[i] % COMMUNITY_COLORS.length];
       } else if (focusId && n.id === focusId) {
@@ -571,13 +615,15 @@ export function mount(container, initialParams) {
     if (hovered) {
       const n = hovered;
       const connEdges = edges.filter((e) => e.source === n._idx || e.target === n._idx);
+      const ratio = n.total_inbound > 0 ? (n.total_outbound / n.total_inbound).toFixed(2) : "∞";
       const lines = [
         n.name,
-        `Out: ${n.total_outbound}  In: ${n.total_inbound}`,
+        `Out: ${n.total_outbound}  In: ${n.total_inbound}  (ratio ${ratio})`,
         `Partners: ${n.unique_partners}  Edges shown: ${connEdges.length}`,
+        `Cluster: ${(n.cluster_id ?? 0) + 1}`,
       ];
       if (currentLayout === "community" && communityOf[n._idx] !== undefined) {
-        lines.push(`Community: ${communityOf[n._idx] + 1}`);
+        lines.push(`Layout group: ${communityOf[n._idx] + 1}`);
       }
       const pad = 6;
       ctx2d.font = "11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
@@ -698,12 +744,209 @@ export function mount(container, initialParams) {
       );
     }
 
+    // Cluster filter — drop edges whose endpoints are in a hidden cluster
+    if (hiddenClusters.size) {
+      filteredPairs = filteredPairs.filter((p) => {
+        const ca = clusterByUser[p.from_id];
+        const cb = clusterByUser[p.to_id];
+        return !hiddenClusters.has(ca) && !hiddenClusters.has(cb);
+      });
+    }
+
     // Collect nodes from remaining edges
     const nodeIds = new Set();
     for (const p of filteredPairs) { nodeIds.add(p.from_id); nodeIds.add(p.to_id); }
-    const filteredNodes = data.nodes.filter((n) => nodeIds.has(n.user_id));
+    let filteredNodes = data.nodes.filter((n) => nodeIds.has(n.user_id));
+    if (hiddenClusters.size) {
+      filteredNodes = filteredNodes.filter((n) => !hiddenClusters.has(n.cluster_id));
+    }
 
     return { nodes: filteredNodes, pairs: filteredPairs };
+  }
+
+  // ── Metrics rendering ─────────────────────────────────────────────────
+
+  const BADGE_COLORS = {
+    critical:   "#9E3B2E",
+    needs_work: "#B88A2C",
+    healthy:    "#7F8F3A",
+    excellent:  "#E6B84C",
+    unknown:    "#949ba4",
+  };
+
+  function renderScorecard(m) {
+    if (!m) { scorecardEl.innerHTML = ""; return; }
+    const badge = m.badge || "unknown";
+    const badgeColor = BADGE_COLORS[badge] || BADGE_COLORS.unknown;
+    scorecardEl.innerHTML = `
+      <div class="home-card">
+        <div class="home-card-label">Clustering
+          <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;background:${badgeColor};color:#18191c;font-size:10px;font-weight:600;text-transform:uppercase;">${esc(badge.replace("_", " "))}</span>
+        </div>
+        <div class="home-card-big">${m.clustering_coefficient}</div>
+        <div class="home-card-sub">Friend-group tightness (target 0.25–0.55)</div>
+      </div>
+      <div class="home-card">
+        <div class="home-card-label">Density</div>
+        <div class="home-card-big">${m.network_density}</div>
+        <div class="home-card-sub">Connections / possible (0–1)</div>
+      </div>
+      <div class="home-card">
+        <div class="home-card-label">Reciprocity</div>
+        <div class="home-card-big">${m.reciprocity}</div>
+        <div class="home-card-sub">Two-way conversation rate (&gt;0.35)</div>
+      </div>
+      <div class="home-card">
+        <div class="home-card-label">Small-world</div>
+        <div class="home-card-big">${m.small_world_quotient}</div>
+        <div class="home-card-sub">Clustering ÷ density (target &gt;3)</div>
+      </div>
+      <div class="home-card">
+        <div class="home-card-label">Avg path</div>
+        <div class="home-card-big">${m.avg_path_length}</div>
+        <div class="home-card-sub">Hops between any two people (&lt;3)</div>
+      </div>
+      <div class="home-card">
+        <div class="home-card-label">Bridge users</div>
+        <div class="home-card-big">${m.bridge_count}</div>
+        <div class="home-card-sub">${m.isolates} isolates · ${m.node_count} nodes</div>
+      </div>
+    `;
+  }
+
+  function renderMetricsTables(m) {
+    if (!m) { metricsTablesEl.innerHTML = ""; return; }
+    const bridgeRows = (m.bridge_users || []).map((b, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${esc(b.user_name || b.user_id)}</td>
+        <td>${b.betweenness}%</td>
+      </tr>
+    `).join("") || `<tr><td colspan="3" style="color:#949ba4;">No bridge users detected</td></tr>`;
+
+    const clusterRows = (m.clusters || []).map((c, i) => {
+      const color = COMMUNITY_COLORS[c.id % COMMUNITY_COLORS.length];
+      const hidden = hiddenClusters.has(c.id);
+      return `
+        <tr data-cluster-row="${c.id}" style="cursor:pointer;${hidden ? "opacity:0.4;" : ""}" title="Click to ${hidden ? "show" : "hide"} this cluster">
+          <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle;"></span>Cluster ${i + 1}</td>
+          <td>${c.size}</td>
+          <td style="color:#949ba4;font-size:11px;">${hidden ? "hidden" : "visible"}</td>
+        </tr>
+      `;
+    }).join("") || `<tr><td colspan="3" style="color:#949ba4;">No clusters detected</td></tr>`;
+
+    metricsTablesEl.innerHTML = `
+      <div class="home-card">
+        <div class="home-card-label">Top bridge users</div>
+        <table class="data-table">
+          <thead><tr><th>#</th><th>User</th><th>Betweenness</th></tr></thead>
+          <tbody>${bridgeRows}</tbody>
+        </table>
+      </div>
+      <div class="home-card">
+        <div class="home-card-label">Detected clusters</div>
+        <table class="data-table">
+          <thead><tr><th>Cluster</th><th>Size</th><th></th></tr></thead>
+          <tbody>${clusterRows}</tbody>
+        </table>
+      </div>
+    `;
+
+    metricsTablesEl.querySelectorAll("[data-cluster-row]").forEach((row) => {
+      row.addEventListener("click", () => {
+        const cid = parseInt(row.dataset.clusterRow);
+        if (hiddenClusters.has(cid)) hiddenClusters.delete(cid);
+        else hiddenClusters.add(cid);
+        syncClusterFilterChecks();
+        rebuildGraph();
+      });
+    });
+  }
+
+  function renderHeatmap(m) {
+    if (!m || !m.cross_cluster_matrix || !m.cross_cluster_matrix.length) {
+      heatmapEl.innerHTML = "";
+      return;
+    }
+    const mat = m.cross_cluster_matrix;
+    const labels = m.cross_cluster_labels || mat.map((_, i) => `Cluster ${i + 1}`);
+    const n = mat.length;
+    // Per-row normalization so each row sums to 1 (show internal vs external share)
+    const rowTotals = mat.map((row) => row.reduce((s, v) => s + v, 0) || 1);
+
+    const cell = 42;
+    const pad = 90;
+    const total = pad + n * cell + 20;
+    const cells = [];
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const raw = mat[i][j];
+        const frac = raw / rowTotals[i];
+        const alpha = Math.min(1, Math.sqrt(frac));
+        const bg = `rgba(230,184,76,${alpha.toFixed(3)})`;
+        const pctLabel = (frac * 100).toFixed(0) + "%";
+        cells.push(`
+          <div title="${esc(labels[i])} → ${esc(labels[j])}: ${raw} interactions (${pctLabel} of ${esc(labels[i])}'s out-edges)"
+               style="position:absolute;left:${pad + j * cell}px;top:${30 + i * cell}px;width:${cell - 1}px;height:${cell - 1}px;background:${bg};color:${alpha > 0.5 ? "#18191c" : "#dbdee1"};display:flex;align-items:center;justify-content:center;font-size:10px;">${raw > 0 ? raw : ""}</div>
+        `);
+      }
+    }
+    const colHeaders = labels.map((l, j) => `
+      <div style="position:absolute;left:${pad + j * cell}px;top:0;width:${cell - 1}px;height:28px;display:flex;align-items:flex-end;justify-content:center;font-size:10px;color:#949ba4;">${esc(l)}</div>
+    `).join("");
+    const rowHeaders = labels.map((l, i) => `
+      <div style="position:absolute;left:0;top:${30 + i * cell}px;width:${pad - 6}px;height:${cell - 1}px;display:flex;align-items:center;justify-content:flex-end;padding-right:6px;font-size:11px;color:#dbdee1;">${esc(l)}</div>
+    `).join("");
+
+    heatmapEl.innerHTML = `
+      <div class="home-card home-card-wide">
+        <div class="home-card-label">Cross-cluster interactions</div>
+        <div style="position:relative;height:${total}px;min-width:${pad + n * cell + 20}px;margin-top:6px;">
+          ${colHeaders}${rowHeaders}${cells.join("")}
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:#949ba4;">Row-normalized: darker = larger share of that cluster's outgoing interactions going to that target cluster. Diagonal shows internal activity.</div>
+      </div>
+    `;
+  }
+
+  function renderClusterFilter(clusters) {
+    if (!clusters || !clusters.length) {
+      clusterFilterSlot.innerHTML = `<span style="color:#949ba4;font-size:11px;">—</span>`;
+      return;
+    }
+    const items = clusters.map((c, i) => {
+      const color = COMMUNITY_COLORS[c.id % COMMUNITY_COLORS.length];
+      const checked = !hiddenClusters.has(c.id) ? "checked" : "";
+      return `<label style="display:flex;align-items:center;gap:4px;padding:2px 0;">
+        <input type="checkbox" data-cluster-toggle="${c.id}" ${checked} />
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};"></span>
+        <span style="font-size:12px;">Cluster ${i + 1}</span>
+      </label>`;
+    }).join("");
+    clusterFilterSlot.innerHTML = `
+      <details style="display:inline-block;position:relative;">
+        <summary style="cursor:pointer;padding:4px 8px;background:#2b2d31;border-radius:4px;font-size:12px;list-style:none;">
+          ${hiddenClusters.size ? `${clusters.length - hiddenClusters.size}/${clusters.length} shown` : "All shown"}
+        </summary>
+        <div style="position:absolute;z-index:10;top:calc(100% + 4px);left:0;background:#2b2d31;border:1px solid #3f4147;border-radius:4px;padding:6px 10px;min-width:140px;">${items}</div>
+      </details>
+    `;
+    clusterFilterSlot.querySelectorAll("[data-cluster-toggle]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const cid = parseInt(cb.dataset.clusterToggle);
+        if (cb.checked) hiddenClusters.delete(cid);
+        else hiddenClusters.add(cid);
+        rebuildGraph();
+      });
+    });
+  }
+
+  function syncClusterFilterChecks() {
+    clusterFilterSlot.querySelectorAll("[data-cluster-toggle]").forEach((cb) => {
+      const cid = parseInt(cb.dataset.clusterToggle);
+      cb.checked = !hiddenClusters.has(cid);
+    });
   }
 
   // ── Data loading ──────────────────────────────────────────────────────
@@ -711,10 +954,19 @@ export function mount(container, initialParams) {
   let cachedData = null;
 
   async function fetchData() {
-    const params = { limit: parseInt(limitEl.value) || 40 };
+    const params = { limit: parseInt(limitEl.value) || 40, include_metrics: 1 };
     const d = parseInt(timescaleEl.value);
     if (!isNaN(d) && d > 0) params.days = d;
     cachedData = await api("/api/reports/interaction-graph", params);
+    const metrics = cachedData.metrics || null;
+    clusterByUser = {};
+    for (const n of cachedData.nodes || []) {
+      clusterByUser[n.user_id] = n.cluster_id || 0;
+    }
+    renderScorecard(metrics);
+    renderMetricsTables(metrics);
+    renderHeatmap(metrics);
+    renderClusterFilter(metrics ? metrics.clusters : []);
     rebuildGraph();
   }
 
@@ -730,6 +982,7 @@ export function mount(container, initialParams) {
     qs.set("limit", limitEl.value);
     qs.set("spread", spreadEl.value);
     qs.set("max_per_node", maxPerNodeEl.value);
+    if (hiddenClusters.size) qs.set("hidden_clusters", [...hiddenClusters].join(","));
     history.replaceState(null, "", `#/connection-graph?${qs}`);
 
     if (sim) { cancelAnimationFrame(sim); sim = null; }
@@ -777,6 +1030,7 @@ export function mount(container, initialParams) {
         total_outbound: n.total_outbound,
         total_inbound: n.total_inbound,
         unique_partners: n.unique_partners,
+        cluster_id: n.cluster_id ?? 0,
       });
     });
 

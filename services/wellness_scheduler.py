@@ -28,6 +28,7 @@ import discord
 
 from db_utils import open_db
 from services.wellness_ai import generate_weekly_encouragement
+from utils import format_guild_for_log, format_user_for_log
 from services.wellness_service import (
     MILESTONES,
     SETTINGS_RETENTION_SECONDS,
@@ -297,7 +298,10 @@ async def _rebuild_active_list_for_guild(
     try:
         new_message = await channel.send(embed=embed)
     except (discord.Forbidden, discord.HTTPException):
-        log.warning("wellness: failed to post active list in guild %s", guild.id)
+        log.warning(
+            "wellness: failed to post active list in guild %s",
+            format_guild_for_log(guild),
+        )
         return
 
     # Pin the new message if we can
@@ -369,7 +373,8 @@ async def _post_milestone_celebrations(
             )
         except (discord.Forbidden, discord.HTTPException):
             log.debug(
-                "wellness: failed to post milestone celebration in guild %s", guild.id
+                "wellness: failed to post milestone celebration in guild %s",
+                format_guild_for_log(guild),
             )
             continue
 
@@ -397,7 +402,10 @@ async def wellness_active_list_loop(bot: discord.Client, db_path: Path) -> None:
                     await _post_milestone_celebrations(bot, db_path, guild)
                     await _rebuild_active_list_for_guild(bot, db_path, guild)
                 except Exception:
-                    log.exception("wellness_active_list_loop: guild %s error", guild.id)
+                    log.exception(
+                        "wellness_active_list_loop: guild %s error",
+                        format_guild_for_log(guild),
+                    )
         except Exception:
             log.exception("wellness_active_list_loop top-level error")
         await asyncio.sleep(3600)  # hourly
@@ -505,7 +513,10 @@ async def _generate_and_send_weekly_report(
     try:
         await member.send(embed=embed)
     except (discord.Forbidden, discord.HTTPException):
-        log.info("wellness_weekly_report: DM closed for user %s", user.user_id)
+        log.info(
+            "wellness_weekly_report: DM closed for user %s",
+            format_user_for_log(member, user.user_id),
+        )
 
     return True
 
@@ -529,8 +540,10 @@ async def wellness_weekly_report_loop(bot: discord.Client, db_path: Path) -> Non
                     except Exception:
                         log.exception(
                             "wellness_weekly_report_loop: failed for guild=%s user=%s",
-                            guild.id,
-                            u.user_id,
+                            format_guild_for_log(guild),
+                            format_user_for_log(
+                                guild.get_member(u.user_id), u.user_id
+                            ),
                         )
         except Exception:
             log.exception("wellness_weekly_report_loop top-level error")

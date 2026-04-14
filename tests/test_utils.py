@@ -1,7 +1,12 @@
 import unittest
 from types import SimpleNamespace
 
-from utils import format_user_for_log, resolve_user_for_log
+from utils import (
+    format_guild_for_log,
+    format_user_for_log,
+    resolve_guild_for_log,
+    resolve_user_for_log,
+)
 
 
 class FormatUserForLogTests(unittest.TestCase):
@@ -45,6 +50,36 @@ class ResolveUserForLogTests(unittest.TestCase):
 
     def test_none_guild_falls_back_to_id(self):
         self.assertEqual(resolve_user_for_log(None, 42), "user 42")
+
+
+class FormatGuildForLogTests(unittest.TestCase):
+    def test_no_args_returns_unknown(self):
+        self.assertEqual(format_guild_for_log(), "unknown guild")
+
+    def test_guild_id_only(self):
+        self.assertEqual(format_guild_for_log(guild_id=42), "guild 42")
+
+    def test_guild_with_name(self):
+        guild = SimpleNamespace(id=7, name="My Server")
+        self.assertEqual(format_guild_for_log(guild), "My Server (7)")
+
+    def test_guild_without_name_uses_id(self):
+        guild = SimpleNamespace(id=7, name=None)
+        self.assertEqual(format_guild_for_log(guild), "guild 7")
+
+
+class ResolveGuildForLogTests(unittest.TestCase):
+    def test_known_guild_uses_format(self):
+        guild = SimpleNamespace(id=10, name="Zone")
+        bot = SimpleNamespace(get_guild=lambda gid: guild if gid == 10 else None)
+        self.assertEqual(resolve_guild_for_log(bot, 10), "Zone (10)")
+
+    def test_unknown_guild_falls_back_to_id(self):
+        bot = SimpleNamespace(get_guild=lambda gid: None)
+        self.assertEqual(resolve_guild_for_log(bot, 99), "guild 99")
+
+    def test_none_bot_falls_back_to_id(self):
+        self.assertEqual(resolve_guild_for_log(None, 42), "guild 42")
 
 
 if __name__ == "__main__":

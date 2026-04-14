@@ -25,11 +25,27 @@ Chart.defaults.color = TEXT;
 Chart.defaults.borderColor = GRID;
 Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
 
+// Keep the x-axis minimum pinned to the original (labeled) edge when zooming,
+// instead of letting the zoom plugin center the visible range on the cursor.
+function pinXMinOnZoom({ chart }) {
+  const scale = chart.scales?.x;
+  const bounds = chart.getInitialScaleBounds?.().x;
+  if (!scale || !bounds) return;
+  const range = scale.max - scale.min;
+  const newMin = bounds.min;
+  const newMax = Math.min(bounds.max, newMin + range);
+  if (scale.min === newMin && scale.max === newMax) return;
+  chart.options.scales.x.min = newMin;
+  chart.options.scales.x.max = newMax;
+  chart.update("none");
+}
+
 const ZOOM_OPTIONS = {
   zoom: {
     wheel: { enabled: true },
     pinch: { enabled: true },
     mode: "x",
+    onZoomComplete: pinXMinOnZoom,
   },
   pan: {
     enabled: true,

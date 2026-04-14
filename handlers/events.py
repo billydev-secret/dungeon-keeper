@@ -36,6 +36,7 @@ from services.sentiment_service import score_text
 from services.welcome_service import build_leave_embed, build_welcome_embed
 from services.wellness_enforcement import wellness_on_message
 from services.xp_service import handle_level_progress
+from utils import format_guild_for_log
 from xp_system import count_xp_events, log_role_event, record_member_activity
 
 if TYPE_CHECKING:
@@ -109,7 +110,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                         )
                 log.debug(
                     "XP event rows for guild %s: %s",
-                    g.id,
+                    format_guild_for_log(g),
                     count_xp_events(conn, g.id),
                 )
             log.info(

@@ -14,6 +14,7 @@ import discord
 from discord import app_commands
 
 from services.wellness_partners import make_partner_request_view
+from utils import format_user_for_log
 from services.wellness_service import (
     ALL_DAYS_MASK,
     BLACKOUT_TEMPLATES,
@@ -313,7 +314,10 @@ class _SetupWizardView(discord.ui.View):
         try:
             await self._finish_setup(interaction, guild)
         except Exception:
-            log.exception("Wellness setup failed for user %s", interaction.user.id)
+            log.exception(
+                "Wellness setup failed for user %s",
+                format_user_for_log(interaction.user),
+            )
             try:
                 await interaction.response.edit_message(
                     content="⚠️ Something went wrong during setup. Please try again.",

@@ -70,6 +70,7 @@ from services.wellness_scheduler import (
 )
 from services.wellness_service import init_wellness_tables
 from services.xp_service import handle_level_progress
+from utils import format_guild_for_log
 from xp_system import init_xp_tables
 
 # ==============================
@@ -418,11 +419,17 @@ async def _health_batch_loop() -> None:
                         set_cached(conn, gid, "incidents", data)
 
                 await asyncio.to_thread(_batch)
-                log.info("Health metrics batch completed for guild %d", gid)
+                log.info(
+                    "Health metrics batch completed for guild %s",
+                    format_guild_for_log(guild),
+                )
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("Health metrics batch failed for guild %d", guild.id)
+                log.exception(
+                    "Health metrics batch failed for guild %s",
+                    format_guild_for_log(guild),
+                )
         await asyncio.sleep(900)  # 15 minutes
 
 

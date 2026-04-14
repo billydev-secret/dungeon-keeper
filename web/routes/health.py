@@ -76,7 +76,11 @@ def _guild_extras(ctx, guild):
 
 
 def _resolve_user_names(conn, guild, guild_id, user_ids: set[int]) -> dict[int, str]:
-    """Resolve user IDs to display names via guild cache then DB fallback."""
+    """Resolve user IDs to display names via guild cache then DB fallback.
+
+    Any IDs that can't be resolved get a friendly "User <id>" placeholder
+    so frontend consumers never have to render a raw ID.
+    """
     names: dict[int, str] = {}
     if guild:
         for uid in user_ids:
@@ -87,6 +91,9 @@ def _resolve_user_names(conn, guild, guild_id, user_ids: set[int]) -> dict[int, 
     if missing:
         db_names = get_known_users_bulk(conn, guild_id, list(missing))
         names.update(db_names)
+    for uid in user_ids:
+        if not names.get(uid):
+            names[uid] = f"User {uid}"
     return names
 
 

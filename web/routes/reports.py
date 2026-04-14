@@ -58,14 +58,14 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
     """Resolve user IDs to display names in a list of dicts.
 
     Each pair is (id_field, name_field). Tries the live guild cache first,
-    then falls back to the known_users DB table.
+    then falls back to the known_users DB table, then to a friendly
+    "User <id>" placeholder so the frontend never has to render a raw ID.
     """
     if not entries:
         return
 
     _guild_id = guild.id if guild else 0
 
-    # Collect all IDs that need resolving
     unresolved: set[int] = set()
     for entry in entries:
         for id_field, name_field in id_name_pairs:
@@ -78,7 +78,6 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
                         continue
                 unresolved.add(int(uid))
 
-    # DB fallback for any still-unresolved IDs
     if unresolved:
         with ctx.open_db() as conn:
             known = get_known_users_bulk(conn, _guild_id, list(unresolved))
@@ -89,6 +88,14 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
                 uid = entry.get(id_field)
                 if uid and int(uid) in known:
                     entry[name_field] = known[int(uid)]
+
+    for entry in entries:
+        for id_field, name_field in id_name_pairs:
+            if entry.get(name_field):
+                continue
+            uid = entry.get(id_field)
+            if uid:
+                entry[name_field] = f"User {uid}"
 
 
 # ── Role growth ──────────────────────────────────────────────────────────
@@ -567,12 +574,14 @@ async def interaction_graph(
     request: Request,
     days: int | None = None,
     limit: int = 50,
+    include_metrics: int = 0,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
+    want_metrics = bool(include_metrics)
 
     def _q():
         with ctx.open_db() as conn:
@@ -581,12 +590,13 @@ async def interaction_graph(
                 guild_id,
                 days=days,
                 limit=min(limit, 100),
+                include_metrics=want_metrics,
             )
 
     result = await cached_run_query(
         "interaction-graph",
         guild_id,
-        {"days": days, "limit": limit},
+        {"days": days, "limit": limit, "metrics": want_metrics},
         _q,
     )
     _resolve_names(ctx, guild, result.get("nodes", []), ("user_id", "user_name"))
@@ -604,6 +614,9 @@ async def interaction_graph(
         ("from_id", "from_name"),
         ("to_id", "to_name"),
     )
+    metrics = result.get("metrics")
+    if metrics and metrics.get("bridge_users"):
+        _resolve_names(ctx, guild, metrics["bridge_users"], ("user_id", "user_name"))
     return result
 
 

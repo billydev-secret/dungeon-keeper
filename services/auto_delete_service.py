@@ -14,6 +14,7 @@ import discord
 
 from db_utils import open_db
 from settings import AUTO_DELETE_KEYWORDS, AUTO_DELETE_SETTINGS
+from utils import format_guild_for_log
 
 GuildTextLike = discord.TextChannel | discord.Thread
 
@@ -473,7 +474,7 @@ async def process_auto_delete_tick(
             log.warning(
                 "Auto-delete channel %s not found in guild %s; skipping rule.",
                 channel_id,
-                guild_id,
+                format_guild_for_log(guild, guild_id),
             )
             continue
 
@@ -658,7 +659,7 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
             log.warning(
                 "Auto-delete startup: channel %s not found in guild %s; skipping.",
                 channel_id,
-                guild_id,
+                format_guild_for_log(guild, guild_id),
             )
             continue
 

@@ -39,7 +39,6 @@ const SECTIONS = [
       { heading: "People", items: [
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js" },
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
-        { id: "health-social-graph",    label: "Social Graph",       module: "./panels/health-social-graph.js" },
         { id: "health-churn-risk",      label: "Churn Risk",         module: "./panels/health-churn-risk.js" },
         { id: "retention",            label: "Retention",             module: "./panels/retention.js" },
         { id: "interaction-graph",    label: "Interactions",          module: "./panels/interaction-graph.js" },

@@ -52,6 +52,7 @@ from services.wellness_service import (
     update_user_settings,
     user_now,
 )
+from utils import format_user_for_log
 from web.auth import AuthenticatedUser
 from web.wellness_routes.deps import get_ctx, get_guild_id, require_user
 
@@ -795,6 +796,7 @@ async def request_partner(
     # mirrors the slash command in commands/wellness_commands.py.
     bot = getattr(ctx, "bot", None)
     if bot:
+        target_user = None
         try:
             from services.wellness_partners import make_partner_request_view
 
@@ -813,7 +815,11 @@ async def request_partner(
                 view=view,
             )
         except Exception as e:  # noqa: BLE001
-            log.warning("Could not DM partner request to %d: %s", target_id, e)
+            log.warning(
+                "Could not DM partner request to %s: %s",
+                format_user_for_log(target_user, target_id),
+                e,
+            )
             with ctx.open_db() as conn:
                 dissolve_partnership(conn, partner.id)
             return _err("could not DM that user — they may have DMs disabled")

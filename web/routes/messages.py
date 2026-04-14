@@ -342,15 +342,18 @@ async def search_messages(
                     {
                         "message_id": str(msg_id),
                         "channel_id": str(ch_id),
-                        "channel_name": channel_names.get(ch_id, ""),
+                        "channel_name": channel_names.get(ch_id) or f"channel {ch_id}",
                         "author_id": str(auth_id),
-                        "author_name": user_names.get(auth_id, ""),
+                        "author_name": user_names.get(auth_id) or f"User {auth_id}",
                         "content": content or "",
                         "reply_to_id": str(reply_id) if reply_id else None,
                         "reply_to_author_id": str(reply_author_id)
                         if reply_author_id
                         else None,
-                        "reply_to_author_name": user_names.get(reply_author_id, "")
+                        "reply_to_author_name": (
+                            user_names.get(reply_author_id)
+                            or f"User {reply_author_id}"
+                        )
                         if reply_author_id
                         else None,
                         "attachments": attachments.get(msg_id, []),

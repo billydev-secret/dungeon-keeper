@@ -617,6 +617,8 @@ def compute_social_graph(
     now: float | None = None,
     nsfw_channel_ids: list[int] | None = None,
 ) -> dict:
+    from services.graph_metrics import compute_graph_metrics
+
     now = now or time.time()
     thirty_days_ago = _ts(30, now=now)
     nsfw_ids = set(nsfw_channel_ids or [])
@@ -630,142 +632,10 @@ def compute_social_graph(
         (guild_id, int(thirty_days_ago)),
     ).fetchall()
 
-    # Directed adjacency: out_edges[u] = {v: weight}
-    out_edges: dict[int, dict[int, float]] = defaultdict(dict)
-    in_edges: dict[int, dict[int, float]] = defaultdict(dict)
-    all_nodes: set[int] = set()
-    for r in rows:
-        u, v, w = r["from_user_id"], r["to_user_id"], r["weight"]
-        out_edges[u][v] = w
-        in_edges[v][u] = w
-        all_nodes.add(u)
-        all_nodes.add(v)
-
-    n_nodes = len(all_nodes)
-    n_edges = sum(len(vs) for vs in out_edges.values())
-
-    # Undirected neighbors for clustering
-    neighbors: dict[int, set[int]] = defaultdict(set)
-    for u, vs in out_edges.items():
-        for v in vs:
-            neighbors[u].add(v)
-            neighbors[v].add(u)
-
-    # Clustering coefficient (average local)
-    cc_vals = []
-    for node in all_nodes:
-        nbrs = neighbors[node]
-        k = len(nbrs)
-        if k < 2:
-            continue
-        triangles = 0
-        nbrs_list = list(nbrs)
-        for i in range(len(nbrs_list)):
-            for j in range(i + 1, len(nbrs_list)):
-                if nbrs_list[j] in neighbors[nbrs_list[i]]:
-                    triangles += 1
-        possible = k * (k - 1) / 2
-        cc_vals.append(triangles / possible if possible else 0)
-    clustering_coeff = round(statistics.mean(cc_vals), 3) if cc_vals else 0
-
-    # Network density
-    possible_edges = n_nodes * (n_nodes - 1) if n_nodes > 1 else 1
-    density = round(n_edges / possible_edges, 4) if possible_edges else 0
-
-    # Reciprocity
-    reciprocal_count = 0
-    for u, vs in out_edges.items():
-        for v in vs:
-            if u in out_edges.get(v, {}):
-                reciprocal_count += 1
-    reciprocity = round(reciprocal_count / n_edges, 3) if n_edges else 0
-
-    # Isolates (0-1 undirected connections)
-    isolates = sum(1 for node in all_nodes if len(neighbors[node]) <= 1)
-
-    # Bridge users: approximate betweenness centrality (top 20)
-    # Full betweenness is O(V*E) — for communities <1000 nodes this is fine
-    betweenness: dict[int, float] = defaultdict(float)
-    node_list = list(all_nodes)
-
-    # Simplified: count how often a node appears on shortest paths
-    # For efficiency, sample if too large
-    sample_nodes = node_list[:200] if len(node_list) > 200 else node_list
-    for source in sample_nodes:
-        # BFS from source
-        dist: dict[int, int] = {source: 0}
-        pred: dict[int, list[int]] = defaultdict(list)
-        queue = [source]
-        order = []
-        idx = 0
-        while idx < len(queue):
-            u = queue[idx]
-            idx += 1
-            order.append(u)
-            for v in neighbors[u]:
-                if v not in dist:
-                    dist[v] = dist[u] + 1
-                    queue.append(v)
-                if dist.get(v) == dist[u] + 1:
-                    pred[v].append(u)
-
-        # Accumulate betweenness
-        delta: dict[int, float] = defaultdict(float)
-        sigma: dict[int, float] = defaultdict(float)
-        sigma[source] = 1.0
-        for v in order:
-            for p in pred[v]:
-                sigma[v] += sigma[p]
-
-        for v in reversed(order):
-            for p in pred[v]:
-                if sigma[v] > 0:
-                    delta[p] += (sigma[p] / sigma[v]) * (1 + delta[v])
-            if v != source:
-                betweenness[v] += delta[v]
-
-    # Normalize and rank
-    total_betweenness = sum(betweenness.values()) or 1
-    _bridge_list: list[dict[str, str | float]] = [
-        {"user_id": str(uid), "betweenness": round(b / total_betweenness * 100, 2)}
-        for uid, b in betweenness.items()
-    ]
-    _bridge_list.sort(key=lambda x: float(x["betweenness"]), reverse=True)
-    bridge_users = _bridge_list[:20]
-
-    bridge_count = sum(1 for b in bridge_users if float(b["betweenness"]) > 5)
-    top_betweenness_pct = float(bridge_users[0]["betweenness"]) if bridge_users else 0.0
-
-    # Simple community detection (label propagation)
-    labels = {node: i for i, node in enumerate(all_nodes)}
-    for _ in range(10):
-        changed = False
-        for node in all_nodes:
-            if not neighbors[node]:
-                continue
-            label_counts: dict[int, float] = defaultdict(float)
-            for nb in neighbors[node]:
-                label_counts[labels[nb]] += 1
-            best_label = max(label_counts, key=lambda lb: label_counts[lb])
-            if labels[node] != best_label:
-                labels[node] = best_label
-                changed = True
-        if not changed:
-            break
-
-    clusters: dict[int, list[int]] = defaultdict(list)
-    for node, lbl in labels.items():
-        clusters[lbl].append(node)
-
-    cluster_info = sorted(
-        [
-            {"id": i, "size": len(members)}
-            for i, (_, members) in enumerate(
-                sorted(clusters.items(), key=lambda x: -len(x[1]))
-            )
-        ],
-        key=lambda x: -x["size"],
-    )[:10]
+    metrics = compute_graph_metrics(
+        ((r["from_user_id"], r["to_user_id"], r["weight"]) for r in rows),
+        top_n=100,
+    )
 
     # SFW/NSFW bridge: users active in both
     if nsfw_ids:
@@ -791,46 +661,7 @@ def compute_social_graph(
     else:
         sfw_nsfw_bridge = 0
 
-    # Graph data for visualization (nodes + edges, limited to top interactors)
-    top_nodes = sorted(all_nodes, key=lambda u: len(neighbors[u]), reverse=True)[:100]
-    top_set = set(top_nodes)
-    graph_nodes = [
-        {"id": str(n), "degree": len(neighbors[n]), "cluster": labels.get(n, 0)}
-        for n in top_nodes
-    ]
-    graph_edges = [
-        {"source": str(u), "target": str(v), "weight": w}
-        for u, vs in out_edges.items()
-        for v, w in vs.items()
-        if u in top_set and v in top_set
-    ]
-
-    badge = _badge(
-        clustering_coeff,
-        [
-            (0.15, "critical"),
-            (0.25, "needs_work"),
-            (0.55, "healthy"),
-            (1.0, "excellent"),
-        ],
-    )
-
-    return {
-        "clustering_coefficient": clustering_coeff,
-        "network_density": density,
-        "reciprocity": reciprocity,
-        "isolates": isolates,
-        "bridge_count": bridge_count,
-        "bridge_users": bridge_users[:10],
-        "top_betweenness_pct": top_betweenness_pct,
-        "clusters": cluster_info,
-        "sfw_nsfw_bridge_pct": sfw_nsfw_bridge,
-        "node_count": n_nodes,
-        "edge_count": n_edges,
-        "badge": badge,
-        "graph_nodes": graph_nodes,
-        "graph_edges": graph_edges,
-    }
+    return {**metrics, "sfw_nsfw_bridge_pct": sfw_nsfw_bridge}
 
 
 # ---------------------------------------------------------------------------

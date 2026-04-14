@@ -14,7 +14,7 @@ const WIDGETS = [
   { id: "home-users",       label: "Most Active Users (1h)",  category: "Home", perms: [], source: "home", wide: false, nav: "activity" },
   { id: "home-returned",    label: "Returned After Break",    category: "Home", perms: [], source: "home", wide: false, nav: "retention" },
   { id: "home-starters",    label: "Conversation Starters",   category: "Home", perms: [], source: "home", wide: false, nav: "interaction-graph" },
-  { id: "home-butterflies", label: "Social Butterflies",      category: "Home", perms: [], source: "home", wide: false, nav: "health-social-graph" },
+  { id: "home-butterflies", label: "Social Butterflies",      category: "Home", perms: [], source: "home", wide: false, nav: "connection-graph" },
   { id: "home-loyalists",   label: "Channel Loyalists",       category: "Home", perms: [], source: "home", wide: false, nav: "health-channel-health" },
   { id: "home-mod-actions", label: "Recent Mod Actions",      category: "Home", perms: [], source: "home", wide: true,  nav: "mod-audit" },
 
@@ -24,7 +24,7 @@ const WIDGETS = [
   { id: "health-heatmap",          label: "Activity Heatmap",    category: "Health", perms: ["admin"], source: "health", tileKey: "heatmap",          wide: false, nav: "health-heatmap",         needsNames: false },
   { id: "health-gini",             label: "Participation Gini",  category: "Health", perms: ["admin"], source: "health", tileKey: "gini",             wide: false, nav: "health-gini",            needsNames: false },
   { id: "health-channel-health",   label: "Channel Health",      category: "Health", perms: ["admin"], source: "health", tileKey: "channel_health",   wide: false, nav: "health-channel-health",  needsNames: true  },
-  { id: "health-social-graph",     label: "Social Graph",        category: "Health", perms: ["admin"], source: "health", tileKey: "social_graph",     wide: false, nav: "health-social-graph",    needsNames: false },
+  { id: "health-social-graph",     label: "Social Graph",        category: "Health", perms: ["admin"], source: "health", tileKey: "social_graph",     wide: false, nav: "connection-graph",       needsNames: false },
   { id: "health-sentiment",        label: "Sentiment & Tone",    category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment",        wide: false, nav: "health-sentiment",       needsNames: true  },
   { id: "health-newcomer-funnel",  label: "Newcomer Funnel",     category: "Health", perms: ["admin"], source: "health", tileKey: "newcomer_funnel",  wide: false, nav: "health-newcomer-funnel", needsNames: false },
   { id: "health-cohort-retention", label: "Cohort Retention",    category: "Health", perms: ["admin"], source: "health", tileKey: "cohort_retention", wide: false, nav: "health-cohort-retention",needsNames: false },

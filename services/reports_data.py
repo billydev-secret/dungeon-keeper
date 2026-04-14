@@ -674,12 +674,14 @@ class InteractionNode(TypedDict):
     total_outbound: int
     total_inbound: int
     unique_partners: int
+    cluster_id: int
 
 
-class InteractionGraphData(TypedDict):
+class InteractionGraphData(TypedDict, total=False):
     nodes: list[InteractionNode]
     edges: list[InteractionEdge]
     top_pairs: list[InteractionEdge]
+    metrics: dict
 
 
 def get_interaction_graph_data(
@@ -687,6 +689,7 @@ def get_interaction_graph_data(
     guild_id: int,
     days: int | None = None,
     limit: int = 50,
+    include_metrics: bool = False,
 ) -> InteractionGraphData:
     now = int(datetime.now(timezone.utc).timestamp())
 
@@ -758,6 +761,20 @@ def get_interaction_graph_data(
             }
         )
 
+    metrics: dict | None = None
+    cluster_lookup: dict[str, int] = {}
+    if include_metrics:
+        from services.graph_metrics import compute_graph_metrics
+
+        metrics = compute_graph_metrics(
+            ((int(e["from_id"]), int(e["to_id"]), e["weight"]) for e in edges),
+            top_n=limit,
+        )
+        cluster_lookup = metrics.get("node_cluster", {})
+        # Strip the raw per-node cluster map from the response payload — the
+        # frontend only needs cluster_id baked onto each node.
+        metrics = {k: v for k, v in metrics.items() if k not in {"node_cluster", "graph_nodes", "graph_edges"}}
+
     all_ids = set(node_out.keys()) | set(node_in.keys())
     nodes: list[InteractionNode] = []
     for uid in sorted(
@@ -770,14 +787,18 @@ def get_interaction_graph_data(
                 "total_outbound": node_out.get(uid, 0),
                 "total_inbound": node_in.get(uid, 0),
                 "unique_partners": len(node_partners.get(uid, set())),
+                "cluster_id": cluster_lookup.get(str(uid), 0),
             }
         )
 
-    return {
+    result: InteractionGraphData = {
         "nodes": nodes,
         "edges": edges[: limit * 2],
         "top_pairs": top_pairs,
     }
+    if metrics is not None:
+        result["metrics"] = metrics
+    return result
 
 
 # ---------------------------------------------------------------------------

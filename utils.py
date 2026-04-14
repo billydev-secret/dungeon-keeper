@@ -58,6 +58,29 @@ def resolve_user_for_log(guild: discord.Guild | None, user_id: int) -> str:
     return format_user_for_log(member, user_id)
 
 
+def format_guild_for_log(
+    guild: discord.Guild | None = None,
+    guild_id: int | None = None,
+) -> str:
+    """Format a guild for logging with name and ID."""
+    if guild is not None:
+        resolved_id = getattr(guild, "id", guild_id)
+        name = getattr(guild, "name", None)
+        if name:
+            return f"{name} ({resolved_id})" if resolved_id is not None else name
+        return f"guild {resolved_id}" if resolved_id is not None else "unknown guild"
+
+    if guild_id is None:
+        return "unknown guild"
+    return f"guild {guild_id}"
+
+
+def resolve_guild_for_log(bot: discord.Client | None, guild_id: int) -> str:
+    """Resolve and format a guild ID for logging."""
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    return format_guild_for_log(guild, guild_id)
+
+
 def get_guild_channel_or_thread(
     guild: discord.Guild,
     channel_id: int,

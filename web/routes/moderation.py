@@ -49,6 +49,13 @@ def _resolve_names(ctx, guild, entries, *id_name_pairs):
                 uid = entry.get(id_field)
                 if uid and int(uid) in known:
                     entry[name_field] = known[int(uid)]
+    for entry in entries:
+        for id_field, name_field in id_name_pairs:
+            if entry.get(name_field):
+                continue
+            uid = entry.get(id_field)
+            if uid:
+                entry[name_field] = f"User {uid}"
 
 
 # ── Summary stats ─────────────────────────────────────────────────────────

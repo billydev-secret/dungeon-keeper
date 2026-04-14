@@ -13,6 +13,7 @@ import discord
 
 from db_utils import open_db
 from settings import AUTO_DELETE_SETTINGS
+from utils import resolve_guild_for_log
 
 log = logging.getLogger("dungeonkeeper.inactivity_prune")
 
@@ -135,7 +136,10 @@ async def run_prune_for_guild(
 
     guild = bot.get_guild(guild_id)
     if guild is None:
-        log.warning("Inactivity prune: guild %s not found; skipping.", guild_id)
+        log.warning(
+            "Inactivity prune: guild %s not found; skipping.",
+            resolve_guild_for_log(bot, guild_id),
+        )
         return
 
     role = guild.get_role(role_id)
@@ -239,5 +243,6 @@ async def inactivity_prune_loop(bot: discord.Client, db_path: Path) -> None:
                 raise
             except Exception:
                 log.exception(
-                    "Inactivity prune: unhandled error for guild %s.", rule["guild_id"]
+                    "Inactivity prune: unhandled error for guild %s.",
+                    resolve_guild_for_log(bot, int(rule["guild_id"])),
                 )

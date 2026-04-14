@@ -553,14 +553,20 @@ async def home_data(
             m = guild.get_member(int(uid_str))
             if m:
                 return m.display_name
-        return unames.get(uid_str, "")
+        cached = unames.get(uid_str)
+        if cached:
+            return cached
+        return f"User {uid_str}"
 
     def _resolve_channel(cid_str):
         if guild:
             ch = guild.get_channel(int(cid_str))
             if ch:
                 return ch.name
-        return cnames.get(cid_str, "")
+        cached = cnames.get(cid_str)
+        if cached:
+            return cached
+        return f"channel {cid_str}"
 
     for u in db_data.get("top_users", []):
         u["user_name"] = _resolve_user(u["user_id"])

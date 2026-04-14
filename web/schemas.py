@@ -217,12 +217,42 @@ class InteractionNodeSchema(BaseModel):
     total_outbound: int
     total_inbound: int
     unique_partners: int
+    cluster_id: int = 0
+
+
+class BridgeUserSchema(BaseModel):
+    user_id: str
+    user_name: str = ""
+    betweenness: float
+
+
+class ClusterInfoSchema(BaseModel):
+    id: int
+    size: int
+
+
+class InteractionGraphMetricsSchema(BaseModel):
+    clustering_coefficient: float
+    network_density: float
+    reciprocity: float
+    isolates: int
+    bridge_count: int
+    bridge_users: list[BridgeUserSchema]
+    clusters: list[ClusterInfoSchema]
+    avg_path_length: float
+    small_world_quotient: float
+    node_count: int
+    edge_count: int
+    badge: str
+    cross_cluster_matrix: list[list[float]]
+    cross_cluster_labels: list[str]
 
 
 class InteractionGraphResponse(BaseModel):
     nodes: list[InteractionNodeSchema]
     edges: list[InteractionEdgeSchema]
     top_pairs: list[InteractionEdgeSchema]
+    metrics: InteractionGraphMetricsSchema | None = None
 
 
 # ── Member retention ───────────────────────────────────────────────────
