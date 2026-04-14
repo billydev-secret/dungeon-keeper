@@ -20,9 +20,17 @@ function entryToParts(entry) {
 }
 
 function gridColumnCount(gridEl) {
+  // Count comma-free whitespace tokens in the resolved template.
+  // getComputedStyle resolves repeat(auto-fill, ...) to an explicit list
+  // of pixel sizes, one per rendered track.
   const tpl = getComputedStyle(gridEl).gridTemplateColumns || "";
-  const n = tpl.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, n);
+  const tokens = tpl.trim().split(/\s+/).filter(Boolean);
+  // Filter out non-track tokens (e.g. bracketed line-names)
+  const trackCount = tokens.filter(t => !t.startsWith("[") && !t.endsWith("]")).length;
+  if (trackCount >= 1) return trackCount;
+  // Fallback: estimate from container width vs minmax(260px, ...) minimum
+  const w = gridEl.clientWidth || 0;
+  return Math.max(1, Math.floor(w / 260));
 }
 
 export async function renderGrid(gridEl, layout, data, opts = {}) {
@@ -292,16 +300,25 @@ function _setupResize(gridEl, opts) {
     const startRows = parseInt(card.dataset.rows || "1", 10);
     const startCols = parseInt(card.dataset.cols || "1", 10);
     const oneRowHeight = rect.height / startRows;
-    const oneColWidth = rect.width / startCols;
+    const maxCols = gridColumnCount(gridEl);
+    const oneColWidth = rect.width / Math.max(1, startCols);
     const startX = e.clientX;
     const startY = e.clientY;
     const yThreshold = Math.max(24, oneRowHeight * 0.3);
-    const xThreshold = Math.max(40, oneColWidth * 0.4);
-    const maxCols = gridColumnCount(gridEl);
+    // Step every ~half-column of movement; use the narrower of the card's
+    // own column estimate or a uniform track-width derived from the grid.
+    const trackWidth = gridEl.clientWidth / Math.max(1, maxCols);
+    const xThreshold = Math.max(30, Math.min(oneColWidth, trackWidth) * 0.5);
 
     let currentRows = startRows;
     let currentCols = startCols;
     card.classList.add("resizing");
+    console.log("[resize] start", {
+      id: card.dataset.widgetId,
+      startRows, startCols, maxCols,
+      rectW: rect.width, rectH: rect.height,
+      oneColWidth, trackWidth, xThreshold, yThreshold,
+    });
 
     try { handle.setPointerCapture(e.pointerId); } catch (_) {}
 
@@ -337,6 +354,10 @@ function _setupResize(gridEl, opts) {
       card.dataset.rows = String(currentRows);
       card.dataset.cols = String(currentCols);
       const changed = currentRows !== startRows || currentCols !== startCols;
+      console.log("[resize] end", {
+        id: card.dataset.widgetId,
+        startRows, currentRows, startCols, currentCols, changed,
+      });
       if (changed && opts.onResize) {
         opts.onResize(card.dataset.widgetId, currentRows, currentCols);
       }
