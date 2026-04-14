@@ -145,7 +145,7 @@ def _build_help_pages(
                     [
                         (
                             "/warn user:@user reason:...",
-                            "Issue a warning. The member is DM'd and admins are pinged at the threshold.",
+                            "Issue a warning (mod-only, user is not notified). Admins are pinged at the threshold.",
                         ),
                         (
                             "/warnings user:@user",

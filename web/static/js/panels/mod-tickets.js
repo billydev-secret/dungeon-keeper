@@ -1,4 +1,4 @@
-import { api, esc } from "../api.js";
+import { api, apiPost, esc } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
 
 const AVATAR_COLORS = ["#c07aa1", "#5865f2", "#23a55a", "#e6b84c", "#f23f43", "#7F8F3A"];
@@ -116,20 +116,33 @@ const ICON_NOTE = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><
 const ICON_X = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 2L8 8M8 2L2 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
 const ICON_DOC = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 11V3a1 1 0 011-1h6l4 4v5a1 1 0 01-1 1H2a1 1 0 01-1-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 2v4h4" stroke="currentColor" stroke-width="1.5"/></svg>`;
 
-function renderActions() {
+function renderActions(t) {
+  if (t && t.status === "closed") {
+    return `
+      <div class="td-actions">
+        <button class="act-btn" data-action="note">${ICON_NOTE}Add note</button>
+        <span class="act-spacer"></span>
+        <button class="act-btn" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
+        <button class="act-btn warn" data-action="reopen">Reopen ticket</button>
+      </div>
+    `;
+  }
+  const me = window.__dk_user;
+  const claimedByMe = t && t.claimer_id && me && String(t.claimer_id) === String(me.user_id);
+  const claimLabel = claimedByMe ? "Claimed by you" : (t && t.claimer_id ? "Reassign to me" : "Claim");
   return `
     <div class="td-actions">
-      <button class="act-btn warn" data-action="open-channel">${ICON_WARN}Warn</button>
+      <button class="act-btn warn" data-action="warn">${ICON_WARN}Warn</button>
       <div class="split-btn">
-        <button class="act-btn jail" data-action="open-channel">${ICON_JAIL}Jail · 24h</button>
-        <button class="act-btn jail" data-action="open-channel" aria-label="Change duration">${ICON_CHEV}</button>
+        <button class="act-btn jail" data-action="jail">${ICON_JAIL}Jail · 24h</button>
+        <button class="act-btn jail" data-action="jail-custom" aria-label="Change duration">${ICON_CHEV}</button>
       </div>
-      <button class="act-btn" data-action="open-channel">${ICON_NOTE}Add note</button>
-      <button class="act-btn ghost" data-action="open-channel">Dismiss</button>
+      <button class="act-btn" data-action="note">${ICON_NOTE}Add note</button>
+      <button class="act-btn ghost" data-action="dismiss">Dismiss</button>
       <span class="act-spacer"></span>
-      <button class="act-btn ghost" data-action="open-channel">Claim</button>
+      <button class="act-btn ghost" data-action="claim"${claimedByMe ? " disabled" : ""}>${esc(claimLabel)}</button>
       <button class="act-btn" data-action="transcript" title="View transcript">${ICON_DOC}Transcript</button>
-      <button class="act-btn" data-action="open-channel">Close ticket${ICON_X}</button>
+      <button class="act-btn" data-action="close">Close ticket${ICON_X}</button>
     </div>
   `;
 }
@@ -251,7 +264,7 @@ function renderDetail(t, detail) {
       ${closeSection}
     </div>
 
-    ${renderActions()}
+    ${renderActions(t)}
   `;
 }
 
@@ -272,7 +285,6 @@ export function mount(container) {
     <div class="panel">
       <div class="panel-head">
         <div>
-          <div class="kicker">Moderation · Tickets</div>
           <h1 class="panel-title">Active <em>tickets</em></h1>
           <div class="sub" style="font-size:13px;color:var(--ink-dim);margin-top:6px">
             Flagged messages, auto-mod hits, and member reports awaiting review.
@@ -405,30 +417,86 @@ export function mount(container) {
     render();
   });
 
-  detailEl.addEventListener("click", (e) => {
+  async function runAction(action, t) {
+    const id = t.id;
+    const base = `/api/moderation/tickets/${encodeURIComponent(id)}`;
+    if (action === "claim") {
+      await apiPost(`${base}/claim`);
+      return;
+    }
+    if (action === "reopen") {
+      await apiPost(`${base}/reopen`);
+      return;
+    }
+    if (action === "warn") {
+      const reason = window.prompt("Reason for warning?");
+      if (reason === null) return;
+      const trimmed = reason.trim();
+      if (!trimmed) { window.alert("A reason is required."); return; }
+      await apiPost(`${base}/warn`, { reason: trimmed });
+      return;
+    }
+    if (action === "jail") {
+      const reason = window.prompt("Reason for 24h jail? (blank = no reason)");
+      if (reason === null) return;
+      await apiPost(`${base}/jail`, { duration: "24h", reason: reason.trim() });
+      return;
+    }
+    if (action === "jail-custom") {
+      const duration = window.prompt("Jail duration? (e.g. 30m, 2h, 7d)", "24h");
+      if (duration === null || !duration.trim()) return;
+      const reason = window.prompt("Reason?");
+      if (reason === null) return;
+      await apiPost(`${base}/jail`, { duration: duration.trim(), reason: reason.trim() });
+      return;
+    }
+    if (action === "note") {
+      const body = window.prompt("Note body?");
+      if (body === null) return;
+      const trimmed = body.trim();
+      if (!trimmed) { window.alert("Note body is required."); return; }
+      await apiPost(`${base}/note`, { body: trimmed });
+      return;
+    }
+    if (action === "dismiss") {
+      const reason = window.prompt("Dismissal reason? (optional)", "");
+      if (reason === null) return;
+      await apiPost(`${base}/dismiss`, { reason: reason.trim() });
+      return;
+    }
+    if (action === "close") {
+      const reason = window.prompt("Reason for closing?");
+      if (reason === null) return;
+      await apiPost(`${base}/close`, { reason: reason.trim() });
+      return;
+    }
+    throw new Error(`Unknown action: ${action}`);
+  }
+
+  detailEl.addEventListener("click", async (e) => {
     const btn = e.target.closest(".act-btn");
-    if (!btn) return;
+    if (!btn || btn.disabled) return;
     const action = btn.dataset.action;
+    if (!action) return;
+
     if (action === "transcript") {
       if (state.activeId) showTranscript("ticket", state.activeId);
       return;
     }
-    if (action === "open-channel") {
-      const t = state.tickets.find((x) => x.id === state.activeId);
-      if (!t || !t.channel_id) {
-        console.warn("No channel_id on active ticket; cannot open Discord");
-        return;
-      }
-      const guildId = window.__dk_user?.guild_id;
-      if (!guildId) {
-        console.warn("No active guild; cannot open Discord");
-        return;
-      }
-      window.open(
-        `https://discord.com/channels/${encodeURIComponent(guildId)}/${encodeURIComponent(t.channel_id)}`,
-        "_blank",
-        "noopener,noreferrer",
-      );
+
+    const t = state.tickets.find((x) => x.id === state.activeId);
+    if (!t) return;
+
+    btn.disabled = true;
+    try {
+      await runAction(action, t);
+      state.detailCache.delete(t.id);
+      await refresh();
+    } catch (err) {
+      console.error(`Ticket action "${action}" failed:`, err);
+      window.alert(`Action failed: ${err.message}`);
+    } finally {
+      btn.disabled = false;
     }
   });
 

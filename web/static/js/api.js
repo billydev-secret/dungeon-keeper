@@ -30,3 +30,25 @@ export async function api(path, params) {
   }
   return res.json();
 }
+
+export async function apiPost(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  if (res.status === 401) {
+    window.location = "/login";
+    return new Promise(() => {});
+  }
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const b = await res.json();
+      if (b.detail) detail = b.detail;
+    } catch (_) {}
+    throw new Error(`${res.status}: ${detail}`);
+  }
+  return res.json();
+}

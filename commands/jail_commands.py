@@ -2540,7 +2540,7 @@ def register_jail_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
         name="warn",
-        description="Issue a formal warning. The member is DM'd and the action is logged.",
+        description="Issue a formal warning. The action is logged (user is not notified).",
     )
     @app_commands.default_permissions(moderate_members=True)
     @app_commands.describe(user="Member to warn", reason="Reason for warning")
@@ -2577,16 +2577,6 @@ def register_jail_commands(bot: Bot, ctx: AppContext) -> None:
                 target_id=user.id,
                 extra={"warning_id": warning_id, "reason": reason_text, "count": count},
             )
-
-        # DM the user
-        dm_embed = discord.Embed(
-            title="You've received a warning",
-            description=f"**Server:** {guild.name}\n**Moderator:** {member}\n"
-            + (f"**Reason:** {reason_text}\n" if reason_text else "")
-            + f"**Active warnings:** {count}",
-            color=CLR_WARNING,
-        )
-        await _dm_user(user, embed=dm_embed)
 
         await interaction.response.send_message(
             f"⚠️ Warning issued to {user.mention}. They now have **{count}** active warning(s).",

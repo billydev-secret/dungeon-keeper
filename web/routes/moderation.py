@@ -8,7 +8,18 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from services.message_store import get_known_users_bulk
-from services.moderation import fmt_duration, get_transcript
+from services.moderation import (
+    claim_ticket,
+    close_ticket,
+    create_jail,
+    create_warning,
+    escalate_ticket,
+    fmt_duration,
+    get_transcript,
+    parse_duration,
+    reopen_ticket,
+    write_audit,
+)
 from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from web.schemas import (
@@ -16,7 +27,11 @@ from web.schemas import (
     JailsResponse,
     ModerationStatsResponse,
     PolicyTicketsResponse,
+    TicketActionResult,
     TicketDetailSchema,
+    TicketJailBody,
+    TicketNoteBody,
+    TicketReasonBody,
     TicketsResponse,
     TranscriptResponse,
     WarningsResponse,
@@ -390,6 +405,365 @@ async def get_ticket_detail(
     _resolve_names(ctx, guild, history, ("actor_id", "actor_name"))
 
     return {**ticket, "subject": subject, "history": history}
+
+
+# ── Ticket mutations ─────────────────────────────────────────────────────
+
+
+def _fetch_ticket_row(conn, guild_id: int, ticket_id: int):
+    row = conn.execute(
+        "SELECT * FROM tickets WHERE guild_id = ? AND id = ?",
+        (guild_id, ticket_id),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return row
+
+
+@router.post(
+    "/moderation/tickets/{ticket_id}/claim",
+    response_model=TicketActionResult,
+)
+async def ticket_claim(
+    request: Request,
+    ticket_id: int,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _fetch_ticket_row(conn, guild_id, ticket_id)
+            if row["status"] != "open":
+                raise HTTPException(
+                    status_code=409, detail="Only open tickets can be claimed"
+                )
+            claim_ticket(conn, ticket_id, user.user_id)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_claim",
+                actor_id=user.user_id,
+                target_id=int(row["user_id"]),
+                extra={"ticket_id": ticket_id},
+            )
+            return {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "status": "open",
+                "message": "Ticket claimed",
+            }
+
+    return await run_query(_q)
+
+
+@router.post(
+    "/moderation/tickets/{ticket_id}/close",
+    response_model=TicketActionResult,
+)
+async def ticket_close(
+    request: Request,
+    ticket_id: int,
+    body: TicketReasonBody,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    reason = (body.reason or "").strip() or "Closed from dashboard"
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _fetch_ticket_row(conn, guild_id, ticket_id)
+            if row["status"] != "open":
+                raise HTTPException(
+                    status_code=409, detail="Only open tickets can be closed"
+                )
+            close_ticket(conn, ticket_id, closed_by=user.user_id, reason=reason)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_close",
+                actor_id=user.user_id,
+                target_id=int(row["user_id"]),
+                extra={"ticket_id": ticket_id, "reason": reason},
+            )
+            return {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "status": "closed",
+                "message": "Ticket closed",
+            }
+
+    return await run_query(_q)
+
+
+@router.post(
+    "/moderation/tickets/{ticket_id}/reopen",
+    response_model=TicketActionResult,
+)
+async def ticket_reopen(
+    request: Request,
+    ticket_id: int,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _fetch_ticket_row(conn, guild_id, ticket_id)
+            if row["status"] != "closed":
+                raise HTTPException(
+                    status_code=409, detail="Only closed tickets can be reopened"
+                )
+            reopen_ticket(conn, ticket_id)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_reopen",
+                actor_id=user.user_id,
+                target_id=int(row["user_id"]),
+                extra={"ticket_id": ticket_id},
+            )
+            return {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "status": "open",
+                "message": "Ticket reopened",
+            }
+
+    return await run_query(_q)
+
+
+@router.post(
+    "/moderation/tickets/{ticket_id}/dismiss",
+    response_model=TicketActionResult,
+)
+async def ticket_dismiss(
+    request: Request,
+    ticket_id: int,
+    body: TicketReasonBody,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    tail = (body.reason or "").strip()
+    reason = f"Dismissed: {tail}" if tail else "Dismissed"
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _fetch_ticket_row(conn, guild_id, ticket_id)
+            if row["status"] != "open":
+                raise HTTPException(
+                    status_code=409, detail="Only open tickets can be dismissed"
+                )
+            close_ticket(conn, ticket_id, closed_by=user.user_id, reason=reason)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_dismiss",
+                actor_id=user.user_id,
+                target_id=int(row["user_id"]),
+                extra={"ticket_id": ticket_id, "reason": reason},
+            )
+            return {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "status": "closed",
+                "message": "Ticket dismissed",
+            }
+
+    return await run_query(_q)
+
+
+@router.post(
+    "/moderation/tickets/{ticket_id}/escalate",
+    response_model=TicketActionResult,
+)
+async def ticket_escalate(
+    request: Request,
+    ticket_id: int,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _fetch_ticket_row(conn, guild_id, ticket_id)
+            if row["status"] != "open":
+                raise HTTPException(
+                    status_code=409, detail="Only open tickets can be escalated"
+                )
+            if row["escalated"]:
+                return {
+                    "ok": True,
+                    "ticket_id": ticket_id,
+                    "status": row["status"],
+                    "message": "Already escalated",
+                }
+            escalate_ticket(conn, ticket_id)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_escalate",
+                actor_id=user.user_id,
+                target_id=int(row["user_id"]),
+                extra={"ticket_id": ticket_id},
+            )
+            return {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "status": "open",
+                "message": "Ticket escalated",
+            }
+
+    return await run_query(_q)
+
+
+@router.post(
+    "/moderation/tickets/{ticket_id}/warn",
+    response_model=TicketActionResult,
+)
+async def ticket_warn(
+    request: Request,
+    ticket_id: int,
+    body: TicketReasonBody,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="A reason is required for a warning")
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _fetch_ticket_row(conn, guild_id, ticket_id)
+            subject_id = int(row["user_id"])
+            warning_id = create_warning(
+                conn,
+                guild_id=guild_id,
+                user_id=subject_id,
+                moderator_id=user.user_id,
+                reason=reason,
+            )
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_warn",
+                actor_id=user.user_id,
+                target_id=subject_id,
+                extra={
+                    "ticket_id": ticket_id,
+                    "warning_id": warning_id,
+                    "reason": reason,
+                },
+            )
+            return {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "status": row["status"],
+                "message": f"Warning #{warning_id} issued",
+            }
+
+    return await run_query(_q)
+
+
+@router.post(
+    "/moderation/tickets/{ticket_id}/jail",
+    response_model=TicketActionResult,
+)
+async def ticket_jail(
+    request: Request,
+    ticket_id: int,
+    body: TicketJailBody,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    reason = (body.reason or "").strip()
+    duration_s = parse_duration(body.duration or "")
+    if duration_s is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not parse duration (use e.g. '30m', '24h', '7d')",
+        )
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _fetch_ticket_row(conn, guild_id, ticket_id)
+            subject_id = int(row["user_id"])
+            jail_id = create_jail(
+                conn,
+                guild_id=guild_id,
+                user_id=subject_id,
+                moderator_id=user.user_id,
+                reason=reason,
+                stored_roles=[],
+                channel_id=0,
+                duration_seconds=duration_s,
+            )
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_jail",
+                actor_id=user.user_id,
+                target_id=subject_id,
+                extra={
+                    "ticket_id": ticket_id,
+                    "jail_id": jail_id,
+                    "duration_seconds": duration_s,
+                    "reason": reason,
+                    "dashboard_only": True,
+                },
+            )
+            return {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "status": row["status"],
+                "message": f"Jail #{jail_id} recorded ({fmt_duration(duration_s)})",
+            }
+
+    return await run_query(_q)
+
+
+@router.post(
+    "/moderation/tickets/{ticket_id}/note",
+    response_model=TicketActionResult,
+)
+async def ticket_note(
+    request: Request,
+    ticket_id: int,
+    body: TicketNoteBody,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    note_body = (body.body or "").strip()
+    if not note_body:
+        raise HTTPException(status_code=400, detail="Note body is required")
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _fetch_ticket_row(conn, guild_id, ticket_id)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_note",
+                actor_id=user.user_id,
+                target_id=int(row["user_id"]),
+                extra={"ticket_id": ticket_id, "body": note_body},
+            )
+            return {
+                "ok": True,
+                "ticket_id": ticket_id,
+                "status": row["status"],
+                "message": "Note added",
+            }
+
+    return await run_query(_q)
 
 
 # ── Warnings ──────────────────────────────────────────────────────────────

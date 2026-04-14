@@ -501,6 +501,26 @@ class TicketDetailSchema(TicketEntrySchema):
     history: list[TicketHistoryEntrySchema]
 
 
+class TicketReasonBody(BaseModel):
+    reason: str = ""
+
+
+class TicketJailBody(BaseModel):
+    duration: str = "24h"
+    reason: str = ""
+
+
+class TicketNoteBody(BaseModel):
+    body: str
+
+
+class TicketActionResult(BaseModel):
+    ok: bool = True
+    ticket_id: int
+    status: str = ""
+    message: str = ""
+
+
 # ── Moderation: Warnings ─────────────────────────────────────────────────
 
 
