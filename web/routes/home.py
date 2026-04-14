@@ -263,6 +263,34 @@ async def home_data(
                     (guild_id,),
                 ).fetchone()[0]
 
+                # Latest entry in each category
+                lj = conn.execute(
+                    "SELECT user_id, reason, created_at FROM jails WHERE guild_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+                    (guild_id,),
+                ).fetchone()
+                result["latest_jail"] = (
+                    {"user_id": str(lj["user_id"]), "reason": lj["reason"] or "", "created_at": lj["created_at"]}
+                    if lj else None
+                )
+
+                lt = conn.execute(
+                    "SELECT user_id, description, created_at FROM tickets WHERE guild_id = ? AND status = 'open' ORDER BY created_at DESC LIMIT 1",
+                    (guild_id,),
+                ).fetchone()
+                result["latest_ticket"] = (
+                    {"user_id": str(lt["user_id"]), "description": lt["description"] or "", "created_at": lt["created_at"]}
+                    if lt else None
+                )
+
+                lw = conn.execute(
+                    "SELECT user_id, reason, created_at FROM warnings WHERE guild_id = ? AND revoked = 0 ORDER BY created_at DESC LIMIT 1",
+                    (guild_id,),
+                ).fetchone()
+                result["latest_warning"] = (
+                    {"user_id": str(lw["user_id"]), "reason": lw["reason"] or "", "created_at": lw["created_at"]}
+                    if lw else None
+                )
+
             # Recent mod actions
             actions_list: list[dict] = []
             if _need("mod_actions"):
@@ -487,6 +515,9 @@ async def home_data(
                 all_user_ids.add(int(sb["user_id"]))
             for cl in channel_loyalists:
                 all_user_ids.add(int(cl["user_id"]))
+            for lentry in (result.get("latest_jail"), result.get("latest_ticket"), result.get("latest_warning")):
+                if lentry:
+                    all_user_ids.add(int(lentry["user_id"]))
             for a in actions_list:
                 all_user_ids.add(int(a["actor_id"]))
                 if a["target_id"]:
@@ -549,6 +580,10 @@ async def home_data(
         item["user_name"] = _resolve_user(item["user_id"])
     for cl in db_data.get("channel_loyalists", []):
         cl["channel_name"] = _resolve_channel(cl["channel_id"])
+    for key in ("latest_jail", "latest_ticket", "latest_warning"):
+        entry = db_data.get(key)
+        if entry:
+            entry["user_name"] = _resolve_user(entry["user_id"])
 
     # Remove bulk lookup maps from response
     db_data.pop("user_names", None)

@@ -18,7 +18,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
 
-from db_utils import get_config_value, open_db
+from db_utils import (
+    delete_config_value,
+    get_config_value,
+    open_db,
+    set_config_value as _db_set_config_value,
+)
 
 # ── Model defaults ─────────────────────────────────────────────────────
 
@@ -256,41 +261,49 @@ def get_prompt_from_path(db_path: Path, key: str) -> str:
 # ── Write helpers ──────────────────────────────────────────────────────
 
 
-def set_config(conn: sqlite3.Connection, key: str, value: str) -> None:
-    conn.execute(
-        "INSERT INTO config (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (key, value),
-    )
+def set_config(
+    conn: sqlite3.Connection, key: str, value: str, guild_id: int = 0
+) -> None:
+    _db_set_config_value(conn, key, value, guild_id)
 
 
-def set_mod_model(conn: sqlite3.Connection, model: str) -> None:
-    set_config(conn, _MOD_MODEL_KEY, model)
+def set_mod_model(
+    conn: sqlite3.Connection, model: str, guild_id: int = 0
+) -> None:
+    set_config(conn, _MOD_MODEL_KEY, model, guild_id)
 
 
-def set_wellness_model(conn: sqlite3.Connection, model: str) -> None:
-    set_config(conn, _WELLNESS_MODEL_KEY, model)
+def set_wellness_model(
+    conn: sqlite3.Connection, model: str, guild_id: int = 0
+) -> None:
+    set_config(conn, _WELLNESS_MODEL_KEY, model, guild_id)
 
 
-def set_command_model(conn: sqlite3.Connection, prompt_key: str, model: str) -> None:
+def set_command_model(
+    conn: sqlite3.Connection, prompt_key: str, model: str, guild_id: int = 0
+) -> None:
     """Set a per-command model override. Pass empty string to clear it."""
     info = _PROMPTS_BY_KEY.get(prompt_key)
     if info is None or not info.model_key:
         raise KeyError(f"Unknown AI prompt key: {prompt_key}")
     if model:
-        set_config(conn, info.model_key, model)
+        set_config(conn, info.model_key, model, guild_id)
     else:
-        conn.execute("DELETE FROM config WHERE key = ?", (info.model_key,))
+        delete_config_value(conn, info.model_key, guild_id)
 
 
-def set_prompt(conn: sqlite3.Connection, key: str, value: str) -> None:
+def set_prompt(
+    conn: sqlite3.Connection, key: str, value: str, guild_id: int = 0
+) -> None:
     if key not in _PROMPTS_BY_KEY:
         raise KeyError(f"Unknown AI prompt key: {key}")
-    set_config(conn, key, value)
+    set_config(conn, key, value, guild_id)
 
 
-def reset_prompt(conn: sqlite3.Connection, key: str) -> None:
+def reset_prompt(
+    conn: sqlite3.Connection, key: str, guild_id: int = 0
+) -> None:
     """Delete the override so the baked-in default is used again."""
     if key not in _PROMPTS_BY_KEY:
         raise KeyError(f"Unknown AI prompt key: {key}")
-    conn.execute("DELETE FROM config WHERE key = ?", (key,))
+    delete_config_value(conn, key, guild_id)

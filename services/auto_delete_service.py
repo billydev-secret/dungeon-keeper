@@ -273,7 +273,7 @@ async def delete_tracked_messages_older_than(
     total_failed = 0
     channel_name = getattr(channel, "name", str(channel.id))
 
-    log.info(
+    log.debug(
         "Auto-delete #%s: starting, %s messages due",
         channel_name,
         grand_total,
@@ -357,7 +357,7 @@ async def delete_tracked_messages_older_than(
         if abort:
             break
 
-        log.info(
+        log.debug(
             "Auto-delete #%s: %s/%s deleted (%.1fs elapsed)",
             channel_name,
             total_deleted,
@@ -366,14 +366,23 @@ async def delete_tracked_messages_older_than(
         )
 
     elapsed = time.monotonic() - start_time
-    log.info(
-        "Auto-delete #%s: done in %.1fs, %s/%s deleted, %s failed",
-        channel_name,
-        elapsed,
-        total_deleted,
-        grand_total,
-        total_failed,
-    )
+    if total_failed > 0:
+        log.info(
+            "Auto-delete #%s: done in %.1fs, %s/%s deleted, %s failed",
+            channel_name,
+            elapsed,
+            total_deleted,
+            grand_total,
+            total_failed,
+        )
+    else:
+        log.debug(
+            "Auto-delete #%s: done in %.1fs, %s/%s deleted",
+            channel_name,
+            elapsed,
+            total_deleted,
+            grand_total,
+        )
     return grand_total, total_deleted, total_failed
 
 
@@ -477,7 +486,7 @@ async def process_auto_delete_tick(
                 cutoff_ts,
                 reason="Auto-delete scheduled cleanup",
             )
-            if queued > 0:
+            if failed > 0:
                 log.info(
                     "Auto-delete in #%s (%s): queued=%s deleted=%s failed=%s",
                     channel.name,
@@ -558,7 +567,7 @@ async def _scan_and_delete_channel_history(
     if scanned == 0:
         return 0, 0
 
-    log.info(
+    log.debug(
         "Auto-delete scan #%s: starting, %s messages found (%s bulk, %s old)",
         channel_name,
         scanned,
@@ -595,7 +604,7 @@ async def _scan_and_delete_channel_history(
             failed += 1
         old_processed += 1
         if old_processed % 50 == 0:
-            log.info(
+            log.debug(
                 "Auto-delete scan #%s: %s/%s deleted (%.1fs elapsed)",
                 channel_name,
                 deleted,
@@ -604,14 +613,23 @@ async def _scan_and_delete_channel_history(
             )
 
     elapsed = time.monotonic() - start_time
-    log.info(
-        "Auto-delete scan #%s: done in %.1fs, %s/%s deleted, %s failed",
-        channel_name,
-        elapsed,
-        deleted,
-        scanned,
-        failed,
-    )
+    if failed > 0:
+        log.info(
+            "Auto-delete scan #%s: done in %.1fs, %s/%s deleted, %s failed",
+            channel_name,
+            elapsed,
+            deleted,
+            scanned,
+            failed,
+        )
+    else:
+        log.debug(
+            "Auto-delete scan #%s: done in %.1fs, %s/%s deleted",
+            channel_name,
+            elapsed,
+            deleted,
+            scanned,
+        )
     return deleted, failed
 
 
@@ -649,7 +667,7 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
             deleted, failed = await _scan_and_delete_channel_history(
                 channel, cutoff, reason="Auto-delete startup catchup"
             )
-            if deleted > 0 or failed > 0:
+            if failed > 0:
                 log.info(
                     "Auto-delete startup #%s (%s): deleted=%s failed=%s",
                     channel.name,

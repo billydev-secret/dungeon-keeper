@@ -31,7 +31,7 @@ export function sparklineSVG(data, { width = 180, height = 32, color = "#E6B84C"
   `;
 }
 
-export function miniBarHTML(items, { maxVal, height = 6, color = "var(--accent)" } = {}) {
+export function miniBarHTML(items, { maxVal, color = "var(--accent)" } = {}) {
   if (!items || !items.length) return "";
   const mx = maxVal || Math.max(...items.map(i => i.value), 1);
   return items.map(i => {

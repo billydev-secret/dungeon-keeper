@@ -1,5 +1,5 @@
-import { api } from "../api.js";
-import { makeBarChart, makeHorizontalBarChart } from "../charts.js";
+import { api, esc } from "../api.js";
+import { makeBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
 export function mount(container, initialParams) {
@@ -81,7 +81,7 @@ export function mount(container, initialParams) {
       } else { receiversWrap.innerHTML = ""; }
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
       giversWrap.innerHTML = "";
       receiversWrap.innerHTML = "";
     }

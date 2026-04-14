@@ -1,4 +1,4 @@
-import { badgeHTML, fmtNum } from "./tile-helpers.js";
+import { badgeHTML } from "./tile-helpers.js";
 
 export function renderTile(el, data) {
   el.innerHTML = `

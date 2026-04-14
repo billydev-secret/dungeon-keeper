@@ -108,14 +108,14 @@ async def callback(request: Request) -> RedirectResponse:
     cookie_state = request.cookies.get("dk_oauth_state")
     query_state = request.query_params.get("state")
     if not cookie_state or cookie_state != query_state:
-        return _login_redirect("Invalid OAuth state. Please try again.")
+        return _login_redirect("invalid_state")
 
     code = request.query_params.get("code")
     if not code:
-        desc = request.query_params.get(
-            "error_description", "Authorization was denied."
-        )
-        return _login_redirect(desc)
+        # Log the raw error for debugging, but show a safe predefined message
+        raw_error = request.query_params.get("error", "unknown")
+        _log.warning("OAuth denied: error=%s", raw_error)
+        return _login_redirect("denied")
 
     client_id = os.getenv("DISCORD_CLIENT_ID", "")
     client_secret = os.getenv("DISCORD_CLIENT_SECRET", "")
@@ -134,17 +134,15 @@ async def callback(request: Request) -> RedirectResponse:
             },
         )
         if token_resp.status_code != 200:
-            _log.warning("Token exchange failed: %s", token_resp.text)
-            return _login_redirect("Login failed — could not exchange token.")
+            _log.warning("Token exchange failed: status=%d", token_resp.status_code)
+            return _login_redirect("token_failed")
         access_token: str = token_resp.json()["access_token"]
 
         # 2. Fetch user identity
         headers = {"Authorization": f"Bearer {access_token}"}
         user_resp = await client.get(f"{DISCORD_API}/users/@me", headers=headers)
         if user_resp.status_code != 200:
-            return _login_redirect(
-                "Login failed — could not fetch your Discord profile."
-            )
+            return _login_redirect("profile_failed")
         user_data = user_resp.json()
         user_id = int(user_data["id"])
         username = user_data.get("global_name") or user_data["username"]
@@ -172,9 +170,7 @@ async def callback(request: Request) -> RedirectResponse:
                     })
 
             if not mutual_guilds:
-                return _login_redirect(
-                    "You must share a server with the bot to use this dashboard."
-                )
+                return _login_redirect("no_shared_guild")
 
             # Default to primary guild if user is in it, else first mutual
             if any(g["id"] == primary_guild_id for g in mutual_guilds):
@@ -196,18 +192,14 @@ async def callback(request: Request) -> RedirectResponse:
                 f"{DISCORD_API}/users/@me/guilds", headers=headers
             )
             if guilds_resp.status_code != 200:
-                return _login_redirect(
-                    "Login failed — could not verify guild membership."
-                )
+                return _login_redirect("guilds_failed")
             # In standalone mode we only know about the primary guild
             guild_entry = next(
                 (g for g in guilds_resp.json() if int(g["id"]) == primary_guild_id),
                 None,
             )
             if not guild_entry:
-                return _login_redirect(
-                    "You must share a server with the bot to use this dashboard."
-                )
+                return _login_redirect("no_shared_guild")
             permission_bits = int(guild_entry.get("permissions", "0"))
             active_guild_id = primary_guild_id
             mutual_guilds = [{
@@ -271,5 +263,18 @@ async def logout() -> RedirectResponse:
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 
-def _login_redirect(error: str) -> RedirectResponse:
-    return RedirectResponse(f"/login?error={error}", status_code=302)
+_ERROR_MESSAGES: dict[str, str] = {
+    "invalid_state": "Invalid OAuth state. Please try again.",
+    "denied": "Authorization was denied.",
+    "token_failed": "Login failed — could not exchange token.",
+    "profile_failed": "Login failed — could not fetch your Discord profile.",
+    "guilds_failed": "Login failed — could not verify guild membership.",
+    "no_shared_guild": "You must share a server with the bot to use this dashboard.",
+}
+
+
+def _login_redirect(error_code: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"/login?error={urlencode({'': error_code})[1:]}",
+        status_code=302,
+    )

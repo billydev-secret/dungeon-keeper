@@ -336,7 +336,6 @@ export function mount(container, initialParams) {
     if (n === 1) { nodes[indices[0]].x = cx; nodes[indices[0]].y = cy; return; }
 
     const k = Math.sqrt((radius * radius) / n) * 0.8;
-    const idxSet = new Set(indices);
     const pos = {};
     indices.forEach((idx, i) => {
       const angle = (i / n) * Math.PI * 2;

@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeLineChart } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 
@@ -163,7 +163,7 @@ export function mount(container, initialParams) {
       });
     } catch (err) {
       const wrap = container.querySelector(".chart-wrap");
-      wrap.innerHTML = `<div class="error">${err.message}</div>`;
+      wrap.innerHTML = `<div class="error">${esc(err.message)}</div>`;
     }
   }
 

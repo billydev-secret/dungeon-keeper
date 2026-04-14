@@ -14,12 +14,17 @@ import discord
 
 from db_utils import (
     GrantRoleConfig,
+    add_config_id,
     can_use_grant,
+    clear_config_id_bucket,
+    delete_config_value,
     get_config_id_set,
     get_config_value,
     get_grant_roles,
     open_db,
     parse_bool,
+    remove_config_id,
+    set_config_value as _db_set_config_value,
 )
 from xp_system import DEFAULT_XP_SETTINGS, XpSettings, load_xp_settings
 
@@ -67,6 +72,7 @@ class RuntimeConfig(TypedDict):
     bypass_role_ids: set[int]
     xp_grant_allowed_user_ids: set[int]
     xp_excluded_channel_ids: set[int]
+    recorded_bot_user_ids: set[int]
     welcome_channel_id: int
     welcome_message: str
     welcome_ping_role_id: int
@@ -127,6 +133,9 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
             ),
             "xp_excluded_channel_ids": get_config_id_set(
                 conn, "xp_excluded_channel_ids"
+            ),
+            "recorded_bot_user_ids": get_config_id_set(
+                conn, "recorded_bot_user_ids"
             ),
             "welcome_channel_id": _parse_int_config(
                 get_config_value(conn, "welcome_channel_id", "0"),
@@ -200,7 +209,45 @@ class Bot(discord.Client):
                     )
 
         for factory in self.startup_task_factories:
-            self.startup_tasks.append(asyncio.create_task(factory()))
+            self.startup_tasks.append(asyncio.create_task(
+                self._resilient_task(factory)
+            ))
+
+    @staticmethod
+    async def _resilient_task(
+        factory: Callable[[], Coroutine[Any, Any, None]],
+        restart_delay: float = 30.0,
+        max_restarts: int = 10,
+    ) -> None:
+        """Run a background task with automatic restart on failure.
+
+        Respects CancelledError (shutdown) but restarts on other exceptions,
+        with a delay between restarts and a cap on total restarts.
+        """
+        _log = logging.getLogger("dungeonkeeper.tasks")
+        name = getattr(factory, "__name__", repr(factory))
+        restarts = 0
+
+        while restarts <= max_restarts:
+            try:
+                await factory()
+                return  # Exited cleanly (one-shot task like backfill)
+            except asyncio.CancelledError:
+                raise  # Propagate — shutdown is happening
+            except Exception:
+                restarts += 1
+                _log.exception(
+                    "Background task %s crashed (restart %d/%d) — "
+                    "restarting in %.0fs",
+                    name, restarts, max_restarts, restart_delay,
+                )
+                if restarts > max_restarts:
+                    _log.error(
+                        "Background task %s exceeded max restarts — giving up",
+                        name,
+                    )
+                    return
+                await asyncio.sleep(restart_delay)
 
 
 @dataclass
@@ -215,6 +262,7 @@ class AppContext:
     bypass_role_ids: set[int]
     xp_grant_allowed_user_ids: set[int]
     xp_excluded_channel_ids: set[int]
+    recorded_bot_user_ids: set[int]
     level_5_role_id: int
     level_5_log_channel_id: int
     level_up_log_channel_id: int
@@ -241,30 +289,26 @@ class AppContext:
 
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
-                (bucket, value),
-            )
-            return get_config_id_set(conn, bucket)
+            add_config_id(conn, bucket, value, self.guild_id)
+            return get_config_id_set(conn, bucket, self.guild_id)
 
     def remove_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
-            conn.execute(
-                "DELETE FROM config_ids WHERE bucket = ? AND value = ?", (bucket, value)
-            )
-            return get_config_id_set(conn, bucket)
+            remove_config_id(conn, bucket, value, self.guild_id)
+            return get_config_id_set(conn, bucket, self.guild_id)
+
+    def clear_config_id_bucket(self, bucket: str) -> None:
+        with self.open_db() as conn:
+            clear_config_id_bucket(conn, bucket, self.guild_id)
 
     def set_config_value(self, key: str, value: str) -> str:
         with self.open_db() as conn:
-            conn.execute(
-                """
-                INSERT INTO config (key, value)
-                VALUES (?, ?)
-                ON CONFLICT(key) DO UPDATE SET value = excluded.value
-                """,
-                (key, value),
-            )
-            return get_config_value(conn, key, value)
+            _db_set_config_value(conn, key, value, self.guild_id)
+            return get_config_value(conn, key, value, self.guild_id)
+
+    def delete_config_value(self, key: str) -> None:
+        with self.open_db() as conn:
+            delete_config_value(conn, key, self.guild_id)
 
     def get_interaction_member(
         self, interaction: discord.Interaction

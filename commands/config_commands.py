@@ -18,7 +18,9 @@ import discord
 from discord import app_commands
 
 from db_utils import (
+    add_config_id,
     add_grant_permission,
+    clear_config_id_bucket,
     delete_grant_role,
     get_grant_permissions,
     remove_grant_permission,
@@ -161,17 +163,14 @@ class _GlobalModal(discord.ui.Modal, title="Global Settings"):
         # Save bypass roles — replace the full set
         assert bypass_valid
         with self._ctx.open_db() as conn:
-            conn.execute(
-                "DELETE FROM config_ids WHERE bucket = ?", ("bypass_role_ids",)
-            )
+            clear_config_id_bucket(conn, "bypass_role_ids", self._ctx.guild_id)
             for rid in bypass_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
-                    ("bypass_role_ids", rid),
-                )
+                add_config_id(conn, "bypass_role_ids", rid, self._ctx.guild_id)
             from db_utils import get_config_id_set
 
-            self._ctx.bypass_role_ids = get_config_id_set(conn, "bypass_role_ids")
+            self._ctx.bypass_role_ids = get_config_id_set(
+                conn, "bypass_role_ids", self._ctx.guild_id
+            )
 
         tz_label = f"UTC{tz_hours:+g}" if tz_hours != 0 else "UTC"
         mc_label = f"<#{mc}>" if mc > 0 else "off"

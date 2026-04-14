@@ -105,10 +105,18 @@
     </div>
   </div>
   <script>
-    const error = new URLSearchParams(window.location.search).get("error");
-    if (error) {
+    const ERROR_MESSAGES = {
+      invalid_state: "Invalid OAuth state. Please try again.",
+      denied: "Authorization was denied.",
+      token_failed: "Login failed \u2014 could not exchange token.",
+      profile_failed: "Login failed \u2014 could not fetch your Discord profile.",
+      guilds_failed: "Login failed \u2014 could not verify guild membership.",
+      no_shared_guild: "You must share a server with the bot to use this dashboard.",
+    };
+    const code = new URLSearchParams(window.location.search).get("error");
+    if (code) {
       const el = document.getElementById("error-block");
-      el.textContent = error;
+      el.textContent = ERROR_MESSAGES[code] || "An unexpected error occurred.";
       el.style.display = "block";
     }
   </script>

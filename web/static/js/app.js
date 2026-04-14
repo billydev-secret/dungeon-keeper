@@ -1,5 +1,5 @@
 // Dashboard boot + hash-based panel router.
-import { api } from "./api.js";
+import { api, esc } from "./api.js";
 
 const _moduleVer = "?v=12";
 
@@ -263,13 +263,13 @@ async function mountPanel() {
   if (currentPanel && currentPanel.unmount) {
     try { currentPanel.unmount(); } catch (_) {}
   }
-  rootEl.innerHTML = `<div class="panel"><div class="panel-loading">Loading ${page.label}…</div></div>`;
+  rootEl.innerHTML = `<div class="panel"><div class="panel-loading">Loading ${esc(page.label)}…</div></div>`;
 
   try {
     const mod = await import(page.module + _moduleVer);
     currentPanel = mod.mount(rootEl, params) || null;
   } catch (err) {
-    rootEl.innerHTML = `<div class="panel"><div class="error">Failed to load ${page.label}: ${err.message}</div></div>`;
+    rootEl.innerHTML = `<div class="panel"><div class="error">Failed to load ${esc(page.label)}: ${esc(err.message)}</div></div>`;
   }
 }
 
@@ -296,13 +296,21 @@ function applyMeData(me) {
 }
 
 function populateGuildPicker(guilds, activeId) {
-  guildSelectEl.innerHTML = "";
+  const nameEl = guildSelectEl.querySelector(".guild-picker__name");
+  const menuEl = guildSelectEl.querySelector(".guild-picker__menu");
+  menuEl.innerHTML = "";
+  const active = guilds.find((g) => g.id === activeId) || guilds[0];
+  if (active) nameEl.textContent = active.name;
   for (const g of guilds) {
-    const opt = document.createElement("option");
-    opt.value = g.id;
-    opt.textContent = g.name;
-    if (g.id === activeId) opt.selected = true;
-    guildSelectEl.appendChild(opt);
+    const li = document.createElement("li");
+    li.className = "guild-picker__item" + (g.id === activeId ? " active" : "");
+    li.textContent = g.name;
+    li.dataset.id = g.id;
+    li.addEventListener("click", () => {
+      guildSelectEl.classList.remove("open");
+      if (g.id !== activeId) switchGuild(g.id);
+    });
+    menuEl.appendChild(li);
   }
   // Only show picker if user has access to more than one guild
   guildSelectEl.style.display = guilds.length > 1 ? "" : "none";
@@ -318,6 +326,7 @@ async function switchGuild(newGuildId) {
     if (!res.ok) return;
     const me = await res.json();
     applyMeData(me);
+    if (me.guilds) populateGuildPicker(me.guilds, me.guild_id);
     renderNav(parseHash().id);
     mountPanel();
   } catch (err) {
@@ -335,8 +344,11 @@ async function boot() {
     // Guild picker
     if (me.guilds && me.guilds.length > 0) {
       populateGuildPicker(me.guilds, me.guild_id);
-      guildSelectEl.addEventListener("change", () => {
-        switchGuild(guildSelectEl.value);
+      guildSelectEl.querySelector(".guild-picker__toggle").addEventListener("click", () => {
+        guildSelectEl.classList.toggle("open");
+      });
+      document.addEventListener("click", (e) => {
+        if (!guildSelectEl.contains(e.target)) guildSelectEl.classList.remove("open");
       });
     }
 

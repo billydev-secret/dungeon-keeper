@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeBarChart } from "../charts.js";
 
 const RESOLUTIONS = [
@@ -42,7 +42,7 @@ export function mount(container, initialParams) {
         yLabel: "Members joined",
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
     }
   }
 

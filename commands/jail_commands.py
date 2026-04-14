@@ -33,6 +33,7 @@ from services.moderation import (
     escalate_ticket,
     fmt_duration,
     generate_transcript,
+    render_transcript_html,
     get_active_jail,
     get_active_warning_count,
     get_expired_jails,
@@ -193,9 +194,9 @@ async def _collect_and_post_transcript(
             content=transcript,
         )
 
-    # Build file
-    file_bytes = json.dumps(transcript, indent=2).encode()
-    filename = f"{record_type}-{record_id}-transcript.json"
+    # Build HTML file
+    html_bytes = render_transcript_html(transcript).encode("utf-8")
+    filename = f"{record_type}-{record_id}-transcript.html"
 
     # Post to transcript channel
     transcript_ch_id = _get_config(ctx, "transcript_channel_id")
@@ -210,11 +211,11 @@ async def _collect_and_post_transcript(
                 color=CLR_INFO,
             )
             await ch.send(
-                embed=embed, file=discord.File(io.BytesIO(file_bytes), filename)
+                embed=embed, file=discord.File(io.BytesIO(html_bytes), filename)
             )
 
     # DM to user
-    await _dm_user(user, file=discord.File(io.BytesIO(file_bytes), filename))
+    await _dm_user(user, file=discord.File(io.BytesIO(html_bytes), filename))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1123,21 +1124,6 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
                 close_msg += f"\n**Reason:** {reason}"
             await channel.send(
                 close_msg, allowed_mentions=discord.AllowedMentions.none()
-            )
-
-            # Generate close-time transcript
-            transcript_user = creator or guild.get_member(ticket["user_id"]) or member
-            await _collect_and_post_transcript(
-                ctx,
-                channel,
-                record_type="ticket",
-                record_id=self.ticket_id,
-                user=transcript_user,
-                extra_meta={
-                    "closed_by": member.id,
-                    "close_reason": reason,
-                    "transcript_stage": "close",
-                },
             )
 
             # DM creator

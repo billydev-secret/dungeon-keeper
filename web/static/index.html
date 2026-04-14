@@ -14,7 +14,13 @@
     <header id="topbar">
       <button id="sidebar-toggle" aria-label="Menu">&#9776;</button>
       <span class="topbar-brand">TGM</span>
-      <select id="guild-select" class="guild-picker" style="display:none"></select>
+      <div id="guild-select" class="guild-picker" style="display:none">
+        <button class="guild-picker__toggle" type="button">
+          <span class="guild-picker__name"></span>
+          <svg class="guild-picker__chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <ul class="guild-picker__menu"></ul>
+      </div>
       <nav id="topbar-tabs"></nav>
       <span id="me"></span>
     </header>

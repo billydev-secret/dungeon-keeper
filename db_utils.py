@@ -32,18 +32,99 @@ def open_db(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
-def get_config_value(conn: sqlite3.Connection, key: str, default: str) -> str:
-    """Retrieve configuration value from config table."""
-    row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else default
+def get_config_value(
+    conn: sqlite3.Connection, key: str, default: str, guild_id: int = 0
+) -> str:
+    """Retrieve configuration value from config table.
+
+    Tries guild-specific first, then falls back to ``guild_id=0`` (legacy).
+    """
+    row = conn.execute(
+        "SELECT value FROM config WHERE guild_id = ? AND key = ?", (guild_id, key)
+    ).fetchone()
+    if row:
+        return row["value"]
+    if guild_id != 0:
+        # Fall back to legacy (guild_id=0) row
+        row = conn.execute(
+            "SELECT value FROM config WHERE guild_id = 0 AND key = ?", (key,)
+        ).fetchone()
+        if row:
+            return row["value"]
+    return default
 
 
-def get_config_id_set(conn: sqlite3.Connection, bucket: str) -> set[int]:
-    """Retrieve set of integer IDs from config_ids table for given bucket."""
+def set_config_value(
+    conn: sqlite3.Connection, key: str, value: str, guild_id: int = 0
+) -> None:
+    """Upsert a config value, scoped to the given guild."""
+    conn.execute(
+        """
+        INSERT INTO config (guild_id, key, value)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value
+        """,
+        (guild_id, key, value),
+    )
+
+
+def delete_config_value(
+    conn: sqlite3.Connection, key: str, guild_id: int = 0
+) -> None:
+    """Delete a single config key for the given guild."""
+    conn.execute(
+        "DELETE FROM config WHERE guild_id = ? AND key = ?", (guild_id, key)
+    )
+
+
+def add_config_id(
+    conn: sqlite3.Connection, bucket: str, value: int, guild_id: int = 0
+) -> None:
+    """Insert an ID value into a bucket for the given guild."""
+    conn.execute(
+        "INSERT OR IGNORE INTO config_ids (guild_id, bucket, value) VALUES (?, ?, ?)",
+        (guild_id, bucket, value),
+    )
+
+
+def remove_config_id(
+    conn: sqlite3.Connection, bucket: str, value: int, guild_id: int = 0
+) -> None:
+    """Remove an ID value from a bucket for the given guild."""
+    conn.execute(
+        "DELETE FROM config_ids WHERE guild_id = ? AND bucket = ? AND value = ?",
+        (guild_id, bucket, value),
+    )
+
+
+def clear_config_id_bucket(
+    conn: sqlite3.Connection, bucket: str, guild_id: int = 0
+) -> None:
+    """Remove all ID values from a bucket for the given guild."""
+    conn.execute(
+        "DELETE FROM config_ids WHERE guild_id = ? AND bucket = ?",
+        (guild_id, bucket),
+    )
+
+
+def get_config_id_set(
+    conn: sqlite3.Connection, bucket: str, guild_id: int = 0
+) -> set[int]:
+    """Retrieve set of integer IDs from config_ids table for given bucket.
+
+    Tries guild-specific first, then falls back to ``guild_id=0`` (legacy).
+    """
     rows = conn.execute(
-        "SELECT value FROM config_ids WHERE bucket = ? ORDER BY value",
-        (bucket,),
+        "SELECT value FROM config_ids WHERE guild_id = ? AND bucket = ? ORDER BY value",
+        (guild_id, bucket),
     ).fetchall()
+    if rows:
+        return {int(row["value"]) for row in rows}
+    if guild_id != 0:
+        rows = conn.execute(
+            "SELECT value FROM config_ids WHERE guild_id = 0 AND bucket = ? ORDER BY value",
+            (bucket,),
+        ).fetchall()
     return {int(row["value"]) for row in rows}
 
 
@@ -267,22 +348,84 @@ def can_use_grant(
 
 
 def init_config_db(db_path: Path) -> None:
-    """Initialize configuration database tables."""
+    """Initialize configuration database tables.
+
+    If legacy tables (without guild_id) exist, migrate them: existing
+    rows are preserved under guild_id=0, which acts as the legacy /
+    fallback bucket.
+    """
     with open_db(db_path) as conn:
+        _migrate_config_to_guild_scoped(conn)
+
+
+def _migrate_config_to_guild_scoped(conn: sqlite3.Connection) -> None:
+    """Create (or migrate) the config / config_ids tables with guild_id."""
+
+    def _has_guild_id(table: str) -> bool:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(row["name"] == "guild_id" for row in rows)
+
+    def _table_exists(table: str) -> bool:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        return row is not None
+
+    # config table
+    if _table_exists("config") and not _has_guild_id("config"):
+        # Legacy schema — migrate
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS config (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
+            CREATE TABLE config_new (
+                guild_id INTEGER NOT NULL DEFAULT 0,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (guild_id, key)
             )
             """
         )
         conn.execute(
+            "INSERT INTO config_new (guild_id, key, value) SELECT 0, key, value FROM config"
+        )
+        conn.execute("DROP TABLE config")
+        conn.execute("ALTER TABLE config_new RENAME TO config")
+    else:
+        conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS config_ids (
+            CREATE TABLE IF NOT EXISTS config (
+                guild_id INTEGER NOT NULL DEFAULT 0,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (guild_id, key)
+            )
+            """
+        )
+
+    # config_ids table
+    if _table_exists("config_ids") and not _has_guild_id("config_ids"):
+        conn.execute(
+            """
+            CREATE TABLE config_ids_new (
+                guild_id INTEGER NOT NULL DEFAULT 0,
                 bucket TEXT NOT NULL,
                 value INTEGER NOT NULL,
-                PRIMARY KEY (bucket, value)
+                PRIMARY KEY (guild_id, bucket, value)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO config_ids_new (guild_id, bucket, value) SELECT 0, bucket, value FROM config_ids"
+        )
+        conn.execute("DROP TABLE config_ids")
+        conn.execute("ALTER TABLE config_ids_new RENAME TO config_ids")
+    else:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS config_ids (
+                guild_id INTEGER NOT NULL DEFAULT 0,
+                bucket TEXT NOT NULL,
+                value INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, bucket, value)
             )
             """
         )

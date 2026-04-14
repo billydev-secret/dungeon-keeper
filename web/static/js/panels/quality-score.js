@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { renderSortableTable } from "../table.js";
 
 const COMPONENT_COLORS = {
@@ -147,7 +147,7 @@ export function mount(container, initialParams) {
         defaultSort: "final_score",
       });
     } catch (err) {
-      container.querySelector("[data-top-chart]").innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector("[data-top-chart]").innerHTML = `<div class="error">${esc(err.message)}</div>`;
       container.querySelector("[data-bottom-chart]").innerHTML = "";
       tableWrap.innerHTML = "";
     }

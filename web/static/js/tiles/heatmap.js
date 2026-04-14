@@ -1,5 +1,3 @@
-import { badgeHTML } from "./tile-helpers.js";
-
 export function renderTile(el, data) {
   // Mini 7x24 heatmap
   const maxVal = Math.max(...data.grid.flat(), 1);

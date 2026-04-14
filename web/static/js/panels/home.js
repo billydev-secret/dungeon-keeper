@@ -1,18 +1,20 @@
 import { api } from "../api.js";
-import { WIDGET_MAP, DEFAULT_HOME, DEFAULT_ADMIN, ALL_WIDGETS, loadRenderer } from "../widget-registry.js";
+import { WIDGET_MAP, DEFAULT_HOME, DEFAULT_ADMIN } from "../widget-registry.js";
 import { renderGrid, showWidgetPicker } from "../widget-grid.js";
 import { esc } from "../tiles/tile-helpers.js";
 
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
+
+function entryId(e) { return typeof e === "string" ? e : e?.id; }
 
 function getLayout(userId, isAdmin) {
   try {
     const raw = localStorage.getItem(`dk_layout_${userId}`);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed.version === STORAGE_VERSION && Array.isArray(parsed.widgets)) {
-        // Filter out any widgets that no longer exist in registry
-        const valid = parsed.widgets.filter(id => WIDGET_MAP[id]);
+      if (Array.isArray(parsed.widgets) &&
+          (parsed.version === 1 || parsed.version === STORAGE_VERSION)) {
+        const valid = parsed.widgets.filter(e => WIDGET_MAP[entryId(e)]);
         if (valid.length) return valid;
       }
     }
@@ -21,9 +23,14 @@ function getLayout(userId, isAdmin) {
 }
 
 function saveLayout(userId, layout) {
+  const serialized = layout.map(e => {
+    if (typeof e === "string") return e;
+    if (e && e.rows && e.rows > 1) return { id: e.id, rows: e.rows };
+    return e.id;
+  });
   localStorage.setItem(`dk_layout_${userId}`, JSON.stringify({
     version: STORAGE_VERSION,
-    widgets: layout,
+    widgets: serialized,
   }));
 }
 
@@ -46,8 +53,8 @@ export function mount(container) {
 
   async function fetchData() {
     // Determine which sources are needed
-    const needsHome = layout.some(id => WIDGET_MAP[id]?.source === "home");
-    const needsHealth = layout.some(id => WIDGET_MAP[id]?.source === "health");
+    const needsHome = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "home");
+    const needsHealth = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "health");
 
     const promises = [];
     if (needsHome) promises.push(api("/api/home").then(d => { data.home = d; }));
@@ -85,8 +92,8 @@ export function mount(container) {
     if (editMode) gridEl.classList.add("edit-mode");
 
     // Filter layout to only widgets user has perms for
-    const visibleLayout = layout.filter(id => {
-      const w = WIDGET_MAP[id];
+    const visibleLayout = layout.filter(e => {
+      const w = WIDGET_MAP[entryId(e)];
       return w && (!w.perms.length || w.perms.every(p => perms.has(p)));
     });
 
@@ -99,16 +106,25 @@ export function mount(container) {
         render();
       },
       onRemove(id) {
-        layout = layout.filter(wid => wid !== id);
+        layout = layout.filter(e => entryId(e) !== id);
         saveLayout(userId, layout);
         render();
       },
       onAdd() {
-        showWidgetPicker(layout, perms, (id) => {
+        showWidgetPicker(layout.map(entryId), perms, (id) => {
           layout.push(id);
           saveLayout(userId, layout);
           render();
         });
+      },
+      onResize(id, rows) {
+        layout = layout.map(e => {
+          if (entryId(e) !== id) return e;
+          if (rows > 1) return { id, rows };
+          return id;
+        });
+        saveLayout(userId, layout);
+        render();
       },
     });
 

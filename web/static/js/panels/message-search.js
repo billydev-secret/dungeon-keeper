@@ -1,10 +1,4 @@
-import { api } from "../api.js";
-
-function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
-}
+import { api, esc } from "../api.js";
 
 /**
  * Build a filterable select widget: a text input that filters a dropdown list.
@@ -307,7 +301,7 @@ export function mount(container) {
       aiStatusEl.textContent = data.explanation || "Filters applied";
       doSearch(1);
     } catch (err) {
-      aiStatusEl.textContent = `Error: ${err.message}`;
+      aiStatusEl.textContent = `Error: ${esc(err.message)}`;
     } finally {
       aiSearchBtn.disabled = false;
     }
@@ -409,7 +403,7 @@ export function mount(container) {
       const data = await api(`/api/messages/search?${params}`);
       renderResults(data);
     } catch (err) {
-      resultsEl.innerHTML = `<div class="error">${err.message}</div>`;
+      resultsEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
     }
   }
 

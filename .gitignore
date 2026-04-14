@@ -10,3 +10,4 @@ dungeonkeeper.db-shm
 __pycache__/
 .venv/
 /.claude/*
+backups/

@@ -1,4 +1,4 @@
-import { sparklineSVG, badgeHTML, esc, fmtAgo } from "./tile-helpers.js";
+import { badgeHTML, esc, fmtAgo } from "./tile-helpers.js";
 
 export function renderTile(el, data, names) {
   const chNames = names ? names.channels || {} : {};
@@ -17,7 +17,7 @@ export function renderTile(el, data, names) {
   // Outlier messages (1σ above/below baseline)
   const outliers = data.outliers || { top: [], bottom: [] };
 
-  function msgSnippet(m, label) {
+  function msgSnippet(m, _label) {
     const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
     const scoreColor = m.sentiment >= 0 ? "var(--success)" : "var(--danger)";
     const author = uNames[m.author_id] || "";

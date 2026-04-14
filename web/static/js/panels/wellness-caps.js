@@ -1,12 +1,5 @@
 import { wGet, wPost, wPut, wDelete, esc, showStatus } from "../wellness-helpers.js";
 
-const HOUR_LABELS = [
-  "12a","1a","2a","3a","4a","5a","6a","7a",
-  "8a","9a","10a","11a","12p","1p","2p","3p",
-  "4p","5p","6p","7p","8p","9p","10p","11p",
-];
-const DAY_LABELS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading caps…</div></div>`;
 
@@ -223,7 +216,6 @@ export function mount(container) {
     }
 
     function yToValue(yPixel) {
-      const area = chart.chartArea;
       const yScale = chart.scales.y;
       const val = yScale.getValueForPixel(yPixel);
       return Math.max(1, Math.round(val));

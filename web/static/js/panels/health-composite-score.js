@@ -1,6 +1,4 @@
 import { api } from "../api.js";
-import { ROLE_COLORS } from "../charts.js";
-
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 const DIM_COLORS = ["#E6B84C", "#B88A2C", "#7F8F3A", "#B36A92", "#9E3B2E", "#949ba4"];

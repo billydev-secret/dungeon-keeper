@@ -135,6 +135,7 @@ class GreeterResponseEntry(BaseModel):
 
 class GreeterResponseResponse(BaseModel):
     window_label: str
+    total_joins: int = 0
     count: int
     median_seconds: float
     mean_seconds: float

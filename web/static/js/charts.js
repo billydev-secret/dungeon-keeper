@@ -238,7 +238,7 @@ export function makeDoughnutChart(canvas, { labels, data, title, colors }) {
 
 // ── Floating bar / candlestick (message cadence) ────────────────────────
 
-export function makeCandlestickChart(canvas, { buckets, title, noZoom }) {
+export function makeCandlestickChart(canvas, { buckets, title, noZoom: _noZoom }) {
   // Chart.js "floating bars": data as [low, high] pairs.
   // We draw the body (p20 → p80) as a thick bar, the wick (min → max) as a
   // thin bar behind it, and mark the median with a line annotation.

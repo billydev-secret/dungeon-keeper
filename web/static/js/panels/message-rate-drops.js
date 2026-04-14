@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -80,7 +80,7 @@ export function mount(container, initialParams) {
       });
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
       tableWrap.innerHTML = "";
     }
   }

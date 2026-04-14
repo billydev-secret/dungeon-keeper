@@ -6,13 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from db_utils import (
+    add_config_id,
     add_grant_permission,
+    clear_config_id_bucket,
     delete_grant_role,
     get_config_id_set,
     get_config_value,
     get_grant_permissions,
     get_grant_roles,
     remove_grant_permission,
+    set_config_value,
     upsert_grant_role,
 )
 from services.auto_delete_service import (
@@ -140,6 +143,9 @@ async def get_config(
                     "bypass_role_ids": [
                         str(i) for i in _id_set_list(conn, "bypass_role_ids")
                     ],
+                    "recorded_bot_user_ids": [
+                        str(i) for i in _id_set_list(conn, "recorded_bot_user_ids")
+                    ],
                     "booster_swatch_dir": _str_val(conn, "booster_swatch_dir"),
                 },
                 "welcome": {
@@ -249,6 +255,7 @@ class GlobalConfigUpdate(BaseModel):
     tz_offset_hours: float | None = None
     mod_channel_id: str | None = None
     bypass_role_ids: list[str] | None = None
+    recorded_bot_user_ids: list[str] | None = None
     booster_swatch_dir: str | None = None
 
 
@@ -259,37 +266,36 @@ async def update_global(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
-    get_active_guild_id(request)
+    guild_id = get_active_guild_id(request)
     _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
             if body.tz_offset_hours is not None:
-                conn.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    ("tz_offset_hours", str(body.tz_offset_hours)),
+                set_config_value(
+                    conn, "tz_offset_hours", str(body.tz_offset_hours), guild_id
                 )
                 ctx.tz_offset_hours = body.tz_offset_hours
             if body.mod_channel_id is not None:
-                conn.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    ("mod_channel_id", body.mod_channel_id),
+                set_config_value(
+                    conn, "mod_channel_id", body.mod_channel_id, guild_id
                 )
                 ctx.mod_channel_id = int(body.mod_channel_id)
             if body.bypass_role_ids is not None:
-                conn.execute(
-                    "DELETE FROM config_ids WHERE bucket = ?", ("bypass_role_ids",)
-                )
+                clear_config_id_bucket(conn, "bypass_role_ids", guild_id)
                 for rid in body.bypass_role_ids:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
-                        ("bypass_role_ids", int(rid)),
-                    )
+                    add_config_id(conn, "bypass_role_ids", int(rid), guild_id)
                 ctx.bypass_role_ids = {int(r) for r in body.bypass_role_ids}
+            if body.recorded_bot_user_ids is not None:
+                clear_config_id_bucket(conn, "recorded_bot_user_ids", guild_id)
+                for uid in body.recorded_bot_user_ids:
+                    add_config_id(conn, "recorded_bot_user_ids", int(uid), guild_id)
+                ctx.recorded_bot_user_ids = {
+                    int(u) for u in body.recorded_bot_user_ids
+                }
             if body.booster_swatch_dir is not None:
-                conn.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    ("booster_swatch_dir", body.booster_swatch_dir),
+                set_config_value(
+                    conn, "booster_swatch_dir", body.booster_swatch_dir, guild_id
                 )
         return {"ok": True}
 
@@ -313,7 +319,7 @@ async def update_welcome(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
-    get_active_guild_id(request)
+    guild_id = get_active_guild_id(request)
     _require_primary_guild(request)
 
     _FIELDS = {
@@ -331,10 +337,7 @@ async def update_welcome(
             for field_name, config_key in _FIELDS.items():
                 val = getattr(body, field_name)
                 if val is not None:
-                    conn.execute(
-                        "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                        (config_key, val),
-                    )
+                    set_config_value(conn, config_key, val, guild_id)
                     # Update live context for int fields
                     if hasattr(ctx, config_key):
                         try:
@@ -375,51 +378,50 @@ async def update_xp(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
-    get_active_guild_id(request)
+    guild_id = get_active_guild_id(request)
     _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
             if body.level_5_role_id is not None:
-                conn.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    ("xp_level_5_role_id", body.level_5_role_id),
+                set_config_value(
+                    conn, "xp_level_5_role_id", body.level_5_role_id, guild_id
                 )
                 ctx.level_5_role_id = int(body.level_5_role_id)
             if body.level_5_log_channel_id is not None:
-                conn.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    ("xp_level_5_log_channel_id", body.level_5_log_channel_id),
+                set_config_value(
+                    conn,
+                    "xp_level_5_log_channel_id",
+                    body.level_5_log_channel_id,
+                    guild_id,
                 )
                 ctx.level_5_log_channel_id = int(body.level_5_log_channel_id)
             if body.level_up_log_channel_id is not None:
-                conn.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    ("xp_level_up_log_channel_id", body.level_up_log_channel_id),
+                set_config_value(
+                    conn,
+                    "xp_level_up_log_channel_id",
+                    body.level_up_log_channel_id,
+                    guild_id,
                 )
                 ctx.level_up_log_channel_id = int(body.level_up_log_channel_id)
             if body.xp_grant_allowed_user_ids is not None:
-                conn.execute(
-                    "DELETE FROM config_ids WHERE bucket = ?",
-                    ("xp_grant_allowed_user_ids",),
+                clear_config_id_bucket(
+                    conn, "xp_grant_allowed_user_ids", guild_id
                 )
                 for uid in body.xp_grant_allowed_user_ids:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
-                        ("xp_grant_allowed_user_ids", int(uid)),
+                    add_config_id(
+                        conn, "xp_grant_allowed_user_ids", int(uid), guild_id
                     )
                 ctx.xp_grant_allowed_user_ids = {
                     int(u) for u in body.xp_grant_allowed_user_ids
                 }
             if body.xp_excluded_channel_ids is not None:
-                conn.execute(
-                    "DELETE FROM config_ids WHERE bucket = ?",
-                    ("xp_excluded_channel_ids",),
+                clear_config_id_bucket(
+                    conn, "xp_excluded_channel_ids", guild_id
                 )
                 for cid in body.xp_excluded_channel_ids:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
-                        ("xp_excluded_channel_ids", int(cid)),
+                    add_config_id(
+                        conn, "xp_excluded_channel_ids", int(cid), guild_id
                     )
                 ctx.xp_excluded_channel_ids = {
                     int(c) for c in body.xp_excluded_channel_ids
@@ -444,9 +446,11 @@ async def update_xp(
             for field_name in _COEFF_FIELDS:
                 val = getattr(body, field_name, None)
                 if val is not None:
-                    conn.execute(
-                        "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                        (f"{_XP_COEFF_PREFIX}{field_name}", str(val)),
+                    set_config_value(
+                        conn,
+                        f"{_XP_COEFF_PREFIX}{field_name}",
+                        str(val),
+                        guild_id,
                     )
 
             # Reload live XP settings on ctx
@@ -516,7 +520,7 @@ async def update_moderation(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
-    get_active_guild_id(request)
+    guild_id = get_active_guild_id(request)
     _require_primary_guild(request)
 
     _FIELDS = {
@@ -535,14 +539,13 @@ async def update_moderation(
             for field_name, config_key in _FIELDS.items():
                 val = getattr(body, field_name)
                 if val is not None:
-                    conn.execute(
-                        "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                        (config_key, val),
-                    )
+                    set_config_value(conn, config_key, val, guild_id)
             if body.warning_threshold is not None:
-                conn.execute(
-                    "INSERT INTO config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                    ("warning_threshold", str(body.warning_threshold)),
+                set_config_value(
+                    conn,
+                    "warning_threshold",
+                    str(body.warning_threshold),
+                    guild_id,
                 )
         return {"ok": True}
 
@@ -652,20 +655,16 @@ async def update_spoiler(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
-    get_active_guild_id(request)
+    guild_id = get_active_guild_id(request)
     _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
             if body.spoiler_required_channels is not None:
-                conn.execute(
-                    "DELETE FROM config_ids WHERE bucket = ?",
-                    ("spoiler_required_channels",),
-                )
+                clear_config_id_bucket(conn, "spoiler_required_channels", guild_id)
                 for cid in body.spoiler_required_channels:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO config_ids (bucket, value) VALUES (?, ?)",
-                        ("spoiler_required_channels", int(cid)),
+                    add_config_id(
+                        conn, "spoiler_required_channels", int(cid), guild_id
                     )
                 ctx.spoiler_required_channels = {
                     int(c) for c in body.spoiler_required_channels

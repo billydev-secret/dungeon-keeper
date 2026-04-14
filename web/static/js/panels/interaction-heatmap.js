@@ -138,11 +138,12 @@ export function mount(container, initialParams) {
     }
     ctx.restore();
 
-    // top labels (rotated)
+    // top labels (rotated -45°; left-aligned so they extend up-and-right into
+    // the top margin instead of down-and-left into the grid cells)
     ctx.save();
     ctx.font = "11px monospace";
     ctx.fillStyle = "#dbdee1";
-    ctx.textAlign = "right";
+    ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     for (let j = 0; j < n; j++) {
       const x = labelW + j * cell + cell / 2;

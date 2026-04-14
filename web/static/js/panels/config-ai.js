@@ -9,7 +9,7 @@ export function mount(container) {
     try {
       data = await api("/api/config/ai");
     } catch (err) {
-      container.innerHTML = `<div class="panel"><div class="error">Failed to load AI config: ${err.message}</div></div>`;
+      container.innerHTML = `<div class="panel"><div class="error">Failed to load AI config: ${esc(err.message)}</div></div>`;
       return;
     }
 
@@ -220,7 +220,7 @@ export function mount(container) {
             }
           } catch (err) {
             testStatus.textContent = "";
-            testOutput.textContent = `Error: ${err.message}`;
+            testOutput.textContent = `Error: ${esc(err.message)}`;
           }
         }
       });

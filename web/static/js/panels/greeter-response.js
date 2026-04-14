@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -63,9 +63,12 @@ export function mount(container, initialParams) {
       const data = await api("/api/reports/greeter-response", params);
       if (chart) { chart.destroy(); chart = null; }
 
-      statsEl.textContent = data.count
-        ? `Median: ${fmtDur(data.median_seconds)}  ·  Mean: ${fmtDur(data.mean_seconds)}  ·  n=${data.count}`
-        : "";
+      if (data.count) {
+        const pct = data.total_joins ? Math.round(data.count / data.total_joins * 100) : 0;
+        statsEl.textContent = `Median: ${fmtDur(data.median_seconds)}  ·  Mean: ${fmtDur(data.mean_seconds)}  ·  ${data.count} of ${data.total_joins} greeted (${pct}%)`;
+      } else {
+        statsEl.textContent = "";
+      }
 
       const wrap = container.querySelector(".chart-wrap");
       if (!data.histogram.length || data.count === 0) {
@@ -84,7 +87,7 @@ export function mount(container, initialParams) {
       renderTable(data.entries || []);
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
       tableWrap.innerHTML = "";
     }
   }

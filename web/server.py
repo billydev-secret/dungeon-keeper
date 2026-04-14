@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from collections import defaultdict
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -27,6 +29,100 @@ from web.auth import AuthBackend, DiscordOAuthAuth, OpenAuth
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _log = logging.getLogger("dungeonkeeper.web")
+
+
+# ── Rate limiting ────────────────────────────────────────────────────
+# Simple per-IP token bucket. No external dependency needed.
+
+# Tier definitions: (max_tokens, refill_per_second)
+_RATE_TIERS: dict[str, tuple[int, float]] = {
+    "ai":      (5, 0.1),     # 5 burst, 1 per 10s — expensive AI calls
+    "search":  (10, 0.5),    # 10 burst, 1 per 2s — regex search
+    "auth":    (10, 0.2),    # 10 burst, 1 per 5s — login/callback
+    "default": (60, 2.0),    # 60 burst, 2/s — normal API
+}
+
+# Map path prefixes to tiers
+_TIER_ROUTES: list[tuple[str, str]] = [
+    ("/api/messages/ai-query", "ai"),
+    ("/api/messages/search",   "search"),
+    ("/login",                 "auth"),
+    ("/callback",              "auth"),
+]
+
+
+class _RateBucket:
+    __slots__ = ("tokens", "last_refill", "max_tokens", "refill_rate")
+
+    def __init__(self, max_tokens: float, refill_rate: float) -> None:
+        self.tokens = max_tokens
+        self.last_refill = time.monotonic()
+        self.max_tokens = max_tokens
+        self.refill_rate = refill_rate
+
+    def consume(self) -> bool:
+        now = time.monotonic()
+        elapsed = now - self.last_refill
+        self.tokens = min(self.max_tokens, self.tokens + elapsed * self.refill_rate)
+        self.last_refill = now
+        if self.tokens >= 1.0:
+            self.tokens -= 1.0
+            return True
+        return False
+
+
+# ip → tier → bucket
+_buckets: dict[str, dict[str, _RateBucket]] = defaultdict(dict)
+_BUCKET_EXPIRY = 600  # prune IPs not seen in 10 minutes
+_last_prune = time.monotonic()
+
+
+def _get_tier(path: str) -> str:
+    for prefix, tier in _TIER_ROUTES:
+        if path.startswith(prefix):
+            return tier
+    return "default"
+
+
+class _RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        global _last_prune  # noqa: PLW0603
+
+        path = request.url.path
+        # Skip static files — no rate limit needed
+        if path.startswith("/static/"):
+            return await call_next(request)
+
+        ip = request.client.host if request.client else "unknown"
+        tier = _get_tier(path)
+        max_tokens, refill_rate = _RATE_TIERS[tier]
+
+        ip_buckets = _buckets[ip]
+        bucket = ip_buckets.get(tier)
+        if bucket is None:
+            bucket = _RateBucket(max_tokens, refill_rate)
+            ip_buckets[tier] = bucket
+
+        if not bucket.consume():
+            _log.warning("Rate limited %s on %s (tier=%s)", ip, path, tier)
+            return JSONResponse(
+                {"detail": "Too many requests. Please slow down."},
+                status_code=429,
+                headers={"Retry-After": str(int(1 / refill_rate))},
+            )
+
+        # Periodic prune of stale buckets (every 10 min)
+        now = time.monotonic()
+        if now - _last_prune > _BUCKET_EXPIRY:
+            _last_prune = now
+            stale = [
+                k for k, v in _buckets.items()
+                if all(now - b.last_refill > _BUCKET_EXPIRY for b in v.values())
+            ]
+            for k in stale:
+                del _buckets[k]
+
+        return await call_next(request)
 
 
 def _auto_detect_auth(guild_id: int) -> AuthBackend:
@@ -103,6 +199,9 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()
+
+    # ── Rate limiting ──────────────────────────────────────────────────
+    app.add_middleware(_RateLimitMiddleware)
 
     # ── Cache headers for JS/CSS so deploys take effect immediately ──
     class _NoCacheJS(BaseHTTPMiddleware):

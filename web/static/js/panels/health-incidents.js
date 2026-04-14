@@ -1,13 +1,11 @@
 import { api } from "../api.js";
-import { makeLineChart, makeBarChart, ROLE_COLORS } from "../charts.js";
+import { makeBarChart } from "../charts.js";
 
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 function fmtTime(ts) {
   return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
-
-const SEVERITY_COLORS = { critical: "#9E3B2E", high: "#E6B84C", medium: "#B88A2C", low: "#949ba4" };
 
 export function mount(container) {
   container.innerHTML = '<div class="panel"><div class="panel-loading">Loading incident data...</div></div>';

@@ -5,6 +5,7 @@ Implements the moderation system described in dungeon_keeper_jail_ticket_spec.md
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -681,6 +682,151 @@ async def generate_transcript(
     if extra_meta:
         transcript.update(extra_meta)
     return transcript
+
+
+# ---------------------------------------------------------------------------
+# Transcript HTML rendering
+# ---------------------------------------------------------------------------
+
+_TRANSCRIPT_CSS = """
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #1e1f22;
+    color: #dbdee1;
+    line-height: 1.45;
+}
+.wrap { max-width: 900px; margin: 0 auto; padding: 24px 16px 64px; }
+header {
+    border-bottom: 1px solid #2b2d31;
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+}
+h1 {
+    margin: 0 0 8px;
+    font-size: 20px;
+    font-weight: 600;
+    color: #f2f3f5;
+}
+.meta { font-size: 13px; color: #949ba4; }
+.meta div { margin-top: 2px; }
+.meta b { color: #dbdee1; font-weight: 500; }
+.msg {
+    padding: 10px 12px;
+    border-radius: 6px;
+    margin-bottom: 2px;
+}
+.msg:hover { background: #2b2d31; }
+.msg-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 2px;
+}
+.author { font-weight: 600; color: #f2f3f5; }
+.ts { font-size: 11px; color: #949ba4; }
+.content {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: #dbdee1;
+}
+.embed {
+    margin-top: 6px;
+    padding: 8px 10px;
+    border-left: 3px solid #5865f2;
+    background: #2b2d31;
+    border-radius: 3px;
+    font-size: 13px;
+}
+.embed-title { font-weight: 600; color: #f2f3f5; margin-bottom: 2px; }
+.embed-desc { color: #dbdee1; white-space: pre-wrap; }
+.attach {
+    margin-top: 4px;
+    font-size: 12px;
+}
+.attach a { color: #00a8fc; text-decoration: none; }
+.attach a:hover { text-decoration: underline; }
+.empty { color: #6d6f78; font-style: italic; }
+"""
+
+
+def _fmt_ts(iso: str) -> str:
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (ValueError, AttributeError):
+        return iso or ""
+
+
+def render_transcript_html(transcript: dict[str, Any]) -> str:
+    """Render a transcript dict as a standalone HTML document."""
+    rtype = str(transcript.get("type", "transcript")).replace("_", " ").title()
+    rid = transcript.get("record_id", "")
+    channel_name = transcript.get("channel_name", "")
+    count = transcript.get("message_count", 0)
+    created = _fmt_ts(transcript.get("created_at", ""))
+
+    meta_rows = [f"<div><b>Channel:</b> #{html.escape(str(channel_name))}</div>"]
+    meta_rows.append(f"<div><b>Messages:</b> {int(count) if isinstance(count, int) else html.escape(str(count))}</div>")
+    meta_rows.append(f"<div><b>Generated:</b> {html.escape(created)}</div>")
+    for key in ("close_reason", "reason", "closed_by", "duration_served", "transcript_stage"):
+        if key in transcript and transcript[key] not in (None, ""):
+            label = key.replace("_", " ").title()
+            meta_rows.append(
+                f"<div><b>{html.escape(label)}:</b> {html.escape(str(transcript[key]))}</div>"
+            )
+
+    msg_parts: list[str] = []
+    for m in transcript.get("messages", []):
+        author = html.escape(str(m.get("author_name", "unknown")))
+        ts = html.escape(_fmt_ts(m.get("timestamp", "")))
+        content = html.escape(str(m.get("content", "") or ""))
+        body = f'<div class="content">{content}</div>' if content else '<div class="content empty">(no text)</div>'
+
+        embed_html = ""
+        for e in m.get("embeds", []) or []:
+            etitle = html.escape(str(e.get("title", "") or ""))
+            edesc = html.escape(str(e.get("description", "") or ""))
+            if etitle or edesc:
+                embed_html += '<div class="embed">'
+                if etitle:
+                    embed_html += f'<div class="embed-title">{etitle}</div>'
+                if edesc:
+                    embed_html += f'<div class="embed-desc">{edesc}</div>'
+                embed_html += "</div>"
+
+        attach_html = ""
+        for a in m.get("attachments", []) or []:
+            fn = html.escape(str(a.get("filename", "file")))
+            url = html.escape(str(a.get("url", "")), quote=True)
+            attach_html += f'<div class="attach">📎 <a href="{url}" target="_blank" rel="noopener">{fn}</a></div>'
+
+        msg_parts.append(
+            f'<div class="msg">'
+            f'<div class="msg-head"><span class="author">{author}</span>'
+            f'<span class="ts">{ts}</span></div>'
+            f"{body}{embed_html}{attach_html}"
+            f"</div>"
+        )
+
+    if not msg_parts:
+        msg_parts.append('<div class="msg empty">No messages in this transcript.</div>')
+
+    title = f"{rtype} #{html.escape(str(rid))} — #{html.escape(str(channel_name))}"
+    return (
+        "<!doctype html>\n"
+        '<html lang="en"><head>'
+        '<meta charset="utf-8">'
+        f"<title>{title}</title>"
+        f"<style>{_TRANSCRIPT_CSS}</style>"
+        "</head><body><div class=\"wrap\">"
+        f"<header><h1>{title}</h1>"
+        f'<div class="meta">{"".join(meta_rows)}</div></header>'
+        f'<section>{"".join(msg_parts)}</section>'
+        "</div></body></html>"
+    )
 
 
 # ---------------------------------------------------------------------------

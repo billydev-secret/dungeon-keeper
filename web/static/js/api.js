@@ -1,5 +1,12 @@
 // Tiny fetch wrapper. All endpoints are same-origin JSON.
 
+/** Escape a string for safe insertion into innerHTML. */
+export function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+
 export async function api(path, params) {
   const url = new URL(path, window.location.origin);
   if (params) {

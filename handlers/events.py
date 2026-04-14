@@ -57,20 +57,19 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             return
 
         log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
-        _guild = bot.get_guild(ctx.guild_id) if ctx.guild_id else None
-        _guild_name = _guild.name if _guild else ctx.guild_id
+        _primary_guild = bot.get_guild(ctx.guild_id) if ctx.guild_id else None
 
         def _ch(cid: int) -> str:
-            c = _guild.get_channel(cid) if _guild else None
+            c = _primary_guild.get_channel(cid) if _primary_guild else None
             return f"#{c.name}" if c else str(cid)
 
         def _ro(rid: int) -> str:
-            r = _guild.get_role(rid) if _guild else None
+            r = _primary_guild.get_role(rid) if _primary_guild else None
             return f"@{r.name}" if r else str(rid)
 
         log.info(
-            "In Guild %s (ID: %s, guarding: %s)",
-            _guild_name,
+            "Primary guild %s (ID: %s, guarding: %s)",
+            _primary_guild.name if _primary_guild else ctx.guild_id,
             ctx.guild_id,
             [_ch(c) for c in ctx.spoiler_required_channels],
         )
@@ -83,51 +82,119 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             _ch(ctx.level_5_log_channel_id),
         )
         log.debug("XP excluded channels: %s", sorted(ctx.xp_excluded_channel_ids))
-        if _guild is not None:
-            await refresh_invite_cache(_guild)
-            # Backfill known_users and known_channels from guild cache
-            now_ts = time.time()
+
+        # Backfill known_users/channels across every guild the bot is in
+        now_ts = time.time()
+        for g in bot.guilds:
+            await refresh_invite_cache(g)
             with ctx.open_db() as conn:
-                for m in _guild.members:
-                    if not m.bot:
+                for m in g.members:
+                    if not m.bot or m.id in ctx.recorded_bot_user_ids:
                         upsert_known_user(
                             conn,
-                            guild_id=_guild.id,
+                            guild_id=g.id,
                             user_id=m.id,
                             username=str(m),
                             display_name=m.display_name,
                             ts=now_ts,
                         )
-                for ch in _guild.channels:
+                for ch in g.channels:
                     if hasattr(ch, "name"):
                         upsert_known_channel(
                             conn,
-                            guild_id=_guild.id,
+                            guild_id=g.id,
                             channel_id=ch.id,
                             channel_name=ch.name,
                             ts=now_ts,
                         )
-            log.info(
-                "Backfilled %d known users and %d known channels.",
-                sum(1 for m in _guild.members if not m.bot),
-                len(_guild.channels),
-            )
-        if ctx.guild_id:
-            with ctx.open_db() as conn:
                 log.debug(
                     "XP event rows for guild %s: %s",
-                    ctx.guild_id,
-                    count_xp_events(conn, ctx.guild_id),
+                    g.id,
+                    count_xp_events(conn, g.id),
                 )
+            log.info(
+                "Backfilled guild %s: %d known users, %d known channels.",
+                g.name,
+                sum(1 for m in g.members if not m.bot),
+                len(g.channels),
+            )
 
     @bot.event
     async def on_message(message: discord.Message):
-        if message.author.bot or not message.guild:
+        if not message.guild:
+            return
+        is_bot_author = message.author.bot
+        if is_bot_author and message.author.id not in ctx.recorded_bot_user_ids:
             return
 
         message_ts = (
             message.created_at.timestamp() if message.created_at else time.time()
         )
+
+        reply_to_id: int | None = None
+        if message.reference and message.reference.message_id:
+            reply_to_id = message.reference.message_id
+        attachment_urls = [a.url for a in message.attachments]
+
+        if is_bot_author:
+            sentiment, emotion = score_text(message.content)
+            with ctx.open_db() as conn:
+                if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+                    track_auto_delete_message(
+                        conn,
+                        message.guild.id,
+                        message.channel.id,
+                        message.id,
+                        message_ts,
+                    )
+                store_message(
+                    conn,
+                    message_id=message.id,
+                    guild_id=message.guild.id,
+                    channel_id=message.channel.id,
+                    author_id=message.author.id,
+                    content=message.content or None,
+                    reply_to_id=reply_to_id,
+                    ts=int(message_ts),
+                    attachment_urls=attachment_urls,
+                    mention_ids=[],
+                    sentiment=sentiment,
+                    emotion=emotion,
+                )
+                if sentiment is not None:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO message_sentiment "
+                        "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            message.id,
+                            message.guild.id,
+                            message.channel.id,
+                            sentiment,
+                            emotion,
+                            message_ts,
+                        ),
+                    )
+                upsert_known_user(
+                    conn,
+                    guild_id=message.guild.id,
+                    user_id=message.author.id,
+                    username=str(message.author),
+                    display_name=message.author.display_name,
+                    ts=message_ts,
+                )
+                upsert_known_channel(
+                    conn,
+                    guild_id=message.guild.id,
+                    channel_id=message.channel.id,
+                    channel_name=getattr(message.channel, "name", str(message.channel.id)),
+                    ts=message_ts,
+                )
+                velocity_tracker.record_message(
+                    conn, message.guild.id, message.channel.id, ts=message_ts
+                )
+            return
+
         spoiler_deleted = await enforce_spoiler_requirement(
             message,
             spoiler_required_channels=ctx.spoiler_required_channels,
@@ -135,15 +202,11 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             log=log,
         )
 
-        # Collect reply / mention data once (used by both store_message and record_interactions)
-        reply_to_id: int | None = None
-        if message.reference and message.reference.message_id:
-            reply_to_id = message.reference.message_id
-
         mention_ids = [
-            u.id for u in message.mentions if not u.bot and u.id != message.author.id
+            u.id for u in message.mentions
+            if (not u.bot or u.id in ctx.recorded_bot_user_ids)
+            and u.id != message.author.id
         ]
-        attachment_urls = [a.url for a in message.attachments]
 
         if spoiler_deleted:
             return
@@ -230,7 +293,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             ):
                 ref = message.reference.resolved
                 if (
-                    not ref.author.bot
+                    (not ref.author.bot or ref.author.id in ctx.recorded_bot_user_ids)
                     and ref.author.id != message.author.id
                     and ref.author.id not in interaction_targets
                 ):
@@ -416,8 +479,6 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
     @bot.event
     async def on_member_update(before: discord.Member, after: discord.Member) -> None:
-        if before.guild.id != ctx.guild_id:
-            return
         before_ids = {r.id for r in before.roles}
         after_ids = {r.id for r in after.roles}
         if before_ids == after_ids:

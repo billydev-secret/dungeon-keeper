@@ -402,10 +402,10 @@ async def greeter_response(
                 rows = conn.execute(
                     """
                     SELECT author_id, COUNT(*) AS cnt FROM messages
-                    WHERE guild_id = ? AND channel_id = ?
+                    WHERE guild_id = ? AND channel_id = ? AND ts >= ?
                     GROUP BY author_id HAVING cnt >= 5
                     """,
-                    (guild_id, welcome_channel_id),
+                    (guild_id, welcome_channel_id, cutoff_ts),
                 ).fetchall()
                 greeter_ids = {int(r[0]) for r in rows}
 
@@ -439,7 +439,7 @@ async def greeter_response(
                         continue
                     ts = m.joined_at.timestamp()
                     if ts >= cutoff_ts:
-                        join_map[m.id] = ts
+                        join_map.setdefault(m.id, ts)
 
             if not join_map:
                 return None

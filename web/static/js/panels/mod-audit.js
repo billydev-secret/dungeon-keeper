@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 
 const ACTION_LABELS = {
   jail:         "Jail",
@@ -103,7 +103,7 @@ export function mount(container) {
         </table>
       `;
     } catch (err) {
-      tableWrap.innerHTML = `<div class="error">${err.message}</div>`;
+      tableWrap.innerHTML = `<div class="error">${esc(err.message)}</div>`;
     }
   }
 
@@ -112,11 +112,4 @@ export function mount(container) {
   refresh();
 
   return { unmount() {} };
-}
-
-function esc(s) {
-  if (!s) return "";
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }

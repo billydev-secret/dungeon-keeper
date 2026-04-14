@@ -1,4 +1,4 @@
-import { badgeHTML, esc, miniBarHTML } from "./tile-helpers.js";
+import { miniBarHTML } from "./tile-helpers.js";
 
 export function renderTile(el, data, names) {
   const bars = (data.top5 || []).map(ch => ({

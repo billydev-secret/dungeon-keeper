@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeBarChart, makeDoughnutChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -162,7 +162,7 @@ export function mount(container, initialParams) {
       } else { tableWrap.innerHTML = ""; }
     } catch (err) {
       statsEl.textContent = "";
-      container.querySelector("[data-chart-levels]").parentElement.innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector("[data-chart-levels]").parentElement.innerHTML = `<div class="error">${esc(err.message)}</div>`;
       tableWrap.innerHTML = "";
     }
   }

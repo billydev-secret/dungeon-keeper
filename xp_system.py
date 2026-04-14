@@ -396,6 +396,13 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
         ON xp_events (guild_id, source, created_at, user_id)
         """
     )
+    # Leaderboard: SELECT ... FROM member_xp WHERE guild_id=? ORDER BY total_xp DESC LIMIT ?
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_member_xp_leaderboard
+        ON member_xp (guild_id, total_xp DESC)
+        """
+    )
     # Migration: add channel_id to existing xp_events tables
     cols = {row[1] for row in conn.execute("PRAGMA table_info(xp_events)").fetchall()}
     _needs_channel_backfill = "channel_id" not in cols
@@ -430,6 +437,13 @@ def init_xp_tables(conn: sqlite3.Connection) -> None:
             last_message_at REAL NOT NULL,
             PRIMARY KEY (guild_id, user_id)
         )
+        """
+    )
+    # Activity lookups: WHERE guild_id=? AND last_message_at >= ?
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_member_activity_guild_ts
+        ON member_activity (guild_id, last_message_at)
         """
     )
     conn.execute(

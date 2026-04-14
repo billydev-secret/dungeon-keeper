@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import logging.handlers
 import os
+import signal
 from pathlib import Path
 
 import discord
@@ -60,6 +62,7 @@ from services.wellness_partners import (
     WellnessPartnerAcceptButton,
     WellnessPartnerDeclineButton,
 )
+from services.db_backup import db_backup_loop
 from services.wellness_scheduler import (
     wellness_active_list_loop,
     wellness_tick_loop,
@@ -166,6 +169,7 @@ ctx = AppContext(
     bypass_role_ids=_cfg["bypass_role_ids"],
     xp_grant_allowed_user_ids=_cfg["xp_grant_allowed_user_ids"],
     xp_excluded_channel_ids=_cfg["xp_excluded_channel_ids"],
+    recorded_bot_user_ids=_cfg["recorded_bot_user_ids"],
     level_5_role_id=_cfg["xp_level_5_role_id"],
     level_5_log_channel_id=_cfg["xp_level_5_log_channel_id"],
     level_up_log_channel_id=_cfg["xp_level_up_log_channel_id"],
@@ -252,17 +256,26 @@ bot.startup_task_factories.append(lambda: wellness_active_list_loop(bot, DB_PATH
 
 bot.startup_task_factories.append(lambda: wellness_weekly_report_loop(bot, DB_PATH))
 
+bot.startup_task_factories.append(lambda: db_backup_loop(bot, DB_PATH))
+
 
 # ==============================
 # Startup backfill — score messages missing calculated fields
 # ==============================
 async def _startup_backfill() -> None:
-    """One-time check on startup for messages missing VADER sentiment scores."""
-    import asyncio
+    """One-time check on startup for messages missing VADER sentiment scores.
 
+    Iterates every guild the bot is in so multi-guild deployments all get
+    backfilled.
+    """
     await bot.wait_until_ready()
 
-    def _run():
+    guild_ids = [g.id for g in bot.guilds]
+    if not guild_ids:
+        log.info("Startup backfill: bot is not in any guilds")
+        return
+
+    def _run(gid: int) -> None:
         from services.sentiment_service import backfill
 
         with open_db(DB_PATH) as conn:
@@ -271,22 +284,26 @@ async def _startup_backfill() -> None:
                 "LEFT JOIN message_sentiment ms ON m.message_id = ms.message_id "
                 "WHERE m.guild_id = ? AND ms.message_id IS NULL "
                 "AND m.content IS NOT NULL AND m.content != ''",
-                (ctx.guild_id,),
+                (gid,),
             ).fetchone()[0]
             if missing == 0:
-                log.info("Startup backfill: all messages have sentiment scores")
+                log.info(
+                    "Startup backfill [%d]: all messages have sentiment scores", gid
+                )
                 return
             log.info(
-                "Startup backfill: %d messages missing sentiment scores, backfilling...",
+                "Startup backfill [%d]: %d messages missing sentiment scores, backfilling...",
+                gid,
                 missing,
             )
-            scored = backfill(conn, ctx.guild_id, max_messages=missing)
-            log.info("Startup backfill: scored %d messages", scored)
+            scored = backfill(conn, gid, max_messages=missing)
+            log.info("Startup backfill [%d]: scored %d messages", gid, scored)
 
-    try:
-        await asyncio.to_thread(_run)
-    except Exception:
-        log.exception("Startup backfill failed")
+    for gid in guild_ids:
+        try:
+            await asyncio.to_thread(_run, gid)
+        except Exception:
+            log.exception("Startup backfill failed for guild %d", gid)
 
 
 bot.startup_task_factories.append(lambda: _startup_backfill())
@@ -296,19 +313,21 @@ bot.startup_task_factories.append(lambda: _startup_backfill())
 # Health dashboard batch loop
 # ==============================
 async def _health_batch_loop() -> None:
-    """Refresh health metrics cache and run sentiment scoring every 15 min."""
-    import asyncio
+    """Refresh health metrics cache and run sentiment scoring every 15 min.
 
+    Runs the batch once per guild the bot is in so multi-guild deployments
+    have up-to-date metrics everywhere.
+    """
     await bot.wait_until_ready()
     while not bot.is_closed():
-        try:
-            guild = bot.get_guild(ctx.guild_id) if ctx.guild_id else None
-            _member_count = guild.member_count if guild else 0
-            _voice_active = 0
-            _nsfw_ids: list[int] = []
-            _mod_ids: list[int] = []
-            _recent_joins: dict[int, float] = {}
-            if guild:
+        for guild in list(bot.guilds):
+            try:
+                gid = guild.id
+                _member_count = guild.member_count or 0
+                _voice_active = 0
+                _nsfw_ids: list[int] = []
+                _mod_ids: list[int] = []
+                _recent_joins: dict[int, float] = {}
                 import time as _t
 
                 _now = _t.time()
@@ -334,72 +353,76 @@ async def _health_batch_loop() -> None:
                         if _age < 90 * 86400:
                             _recent_joins[_m.id] = _m.joined_at.timestamp()
 
-            def _batch():
-                from services.health_metrics import (
-                    compute_channel_health,
-                    compute_churn_risk,
-                    compute_cohort_retention,
-                    compute_dau_mau,
-                    compute_gini,
-                    compute_heatmap,
-                    compute_incidents,
-                    compute_mod_workload,
-                    compute_newcomer_funnel,
-                    compute_sentiment,
-                    compute_social_graph,
-                )
-                from services.health_service import set_cached
-                from services.incident_detection import update_baselines
-                from services.sentiment_service import analyze_batch
+                def _batch(
+                    gid: int = gid,
+                    _member_count: int = _member_count,
+                    _voice_active: int = _voice_active,
+                    _nsfw_ids: list[int] = _nsfw_ids,
+                    _mod_ids: list[int] = _mod_ids,
+                    _recent_joins: dict[int, float] = _recent_joins,
+                ) -> None:
+                    from services.health_metrics import (
+                        compute_channel_health,
+                        compute_churn_risk,
+                        compute_cohort_retention,
+                        compute_dau_mau,
+                        compute_gini,
+                        compute_heatmap,
+                        compute_incidents,
+                        compute_mod_workload,
+                        compute_newcomer_funnel,
+                        compute_sentiment,
+                        compute_social_graph,
+                    )
+                    from services.health_service import set_cached
+                    from services.incident_detection import update_baselines
+                    from services.sentiment_service import analyze_batch
 
-                with open_db(DB_PATH) as conn:
-                    # Sentiment scoring batch
-                    analyze_batch(conn, ctx.guild_id, batch_size=500)
-                    # Update velocity baselines
-                    update_baselines(conn, ctx.guild_id)
-                    # Refresh all health metrics
-                    data = compute_dau_mau(
-                        conn,
-                        ctx.guild_id,
-                        member_count=_member_count,
-                        voice_active_count=_voice_active,
-                    )
-                    set_cached(conn, ctx.guild_id, "dau_mau", data)
-                    data = compute_heatmap(conn, ctx.guild_id)
-                    set_cached(conn, ctx.guild_id, "heatmap", data)
-                    data = compute_channel_health(
-                        conn, ctx.guild_id, nsfw_channel_ids=_nsfw_ids
-                    )
-                    set_cached(conn, ctx.guild_id, "channel_health", data)
-                    data = compute_gini(conn, ctx.guild_id)
-                    set_cached(conn, ctx.guild_id, "gini", data)
-                    data = compute_social_graph(
-                        conn, ctx.guild_id, nsfw_channel_ids=_nsfw_ids
-                    )
-                    set_cached(conn, ctx.guild_id, "social_graph", data)
-                    data = compute_sentiment(conn, ctx.guild_id)
-                    set_cached(conn, ctx.guild_id, "sentiment", data)
-                    data = compute_newcomer_funnel(
-                        conn, ctx.guild_id, recent_join_ids=_recent_joins
-                    )
-                    set_cached(conn, ctx.guild_id, "newcomer_funnel", data)
-                    data = compute_cohort_retention(
-                        conn, ctx.guild_id, join_times=_recent_joins
-                    )
-                    set_cached(conn, ctx.guild_id, "cohort_retention", data)
-                    data = compute_churn_risk(conn, ctx.guild_id)
-                    set_cached(conn, ctx.guild_id, "churn_risk", data)
-                    data = compute_mod_workload(conn, ctx.guild_id, mod_ids=_mod_ids)
-                    set_cached(conn, ctx.guild_id, "mod_workload", data)
-                    data = compute_incidents(conn, ctx.guild_id)
-                    set_cached(conn, ctx.guild_id, "incidents", data)
+                    with open_db(DB_PATH) as conn:
+                        analyze_batch(conn, gid, batch_size=500)
+                        update_baselines(conn, gid)
+                        data = compute_dau_mau(
+                            conn,
+                            gid,
+                            member_count=_member_count,
+                            voice_active_count=_voice_active,
+                        )
+                        set_cached(conn, gid, "dau_mau", data)
+                        data = compute_heatmap(conn, gid)
+                        set_cached(conn, gid, "heatmap", data)
+                        data = compute_channel_health(
+                            conn, gid, nsfw_channel_ids=_nsfw_ids
+                        )
+                        set_cached(conn, gid, "channel_health", data)
+                        data = compute_gini(conn, gid)
+                        set_cached(conn, gid, "gini", data)
+                        data = compute_social_graph(
+                            conn, gid, nsfw_channel_ids=_nsfw_ids
+                        )
+                        set_cached(conn, gid, "social_graph", data)
+                        data = compute_sentiment(conn, gid)
+                        set_cached(conn, gid, "sentiment", data)
+                        data = compute_newcomer_funnel(
+                            conn, gid, recent_join_ids=_recent_joins
+                        )
+                        set_cached(conn, gid, "newcomer_funnel", data)
+                        data = compute_cohort_retention(
+                            conn, gid, join_times=_recent_joins
+                        )
+                        set_cached(conn, gid, "cohort_retention", data)
+                        data = compute_churn_risk(conn, gid)
+                        set_cached(conn, gid, "churn_risk", data)
+                        data = compute_mod_workload(conn, gid, mod_ids=_mod_ids)
+                        set_cached(conn, gid, "mod_workload", data)
+                        data = compute_incidents(conn, gid)
+                        set_cached(conn, gid, "incidents", data)
 
-            await asyncio.to_thread(_batch)
-            log.info("Health metrics batch completed")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            log.exception("Health metrics batch failed")
+                await asyncio.to_thread(_batch)
+                log.info("Health metrics batch completed for guild %d", gid)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("Health metrics batch failed for guild %d", guild.id)
         await asyncio.sleep(900)  # 15 minutes
 
 
@@ -419,9 +442,67 @@ if os.getenv("DASHBOARD_ENABLED") == "1":
     log.info("Dashboard enabled — will bind %s:%d", _dashboard_host, _dashboard_port)
 
 # ==============================
+# Graceful shutdown
+# ==============================
+async def _shutdown() -> None:
+    """Cancel background tasks, close the bot, and stop the log listener."""
+    log.info("Shutting down gracefully...")
+
+    # Cancel all background tasks and give them a moment to finish
+    for task in bot.startup_tasks:
+        if not task.done():
+            task.cancel()
+    if bot.startup_tasks:
+        await asyncio.gather(*bot.startup_tasks, return_exceptions=True)
+    log.info("Background tasks cancelled")
+
+    # Close the interaction graph thread pool if loaded
+    try:
+        from services.interaction_graph import _layout_executor
+
+        _layout_executor.shutdown(wait=False)
+    except (ImportError, AttributeError):
+        pass
+
+    # Close the bot (disconnects from Discord gateway)
+    if not bot.is_closed():
+        await bot.close()
+    log.info("Bot closed")
+
+    # Flush and stop the log listener
+    listener = globals().get("_log_queue_listener")
+    if listener:
+        listener.stop()
+
+
+async def _run_bot() -> None:
+    """Start the bot with proper signal handling for graceful shutdown."""
+    if not TOKEN:
+        raise RuntimeError("DISCORD_TOKEN is not set.")
+    loop = asyncio.get_running_loop()
+
+    # Install signal handlers (Unix-style; on Windows only SIGINT works via loop)
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(_shutdown()))
+        except NotImplementedError:
+            # Windows doesn't support add_signal_handler; fall back to
+            # KeyboardInterrupt handling below
+            pass
+
+    try:
+        async with bot:
+            await bot.start(TOKEN)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
+    finally:
+        await _shutdown()
+
+
+# ==============================
 # Run
 # ==============================
 if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("DISCORD_TOKEN is not set.")
-    bot.run(TOKEN, log_handler=None)
+    asyncio.run(_run_bot())

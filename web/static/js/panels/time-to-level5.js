@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeBarChart } from "../charts.js";
 
 export function mount(container, initialParams) {
@@ -73,7 +73,7 @@ export function mount(container, initialParams) {
     } catch (err) {
       statsEl.textContent = "";
       membersEl.innerHTML = "";
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
     }
   }
 

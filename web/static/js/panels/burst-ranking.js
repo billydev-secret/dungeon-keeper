@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { makeHorizontalBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -78,7 +78,7 @@ export function mount(container, initialParams) {
         defaultSort: "increase",
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
       tableWrap.innerHTML = "";
     }
   }

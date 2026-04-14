@@ -25,6 +25,7 @@ repos:
         language: node
         types: [javascript]
         files: ^web/static/
+        exclude: ^web/static/vendor/
         additional_dependencies: ['eslint@8.57.1']
       - id: stylelint
         name: stylelint

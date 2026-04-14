@@ -1,5 +1,5 @@
 import { api } from "../api.js";
-import { makeBarChart, makeHorizontalBarChart, ROLE_COLORS } from "../charts.js";
+import { makeBarChart } from "../charts.js";
 
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 

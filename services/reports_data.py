@@ -347,6 +347,7 @@ class GreeterResponseEntry(TypedDict):
 
 class GreeterResponseData(TypedDict):
     window_label: str
+    total_joins: int
     count: int
     median_seconds: float
     mean_seconds: float
@@ -403,7 +404,7 @@ def _query_greeter_response_details(
         while scan < len(greeter_times):
             author_id, msg_ts = greeter_times[scan]
             if author_id != user_id:
-                delta = msg_ts - joined_at
+                delta = max(0, msg_ts - joined_at)
                 entries.append(
                     {
                         "user_id": str(user_id),
@@ -450,6 +451,7 @@ def get_greeter_response_data(
 
     return {
         "window_label": "All Time",
+        "total_joins": len(join_times),
         "count": len(response_times),
         "median_seconds": med,
         "mean_seconds": avg,

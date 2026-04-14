@@ -1,5 +1,5 @@
 // System stats panel — live network, CPU, memory, disk from the host OS.
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 
 function fmtBytes(b) {
   if (b < 1024) return b + " B";
@@ -126,7 +126,7 @@ export function mount(container) {
       if (!data || !alive) return;
       renderStats(container, data);
     } catch (err) {
-      container.innerHTML = `<div class="panel"><div class="error">Failed to load system stats: ${err.message}</div></div>`;
+      container.innerHTML = `<div class="panel"><div class="error">Failed to load system stats: ${esc(err.message)}</div></div>`;
     }
     if (alive) timer = setTimeout(poll, 3000);
   }

@@ -12,18 +12,25 @@ import { esc } from "./tiles/tile-helpers.js";
  * @param {object}      data    - { home: apiResponse|null, health: { tiles, channel_names, user_names }|null }
  * @param {object}      opts    - { editMode, onReorder(newLayout), onRemove(id), onAdd() }
  */
+function entryToParts(entry) {
+  if (typeof entry === "string") return { id: entry, rows: 1 };
+  return { id: entry.id, rows: entry.rows || 1 };
+}
+
 export async function renderGrid(gridEl, layout, data, opts = {}) {
   gridEl.innerHTML = "";
 
+  const parts = layout.map(entryToParts);
+
   const renderers = await Promise.all(
-    layout.map(id => loadRenderer(id).catch(err => {
-      console.error(`[widget-grid] failed to load renderer for "${id}":`, err);
+    parts.map(p => loadRenderer(p.id).catch(err => {
+      console.error(`[widget-grid] failed to load renderer for "${p.id}":`, err);
       return null;
     }))
   );
 
-  for (let i = 0; i < layout.length; i++) {
-    const id = layout[i];
+  for (let i = 0; i < parts.length; i++) {
+    const { id, rows } = parts[i];
     const widget = WIDGET_MAP[id];
     if (!widget) continue;
 
@@ -31,8 +38,11 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
     if (!renderTile) continue;
 
     const card = document.createElement("div");
-    card.className = "home-card" + (widget.wide ? " home-card-wide" : "");
+    card.className = "home-card"
+      + (widget.wide ? " home-card-wide" : "")
+      + (rows === 2 ? " home-card-tall" : "");
     card.dataset.widgetId = id;
+    card.dataset.rows = String(rows);
 
     // Edit mode controls
     if (opts.editMode) {
@@ -40,6 +50,7 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
       card.innerHTML = `
         <div class="widget-handle" title="Drag to reorder">&#9776;</div>
         <button class="widget-remove" title="Remove widget">&times;</button>
+        <div class="widget-resize" title="Drag to resize">&#8690;</div>
       `;
       card.querySelector(".widget-remove").addEventListener("click", (e) => {
         e.stopPropagation();
@@ -100,6 +111,7 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
     gridEl.appendChild(addBtn);
 
     _setupDragDrop(gridEl, layout, opts);
+    _setupResize(gridEl, opts);
   }
 }
 
@@ -228,4 +240,64 @@ function _setupDragDrop(gridEl, layout, opts) {
     gridEl.querySelectorAll(".drag-over").forEach(el => el.classList.remove("drag-over"));
     dragSrcIndex = null;
   });
+}
+
+
+// ── Resize (corner-drag, snaps to 1 or 2 rows) ─────────────────────
+
+function _setupResize(gridEl, opts) {
+  gridEl.addEventListener("pointerdown", (e) => {
+    const handle = e.target.closest(".widget-resize");
+    if (!handle) return;
+    const card = handle.closest(".home-card[data-widget-id]");
+    if (!card) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Disable native drag while resizing so card doesn't get picked up
+    const wasDraggable = card.draggable;
+    card.draggable = false;
+
+    const rect = card.getBoundingClientRect();
+    const startRows = parseInt(card.dataset.rows || "1", 10);
+    const rowHeight = rect.height / startRows;
+    const startTop = rect.top;
+
+    let currentRows = startRows;
+    card.classList.add("resizing");
+
+    try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+
+    const onMove = (ev) => {
+      const proposed = Math.max(1, Math.min(2,
+        Math.round((ev.clientY - startTop) / rowHeight)));
+      if (proposed !== currentRows) {
+        currentRows = proposed;
+        card.classList.toggle("home-card-tall", currentRows === 2);
+      }
+    };
+
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+      card.classList.remove("resizing");
+      card.draggable = wasDraggable;
+      card.dataset.rows = String(currentRows);
+      if (currentRows !== startRows && opts.onResize) {
+        opts.onResize(card.dataset.widgetId, currentRows);
+      }
+    };
+
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  });
+
+  // Prevent native drag from starting when grabbing the resize handle
+  gridEl.addEventListener("dragstart", (e) => {
+    if (e.target.closest(".widget-resize")) e.preventDefault();
+  }, true);
 }

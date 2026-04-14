@@ -1,5 +1,5 @@
-import { api } from "../api.js";
-import { makeBarChart, makeLineChart } from "../charts.js";
+import { api, esc } from "../api.js";
+import { makeBarChart } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 
 const RESOLUTIONS = [
@@ -174,7 +174,7 @@ export function mount(container, initialParams) {
         onChange: renderChart,
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${err.message}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
       sliderWrap.innerHTML = "";
     }
   }

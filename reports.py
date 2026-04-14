@@ -365,10 +365,12 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         if roles is not None:
             role_filter = {r.strip().lower() for r in roles.split(",") if r.strip()}
 
+        guild_id = member.guild.id
+
         def _fetch():
             with ctx.open_db() as conn:
                 return reports_data.get_role_growth_data(
-                    conn, ctx.guild_id, res, role_filter
+                    conn, guild_id, res, role_filter
                 )
 
         data = await asyncio.to_thread(_fetch)
@@ -431,11 +433,13 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         channel_id = channel.id if channel else None
         scope = f" in #{channel.name}" if channel else ""
 
+        guild_id = member.guild.id
+
         def _fetch():
             with ctx.open_db() as conn:
                 return reports_data.get_message_cadence_data(
                     conn,
-                    ctx.guild_id,
+                    guild_id,
                     res,
                     ctx.tz_offset_hours,
                     channel_id,
@@ -892,11 +896,13 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
+        guild_id = guild.id
+
         def _fetch():
             with ctx.open_db() as conn:
                 return reports_data.get_nsfw_gender_data(
                     conn,
-                    ctx.guild_id,
+                    guild_id,
                     res,
                     target_channel_ids,
                     ctx.tz_offset_hours,
@@ -957,11 +963,13 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+        guild_id = member.guild.id
+
         def _fetch():
             with ctx.open_db() as conn:
                 return reports_data.get_message_rate_data(
                     conn,
-                    ctx.guild_id,
+                    guild_id,
                     days,
                     ctx.tz_offset_hours,
                 )
@@ -1210,10 +1218,13 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         from services.member_quality_score import add_leave
 
+        guild_id = (
+            interaction.guild.id if interaction.guild else ctx.guild_id
+        )
         now_ts = discord.utils.utcnow().timestamp()
         end_ts = now_ts + days.value * 86400
         with ctx.open_db() as conn:
-            add_leave(conn, ctx.guild_id, member.id, now_ts, end_ts)
+            add_leave(conn, guild_id, member.id, now_ts, end_ts)
 
         await interaction.response.send_message(
             f"{member.mention} placed on leave of absence for {days.value} days.",
@@ -1233,8 +1244,11 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
 
         from services.member_quality_score import remove_leave
 
+        guild_id = (
+            interaction.guild.id if interaction.guild else ctx.guild_id
+        )
         with ctx.open_db() as conn:
-            removed = remove_leave(conn, ctx.guild_id, member.id)
+            removed = remove_leave(conn, guild_id, member.id)
 
         if removed:
             await interaction.response.send_message(
@@ -1265,7 +1279,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         from services.member_quality_score import get_leaves
 
         with ctx.open_db() as conn:
-            leaves = get_leaves(conn, ctx.guild_id)
+            leaves = get_leaves(conn, guild.id)
 
         if not leaves:
             await interaction.response.send_message(

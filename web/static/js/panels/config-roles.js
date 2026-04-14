@@ -131,13 +131,6 @@ function render(container, grants, channels, roles) {
     });
   }
 
-  // Collect permissions from the DOM for a given grant name
-  function collectPerms(name) {
-    const g = grants[name];
-    // Start from the current in-memory perms (may have been modified by add/remove clicks)
-    return (g._perms || g.permissions || []).slice();
-  }
-
   // Local add permission
   for (const name of names) {
     const g = grants[name];
