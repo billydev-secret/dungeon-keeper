@@ -245,10 +245,14 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
                     status_code=response.status_code,
                     headers=dict(response.headers),
                 )
-            new_body = _JS_IMPORT_RE.sub(
+            text = _JS_IMPORT_RE.sub(
                 lambda m: f"{m.group(1)}{m.group(2)}?v={_BOOT_ID}{m.group(3)}",
                 text,
-            ).encode("utf-8")
+            )
+            # Also rewrite any standalone ?v=NN tokens (e.g. hardcoded
+            # dynamic-import cache-bust constants) so every per-boot URL
+            # changes, forcing the browser to refetch the module graph.
+            new_body = re.sub(r"\?v=\d+", f"?v={_BOOT_ID}", text).encode("utf-8")
             headers = dict(response.headers)
             headers.pop("content-length", None)
             headers["cache-control"] = "public, max-age=31536000, immutable"
