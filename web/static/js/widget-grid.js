@@ -50,7 +50,7 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
       card.innerHTML = `
         <div class="widget-handle" title="Drag to reorder">&#9776;</div>
         <button class="widget-remove" title="Remove widget">&times;</button>
-        <div class="widget-resize" title="Drag to resize">&#8690;</div>
+        <div class="widget-resize" title="Drag to resize"></div>
       `;
       card.querySelector(".widget-remove").addEventListener("click", (e) => {
         e.stopPropagation();

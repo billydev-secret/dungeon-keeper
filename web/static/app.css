@@ -1121,20 +1121,21 @@ html, body {
 
 .widget-resize {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 18px;
-  height: 18px;
-  font-size: 14px;
-  line-height: 1;
-  color: var(--text-dim);
+  right: 3px;
+  bottom: 3px;
+  width: 16px;
+  height: 16px;
   cursor: nwse-resize;
   z-index: 2;
   user-select: none;
   touch-action: none;
-  text-align: center;
+  background:
+    linear-gradient(135deg, transparent 0 55%, var(--text-dim) 55% 70%, transparent 70% 80%, var(--text-dim) 80% 95%, transparent 95%);
+  opacity: 0.7;
+  border-radius: 3px;
 }
-.widget-resize:hover { color: var(--accent); }
+.widget-resize:hover { opacity: 1; background:
+    linear-gradient(135deg, transparent 0 55%, var(--accent) 55% 70%, transparent 70% 80%, var(--accent) 80% 95%, transparent 95%); }
 
 .edit-mode .home-card {
   border: 1px dashed var(--grid);
