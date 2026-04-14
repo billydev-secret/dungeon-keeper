@@ -31,8 +31,8 @@ const WIDGETS = [
   { id: "health-churn-risk",       label: "Churn Risk",          category: "Health", perms: ["admin"], source: "health", tileKey: "churn_risk",       wide: false, nav: "health-churn-risk",      needsNames: false },
   { id: "health-mod-workload",     label: "Mod Workload",        category: "Health", perms: ["admin"], source: "health", tileKey: "mod_workload",     wide: false, nav: "health-mod-workload",    needsNames: true  },
   { id: "health-incidents",        label: "Incidents",           category: "Health", perms: ["admin"], source: "health", tileKey: "incidents",        wide: false, nav: "health-incidents",       needsNames: false },
-  { id: "health-sentiment-feed",  label: "Sentiment Feed",      category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment-feed", needsNames: true  },
-  { id: "health-message-feed",   label: "Message Feed",         category: "Health", perms: ["admin"], source: "health", tileKey: "message_feed",    wide: true,  nav: "health-message-feed",  needsNames: true  },
+  { id: "health-sentiment-feed",  label: "Sentiment Feed",      category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment-feed", needsNames: true,  maxRows: 4 },
+  { id: "health-message-feed",   label: "Message Feed",         category: "Health", perms: ["admin"], source: "health", tileKey: "message_feed",    wide: true,  nav: "health-message-feed",  needsNames: true,  maxRows: 4 },
 ];
 
 // Keyed lookup

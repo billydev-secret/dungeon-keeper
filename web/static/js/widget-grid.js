@@ -62,12 +62,15 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
     const card = document.createElement("div");
     card.className = "home-card"
       + (useWideClass ? " home-card-wide" : "")
-      + (rows === 2 ? " home-card-tall" : "");
+      + (rows >= 2 ? " home-card-tall" : "");
     card.dataset.widgetId = id;
     card.dataset.rows = String(rows);
     card.dataset.cols = String(effectiveCols);
     if (hasExplicitCols) {
       card.style.gridColumn = `span ${cols}`;
+    }
+    if (rows > 2) {
+      card.style.gridRow = `span ${rows}`;
     }
 
     // Edit mode controls
@@ -299,6 +302,9 @@ function _setupResize(gridEl, opts) {
     const rect = card.getBoundingClientRect();
     const startRows = parseInt(card.dataset.rows || "1", 10);
     const startCols = parseInt(card.dataset.cols || "1", 10);
+    const widgetId = card.dataset.widgetId;
+    const widget = WIDGET_MAP[widgetId] || {};
+    const maxRows = Math.max(2, widget.maxRows || 2);
     const oneRowHeight = rect.height / startRows;
     const maxCols = gridColumnCount(gridEl);
     const oneColWidth = rect.width / Math.max(1, startCols);
@@ -326,13 +332,16 @@ function _setupResize(gridEl, opts) {
       const dy = ev.clientY - startY;
       const dx = ev.clientX - startX;
 
-      let rowsProposed = startRows;
-      if (dy > yThreshold) rowsProposed = 2;
-      else if (dy < -yThreshold) rowsProposed = 1;
-      rowsProposed = Math.max(1, Math.min(2, rowsProposed));
+      const rowDelta = Math.round(dy / Math.max(1, yThreshold));
+      let rowsProposed = Math.max(1, Math.min(maxRows, startRows + rowDelta));
       if (rowsProposed !== currentRows) {
         currentRows = rowsProposed;
-        card.classList.toggle("home-card-tall", currentRows === 2);
+        card.classList.toggle("home-card-tall", currentRows >= 2);
+        if (currentRows > 2) {
+          card.style.gridRow = `span ${currentRows}`;
+        } else {
+          card.style.gridRow = "";
+        }
       }
 
       const colDelta = Math.round(dx / Math.max(1, xThreshold));

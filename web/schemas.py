@@ -470,6 +470,7 @@ class TicketEntrySchema(BaseModel):
     closer_name: str = ""
     close_reason: str = ""
     channel_id: str = ""
+    channel_name: str = ""
 
 
 class TicketsResponse(BaseModel):
@@ -477,6 +478,27 @@ class TicketsResponse(BaseModel):
     closed_count: int
     total_count: int
     tickets: list[TicketEntrySchema]
+
+
+class TicketSubjectSchema(BaseModel):
+    user_id: str
+    user_name: str = ""
+    joined_at: float | None = None
+    warn_count_active: int = 0
+    jail_count_total: int = 0
+
+
+class TicketHistoryEntrySchema(BaseModel):
+    kind: str
+    body: str
+    actor_id: str = ""
+    actor_name: str = ""
+    date: float
+
+
+class TicketDetailSchema(TicketEntrySchema):
+    subject: TicketSubjectSchema
+    history: list[TicketHistoryEntrySchema]
 
 
 # ── Moderation: Warnings ─────────────────────────────────────────────────

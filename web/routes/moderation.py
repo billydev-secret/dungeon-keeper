@@ -8,7 +8,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from services.message_store import get_known_users_bulk
-from services.moderation import get_transcript
+from services.moderation import fmt_duration, get_transcript
 from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from web.schemas import (
@@ -16,6 +16,7 @@ from web.schemas import (
     JailsResponse,
     ModerationStatsResponse,
     PolicyTicketsResponse,
+    TicketDetailSchema,
     TicketsResponse,
     TranscriptResponse,
     WarningsResponse,
@@ -241,7 +242,154 @@ async def list_tickets(
         ("claimer_id", "claimer_name"),
         ("closed_by", "closer_name"),
     )
+    if guild:
+        for t in result["tickets"]:
+            cid = t.get("channel_id")
+            if not cid:
+                continue
+            try:
+                ch = guild.get_channel(int(cid))
+            except (TypeError, ValueError):
+                ch = None
+            if ch is not None:
+                t["channel_name"] = ch.name
     return result
+
+
+@router.get("/moderation/tickets/{ticket_id}", response_model=TicketDetailSchema)
+async def get_ticket_detail(
+    request: Request,
+    ticket_id: int,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM tickets WHERE guild_id = ? AND id = ?",
+                (guild_id, ticket_id),
+            ).fetchone()
+            if row is None:
+                return None
+            ticket = {
+                "id": row["id"],
+                "user_id": str(row["user_id"]),
+                "description": row["description"],
+                "status": row["status"],
+                "claimer_id": str(row["claimer_id"]) if row["claimer_id"] else None,
+                "escalated": bool(row["escalated"]),
+                "created_at": row["created_at"],
+                "closed_at": row["closed_at"],
+                "closed_by": str(row["closed_by"]) if row["closed_by"] else None,
+                "close_reason": row["close_reason"],
+                "channel_id": str(row["channel_id"]) if row["channel_id"] else "",
+            }
+            user_id_int = int(row["user_id"])
+            warn_active = conn.execute(
+                "SELECT COUNT(*) FROM warnings WHERE guild_id = ? AND user_id = ? AND revoked = 0",
+                (guild_id, user_id_int),
+            ).fetchone()[0]
+            jail_total = conn.execute(
+                "SELECT COUNT(*) FROM jails WHERE guild_id = ? AND user_id = ?",
+                (guild_id, user_id_int),
+            ).fetchone()[0]
+            warn_rows = conn.execute(
+                "SELECT id, reason, moderator_id, created_at, revoked "
+                "FROM warnings WHERE guild_id = ? AND user_id = ? "
+                "ORDER BY created_at DESC LIMIT 20",
+                (guild_id, user_id_int),
+            ).fetchall()
+            jail_rows = conn.execute(
+                "SELECT id, reason, moderator_id, created_at, expires_at "
+                "FROM jails WHERE guild_id = ? AND user_id = ? "
+                "ORDER BY created_at DESC LIMIT 20",
+                (guild_id, user_id_int),
+            ).fetchall()
+            history: list[dict] = []
+            for w in warn_rows:
+                body = w["reason"] or ("Warning revoked" if w["revoked"] else "Warning issued")
+                if w["revoked"]:
+                    body = f"{body} (revoked)"
+                history.append(
+                    {
+                        "kind": "warn",
+                        "body": body,
+                        "actor_id": str(w["moderator_id"]) if w["moderator_id"] else "",
+                        "actor_name": "",
+                        "date": w["created_at"],
+                    }
+                )
+            for j in jail_rows:
+                dur_s = (
+                    int(j["expires_at"] - j["created_at"])
+                    if j["expires_at"] and j["created_at"]
+                    else 0
+                )
+                dur_label = fmt_duration(dur_s) if dur_s > 0 else "indefinite"
+                body = f"{dur_label}"
+                if j["reason"]:
+                    body = f"{dur_label} · {j['reason']}"
+                history.append(
+                    {
+                        "kind": "jail",
+                        "body": body,
+                        "actor_id": str(j["moderator_id"]) if j["moderator_id"] else "",
+                        "actor_name": "",
+                        "date": j["created_at"],
+                    }
+                )
+            history.sort(key=lambda e: e["date"], reverse=True)
+            history = history[:20]
+            return {
+                "ticket": ticket,
+                "subject": {
+                    "user_id": str(user_id_int),
+                    "user_name": "",
+                    "joined_at": None,
+                    "warn_count_active": warn_active,
+                    "jail_count_total": jail_total,
+                },
+                "history": history,
+            }
+
+    data = await run_query(_q)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    ticket = data["ticket"]
+    subject = data["subject"]
+    history = data["history"]
+
+    _resolve_names(
+        ctx,
+        guild,
+        [ticket],
+        ("user_id", "user_name"),
+        ("claimer_id", "claimer_name"),
+        ("closed_by", "closer_name"),
+    )
+    subject["user_name"] = ticket.get("user_name", "")
+
+    if guild:
+        cid = ticket.get("channel_id")
+        if cid:
+            try:
+                ch = guild.get_channel(int(cid))
+            except (TypeError, ValueError):
+                ch = None
+            if ch is not None:
+                ticket["channel_name"] = ch.name
+        member = guild.get_member(int(subject["user_id"]))
+        if member and member.joined_at:
+            subject["joined_at"] = member.joined_at.timestamp()
+
+    _resolve_names(ctx, guild, history, ("actor_id", "actor_name"))
+
+    return {**ticket, "subject": subject, "history": history}
 
 
 # ── Warnings ──────────────────────────────────────────────────────────────
