@@ -39,12 +39,15 @@ def compute_graph_metrics(
     top_n: int = 100,
     betweenness_sample_cap: int = 200,
     cluster_matrix_cap: int = 8,
+    clustering_resolution: float = 1.2,
 ) -> dict:
     """Compute all social-graph metrics from directed weighted edges.
 
     edge_rows: iterable of (from_user_id, to_user_id, weight) tuples.
     top_n: cap the returned ``graph_nodes``/``graph_edges`` to the top-N most
            connected nodes so the payload stays reasonable for rendering.
+    clustering_resolution: granularity knob for label propagation. 1.0 is
+           modularity-neutral; higher values break up large communities.
     """
     out_edges: dict[int, dict[int, float]] = defaultdict(dict)
     in_edges: dict[int, dict[int, float]] = defaultdict(dict)
@@ -163,19 +166,49 @@ def compute_graph_metrics(
         round(clustering_coeff / density, 2) if density else 0.0
     )
 
-    # Label-propagation community detection
+    # Label-propagation community detection — weighted + modularity-style
+    # resolution penalty so dense graphs don't collapse to one big cluster.
+    adj_w: dict[int, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+    for u, vs in out_edges.items():
+        for v, w in vs.items():
+            adj_w[u][v] += w
+            adj_w[v][u] += w
+    node_strength: dict[int, float] = {
+        n: sum(adj_w[n].values()) for n in all_nodes
+    }
+    two_m = sum(node_strength.values()) or 1.0
+
     labels: dict[int, int] = {node: i for i, node in enumerate(all_nodes)}
-    for _ in range(10):
+    comm_strength: dict[int, float] = dict(node_strength)  # label -> total strength
+    for _ in range(20):
         changed = False
         for node in all_nodes:
             if not neighbors[node]:
                 continue
+            # Weighted vote per candidate label.
             counts: dict[int, float] = defaultdict(float)
             for nb in neighbors[node]:
-                counts[labels[nb]] += 1
-            best = max(counts, key=lambda lb: counts[lb])
-            if labels[node] != best:
-                labels[node] = best
+                counts[labels[nb]] += adj_w[node][nb]
+            # Subtract expected weight (modularity-style) with resolution gamma.
+            # Node's own strength is in its current community — exclude when
+            # considering alternatives, include only when weighing a move.
+            own_lbl = labels[node]
+            own_strength = node_strength[node]
+            best_lbl = own_lbl
+            best_score = -float("inf")
+            for lbl, w_to_lbl in counts.items():
+                comm_s = comm_strength.get(lbl, 0.0)
+                if lbl == own_lbl:
+                    comm_s -= own_strength  # don't penalize self-overlap
+                expected = clustering_resolution * own_strength * comm_s / two_m
+                score = w_to_lbl - expected
+                if score > best_score:
+                    best_score = score
+                    best_lbl = lbl
+            if best_lbl != own_lbl:
+                comm_strength[own_lbl] = comm_strength.get(own_lbl, 0.0) - own_strength
+                comm_strength[best_lbl] = comm_strength.get(best_lbl, 0.0) + own_strength
+                labels[node] = best_lbl
                 changed = True
         if not changed:
             break
