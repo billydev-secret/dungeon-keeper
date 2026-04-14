@@ -31,7 +31,12 @@ from services.booster_roles import (
     get_booster_roles,
     upsert_booster_role,
 )
-from services.inactivity_prune_service import get_prune_rule as _get_prune_rule
+from services.inactivity_prune_service import (
+    add_prune_exception,
+    get_prune_exception_ids,
+    get_prune_rule as _get_prune_rule,
+    remove_prune_exception,
+)
 from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from xp_system import _XP_COEFF_PREFIX, DEFAULT_XP_SETTINGS
@@ -133,7 +138,29 @@ async def get_config(
             )
 
             prune_rule = _get_prune_rule(ctx.db_path, guild_id)
+            prune_exempt_ids = get_prune_exception_ids(ctx.db_path, guild_id)
             grant_roles = get_grant_roles(conn, guild_id)
+
+            bot = getattr(ctx, "bot", None)
+            prune_guild = bot.get_guild(guild_id) if bot is not None else None
+
+            def _member_name(uid: int) -> str:
+                if prune_guild is not None:
+                    m = prune_guild.get_member(uid)
+                    if m is not None:
+                        return m.display_name
+                row = conn.execute(
+                    "SELECT display_name, username FROM known_users WHERE guild_id = ? AND user_id = ?",
+                    (guild_id, uid),
+                ).fetchone()
+                if row is not None:
+                    return row["display_name"] or row["username"] or str(uid)
+                return str(uid)
+
+            exempt_users = [
+                {"id": str(uid), "name": _member_name(uid)}
+                for uid in sorted(prune_exempt_ids)
+            ]
 
             return {
                 "global": {
@@ -185,6 +212,7 @@ async def get_config(
                     "inactivity_days": prune_rule["inactivity_days"]
                     if prune_rule
                     else 0,
+                    "exemptions": exempt_users,
                 },
                 "spoiler": {
                     "spoiler_required_channels": [
@@ -499,6 +527,123 @@ async def update_prune(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+@router.put("/config/prune/exemptions/{user_id}")
+async def add_prune_exemption(
+    user_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        add_prune_exception(ctx.db_path, guild_id, int(user_id))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/prune/exemptions/{user_id}")
+async def delete_prune_exemption(
+    user_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        remove_prune_exception(ctx.db_path, guild_id, int(user_id))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class PrunePreviewRequest(BaseModel):
+    role_id: str
+    inactivity_days: int
+    exempt_user_ids: list[str] | None = None
+
+
+@router.post("/config/prune/preview")
+async def preview_prune(
+    request: Request,
+    body: PrunePreviewRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Return the members who would be pruned with the given settings.
+
+    Does not perform any role changes. Uses saved exemptions unless
+    ``exempt_user_ids`` is provided (allows preview of unsaved changes).
+    """
+    import time as _time
+
+    from xp_system import get_member_last_activity_map
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    if not body.role_id or body.role_id == "0" or body.inactivity_days <= 0:
+        return {"role_name": None, "candidates": []}
+
+    role_id = int(body.role_id)
+    inactivity_days = int(body.inactivity_days)
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+
+    role = guild.get_role(role_id)
+    if role is None:
+        raise HTTPException(404, "Role not found")
+
+    if body.exempt_user_ids is None:
+        exempt_ids = get_prune_exception_ids(ctx.db_path, guild_id)
+    else:
+        exempt_ids = {int(u) for u in body.exempt_user_ids}
+
+    candidates = [m for m in role.members if not m.bot and m.id not in exempt_ids]
+    candidate_ids = [m.id for m in candidates]
+
+    def _q():
+        with ctx.open_db() as conn:
+            return get_member_last_activity_map(conn, guild_id, candidate_ids)
+
+    activity_map = await run_query(_q)
+
+    now_ts = _time.time()
+    cutoff_ts = now_ts - inactivity_days * 86400
+
+    to_prune: list[dict] = []
+    for member in candidates:
+        activity = activity_map.get(member.id)
+        if activity is None:
+            continue
+        if activity.created_at < cutoff_ts:
+            days = (now_ts - activity.created_at) / 86400.0
+            to_prune.append(
+                {
+                    "id": str(member.id),
+                    "name": member.display_name,
+                    "last_activity_ts": activity.created_at,
+                    "days_inactive": round(days, 1),
+                }
+            )
+
+    to_prune.sort(key=lambda x: x["last_activity_ts"])
+
+    return {
+        "role_name": role.name,
+        "role_member_count": len(role.members),
+        "considered_count": len(candidates),
+        "candidates": to_prune,
+    }
 
 
 class ModerationConfigUpdate(BaseModel):

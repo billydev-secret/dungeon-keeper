@@ -37,6 +37,15 @@ def _is_secure() -> bool:
 _RETURN_TO_COOKIE = "dk_oauth_return"
 
 
+def _discord_avatar_url(user_id: int, avatar_hash: str | None) -> str:
+    if avatar_hash:
+        ext = "gif" if avatar_hash.startswith("a_") else "png"
+        return f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.{ext}?size=64"
+    # Default avatar: Discord uses (user_id >> 22) % 6 for non-migrated users
+    idx = (user_id >> 22) % 6
+    return f"https://cdn.discordapp.com/embed/avatars/{idx}.png"
+
+
 def _safelisted_return_urls() -> list[str]:
     """Origins allowed as `return_to` after OAuth callback. Must match scheme+host+port."""
     return [_base_url()]
@@ -146,6 +155,7 @@ async def callback(request: Request) -> RedirectResponse:
         user_data = user_resp.json()
         user_id = int(user_data["id"])
         username = user_data.get("global_name") or user_data["username"]
+        avatar_url = _discord_avatar_url(user_id, user_data.get("avatar"))
 
         # 3. Build mutual guild list + resolve permissions for active guild
         ctx = request.app.state.ctx
@@ -219,6 +229,7 @@ async def callback(request: Request) -> RedirectResponse:
         role_names=role_names,
         guild_id=active_guild_id,
         guilds=mutual_guilds,
+        avatar_url=avatar_url,
     )
 
     _log.info(

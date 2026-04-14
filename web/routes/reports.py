@@ -575,6 +575,7 @@ async def interaction_graph(
     days: int | None = None,
     limit: int = 50,
     include_metrics: int = 0,
+    resolution: float = 1.2,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
@@ -582,6 +583,7 @@ async def interaction_graph(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
     want_metrics = bool(include_metrics)
+    resolution = max(0.3, min(3.0, float(resolution)))
 
     def _q():
         with ctx.open_db() as conn:
@@ -591,12 +593,13 @@ async def interaction_graph(
                 days=days,
                 limit=min(limit, 100),
                 include_metrics=want_metrics,
+                clustering_resolution=resolution,
             )
 
     result = await cached_run_query(
         "interaction-graph",
         guild_id,
-        {"days": days, "limit": limit, "metrics": want_metrics},
+        {"days": days, "limit": limit, "metrics": want_metrics, "res": round(resolution, 2)},
         _q,
     )
     _resolve_names(ctx, guild, result.get("nodes", []), ("user_id", "user_name"))

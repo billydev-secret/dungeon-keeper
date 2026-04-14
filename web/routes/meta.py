@@ -37,6 +37,11 @@ async def me(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     session_guilds = _guilds_from_session(request)
+    status: str | None = None
+    if guild is not None:
+        member = guild.get_member(user.user_id)
+        if member is not None:
+            status = str(member.status)
     return MeResponse(
         user_id=str(user.user_id),
         username=user.username,
@@ -50,6 +55,8 @@ async def me(
             for g in session_guilds
         ],
         primary_guild_id=str(ctx.guild_id),
+        avatar_url=user.avatar_url,
+        status=status,
     )
 
 
@@ -104,12 +111,14 @@ async def select_guild(
     perms: list[str] = []
     role_ids: list[str] = []
     role_names: list[str] = []
+    status: str | None = None
     if target_guild:
         member = target_guild.get_member(user.user_id)
         if member:
             perms = sorted(resolve_discord_perms(member.guild_permissions.value))
             role_ids = [str(r.id) for r in member.roles if not r.is_default()]
             role_names = [r.name for r in member.roles if not r.is_default()]
+            status = str(member.status)
 
     session_guilds = _guilds_from_session(request)
     body = MeResponse(
@@ -125,6 +134,8 @@ async def select_guild(
             for g in session_guilds
         ],
         primary_guild_id=str(ctx.guild_id),
+        avatar_url=user.avatar_url,
+        status=status,
     )
 
     from web.routes.oauth import _is_secure

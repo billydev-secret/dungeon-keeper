@@ -21,6 +21,8 @@ class MeResponse(BaseModel):
     guild_name: str | None = None
     guilds: list[GuildInfo] = []
     primary_guild_id: str | None = None
+    avatar_url: str | None = None
+    status: str | None = None
 
 
 class RoleMeta(BaseModel):

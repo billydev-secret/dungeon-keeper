@@ -106,6 +106,10 @@ export function mount(container, initialParams) {
         <label>Spread
           <input type="range" data-control="spread" min="0.5" max="3" step="0.1" value="${initialParams.spread || 1.0}" style="width:80px;" />
         </label>
+        <label title="Higher values break up large clusters; lower values merge them. Affects server-side clustering.">Granularity
+          <input type="range" data-control="resolution" min="0.5" max="3.0" step="0.1" value="${initialParams.resolution || 1.2}" style="width:80px;" />
+          <span data-resolution-val style="font-size:11px;color:#949ba4;margin-left:4px;">${initialParams.resolution || 1.2}</span>
+        </label>
         <label>Max edges/node
           <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 3}" title="Max connections per person (0 = no limit)" />
         </label>
@@ -115,6 +119,7 @@ export function mount(container, initialParams) {
       </div>
       <div data-graph-wrap style="position:relative; height:60vh; min-height:300px; min-width:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
         <canvas data-graph></canvas>
+        <button data-fullscreen title="Toggle fullscreen" style="position:absolute;top:6px;right:6px;z-index:5;background:rgba(0,0,0,0.5);border:1px solid #3f4147;color:#dbdee1;border-radius:4px;width:28px;height:28px;font-size:14px;cursor:pointer;padding:0;">⛶</button>
       </div>
       <div data-legend style="margin-top:4px; font-size:11px; color:#949ba4;">
         Drag nodes · Scroll to zoom · Pan background · Node size = interactions · Edge width = weight · Node color = detected community
@@ -131,7 +136,10 @@ export function mount(container, initialParams) {
   const layersEl      = container.querySelector('[data-control="layers"]');
   const limitEl       = container.querySelector('[data-control="limit"]');
   const spreadEl      = container.querySelector('[data-control="spread"]');
+  const resolutionEl  = container.querySelector('[data-control="resolution"]');
+  const resolutionValEl = container.querySelector('[data-resolution-val]');
   const maxPerNodeEl  = container.querySelector('[data-control="max_per_node"]');
+  const fullscreenBtn = container.querySelector('[data-fullscreen]');
   const scorecardEl   = container.querySelector("[data-scorecard]");
   const metricsTablesEl = container.querySelector("[data-metrics-tables]");
   const heatmapEl     = container.querySelector("[data-heatmap]");
@@ -957,6 +965,8 @@ export function mount(container, initialParams) {
     const params = { limit: parseInt(limitEl.value) || 40, include_metrics: 1 };
     const d = parseInt(timescaleEl.value);
     if (!isNaN(d) && d > 0) params.days = d;
+    const res = parseFloat(resolutionEl.value);
+    if (!isNaN(res)) params.resolution = res;
     cachedData = await api("/api/reports/interaction-graph", params);
     const metrics = cachedData.metrics || null;
     clusterByUser = {};
@@ -981,6 +991,7 @@ export function mount(container, initialParams) {
     qs.set("layers", layersEl.value);
     qs.set("limit", limitEl.value);
     qs.set("spread", spreadEl.value);
+    qs.set("resolution", resolutionEl.value);
     qs.set("max_per_node", maxPerNodeEl.value);
     if (hiddenClusters.size) qs.set("hidden_clusters", [...hiddenClusters].join(","));
     history.replaceState(null, "", `#/connection-graph?${qs}`);
@@ -1070,6 +1081,24 @@ export function mount(container, initialParams) {
   layoutEl.addEventListener("change", rebuildGraph);
   for (const el of [minPctEl, layersEl, maxPerNodeEl]) el.addEventListener("change", rebuildGraph);
   spreadEl.addEventListener("input", rebuildGraph);
+
+  // Resolution slider: live-update readout, debounce server fetch
+  let resolutionTimer = null;
+  resolutionEl.addEventListener("input", () => {
+    resolutionValEl.textContent = parseFloat(resolutionEl.value).toFixed(1);
+    if (resolutionTimer) clearTimeout(resolutionTimer);
+    resolutionTimer = setTimeout(fetchData, 350);
+  });
+
+  // Fullscreen toggle
+  fullscreenBtn.addEventListener("click", () => {
+    const fsEl = document.fullscreenElement;
+    if (fsEl) {
+      document.exitFullscreen();
+    } else {
+      wrap.requestFullscreen?.().catch(() => {});
+    }
+  });
   // Watch for member selection — rebuild after dropdown closes
   const memberSlot = container.querySelector('[data-slot="member"]');
   let lastMemberId = memberFS.id;

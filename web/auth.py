@@ -37,6 +37,7 @@ class AuthenticatedUser:
     perms: frozenset[str]
     role_ids: tuple[int, ...] = ()
     role_names: tuple[str, ...] = ()
+    avatar_url: str | None = None
 
     def has_perm(self, perm: str) -> bool:
         return perm in self.perms
@@ -124,6 +125,7 @@ class DiscordOAuthAuth:
         role_names: list[str] | None = None,
         guild_id: int | None = None,
         guilds: list[dict] | None = None,
+        avatar_url: str | None = None,
     ) -> str:
         """Create a signed, timestamped session cookie value."""
         return self._serializer.dumps(
@@ -136,6 +138,7 @@ class DiscordOAuthAuth:
                 "role_names": role_names or [],
                 "guild_id": guild_id or self._guild_id,
                 "guilds": guilds or [],
+                "avatar_url": avatar_url,
             }
         )
 
@@ -171,6 +174,7 @@ class DiscordOAuthAuth:
 
         user_id: int = session["uid"]
         username: str = session["name"]
+        avatar_url: str | None = session.get("avatar_url")
 
         # Use the active guild from session, falling back to the primary guild
         active_guild_id = session.get("guild_id", self._guild_id)
@@ -193,6 +197,7 @@ class DiscordOAuthAuth:
                 perms=perms,
                 role_ids=rids,
                 role_names=rnames,
+                avatar_url=avatar_url,
             )
 
         # Fallback: use permission bits and roles stored at login time
@@ -205,4 +210,5 @@ class DiscordOAuthAuth:
             perms=resolve_discord_perms(perms_bits),
             role_ids=stored_rids,
             role_names=stored_rnames,
+            avatar_url=avatar_url,
         )

@@ -15,8 +15,14 @@ console.log("[widget-grid] resize-enabled build loaded");
  * @param {object}      opts    - { editMode, onReorder(newLayout), onRemove(id), onAdd() }
  */
 function entryToParts(entry) {
-  if (typeof entry === "string") return { id: entry, rows: 1 };
-  return { id: entry.id, rows: entry.rows || 1 };
+  if (typeof entry === "string") return { id: entry, rows: 1, cols: 1 };
+  return { id: entry.id, rows: entry.rows || 1, cols: entry.cols || 1 };
+}
+
+function gridColumnCount(gridEl) {
+  const tpl = getComputedStyle(gridEl).gridTemplateColumns || "";
+  const n = tpl.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, n);
 }
 
 export async function renderGrid(gridEl, layout, data, opts = {}) {
@@ -32,7 +38,7 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
   );
 
   for (let i = 0; i < parts.length; i++) {
-    const { id, rows } = parts[i];
+    const { id, rows, cols } = parts[i];
     const widget = WIDGET_MAP[id];
     if (!widget) continue;
 
@@ -45,6 +51,10 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
       + (rows === 2 ? " home-card-tall" : "");
     card.dataset.widgetId = id;
     card.dataset.rows = String(rows);
+    card.dataset.cols = String(cols);
+    if (cols > 1 && !widget.wide) {
+      card.style.gridColumn = `span ${cols}`;
+    }
 
     // Edit mode controls
     if (opts.editMode) {
@@ -274,25 +284,43 @@ function _setupResize(gridEl, opts) {
 
     const rect = card.getBoundingClientRect();
     const startRows = parseInt(card.dataset.rows || "1", 10);
+    const startCols = parseInt(card.dataset.cols || "1", 10);
     const oneRowHeight = rect.height / startRows;
+    const oneColWidth = rect.width / startCols;
+    const startX = e.clientX;
     const startY = e.clientY;
-    const threshold = Math.max(24, oneRowHeight * 0.3);
+    const yThreshold = Math.max(24, oneRowHeight * 0.3);
+    const xThreshold = Math.max(40, oneColWidth * 0.4);
+    const maxCols = gridColumnCount(gridEl);
 
     let currentRows = startRows;
+    let currentCols = startCols;
     card.classList.add("resizing");
-    console.log("[resize] start", { id: card.dataset.widgetId, startRows, oneRowHeight, threshold });
 
     try { handle.setPointerCapture(e.pointerId); } catch (_) {}
 
     const onMove = (ev) => {
       const dy = ev.clientY - startY;
-      let proposed = startRows;
-      if (dy > threshold) proposed = 2;
-      else if (dy < -threshold) proposed = 1;
-      proposed = Math.max(1, Math.min(2, proposed));
-      if (proposed !== currentRows) {
-        currentRows = proposed;
+      const dx = ev.clientX - startX;
+
+      let rowsProposed = startRows;
+      if (dy > yThreshold) rowsProposed = 2;
+      else if (dy < -yThreshold) rowsProposed = 1;
+      rowsProposed = Math.max(1, Math.min(2, rowsProposed));
+      if (rowsProposed !== currentRows) {
+        currentRows = rowsProposed;
         card.classList.toggle("home-card-tall", currentRows === 2);
+      }
+
+      const colDelta = Math.round(dx / Math.max(1, xThreshold));
+      let colsProposed = Math.max(1, Math.min(maxCols, startCols + colDelta));
+      if (colsProposed !== currentCols) {
+        currentCols = colsProposed;
+        if (currentCols > 1) {
+          card.style.gridColumn = `span ${currentCols}`;
+        } else {
+          card.style.gridColumn = "";
+        }
       }
     };
 
@@ -303,9 +331,10 @@ function _setupResize(gridEl, opts) {
       try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
       card.classList.remove("resizing");
       card.dataset.rows = String(currentRows);
-      console.log("[resize] end", { id: card.dataset.widgetId, currentRows, changed: currentRows !== startRows });
-      if (currentRows !== startRows && opts.onResize) {
-        opts.onResize(card.dataset.widgetId, currentRows);
+      card.dataset.cols = String(currentCols);
+      const changed = currentRows !== startRows || currentCols !== startCols;
+      if (changed && opts.onResize) {
+        opts.onResize(card.dataset.widgetId, currentRows, currentCols);
       }
     };
 

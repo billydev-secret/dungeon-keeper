@@ -690,6 +690,7 @@ def get_interaction_graph_data(
     days: int | None = None,
     limit: int = 50,
     include_metrics: bool = False,
+    clustering_resolution: float = 1.2,
 ) -> InteractionGraphData:
     now = int(datetime.now(timezone.utc).timestamp())
 
@@ -769,6 +770,7 @@ def get_interaction_graph_data(
         metrics = compute_graph_metrics(
             ((int(e["from_id"]), int(e["to_id"]), e["weight"]) for e in edges),
             top_n=limit,
+            clustering_resolution=clustering_resolution,
         )
         cluster_lookup = metrics.get("node_cluster", {})
         # Strip the raw per-node cluster map from the response payload — the

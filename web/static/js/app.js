@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=14";
+const _moduleVer = "?v=15";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -345,7 +345,13 @@ function populateGuildPicker(guilds, activeId) {
   const active = guilds.find((g) => g.id === activeId) || guilds[0];
   if (active) {
     nameEl.textContent = active.name;
-    if (sigilEl) sigilEl.textContent = active.name.charAt(0).toUpperCase();
+    if (sigilEl) {
+      if (active.icon) {
+        sigilEl.innerHTML = `<img class="guild-sigil-img" src="${escText(active.icon)}" alt="">`;
+      } else {
+        sigilEl.textContent = active.name.charAt(0).toUpperCase();
+      }
+    }
   }
   for (const g of guilds) {
     const li = document.createElement("li");
@@ -366,13 +372,19 @@ function populateGuildPicker(guilds, activeId) {
 
 function renderUserBar(me) {
   const initial = (me.username || "?").charAt(0).toUpperCase();
+  const isGuest = me.user_id === "0";
+  const status = isGuest ? "offline" : (me.status || "online");
+  const statusLabel = isGuest ? "guest" : `${(me.perms || []).includes("admin") ? "Keeper" : "Member"} · ${status}`;
+  const avatarInner = (!isGuest && me.avatar_url)
+    ? `<img class="user-avatar-img" src="${escText(me.avatar_url)}" alt="">`
+    : escText(initial);
   meEl.innerHTML = `
-    <div class="user-avatar">${escText(initial)}</div>
+    <div class="user-avatar status-${escText(status)}">${avatarInner}</div>
     <div class="user-meta">
       <b>${escText(me.username || "")}</b>
-      <small>${me.user_id !== "0" ? "Keeper · online" : "guest"}</small>
+      <small>${escText(statusLabel)}</small>
     </div>
-    ${me.user_id !== "0" ? `<a class="logout-link" href="/logout">Logout</a>` : ""}
+    ${!isGuest ? `<a class="logout-link" href="/logout">Logout</a>` : ""}
   `;
 }
 

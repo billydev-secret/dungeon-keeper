@@ -3,7 +3,7 @@ import { WIDGET_MAP, DEFAULT_HOME, DEFAULT_ADMIN } from "../widget-registry.js";
 import { renderGrid, showWidgetPicker } from "../widget-grid.js";
 import { esc } from "../tiles/tile-helpers.js";
 
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 
 function entryId(e) { return typeof e === "string" ? e : e?.id; }
 
@@ -13,7 +13,7 @@ function getLayout(userId, isAdmin) {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed.widgets) &&
-          (parsed.version === 1 || parsed.version === STORAGE_VERSION)) {
+          [1, 2, STORAGE_VERSION].includes(parsed.version)) {
         const valid = parsed.widgets.filter(e => WIDGET_MAP[entryId(e)]);
         if (valid.length) return valid;
       }
@@ -25,8 +25,13 @@ function getLayout(userId, isAdmin) {
 function saveLayout(userId, layout) {
   const serialized = layout.map(e => {
     if (typeof e === "string") return e;
-    if (e && e.rows && e.rows > 1) return { id: e.id, rows: e.rows };
-    return e.id;
+    const rows = e.rows && e.rows > 1 ? e.rows : undefined;
+    const cols = e.cols && e.cols > 1 ? e.cols : undefined;
+    if (rows === undefined && cols === undefined) return e.id;
+    const out = { id: e.id };
+    if (rows) out.rows = rows;
+    if (cols) out.cols = cols;
+    return out;
   });
   localStorage.setItem(`dk_layout_${userId}`, JSON.stringify({
     version: STORAGE_VERSION,
@@ -117,11 +122,13 @@ export function mount(container) {
           render();
         });
       },
-      onResize(id, rows) {
+      onResize(id, rows, cols) {
         layout = layout.map(e => {
           if (entryId(e) !== id) return e;
-          if (rows > 1) return { id, rows };
-          return id;
+          const entry = { id };
+          if (rows > 1) entry.rows = rows;
+          if (cols > 1) entry.cols = cols;
+          return (entry.rows || entry.cols) ? entry : id;
         });
         saveLayout(userId, layout);
         render();
