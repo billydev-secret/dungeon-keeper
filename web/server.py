@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -29,6 +31,23 @@ from web.auth import AuthBackend, DiscordOAuthAuth, OpenAuth
 
 _STATIC_DIR = Path(__file__).parent / "static"
 _log = logging.getLogger("dungeonkeeper.web")
+
+# Per-boot cache-buster. Every module import in served JS, and every ?v= in
+# served HTML, gets rewritten to carry this token so browsers (and Cloudflare)
+# treat each reboot as a fresh URL set.
+_BOOT_ID = str(int(time.time()))
+
+# Matches `from "./x.js"`, `from '../x.js'`, `import("./x.js")`, etc.
+# Only relative specifiers (./ or ../) so we don't touch bare imports or URLs.
+_JS_IMPORT_RE = re.compile(
+    r'''((?:\bfrom|\bimport)\s*\(?\s*["'])(\.{1,2}/[^"']+\.js)(["'])'''
+)
+
+
+@lru_cache(maxsize=4)
+def _html_with_boot_id(name: str) -> str:
+    text = (_STATIC_DIR / name).read_text(encoding="utf-8")
+    return re.sub(r"\?v=\d+", f"?v={_BOOT_ID}", text)
 
 
 # ── Rate limiting ────────────────────────────────────────────────────
@@ -203,17 +222,44 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     # ── Rate limiting ──────────────────────────────────────────────────
     app.add_middleware(_RateLimitMiddleware)
 
-    # ── Cache headers for JS/CSS so deploys take effect immediately ──
-    class _NoCacheJS(BaseHTTPMiddleware):
+    # ── Per-boot cache-busting for JS/CSS ──────────────────────────────
+    # JS responses get their relative imports rewritten to `...?v={BOOT_ID}`,
+    # which cascades through the whole module graph. Content is then safe to
+    # cache long because a new boot → new URLs. CSS gets the same treatment
+    # via the HTML ?v= token (rewritten in _html_with_boot_id).
+    class _CacheBustJS(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
             response = await call_next(request)
-            if request.url.path.startswith("/static/") and request.url.path.endswith(
-                (".js", ".css")
-            ):
-                response.headers["Cache-Control"] = "no-cache"
-            return response
+            path = request.url.path
+            if not (path.startswith("/static/") and path.endswith(".js")):
+                return response
+            chunks: list[bytes] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            body = b"".join(chunks)
+            try:
+                text = body.decode("utf-8")
+            except UnicodeDecodeError:
+                return Response(
+                    content=body,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                )
+            new_body = _JS_IMPORT_RE.sub(
+                lambda m: f"{m.group(1)}{m.group(2)}?v={_BOOT_ID}{m.group(3)}",
+                text,
+            ).encode("utf-8")
+            headers = dict(response.headers)
+            headers.pop("content-length", None)
+            headers["cache-control"] = "public, max-age=31536000, immutable"
+            return Response(
+                content=new_body,
+                status_code=response.status_code,
+                headers=headers,
+                media_type="application/javascript",
+            )
 
-    app.add_middleware(_NoCacheJS)
+    app.add_middleware(_CacheBustJS)
 
     # ── Static files & HTML entry points ────────────────────────────
     if _STATIC_DIR.exists():
@@ -221,7 +267,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
         @app.get("/login", include_in_schema=False)
         async def _login():
-            return FileResponse(str(_STATIC_DIR / "login.html"))
+            return HTMLResponse(
+                content=_html_with_boot_id("login.html"),
+                headers={"cache-control": "no-cache"},
+            )
 
         @app.get("/", include_in_schema=False)
         async def _index(request: Request):
@@ -230,7 +279,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
                 user = await app.state.auth.authenticate(request)
                 if user is None:
                     return RedirectResponse("/login", status_code=302)
-            return FileResponse(str(_STATIC_DIR / "index.html"))
+            return HTMLResponse(
+                content=_html_with_boot_id("index.html"),
+                headers={"cache-control": "no-cache"},
+            )
 
     return app
 
