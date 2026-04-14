@@ -316,7 +316,7 @@ async def health_tiles(
                                GROUP BY reply_to_id
                            ) rp ON rp.reply_to_id = m.message_id
                            WHERE m.guild_id = ? AND m.ts >= ?
-                           ORDER BY (COALESCE(rx.reaction_total, 0) + COALESCE(rp.reply_count, 0)) DESC, m.ts DESC
+                           ORDER BY m.ts DESC
                            LIMIT 8""",
                         (guild_id, guild_id, cutoff_24h),
                     ).fetchall()

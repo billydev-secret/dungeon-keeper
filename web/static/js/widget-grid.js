@@ -248,7 +248,22 @@ function _setupDragDrop(gridEl, layout, opts) {
 // ── Resize (corner-drag, snaps to 1 or 2 rows) ─────────────────────
 
 function _setupResize(gridEl, opts) {
+  // Kill native HTML5 drag when the user grabs the resize handle.
+  // mousedown preventDefault suppresses drag initiation entirely.
+  gridEl.addEventListener("mousedown", (e) => {
+    if (e.target.closest(".widget-resize")) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
+
   gridEl.addEventListener("pointerdown", (e) => {
+    console.log("[grid pointerdown]", {
+      target: e.target,
+      targetClass: e.target?.className,
+      closestResize: e.target.closest?.(".widget-resize"),
+      closestCard: e.target.closest?.(".home-card[data-widget-id]")?.dataset?.widgetId,
+    });
     const handle = e.target.closest(".widget-resize");
     if (!handle) return;
     const card = handle.closest(".home-card[data-widget-id]");
@@ -257,23 +272,24 @@ function _setupResize(gridEl, opts) {
     e.preventDefault();
     e.stopPropagation();
 
-    // Disable native drag while resizing so card doesn't get picked up
-    const wasDraggable = card.draggable;
-    card.draggable = false;
-
     const rect = card.getBoundingClientRect();
     const startRows = parseInt(card.dataset.rows || "1", 10);
-    const rowHeight = rect.height / startRows;
-    const startTop = rect.top;
+    const oneRowHeight = rect.height / startRows;
+    const startY = e.clientY;
+    const threshold = Math.max(24, oneRowHeight * 0.3);
 
     let currentRows = startRows;
     card.classList.add("resizing");
+    console.log("[resize] start", { id: card.dataset.widgetId, startRows, oneRowHeight, threshold });
 
     try { handle.setPointerCapture(e.pointerId); } catch (_) {}
 
     const onMove = (ev) => {
-      const proposed = Math.max(1, Math.min(2,
-        Math.round((ev.clientY - startTop) / rowHeight)));
+      const dy = ev.clientY - startY;
+      let proposed = startRows;
+      if (dy > threshold) proposed = 2;
+      else if (dy < -threshold) proposed = 1;
+      proposed = Math.max(1, Math.min(2, proposed));
       if (proposed !== currentRows) {
         currentRows = proposed;
         card.classList.toggle("home-card-tall", currentRows === 2);
@@ -286,8 +302,8 @@ function _setupResize(gridEl, opts) {
       handle.removeEventListener("pointercancel", onUp);
       try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
       card.classList.remove("resizing");
-      card.draggable = wasDraggable;
       card.dataset.rows = String(currentRows);
+      console.log("[resize] end", { id: card.dataset.widgetId, currentRows, changed: currentRows !== startRows });
       if (currentRows !== startRows && opts.onResize) {
         opts.onResize(card.dataset.widgetId, currentRows);
       }
@@ -297,9 +313,4 @@ function _setupResize(gridEl, opts) {
     handle.addEventListener("pointerup", onUp);
     handle.addEventListener("pointercancel", onUp);
   });
-
-  // Prevent native drag from starting when grabbing the resize handle
-  gridEl.addEventListener("dragstart", (e) => {
-    if (e.target.closest(".widget-resize")) e.preventDefault();
-  }, true);
 }

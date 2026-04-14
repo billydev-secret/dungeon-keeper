@@ -84,9 +84,22 @@ export function addResetZoom(chart) {
   chart.canvas.addEventListener("dblclick", () => chart.resetZoom());
 }
 
+function cloneOpts(value) {
+  // Deep clone for chart-options objects: handles plain objects + arrays,
+  // passes functions and other non-cloneable values through by reference
+  // (structuredClone can't handle functions like onZoomComplete).
+  if (Array.isArray(value)) return value.map(cloneOpts);
+  if (value && typeof value === "object" && value.constructor === Object) {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = cloneOpts(v);
+    return out;
+  }
+  return value;
+}
+
 function merge(base, overrides) {
   // Shallow-ish merge good enough for chart options
-  const result = structuredClone(base);
+  const result = cloneOpts(base);
   for (const [k, v] of Object.entries(overrides)) {
     if (v && typeof v === "object" && !Array.isArray(v) && result[k]) {
       result[k] = merge(result[k], v);

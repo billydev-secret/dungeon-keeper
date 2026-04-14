@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=13";
+const _moduleVer = "?v=14";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -242,10 +242,15 @@ function makeNavItem(item, activeId, { isSubitem = false } = {}) {
 function renderNav(activeId) {
   sidebarItemsEl.innerHTML = "";
 
+  const activeSection = PAGE_TO_SECTION[activeId];
+
   for (const sec of visibleSections) {
     const group = document.createElement("div");
     group.className = "nav-group";
     group.textContent = sec.label;
+    // Collapse by default, except the group containing the active page
+    const startCollapsed = !activeSection || sec.id !== activeSection.id;
+    if (startCollapsed) group.classList.add("collapsed");
     group.addEventListener("click", () => {
       group.classList.toggle("collapsed");
       const hidden = group.classList.contains("collapsed");
@@ -257,20 +262,29 @@ function renderNav(activeId) {
     });
     sidebarItemsEl.appendChild(group);
 
+    const children = [];
     if (sec.groups) {
       for (const g of sec.groups) {
         const subLabel = document.createElement("div");
         subLabel.className = "nav-subgroup";
         subLabel.textContent = g.heading;
         sidebarItemsEl.appendChild(subLabel);
+        children.push(subLabel);
         for (const item of g.items) {
-          sidebarItemsEl.appendChild(makeNavItem(item, activeId, { isSubitem: true }));
+          const el = makeNavItem(item, activeId, { isSubitem: true });
+          sidebarItemsEl.appendChild(el);
+          children.push(el);
         }
       }
     } else {
       for (const item of sec.items || []) {
-        sidebarItemsEl.appendChild(makeNavItem(item, activeId));
+        const el = makeNavItem(item, activeId);
+        sidebarItemsEl.appendChild(el);
+        children.push(el);
       }
+    }
+    if (startCollapsed) {
+      for (const c of children) c.classList.add("group-hidden");
     }
   }
 
