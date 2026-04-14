@@ -15,8 +15,8 @@ console.log("[widget-grid] resize-enabled build loaded");
  * @param {object}      opts    - { editMode, onReorder(newLayout), onRemove(id), onAdd() }
  */
 function entryToParts(entry) {
-  if (typeof entry === "string") return { id: entry, rows: 1, cols: 1 };
-  return { id: entry.id, rows: entry.rows || 1, cols: entry.cols || 1 };
+  if (typeof entry === "string") return { id: entry, rows: 1, cols: undefined };
+  return { id: entry.id, rows: entry.rows || 1, cols: entry.cols };
 }
 
 function gridColumnCount(gridEl) {
@@ -37,6 +37,8 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
     }))
   );
 
+  const maxCols = gridColumnCount(gridEl);
+
   for (let i = 0; i < parts.length; i++) {
     const { id, rows, cols } = parts[i];
     const widget = WIDGET_MAP[id];
@@ -45,14 +47,18 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
     const renderTile = renderers[i];
     if (!renderTile) continue;
 
+    const hasExplicitCols = typeof cols === "number";
+    const useWideClass = widget.wide && !hasExplicitCols;
+    const effectiveCols = hasExplicitCols ? cols : (widget.wide ? maxCols : 1);
+
     const card = document.createElement("div");
     card.className = "home-card"
-      + (widget.wide ? " home-card-wide" : "")
+      + (useWideClass ? " home-card-wide" : "")
       + (rows === 2 ? " home-card-tall" : "");
     card.dataset.widgetId = id;
     card.dataset.rows = String(rows);
-    card.dataset.cols = String(cols);
-    if (cols > 1 && !widget.wide) {
+    card.dataset.cols = String(effectiveCols);
+    if (hasExplicitCols) {
       card.style.gridColumn = `span ${cols}`;
     }
 
@@ -316,11 +322,9 @@ function _setupResize(gridEl, opts) {
       let colsProposed = Math.max(1, Math.min(maxCols, startCols + colDelta));
       if (colsProposed !== currentCols) {
         currentCols = colsProposed;
-        if (currentCols > 1) {
-          card.style.gridColumn = `span ${currentCols}`;
-        } else {
-          card.style.gridColumn = "";
-        }
+        // Override the home-card-wide class so the inline span wins.
+        card.classList.remove("home-card-wide");
+        card.style.gridColumn = `span ${currentCols}`;
       }
     };
 

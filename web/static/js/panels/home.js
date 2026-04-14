@@ -25,13 +25,10 @@ function getLayout(userId, isAdmin) {
 function saveLayout(userId, layout) {
   const serialized = layout.map(e => {
     if (typeof e === "string") return e;
-    const rows = e.rows && e.rows > 1 ? e.rows : undefined;
-    const cols = e.cols && e.cols > 1 ? e.cols : undefined;
-    if (rows === undefined && cols === undefined) return e.id;
     const out = { id: e.id };
-    if (rows) out.rows = rows;
-    if (cols) out.cols = cols;
-    return out;
+    if (e.rows && e.rows > 1) out.rows = e.rows;
+    if (typeof e.cols === "number") out.cols = e.cols;
+    return Object.keys(out).length > 1 ? out : e.id;
   });
   localStorage.setItem(`dk_layout_${userId}`, JSON.stringify({
     version: STORAGE_VERSION,
@@ -125,10 +122,14 @@ export function mount(container) {
       onResize(id, rows, cols) {
         layout = layout.map(e => {
           if (entryId(e) !== id) return e;
+          const widget = WIDGET_MAP[id];
           const entry = { id };
           if (rows > 1) entry.rows = rows;
-          if (cols > 1) entry.cols = cols;
-          return (entry.rows || entry.cols) ? entry : id;
+          // Persist cols whenever the user has resized a "wide" widget,
+          // so we remember the override even when the chosen size is 1.
+          if (cols > 1 || widget?.wide) entry.cols = cols;
+          const hasExtra = entry.rows !== undefined || entry.cols !== undefined;
+          return hasExtra ? entry : id;
         });
         saveLayout(userId, layout);
         render();
