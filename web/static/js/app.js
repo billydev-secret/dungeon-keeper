@@ -1,13 +1,13 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=12";
+const _moduleVer = "?v=13";
 
 // ── Section definitions ─────────────────────────────────────────────
 
 const SECTIONS = [
   {
-    id: "home", label: "Home", perms: [],
+    id: "home", label: "Dashboard", perms: [],
     items: [
       { id: "home", label: "Home", module: "./panels/home.js" },
     ],
@@ -144,7 +144,6 @@ rebuildIndex();
 
 // ── DOM refs ────────────────────────────────────────────────────────
 
-const topbarTabsEl = document.getElementById("topbar-tabs");
 const guildSelectEl = document.getElementById("guild-select");
 const sidebarEl = document.getElementById("sidebar");
 const sidebarItemsEl = document.getElementById("sidebar-items");
@@ -152,22 +151,54 @@ const rootEl = document.getElementById("panel-root");
 const meEl = document.getElementById("me");
 const sidebarToggleEl = document.getElementById("sidebar-toggle");
 const sidebarBackdropEl = document.getElementById("sidebar-backdrop");
+const navFilterEl = document.querySelector("[data-nav-filter]");
 
 let currentPanel = null;
 
-// ── Mobile sidebar toggle ──────────────────────────────────────────
+// ── Sidebar collapse (desktop) + mobile backdrop close ─────────────
 
-function closeSidebar() {
+function closeMobileSidebar() {
   sidebarEl.classList.remove("open");
   sidebarBackdropEl.classList.remove("open");
 }
 
-sidebarToggleEl.addEventListener("click", () => {
-  const opening = !sidebarEl.classList.contains("open");
-  sidebarEl.classList.toggle("open", opening);
-  sidebarBackdropEl.classList.toggle("open", opening);
+sidebarToggleEl.addEventListener("click", (e) => {
+  e.stopPropagation();
+  sidebarEl.classList.toggle("collapsed");
 });
-sidebarBackdropEl.addEventListener("click", closeSidebar);
+sidebarBackdropEl.addEventListener("click", closeMobileSidebar);
+
+// ── Nav filter ──────────────────────────────────────────────────────
+
+if (navFilterEl) {
+  navFilterEl.addEventListener("input", () => {
+    const q = navFilterEl.value.trim().toLowerCase();
+    const items = sidebarItemsEl.querySelectorAll(".nav-item");
+    items.forEach((it) => {
+      const txt = it.querySelector(".lbl")?.textContent.toLowerCase() || "";
+      it.classList.toggle("filtered-out", !!q && !txt.includes(q));
+    });
+    // Hide empty subgroups / groups
+    sidebarItemsEl.querySelectorAll(".nav-subgroup").forEach((sg) => {
+      let n = sg.nextElementSibling;
+      let anyVisible = false;
+      while (n && !n.matches(".nav-subgroup, .nav-group")) {
+        if (n.matches(".nav-item") && !n.classList.contains("filtered-out")) { anyVisible = true; break; }
+        n = n.nextElementSibling;
+      }
+      sg.classList.toggle("filtered-out", !anyVisible);
+    });
+    sidebarItemsEl.querySelectorAll(".nav-group").forEach((g) => {
+      let n = g.nextElementSibling;
+      let anyVisible = false;
+      while (n && !n.matches(".nav-group")) {
+        if (n.matches(".nav-item") && !n.classList.contains("filtered-out")) { anyVisible = true; break; }
+        n = n.nextElementSibling;
+      }
+      g.classList.toggle("filtered-empty", !anyVisible);
+    });
+  });
+}
 
 // ── Hash parsing ────────────────────────────────────────────────────
 
@@ -184,77 +215,75 @@ function parseHash() {
 
 // ── Render nav ──────────────────────────────────────────────────────
 
+function makeNavItem(item, activeId, { isSubitem = false } = {}) {
+  const btn = document.createElement("button");
+  btn.className = "nav-item" + (isSubitem ? " is-subitem" : "");
+  btn.type = "button";
+  btn.dataset.pageId = item.id;
+
+  const icn = document.createElement("span");
+  icn.className = "icn";
+  icn.textContent = "#";
+  btn.appendChild(icn);
+
+  const lbl = document.createElement("span");
+  lbl.className = "lbl";
+  lbl.textContent = item.label;
+  btn.appendChild(lbl);
+
+  if (item.id === activeId) btn.classList.add("active");
+
+  btn.addEventListener("click", () => {
+    window.location.hash = `#/${item.id}`;
+  });
+  return btn;
+}
+
 function renderNav(activeId) {
-  const activeSection = PAGE_TO_SECTION[activeId] || SECTIONS[0];
-
-  // Top bar tabs
-  topbarTabsEl.innerHTML = "";
-  for (const sec of visibleSections) {
-    const btn = document.createElement("button");
-    btn.textContent = sec.label;
-    if (sec.id === activeSection.id) btn.classList.add("active");
-    btn.addEventListener("click", () => {
-      const firstPage = allPages(sec)[0];
-      if (firstPage) window.location.hash = `#/${firstPage.id}`;
-    });
-    topbarTabsEl.appendChild(btn);
-  }
-
-  // Sidebar items for active section
-  const pages = allPages(activeSection);
-  if (pages.length <= 1) {
-    sidebarEl.classList.add("hidden");
-    sidebarToggleEl.classList.add("hidden");
-    return;
-  }
-  sidebarEl.classList.remove("hidden");
-  sidebarToggleEl.classList.remove("hidden");
   sidebarItemsEl.innerHTML = "";
 
-  if (activeSection.groups) {
-    // Grouped sidebar (Reports)
-    for (const group of activeSection.groups) {
-      const subLabel = document.createElement("button");
-      subLabel.className = "nav-sub-label";
-      subLabel.textContent = group.heading;
-      subLabel.addEventListener("click", () => {
-        subLabel.classList.toggle("collapsed");
-      });
-      sidebarItemsEl.appendChild(subLabel);
-
-      const subBody = document.createElement("div");
-      subBody.className = "nav-sub-body";
-      for (const item of group.items) {
-        const btn = document.createElement("button");
-        btn.className = "sidebar-item";
-        btn.textContent = item.label;
-        if (item.id === activeId) btn.classList.add("active");
-        btn.addEventListener("click", () => {
-          window.location.hash = `#/${item.id}`;
-        });
-        subBody.appendChild(btn);
+  for (const sec of visibleSections) {
+    const group = document.createElement("div");
+    group.className = "nav-group";
+    group.textContent = sec.label;
+    group.addEventListener("click", () => {
+      group.classList.toggle("collapsed");
+      const hidden = group.classList.contains("collapsed");
+      let n = group.nextElementSibling;
+      while (n && !n.matches(".nav-group")) {
+        n.classList.toggle("group-hidden", hidden);
+        n = n.nextElementSibling;
       }
-      sidebarItemsEl.appendChild(subBody);
+    });
+    sidebarItemsEl.appendChild(group);
+
+    if (sec.groups) {
+      for (const g of sec.groups) {
+        const subLabel = document.createElement("div");
+        subLabel.className = "nav-subgroup";
+        subLabel.textContent = g.heading;
+        sidebarItemsEl.appendChild(subLabel);
+        for (const item of g.items) {
+          sidebarItemsEl.appendChild(makeNavItem(item, activeId, { isSubitem: true }));
+        }
+      }
+    } else {
+      for (const item of sec.items || []) {
+        sidebarItemsEl.appendChild(makeNavItem(item, activeId));
+      }
     }
-  } else {
-    // Flat sidebar
-    for (const item of activeSection.items) {
-      const btn = document.createElement("button");
-      btn.className = "sidebar-item";
-      btn.textContent = item.label;
-      if (item.id === activeId) btn.classList.add("active");
-      btn.addEventListener("click", () => {
-        window.location.hash = `#/${item.id}`;
-      });
-      sidebarItemsEl.appendChild(btn);
-    }
+  }
+
+  // Re-apply any active filter text
+  if (navFilterEl && navFilterEl.value) {
+    navFilterEl.dispatchEvent(new Event("input"));
   }
 }
 
 // ── Mount panel ─────────────────────────────────────────────────────
 
 async function mountPanel() {
-  closeSidebar();
+  closeMobileSidebar();
   const { id, params } = parseHash();
   const page = ALL_PAGES.find((p) => p.id === id) || ALL_PAGES[0];
   renderNav(page.id);
@@ -296,10 +325,14 @@ function applyMeData(me) {
 
 function populateGuildPicker(guilds, activeId) {
   const nameEl = guildSelectEl.querySelector(".guild-picker__name");
+  const sigilEl = guildSelectEl.querySelector("[data-guild-sigil]");
   const menuEl = guildSelectEl.querySelector(".guild-picker__menu");
   menuEl.innerHTML = "";
   const active = guilds.find((g) => g.id === activeId) || guilds[0];
-  if (active) nameEl.textContent = active.name;
+  if (active) {
+    nameEl.textContent = active.name;
+    if (sigilEl) sigilEl.textContent = active.name.charAt(0).toUpperCase();
+  }
   for (const g of guilds) {
     const li = document.createElement("li");
     li.className = "guild-picker__item" + (g.id === activeId ? " active" : "");
@@ -311,8 +344,28 @@ function populateGuildPicker(guilds, activeId) {
     });
     menuEl.appendChild(li);
   }
-  // Only show picker if user has access to more than one guild
-  guildSelectEl.style.display = guilds.length > 1 ? "" : "none";
+  // Always show the guild bar — it doubles as the sidebar head.
+  // If only one guild, suppress the dropdown but keep the bar visible.
+  guildSelectEl.style.display = "";
+  guildSelectEl.classList.toggle("single-guild", guilds.length <= 1);
+}
+
+function renderUserBar(me) {
+  const initial = (me.username || "?").charAt(0).toUpperCase();
+  meEl.innerHTML = `
+    <div class="user-avatar">${escText(initial)}</div>
+    <div class="user-meta">
+      <b>${escText(me.username || "")}</b>
+      <small>${me.user_id !== "0" ? "Keeper · online" : "guest"}</small>
+    </div>
+    ${me.user_id !== "0" ? `<a class="logout-link" href="/logout">Logout</a>` : ""}
+  `;
+}
+
+function escText(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
 }
 
 async function switchGuild(newGuildId) {
@@ -343,7 +396,10 @@ async function boot() {
     // Guild picker
     if (me.guilds && me.guilds.length > 0) {
       populateGuildPicker(me.guilds, me.guild_id);
-      guildSelectEl.querySelector(".guild-picker__toggle").addEventListener("click", () => {
+      guildSelectEl.querySelector(".guild-picker__toggle").addEventListener("click", (e) => {
+        // Only open the dropdown if there's more than one guild
+        if (me.guilds.length <= 1) return;
+        e.stopPropagation();
         guildSelectEl.classList.toggle("open");
       });
       document.addEventListener("click", (e) => {
@@ -351,20 +407,9 @@ async function boot() {
       });
     }
 
-    meEl.textContent = me.username;
-    if (me.user_id !== "0") {
-      const sep = document.createTextNode(" \u00b7 ");
-      const link = document.createElement("a");
-      link.href = "/logout";
-      link.textContent = "Logout";
-      link.style.cssText = "color:var(--text-dim);font-size:12px;text-decoration:none;";
-      link.addEventListener("mouseenter", () => { link.style.color = "var(--text)"; });
-      link.addEventListener("mouseleave", () => { link.style.color = "var(--text-dim)"; });
-      meEl.appendChild(sep);
-      meEl.appendChild(link);
-    }
+    renderUserBar(me);
   } catch (err) {
-    meEl.textContent = `auth error: ${err.message}`;
+    meEl.innerHTML = `<div class="user-meta"><small style="color:var(--red)">auth error: ${escText(err.message)}</small></div>`;
   }
   window.addEventListener("hashchange", mountPanel);
   mountPanel();

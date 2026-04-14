@@ -16,17 +16,25 @@ export function mount(container) {
     const headerCells = checkpoints.map(c => `<th>${c.toUpperCase()}</th>`).join("");
     const tableRows = (d.cohorts || []).map(c => {
       const cells = checkpoints.map(cp => {
-        const val = c[cp] || 0;
+        const val = c[cp];
+        if (val === null || val === undefined) {
+          return `<td style="color:var(--text-muted, #949ba4)" title="Cohort hasn't aged to this checkpoint yet">—</td>`;
+        }
         const bg = val >= 60 ? "rgba(127,143,58,0.3)" : val >= 30 ? "rgba(230,184,76,0.3)" : val > 0 ? "rgba(158,59,46,0.3)" : "transparent";
         return `<td style="background:${bg}">${val}%</td>`;
       }).join("");
       return `<tr><td>${esc(c.label)}</td><td>${c.size}</td>${cells}</tr>`;
     }).join("");
 
+    const fmt = v => (v === null || v === undefined) ? "—" : `${v}%`;
+    const headlineSub = d.d7_cohort_label
+      ? `D7: ${fmt(d.d7)} &middot; D30: ${fmt(d.d30)} <span style="opacity:0.7">(cohort ${esc(d.d7_cohort_label)})</span>`
+      : `D7: ${fmt(d.d7)} &middot; D30: ${fmt(d.d30)}`;
+
     panel.innerHTML = `
       <header>
         <h2>Cohort Retention</h2>
-        <div class="subtitle">D7: ${d.d7}% &middot; D30: ${d.d30}%</div>
+        <div class="subtitle">${headlineSub}</div>
       </header>
 
       <details class="panel-about" style="margin:8px 0 14px;">
@@ -41,17 +49,17 @@ export function mount(container) {
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">D7 Retention</div>
-          <div class="home-card-big">${d.d7}%</div>
+          <div class="home-card-big">${fmt(d.d7)}</div>
           <div class="home-card-sub">Still active 7 days after joining (target: &gt;60%)</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">D30 Retention</div>
-          <div class="home-card-big">${d.d30}%</div>
+          <div class="home-card-big">${fmt(d.d30)}</div>
           <div class="home-card-sub">Still active 30 days after joining (target: &gt;40%)</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">D90 Retention</div>
-          <div class="home-card-big">${d.d90}%</div>
+          <div class="home-card-big">${fmt(d.d90)}</div>
           <div class="home-card-sub">Still active 90 days after joining (target: &gt;25%)</div>
         </div>
       </div>
@@ -76,9 +84,10 @@ export function mount(container) {
     const curvesCanvas = panel.querySelector("#retention-curves");
     if (curvesCanvas && d.cohorts && d.cohorts.length) {
       const labels = ["Join", "D1", "D7", "D14", "D30", "D60", "D90"];
+      const nullToNull = v => (v === null || v === undefined) ? null : v;
       const series = d.cohorts.slice(-6).map((c, i) => ({
         label: c.label,
-        counts: [100, c.d1 || 0, c.d7 || 0, c.d14 || 0, c.d30 || 0, c.d60 || 0, c.d90 || 0],
+        counts: [100, nullToNull(c.d1), nullToNull(c.d7), nullToNull(c.d14), nullToNull(c.d30), nullToNull(c.d60), nullToNull(c.d90)],
         color: ROLE_COLORS[i % ROLE_COLORS.length],
       }));
       charts.push(makeLineChart(curvesCanvas, { labels, series, title: "Retention by Weekly Cohort" }));

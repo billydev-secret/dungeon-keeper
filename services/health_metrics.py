@@ -972,21 +972,20 @@ def compute_cohort_retention(
             "heatmap": [],
         }
 
-    # Group into weekly cohorts
-    cohorts: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    # Group into weekly cohorts, keyed by week_start timestamp for stable ordering
+    cohorts: dict[int, list[tuple[int, float]]] = defaultdict(list)
     for uid, jt in join_times.items():
-        # Week label: ISO week
         week_start = int(jt) - (int(jt) % _WEEK)
-        label = time.strftime("%Y-W%W", time.gmtime(week_start))
-        cohorts[label].append((uid, jt))
+        cohorts[week_start].append((uid, jt))
 
     # Compute retention for each cohort at D1, D7, D14, D30, D60, D90
     checkpoints = [1, 7, 14, 30, 60, 90]
     cohort_results = []
-    for label in sorted(cohorts.keys())[-12:]:  # last 12 weeks
-        members = cohorts[label]
+    for week_start in sorted(cohorts.keys())[-12:]:  # last 12 weeks
+        members = cohorts[week_start]
         size = len(members)
-        rates = {}
+        label = time.strftime("%Y-W%W", time.gmtime(week_start))
+        rates: dict[str, float | None] = {}
         for d in checkpoints:
             retained = 0
             eligible = 0
@@ -1003,24 +1002,33 @@ def compute_cohort_retention(
                 ).fetchone()
                 if active:
                     retained += 1
-            rates[f"d{d}"] = _pct(retained, eligible) if eligible else 0
+            rates[f"d{d}"] = _pct(retained, eligible) if eligible else None
         cohort_results.append({"label": label, "size": size, **rates})
 
-    # Latest cohort metrics for tile
-    latest = cohort_results[-1] if cohort_results else {}
-    d7 = latest.get("d7", 0)
-    d30 = latest.get("d30", 0)
-    d90 = latest.get("d90", 0)
+    # Headline metrics: most recent cohort that has actually reached each checkpoint
+    def _latest_reached(key: str) -> tuple[float | None, dict]:
+        for c in reversed(cohort_results):
+            val = c.get(key)
+            if val is not None:
+                return float(val), c  # type: ignore[arg-type]
+        return None, {}
+
+    d7, d7_cohort = _latest_reached("d7")
+    d30, _ = _latest_reached("d30")
+    d90, _ = _latest_reached("d90")
 
     badge = _badge(
-        float(d7),
+        float(d7 if d7 is not None else 0),
         [(40, "critical"), (50, "needs_work"), (60, "healthy"), (100, "excellent")],
-    )
+    ) if d7 is not None else "no_data"
+
+    latest = cohort_results[-1] if cohort_results else {}
 
     return {
         "d7": d7,
         "d30": d30,
         "d90": d90,
+        "d7_cohort_label": d7_cohort.get("label"),
         "badge": badge,
         "latest_cohort_size": latest.get("size", 0),
         "cohorts": cohort_results,
@@ -1506,7 +1514,7 @@ def compute_composite_health(
     network_score = min(100, round(clustering * 200))  # 0.5 = 100
 
     # Retention (15%) — based on D7 retention
-    d7 = (retention_data or {}).get("d7", 0)
+    d7 = (retention_data or {}).get("d7") or 0
     retention_score = min(100, round(d7 * 1.25))  # 80% = 100
 
     # Sentiment (15%) — based on avg sentiment

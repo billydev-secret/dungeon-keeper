@@ -5,36 +5,43 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="data:," />
   <title>TGM Dashboard</title>
-  <link rel="stylesheet" href="/static/app.css?v=8" />
+  <link rel="stylesheet" href="/static/app.css?v=9" />
   <script src="/static/vendor/chart.umd.min.js"></script>
   <script src="/static/vendor/hammer.min.js"></script>
   <script src="/static/vendor/chartjs-plugin-zoom.min.js"></script>
 </head>
 <body>
   <div id="app">
-    <header id="topbar">
-      <button id="sidebar-toggle" aria-label="Menu">&#9776;</button>
-      <span class="topbar-brand">TGM</span>
+    <aside id="sidebar">
+
       <div id="guild-select" class="guild-picker" style="display:none">
-        <button class="guild-picker__toggle" type="button">
-          <span class="guild-picker__name"></span>
-          <svg class="guild-picker__chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <button class="guild-picker__toggle guild-select" type="button">
+          <span class="guild-sigil" data-guild-sigil>G</span>
+          <span class="guild-name guild-picker__name"></span>
+          <svg class="guild-chevron guild-picker__chevron" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button id="sidebar-toggle" class="sidebar-toggle" aria-label="Collapse sidebar">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M6.5 2L3.5 5L6.5 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <ul class="guild-picker__menu"></ul>
       </div>
-      <nav id="topbar-tabs"></nav>
-      <span id="me"></span>
-    </header>
+
+      <div class="nav-filter">
+        <input type="text" placeholder="Filter panels…" data-nav-filter />
+      </div>
+
+      <nav id="sidebar-items" class="nav-scroll"></nav>
+
+      <div id="me" class="user-bar"></div>
+
+    </aside>
+
     <div id="sidebar-backdrop"></div>
-    <div id="body-row">
-      <aside id="sidebar">
-        <nav id="sidebar-items"></nav>
-      </aside>
-      <main id="panel-container">
-        <div id="panel-root"></div>
-      </main>
-    </div>
+
+    <main id="panel-container">
+      <div id="panel-root"></div>
+    </main>
   </div>
-  <script type="module" src="/static/js/app.js?v=12"></script>
+  <script type="module" src="/static/js/app.js?v=13"></script>
 </body>
 </html>
