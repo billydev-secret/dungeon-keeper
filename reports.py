@@ -68,18 +68,18 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
     report_group = app_commands.Group(
         name="report",
         description="Charts and tables about member activity, roles, and engagement.",
-        default_permissions=discord.Permissions(manage_guild=True),
+        default_permissions=discord.Permissions(manage_messages=True),
     )
 
-    async def _report_admin_check(interaction: discord.Interaction) -> bool:
-        if not ctx.is_admin(interaction):
+    async def _report_mod_check(interaction: discord.Interaction) -> bool:
+        if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You don't have permission to use this command.", ephemeral=True
             )
             return False
         return True
 
-    report_group.interaction_check = _report_admin_check  # type: ignore[method-assign]
+    report_group.interaction_check = _report_mod_check  # type: ignore[method-assign]
 
     @report_group.command(
         name="list_role", description="List every member who currently has a role."
