@@ -38,6 +38,7 @@ class MemberMeta(BaseModel):
     id: str
     name: str
     display_name: str
+    left_server: bool = False
 
 
 class ChannelMeta(BaseModel):
@@ -401,6 +402,9 @@ class ChannelRowSchema(BaseModel):
     recent_count: int
     prev_count: int
     trend_pct: float
+    total_xp: float = 0.0
+    gini: float = 0.0
+    avg_sentiment: float | None = None
 
 
 class ChannelComparisonResponse(BaseModel):

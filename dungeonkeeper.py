@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 import logging.handlers
@@ -78,6 +79,10 @@ from xp_system import init_xp_tables
 # ==============================
 load_dotenv()
 
+_parser = argparse.ArgumentParser(description="DungeonKeeper Discord bot")
+_parser.add_argument("--debug", action="store_true", help="Sync commands to dev guild only")
+_args = _parser.parse_args()
+
 _log_queue: logging.handlers.QueueHandler
 _log_queue_listener: logging.handlers.QueueListener
 
@@ -149,7 +154,7 @@ with open_db(DB_PATH) as _conn:
 # ==============================
 # Runtime config + context
 # ==============================
-_cfg = load_runtime_config(DB_PATH)
+_cfg = load_runtime_config(DB_PATH, debug=_args.debug)
 
 intents = discord.Intents.default()
 intents.members = True
@@ -434,6 +439,139 @@ async def _health_batch_loop() -> None:
 
 
 bot.startup_task_factories.append(lambda: _health_batch_loop())
+
+# ==============================
+# Reports page cache warmer
+# ==============================
+async def _reports_batch_loop() -> None:
+    """Pre-warm the metrics/reports page cache every hour.
+
+    Runs each default-param DB query in a background thread and writes the
+    result directly into ``web.deps._report_cache`` so the first page load
+    after a restart is also instant.
+    """
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        for guild in list(bot.guilds):
+            try:
+                from services.reports_data import MemberSnapshot
+
+                gid = guild.id
+                tz = getattr(ctx, "tz_offset_hours", 0.0)
+                nsfw_ids: list[int] = [
+                    ch.id for ch in guild.channels if getattr(ch, "nsfw", False)
+                ]
+                member_snapshots = [
+                    MemberSnapshot(
+                        user_id=m.id,
+                        display_name=m.display_name,
+                        is_bot=m.bot,
+                        joined_at=m.joined_at.timestamp() if m.joined_at else None,
+                        role_ids=tuple(r.id for r in m.roles),
+                    )
+                    for m in guild.members
+                ]
+
+                def _warm(
+                    gid: int = gid,
+                    tz: float = tz,
+                    nsfw_ids: list[int] = nsfw_ids,
+                    member_snapshots: list = member_snapshots,
+                ) -> None:
+                    from services import reports_data
+                    from web.deps import store_report_result
+
+                    TTL = 3600
+
+                    def _put(name, params, result):
+                        store_report_result(name, gid, params, result, TTL)
+
+                    with open_db(DB_PATH) as conn:
+                        for fn, name, params, kwargs in [
+                            (reports_data.get_role_growth_data,
+                             "role-growth", {"resolution": "week", "roles": None},
+                             {"resolution": "week", "role_filter": None, "utc_offset_hours": tz}),
+                            (reports_data.get_message_cadence_data,
+                             "message-cadence", {"resolution": "hour", "channel_id": None},
+                             {"resolution": "hour", "utc_offset_hours": tz, "channel_id": None}),
+                            (reports_data.get_message_rate_data,
+                             "message-rate", {"days": 30},
+                             {"days": 30, "utc_offset_hours": tz}),
+                            (reports_data.get_activity_data,
+                             "activity",
+                             {"resolution": "day", "mode": "xp", "user_id": None,
+                              "channel_id": None, "exclude_channel_ids": "", "exclude_user_ids": ""},
+                             {"resolution": "day", "utc_offset_hours": tz, "mode": "xp"}),
+                            (reports_data.get_invite_effectiveness_data,
+                             "invite-effectiveness", {"days": None, "active_days": 30},
+                             {"days": None, "active_days": 30}),
+                            (reports_data.get_interaction_graph_data,
+                             "interaction-graph",
+                             {"days": None, "limit": 50, "metrics": False, "res": 1.2},
+                             {"days": None, "limit": 50, "include_metrics": False, "clustering_resolution": 1.2}),
+                            (reports_data.get_retention_data,
+                             "retention", {"period_days": 3, "min_previous": 5},
+                             {"period_days": 3, "min_previous": 5}),
+                            (reports_data.get_voice_activity_data,
+                             "voice-activity", {"days": None},
+                             {"days": None, "utc_offset_hours": tz}),
+                            (reports_data.get_xp_leaderboard_data,
+                             "xp-leaderboard", {"days": None},
+                             {"days": None}),
+                            (reports_data.get_reaction_analytics_data,
+                             "reaction-analytics", {"days": None},
+                             {"days": None}),
+                            (reports_data.get_message_rate_drops_data,
+                             "message-rate-drops", {"period_days": 2, "min_previous": 100},
+                             {"period_days": 2, "min_previous": 100}),
+                            (reports_data.get_burst_ranking_data,
+                             "burst-ranking", {"min_sessions": 3, "days": None},
+                             {"min_sessions": 3, "days": None}),
+                            (reports_data.get_channel_comparison_data,
+                             "channel-comparison", {"days": 1},
+                             {"days": 1}),
+                            (reports_data.get_animated_heatmap_data,
+                             "interaction-heatmap",
+                             {"resolution": "week", "days": 90, "top_n": 20},
+                             {"resolution": "week", "days": 90, "top_n": 20}),
+                        ]:
+                            try:
+                                _put(name, params, fn(conn, gid, **kwargs))
+                            except Exception:
+                                pass
+
+                        # join-times needs the member snapshot list, not a conn arg
+                        try:
+                            _put(
+                                "join-times",
+                                {"resolution": "hour_of_day"},
+                                reports_data.get_join_times_data(member_snapshots, "hour_of_day", tz),
+                            )
+                        except Exception:
+                            pass
+
+                        if nsfw_ids:
+                            try:
+                                _put(
+                                    "nsfw-gender",
+                                    {"resolution": "week", "media_only": False, "channel_id": None},
+                                    reports_data.get_nsfw_gender_data(conn, gid, "week", nsfw_ids, tz, False),
+                                )
+                            except Exception:
+                                pass
+
+                await asyncio.to_thread(_warm)
+                log.info("Reports cache warmed for guild %s", format_guild_for_log(guild))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Reports cache warming failed for guild %s", format_guild_for_log(guild)
+                )
+        await asyncio.sleep(3600)  # 1 hour
+
+
+bot.startup_task_factories.append(lambda: _reports_batch_loop())
 
 # ==============================
 # Optional web dashboard (LAN, opt-in via DASHBOARD_ENABLED=1)

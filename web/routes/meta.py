@@ -215,17 +215,37 @@ async def meta_members(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
     if guild is not None:
-        return sorted(
-            [
+        current_members = [
+            MemberMeta(
+                id=str(m.id),
+                name=m.name,
+                display_name=m.display_name,
+            )
+            for m in guild.members
+            if not m.bot
+        ]
+        current_ids = {m.id for m in current_members}
+
+        def _q_left():
+            with ctx.open_db() as conn:
+                rows = conn.execute(
+                    "SELECT user_id, username, display_name FROM known_users WHERE guild_id = ? ORDER BY display_name COLLATE NOCASE",
+                    (guild_id,),
+                ).fetchall()
+            return [
                 MemberMeta(
-                    id=str(m.id),
-                    name=m.name,
-                    display_name=m.display_name,
+                    id=str(r[0]),
+                    name=r[1] or str(r[0]),
+                    display_name=r[2] or r[1] or str(r[0]),
+                    left_server=True,
                 )
-                for m in guild.members
-                if not m.bot
-            ],
-            key=lambda m: m.display_name.lower(),
+                for r in rows
+                if str(r[0]) not in current_ids
+            ]
+
+        left_members = await run_query(_q_left)
+        return sorted(current_members, key=lambda m: m.display_name.lower()) + sorted(
+            left_members, key=lambda m: m.display_name.lower()
         )
 
     # Fallback: known_users table

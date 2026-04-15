@@ -183,7 +183,9 @@ export function mount(container, initialParams) {
       const memberOpts = members.map((m) => ({
         id: m.id,
         label: m.display_name !== m.name ? `${m.display_name} (${m.name})` : m.name,
-      }));
+        left: !!m.left_server,
+      })).sort((a, b) => a.left - b.left || a.label.localeCompare(b.label));
+      memberOpts.forEach((o) => { if (o.left) o.label += " (left)"; });
       const newFS = filterSelect("Type to filter…", memberOpts);
       userFS.el.replaceWith(newFS.el);
       userFS = newFS;

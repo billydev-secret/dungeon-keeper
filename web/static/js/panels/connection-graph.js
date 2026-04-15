@@ -161,7 +161,11 @@ export function mount(container, initialParams) {
   // Load member list
   api("/api/meta/members", {}).then((members) => {
     allMembers = members;
-    const opts = members.map((m) => ({ id: m.id, label: m.display_name || m.name }));
+    const opts = members.map((m) => ({
+      id: m.id,
+      label: (m.display_name || m.name) + (m.left_server ? " (left)" : ""),
+      left: !!m.left_server,
+    })).sort((a, b) => a.left - b.left || a.label.localeCompare(b.label));
     const fs = filterSelect("Type to filter…", opts);
     if (initialParams.member) fs.id = initialParams.member;
     memberFS.el.replaceWith(fs.el);

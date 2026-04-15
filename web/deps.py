@@ -21,7 +21,7 @@ _log = logging.getLogger("dungeonkeeper.web.cache")
 # ── Report cache ────────────────────────────────────────────────────────
 
 _report_cache: dict[str, tuple[float, object]] = {}  # key → (expires_at, result)
-_DEFAULT_TTL = 120  # seconds
+_DEFAULT_TTL = 3600  # seconds (1 hour — batch warmer refreshes on the same cadence)
 
 
 def _make_cache_key(name: str, guild_id: int, params: dict) -> str:
@@ -86,6 +86,18 @@ def invalidate_report_cache(
     count = len(_report_cache)
     _report_cache.clear()
     return count
+
+
+def store_report_result(
+    name: str, guild_id: int, params: dict, result: object, ttl: int = _DEFAULT_TTL
+) -> None:
+    """Write a pre-computed result directly into the report cache.
+
+    Used by the batch warmer in ``dungeonkeeper.py`` to populate the cache
+    proactively so dashboard page loads are always instant.
+    """
+    key = _make_cache_key(name, guild_id, params)
+    _report_cache[key] = (time.monotonic() + ttl, result)
 
 
 def get_ctx(request: Request):

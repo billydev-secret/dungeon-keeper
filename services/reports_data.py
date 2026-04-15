@@ -1467,6 +1467,9 @@ class ChannelRow(TypedDict):
     recent_count: int
     prev_count: int
     trend_pct: float
+    total_xp: float
+    gini: float
+    avg_sentiment: float | None
 
 
 class ChannelComparisonData(TypedDict):
@@ -1497,8 +1500,65 @@ def get_channel_comparison_data(
         (mid, mid, guild_id, cutoff),
     ).fetchall()
 
+    # XP earned per channel in the window
+    xp_rows = conn.execute(
+        """
+        SELECT channel_id, SUM(amount) AS xp
+        FROM xp_events
+        WHERE guild_id = ? AND created_at >= ?
+        GROUP BY channel_id
+        """,
+        (guild_id, cutoff),
+    ).fetchall()
+    xp_by_channel: dict[str, float] = {str(r[0]): float(r[1]) for r in xp_rows if r[0] is not None}
+
+    # Per-channel Gini: message distribution among authors
+    author_msg_rows = conn.execute(
+        """
+        SELECT channel_id, author_id, COUNT(*) AS cnt
+        FROM messages
+        WHERE guild_id = ? AND ts >= ?
+        GROUP BY channel_id, author_id
+        """,
+        (guild_id, cutoff),
+    ).fetchall()
+    ch_author_counts: dict[str, list[float]] = {}
+    for r in author_msg_rows:
+        cid = str(r[0])
+        ch_author_counts.setdefault(cid, []).append(float(r[2]))
+
+    def _gini(values: list[float]) -> float:
+        if not values:
+            return 0.0
+        vals = sorted(values)
+        n = len(vals)
+        s = sum(vals)
+        if s == 0:
+            return 0.0
+        cumsum = 0.0
+        for i, v in enumerate(vals):
+            cumsum += v * (2 * (i + 1) - n - 1)
+        return cumsum / (n * s)
+
+    # Average sentiment per channel
+    sentiment_rows = conn.execute(
+        """
+        SELECT m.channel_id, AVG(ms.sentiment) AS avg_s
+        FROM message_sentiment ms
+        JOIN messages m ON ms.message_id = m.message_id
+        WHERE ms.guild_id = ? AND m.ts >= ?
+        GROUP BY m.channel_id
+        """,
+        (guild_id, cutoff),
+    ).fetchall()
+    sentiment_by_channel: dict[str, float | None] = {
+        str(r[0]): round(float(r[1]), 3) if r[1] is not None else None
+        for r in sentiment_rows
+    }
+
     channels: list[ChannelRow] = []
     for r in rows:
+        cid = str(r[0])
         recent = int(r[3])
         prev = int(r[4])
         trend = (
@@ -1506,15 +1566,19 @@ def get_channel_comparison_data(
             if prev > 0
             else (100.0 if recent > 0 else 0.0)
         )
+        gini_val = round(_gini(ch_author_counts.get(cid, [])), 3)
         channels.append(
             {
-                "channel_id": str(r[0]),
+                "channel_id": cid,
                 "channel_name": "",
                 "message_count": int(r[1]),
                 "unique_authors": int(r[2]),
                 "recent_count": recent,
                 "prev_count": prev,
                 "trend_pct": trend,
+                "total_xp": xp_by_channel.get(cid, 0.0),
+                "gini": gini_val,
+                "avg_sentiment": sentiment_by_channel.get(cid),
             }
         )
 

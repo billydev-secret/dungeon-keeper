@@ -22,7 +22,6 @@ from db_utils import (
     get_config_value,
     get_grant_roles,
     open_db,
-    parse_bool,
     remove_config_id,
     set_config_value as _db_set_config_value,
 )
@@ -81,7 +80,7 @@ class RuntimeConfig(TypedDict):
     tz_offset_hours: float
 
 
-def load_runtime_config(db_path: Path) -> RuntimeConfig:
+def load_runtime_config(db_path: Path, *, debug: bool) -> RuntimeConfig:
     from services.welcome_service import DEFAULT_LEAVE_MESSAGE, DEFAULT_WELCOME_MESSAGE
 
     with open_db(db_path) as conn:
@@ -92,12 +91,6 @@ def load_runtime_config(db_path: Path) -> RuntimeConfig:
             guild_id = _parse_int_config(
                 os.environ.get("GUILD_ID", "0"), key="GUILD_ID"
             )
-
-        db_debug = get_config_value(conn, "debug", "")
-        if db_debug:
-            debug = parse_bool(db_debug, default=True)
-        else:
-            debug = parse_bool(os.environ.get("DEBUG", "1"), default=True)
 
         return {
             "guild_id": guild_id,
