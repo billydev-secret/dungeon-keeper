@@ -292,13 +292,6 @@ export function mount(container) {
         </div>
       </div>
 
-      <div class="mod-stats" data-stats>
-        <div class="mod-stat open"><div class="lbl">Open</div><div class="v">—</div><div class="sub">loading…</div></div>
-        <div class="mod-stat claimed"><div class="lbl">Claimed</div><div class="v">—</div><div class="sub"></div></div>
-        <div class="mod-stat resolved"><div class="lbl">Closed</div><div class="v">—</div><div class="sub"></div></div>
-        <div class="mod-stat avg"><div class="lbl">Escalated</div><div class="v">—</div><div class="sub"></div></div>
-      </div>
-
       <section class="mod-split">
         <div class="ticket-list-wrap">
           <div class="ticket-list-head">
@@ -322,7 +315,6 @@ export function mount(container) {
     </div>
   `;
 
-  const statsEl = container.querySelector("[data-stats]");
   const listEl = container.querySelector("[data-list]");
   const detailEl = container.querySelector("[data-detail]");
   const filterGroup = container.querySelector("[data-filter-group]");
@@ -340,6 +332,25 @@ export function mount(container) {
     return state.filter === "closed" ? (state.closedTickets || []) : state.tickets;
   }
 
+  function setFilterBadge(filter, label, count) {
+    const btn = filterGroup.querySelector(`[data-filter="${filter}"]`);
+    if (!btn) return;
+    btn.textContent = label;
+    if (count) {
+      const badge = document.createElement("span");
+      badge.className = "filter-badge";
+      badge.textContent = String(count);
+      btn.appendChild(badge);
+    }
+  }
+
+  function updateFilterBadges() {
+    const openCount = state.tickets.filter((t) => t.status === "open").length;
+    const mineCount = state.tickets.filter(FILTERS.mine).length;
+    setFilterBadge("open", "Open", openCount);
+    setFilterBadge("mine", "Mine", mineCount);
+  }
+
   function render() {
     const source = currentTicketSource();
     const filtered = source.filter(FILTERS[state.filter]);
@@ -351,6 +362,7 @@ export function mount(container) {
     const detail = active ? state.detailCache.get(active.id) : null;
     detailEl.innerHTML = renderDetail(active, detail);
     if (active && !detail) loadDetail(active.id);
+    updateFilterBadges();
   }
 
   async function loadDetail(id) {
@@ -365,42 +377,11 @@ export function mount(container) {
     }
   }
 
-  function renderStats() {
-    const open = state.tickets.filter((t) => t.status === "open").length;
-    const claimed = state.tickets.filter((t) => t.status === "open" && t.claimer_id).length;
-    const closed = state.tickets.filter((t) => t.status === "closed" || t.status === "deleted").length;
-    const escalated = state.tickets.filter((t) => t.escalated && t.status === "open").length;
-
-    statsEl.innerHTML = `
-      <div class="mod-stat open">
-        <div class="lbl">Open</div>
-        <div class="v">${open}</div>
-        <div class="sub">${open ? `${open - claimed} unclaimed` : "all clear"}</div>
-      </div>
-      <div class="mod-stat claimed">
-        <div class="lbl">Claimed</div>
-        <div class="v">${claimed}</div>
-        <div class="sub">${open ? Math.round((claimed / open) * 100) + "% of open" : "—"}</div>
-      </div>
-      <div class="mod-stat resolved">
-        <div class="lbl">Closed</div>
-        <div class="v">${closed}</div>
-        <div class="sub">in current window</div>
-      </div>
-      <div class="mod-stat avg">
-        <div class="lbl">Escalated</div>
-        <div class="v">${escalated}</div>
-        <div class="sub">${escalated ? "needs review" : "none"}</div>
-      </div>
-    `;
-  }
-
   async function refresh() {
     try {
       const data = await api("/api/moderation/tickets");
       state.tickets = data.tickets || [];
       state.closedTickets = null;
-      renderStats();
       if (state.filter === "closed") {
         await refreshClosed();
       } else {

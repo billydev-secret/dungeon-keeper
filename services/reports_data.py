@@ -489,6 +489,8 @@ def get_activity_data(
     mode: Literal["messages", "xp"] = "messages",
     user_id: int | None = None,
     channel_id: int | None = None,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
 ) -> ActivityData:
     tz_label = f"UTC{utc_offset_hours:+g}" if utc_offset_hours else "UTC"
     show_members = user_id is None
@@ -501,6 +503,8 @@ def get_activity_data(
                 resolution,  # type: ignore[arg-type]
                 user_id=user_id,
                 channel_id=channel_id,
+                exclude_user_ids=exclude_user_ids,
+                exclude_channel_ids=exclude_channel_ids,
                 utc_offset_hours=utc_offset_hours,
             )
             counts: list[float] = xp_totals
@@ -513,6 +517,8 @@ def get_activity_data(
                 resolution,
                 user_id=user_id,
                 channel_id=channel_id,
+                exclude_user_ids=exclude_user_ids,
+                exclude_channel_ids=exclude_channel_ids,
                 utc_offset_hours=utc_offset_hours,
             )
             counts = xp_totals
@@ -525,6 +531,8 @@ def get_activity_data(
                 resolution,  # type: ignore[arg-type]
                 user_id=user_id,
                 channel_id=channel_id,
+                exclude_user_ids=exclude_user_ids,
+                exclude_channel_ids=exclude_channel_ids,
                 utc_offset_hours=utc_offset_hours,
             )
             counts = [float(c) for c in msg_counts]
@@ -537,6 +545,8 @@ def get_activity_data(
                 resolution,
                 user_id=user_id,
                 channel_id=channel_id,
+                exclude_user_ids=exclude_user_ids,
+                exclude_channel_ids=exclude_channel_ids,
                 utc_offset_hours=utc_offset_hours,
             )
             counts = [float(c) for c in msg_counts]

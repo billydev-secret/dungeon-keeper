@@ -155,18 +155,55 @@ const navFilterEl = document.querySelector("[data-nav-filter]");
 
 let currentPanel = null;
 
-// ── Sidebar collapse (desktop) + mobile backdrop close ─────────────
+// ── Sidebar collapse (desktop) + mobile open/close ─────────────────
 
 function closeMobileSidebar() {
   sidebarEl.classList.remove("open");
   sidebarBackdropEl.classList.remove("open");
 }
 
+function openMobileSidebar() {
+  sidebarEl.classList.add("open");
+  sidebarBackdropEl.classList.add("open");
+}
+
 sidebarToggleEl.addEventListener("click", (e) => {
   e.stopPropagation();
-  sidebarEl.classList.toggle("collapsed");
+  if (window.innerWidth <= 768) {
+    closeMobileSidebar();
+  } else {
+    sidebarEl.classList.toggle("collapsed");
+  }
 });
 sidebarBackdropEl.addEventListener("click", closeMobileSidebar);
+
+// Mobile hamburger button
+const mobileMenuBtnEl = document.getElementById("mobile-menu-btn");
+if (mobileMenuBtnEl) {
+  mobileMenuBtnEl.addEventListener("click", openMobileSidebar);
+}
+
+// Swipe-from-left-edge to open sidebar on mobile
+(function () {
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let tracking = false;
+
+  document.addEventListener("touchstart", (e) => {
+    if (window.innerWidth > 768) return;
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+    tracking = touchStartX < 24; // only track swipes starting near left edge
+  }, { passive: true });
+
+  document.addEventListener("touchend", (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const dx = e.changedTouches[0].clientX - touchStartX;
+    const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
+    if (dx > 40 && dy < 60) openMobileSidebar();
+  }, { passive: true });
+})();
 
 // ── Nav filter ──────────────────────────────────────────────────────
 

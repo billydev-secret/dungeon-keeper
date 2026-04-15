@@ -2359,6 +2359,31 @@ a { text-decoration: none; }
   .transcript-modal { left: 2vw; right: 2vw; top: 2vh; bottom: 2vh; }
 }
 
+/* ── Mobile hamburger button ──────────────────────────────────────── */
+
+.mobile-menu-btn {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-menu-btn {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    top: 10px;
+    left: 10px;
+    z-index: 80;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--bg-rail);
+    border: 1px solid var(--rule);
+    color: var(--ink-dim);
+    cursor: pointer;
+    padding: 0;
+  }
+}
+
 /* ── Mobile ───────────────────────────────────────────────────────── */
 
 @media (max-width: 768px) {
@@ -2377,7 +2402,7 @@ a { text-decoration: none; }
 
   #sidebar-backdrop.open { display: block; }
 
-  #panel-container { padding: 16px; }
+  #panel-container { padding: 52px 16px 16px; }
 
   .health-grid { grid-template-columns: 1fr; }
   .health-status-bar { font-size: 12px; gap: 10px; }
@@ -2436,6 +2461,22 @@ a { text-decoration: none; }
 }
 .ctrl-group button:hover { color: var(--ink-bright); }
 .ctrl-group button.active { background: var(--active); color: var(--ink-bright); }
+.filter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin-left: 5px;
+  border-radius: 8px;
+  background: var(--red);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+}
 
 /* ── Moderation: Tickets two-column workflow ────────────────────────── */
 

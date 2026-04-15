@@ -194,6 +194,23 @@ _WINDOW_LABELS = {
 # ---------------------------------------------------------------------------
 
 
+def _append_exclusions(
+    where: str,
+    params: list[object],
+    exclude_user_ids: set[int] | None,
+    exclude_channel_ids: set[int] | None,
+) -> str:
+    if exclude_user_ids:
+        ph = ",".join("?" * len(exclude_user_ids))
+        where += f" AND user_id NOT IN ({ph})"
+        params.extend(exclude_user_ids)
+    if exclude_channel_ids:
+        ph = ",".join("?" * len(exclude_channel_ids))
+        where += f" AND channel_id NOT IN ({ph})"
+        params.extend(exclude_channel_ids)
+    return where
+
+
 def query_message_activity(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -201,6 +218,8 @@ def query_message_activity(
     *,
     user_id: int | None = None,
     channel_id: int | None = None,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
     utc_offset_hours: float = 0,
 ) -> tuple[list[str], list[int], list[int]]:
     """
@@ -224,6 +243,7 @@ def query_message_activity(
     if channel_id is not None:
         where += " AND channel_id = ?"
         params.append(channel_id)
+    where = _append_exclusions(where, params, exclude_user_ids, exclude_channel_ids)
 
     rows = conn.execute(
         f"""
@@ -255,6 +275,8 @@ def query_message_histogram(
     *,
     user_id: int | None = None,
     channel_id: int | None = None,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
     utc_offset_hours: float = 0,
 ) -> tuple[list[str], list[int]]:
     """
@@ -282,6 +304,7 @@ def query_message_histogram(
     if channel_id is not None:
         where += " AND channel_id = ?"
         params.append(channel_id)
+    where = _append_exclusions(where, params, exclude_user_ids, exclude_channel_ids)
 
     rows = conn.execute(
         f"""
@@ -309,6 +332,8 @@ def query_xp_activity(
     *,
     user_id: int | None = None,
     channel_id: int | None = None,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
     utc_offset_hours: float = 0,
 ) -> tuple[list[str], list[float], list[int]]:
     """
@@ -331,6 +356,7 @@ def query_xp_activity(
     if channel_id is not None:
         where += " AND channel_id = ?"
         params.append(channel_id)
+    where = _append_exclusions(where, params, exclude_user_ids, exclude_channel_ids)
 
     rows = conn.execute(
         f"""
@@ -362,6 +388,8 @@ def query_xp_histogram(
     *,
     user_id: int | None = None,
     channel_id: int | None = None,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
     utc_offset_hours: float = 0,
 ) -> tuple[list[str], list[float]]:
     """
@@ -388,6 +416,7 @@ def query_xp_histogram(
     if channel_id is not None:
         where += " AND channel_id = ?"
         params.append(channel_id)
+    where = _append_exclusions(where, params, exclude_user_ids, exclude_channel_ids)
 
     rows = conn.execute(
         f"""

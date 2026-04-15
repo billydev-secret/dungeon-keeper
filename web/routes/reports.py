@@ -497,6 +497,8 @@ async def activity(
     mode: Literal["messages", "xp"] = "xp",
     user_id: str | None = None,
     channel_id: str | None = None,
+    exclude_channel_ids: str | None = None,
+    exclude_bots: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
@@ -504,6 +506,24 @@ async def activity(
     tz = getattr(ctx, "tz_offset_hours", 0.0)
     uid = int(user_id) if user_id else None
     cid = int(channel_id) if channel_id else None
+
+    excluded_channels: set[int] = set()
+    if exclude_channel_ids:
+        for part in exclude_channel_ids.split(","):
+            part = part.strip()
+            if part:
+                try:
+                    excluded_channels.add(int(part))
+                except ValueError:
+                    continue
+
+    excluded_users: set[int] = set()
+    if exclude_bots:
+        bot = getattr(ctx, "bot", None)
+        guild = bot.get_guild(guild_id) if bot is not None else None
+        if guild is not None:
+            excluded_users.update(m.id for m in guild.members if m.bot)
+        excluded_users.update(getattr(ctx, "recorded_bot_user_ids", set()))
 
     def _q():
         with ctx.open_db() as conn:
@@ -515,6 +535,8 @@ async def activity(
                 mode=mode,
                 user_id=uid,
                 channel_id=cid,
+                exclude_user_ids=excluded_users or None,
+                exclude_channel_ids=excluded_channels or None,
             )
 
     return await cached_run_query(
@@ -525,6 +547,8 @@ async def activity(
             "mode": mode,
             "user_id": user_id,
             "channel_id": channel_id,
+            "exclude_channel_ids": ",".join(str(c) for c in sorted(excluded_channels)),
+            "exclude_user_ids": ",".join(str(u) for u in sorted(excluded_users)),
         },
         _q,
     )
