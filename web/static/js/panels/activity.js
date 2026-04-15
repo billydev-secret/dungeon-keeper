@@ -36,7 +36,7 @@ function filterSelect(placeholder, options) {
     const lc = filter.toLowerCase();
     const matches = lc ? options.filter((o) => o.label.toLowerCase().includes(lc)) : options;
     list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--text-dim)">(all)</em></div>` +
-      matches.slice(0, 80).map((o) => `<div class="filter-select-item" data-id="${escHtml(o.id)}">${escHtml(o.label)}</div>`).join("");
+      (lc ? matches : matches.slice(0, 300)).map((o) => `<div class="filter-select-item" data-id="${escHtml(o.id)}">${escHtml(o.label)}</div>`).join("");
   }
 
   input.addEventListener("focus", () => { render(input.value); list.style.display = "block"; });

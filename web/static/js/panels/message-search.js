@@ -29,7 +29,7 @@ function filterSelect(placeholder, options) {
     const matches = lc
       ? options.filter((o) => o.label.toLowerCase().includes(lc))
       : options;
-    const show = matches.slice(0, 80);
+    const show = lc ? matches : matches.slice(0, 300);
     list.innerHTML = `<div class="filter-select-item" data-id="">
         <em style="color:var(--text-dim)">(any)</em>
       </div>` +
