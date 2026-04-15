@@ -98,47 +98,42 @@ def _day_buckets(
     return buckets, start_ts
 
 
+_WEEK_SECS = 7 * 86400
+_MONTH_SECS = 30 * 86400
+
+
 def _week_buckets(
     now: datetime, utc_offset_hours: float = 0
 ) -> tuple[list[tuple[str, str]], float]:
-    """12 weekly buckets (Monday-based) ending this week."""
+    """12 rolling 7-day buckets ending at now."""
     offset = timedelta(hours=utc_offset_hours)
     local_now = now + offset
-    days_since_monday = local_now.weekday()
-    this_monday = (local_now - timedelta(days=days_since_monday)).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
-    start = this_monday - timedelta(weeks=11)
+    start = local_now - timedelta(weeks=12)
+    start_ts = (start - offset).timestamp()
     buckets = []
     for i in range(12):
-        dt = start + timedelta(weeks=i)
-        key = (dt - offset).strftime("%Y-%W")  # key in UTC
-        label = dt.strftime("%b %d")
+        bucket_end = start + timedelta(weeks=i + 1)
+        key = str(int(start_ts + (i + 1) * _WEEK_SECS))
+        label = bucket_end.strftime("%b %d")
         buckets.append((key, label))
-    return buckets, (start - offset).timestamp()
+    return buckets, start_ts
 
 
 def _month_buckets(
     now: datetime, utc_offset_hours: float = 0
 ) -> tuple[list[tuple[str, str]], float]:
-    """12 monthly buckets ending this month."""
+    """12 rolling 30-day buckets ending at now."""
     offset = timedelta(hours=utc_offset_hours)
     local_now = now + offset
+    start = local_now - timedelta(days=30 * 12)
+    start_ts = (start - offset).timestamp()
     buckets = []
-    for i in range(11, -1, -1):
-        m = local_now.month - i
-        y = local_now.year
-        while m <= 0:
-            m += 12
-            y -= 1
-        dt = datetime(y, m, 1, tzinfo=timezone.utc)
-        key = dt.strftime("%Y-%m")
-        label = dt.strftime("%b '%y")
+    for i in range(12):
+        bucket_end = start + timedelta(days=30 * (i + 1))
+        key = str(int(start_ts + (i + 1) * _MONTH_SECS))
+        label = bucket_end.strftime("%b %d")
         buckets.append((key, label))
-    first_y = int(buckets[0][0][:4])
-    first_m = int(buckets[0][0][5:])
-    since_ts = datetime(first_y, first_m, 1, tzinfo=timezone.utc).timestamp()
-    return buckets, since_ts
+    return buckets, start_ts
 
 
 def _strftime_expr(
@@ -149,12 +144,13 @@ def _strftime_expr(
 ) -> str:
     """SQLite expression that buckets a timestamp column into the right key format.
 
-    For ``day`` resolution the buckets are rolling 24-hour windows anchored to
-    the query start, so the key is the epoch of the bucket's upper edge.  All
-    other resolutions use the traditional ``strftime`` calendar bucketing.
+    Day, week, and month resolutions use rolling windows anchored to the query
+    start — the key is the epoch of the bucket's upper edge, so the last bucket
+    always ends at *now* and is never partially filled.  Hour resolution uses
+    calendar-hour strftime bucketing.
 
     *utc_offset_secs* shifts the timestamp before bucketing so that calendar
-    boundaries (midnight, Monday, month start) align with the user's local time.
+    boundaries align with the user's local time (hour resolution only).
     """
     shifted = f"({col} + {utc_offset_secs})" if utc_offset_secs else col
     if resolution == "hour":
@@ -165,8 +161,15 @@ def _strftime_expr(
             f" + 86400 + {since_ts} AS INTEGER)"
         )
     if resolution == "week":
-        return f"strftime('%Y-%W', datetime({shifted}, 'unixepoch'))"
-    return f"strftime('%Y-%m', datetime({shifted}, 'unixepoch'))"
+        return (
+            f"CAST(CAST(({col} - {since_ts}) / {_WEEK_SECS} AS INTEGER) * {_WEEK_SECS}"
+            f" + {_WEEK_SECS} + {since_ts} AS INTEGER)"
+        )
+    # month = 30-day rolling window
+    return (
+        f"CAST(CAST(({col} - {since_ts}) / {_MONTH_SECS} AS INTEGER) * {_MONTH_SECS}"
+        f" + {_MONTH_SECS} + {since_ts} AS INTEGER)"
+    )
 
 
 _BUCKET_BUILDERS = {

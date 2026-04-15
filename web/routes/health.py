@@ -7,7 +7,7 @@ Each ``GET /api/health/{tile}`` endpoint returns full deep-dive data.
 from __future__ import annotations
 
 import time
-from typing import Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -514,7 +514,7 @@ async def health_tiles(
                 if _want("composite"):
                     # Composite depends on other tiles being cached — compute
                     # any missing dependencies first so get_cached finds them.
-                    for dep_key, dep_fn, dep_kw in [
+                    composite_deps: list[tuple[str, Callable[..., Any], dict[str, Any]]] = [
                         (
                             "dau_mau",
                             compute_dau_mau,
@@ -536,7 +536,8 @@ async def health_tiles(
                             {"join_times": extras["recent_joins"]},
                         ),
                         ("heatmap", compute_heatmap, {}),
-                    ]:
+                    ]
+                    for dep_key, dep_fn, dep_kw in composite_deps:
                         if get_cached(conn, guild_id, dep_key) is None:
                             dep_result = dep_fn(conn, guild_id, **dep_kw)
                             set_cached(conn, guild_id, dep_key, dep_result)

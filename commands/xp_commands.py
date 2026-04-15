@@ -332,10 +332,10 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                 conn,
                 guild.id,
                 member.id,
-                DEFAULT_XP_SETTINGS.manual_grant_xp,
+                ctx.xp_settings.manual_grant_xp,
                 event_source=XP_SOURCE_GRANT,
                 event_timestamp=now_ts,
-                settings=DEFAULT_XP_SETTINGS,
+                settings=ctx.xp_settings,
             )
 
         await handle_level_progress(
@@ -348,7 +348,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
         )
 
         await interaction.response.send_message(
-            f"{interaction.user.mention} granted {DEFAULT_XP_SETTINGS.manual_grant_xp:.0f} XP to {member.mention}. "
+            f"{interaction.user.mention} granted {ctx.xp_settings.manual_grant_xp:.0f} XP to {member.mention}. "
             f"They now have {award.total_xp:.2f} XP and are level {award.new_level}.",
             ephemeral=False,
         )
@@ -494,7 +494,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                                 is_reply_to_human=is_reply_to_human,
                                 pair_streak=pair_streak,
                             ),
-                            DEFAULT_XP_SETTINGS,
+                            ctx.xp_settings,
                         )
 
                         award = apply_xp_award(
@@ -502,7 +502,7 @@ def register_xp_commands(bot: Bot, ctx: AppContext) -> None:
                             guild.id,
                             message.author.id,
                             breakdown.awarded_xp,
-                            settings=DEFAULT_XP_SETTINGS,
+                            settings=ctx.xp_settings,
                         )
 
                         reply_award = 0.0
