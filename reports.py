@@ -540,8 +540,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         description="Members past level 5 who still lack NSFW access. Flags pruned users.",
     )
     async def promotion_review(interaction: discord.Interaction):
-        member = ctx.get_interaction_member(interaction)
-        if member is None or not member.guild_permissions.manage_roles:
+        if not ctx.is_mod(interaction):
             await interaction.response.send_message(
                 "You do not have permission to use this command.", ephemeral=True
             )
