@@ -285,7 +285,7 @@ class AppContext:
     def reload_xp_settings(self) -> None:
         """Reload XP algorithm coefficients from the config DB."""
         with self.open_db() as conn:
-            self.xp_settings = load_xp_settings(conn)
+            self.xp_settings = load_xp_settings(conn, self.guild_id)
 
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:

@@ -78,44 +78,60 @@ def _float_val(conn, key: str, default: float = 0.0) -> float:
         return default
 
 
-def _xp_coefficients(conn) -> dict:
-    """Read XP algorithm coefficients from the config table, with defaults."""
+def _xp_coefficients(conn, guild_id: int = 0) -> dict:
+    """Read XP algorithm coefficients from the config table, with defaults.
+
+    Guild-scoped rows take precedence; falls back to ``guild_id=0`` legacy rows
+    via ``get_config_value``.
+    """
+    from db_utils import get_config_value
+
     d = DEFAULT_XP_SETTINGS
     p = _XP_COEFF_PREFIX
+
+    def _f(key: str, default: float) -> float:
+        raw = get_config_value(conn, f"{p}{key}", str(default), guild_id)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def _i(key: str, default: int) -> int:
+        raw = get_config_value(conn, f"{p}{key}", str(default), guild_id)
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def _s(key: str, default: str) -> str:
+        return get_config_value(conn, f"{p}{key}", default, guild_id)
+
     return {
-        "message_word_xp": _float_val(conn, f"{p}message_word_xp", d.message_word_xp),
-        "reply_bonus_xp": _float_val(conn, f"{p}reply_bonus_xp", d.reply_bonus_xp),
-        "image_reaction_received_xp": _float_val(
-            conn, f"{p}image_reaction_received_xp", d.image_reaction_received_xp
+        "message_word_xp": _f("message_word_xp", d.message_word_xp),
+        "reply_bonus_xp": _f("reply_bonus_xp", d.reply_bonus_xp),
+        "image_reaction_received_xp": _f(
+            "image_reaction_received_xp", d.image_reaction_received_xp
         ),
-        "cooldown_thresholds_seconds": _str_val(
-            conn,
-            f"{p}cooldown_thresholds_seconds",
+        "cooldown_thresholds_seconds": _s(
+            "cooldown_thresholds_seconds",
             ",".join(str(v) for v in d.cooldown_thresholds_seconds),
         ),
-        "cooldown_multipliers": _str_val(
-            conn,
-            f"{p}cooldown_multipliers",
+        "cooldown_multipliers": _s(
+            "cooldown_multipliers",
             ",".join(str(v) for v in d.cooldown_multipliers),
         ),
-        "duplicate_multiplier": _float_val(
-            conn, f"{p}duplicate_multiplier", d.duplicate_multiplier
+        "duplicate_multiplier": _f("duplicate_multiplier", d.duplicate_multiplier),
+        "pair_streak_threshold": _i("pair_streak_threshold", d.pair_streak_threshold),
+        "pair_streak_multiplier": _f(
+            "pair_streak_multiplier", d.pair_streak_multiplier
         ),
-        "pair_streak_threshold": _int_val(
-            conn, f"{p}pair_streak_threshold", d.pair_streak_threshold
+        "voice_award_xp": _f("voice_award_xp", d.voice_award_xp),
+        "voice_interval_seconds": _i(
+            "voice_interval_seconds", d.voice_interval_seconds
         ),
-        "pair_streak_multiplier": _float_val(
-            conn, f"{p}pair_streak_multiplier", d.pair_streak_multiplier
-        ),
-        "voice_award_xp": _float_val(conn, f"{p}voice_award_xp", d.voice_award_xp),
-        "voice_interval_seconds": _int_val(
-            conn, f"{p}voice_interval_seconds", d.voice_interval_seconds
-        ),
-        "voice_min_humans": _int_val(conn, f"{p}voice_min_humans", d.voice_min_humans),
-        "manual_grant_xp": _float_val(conn, f"{p}manual_grant_xp", d.manual_grant_xp),
-        "level_curve_factor": _float_val(
-            conn, f"{p}level_curve_factor", d.level_curve_factor
-        ),
+        "voice_min_humans": _i("voice_min_humans", d.voice_min_humans),
+        "manual_grant_xp": _f("manual_grant_xp", d.manual_grant_xp),
+        "level_curve_factor": _f("level_curve_factor", d.level_curve_factor),
     }
 
 
@@ -205,7 +221,7 @@ async def get_config(
                         str(i) for i in _id_set_list(conn, "xp_excluded_channel_ids")
                     ],
                     # Algorithm coefficients (loaded with defaults)
-                    **_xp_coefficients(conn),
+                    **_xp_coefficients(conn, guild_id),
                 },
                 "prune": {
                     "role_id": str(prune_rule["role_id"]) if prune_rule else "0",

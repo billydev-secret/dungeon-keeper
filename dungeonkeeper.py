@@ -243,7 +243,7 @@ async def _handle_level_progress_cb(member, award, source):
 
 bot.startup_task_factories.append(
     lambda: voice_xp_loop(
-        bot, DB_PATH, _handle_level_progress_cb, settings=ctx.xp_settings
+        bot, DB_PATH, _handle_level_progress_cb, settings_getter=lambda: ctx.xp_settings
     )
 )
 

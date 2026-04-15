@@ -59,15 +59,19 @@ _TUPLE_FLOAT_COEFFS = ["cooldown_multipliers"]
 _TUPLE_INT_COEFFS = ["cooldown_thresholds_seconds"]
 
 
-def load_xp_settings(conn: sqlite3.Connection) -> XpSettings:
-    """Build an XpSettings from stored config values, falling back to defaults."""
+def load_xp_settings(conn: sqlite3.Connection, guild_id: int = 0) -> XpSettings:
+    """Build an XpSettings from stored config values, falling back to defaults.
+
+    When ``guild_id`` is non-zero, guild-scoped rows take precedence and the
+    loader falls back to ``guild_id=0`` legacy rows via ``get_config_value``.
+    """
     from db_utils import get_config_value
 
     defaults = DEFAULT_XP_SETTINGS
     kwargs: dict[str, object] = {}
 
     for key in _FLOAT_COEFFS:
-        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "")
+        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "", guild_id)
         if raw:
             try:
                 kwargs[key] = float(raw)
@@ -75,7 +79,7 @@ def load_xp_settings(conn: sqlite3.Connection) -> XpSettings:
                 pass
 
     for key in _INT_COEFFS:
-        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "")
+        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "", guild_id)
         if raw:
             try:
                 kwargs[key] = int(raw)
@@ -83,7 +87,7 @@ def load_xp_settings(conn: sqlite3.Connection) -> XpSettings:
                 pass
 
     for key in _TUPLE_FLOAT_COEFFS:
-        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "")
+        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "", guild_id)
         if raw:
             try:
                 vals = tuple(float(v.strip()) for v in raw.split(",") if v.strip())
@@ -94,7 +98,7 @@ def load_xp_settings(conn: sqlite3.Connection) -> XpSettings:
                 pass
 
     for key in _TUPLE_INT_COEFFS:
-        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "")
+        raw = get_config_value(conn, f"{_XP_COEFF_PREFIX}{key}", "", guild_id)
         if raw:
             try:
                 vals = tuple(int(v.strip()) for v in raw.split(",") if v.strip())

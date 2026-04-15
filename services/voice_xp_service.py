@@ -157,13 +157,20 @@ async def voice_xp_loop(
     db_path: Path,
     handle_level_progress_callback,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    settings_getter=None,
 ) -> None:
-    """Background task that periodically awards voice XP."""
+    """Background task that periodically awards voice XP.
+
+    Pass ``settings_getter`` as a zero-argument callable (e.g. ``lambda: ctx.xp_settings``)
+    so each tick picks up live config changes without restarting the loop.
+    If omitted, the static ``settings`` snapshot is used for every tick.
+    """
     await bot.wait_until_ready()
 
     while not bot.is_closed():
+        current_settings = settings_getter() if settings_getter is not None else settings
         try:
-            leveled_members = await process_voice_xp_tick(bot, db_path, settings)
+            leveled_members = await process_voice_xp_tick(bot, db_path, current_settings)
             if leveled_members:
                 log.info(
                     "Voice XP tick awarded XP to %d member(s): %s",
@@ -182,4 +189,4 @@ async def voice_xp_loop(
         except Exception:
             log.exception("Voice XP tick failed.")
 
-        await asyncio.sleep(settings.voice_poll_seconds)
+        await asyncio.sleep(current_settings.voice_poll_seconds)
