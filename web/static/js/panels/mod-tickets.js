@@ -60,7 +60,7 @@ function priorityClass(t) {
 }
 
 function statusChip(t) {
-  if (t.status === "closed") return '<span class="t-chip closed">Closed</span>';
+  if (t.status === "closed" || t.status === "deleted") return '<span class="t-chip closed">Closed</span>';
   if (t.claimer_id) return '<span class="t-chip claimed">Claimed</span>';
   return '<span class="t-chip open">Open</span>';
 }
@@ -117,7 +117,7 @@ const ICON_X = `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><pat
 const ICON_DOC = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 11V3a1 1 0 011-1h6l4 4v5a1 1 0 01-1 1H2a1 1 0 01-1-1z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 2v4h4" stroke="currentColor" stroke-width="1.5"/></svg>`;
 
 function renderActions(t) {
-  if (t && t.status === "closed") {
+  if (t && (t.status === "closed" || t.status === "deleted")) {
     return `
       <div class="td-actions">
         <button class="act-btn" data-action="note">${ICON_NOTE}Add note</button>
@@ -228,7 +228,7 @@ function renderDetail(t, detail) {
     ? renderHistory(detail.history || [])
     : `<div class="empty" style="padding:8px 0;color:var(--ink-mute);font-size:12px">Loading…</div>`;
 
-  const closeSection = t.status === "closed" ? `
+  const closeSection = (t.status === "closed" || t.status === "deleted") ? `
     <div class="td-section">Resolution</div>
     <div class="user-card" style="background:var(--bg-floor)">
       <div class="av" style="background:${avatarColor(t.closed_by || "system")}">${esc(initial(t.closer_name || "·"))}</div>
@@ -276,7 +276,7 @@ const FILTERS = {
     if (!me || !me.user_id) return true;
     return String(t.claimer_id) === String(me.user_id);
   },
-  closed: (t) => t.status === "closed",
+  closed: (t) => t.status === "closed" || t.status === "deleted",
   all:    () => true,
 };
 
@@ -368,7 +368,7 @@ export function mount(container) {
   function renderStats() {
     const open = state.tickets.filter((t) => t.status === "open").length;
     const claimed = state.tickets.filter((t) => t.status === "open" && t.claimer_id).length;
-    const closed = state.tickets.filter((t) => t.status === "closed").length;
+    const closed = state.tickets.filter((t) => t.status === "closed" || t.status === "deleted").length;
     const escalated = state.tickets.filter((t) => t.escalated && t.status === "open").length;
 
     statsEl.innerHTML = `

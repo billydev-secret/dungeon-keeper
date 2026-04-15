@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
@@ -44,6 +43,111 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.events")
+
+
+async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
+    """Walk every readable text channel and store any messages not already in the DB.
+
+    Resumes per-channel from MAX(message_id). If a channel has no stored messages,
+    pulls full history back to channel creation.
+    """
+    for g in bot.guilds:
+        me = g.me
+        guild_count = 0
+        for channel in g.channels:
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            if me and not channel.permissions_for(me).read_message_history:
+                continue
+            with ctx.open_db() as conn:
+                row = conn.execute(
+                    "SELECT MAX(message_id) FROM messages WHERE guild_id = ? AND channel_id = ?",
+                    (g.id, channel.id),
+                ).fetchone()
+            max_id = row[0] if row and row[0] else None
+            history_kwargs: dict = {"limit": None, "oldest_first": True}
+            if max_id:
+                history_kwargs["after"] = discord.Object(id=max_id)
+
+            channel_count = 0
+            batch: list[discord.Message] = []
+            BATCH_SIZE = 200
+
+            def _flush(msgs: list[discord.Message]) -> None:
+                if not msgs:
+                    return
+                with ctx.open_db() as conn:
+                    for msg in msgs:
+                        msg_ts = msg.created_at.timestamp() if msg.created_at else time.time()
+                        sentiment, emotion = score_text(msg.content)
+                        reply_to_id = (
+                            msg.reference.message_id
+                            if msg.reference and msg.reference.message_id
+                            else None
+                        )
+                        store_message(
+                            conn,
+                            message_id=msg.id,
+                            guild_id=g.id,
+                            channel_id=channel.id,
+                            author_id=msg.author.id,
+                            content=msg.content or None,
+                            reply_to_id=reply_to_id,
+                            ts=int(msg_ts),
+                            attachment_urls=[a.url for a in msg.attachments],
+                            mention_ids=[],
+                            sentiment=sentiment,
+                            emotion=emotion,
+                        )
+                        if sentiment is not None:
+                            conn.execute(
+                                "INSERT OR IGNORE INTO message_sentiment "
+                                "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
+                                "VALUES (?, ?, ?, ?, ?, ?)",
+                                (msg.id, g.id, channel.id, sentiment, emotion, msg_ts),
+                            )
+                        upsert_known_user(
+                            conn,
+                            guild_id=g.id,
+                            user_id=msg.author.id,
+                            username=str(msg.author),
+                            display_name=msg.author.display_name,
+                            ts=msg_ts,
+                        )
+
+            try:
+                async for msg in channel.history(**history_kwargs):
+                    batch.append(msg)
+                    channel_count += 1
+                    if len(batch) >= BATCH_SIZE:
+                        _flush(batch)
+                        batch = []
+                _flush(batch)
+            except discord.Forbidden:
+                _flush(batch)
+                continue
+            except Exception:
+                _flush(batch)
+                log.exception(
+                    "Backfill failed in guild %s channel #%s",
+                    format_guild_for_log(g),
+                    getattr(channel, "name", channel.id),
+                )
+                continue
+            if channel_count:
+                log.info(
+                    "Backfilled %d messages in guild %s channel #%s.",
+                    channel_count,
+                    format_guild_for_log(g),
+                    getattr(channel, "name", channel.id),
+                )
+                guild_count += channel_count
+        if guild_count:
+            log.info(
+                "Backfill complete for guild %s: %d messages.",
+                format_guild_for_log(g),
+                guild_count,
+            )
 
 
 def register_events(bot: Bot, ctx: AppContext) -> None:
@@ -120,79 +224,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 len(g.channels),
             )
 
-        # Backfill bot messages missed while offline
-        _seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
-        for g in bot.guilds:
-            me = g.me
-            guild_backfill_count = 0
-            for channel in g.channels:
-                if not isinstance(channel, discord.TextChannel):
-                    continue
-                if me and not channel.permissions_for(me).read_message_history:
-                    continue
-                with ctx.open_db() as conn:
-                    row = conn.execute(
-                        "SELECT MAX(message_id) FROM messages WHERE guild_id = ? AND channel_id = ?",
-                        (g.id, channel.id),
-                    ).fetchone()
-                max_id = row[0] if row and row[0] else None
-                after: discord.abc.Snowflake | datetime = (
-                    discord.Object(id=max_id) if max_id else _seven_days_ago
-                )
-                bot_msgs = []
-                try:
-                    async for msg in channel.history(after=after, limit=None, oldest_first=True):
-                        if msg.author.bot:
-                            bot_msgs.append(msg)
-                except discord.Forbidden:
-                    continue
-                if not bot_msgs:
-                    continue
-                with ctx.open_db() as conn:
-                    for msg in bot_msgs:
-                        msg_ts = msg.created_at.timestamp() if msg.created_at else time.time()
-                        sentiment, emotion = score_text(msg.content)
-                        reply_to_id = (
-                            msg.reference.message_id
-                            if msg.reference and msg.reference.message_id
-                            else None
-                        )
-                        store_message(
-                            conn,
-                            message_id=msg.id,
-                            guild_id=g.id,
-                            channel_id=channel.id,
-                            author_id=msg.author.id,
-                            content=msg.content or None,
-                            reply_to_id=reply_to_id,
-                            ts=int(msg_ts),
-                            attachment_urls=[a.url for a in msg.attachments],
-                            mention_ids=[],
-                            sentiment=sentiment,
-                            emotion=emotion,
-                        )
-                        if sentiment is not None:
-                            conn.execute(
-                                "INSERT OR IGNORE INTO message_sentiment "
-                                "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
-                                "VALUES (?, ?, ?, ?, ?, ?)",
-                                (msg.id, g.id, channel.id, sentiment, emotion, msg_ts),
-                            )
-                        upsert_known_user(
-                            conn,
-                            guild_id=g.id,
-                            user_id=msg.author.id,
-                            username=str(msg.author),
-                            display_name=msg.author.display_name,
-                            ts=msg_ts,
-                        )
-                        guild_backfill_count += 1
-            if guild_backfill_count:
-                log.info(
-                    "Backfilled %d bot messages for guild %s.",
-                    guild_backfill_count,
-                    format_guild_for_log(g),
-                )
+        # Backfill any messages missed while offline (runs in background so on_ready returns)
+        asyncio.create_task(_backfill_messages(bot, ctx))
 
     @bot.event
     async def on_message(message: discord.Message):
