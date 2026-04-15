@@ -329,19 +329,25 @@ export function mount(container) {
 
   const state = {
     tickets: [],
+    closedTickets: null,
     filter: "open",
     activeId: null,
     detailCache: new Map(),
     fetchToken: 0,
   };
 
+  function currentTicketSource() {
+    return state.filter === "closed" ? (state.closedTickets || []) : state.tickets;
+  }
+
   function render() {
-    const filtered = state.tickets.filter(FILTERS[state.filter]);
+    const source = currentTicketSource();
+    const filtered = source.filter(FILTERS[state.filter]);
     if (!filtered.find((t) => t.id === state.activeId)) {
       state.activeId = filtered[0]?.id ?? null;
     }
     listEl.innerHTML = renderList(filtered, state.activeId);
-    const active = state.tickets.find((t) => t.id === state.activeId) || null;
+    const active = source.find((t) => t.id === state.activeId) || null;
     const detail = active ? state.detailCache.get(active.id) : null;
     detailEl.innerHTML = renderDetail(active, detail);
     if (active && !detail) loadDetail(active.id);
@@ -393,11 +399,27 @@ export function mount(container) {
     try {
       const data = await api("/api/moderation/tickets");
       state.tickets = data.tickets || [];
+      state.closedTickets = null;
       renderStats();
-      render();
+      if (state.filter === "closed") {
+        await refreshClosed();
+      } else {
+        render();
+      }
     } catch (err) {
       listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
       detailEl.innerHTML = "";
+    }
+  }
+
+  async function refreshClosed() {
+    listEl.innerHTML = '<div class="empty">Loading…</div>';
+    try {
+      const data = await api("/api/moderation/tickets?status=closed");
+      state.closedTickets = data.tickets || [];
+      render();
+    } catch (err) {
+      listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
     }
   }
 
@@ -407,7 +429,11 @@ export function mount(container) {
     filterGroup.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
     state.filter = btn.dataset.filter;
     state.activeId = null;
-    render();
+    if (state.filter === "closed" && state.closedTickets === null) {
+      refreshClosed();
+    } else {
+      render();
+    }
   });
 
   listEl.addEventListener("click", (e) => {
