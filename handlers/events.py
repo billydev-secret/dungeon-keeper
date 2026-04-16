@@ -27,6 +27,7 @@ from services.message_store import (
     delete_message,
     delete_messages_bulk,
     record_reaction,
+    set_reaction_count,
     store_message,
     upsert_known_channel,
     upsert_known_user,
@@ -45,6 +46,67 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.events")
 
 
+def _discord_embed_to_dict(e: discord.Embed) -> dict:
+    """Serialize a discord.Embed to the canonical dict format used by message_store."""
+    return {
+        "title": e.title,
+        "description": e.description,
+        "url": e.url,
+        "author": e.author.name if e.author else None,
+        "footer": e.footer.text if e.footer else None,
+        "fields": [
+            {"name": f.name, "value": f.value, "inline": f.inline}
+            for f in e.fields
+        ],
+    }
+
+
+def _message_mention_ids(ctx: AppContext, message: discord.Message) -> list[int]:
+    """Return mention IDs using the same bot-filtering rules as live ingestion."""
+    return [
+        user.id
+        for user in message.mentions
+        if (not user.bot or user.id in ctx.recorded_bot_user_ids)
+        and user.id != message.author.id
+    ]
+
+
+async def _collect_backfill_channels(
+    guild: discord.Guild,
+    me: discord.Member | None,
+) -> list[discord.TextChannel | discord.Thread]:
+    """Collect readable text channels plus active and archived threads."""
+    channels: list[discord.TextChannel | discord.Thread] = []
+    seen_ids: set[int] = set()
+
+    for channel in guild.text_channels:
+        if me and not channel.permissions_for(me).read_message_history:
+            continue
+        channels.append(channel)
+        seen_ids.add(channel.id)
+
+        for thread in channel.threads:
+            if thread.id in seen_ids:
+                continue
+            if me and not thread.permissions_for(me).read_message_history:
+                continue
+            channels.append(thread)
+            seen_ids.add(thread.id)
+
+        try:
+            async for archived_thread in channel.archived_threads(limit=None):
+                if archived_thread.id in seen_ids:
+                    continue
+                if me and not archived_thread.permissions_for(me).read_message_history:
+                    continue
+                channels.append(archived_thread)
+                seen_ids.add(archived_thread.id)
+        except (discord.Forbidden, discord.HTTPException):
+            continue
+
+    return channels
+
+
 async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
     """Walk every readable text channel and store any messages not already in the DB.
 
@@ -54,16 +116,15 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
     for g in bot.guilds:
         me = g.me
         guild_count = 0
-        for channel in g.channels:
-            if not isinstance(channel, discord.TextChannel):
-                continue
-            if me and not channel.permissions_for(me).read_message_history:
-                continue
+        for channel in await _collect_backfill_channels(g, me):
             with ctx.open_db() as conn:
                 row = conn.execute(
                     "SELECT MAX(message_id) FROM messages WHERE guild_id = ? AND channel_id = ?",
                     (g.id, channel.id),
                 ).fetchone()
+                channel_has_auto_delete_rule = auto_delete_rule_exists(
+                    conn, g.id, channel.id
+                )
             max_id = row[0] if row and row[0] else None
             history_kwargs: dict = {"limit": None, "oldest_first": True}
             if max_id:
@@ -80,11 +141,22 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                     for msg in msgs:
                         msg_ts = msg.created_at.timestamp() if msg.created_at else time.time()
                         sentiment, emotion = score_text(msg.content)
+                        mention_ids = (
+                            [] if msg.author.bot else _message_mention_ids(ctx, msg)
+                        )
                         reply_to_id = (
                             msg.reference.message_id
                             if msg.reference and msg.reference.message_id
                             else None
                         )
+                        if channel_has_auto_delete_rule:
+                            track_auto_delete_message(
+                                conn,
+                                g.id,
+                                channel.id,
+                                msg.id,
+                                msg_ts,
+                            )
                         store_message(
                             conn,
                             message_id=msg.id,
@@ -95,10 +167,15 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                             reply_to_id=reply_to_id,
                             ts=int(msg_ts),
                             attachment_urls=[a.url for a in msg.attachments],
-                            mention_ids=[],
+                            mention_ids=mention_ids,
                             sentiment=sentiment,
                             emotion=emotion,
+                            embeds=[_discord_embed_to_dict(e) for e in msg.embeds],
                         )
+                        for reaction in msg.reactions:
+                            set_reaction_count(
+                                conn, msg.id, str(reaction.emoji), reaction.count
+                            )
                         if sentiment is not None:
                             conn.execute(
                                 "INSERT OR IGNORE INTO message_sentiment "
@@ -112,6 +189,13 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                             user_id=msg.author.id,
                             username=str(msg.author),
                             display_name=msg.author.display_name,
+                            ts=msg_ts,
+                        )
+                        upsert_known_channel(
+                            conn,
+                            guild_id=g.id,
+                            channel_id=channel.id,
+                            channel_name=getattr(channel, "name", str(channel.id)),
                             ts=msg_ts,
                         )
 
@@ -155,9 +239,19 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
     _anthropic_client = (
         AsyncAnthropic(api_key=_anthropic_api_key) if _anthropic_api_key else None
     )
+    message_backfill_task: asyncio.Task[None] | None = None
+
+    def _log_background_task_result(task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            log.exception("Background message backfill crashed.")
 
     @bot.event
     async def on_ready():
+        nonlocal message_backfill_task
         if bot.user is None:
             log.warning("Bot user was not available during on_ready.")
             return
@@ -225,7 +319,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             )
 
         # Backfill any messages missed while offline (runs in background so on_ready returns)
-        asyncio.create_task(_backfill_messages(bot, ctx))
+        if message_backfill_task is None or message_backfill_task.done():
+            message_backfill_task = asyncio.create_task(_backfill_messages(bot, ctx))
+            message_backfill_task.add_done_callback(_log_background_task_result)
 
     @bot.event
     async def on_message(message: discord.Message):
@@ -266,6 +362,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     mention_ids=[],
                     sentiment=sentiment,
                     emotion=emotion,
+                    embeds=[_discord_embed_to_dict(e) for e in message.embeds],
                 )
                 if sentiment is not None:
                     conn.execute(
@@ -308,11 +405,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             log=log,
         )
 
-        mention_ids = [
-            u.id for u in message.mentions
-            if (not u.bot or u.id in ctx.recorded_bot_user_ids)
-            and u.id != message.author.id
-        ]
+        mention_ids = _message_mention_ids(ctx, message)
 
         if spoiler_deleted:
             return

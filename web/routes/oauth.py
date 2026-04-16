@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 from fastapi import APIRouter, Request
@@ -27,7 +27,17 @@ router = APIRouter()
 
 
 def _base_url() -> str:
-    return os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rstrip("/")
+    raw = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").strip()
+    parts = urlsplit(raw)
+    path = parts.path.rstrip("/")
+    if path.endswith("/callback"):
+        path = path[: -len("/callback")]
+    normalized = urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    return normalized.rstrip("/")
+
+
+def _oauth_redirect_uri() -> str:
+    return f"{_base_url()}/callback"
 
 
 def _is_secure() -> bool:
@@ -47,13 +57,33 @@ def _discord_avatar_url(user_id: int, avatar_hash: str | None) -> str:
 
 
 def _safelisted_return_urls() -> list[str]:
-    """Origins allowed as `return_to` after OAuth callback. Must match scheme+host+port."""
-    return [_base_url()]
+    """Explicitly allowed absolute return-to URLs after OAuth callback."""
+    roots = {_base_url()}
+    extra_urls = os.getenv("DASHBOARD_RETURN_TO_URLS", "")
+    for raw in extra_urls.split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        roots.add(raw.rstrip("/"))
+    return sorted(roots)
 
 
 def _is_safe_return_to(value: str | None) -> bool:
     if not value:
         return False
+    if value.startswith("/"):
+        return True
+
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+
+    base = urlsplit(_base_url())
+    # Allow same-scheme, same-host sibling apps on different ports (for example
+    # a separate wellness panel running on 8079 alongside the main dashboard).
+    if parsed.scheme == base.scheme and parsed.hostname == base.hostname:
+        return True
+
     safelist = _safelisted_return_urls()
     for prefix in safelist:
         if value == prefix or value.startswith(prefix + "/"):
@@ -67,7 +97,7 @@ def _is_safe_return_to(value: str | None) -> bool:
 @router.get("/auth/discord", include_in_schema=False)
 async def auth_discord(request: Request) -> RedirectResponse:
     client_id = os.getenv("DISCORD_CLIENT_ID", "")
-    redirect_uri = f"{_base_url()}/callback"
+    redirect_uri = _oauth_redirect_uri()
     state = secrets.token_urlsafe(32)
 
     url = (
@@ -128,7 +158,7 @@ async def callback(request: Request) -> RedirectResponse:
 
     client_id = os.getenv("DISCORD_CLIENT_ID", "")
     client_secret = os.getenv("DISCORD_CLIENT_SECRET", "")
-    redirect_uri = f"{_base_url()}/callback"
+    redirect_uri = _oauth_redirect_uri()
 
     async with httpx.AsyncClient(timeout=15) as client:
         # 1. Exchange authorization code for access token

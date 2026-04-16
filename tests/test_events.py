@@ -191,6 +191,39 @@ class OnMessageTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# on_ready tests
+# ---------------------------------------------------------------------------
+
+
+class OnReadyTests(unittest.TestCase):
+    def setUp(self):
+        cap = _EventCapture()
+        self.ctx = _make_ctx()
+        register_events(cap.bot, self.ctx)
+        self.on_ready = cap.get("on_ready")
+        cap.bot.user = MagicMock()
+        cap.bot.user.id = 1
+        cap.bot.get_guild = MagicMock(return_value=None)
+        cap.bot.guilds = []
+
+    @patch("handlers.events.asyncio.create_task")
+    def test_on_ready_does_not_spawn_duplicate_backfill_task(self, mock_create_task):
+        running_task = MagicMock()
+        running_task.done.return_value = False
+
+        def _capture_task(coro):
+            coro.close()
+            return running_task
+
+        mock_create_task.side_effect = _capture_task
+
+        _run(self.on_ready())
+        _run(self.on_ready())
+
+        mock_create_task.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # on_raw_message_delete tests
 # ---------------------------------------------------------------------------
 

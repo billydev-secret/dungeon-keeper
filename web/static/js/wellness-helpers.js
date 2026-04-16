@@ -1,8 +1,14 @@
 // Shared helpers for wellness SPA panels.
 
+function redirectToWellnessLogin() {
+  const url = new URL("/auth/discord", window.location.origin);
+  url.searchParams.set("return_to", window.location.href);
+  window.location = url.toString();
+}
+
 export async function wGet(path) {
   const res = await fetch(path, { credentials: "same-origin" });
-  if (res.status === 401) { window.location = "/login"; return new Promise(() => {}); }
+  if (res.status === 401) { redirectToWellnessLogin(); return new Promise(() => {}); }
   if (!res.ok) {
     let detail = res.statusText;
     try { const b = await res.json(); if (b.error) detail = b.error; else if (b.detail) detail = b.detail; } catch (_) {}
@@ -15,7 +21,7 @@ async function _mutate(method, path, body) {
   const opts = { method, credentials: "same-origin", headers: { "Content-Type": "application/json" } };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
-  if (res.status === 401) { window.location = "/login"; return new Promise(() => {}); }
+  if (res.status === 401) { redirectToWellnessLogin(); return new Promise(() => {}); }
   const data = await res.json();
   if (!res.ok || data.ok === false) throw new Error(data.error || data.detail || res.statusText);
   return data;

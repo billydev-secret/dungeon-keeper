@@ -108,7 +108,8 @@ export function mount(container) {
       );
       charts.push(makeBarChart(distCanvas, {
         labels: bucketLabels,
-        datasets: [{ label: "Members", data: d.risk_distribution, backgroundColor: bucketColors }],
+        data: d.risk_distribution,
+        color: bucketColors,
         title: "Risk Score Distribution",
         yLabel: "Members",
         xLabel: "Risk Score",

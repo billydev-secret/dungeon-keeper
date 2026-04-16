@@ -20,7 +20,8 @@ _log = logging.getLogger("dungeonkeeper.web.cache")
 
 # ── Report cache ────────────────────────────────────────────────────────
 
-_report_cache: dict[str, tuple[float, object]] = {}  # key → (expires_at, result)
+_report_cache: dict[str, tuple[float, str, int, object]] = {}
+# key → (expires_at, report_name, guild_id, result)
 _DEFAULT_TTL = 3600  # seconds (1 hour — batch warmer refreshes on the same cadence)
 
 
@@ -47,13 +48,13 @@ async def cached_run_query(
 
     hit = _report_cache.get(key)
     if hit is not None:
-        expires_at, result = hit
+        expires_at, _name, _guild_id, result = hit
         if now < expires_at:
             _log.debug("cache HIT  %s (ttl %.0fs remaining)", name, expires_at - now)
             return result  # type: ignore[return-value]
 
     result = await asyncio.to_thread(fn)
-    _report_cache[key] = (now + ttl, result)
+    _report_cache[key] = (now + ttl, name, guild_id, result)
     _log.debug("cache MISS %s (stored for %ds)", name, ttl)
     return result  # type: ignore[return-value]
 
@@ -70,22 +71,15 @@ def invalidate_report_cache(
         _report_cache.clear()
         return count
 
-    prefix_parts: dict = {}
-    if name is not None:
-        prefix_parts["n"] = name
-    if guild_id is not None:
-        prefix_parts["g"] = guild_id
-
-    # We need to check each key — rebuild and compare partial JSON isn't
-    # practical, so just iterate and match the raw dict values.
-    to_remove = []
-    for key, (_ts, _result) in list(_report_cache.items()):
-        to_remove.append(key)  # conservative: nuke matching guild/name
-    # For a targeted clear, rebuild keys from scratch isn't feasible with
-    # hashed keys, so just clear everything for now (still fast).
-    count = len(_report_cache)
-    _report_cache.clear()
-    return count
+    to_remove = [
+        key
+        for key, (_ts, entry_name, entry_guild_id, _result) in _report_cache.items()
+        if (name is None or entry_name == name)
+        and (guild_id is None or entry_guild_id == guild_id)
+    ]
+    for key in to_remove:
+        _report_cache.pop(key, None)
+    return len(to_remove)
 
 
 def store_report_result(
@@ -97,7 +91,7 @@ def store_report_result(
     proactively so dashboard page loads are always instant.
     """
     key = _make_cache_key(name, guild_id, params)
-    _report_cache[key] = (time.monotonic() + ttl, result)
+    _report_cache[key] = (time.monotonic() + ttl, name, guild_id, result)
 
 
 def get_ctx(request: Request):

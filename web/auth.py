@@ -60,7 +60,7 @@ class OpenAuth:
     is reachable from an untrusted network.
     """
 
-    _ALL_PERMS = frozenset({"admin", "moderator"})
+    _ALL_PERMS = frozenset({"admin", "moderator", "manage_server"})
 
     async def authenticate(self, request: Request) -> AuthenticatedUser:
         return AuthenticatedUser(

@@ -54,24 +54,24 @@ def _require_primary_guild(request: Request) -> None:
 # ── Read helpers ───────────────────────────────────────────────────────
 
 
-def _id_set_list(conn, bucket: str) -> list[int]:
-    return sorted(get_config_id_set(conn, bucket))
+def _id_set_list(conn, bucket: str, guild_id: int) -> list[int]:
+    return sorted(get_config_id_set(conn, bucket, guild_id))
 
 
-def _int_val(conn, key: str, default: int = 0) -> int:
-    raw = get_config_value(conn, key, str(default))
+def _int_val(conn, key: str, default: int = 0, guild_id: int = 0) -> int:
+    raw = get_config_value(conn, key, str(default), guild_id)
     try:
         return int(raw)
     except (TypeError, ValueError):
         return default
 
 
-def _str_val(conn, key: str, default: str = "") -> str:
-    return get_config_value(conn, key, default)
+def _str_val(conn, key: str, default: str = "", guild_id: int = 0) -> str:
+    return get_config_value(conn, key, default, guild_id)
 
 
-def _float_val(conn, key: str, default: float = 0.0) -> float:
-    raw = get_config_value(conn, key, str(default))
+def _float_val(conn, key: str, default: float = 0.0, guild_id: int = 0) -> float:
+    raw = get_config_value(conn, key, str(default), guild_id)
     try:
         return float(raw)
     except (TypeError, ValueError):
@@ -180,45 +180,80 @@ async def get_config(
 
             return {
                 "global": {
-                    "guild_id": _int_val(conn, "guild_id"),
-                    "tz_offset_hours": _float_val(conn, "tz_offset_hours"),
-                    "mod_channel_id": str(_int_val(conn, "mod_channel_id")),
+                    "guild_id": _int_val(conn, "guild_id", guild_id=guild_id),
+                    "tz_offset_hours": _float_val(
+                        conn, "tz_offset_hours", guild_id=guild_id
+                    ),
+                    "mod_channel_id": str(
+                        _int_val(conn, "mod_channel_id", guild_id=guild_id)
+                    ),
                     "bypass_role_ids": [
-                        str(i) for i in _id_set_list(conn, "bypass_role_ids")
+                        str(i) for i in _id_set_list(conn, "bypass_role_ids", guild_id)
                     ],
                     "recorded_bot_user_ids": [
-                        str(i) for i in _id_set_list(conn, "recorded_bot_user_ids")
+                        str(i)
+                        for i in _id_set_list(
+                            conn, "recorded_bot_user_ids", guild_id
+                        )
                     ],
-                    "booster_swatch_dir": _str_val(conn, "booster_swatch_dir"),
+                    "booster_swatch_dir": _str_val(
+                        conn, "booster_swatch_dir", guild_id=guild_id
+                    ),
                 },
                 "welcome": {
-                    "welcome_channel_id": str(_int_val(conn, "welcome_channel_id")),
+                    "welcome_channel_id": str(
+                        _int_val(conn, "welcome_channel_id", guild_id=guild_id)
+                    ),
                     "welcome_message": _str_val(
-                        conn, "welcome_message", DEFAULT_WELCOME_MESSAGE
+                        conn,
+                        "welcome_message",
+                        DEFAULT_WELCOME_MESSAGE,
+                        guild_id=guild_id,
                     ),
-                    "welcome_ping_role_id": str(_int_val(conn, "welcome_ping_role_id")),
-                    "leave_channel_id": str(_int_val(conn, "leave_channel_id")),
+                    "welcome_ping_role_id": str(
+                        _int_val(conn, "welcome_ping_role_id", guild_id=guild_id)
+                    ),
+                    "leave_channel_id": str(
+                        _int_val(conn, "leave_channel_id", guild_id=guild_id)
+                    ),
                     "leave_message": _str_val(
-                        conn, "leave_message", DEFAULT_LEAVE_MESSAGE
+                        conn,
+                        "leave_message",
+                        DEFAULT_LEAVE_MESSAGE,
+                        guild_id=guild_id,
                     ),
-                    "greeter_role_id": str(_int_val(conn, "greeter_role_id")),
+                    "greeter_role_id": str(
+                        _int_val(conn, "greeter_role_id", guild_id=guild_id)
+                    ),
                     "greeter_chat_channel_id": str(
-                        _int_val(conn, "greeter_chat_channel_id")
+                        _int_val(conn, "greeter_chat_channel_id", guild_id=guild_id)
                     ),
                 },
                 "xp": {
-                    "level_5_role_id": str(_int_val(conn, "xp_level_5_role_id")),
+                    "level_5_role_id": str(
+                        _int_val(conn, "xp_level_5_role_id", guild_id=guild_id)
+                    ),
                     "level_5_log_channel_id": str(
-                        _int_val(conn, "xp_level_5_log_channel_id")
+                        _int_val(
+                            conn, "xp_level_5_log_channel_id", guild_id=guild_id
+                        )
                     ),
                     "level_up_log_channel_id": str(
-                        _int_val(conn, "xp_level_up_log_channel_id")
+                        _int_val(
+                            conn, "xp_level_up_log_channel_id", guild_id=guild_id
+                        )
                     ),
                     "xp_grant_allowed_user_ids": [
-                        str(i) for i in _id_set_list(conn, "xp_grant_allowed_user_ids")
+                        str(i)
+                        for i in _id_set_list(
+                            conn, "xp_grant_allowed_user_ids", guild_id
+                        )
                     ],
                     "xp_excluded_channel_ids": [
-                        str(i) for i in _id_set_list(conn, "xp_excluded_channel_ids")
+                        str(i)
+                        for i in _id_set_list(
+                            conn, "xp_excluded_channel_ids", guild_id
+                        )
                     ],
                     # Algorithm coefficients (loaded with defaults)
                     **_xp_coefficients(conn, guild_id),
@@ -232,23 +267,43 @@ async def get_config(
                 },
                 "spoiler": {
                     "spoiler_required_channels": [
-                        str(i) for i in _id_set_list(conn, "spoiler_required_channels")
+                        str(i)
+                        for i in _id_set_list(
+                            conn, "spoiler_required_channels", guild_id
+                        )
                     ],
                 },
                 "moderation": {
-                    "jailed_role_id": str(_int_val(conn, "jailed_role_id")),
-                    "jail_category_id": str(_int_val(conn, "jail_category_id")),
-                    "ticket_category_id": str(_int_val(conn, "ticket_category_id")),
-                    "log_channel_id": str(_int_val(conn, "log_channel_id")),
+                    "jailed_role_id": str(
+                        _int_val(conn, "jailed_role_id", guild_id=guild_id)
+                    ),
+                    "jail_category_id": str(
+                        _int_val(conn, "jail_category_id", guild_id=guild_id)
+                    ),
+                    "ticket_category_id": str(
+                        _int_val(conn, "ticket_category_id", guild_id=guild_id)
+                    ),
+                    "log_channel_id": str(
+                        _int_val(conn, "log_channel_id", guild_id=guild_id)
+                    ),
                     "transcript_channel_id": str(
-                        _int_val(conn, "transcript_channel_id")
+                        _int_val(conn, "transcript_channel_id", guild_id=guild_id)
                     ),
-                    "mod_role_ids": _str_val(conn, "mod_role_ids"),
-                    "admin_role_ids": _str_val(conn, "admin_role_ids"),
+                    "mod_role_ids": _str_val(
+                        conn, "mod_role_ids", guild_id=guild_id
+                    ),
+                    "admin_role_ids": _str_val(
+                        conn, "admin_role_ids", guild_id=guild_id
+                    ),
                     "ticket_notify_on_create": _str_val(
-                        conn, "ticket_notify_on_create", "1"
+                        conn,
+                        "ticket_notify_on_create",
+                        "1",
+                        guild_id=guild_id,
                     ),
-                    "warning_threshold": _int_val(conn, "warning_threshold", 3),
+                    "warning_threshold": _int_val(
+                        conn, "warning_threshold", 3, guild_id=guild_id
+                    ),
                 },
                 "roles": {
                     name: {

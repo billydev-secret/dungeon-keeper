@@ -570,12 +570,19 @@ def get_activity_data(
 # ---------------------------------------------------------------------------
 
 
+class InviteeRow(TypedDict):
+    invitee_id: str
+    invitee_name: str
+    active: bool
+
+
 class InviterRow(TypedDict):
     inviter_id: str
     inviter_name: str
     invite_count: int
     still_active: int
     retention_pct: float
+    invitees: list[InviteeRow]
 
 
 class InviteEffectivenessData(TypedDict):
@@ -650,6 +657,10 @@ def get_invite_effectiveness_data(
                 "invite_count": count,
                 "still_active": active,
                 "retention_pct": round(active / count * 100, 1) if count else 0.0,
+                "invitees": [
+                    {"invitee_id": str(iid), "invitee_name": "", "active": iid in active_set}
+                    for iid in invitees
+                ],
             }
         )
 

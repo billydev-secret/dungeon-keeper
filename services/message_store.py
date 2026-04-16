@@ -9,7 +9,23 @@ and the /interaction_scan backfill without creating duplicates.
 
 from __future__ import annotations
 
+import json
 import sqlite3
+
+
+def _flatten_embeds(embeds: list[dict]) -> str | None:
+    """Flatten embed dicts into a single searchable text string."""
+    parts = []
+    for e in embeds:
+        for key in ("title", "description", "author", "footer"):
+            if e.get(key):
+                parts.append(e[key])
+        for field in e.get("fields") or []:
+            if field.get("name"):
+                parts.append(field["name"])
+            if field.get("value"):
+                parts.append(field["value"])
+    return "\n".join(parts) if parts else None
 
 
 def init_message_tables(conn: sqlite3.Connection) -> None:
@@ -85,6 +101,22 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
             emoji       TEXT NOT NULL,
             count       INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (message_id, emoji)
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS message_embeds (
+            message_id  INTEGER NOT NULL,
+            embed_index INTEGER NOT NULL,
+            title       TEXT,
+            description TEXT,
+            url         TEXT,
+            author_name TEXT,
+            footer_text TEXT,
+            fields_json TEXT,
+            PRIMARY KEY (message_id, embed_index)
         )
         """
     )
@@ -245,8 +277,19 @@ def store_message(
     mention_ids: list[int],
     sentiment: float | None = None,
     emotion: str | None = None,
+    embeds: list[dict] = (),
 ) -> None:
-    """Store a message and its related data. Silently skips if already stored."""
+    """Store a message and its related data. Silently skips if already stored.
+
+    ``embeds`` is a list of embed dicts with keys: title, description, url,
+    author, footer, fields (list of {name, value, inline}).  When ``content``
+    is None and embeds are present, the flattened embed text is used as content
+    so embed-only bot messages remain searchable.
+    """
+    # Use flattened embed text as searchable content for embed-only messages.
+    if content is None and embeds:
+        content = _flatten_embeds(list(embeds))
+
     conn.execute(
         """
         INSERT OR IGNORE INTO messages
@@ -274,6 +317,24 @@ def store_message(
         conn.execute(
             "INSERT OR IGNORE INTO message_mentions (message_id, user_id) VALUES (?, ?)",
             (message_id, user_id),
+        )
+    for idx, embed in enumerate(embeds):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO message_embeds
+                (message_id, embed_index, title, description, url, author_name, footer_text, fields_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_id,
+                idx,
+                embed.get("title"),
+                embed.get("description"),
+                embed.get("url"),
+                embed.get("author"),
+                embed.get("footer"),
+                json.dumps(embed.get("fields") or []),
+            ),
         )
 
 

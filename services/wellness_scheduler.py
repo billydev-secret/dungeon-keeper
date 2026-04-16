@@ -169,7 +169,9 @@ async def _credit_clean_days(bot: discord.Client, db_path: Path) -> None:
             if u.is_paused:
                 continue
             now_local = user_now(u.timezone)
-            if now_local.hour != u.daily_reset_hour:
+            # Catch up later in the same local day if the bot was offline or the
+            # minute-level tick missed the exact reset boundary.
+            if now_local.hour < u.daily_reset_hour:
                 continue
             today_iso = now_local.date().isoformat()
             with open_db(db_path) as conn:

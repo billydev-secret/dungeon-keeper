@@ -587,6 +587,12 @@ async def invite_effectiveness(
     _resolve_names(
         ctx, guild, result.get("inviters", []), ("inviter_id", "inviter_name")
     )
+    all_invitees = [
+        invitee
+        for inviter in result.get("inviters", [])
+        for invitee in inviter.get("invitees", [])
+    ]
+    _resolve_names(ctx, guild, all_invitees, ("invitee_id", "invitee_name"))
     return result
 
 
