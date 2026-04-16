@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sqlite3
 import statistics
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal, TypedDict
@@ -338,17 +339,29 @@ class ResponseBucket(TypedDict):
     count: int
 
 
+class GreeterSession(TypedDict):
+    user_id: int
+    joined_at: float
+    left_at: float | None
+
+
 class GreeterResponseEntry(TypedDict):
     user_id: str
     joined_at: float
-    response_seconds: float
+    status: str
+    greeted_at: float | None
+    response_seconds: float | None
+    wait_seconds: float | None
     greeter_id: str
+    left_at: float | None
 
 
 class GreeterResponseData(TypedDict):
     window_label: str
     total_joins: int
     count: int
+    left_before_greeting_count: int
+    awaiting_greeting_count: int
     median_seconds: float
     mean_seconds: float
     histogram: list[ResponseBucket]
@@ -356,67 +369,210 @@ class GreeterResponseData(TypedDict):
     entries: list[GreeterResponseEntry]
 
 
+_JOIN_MARKERS = (
+    " just showed up",
+    " joined the server",
+    " just joined",
+)
+
+_LEAVE_MARKERS = (
+    " has left the server",
+    " left the server",
+    " just left",
+)
+
+
+def _greeter_log_event_type(text: str | None) -> str | None:
+    if not text:
+        return None
+    normalized = " ".join(text.strip().lower().split())
+    if not normalized:
+        return None
+    if any(marker in normalized for marker in _JOIN_MARKERS):
+        return "join"
+    if any(marker in normalized for marker in _LEAVE_MARKERS):
+        return "leave"
+    return None
+
+
+def get_greeter_log_sessions(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    log_channel_id: int,
+    *,
+    since_ts: float = 0.0,
+) -> list[GreeterSession]:
+    rows = conn.execute(
+        """
+        SELECT
+            m.author_id,
+            m.ts,
+            m.content,
+            e.description,
+            e.author_name,
+            e.footer_text
+        FROM messages m
+        LEFT JOIN message_embeds e
+            ON e.message_id = m.message_id AND e.embed_index = 0
+        WHERE m.guild_id = ? AND m.channel_id = ? AND m.ts >= ?
+        ORDER BY m.ts
+        """,
+        (guild_id, log_channel_id, since_ts),
+    ).fetchall()
+
+    joins_by_user: dict[int, list[float]] = defaultdict(list)
+    leaves_by_user: dict[int, list[float]] = defaultdict(list)
+
+    for row in rows:
+        text = next(
+            (
+                part
+                for part in (
+                    row["content"],
+                    row["description"],
+                    row["author_name"],
+                    row["footer_text"],
+                )
+                if part
+            ),
+            None,
+        )
+        event_type = _greeter_log_event_type(text)
+        if event_type == "join":
+            joins_by_user[int(row["author_id"])].append(float(row["ts"]))
+        elif event_type == "leave":
+            leaves_by_user[int(row["author_id"])].append(float(row["ts"]))
+
+    sessions: list[GreeterSession] = []
+    for user_id, join_times in joins_by_user.items():
+        joins = sorted(join_times)
+        leaves = sorted(leaves_by_user.get(user_id, []))
+        leave_idx = 0
+
+        for idx, joined_at in enumerate(joins):
+            while leave_idx < len(leaves) and leaves[leave_idx] <= joined_at:
+                leave_idx += 1
+
+            next_join = joins[idx + 1] if idx + 1 < len(joins) else None
+            left_at: float | None = None
+            if leave_idx < len(leaves):
+                candidate = leaves[leave_idx]
+                if next_join is None or candidate < next_join:
+                    left_at = candidate
+                    leave_idx += 1
+
+            sessions.append(
+                {
+                    "user_id": user_id,
+                    "joined_at": joined_at,
+                    "left_at": left_at,
+                }
+            )
+
+    sessions.sort(key=lambda session: session["joined_at"])
+    return sessions
+
+
 def _query_greeter_response_details(
     conn: sqlite3.Connection,
     guild_id: int,
-    welcome_channel_id: int,
+    greeter_channel_id: int,
     greeter_ids: set[int],
-    join_times: dict[int, float],
+    sessions: list[GreeterSession],
+    *,
+    now_ts: float,
 ) -> list[GreeterResponseEntry]:
-    """Match each joiner to the first available greeter message after their join.
-
-    Uses greedy 1:1 matching — each greeter message can only be claimed by one
-    joiner (the earliest unmatched joiner it follows). A greeter's own join is
-    never matched to their own message.
-    """
-    if not greeter_ids or not join_times:
+    if not sessions:
         return []
 
-    placeholders = ",".join("?" * len(greeter_ids))
-    greeter_msgs = conn.execute(
-        f"""
-        SELECT author_id, ts FROM messages
-        WHERE guild_id = ? AND channel_id = ?
-          AND author_id IN ({placeholders})
-        ORDER BY ts
-        """,
-        (guild_id, welcome_channel_id, *greeter_ids),
-    ).fetchall()
+    if greeter_ids:
+        placeholders = ",".join("?" * len(greeter_ids))
+        greeter_msgs = conn.execute(
+            f"""
+            SELECT author_id, ts FROM messages
+            WHERE guild_id = ? AND channel_id = ?
+              AND author_id IN ({placeholders})
+            ORDER BY ts
+            """,
+            (guild_id, greeter_channel_id, *greeter_ids),
+        ).fetchall()
+    else:
+        greeter_msgs = conn.execute(
+            """
+            SELECT author_id, ts FROM messages
+            WHERE guild_id = ? AND channel_id = ?
+            ORDER BY ts
+            """,
+            (guild_id, greeter_channel_id),
+        ).fetchall()
 
-    if not greeter_msgs:
-        return []
-
-    greeter_times = [(int(r[0]), int(r[1])) for r in greeter_msgs]
-
-    # Sort joins chronologically for greedy matching
-    sorted_joins = sorted(join_times.items(), key=lambda kv: kv[1])
+    greeter_times = [(int(r[0]), float(r[1])) for r in greeter_msgs]
 
     entries: list[GreeterResponseEntry] = []
-    msg_idx = 0  # next unconsumed greeter message
+    msg_idx = 0
 
-    for user_id, joined_at in sorted_joins:
-        # Advance past any greeter messages before this join
+    for session in sessions:
+        user_id = session["user_id"]
+        joined_at = session["joined_at"]
+        left_at = session["left_at"]
+
         while msg_idx < len(greeter_times) and greeter_times[msg_idx][1] < joined_at:
             msg_idx += 1
 
-        # Find the next unconsumed greeter message NOT authored by the joiner
+        matched = False
         scan = msg_idx
         while scan < len(greeter_times):
             author_id, msg_ts = greeter_times[scan]
+            if left_at is not None and msg_ts >= left_at:
+                break
             if author_id != user_id:
                 delta = max(0, msg_ts - joined_at)
                 entries.append(
                     {
                         "user_id": str(user_id),
                         "joined_at": joined_at,
+                        "status": "greeted",
+                        "greeted_at": msg_ts,
                         "response_seconds": delta,
+                        "wait_seconds": delta,
                         "greeter_id": str(author_id),
+                        "left_at": left_at,
                     }
                 )
-                # Consume this message and all prior ones up to it
                 msg_idx = scan + 1
+                matched = True
                 break
             scan += 1
+
+        if matched:
+            continue
+
+        if left_at is not None:
+            entries.append(
+                {
+                    "user_id": str(user_id),
+                    "joined_at": joined_at,
+                    "status": "left_before_greeting",
+                    "greeted_at": None,
+                    "response_seconds": None,
+                    "wait_seconds": max(0, left_at - joined_at),
+                    "greeter_id": "",
+                    "left_at": left_at,
+                }
+            )
+        else:
+            entries.append(
+                {
+                    "user_id": str(user_id),
+                    "joined_at": joined_at,
+                    "status": "awaiting_greeting",
+                    "greeted_at": None,
+                    "response_seconds": None,
+                    "wait_seconds": max(0, now_ts - joined_at),
+                    "greeter_id": "",
+                    "left_at": None,
+                }
+            )
 
     return entries
 
@@ -424,18 +580,26 @@ def _query_greeter_response_details(
 def get_greeter_response_data(
     conn: sqlite3.Connection,
     guild_id: int,
-    welcome_channel_id: int,
+    greeter_channel_id: int,
     greeter_ids: set[int],
-    join_times: dict[int, float],
+    sessions: list[GreeterSession],
+    *,
+    now_ts: float | None = None,
 ) -> GreeterResponseData:
+    now_ts = now_ts or datetime.now(timezone.utc).timestamp()
     entries = _query_greeter_response_details(
         conn,
         guild_id,
-        welcome_channel_id,
+        greeter_channel_id,
         greeter_ids,
-        join_times,
+        sessions,
+        now_ts=now_ts,
     )
-    response_times = [e["response_seconds"] for e in entries]
+    response_times = [
+        float(entry["response_seconds"])
+        for entry in entries
+        if entry["response_seconds"] is not None
+    ]
 
     bucket_counts = [0] * len(_RESPONSE_BUCKETS)
     for t in response_times:
@@ -447,12 +611,18 @@ def get_greeter_response_data(
     med = statistics.median(response_times) if response_times else 0.0
     avg = statistics.mean(response_times) if response_times else 0.0
 
-    entries.sort(key=lambda e: e["joined_at"], reverse=True)
+    entries.sort(key=lambda entry: entry["joined_at"], reverse=True)
 
     return {
         "window_label": "All Time",
-        "total_joins": len(join_times),
+        "total_joins": len(sessions),
         "count": len(response_times),
+        "left_before_greeting_count": sum(
+            1 for entry in entries if entry["status"] == "left_before_greeting"
+        ),
+        "awaiting_greeting_count": sum(
+            1 for entry in entries if entry["status"] == "awaiting_greeting"
+        ),
         "median_seconds": med,
         "mean_seconds": avg,
         "histogram": [

@@ -71,6 +71,22 @@ def _message_mention_ids(ctx: AppContext, message: discord.Message) -> list[int]
     ]
 
 
+def _archived_message_content(message: discord.Message) -> str | None:
+    """Return the best searchable content for archival, including system messages."""
+    if message.content:
+        return message.content
+    system_content = (getattr(message, "system_content", "") or "").strip()
+    return system_content or None
+
+
+def _counts_as_member_activity(message: discord.Message) -> bool:
+    """True for normal conversational messages that should affect activity and XP."""
+    return message.type in {
+        discord.MessageType.default,
+        discord.MessageType.reply,
+    }
+
+
 async def _collect_backfill_channels(
     guild: discord.Guild,
     me: discord.Member | None,
@@ -163,7 +179,7 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                             guild_id=g.id,
                             channel_id=channel.id,
                             author_id=msg.author.id,
-                            content=msg.content or None,
+                            content=_archived_message_content(msg),
                             reply_to_id=reply_to_id,
                             ts=int(msg_ts),
                             attachment_urls=[a.url for a in msg.attachments],
@@ -355,7 +371,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     guild_id=message.guild.id,
                     channel_id=message.channel.id,
                     author_id=message.author.id,
-                    content=message.content or None,
+                    content=_archived_message_content(message),
                     reply_to_id=reply_to_id,
                     ts=int(message_ts),
                     attachment_urls=attachment_urls,
@@ -395,6 +411,50 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 )
                 velocity_tracker.record_message(
                     conn, message.guild.id, message.channel.id, ts=message_ts
+                )
+            return
+
+        archive_content = _archived_message_content(message)
+        if not _counts_as_member_activity(message):
+            mention_ids = _message_mention_ids(ctx, message)
+            with ctx.open_db() as conn:
+                if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+                    track_auto_delete_message(
+                        conn,
+                        message.guild.id,
+                        message.channel.id,
+                        message.id,
+                        message_ts,
+                    )
+                store_message(
+                    conn,
+                    message_id=message.id,
+                    guild_id=message.guild.id,
+                    channel_id=message.channel.id,
+                    author_id=message.author.id,
+                    content=archive_content,
+                    reply_to_id=reply_to_id,
+                    ts=int(message_ts),
+                    attachment_urls=attachment_urls,
+                    mention_ids=mention_ids,
+                    embeds=[_discord_embed_to_dict(e) for e in message.embeds],
+                )
+                upsert_known_user(
+                    conn,
+                    guild_id=message.guild.id,
+                    user_id=message.author.id,
+                    username=str(message.author),
+                    display_name=message.author.display_name,
+                    ts=message_ts,
+                )
+                upsert_known_channel(
+                    conn,
+                    guild_id=message.guild.id,
+                    channel_id=message.channel.id,
+                    channel_name=getattr(
+                        message.channel, "name", str(message.channel.id)
+                    ),
+                    ts=message_ts,
                 )
             return
 
@@ -441,13 +501,14 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 guild_id=message.guild.id,
                 channel_id=message.channel.id,
                 author_id=message.author.id,
-                content=message.content or None,
+                content=archive_content,
                 reply_to_id=reply_to_id,
                 ts=int(message_ts),
                 attachment_urls=attachment_urls,
                 mention_ids=mention_ids,
                 sentiment=sentiment,
                 emotion=emotion,
+                embeds=[_discord_embed_to_dict(e) for e in message.embeds],
             )
 
             # Also populate message_sentiment table for health dashboard

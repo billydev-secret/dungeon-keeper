@@ -67,6 +67,7 @@ class RuntimeConfig(TypedDict):
     xp_level_up_log_channel_id: int
     greeter_role_id: int
     greeter_chat_channel_id: int
+    join_leave_log_channel_id: int
     spoiler_required_channels: set[int]
     bypass_role_ids: set[int]
     xp_grant_allowed_user_ids: set[int]
@@ -91,6 +92,9 @@ def load_runtime_config(db_path: Path, *, debug: bool) -> RuntimeConfig:
             guild_id = _parse_int_config(
                 os.environ.get("GUILD_ID", "0"), key="GUILD_ID"
             )
+        leave_channel_id = _parse_int_config(
+            get_config_value(conn, "leave_channel_id", "0"), key="leave_channel_id"
+        )
 
         return {
             "guild_id": guild_id,
@@ -117,6 +121,15 @@ def load_runtime_config(db_path: Path, *, debug: bool) -> RuntimeConfig:
                 get_config_value(conn, "greeter_chat_channel_id", "0"),
                 key="greeter_chat_channel_id",
             ),
+            "join_leave_log_channel_id": _parse_int_config(
+                get_config_value(
+                    conn,
+                    "join_leave_log_channel_id",
+                    str(leave_channel_id),
+                ),
+                key="join_leave_log_channel_id",
+                default=leave_channel_id,
+            ),
             "spoiler_required_channels": get_config_id_set(
                 conn, "spoiler_required_channels"
             ),
@@ -141,9 +154,7 @@ def load_runtime_config(db_path: Path, *, debug: bool) -> RuntimeConfig:
                 get_config_value(conn, "welcome_ping_role_id", "0"),
                 key="welcome_ping_role_id",
             ),
-            "leave_channel_id": _parse_int_config(
-                get_config_value(conn, "leave_channel_id", "0"), key="leave_channel_id"
-            ),
+            "leave_channel_id": leave_channel_id,
             "leave_message": get_config_value(
                 conn, "leave_message", DEFAULT_LEAVE_MESSAGE
             ),
@@ -261,6 +272,7 @@ class AppContext:
     level_up_log_channel_id: int
     greeter_role_id: int
     greeter_chat_channel_id: int
+    join_leave_log_channel_id: int
     welcome_channel_id: int
     welcome_message: str
     welcome_ping_role_id: int

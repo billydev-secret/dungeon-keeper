@@ -131,15 +131,21 @@ class GreeterResponseEntry(BaseModel):
     user_id: str
     user_name: str = ""
     joined_at: float
-    response_seconds: float
-    greeter_id: str
+    status: str = "greeted"
+    greeted_at: float | None = None
+    response_seconds: float | None = None
+    wait_seconds: float | None = None
+    greeter_id: str = ""
     greeter_name: str = ""
+    left_at: float | None = None
 
 
 class GreeterResponseResponse(BaseModel):
     window_label: str
     total_joins: int = 0
     count: int
+    left_before_greeting_count: int = 0
+    awaiting_greeting_count: int = 0
     median_seconds: float
     mean_seconds: float
     histogram: list[ResponseBucketSchema]

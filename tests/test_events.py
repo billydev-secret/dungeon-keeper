@@ -75,12 +75,20 @@ def _make_message(
     author = MagicMock(spec=discord.Member)
     author.bot = is_bot
     author.id = author_id
+    author.display_name = f"user-{author_id}"
     msg.author = author
     msg.guild = guild
     msg.id = message_id
     channel = MagicMock()
     channel.id = channel_id
     msg.channel = channel
+    msg.content = ""
+    msg.system_content = ""
+    msg.mentions = []
+    msg.embeds = []
+    msg.attachments = []
+    msg.reference = None
+    msg.type = discord.MessageType.default
     msg.created_at = MagicMock()
     msg.created_at.timestamp = MagicMock(return_value=1_000_000.0)
     return msg
@@ -188,6 +196,33 @@ class OnMessageTests(unittest.TestCase):
         msg.author.id = 50
         _run(self.on_message(msg))
         mock_level.assert_awaited_once()
+
+    @patch("handlers.events.store_message")
+    @patch("handlers.events.record_member_activity")
+    @patch("handlers.events.auto_delete_rule_exists", return_value=False)
+    @patch("handlers.events.award_message_xp", new_callable=AsyncMock)
+    @patch("handlers.events.enforce_spoiler_requirement", new_callable=AsyncMock)
+    def test_system_message_archives_system_content_without_activity_or_xp(
+        self,
+        mock_spoiler,
+        mock_award,
+        mock_rule_exists,
+        mock_activity,
+        mock_store,
+    ):
+        msg = _make_message()
+        msg.content = ""
+        msg.system_content = "bakedlays just showed up!"
+        msg.type = discord.MessageType.new_member
+
+        _run(self.on_message(msg))
+
+        mock_spoiler.assert_not_awaited()
+        mock_activity.assert_not_called()
+        mock_award.assert_not_awaited()
+        self.assertEqual(
+            mock_store.call_args.kwargs["content"], "bakedlays just showed up!"
+        )
 
 
 # ---------------------------------------------------------------------------

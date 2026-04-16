@@ -292,9 +292,20 @@ def store_message(
 
     conn.execute(
         """
-        INSERT OR IGNORE INTO messages
+        INSERT INTO messages
             (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts, sentiment, emotion)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(message_id) DO UPDATE SET
+            content = CASE
+                WHEN (messages.content IS NULL OR messages.content = '')
+                     AND excluded.content IS NOT NULL
+                     AND excluded.content <> ''
+                THEN excluded.content
+                ELSE messages.content
+            END,
+            reply_to_id = COALESCE(messages.reply_to_id, excluded.reply_to_id),
+            sentiment = COALESCE(excluded.sentiment, messages.sentiment),
+            emotion = COALESCE(excluded.emotion, messages.emotion)
         """,
         (
             message_id,

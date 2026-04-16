@@ -358,7 +358,14 @@ async def greeter_response(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
 
-    welcome_channel_id = getattr(ctx, "welcome_channel_id", 0)
+    greeter_channel_id = (
+        getattr(ctx, "greeter_chat_channel_id", 0)
+        or getattr(ctx, "welcome_channel_id", 0)
+    )
+    log_channel_id = (
+        getattr(ctx, "join_leave_log_channel_id", 0)
+        or getattr(ctx, "leave_channel_id", 0)
+    )
     greeter_role_id = getattr(ctx, "greeter_role_id", 0)
 
     from datetime import datetime, timedelta, timezone
@@ -369,7 +376,6 @@ async def greeter_response(
 
     def _q():
         greeter_ids: set[int] = set()
-        join_map: dict[int, float] = {}
 
         with ctx.open_db() as conn:
             # Resolve greeter IDs: live guild cache first, then DB fallback
@@ -403,60 +409,37 @@ async def greeter_response(
                     ).fetchall()
                     greeter_ids = {int(r[0]) for r in rows}
 
-            # Broader fallback: frequent posters in the welcome channel
+            # Broader fallback: frequent greeters in the configured greeter channel.
             # (at least 5 messages — filters out one-time joiners posting intros)
-            if not greeter_ids and welcome_channel_id:
+            if not greeter_ids and greeter_channel_id:
                 rows = conn.execute(
                     """
                     SELECT author_id, COUNT(*) AS cnt FROM messages
                     WHERE guild_id = ? AND channel_id = ? AND ts >= ?
                     GROUP BY author_id HAVING cnt >= 5
                     """,
-                    (guild_id, welcome_channel_id, cutoff_ts),
+                    (guild_id, greeter_channel_id, cutoff_ts),
                 ).fetchall()
                 greeter_ids = {int(r[0]) for r in rows}
 
-            if not greeter_ids:
+            if not greeter_ids or greeter_channel_id <= 0 or log_channel_id <= 0:
                 return None
 
-            # Join times: invite_edges first, then role_events first-grant fallback
-            rows = conn.execute(
-                "SELECT invitee_id, joined_at FROM invite_edges WHERE guild_id = ? AND joined_at >= ?",
-                (guild_id, cutoff_ts),
-            ).fetchall()
-            for r in rows:
-                join_map[int(r[0])] = float(r[1])
-
-            if not join_map:
-                # Fallback: first role grant per user as join proxy
-                rows = conn.execute(
-                    """SELECT user_id, MIN(granted_at) AS first_grant
-                       FROM role_events
-                       WHERE guild_id = ? AND action = 'grant' AND granted_at >= ?
-                       GROUP BY user_id""",
-                    (guild_id, cutoff_ts),
-                ).fetchall()
-                for r in rows:
-                    join_map[int(r[0])] = float(r[1])
-
-            # Supplement with live guild members if available
-            if guild:
-                for m in guild.members:
-                    if m.bot or not m.joined_at:
-                        continue
-                    ts = m.joined_at.timestamp()
-                    if ts >= cutoff_ts:
-                        join_map.setdefault(m.id, ts)
-
-            if not join_map:
+            sessions = reports_data.get_greeter_log_sessions(
+                conn,
+                guild_id,
+                log_channel_id,
+                since_ts=cutoff_ts,
+            )
+            if not sessions:
                 return None
 
             data = reports_data.get_greeter_response_data(
                 conn,
                 guild_id,
-                welcome_channel_id,
+                greeter_channel_id,
                 greeter_ids,
-                join_map,
+                sessions,
             )
 
         if days is not None:
@@ -469,7 +452,7 @@ async def greeter_response(
         {"days": days},
         _q,
     )
-    if result is None or result["count"] == 0:
+    if result is None or result["total_joins"] == 0:
         raise HTTPException(
             status_code=404,
             detail="No greeter response data found for the selected period.",

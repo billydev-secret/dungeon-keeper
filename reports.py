@@ -1022,9 +1022,21 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
-        if ctx.welcome_channel_id <= 0:
+        greeter_channel_id = ctx.greeter_chat_channel_id or ctx.welcome_channel_id
+        log_channel_id = (
+            getattr(ctx, "join_leave_log_channel_id", 0) or ctx.leave_channel_id
+        )
+
+        if greeter_channel_id <= 0:
             await interaction.response.send_message(
-                "No welcome channel is configured.",
+                "No greeter chat channel is configured.",
+                ephemeral=True,
+            )
+            return
+
+        if log_channel_id <= 0:
+            await interaction.response.send_message(
+                "No join / leave log channel is configured.",
                 ephemeral=True,
             )
             return
@@ -1048,36 +1060,36 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
 
         def _fetch():
-            join_times: dict[int, float] = {}
-
             with ctx.open_db() as conn:
-                rows = conn.execute(
-                    "SELECT invitee_id, joined_at FROM invite_edges WHERE guild_id = ? AND joined_at >= ?",
-                    (guild.id, cutoff_ts),
-                ).fetchall()
-                for r in rows:
-                    join_times[int(r[0])] = float(r[1])
-
-                for m in guild.members:
-                    if m.bot or not m.joined_at:
-                        continue
-                    ts = m.joined_at.timestamp()
-                    if ts >= cutoff_ts:
-                        join_times[m.id] = ts
+                sessions = reports_data.get_greeter_log_sessions(
+                    conn,
+                    guild.id,
+                    log_channel_id,
+                    since_ts=cutoff_ts,
+                )
 
                 return reports_data.get_greeter_response_data(
                     conn,
                     guild.id,
-                    ctx.welcome_channel_id,
+                    greeter_channel_id,
                     greeter_ids,
-                    join_times,
+                    sessions,
                 )
 
         data = await asyncio.to_thread(_fetch)
 
-        if data["count"] == 0:
+        if data["total_joins"] == 0:
             await interaction.followup.send(
                 "No greeter response data found for the selected period.",
+                ephemeral=True,
+            )
+            return
+
+        if data["count"] == 0:
+            await interaction.followup.send(
+                "No greeted joins in the selected period. "
+                f"{data['left_before_greeting_count']} left before greeting; "
+                f"{data['awaiting_greeting_count']} still waiting.",
                 ephemeral=True,
             )
             return

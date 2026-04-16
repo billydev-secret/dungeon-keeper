@@ -34,6 +34,34 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.interaction_commands")
 
 
+def _discord_embed_to_dict(e: discord.Embed) -> dict:
+    return {
+        "title": e.title,
+        "description": e.description,
+        "url": e.url,
+        "author": e.author.name if e.author else None,
+        "footer": e.footer.text if e.footer else None,
+        "fields": [
+            {"name": f.name, "value": f.value, "inline": f.inline}
+            for f in e.fields
+        ],
+    }
+
+
+def _archived_message_content(message: discord.Message) -> str | None:
+    if message.content:
+        return message.content
+    system_content = (getattr(message, "system_content", "") or "").strip()
+    return system_content or None
+
+
+def _counts_as_member_activity(message: discord.Message) -> bool:
+    return message.type in {
+        discord.MessageType.default,
+        discord.MessageType.reply,
+    }
+
+
 def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
@@ -349,11 +377,12 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
                             guild_id=guild.id,
                             channel_id=ch.id,
                             author_id=message.author.id,
-                            content=message.content or None,
+                            content=_archived_message_content(message),
                             reply_to_id=reply_to_id,
                             ts=msg_ts,
                             attachment_urls=[a.url for a in message.attachments],
                             mention_ids=mention_ids,
+                            embeds=[_discord_embed_to_dict(e) for e in message.embeds],
                         )
 
                         for reaction in message.reactions:
@@ -374,7 +403,7 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
                             ):
                                 targets.insert(0, ref.author.id)
 
-                        if targets:
+                        if targets and _counts_as_member_activity(message):
                             record_interactions(
                                 conn,
                                 guild.id,

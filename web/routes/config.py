@@ -228,6 +228,14 @@ async def get_config(
                     "greeter_chat_channel_id": str(
                         _int_val(conn, "greeter_chat_channel_id", guild_id=guild_id)
                     ),
+                    "join_leave_log_channel_id": str(
+                        _int_val(
+                            conn,
+                            "join_leave_log_channel_id",
+                            _int_val(conn, "leave_channel_id", guild_id=guild_id),
+                            guild_id=guild_id,
+                        )
+                    ),
                 },
                 "xp": {
                     "level_5_role_id": str(
@@ -409,6 +417,7 @@ class WelcomeConfigUpdate(BaseModel):
     leave_message: str | None = None
     greeter_role_id: str | None = None
     greeter_chat_channel_id: str | None = None
+    join_leave_log_channel_id: str | None = None
 
 
 @router.put("/config/welcome")
@@ -429,6 +438,7 @@ async def update_welcome(
         "leave_message": "leave_message",
         "greeter_role_id": "greeter_role_id",
         "greeter_chat_channel_id": "greeter_chat_channel_id",
+        "join_leave_log_channel_id": "join_leave_log_channel_id",
     }
 
     def _q():

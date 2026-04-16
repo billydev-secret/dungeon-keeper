@@ -7,7 +7,7 @@ export function mount(container, initialParams) {
     <div class="panel">
       <header>
         <h2>Greeter Response</h2>
-        <div class="subtitle">How long new members wait for their first greeter message</div>
+        <div class="subtitle">Join-to-greeting timing from the join / leave log and greeter chat</div>
       </header>
       <div class="controls">
         <label>Days (empty = all time)
@@ -31,20 +31,37 @@ export function mount(container, initialParams) {
     return `${(s / 3600).toFixed(1)}h`;
   }
 
-  function fmtDate(ts) {
-    return new Date(ts * 1000).toLocaleDateString(undefined, {
-      month: "short", day: "numeric", year: "numeric",
+  function fmtDateTime(ts) {
+    if (!ts) return "—";
+    return new Date(ts * 1000).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
     });
   }
 
+  function statusLabel(status) {
+    if (status === "left_before_greeting") return "Left before greeting";
+    if (status === "awaiting_greeting") return "Awaiting greeting";
+    return "Greeted";
+  }
+
   function renderTable(entries) {
-    if (!entries || !entries.length) { tableWrap.innerHTML = ""; return; }
+    if (!entries || !entries.length) {
+      tableWrap.innerHTML = "";
+      return;
+    }
     renderSortableTable(tableWrap, {
       columns: [
         { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
-        { key: "joined_at", label: "Joined", format: (v) => fmtDate(v) },
-        { key: "response_seconds", label: "Response Time", format: (v) => fmtDur(v) },
-        { key: "greeter_name", label: "Greeted By", format: (v, r) => r.greeter_name || r.greeter_id },
+        { key: "joined_at", label: "Joined", format: (v) => fmtDateTime(v) },
+        { key: "status", label: "Status", format: (v) => statusLabel(v) },
+        { key: "wait_seconds", label: "Wait", format: (v) => v == null ? "—" : fmtDur(v) },
+        { key: "greeted_at", label: "Greeted", format: (v) => fmtDateTime(v) },
+        { key: "greeter_name", label: "Greeted By", format: (v, r) => r.greeter_name || r.greeter_id || "—" },
+        { key: "left_at", label: "Left", format: (v) => fmtDateTime(v) },
       ],
       data: entries,
       defaultSort: "joined_at",
@@ -61,21 +78,25 @@ export function mount(container, initialParams) {
 
     try {
       const data = await api("/api/reports/greeter-response", params);
-      if (chart) { chart.destroy(); chart = null; }
+      if (chart) {
+        chart.destroy();
+        chart = null;
+      }
 
       if (data.count) {
         const pct = data.total_joins ? Math.round(data.count / data.total_joins * 100) : 0;
-        statsEl.textContent = `Median: ${fmtDur(data.median_seconds)}  ·  Mean: ${fmtDur(data.mean_seconds)}  ·  ${data.count} of ${data.total_joins} greeted (${pct}%)`;
+        statsEl.textContent = `Median: ${fmtDur(data.median_seconds)}  ·  Mean: ${fmtDur(data.mean_seconds)}  ·  ${data.count} of ${data.total_joins} greeted (${pct}%)  ·  ${data.left_before_greeting_count || 0} left before greeting  ·  ${data.awaiting_greeting_count || 0} still waiting`;
       } else {
-        statsEl.textContent = "";
+        statsEl.textContent = `${data.left_before_greeting_count || 0} left before greeting  ·  ${data.awaiting_greeting_count || 0} still waiting`;
       }
 
       const wrap = container.querySelector(".chart-wrap");
       if (!data.histogram.length || data.count === 0) {
-        wrap.innerHTML = `<div class="empty">No greeter response data for the selected period.</div>`;
-        tableWrap.innerHTML = "";
+        wrap.innerHTML = `<div class="empty">No greeted joins for the selected period.</div>`;
+        renderTable(data.entries || []);
         return;
       }
+
       wrap.innerHTML = '<canvas data-chart></canvas>';
       chart = makeBarChart(container.querySelector("[data-chart]"), {
         labels: data.histogram.map((b) => b.label),
@@ -95,5 +116,12 @@ export function mount(container, initialParams) {
   daysEl.addEventListener("change", refresh);
   refresh();
 
-  return { unmount() { if (chart) { chart.destroy(); chart = null; } } };
+  return {
+    unmount() {
+      if (chart) {
+        chart.destroy();
+        chart = null;
+      }
+    },
+  };
 }

@@ -181,6 +181,7 @@ ctx = AppContext(
     level_up_log_channel_id=_cfg["xp_level_up_log_channel_id"],
     greeter_role_id=_cfg["greeter_role_id"],
     greeter_chat_channel_id=_cfg["greeter_chat_channel_id"],
+    join_leave_log_channel_id=_cfg["join_leave_log_channel_id"],
     welcome_channel_id=_cfg["welcome_channel_id"],
     welcome_message=_cfg["welcome_message"],
     welcome_ping_role_id=_cfg["welcome_ping_role_id"],

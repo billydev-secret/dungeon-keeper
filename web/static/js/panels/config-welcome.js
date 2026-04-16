@@ -43,6 +43,11 @@ export function mount(container) {
             <label>Greeter Chat Channel</label>
             <select name="greeter_chat_channel_id">${channelSelect(channels, w.greeter_chat_channel_id)}</select>
           </div>
+          <div class="field">
+            <label>Join / Leave Log Channel</label>
+            <select name="join_leave_log_channel_id">${channelSelect(channels, w.join_leave_log_channel_id)}</select>
+            <div class="field-hint">Used by the Greeter Response report to time joins, greetings, and early departures.</div>
+          </div>
           <div><button type="submit">Save</button><span data-status></span></div>
         </form>
       </div>
@@ -62,6 +67,7 @@ export function mount(container) {
           leave_message: fd.get("leave_message"),
           greeter_role_id: fd.get("greeter_role_id"),
           greeter_chat_channel_id: fd.get("greeter_chat_channel_id"),
+          join_leave_log_channel_id: fd.get("join_leave_log_channel_id"),
         });
         showStatus(status, true);
       } catch (err) {
