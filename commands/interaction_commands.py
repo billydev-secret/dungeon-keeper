@@ -62,6 +62,50 @@ def _counts_as_member_activity(message: discord.Message) -> bool:
     }
 
 
+async def _collect_scan_targets(
+    guild: discord.Guild,
+    me: discord.Member | None,
+    selected_channel: discord.TextChannel | discord.Thread | None = None,
+) -> list[discord.TextChannel | discord.Thread]:
+    channels: list[discord.TextChannel | discord.Thread] = []
+    seen_ids: set[int] = set()
+
+    def _can_read_history(channel: discord.TextChannel | discord.Thread) -> bool:
+        return not me or channel.permissions_for(me).read_message_history
+
+    async def _add_channel(
+        channel: discord.TextChannel | discord.Thread,
+    ) -> None:
+        if channel.id in seen_ids or not _can_read_history(channel):
+            return
+        channels.append(channel)
+        seen_ids.add(channel.id)
+
+    async def _add_channel_with_threads(
+        channel: discord.TextChannel | discord.Thread,
+    ) -> None:
+        await _add_channel(channel)
+
+        archived_threads = getattr(channel, "archived_threads", None)
+        if callable(archived_threads):
+            try:
+                async for thread in archived_threads(limit=None):
+                    await _add_channel(thread)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        for thread in getattr(channel, "threads", []):
+            await _add_channel(thread)
+
+    if selected_channel is not None:
+        await _add_channel_with_threads(selected_channel)
+        return channels
+
+    for channel in guild.text_channels:
+        await _add_channel_with_threads(channel)
+    return channels
+
+
 def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
 
     @bot.tree.command(
@@ -290,11 +334,13 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
     @app_commands.describe(
         days="Days of history to scan. 0 = everything available.",
         reset="Wipe existing data first (use if counts look inflated from repeat scans).",
+        channel="Only scan this channel. Text channels include their threads.",
     )
     async def interaction_scan(
         interaction: discord.Interaction,
         days: app_commands.Range[int, 0, 3650] = 0,
         reset: bool = False,
+        channel: discord.TextChannel | discord.Thread | None = None,
     ) -> None:
         if not ctx.is_mod(interaction):
             await interaction.response.send_message(
@@ -317,27 +363,20 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
 
         me = guild.get_member(bot.user.id) if bot.user else None
 
-        # Collect all readable text channels and their active threads
-        channels: list[discord.TextChannel | discord.Thread] = []
-        seen_ids: set[int] = set()
+        if channel is not None and channel.guild != guild:
+            await interaction.followup.send(
+                "That channel is not in this server.",
+                ephemeral=True,
+            )
+            return
 
-        for channel in guild.text_channels:
-            if me and not channel.permissions_for(me).read_message_history:
-                continue
-            if channel.id not in seen_ids:
-                channels.append(channel)
-                seen_ids.add(channel.id)
-            try:
-                async for thread in channel.archived_threads(limit=None):
-                    if thread.id not in seen_ids:
-                        channels.append(thread)
-                        seen_ids.add(thread.id)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-            for thread in channel.threads:
-                if thread.id not in seen_ids:
-                    channels.append(thread)
-                    seen_ids.add(thread.id)
+        channels = await _collect_scan_targets(guild, me, selected_channel=channel)
+        if channel is not None and not channels:
+            await interaction.followup.send(
+                "I can't read message history in that channel.",
+                ephemeral=True,
+            )
+            return
 
         stats = {"channels": 0, "messages": 0, "interactions": 0}
 
@@ -422,9 +461,10 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
             if days == 0
             else f"last {days} day{'s' if days != 1 else ''}"
         )
+        scope_label = channel.mention if channel is not None else "all readable channels"
         reset_note = " (existing data was cleared first)" if reset else ""
         await interaction.followup.send(
-            f"Interaction scan complete for {window_label}{reset_note}.\n"
+            f"Interaction scan complete for {scope_label} over {window_label}{reset_note}.\n"
             f"Channels scanned: **{stats['channels']}**\n"
             f"Messages read: **{stats['messages']}**\n"
             f"Interactions recorded: **{stats['interactions']}**",

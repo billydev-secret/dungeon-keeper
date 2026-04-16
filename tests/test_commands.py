@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from datetime import datetime, timezone
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
 from commands.denizen_commands import register_denizen_commands
+from commands.interaction_commands import register_interaction_commands
 from commands.mod_commands import register_mod_commands
 from commands.xp_commands import register_xp_commands
 
@@ -162,6 +164,94 @@ def _make_member(*, bot: bool = False, user_id: int = 200, roles=None) -> MagicM
     m.mention = f"<@{user_id}>"
     m.add_roles = AsyncMock()
     return m
+
+
+class _AsyncItems:
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __aiter__(self):
+        self._iter = iter(self._items)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class _ScanThread:
+    def __init__(self, thread_id: int, messages=None, *, readable: bool = True):
+        self.id = thread_id
+        self.name = f"thread-{thread_id}"
+        self.mention = f"<#{thread_id}>"
+        self.guild = None
+        self._messages = list(messages or [])
+        self._readable = readable
+
+    def permissions_for(self, _member):
+        perms = MagicMock()
+        perms.read_message_history = self._readable
+        return perms
+
+    def history(self, *, limit=None, after=None, oldest_first=True):
+        del limit, after, oldest_first
+        return _AsyncItems(self._messages)
+
+
+class _ScanTextChannel:
+    def __init__(
+        self,
+        channel_id: int,
+        messages=None,
+        *,
+        archived_threads=None,
+        active_threads=None,
+        readable: bool = True,
+    ):
+        self.id = channel_id
+        self.name = f"channel-{channel_id}"
+        self.mention = f"<#{channel_id}>"
+        self.guild = None
+        self._messages = list(messages or [])
+        self._archived_threads = list(archived_threads or [])
+        self.threads = list(active_threads or [])
+        self._readable = readable
+
+    def permissions_for(self, _member):
+        perms = MagicMock()
+        perms.read_message_history = self._readable
+        return perms
+
+    def history(self, *, limit=None, after=None, oldest_first=True):
+        del limit, after, oldest_first
+        return _AsyncItems(self._messages)
+
+    def archived_threads(self, limit=None):
+        del limit
+        return _AsyncItems(self._archived_threads)
+
+
+def _make_scan_message(message_id: int, guild: Any, *, author_id: int = 200) -> MagicMock:
+    author = MagicMock()
+    author.bot = False
+    author.id = author_id
+
+    msg = MagicMock()
+    msg.id = message_id
+    msg.author = author
+    msg.guild = guild
+    msg.created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    msg.reference = None
+    msg.mentions = []
+    msg.reactions = []
+    msg.attachments = []
+    msg.embeds = []
+    msg.type = discord.MessageType.default
+    msg.content = f"message {message_id}"
+    msg.system_content = ""
+    return msg
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +457,74 @@ class XpConfigCommandSuccessTests(unittest.TestCase):
         ch.id = channel_id
         ch.mention = f"<#{channel_id}>"
         return ch
+
+
+class InteractionScanCommandTests(unittest.TestCase):
+    def setUp(self):
+        cap = _CommandCapture()
+        cap.bot.user = MagicMock(id=999)
+        self.ctx = _make_ctx(is_mod=True)
+        register_interaction_commands(cap.bot, self.ctx)
+        self._interaction_scan = cap.get("interaction_scan")
+
+    def test_channel_target_only_scans_selected_channel_and_threads(self):
+        guild = MagicMock()
+        guild.id = 123
+        guild.get_member = MagicMock(return_value=MagicMock())
+
+        thread = _ScanThread(11)
+        target = _ScanTextChannel(10, active_threads=[thread])
+        other = _ScanTextChannel(20)
+        guild.text_channels = [target, other]
+
+        target.guild = guild
+        other.guild = guild
+        thread.guild = guild
+        target._messages = [_make_scan_message(1001, guild)]
+        thread._messages = [_make_scan_message(1002, guild)]
+        other._messages = [_make_scan_message(2001, guild)]
+
+        ix = _make_interaction(guild=guild)
+
+        with (
+            patch("commands.interaction_commands.clear_interaction_data") as clear_data,
+            patch("commands.interaction_commands.store_message") as store_message,
+            patch("commands.interaction_commands.set_reaction_count"),
+            patch("commands.interaction_commands.record_interactions"),
+        ):
+            _run(self._interaction_scan(ix, days=0, reset=True, channel=target))
+
+        clear_data.assert_called_once()
+        scanned_channel_ids = [
+            call.kwargs["channel_id"] for call in store_message.call_args_list
+        ]
+        self.assertEqual(scanned_channel_ids, [10, 11])
+        self.assertNotIn(20, scanned_channel_ids)
+        ix.followup.send.assert_awaited_once()
+        message = ix.followup.send.call_args[0][0]
+        self.assertIn(target.mention, message)
+        self.assertIn("Channels scanned: **2**", message)
+
+    def test_channel_target_requires_read_history(self):
+        guild = MagicMock()
+        guild.id = 123
+        guild.get_member = MagicMock(return_value=MagicMock())
+
+        unreadable = _ScanTextChannel(30, readable=False)
+        unreadable.guild = guild
+        guild.text_channels = [unreadable]
+
+        ix = _make_interaction(guild=guild)
+
+        with patch("commands.interaction_commands.store_message") as store_message:
+            _run(self._interaction_scan(ix, channel=unreadable))
+
+        store_message.assert_not_called()
+        ix.followup.send.assert_awaited_once()
+        self.assertIn(
+            "can't read message history",
+            ix.followup.send.call_args[0][0].lower(),
+        )
 
 
 # ---------------------------------------------------------------------------
