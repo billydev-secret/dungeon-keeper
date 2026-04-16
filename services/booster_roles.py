@@ -413,6 +413,7 @@ async def sync_swatches(
         found[role_key] = (
             label,
             hex1,
+            hex2,
             os.path.join(swatch_dir, entry),
             _hex_sort_key(hex1, hex2),
         )
@@ -429,7 +430,7 @@ async def sync_swatches(
     new_roles: list[discord.Role] = []
 
     # Create roles for new swatches and update sort order for all
-    for key, (label, hex_color, file_path, skey) in sorted(found.items()):
+    for key, (label, hex_color, hex_color2, file_path, skey) in sorted(found.items()):
         if key in existing_keys:
             old = existing_keys[key]
             if old["image_path"] != file_path or old["sort_order"] != skey:
@@ -443,10 +444,26 @@ async def sync_swatches(
                         image_path=file_path,
                         sort_order=skey,
                     )
+            # Update the Discord role's gradient colors without deleting it
+            if old["role_id"] > 0:
+                discord_role = guild.get_role(old["role_id"])
+                if discord_role is not None:
+                    colours = [
+                        discord.Color(int(hex_color, 16)),
+                        discord.Color(int(hex_color2, 16)),
+                    ]
+                    try:
+                        await discord_role.edit(
+                            colours=colours, reason="Booster swatch sync"
+                        )
+                    except (discord.Forbidden, discord.HTTPException) as exc:
+                        log.warning(
+                            "Could not update gradient for booster role %r: %s", key, exc
+                        )
             continue
-        color = discord.Color(int(hex_color, 16))
+        colours = [discord.Color(int(hex_color, 16)), discord.Color(int(hex_color2, 16))]
         role = await guild.create_role(
-            name=label, color=color, reason="Booster swatch sync"
+            name=label, colours=colours, reason="Booster swatch sync"
         )
         new_roles.append(role)
         with open_db(db_path) as conn:
