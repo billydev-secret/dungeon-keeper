@@ -184,6 +184,9 @@ export function mount(container) {
         <label>&nbsp;
           <button data-search class="msg-search-btn">Search</button>
         </label>
+        <label>&nbsp;
+          <button data-download class="msg-search-btn" style="display:none">Download JSON</button>
+        </label>
       </div>
       <div data-results class="msg-results"></div>
       <div data-pager class="msg-pager"></div>
@@ -205,6 +208,7 @@ export function mount(container) {
   const resultsEl = container.querySelector("[data-results]");
   const pagerEl = container.querySelector("[data-pager]");
   const searchBtn = container.querySelector("[data-search]");
+  const downloadBtn = container.querySelector("[data-download]");
 
   // AI elements
   const aiModelSel = container.querySelector("[data-ai-model]");
@@ -355,55 +359,50 @@ export function mount(container) {
     if (e.key === "Enter") doAiQuery();
   });
 
-  // --- Search ---
-  async function doSearch(page = 1) {
+  function buildFilterParams() {
     const params = new URLSearchParams();
-
     const authorVal = authorFS.getValue();
     if (authorVal) params.set("author", authorVal);
-
     const mentionsVal = mentionsFS.getValue();
     if (mentionsVal) params.set("mentions", mentionsVal);
-
     const replyVal = replyFS.getValue();
     if (replyVal) params.set("reply_to", replyVal);
-
     const channelVal = channelSel.value;
     if (channelVal) params.set("channel", channelVal);
-
     const regexVal = regexInput.value.trim();
     if (regexVal) params.set("regex", regexVal);
-
     const emotionVal = emotionSel.value;
     if (emotionVal) params.set("emotion", emotionVal);
-
     if (sentMinInput.value !== "") params.set("sentiment_min", sentMinInput.value);
     if (sentMaxInput.value !== "") params.set("sentiment_max", sentMaxInput.value);
-
     if (attachSel.value) params.set("has_attachments", attachSel.value);
     if (reactionsSel.value) params.set("has_reactions", reactionsSel.value);
-
     if (minLenInput.value !== "") params.set("min_length", minLenInput.value);
     if (maxLenInput.value !== "") params.set("max_length", maxLenInput.value);
-
-    // Convert datetime-local to unix timestamps
     if (afterDtInput.value) {
       params.set("after", String(Math.floor(new Date(afterDtInput.value).getTime() / 1000)));
     }
     if (beforeDtInput.value) {
       params.set("before", String(Math.floor(new Date(beforeDtInput.value).getTime() / 1000)));
     }
-
     params.set("sort", sortSel.value);
+    return params;
+  }
+
+  // --- Search ---
+  async function doSearch(page = 1) {
+    const params = buildFilterParams();
     params.set("page", String(page));
     params.set("per_page", "50");
 
     resultsEl.innerHTML = `<div class="empty">Searching…</div>`;
     pagerEl.innerHTML = "";
 
+    downloadBtn.style.display = "none";
     try {
       const data = await api(`/api/messages/search?${params}`);
       renderResults(data);
+      if (data.total > 0) downloadBtn.style.display = "";
     } catch (err) {
       resultsEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
     }
@@ -471,6 +470,11 @@ export function mount(container) {
   }
 
   searchBtn.addEventListener("click", () => doSearch(1));
+
+  downloadBtn.addEventListener("click", () => {
+    const params = buildFilterParams();
+    window.location = `/api/messages/search/export?${params}`;
+  });
 
   // Enter key on regex input
   regexInput.addEventListener("keydown", (e) => {
