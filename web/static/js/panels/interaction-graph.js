@@ -21,7 +21,7 @@ export function mount(container, initialParams) {
   `;
 
   const daysEl = container.querySelector('[data-control="days"]');
-  const pairsWrap = container.querySelector("[data-pairs]");
+  let pairsWrap = container.querySelector("[data-pairs]");
   const nodesWrap = container.querySelector("[data-nodes]");
   let chart = null;
 
@@ -40,6 +40,59 @@ export function mount(container, initialParams) {
   let lastNodes = [];
   let lastPairs = [];
 
+  function renderChart(pairs) {
+    const wrap = container.querySelector(".chart-wrap");
+    if (chart) { chart.destroy(); chart = null; }
+    wrap.innerHTML = '<canvas data-chart></canvas>';
+    if (!pairs.length) return;
+    chart = makeHorizontalBarChart(container.querySelector("[data-chart]"), {
+      labels: pairs.map((p) => p.pair_name || `${p.from_name || p.from_id} ↔ ${p.to_name || p.to_id}`),
+      data: pairs.map((p) => p.pct_share !== undefined ? p.pct_share : p.weight),
+      title: pairs[0].pct_share !== undefined ? "Share of interactions (%)" : "Top Interaction Pairs",
+      xLabel: pairs[0].pct_share !== undefined ? "% of total" : "Interactions",
+    });
+  }
+
+  function renderPairsTable() {
+    // Replace element to drop stale click listeners from previous renders
+    const fresh = pairsWrap.cloneNode(false);
+    pairsWrap.replaceWith(fresh);
+    pairsWrap = fresh;
+
+    const uid = focusSel.value;
+    if (!uid) {
+      renderChart(lastPairs.slice(0, 15));
+      renderSortableTable(pairsWrap, {
+        columns: [
+          { key: "pair_name", label: "Pair" },
+          { key: "weight", label: "Interactions" },
+        ],
+        data: lastPairs,
+        defaultSort: "weight",
+      });
+      return;
+    }
+
+    const userPairs = lastPairs.filter((p) => p.from_id === uid || p.to_id === uid);
+    const total = userPairs.reduce((s, p) => s + p.weight, 0);
+    const userName = (lastNodes.find((n) => n.user_id === uid) || {}).user_name || uid;
+    const rows = userPairs.map((p) => ({
+      ...p,
+      pct_share: total > 0 ? (p.weight / total) * 100 : 0,
+    })).sort((a, b) => b.pct_share - a.pct_share);
+
+    renderChart(rows.slice(0, 15));
+    renderSortableTable(pairsWrap, {
+      columns: [
+        { key: "pair_name", label: "Pair" },
+        { key: "weight", label: "Interactions" },
+        { key: "pct_share", label: `% of ${userName}'s total`, format: (v) => v.toFixed(1) + "%" },
+      ],
+      data: rows,
+      defaultSort: "pct_share",
+    });
+  }
+
   async function refresh() {
     const params = {};
     const d = parseInt(daysEl.value);
@@ -51,23 +104,15 @@ export function mount(container, initialParams) {
 
     try {
       const data = await api("/api/reports/interaction-graph", params);
-      if (chart) { chart.destroy(); chart = null; }
 
       const wrap = container.querySelector(".chart-wrap");
-      const pairs = data.top_pairs.slice(0, 15);
-      if (!pairs.length) {
+      if (!data.top_pairs.length) {
+        if (chart) { chart.destroy(); chart = null; }
         wrap.innerHTML = `<div class="empty">No interaction data.</div>`;
         pairsWrap.innerHTML = "";
         nodesWrap.innerHTML = "";
         return;
       }
-      wrap.innerHTML = '<canvas data-chart></canvas>';
-      chart = makeHorizontalBarChart(container.querySelector("[data-chart]"), {
-        labels: pairs.map((p) => `${p.from_name || p.from_id} ↔ ${p.to_name || p.to_id}`),
-        data: pairs.map((p) => p.weight),
-        title: "Top Interaction Pairs",
-        xLabel: "Interactions",
-      });
 
       for (const p of data.top_pairs) p.pair_name = `${p.from_name || p.from_id} ↔ ${p.to_name || p.to_id}`;
       lastPairs = data.top_pairs;
@@ -104,41 +149,6 @@ export function mount(container, initialParams) {
       pairsWrap.innerHTML = "";
       nodesWrap.innerHTML = "";
     }
-  }
-
-  function renderPairsTable() {
-    const uid = focusSel.value;
-    if (!uid) {
-      renderSortableTable(pairsWrap, {
-        columns: [
-          { key: "pair_name", label: "Pair" },
-          { key: "weight", label: "Interactions" },
-        ],
-        data: lastPairs,
-        defaultSort: "weight",
-      });
-      return;
-    }
-
-    // Compute total weight for this user across all their pairs
-    const userPairs = lastPairs.filter((p) => p.from_id === uid || p.to_id === uid);
-    const total = userPairs.reduce((s, p) => s + p.weight, 0);
-
-    const userName = (lastNodes.find((n) => n.user_id === uid) || {}).user_name || uid;
-    const rows = userPairs.map((p) => ({
-      ...p,
-      pct_share: total > 0 ? (p.weight / total) * 100 : 0,
-    }));
-
-    renderSortableTable(pairsWrap, {
-      columns: [
-        { key: "pair_name", label: "Pair" },
-        { key: "weight", label: "Interactions" },
-        { key: "pct_share", label: `% of ${userName}'s total`, format: (v) => v.toFixed(1) + "%" },
-      ],
-      data: rows,
-      defaultSort: "pct_share",
-    });
   }
 
   daysEl.addEventListener("change", refresh);
