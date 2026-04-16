@@ -429,6 +429,23 @@ async def sync_swatches(
     removed: list[str] = []
     new_roles: list[discord.Role] = []
 
+    async def _apply_gradient(role: discord.Role, h1: str, h2: str) -> None:
+        """Set two-color gradient on a role via raw HTTP (discord.py has no high-level API)."""
+        route = discord.http.Route(
+            "PATCH",
+            "/guilds/{guild_id}/roles/{role_id}",
+            guild_id=guild.id,
+            role_id=role.id,
+        )
+        try:
+            await guild._state.http.request(
+                route,
+                json={"colors": [int(h1, 16), int(h2, 16)]},
+                reason="Booster swatch sync",
+            )
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            log.warning("Could not set gradient for role %r: %s", role.name, exc)
+
     # Create roles for new swatches and update sort order for all
     for key, (label, hex_color, hex_color2, file_path, skey) in sorted(found.items()):
         if key in existing_keys:
@@ -448,23 +465,14 @@ async def sync_swatches(
             if old["role_id"] > 0:
                 discord_role = guild.get_role(old["role_id"])
                 if discord_role is not None:
-                    colours = [
-                        discord.Color(int(hex_color, 16)),
-                        discord.Color(int(hex_color2, 16)),
-                    ]
-                    try:
-                        await discord_role.edit(
-                            colours=colours, reason="Booster swatch sync"
-                        )
-                    except (discord.Forbidden, discord.HTTPException) as exc:
-                        log.warning(
-                            "Could not update gradient for booster role %r: %s", key, exc
-                        )
+                    await _apply_gradient(discord_role, hex_color, hex_color2)
             continue
-        colours = [discord.Color(int(hex_color, 16)), discord.Color(int(hex_color2, 16))]
         role = await guild.create_role(
-            name=label, colours=colours, reason="Booster swatch sync"
+            name=label,
+            color=discord.Color(int(hex_color, 16)),
+            reason="Booster swatch sync",
         )
+        await _apply_gradient(role, hex_color, hex_color2)
         new_roles.append(role)
         with open_db(db_path) as conn:
             upsert_booster_role(
