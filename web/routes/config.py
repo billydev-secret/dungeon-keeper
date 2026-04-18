@@ -847,6 +847,7 @@ async def update_role_grant(
                         perm["entity_type"],
                         int(perm["entity_id"]),
                     )
+        ctx.reload_grant_roles()
         return {"ok": True}
 
     return await run_query(_q)
