@@ -26,6 +26,7 @@ from services.message_store import (
     adjust_reaction_count,
     delete_message,
     delete_messages_bulk,
+    mark_member_left,
     record_reaction,
     set_reaction_count,
     store_message,
@@ -206,6 +207,7 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                             username=str(msg.author),
                             display_name=msg.author.display_name,
                             ts=msg_ts,
+                            is_bot=msg.author.bot,
                         )
                         upsert_known_channel(
                             conn,
@@ -312,6 +314,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                         username=str(m),
                         display_name=m.display_name,
                         ts=now_ts,
+                        is_bot=m.bot,
+                        current_member=True,
                     )
                 for ch in g.channels:
                     if hasattr(ch, "name"):
@@ -401,6 +405,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     username=str(message.author),
                     display_name=message.author.display_name,
                     ts=message_ts,
+                    is_bot=message.author.bot,
                 )
                 upsert_known_channel(
                     conn,
@@ -534,6 +539,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 username=str(message.author),
                 display_name=message.author.display_name,
                 ts=message_ts,
+                is_bot=message.author.bot,
             )
 
             upsert_known_channel(
@@ -761,6 +767,18 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         # Jail rejoin detection — re-apply jail if member has an active one
         await check_jail_rejoin(ctx, member)
 
+        with ctx.open_db() as conn:
+            upsert_known_user(
+                conn,
+                guild_id=member.guild.id,
+                user_id=member.id,
+                username=str(member),
+                display_name=member.display_name,
+                ts=time.time(),
+                is_bot=member.bot,
+                current_member=True,
+            )
+
         # Invite tracking — detect who invited this member
         inviter_id, invite_code = await detect_inviter(member.guild)
         if inviter_id is not None:
@@ -815,6 +833,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
     @bot.event
     async def on_member_remove(member: discord.Member) -> None:
+        with ctx.open_db() as conn:
+            mark_member_left(conn, member.guild.id, member.id)
+
         if ctx.leave_channel_id <= 0:
             return
         channel = member.guild.get_channel(ctx.leave_channel_id)

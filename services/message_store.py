@@ -154,10 +154,21 @@ def init_known_users_table(conn: sqlite3.Connection) -> None:
             username        TEXT NOT NULL DEFAULT '',
             display_name    TEXT NOT NULL DEFAULT '',
             updated_at      REAL NOT NULL DEFAULT 0,
+            is_bot          INTEGER NOT NULL DEFAULT 0,
+            current_member  INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (guild_id, user_id)
         )
         """
     )
+    # Migrations for existing DBs
+    for col, definition in (
+        ("is_bot", "INTEGER NOT NULL DEFAULT 0"),
+        ("current_member", "INTEGER NOT NULL DEFAULT 1"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE known_users ADD COLUMN {col} {definition}")
+        except Exception:
+            pass
 
 
 def upsert_known_user(
@@ -167,19 +178,30 @@ def upsert_known_user(
     username: str,
     display_name: str,
     ts: float,
+    *,
+    is_bot: bool = False,
+    current_member: bool = True,
 ) -> None:
-    """Insert or update a user's known name. Only updates if ts is newer."""
+    """Insert or update a user's known name. Only updates name fields if ts is newer."""
     conn.execute(
         """
-        INSERT INTO known_users (guild_id, user_id, username, display_name, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO known_users (guild_id, user_id, username, display_name, updated_at, is_bot, current_member)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
-            username = excluded.username,
-            display_name = excluded.display_name,
-            updated_at = excluded.updated_at
-        WHERE excluded.updated_at > known_users.updated_at
+            username = CASE WHEN excluded.updated_at > known_users.updated_at THEN excluded.username ELSE known_users.username END,
+            display_name = CASE WHEN excluded.updated_at > known_users.updated_at THEN excluded.display_name ELSE known_users.display_name END,
+            updated_at = CASE WHEN excluded.updated_at > known_users.updated_at THEN excluded.updated_at ELSE known_users.updated_at END,
+            is_bot = excluded.is_bot,
+            current_member = excluded.current_member
         """,
-        (guild_id, user_id, username, display_name, ts),
+        (guild_id, user_id, username, display_name, ts, int(is_bot), int(current_member)),
+    )
+
+
+def mark_member_left(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
+    conn.execute(
+        "UPDATE known_users SET current_member = 0 WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
     )
 
 

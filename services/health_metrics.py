@@ -1045,10 +1045,17 @@ def compute_churn_risk(
 ) -> dict:
     now = now or time.time()
 
-    # Get all users active in last 60 days
+    # Get all human current-members active in last 60 days
     sixty_days_ago = _ts(60, now=now)
     users = conn.execute(
-        "SELECT DISTINCT author_id FROM messages WHERE guild_id=? AND ts>=?",
+        """
+        SELECT DISTINCT m.author_id
+        FROM messages m
+        JOIN known_users ku ON ku.guild_id = m.guild_id AND ku.user_id = m.author_id
+        WHERE m.guild_id=? AND m.ts>=?
+          AND ku.is_bot = 0
+          AND ku.current_member = 1
+        """,
         (guild_id, sixty_days_ago),
     ).fetchall()
     user_ids = [r[0] for r in users]

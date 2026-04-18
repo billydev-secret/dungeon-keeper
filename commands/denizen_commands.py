@@ -142,7 +142,7 @@ async def _execute_grant(
         log_channel = guild.get_channel(log_channel_id)
         if isinstance(log_channel, discord.TextChannel):
             await log_channel.send(
-                f"{member.mention} was granted {role.mention} by {interaction.user.mention}."
+                f"{member.display_name} was granted {role.name} by {interaction.user.display_name}."
             )
 
 
