@@ -55,12 +55,23 @@ class _ConfirmDeleteView(discord.ui.View):
 # Deletion logic
 # ---------------------------------------------------------------------------
 
+def _is_forum_thread(channel: discord.abc.GuildChannel | discord.Thread | None) -> bool:
+    return isinstance(channel, discord.Thread) and isinstance(
+        channel.parent, discord.ForumChannel
+    )
+
+
 async def _delete_discord_messages(
     guild: discord.Guild,
     user_id: int,
     msg_rows: list[tuple[int, int]],
-) -> tuple[int, int]:
-    """Delete Discord messages for *user_id*. Returns (deleted, failed)."""
+) -> tuple[int, int, int]:
+    """Delete Discord messages for *user_id*. Returns (deleted, failed, replaced).
+
+    Forum thread OPs (message_id == channel_id) are kept as threads: the original
+    message is deleted and the bot re-posts the same content so the post survives
+    under the bot's name.
+    """
     cutoff = datetime.now(timezone.utc) - _FOURTEEN_DAYS
 
     by_channel: dict[int, list[int]] = {}
@@ -69,18 +80,38 @@ async def _delete_discord_messages(
 
     deleted = 0
     failed = 0
+    replaced = 0
 
     for channel_id, message_ids in by_channel.items():
         channel = guild.get_channel(channel_id)
-        if not isinstance(channel, discord.TextChannel):
+
+        # Forum thread OPs: message_id == channel_id (Discord snowflake parity)
+        if _is_forum_thread(channel) and channel_id in message_ids:
+            try:
+                op = await channel.fetch_message(channel_id)  # type: ignore[union-attr]
+                content = op.content or "\u200b"  # zero-width space if no text content
+                await op.delete()
+                await channel.send(content)  # type: ignore[union-attr]
+                replaced += 1
+            except discord.NotFound:
+                replaced += 1  # already gone, thread still stands
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Forum OP re-post failed in thread %d: %s", channel_id, exc)
+                failed += 1
+            message_ids = [mid for mid in message_ids if mid != channel_id]
+            await asyncio.sleep(0.5)
+
+        if not message_ids:
+            continue
+
+        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
             failed += len(message_ids)
             continue
 
         recent: list[int] = []
         old: list[int] = []
         for mid in message_ids:
-            msg_time = discord.utils.snowflake_time(mid)
-            if msg_time > cutoff:
+            if discord.utils.snowflake_time(mid) > cutoff:
                 recent.append(mid)
             else:
                 old.append(mid)
@@ -92,7 +123,7 @@ async def _delete_discord_messages(
                 await channel.delete_messages(batch)
                 deleted += len(batch)
             except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Bulk delete failed in #%s: %s", channel.name, exc)
+                log.warning("Bulk delete failed in channel %d: %s", channel_id, exc)
                 failed += len(batch)
             await asyncio.sleep(1)
 
@@ -108,7 +139,7 @@ async def _delete_discord_messages(
                 failed += 1
             await asyncio.sleep(0.5)
 
-    return deleted, failed
+    return deleted, failed, replaced
 
 
 def _purge_db(conn, guild_id: int, user_id: int) -> int:
@@ -223,7 +254,9 @@ async def _run_deletion(
 
     msg_rows = [(int(r[0]), int(r[1])) for r in msg_rows]
 
-    discord_deleted, discord_failed = await _delete_discord_messages(guild, user_id, msg_rows)
+    discord_deleted, discord_failed, discord_replaced = await _delete_discord_messages(
+        guild, user_id, msg_rows
+    )
 
     with ctx.open_db() as conn:
         db_msg_count = _purge_db(conn, guild.id, user_id)
@@ -232,6 +265,10 @@ async def _run_deletion(
         "All done. Here's what was removed:",
         f"Messages deleted from Discord: **{discord_deleted}**",
     ]
+    if discord_replaced:
+        lines.append(
+            f"Forum posts re-posted under this bot (content preserved): **{discord_replaced}**"
+        )
     if discord_failed:
         lines.append(f"Messages that couldn't be deleted (no access): **{discord_failed}**")
     lines.append(f"Database records removed: **{db_msg_count}** messages + all associated data")
