@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+
 from typing import TYPE_CHECKING
 
 import discord
@@ -14,9 +14,6 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.privacy")
-
-_FOURTEEN_DAYS = timedelta(days=14)
-
 
 # ---------------------------------------------------------------------------
 # Confirmation view
@@ -65,15 +62,16 @@ async def _delete_discord_messages(
     guild: discord.Guild,
     user_id: int,
     msg_rows: list[tuple[int, int]],
+    on_progress=None,
 ) -> tuple[int, int, int]:
     """Delete Discord messages for *user_id*. Returns (deleted, failed, replaced).
 
     Forum thread OPs (message_id == channel_id) are kept as threads: the original
     message is deleted and the bot re-posts the same content so the post survives
     under the bot's name.
-    """
-    cutoff = datetime.now(timezone.utc) - _FOURTEEN_DAYS
 
+    on_progress: optional async callable(deleted, failed, replaced) called after each channel.
+    """
     by_channel: dict[int, list[int]] = {}
     for message_id, channel_id in msg_rows:
         by_channel.setdefault(channel_id, []).append(message_id)
@@ -89,12 +87,12 @@ async def _delete_discord_messages(
         if _is_forum_thread(channel) and channel_id in message_ids:
             try:
                 op = await channel.fetch_message(channel_id)  # type: ignore[union-attr]
-                content = op.content or "\u200b"  # zero-width space if no text content
+                content = op.content or "\u200b"
                 await op.delete()
                 await channel.send(content)  # type: ignore[union-attr]
                 replaced += 1
             except discord.NotFound:
-                replaced += 1  # already gone, thread still stands
+                replaced += 1
             except (discord.Forbidden, discord.HTTPException) as exc:
                 log.warning("Forum OP re-post failed in thread %d: %s", channel_id, exc)
                 failed += 1
@@ -102,42 +100,33 @@ async def _delete_discord_messages(
             await asyncio.sleep(0.5)
 
         if not message_ids:
+            if on_progress:
+                await on_progress(deleted, failed, replaced)
             continue
 
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
             failed += len(message_ids)
+            if on_progress:
+                await on_progress(deleted, failed, replaced)
             continue
 
-        recent: list[int] = []
-        old: list[int] = []
-        for mid in message_ids:
-            if discord.utils.snowflake_time(mid) > cutoff:
-                recent.append(mid)
-            else:
-                old.append(mid)
+        target_ids = set(message_ids)
+        try:
+            purged = await channel.purge(  # type: ignore[union-attr]
+                limit=None,
+                check=lambda m, _ids=target_ids: m.id in _ids,
+            )
+            deleted += len(purged)
+            # Messages in target_ids that weren't found are already gone — not failures
+        except discord.Forbidden as exc:
+            log.warning("Purge forbidden in channel %d: %s", channel_id, exc)
+            failed += len(message_ids)
+        except discord.HTTPException as exc:
+            log.warning("Purge failed in channel %d: %s", channel_id, exc)
+            failed += len(message_ids)
 
-        # Bulk-delete recent messages in batches of 100
-        for i in range(0, len(recent), 100):
-            batch = [discord.Object(id=mid) for mid in recent[i : i + 100]]
-            try:
-                await channel.delete_messages(batch)
-                deleted += len(batch)
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Bulk delete failed in channel %d: %s", channel_id, exc)
-                failed += len(batch)
-            await asyncio.sleep(1)
-
-        # Individual-delete older messages
-        for mid in old:
-            try:
-                await channel.get_partial_message(mid).delete()
-                deleted += 1
-            except discord.NotFound:
-                pass  # already gone
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Delete failed for message %d: %s", mid, exc)
-                failed += 1
-            await asyncio.sleep(0.5)
+        if on_progress:
+            await on_progress(deleted, failed, replaced)
 
     return deleted, failed, replaced
 
@@ -254,8 +243,17 @@ async def _run_deletion(
 
     msg_rows = [(int(r[0]), int(r[1])) for r in msg_rows]
 
+    async def _progress(deleted: int, failed: int, replaced: int) -> None:
+        try:
+            await original_interaction.edit_original_response(
+                content=f"Deleting… **{deleted}** messages removed so far.",
+                view=None,
+            )
+        except discord.HTTPException:
+            pass
+
     discord_deleted, discord_failed, discord_replaced = await _delete_discord_messages(
-        guild, user_id, msg_rows
+        guild, user_id, msg_rows, on_progress=_progress
     )
 
     lines = [
