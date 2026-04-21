@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from app_context import AppContext, Bot, load_runtime_config
 from commands.activity_commands import register_activity_commands
+from commands.privacy_commands import register_privacy_commands
 from commands.ai_mod_commands import register_ai_mod_commands
 from commands.auto_delete_commands import register_auto_delete_commands
 from commands.config_commands import register_config_commands
@@ -226,6 +227,7 @@ register_invite_commands(bot, ctx)
 register_jail_commands(bot, ctx)
 register_wellness_admin_commands(bot, ctx)
 register_wellness_commands(bot, ctx)
+register_privacy_commands(bot, ctx)
 
 # Register persistent booster-role buttons so they survive restarts
 bot.add_dynamic_items(BoosterRoleDynamicButton)

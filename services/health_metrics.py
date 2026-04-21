@@ -53,18 +53,20 @@ def _lorenz_points(values: list[float], num_points: int = 20) -> list[dict]:
     n = len(sorted_vals)
     points: list[dict[str, float]] = [{"x": 0.0, "y": 0.0}]
     step = max(1, n // num_points)
+    indices = list(range(0, n, step))
+    if indices[-1] < n - 1:
+        indices.append(n - 1)
     cum = 0.0
-    for i in range(0, n, step):
-        cum += (
-            sum(sorted_vals[max(0, i - step + 1) : i + 1]) if i > 0 else sorted_vals[0]
-        )
+    prev = 0
+    for i in indices:
+        cum += sum(sorted_vals[prev : i + 1])
+        prev = i + 1
         points.append(
             {
                 "x": round((i + 1) / n * 100, 1),
                 "y": round(cum / total * 100, 1),
             }
         )
-    # Ensure the final point
     if points[-1]["x"] != 100.0:
         points.append({"x": 100.0, "y": 100.0})
     return points

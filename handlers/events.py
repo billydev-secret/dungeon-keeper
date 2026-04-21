@@ -19,7 +19,7 @@ from services.auto_delete_service import (
     auto_delete_rule_exists,
     track_auto_delete_message,
 )
-from services.incident_detection import velocity_tracker
+from services.incident_detection import check_join_raid, velocity_tracker
 from services.interaction_graph import record_interactions
 from services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from services.message_store import (
@@ -781,6 +781,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 current_member=True,
             )
             record_member_event(conn, member.guild.id, member.id, "join", now)
+            check_join_raid(conn, member.guild.id, member.id, member.created_at.timestamp(), now)
 
         # Invite tracking — detect who invited this member
         inviter_id, invite_code = await detect_inviter(member.guild)

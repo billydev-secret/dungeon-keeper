@@ -768,45 +768,52 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
         leaves = 0
         skipped = 0
 
-        with ctx.open_db() as conn:
-            async for message in log_channel.history(
-                limit=None, after=after_dt, oldest_first=True
-            ):
-                ts = message.created_at.timestamp()
+        # Collect events without holding the DB connection open across async I/O
+        pending: list[tuple[int, str, float]] = []  # (user_id, event_type, ts)
+        leave_name_lookups: list[tuple[str, float]] = []  # (display_name, ts)
 
-                # Discord system guild_member_join messages — author IS the member
-                if message.type == discord.MessageType.guild_member_join:
-                    record_member_event(conn, guild.id, message.author.id, "join", ts)
+        async for message in log_channel.history(
+            limit=None, after=after_dt, oldest_first=True
+        ):
+            ts = message.created_at.timestamp()
+
+            # Discord system guild_member_join messages — author IS the member
+            if message.type == discord.MessageType.guild_member_join:
+                pending.append((message.author.id, "join", ts))
+                joins += 1
+                continue
+
+            # Non-system content messages (randomised Discord join text, other bots)
+            if message.content and not message.author.bot:
+                if not any(m in message.content for m in _BOOST_MARKERS):
+                    pending.append((message.author.id, "join", ts))
                     joins += 1
-                    continue
+                continue
 
-                # Non-system content messages (randomised Discord join text, other bots)
-                if message.content and not message.author.bot:
-                    if not any(m in message.content for m in _BOOST_MARKERS):
-                        record_member_event(conn, guild.id, message.author.id, "join", ts)
-                        joins += 1
-                    continue
+            # Bot leave embeds — description is "{display_name} has left the server."
+            if (
+                bot.user
+                and message.author.id == bot.user.id
+                and message.embeds
+            ):
+                desc = message.embeds[0].description or ""
+                if desc.endswith(_LEAVE_SUFFIX):
+                    leave_name_lookups.append((desc[: -len(_LEAVE_SUFFIX)], ts))
 
-                # Bot leave embeds — description is "{display_name} has left the server."
-                if (
-                    bot.user
-                    and message.author.id == bot.user.id
-                    and message.embeds
-                ):
-                    desc = message.embeds[0].description or ""
-                    if desc.endswith(_LEAVE_SUFFIX):
-                        display_name = desc[: -len(_LEAVE_SUFFIX)]
-                        matches = conn.execute(
-                            "SELECT user_id FROM known_users WHERE guild_id = ? AND display_name = ?",
-                            (guild.id, display_name),
-                        ).fetchall()
-                        if len(matches) == 1:
-                            record_member_event(
-                                conn, guild.id, int(matches[0]["user_id"]), "leave", ts
-                            )
-                            leaves += 1
-                        else:
-                            skipped += 1
+        with ctx.open_db() as conn:
+            for user_id, event_type, ts in pending:
+                record_member_event(conn, guild.id, user_id, event_type, ts)
+
+            for display_name, ts in leave_name_lookups:
+                matches = conn.execute(
+                    "SELECT user_id FROM known_users WHERE guild_id = ? AND display_name = ?",
+                    (guild.id, display_name),
+                ).fetchall()
+                if len(matches) == 1:
+                    record_member_event(conn, guild.id, int(matches[0]["user_id"]), "leave", ts)
+                    leaves += 1
+                else:
+                    skipped += 1
 
         window_label = (
             "all available history" if days == 0
