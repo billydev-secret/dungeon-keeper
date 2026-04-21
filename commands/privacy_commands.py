@@ -311,10 +311,10 @@ def register_privacy_commands(bot: Bot, ctx: AppContext) -> None:
         description="Permanently delete all messages and data for a user from this server.",
     )
     @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(member="The member whose data should be erased.")
+    @app_commands.describe(member="The user whose data should be erased (works for users who have left).")
     async def delete_user(
         interaction: discord.Interaction,
-        member: discord.Member,
+        member: discord.User,
     ) -> None:
         if not interaction.guild:
             await interaction.response.send_message(
