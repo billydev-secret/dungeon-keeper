@@ -26,7 +26,7 @@ from services.interaction_graph import (
     render_interaction_heatmap,
 )
 from services.invite_tracker import query_invite_web
-from services.message_store import set_reaction_count, store_message
+from services.message_store import record_member_event, set_reaction_count, store_message
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -705,5 +705,118 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
         )
         await interaction.followup.send(
             file=discord.File(io.BytesIO(chart_bytes), filename="invite_web.png"),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="member_events_scan",
+        description="Backfill join/leave history into member_events from the join-leave log channel.",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        days="Days of history to scan. 0 = everything available.",
+    )
+    async def member_events_scan(
+        interaction: discord.Interaction,
+        days: app_commands.Range[int, 0, 3650] = 0,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        log_channel_id = ctx.leave_channel_id
+        if log_channel_id <= 0:
+            await interaction.response.send_message(
+                "No join-leave log channel is configured (`leave_channel_id`).",
+                ephemeral=True,
+            )
+            return
+
+        log_channel = guild.get_channel(log_channel_id)
+        if not isinstance(log_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                f"Configured channel <#{log_channel_id}> is not a text channel.",
+                ephemeral=True,
+            )
+            return
+
+        me = guild.get_member(bot.user.id) if bot.user else None
+        if me and not log_channel.permissions_for(me).read_message_history:
+            await interaction.response.send_message(
+                f"I don't have permission to read history in <#{log_channel_id}>.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        from datetime import datetime, timedelta, timezone
+        after_dt = None if days == 0 else datetime.now(timezone.utc) - timedelta(days=days)
+
+        _LEAVE_SUFFIX = " has left the server."
+        _BOOST_MARKERS = ("boosted the server", "just boosted")
+
+        joins = 0
+        leaves = 0
+        skipped = 0
+
+        with ctx.open_db() as conn:
+            async for message in log_channel.history(
+                limit=None, after=after_dt, oldest_first=True
+            ):
+                ts = message.created_at.timestamp()
+
+                # Discord system guild_member_join messages — author IS the member
+                if message.type == discord.MessageType.guild_member_join:
+                    record_member_event(conn, guild.id, message.author.id, "join", ts)
+                    joins += 1
+                    continue
+
+                # Non-system content messages (randomised Discord join text, other bots)
+                if message.content and not message.author.bot:
+                    if not any(m in message.content for m in _BOOST_MARKERS):
+                        record_member_event(conn, guild.id, message.author.id, "join", ts)
+                        joins += 1
+                    continue
+
+                # Bot leave embeds — description is "{display_name} has left the server."
+                if (
+                    bot.user
+                    and message.author.id == bot.user.id
+                    and message.embeds
+                ):
+                    desc = message.embeds[0].description or ""
+                    if desc.endswith(_LEAVE_SUFFIX):
+                        display_name = desc[: -len(_LEAVE_SUFFIX)]
+                        matches = conn.execute(
+                            "SELECT user_id FROM known_users WHERE guild_id = ? AND display_name = ?",
+                            (guild.id, display_name),
+                        ).fetchall()
+                        if len(matches) == 1:
+                            record_member_event(
+                                conn, guild.id, int(matches[0]["user_id"]), "leave", ts
+                            )
+                            leaves += 1
+                        else:
+                            skipped += 1
+
+        window_label = (
+            "all available history" if days == 0
+            else f"last {days} day{'s' if days != 1 else ''}"
+        )
+        skip_note = f"\nLeaves skipped (ambiguous name): **{skipped}**" if skipped else ""
+        await interaction.followup.send(
+            f"Member events scan complete over {window_label}.\n"
+            f"Joins recorded: **{joins}**\n"
+            f"Leaves recorded: **{leaves}**"
+            + skip_note,
             ephemeral=True,
         )
