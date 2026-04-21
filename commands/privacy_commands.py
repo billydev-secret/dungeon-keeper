@@ -258,12 +258,9 @@ async def _run_deletion(
         guild, user_id, msg_rows
     )
 
-    with ctx.open_db() as conn:
-        db_msg_count = _purge_db(conn, guild.id, user_id)
-
     lines = [
-        "All done. Here's what was removed:",
-        f"Messages deleted from Discord: **{discord_deleted}**",
+        "All done. Here's what was removed from Discord:",
+        f"Messages deleted: **{discord_deleted}**",
     ]
     if discord_replaced:
         lines.append(
@@ -271,7 +268,6 @@ async def _run_deletion(
         )
     if discord_failed:
         lines.append(f"Messages that couldn't be deleted (no access): **{discord_failed}**")
-    lines.append(f"Database records removed: **{db_msg_count}** messages + all associated data")
 
     await original_interaction.edit_original_response(
         content="\n".join(lines), view=None
