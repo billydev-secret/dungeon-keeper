@@ -7,6 +7,7 @@ run them via ``asyncio.to_thread`` / ``run_query``.
 
 from __future__ import annotations
 
+import datetime
 import sqlite3
 import statistics
 import time
@@ -522,6 +523,21 @@ def compute_gini(
         w_vals = [r["cnt"] for r in w_rows]
         sparkline.append(round(_gini(w_vals), 3))
 
+    # Gini history (12 weekly snapshots, oldest → newest)
+    gini_history = []
+    for w in range(11, -1, -1):
+        w_start = _ts((w + 1) * 7, now=now)
+        w_end = _ts(w * 7, now=now)
+        h_rows = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM messages "
+            "WHERE guild_id=? AND ts>=? AND ts<? GROUP BY author_id ORDER BY cnt",
+            (guild_id, w_start, w_end),
+        ).fetchall()
+        h_vals = [r["cnt"] for r in h_rows]
+        dt = datetime.datetime.utcfromtimestamp(w_start)
+        label = dt.strftime("%b ") + str(dt.day)
+        gini_history.append({"label": label, "gini": round(_gini(h_vals), 3)})
+
     # Per-channel Gini (top 10 channels)
     ch_rows = conn.execute(
         """SELECT channel_id, author_id, COUNT(*) AS cnt
@@ -602,6 +618,7 @@ def compute_gini(
         "per_channel": per_channel,
         "weighted_gini": weighted_gini,
         "xp_gini": xp_gini,
+        "gini_history": gini_history,
     }
 
 
@@ -1118,14 +1135,14 @@ def compute_churn_risk(
         sent_row = conn.execute(
             "SELECT AVG(ms.sentiment) FROM message_sentiment ms "
             "JOIN messages m ON ms.message_id = m.message_id "
-            "WHERE m.guild_id=? AND m.author_id=? AND ms.computed_at>=?",
+            "WHERE m.guild_id=? AND m.author_id=? AND m.ts>=?",
             (guild_id, uid, _ts(7, now=now)),
         ).fetchone()
         recent_sent = sent_row[0] if sent_row and sent_row[0] is not None else 0
         prev_sent_row = conn.execute(
             "SELECT AVG(ms.sentiment) FROM message_sentiment ms "
             "JOIN messages m ON ms.message_id = m.message_id "
-            "WHERE m.guild_id=? AND m.author_id=? AND ms.computed_at>=? AND ms.computed_at<?",
+            "WHERE m.guild_id=? AND m.author_id=? AND m.ts>=? AND m.ts<?",
             (guild_id, uid, _ts(14, now=now), _ts(7, now=now)),
         ).fetchone()
         prev_sent = (

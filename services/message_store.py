@@ -205,6 +205,40 @@ def mark_member_left(conn: sqlite3.Connection, guild_id: int, user_id: int) -> N
     )
 
 
+def init_member_events_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS member_events (
+            guild_id    INTEGER NOT NULL,
+            user_id     INTEGER NOT NULL,
+            event_type  TEXT NOT NULL,
+            ts          REAL NOT NULL,
+            PRIMARY KEY (guild_id, user_id, event_type, ts)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_member_events_guild_ts "
+        "ON member_events (guild_id, ts)"
+    )
+
+
+def record_member_event(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    event_type: str,
+    ts: float,
+) -> None:
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO member_events (guild_id, user_id, event_type, ts)
+        VALUES (?, ?, ?, ?)
+        """,
+        (guild_id, user_id, event_type, ts),
+    )
+
+
 def get_known_user(
     conn: sqlite3.Connection,
     guild_id: int,

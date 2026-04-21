@@ -369,79 +369,31 @@ class GreeterResponseData(TypedDict):
     entries: list[GreeterResponseEntry]
 
 
-_JOIN_MARKERS = (
-    " just showed up",
-    " joined the server",
-    " just joined",
-)
-
-_LEAVE_MARKERS = (
-    " has left the server",
-    " left the server",
-    " just left",
-)
-
-
-def _greeter_log_event_type(text: str | None) -> str | None:
-    if not text:
-        return None
-    normalized = " ".join(text.strip().lower().split())
-    if not normalized:
-        return None
-    if any(marker in normalized for marker in _JOIN_MARKERS):
-        return "join"
-    if any(marker in normalized for marker in _LEAVE_MARKERS):
-        return "leave"
-    return None
-
-
 def get_greeter_log_sessions(
     conn: sqlite3.Connection,
     guild_id: int,
-    log_channel_id: int,
     *,
     since_ts: float = 0.0,
 ) -> list[GreeterSession]:
     rows = conn.execute(
         """
-        SELECT
-            m.author_id,
-            m.ts,
-            m.content,
-            e.description,
-            e.author_name,
-            e.footer_text
-        FROM messages m
-        LEFT JOIN message_embeds e
-            ON e.message_id = m.message_id AND e.embed_index = 0
-        WHERE m.guild_id = ? AND m.channel_id = ? AND m.ts >= ?
-        ORDER BY m.ts
+        SELECT user_id, event_type, ts FROM member_events
+        WHERE guild_id = ? AND ts >= ?
+        ORDER BY ts
         """,
-        (guild_id, log_channel_id, since_ts),
+        (guild_id, since_ts),
     ).fetchall()
 
     joins_by_user: dict[int, list[float]] = defaultdict(list)
     leaves_by_user: dict[int, list[float]] = defaultdict(list)
 
     for row in rows:
-        text = next(
-            (
-                part
-                for part in (
-                    row["content"],
-                    row["description"],
-                    row["author_name"],
-                    row["footer_text"],
-                )
-                if part
-            ),
-            None,
-        )
-        event_type = _greeter_log_event_type(text)
-        if event_type == "join":
-            joins_by_user[int(row["author_id"])].append(float(row["ts"]))
-        elif event_type == "leave":
-            leaves_by_user[int(row["author_id"])].append(float(row["ts"]))
+        user_id = int(row["user_id"])
+        ts = float(row["ts"])
+        if row["event_type"] == "join":
+            joins_by_user[user_id].append(ts)
+        elif row["event_type"] == "leave":
+            leaves_by_user[user_id].append(ts)
 
     sessions: list[GreeterSession] = []
     for user_id, join_times in joins_by_user.items():

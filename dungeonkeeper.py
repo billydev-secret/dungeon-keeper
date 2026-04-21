@@ -55,6 +55,7 @@ from services.member_quality_score import init_quality_score_tables
 from services.message_store import (
     init_known_channels_table,
     init_known_users_table,
+    init_member_events_table,
     init_message_tables,
 )
 from services.moderation import init_moderation_tables
@@ -143,6 +144,7 @@ with open_db(DB_PATH) as _conn:
     init_message_tables(_conn)
     init_known_users_table(_conn)
     init_known_channels_table(_conn)
+    init_member_events_table(_conn)
     init_grant_role_tables(_conn)
     init_booster_role_tables(_conn)
     init_quality_score_tables(_conn)

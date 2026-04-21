@@ -59,6 +59,13 @@ export function mount(container) {
 
       <div class="home-grid">
         <div class="home-card home-card-wide">
+          <div class="home-card-label">Gini Over Time</div>
+          <div class="chart-wrap" style="height:260px"><canvas id="gini-history-chart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="home-grid">
+        <div class="home-card home-card-wide">
           <div class="home-card-label">Lorenz Curve</div>
           <div class="chart-wrap" style="height:320px"><canvas id="lorenz-chart"></canvas></div>
         </div>
@@ -75,6 +82,18 @@ export function mount(container) {
         </div>
       </div>
     `;
+
+    // Gini over time
+    const histCanvas = panel.querySelector("#gini-history-chart");
+    if (histCanvas && d.gini_history?.length) {
+      charts.push(makeLineChart(histCanvas, {
+        labels: d.gini_history.map(p => p.label),
+        series: [
+          { label: "Gini", counts: d.gini_history.map(p => p.gini), color: "#E6B84C" },
+        ],
+        title: "Weekly Gini coefficient (12 weeks)",
+      }));
+    }
 
     // Lorenz curve
     const lorenzCanvas = panel.querySelector("#lorenz-chart");

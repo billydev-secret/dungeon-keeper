@@ -27,6 +27,7 @@ from services.message_store import (
     delete_message,
     delete_messages_bulk,
     mark_member_left,
+    record_member_event,
     record_reaction,
     set_reaction_count,
     store_message,
@@ -768,16 +769,18 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         await check_jail_rejoin(ctx, member)
 
         with ctx.open_db() as conn:
+            now = time.time()
             upsert_known_user(
                 conn,
                 guild_id=member.guild.id,
                 user_id=member.id,
                 username=str(member),
                 display_name=member.display_name,
-                ts=time.time(),
+                ts=now,
                 is_bot=member.bot,
                 current_member=True,
             )
+            record_member_event(conn, member.guild.id, member.id, "join", now)
 
         # Invite tracking — detect who invited this member
         inviter_id, invite_code = await detect_inviter(member.guild)
@@ -834,7 +837,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
     @bot.event
     async def on_member_remove(member: discord.Member) -> None:
         with ctx.open_db() as conn:
+            now = time.time()
             mark_member_left(conn, member.guild.id, member.id)
+            record_member_event(conn, member.guild.id, member.id, "leave", now)
 
         if ctx.leave_channel_id <= 0:
             return

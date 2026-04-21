@@ -1023,20 +1023,10 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
             return
 
         greeter_channel_id = ctx.greeter_chat_channel_id or ctx.welcome_channel_id
-        log_channel_id = (
-            getattr(ctx, "join_leave_log_channel_id", 0) or ctx.leave_channel_id
-        )
 
         if greeter_channel_id <= 0:
             await interaction.response.send_message(
                 "No greeter chat channel is configured.",
-                ephemeral=True,
-            )
-            return
-
-        if log_channel_id <= 0:
-            await interaction.response.send_message(
-                "No join / leave log channel is configured.",
                 ephemeral=True,
             )
             return
@@ -1064,7 +1054,6 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                 sessions = reports_data.get_greeter_log_sessions(
                     conn,
                     guild.id,
-                    log_channel_id,
                     since_ts=cutoff_ts,
                 )
 

@@ -88,7 +88,7 @@ export function mount(container, initialParams) {
   const tableWrap = container.querySelector("[data-table-wrap]");
   let topChart = null, bottomChart = null;
 
-  daysEl.value = initialParams.days || "1";
+  daysEl.value = initialParams.days || "30";
   statusEl.value = initialParams.status ?? "Active";
 
   async function refresh() {
