@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.privacy")
+
+_FOURTEEN_DAYS = timedelta(days=14)
 
 # ---------------------------------------------------------------------------
 # Confirmation view
@@ -100,8 +102,6 @@ async def _delete_discord_messages(
             await asyncio.sleep(0.5)
 
         if not message_ids:
-            if on_progress:
-                await on_progress(deleted, failed, replaced)
             continue
 
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
@@ -110,23 +110,39 @@ async def _delete_discord_messages(
                 await on_progress(deleted, failed, replaced)
             continue
 
-        target_ids = set(message_ids)
-        try:
-            purged = await channel.purge(  # type: ignore[union-attr]
-                limit=None,
-                check=lambda m, _ids=target_ids: m.id in _ids,
-            )
-            deleted += len(purged)
-            # Messages in target_ids that weren't found are already gone — not failures
-        except discord.Forbidden as exc:
-            log.warning("Purge forbidden in channel %d: %s", channel_id, exc)
-            failed += len(message_ids)
-        except discord.HTTPException as exc:
-            log.warning("Purge failed in channel %d: %s", channel_id, exc)
-            failed += len(message_ids)
+        cutoff = datetime.now(timezone.utc) - _FOURTEEN_DAYS
+        recent: list[int] = []
+        old: list[int] = []
+        for mid in message_ids:
+            if discord.utils.snowflake_time(mid) > cutoff:
+                recent.append(mid)
+            else:
+                old.append(mid)
 
-        if on_progress:
-            await on_progress(deleted, failed, replaced)
+        for i in range(0, len(recent), 100):
+            batch = [discord.Object(id=mid) for mid in recent[i : i + 100]]
+            try:
+                await channel.delete_messages(batch)  # type: ignore[union-attr]
+                deleted += len(batch)
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Bulk delete failed in channel %d: %s", channel_id, exc)
+                failed += len(batch)
+            if on_progress:
+                await on_progress(deleted, failed, replaced)
+            await asyncio.sleep(1)
+
+        for mid in old:
+            try:
+                await channel.get_partial_message(mid).delete()  # type: ignore[union-attr]
+                deleted += 1
+            except discord.NotFound:
+                pass
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Delete failed for message %d: %s", mid, exc)
+                failed += 1
+            if on_progress:
+                await on_progress(deleted, failed, replaced)
+            await asyncio.sleep(0.5)
 
     return deleted, failed, replaced
 
@@ -242,11 +258,19 @@ async def _run_deletion(
         ).fetchall()
 
     msg_rows = [(int(r[0]), int(r[1])) for r in msg_rows]
+    total = len(msg_rows)
+
+    def _render_bar(done: int) -> str:
+        width = 20
+        filled = round(width * done / total) if total else width
+        bar = "█" * filled + "░" * (width - filled)
+        return f"`[{bar}]` {done}/{total}"
 
     async def _progress(deleted: int, failed: int, replaced: int) -> None:
+        done = deleted + failed + replaced
         try:
             await original_interaction.edit_original_response(
-                content=f"Deleting… **{deleted}** messages removed so far.",
+                content=f"Deleting… {_render_bar(done)}",
                 view=None,
             )
         except discord.HTTPException:
