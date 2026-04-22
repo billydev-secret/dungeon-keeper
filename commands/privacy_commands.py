@@ -83,7 +83,16 @@ async def _delete_discord_messages(
     replaced = 0
 
     for channel_id, message_ids in by_channel.items():
-        channel = guild.get_channel(channel_id)
+        channel = guild.get_channel_or_thread(channel_id)
+        if channel is None:
+            try:
+                channel = await guild.fetch_channel(channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Cannot resolve channel %d: %s", channel_id, exc)
+                failed += len(message_ids)
+                if on_progress:
+                    await on_progress(deleted, failed, replaced)
+                continue
 
         # Forum thread OPs: message_id == channel_id (Discord snowflake parity)
         if _is_forum_thread(channel) and channel_id in message_ids:
@@ -105,6 +114,7 @@ async def _delete_discord_messages(
             continue
 
         if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            log.warning("Skipping channel %d — unsupported type %s", channel_id, type(channel).__name__)
             failed += len(message_ids)
             if on_progress:
                 await on_progress(deleted, failed, replaced)
