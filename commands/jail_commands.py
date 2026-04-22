@@ -161,7 +161,7 @@ async def _post_audit(
         return
     ch = guild.get_channel(log_ch_id)
     if ch and isinstance(ch, discord.TextChannel):
-        await ch.send(embed=embed)
+        await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
 
 # ---------------------------------------------------------------------------
