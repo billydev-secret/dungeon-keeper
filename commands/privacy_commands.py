@@ -88,10 +88,23 @@ async def _delete_discord_messages(
             try:
                 channel = await guild.fetch_channel(channel_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Cannot resolve channel %d: %s", channel_id, exc)
-                failed += len(message_ids)
-                if on_progress:
-                    await on_progress(deleted, failed, replaced)
+                # Channel not resolvable — try deleting by ID directly anyway
+                log.warning("Cannot resolve channel %d (%s) — attempting direct deletion", channel_id, exc)
+                partial = discord.PartialMessageable(
+                    state=guild._state, id=channel_id, guild_id=guild.id  # type: ignore[arg-type]
+                )
+                for mid in message_ids:
+                    try:
+                        await partial.get_partial_message(mid).delete()
+                        deleted += 1
+                    except discord.NotFound:
+                        deleted += 1
+                    except (discord.Forbidden, discord.HTTPException) as del_exc:
+                        log.warning("Direct delete failed for message %d: %s", mid, del_exc)
+                        failed += 1
+                    if on_progress:
+                        await on_progress(deleted, failed, replaced)
+                    await asyncio.sleep(0.5)
                 continue
 
         # Forum thread OPs: message_id == channel_id (Discord snowflake parity)
@@ -113,12 +126,24 @@ async def _delete_discord_messages(
         if not message_ids:
             continue
 
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            log.warning("Skipping channel %d — unsupported type %s", channel_id, type(channel).__name__)
-            failed += len(message_ids)
+        if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)):
+            # Unsupported channel type — count as gone
+            deleted += len(message_ids)
             if on_progress:
                 await on_progress(deleted, failed, replaced)
             continue
+
+        # Unarchive threads so we can delete from them, then re-archive after
+        was_archived = isinstance(channel, discord.Thread) and channel.archived
+        if was_archived:
+            try:
+                await channel.edit(archived=False)  # type: ignore[union-attr]
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Cannot unarchive thread %d: %s", channel_id, exc)
+                failed += len(message_ids)
+                if on_progress:
+                    await on_progress(deleted, failed, replaced)
+                continue
 
         cutoff = datetime.now(timezone.utc) - _FOURTEEN_DAYS
         recent: list[int] = []
@@ -153,6 +178,12 @@ async def _delete_discord_messages(
             if on_progress:
                 await on_progress(deleted, failed, replaced)
             await asyncio.sleep(0.5)
+
+        if was_archived:
+            try:
+                await channel.edit(archived=True)  # type: ignore[union-attr]
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     return deleted, failed, replaced
 
