@@ -503,8 +503,16 @@ async def _send_nudge(
     cap = decision.cap_hits[0] if decision.cap_hits else None
     if cap is None:
         return
+    now_local = user_now(user.timezone)
+    effective_limit = _effective_cap_limit(cap, now_local)
+    if cap.bucket_limits and cap.window == "daily":
+        window_label = "this hour"
+    elif cap.bucket_limits and cap.window == "weekly":
+        window_label = "today"
+    else:
+        window_label = cap.window
     desc = (
-        f"💛 Heads up — you've hit your cap of **{cap.cap_limit}** {cap.window} messages. "
+        f"💛 Heads up — you've hit your cap of **{effective_limit}** {window_label} messages. "
         "No worries, just keeping you in the loop. You're doing great!"
     )
     await _deliver_user_notice(message, user, desc)
