@@ -98,8 +98,10 @@ def _setup_logging() -> None:
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
 
+    log_path = Path(__file__).with_name("log.txt")
+    log_path.write_text("", encoding="utf-8")  # wipe on boot
     file_handler = logging.handlers.RotatingFileHandler(
-        Path(__file__).with_name("log.txt"),
+        log_path,
         encoding="utf-8",
         maxBytes=10_000 * 200,
         backupCount=1,  # ~10 000 lines
