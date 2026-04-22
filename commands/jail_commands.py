@@ -1325,12 +1325,20 @@ async def _do_jail(
 
     # Post embed in jail channel
     duration_text = fmt_duration(duration_seconds) if duration_seconds else "Indefinite"
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    expiry_ts = now_ts + duration_seconds if duration_seconds else None
+    countdown_line = (
+        f"**Releases:** <t:{expiry_ts}:R> (<t:{expiry_ts}:f>)\n"
+        if expiry_ts
+        else ""
+    )
     embed = discord.Embed(
         title="Moderation Hold",
         description=(
             f"{target.mention}, you have been placed in a moderation hold.\n\n"
             f"**Moderator:** {mod.mention}\n"
             f"**Duration:** {duration_text}\n"
+            + countdown_line
             + (f"**Reason:** {reason}\n" if reason else "")
             + "\nA moderator will review your case here."
         ),
