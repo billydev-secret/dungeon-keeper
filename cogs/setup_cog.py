@@ -30,12 +30,6 @@ _PRIVATE_CHANNELS: list[tuple[str, str, str | None, str]] = [
     ("transcript_channel_id", "ticket-transcripts", None, "Ticket transcripts"),
 ]
 
-_PUBLIC_CHANNELS: list[tuple[str, str, str | None, str]] = [
-    ("welcome_channel_id", "welcome", "welcome_channel_id", "Welcome messages for new members"),
-    ("leave_channel_id", "farewell", "leave_channel_id", "Farewell messages for departing members"),
-    ("birthday_channel_id", "birthdays", None, "Member birthday announcements"),
-]
-
 
 def _private_ow(
     guild: discord.Guild, ctx: AppContext
@@ -140,19 +134,6 @@ class SetupCog(commands.Cog):
                 ch = await guild.create_text_channel(
                     ch_name, category=logs_cat, overwrites=priv, topic=topic  # type: ignore[arg-type]
                 )
-                ctx.set_config_value(config_key, str(ch.id))
-                if ctx_attr:
-                    setattr(ctx, ctx_attr, ch.id)
-                lines.append(f"🆕 {ch.mention} created")
-
-        # ── Public channels ───────────────────────────────────────────────────
-        for config_key, ch_name, ctx_attr, topic in _PUBLIC_CHANNELS:
-            existing_id = _stored_id(ctx, config_key)
-            ch = guild.get_channel(existing_id) if existing_id else None
-            if isinstance(ch, discord.TextChannel):
-                lines.append(f"✅ {ch.mention} already set")
-            else:
-                ch = await guild.create_text_channel(ch_name, topic=topic)
                 ctx.set_config_value(config_key, str(ch.id))
                 if ctx_attr:
                     setattr(ctx, ctx_attr, ch.id)

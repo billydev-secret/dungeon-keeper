@@ -82,7 +82,7 @@ class RuntimeConfig(TypedDict):
     tz_offset_hours: float
 
 
-def load_runtime_config(db_path: Path, *, debug: bool) -> RuntimeConfig:
+def load_runtime_config(db_path: Path, *, debug: bool, default_guild_id: int = 0) -> RuntimeConfig:
     from services.welcome_service import DEFAULT_LEAVE_MESSAGE, DEFAULT_WELCOME_MESSAGE
 
     with open_db(db_path) as conn:
@@ -90,7 +90,7 @@ def load_runtime_config(db_path: Path, *, debug: bool) -> RuntimeConfig:
             get_config_value(conn, "guild_id", "0"), key="guild_id"
         )
         if guild_id == 0:
-            guild_id = _parse_int_config(
+            guild_id = default_guild_id or _parse_int_config(
                 os.environ.get("GUILD_ID", "0"), key="GUILD_ID"
             )
         leave_channel_id = _parse_int_config(

@@ -27,6 +27,7 @@ from starlette.responses import StreamingResponse
 from services.auto_delete_service import init_auto_delete_tables
 from services.booster_roles import init_booster_role_tables
 from services.confessions_service import init_db as init_confessions_db
+from services.dm_perms_service import init_db as init_dm_perms_db
 from services.health_service import init_health_tables
 from services.moderation import init_moderation_tables
 from services.wellness_service import init_wellness_tables
@@ -179,6 +180,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
         init_booster_role_tables(conn)
         init_auto_delete_tables(conn)
     init_confessions_db(ctx.db_path)
+    init_dm_perms_db(ctx.db_path)
 
     # ── OAuth routes (login / callback / logout) ────────────────────
     from web.routes import oauth as oauth_routes

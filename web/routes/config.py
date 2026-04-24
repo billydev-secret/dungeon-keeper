@@ -37,6 +37,14 @@ from services.inactivity_prune_service import (
     get_prune_rule as _get_prune_rule,
     remove_prune_exception,
 )
+from services.dm_perms_service import (
+    load_audit_channels,
+    load_panel_settings,
+    load_request_channels,
+    set_audit_channel,
+    set_panel_settings,
+    set_request_channel,
+)
 from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from xp_system import _XP_COEFF_PREFIX, DEFAULT_XP_SETTINGS
@@ -137,6 +145,22 @@ def _xp_coefficients(conn, guild_id: int = 0) -> dict:
         "voice_min_humans": _i("voice_min_humans", d.voice_min_humans),
         "manual_grant_xp": _f("manual_grant_xp", d.manual_grant_xp),
         "level_curve_factor": _f("level_curve_factor", d.level_curve_factor),
+    }
+
+
+# ── DM perms config helper ────────────────────────────────────────────
+
+
+def _dms_section(db_path, guild_id: int) -> dict:
+    request_channels = load_request_channels(db_path)
+    audit_channels = load_audit_channels(db_path)
+    panel_settings = load_panel_settings(db_path)
+    panel = panel_settings.get(guild_id, {})
+    return {
+        "request_channel_id": str(request_channels.get(guild_id) or 0),
+        "audit_channel_id": str(audit_channels.get(guild_id) or 0),
+        "panel_channel_id": str(panel.get("panel_channel_id") or 0),
+        "panel_message_id": str(panel.get("panel_message_id") or 0),
     }
 
 
@@ -395,6 +419,7 @@ async def get_config(
                     for r in list_auto_delete_rules_for_guild(ctx.db_path, guild_id)
                 ],
                 "confessions": _confessions_section(ctx.db_path, guild_id, bot, conn),
+                "dms": _dms_section(ctx.db_path, guild_id),
             }
 
     return await run_query(_q)
@@ -1172,4 +1197,59 @@ async def post_confessions_button(
     success = await cog.web_post_launcher(guild_id, int(body.channel_id))
     if not success:
         raise HTTPException(500, "Failed to post confession button — check channel and bot permissions")
+    return {"ok": True}
+
+
+# ── DM perms config ──────────────────────────────────────────────────
+
+
+class DmsConfigUpdate(BaseModel):
+    request_channel_id: str | None = None
+    audit_channel_id: str | None = None
+
+
+@router.put("/config/dms")
+async def update_dms(
+    request: Request,
+    body: DmsConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        if body.request_channel_id is not None:
+            set_request_channel(ctx.db_path, guild_id, int(body.request_channel_id))
+        if body.audit_channel_id is not None:
+            set_audit_channel(ctx.db_path, guild_id, int(body.audit_channel_id))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.post("/config/dms/post-panel")
+async def post_dms_panel(
+    request: Request,
+    body: PostButtonRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    cog = bot.get_cog("DmPermsCog")
+    if cog is None:
+        raise HTTPException(503, "DmPermsCog not loaded")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+
+    channel_id = int(body.channel_id)
+    message_id = await cog._ensure_panel(guild, channel_id, force_repost=True)
+    set_panel_settings(ctx.db_path, guild_id, channel_id, message_id)
+    cog.panel_settings[guild_id] = {"panel_channel_id": channel_id, "panel_message_id": message_id}
     return {"ok": True}

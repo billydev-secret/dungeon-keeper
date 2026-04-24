@@ -94,7 +94,7 @@ apply_migrations_sync(DB_PATH)
 # ==============================
 # Runtime config + context
 # ==============================
-_cfg = load_runtime_config(DB_PATH, debug=_args.debug)
+_cfg = load_runtime_config(DB_PATH, debug=_args.debug, default_guild_id=_boot_cfg.guild_id)
 
 intents = discord.Intents.default()
 intents.members = True
