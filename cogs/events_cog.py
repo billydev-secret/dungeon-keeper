@@ -1,4 +1,4 @@
-"""Event handlers for the Discord bot."""
+"""Discord event listeners (Cog)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import discord
 from anthropic import AsyncAnthropic
 from discord import app_commands
+from discord.ext import commands
 
 from commands.jail_commands import check_jail_rejoin
 from post_monitoring import enforce_spoiler_requirement
@@ -49,7 +50,6 @@ log = logging.getLogger("dungeonkeeper.events")
 
 
 def _discord_embed_to_dict(e: discord.Embed) -> dict:
-    """Serialize a discord.Embed to the canonical dict format used by message_store."""
     return {
         "title": e.title,
         "description": e.description,
@@ -64,7 +64,6 @@ def _discord_embed_to_dict(e: discord.Embed) -> dict:
 
 
 def _message_mention_ids(ctx: AppContext, message: discord.Message) -> list[int]:
-    """Return mention IDs using the same bot-filtering rules as live ingestion."""
     return [
         user.id
         for user in message.mentions
@@ -74,7 +73,6 @@ def _message_mention_ids(ctx: AppContext, message: discord.Message) -> list[int]
 
 
 def _archived_message_content(message: discord.Message) -> str | None:
-    """Return the best searchable content for archival, including system messages."""
     if message.content:
         return message.content
     system_content = (getattr(message, "system_content", "") or "").strip()
@@ -82,7 +80,6 @@ def _archived_message_content(message: discord.Message) -> str | None:
 
 
 def _counts_as_member_activity(message: discord.Message) -> bool:
-    """True for normal conversational messages that should affect activity and XP."""
     return message.type in {
         discord.MessageType.default,
         discord.MessageType.reply,
@@ -93,7 +90,6 @@ async def _collect_backfill_channels(
     guild: discord.Guild,
     me: discord.Member | None,
 ) -> list[discord.TextChannel | discord.Thread]:
-    """Collect readable text channels plus active and archived threads."""
     channels: list[discord.TextChannel | discord.Thread] = []
     seen_ids: set[int] = set()
 
@@ -126,11 +122,6 @@ async def _collect_backfill_channels(
 
 
 async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
-    """Walk every readable text channel and store any messages not already in the DB.
-
-    Resumes per-channel from MAX(message_id). If a channel has no stored messages,
-    pulls full history back to channel creation.
-    """
     for g in bot.guilds:
         me = g.me
         guild_count = 0
@@ -253,14 +244,53 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
             )
 
 
-def register_events(bot: Bot, ctx: AppContext) -> None:
-    _anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-    _anthropic_client = (
-        AsyncAnthropic(api_key=_anthropic_api_key) if _anthropic_api_key else None
-    )
-    message_backfill_task: asyncio.Task[None] | None = None
+async def _on_tree_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+) -> None:
+    if isinstance(error, app_commands.CommandNotFound):
+        missing_name = getattr(error, "name", "unknown")
+        log.warning(
+            "Received unknown slash command '%s' in guild %s (user %s). "
+            "This is usually stale command registration.",
+            missing_name,
+            interaction.guild.name if interaction.guild else interaction.guild_id,
+            interaction.user,
+        )
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "That command is out of date on this server. Please try again in a moment.",
+                    ephemeral=True,
+                )
+        except discord.HTTPException:
+            pass
+        return
 
-    def _log_background_task_result(task: asyncio.Task[None]) -> None:
+    log.exception("Unhandled app command error: %s", error)
+    try:
+        if not interaction.response.is_done():
+            await interaction.response.send_message(
+                "Command failed. Please try again.", ephemeral=True
+            )
+    except discord.HTTPException:
+        pass
+
+
+class EventsCog(commands.Cog):
+    def __init__(self, bot: Bot, ctx: AppContext) -> None:
+        self.bot = bot
+        self.ctx = ctx
+        _anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
+        self._anthropic_client: AsyncAnthropic | None = (
+            AsyncAnthropic(api_key=_anthropic_api_key) if _anthropic_api_key else None
+        )
+        self._message_backfill_task: asyncio.Task[None] | None = None
+        super().__init__()
+
+    async def cog_load(self) -> None:
+        self.bot.tree.error(_on_tree_error)
+
+    def _log_background_task_result(self, task: asyncio.Task[None]) -> None:
         try:
             task.result()
         except asyncio.CancelledError:
@@ -268,15 +298,16 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         except Exception:
             log.exception("Background message backfill crashed.")
 
-    @bot.event
-    async def on_ready():
-        nonlocal message_backfill_task
-        if bot.user is None:
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        if self.bot.user is None:
             log.warning("Bot user was not available during on_ready.")
             return
 
-        log.info("Logged in as %s (ID: %s)", bot.user, bot.user.id)
-        _primary_guild = bot.get_guild(ctx.guild_id) if ctx.guild_id else None
+        log.info("Logged in as %s (ID: %s)", self.bot.user, self.bot.user.id)
+        _primary_guild = (
+            self.bot.get_guild(self.ctx.guild_id) if self.ctx.guild_id else None
+        )
 
         def _ch(cid: int) -> str:
             c = _primary_guild.get_channel(cid) if _primary_guild else None
@@ -288,25 +319,24 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
         log.info(
             "Primary guild %s (ID: %s, guarding: %s)",
-            _primary_guild.name if _primary_guild else ctx.guild_id,
-            ctx.guild_id,
-            [_ch(c) for c in ctx.spoiler_required_channels],
+            _primary_guild.name if _primary_guild else self.ctx.guild_id,
+            self.ctx.guild_id,
+            [_ch(c) for c in self.ctx.spoiler_required_channels],
         )
         log.info(
             "XP config loaded: level-%s role=%s level-up-log=%s level-%s-log=%s.",
-            ctx.xp_settings.role_grant_level,
-            _ro(ctx.level_5_role_id),
-            _ch(ctx.level_up_log_channel_id),
-            ctx.xp_settings.role_grant_level,
-            _ch(ctx.level_5_log_channel_id),
+            self.ctx.xp_settings.role_grant_level,
+            _ro(self.ctx.level_5_role_id),
+            _ch(self.ctx.level_up_log_channel_id),
+            self.ctx.xp_settings.role_grant_level,
+            _ch(self.ctx.level_5_log_channel_id),
         )
-        log.debug("XP excluded channels: %s", sorted(ctx.xp_excluded_channel_ids))
+        log.debug("XP excluded channels: %s", sorted(self.ctx.xp_excluded_channel_ids))
 
-        # Backfill known_users/channels across every guild the bot is in
         now_ts = time.time()
-        for g in bot.guilds:
+        for g in self.bot.guilds:
             await refresh_invite_cache(g)
-            with ctx.open_db() as conn:
+            with self.ctx.open_db() as conn:
                 for m in g.members:
                     upsert_known_user(
                         conn,
@@ -339,13 +369,16 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 len(g.channels),
             )
 
-        # Backfill any messages missed while offline (runs in background so on_ready returns)
-        if message_backfill_task is None or message_backfill_task.done():
-            message_backfill_task = asyncio.create_task(_backfill_messages(bot, ctx))
-            message_backfill_task.add_done_callback(_log_background_task_result)
+        if self._message_backfill_task is None or self._message_backfill_task.done():
+            self._message_backfill_task = asyncio.create_task(
+                _backfill_messages(self.bot, self.ctx)
+            )
+            self._message_backfill_task.add_done_callback(
+                self._log_background_task_result
+            )
 
-    @bot.event
-    async def on_message(message: discord.Message):
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
         if not message.guild:
             return
         is_bot_author = message.author.bot
@@ -360,8 +393,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         attachment_urls = [a.url for a in message.attachments]
 
         if is_bot_author:
-            sentiment, emotion = score_text(message.content)
-            with ctx.open_db() as conn:
+            sentiment, emotion = await asyncio.to_thread(score_text, message.content)
+            with self.ctx.open_db() as conn:
                 if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
                     track_auto_delete_message(
                         conn,
@@ -422,8 +455,8 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
         archive_content = _archived_message_content(message)
         if not _counts_as_member_activity(message):
-            mention_ids = _message_mention_ids(ctx, message)
-            with ctx.open_db() as conn:
+            mention_ids = _message_mention_ids(self.ctx, message)
+            with self.ctx.open_db() as conn:
                 if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
                     track_auto_delete_message(
                         conn,
@@ -466,21 +499,22 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
         spoiler_deleted = await enforce_spoiler_requirement(
             message,
-            spoiler_required_channels=ctx.spoiler_required_channels,
-            bypass_role_ids=ctx.bypass_role_ids,
+            spoiler_required_channels=self.ctx.spoiler_required_channels,
+            bypass_role_ids=self.ctx.bypass_role_ids,
             log=log,
         )
 
-        mention_ids = _message_mention_ids(ctx, message)
+        mention_ids = _message_mention_ids(self.ctx, message)
 
         if spoiler_deleted:
             return
 
-        # Wellness Guardian enforcement — may delete the message and DM the user
-        if await wellness_on_message(ctx, message):
+        if await wellness_on_message(self.ctx, message):
             return
 
-        with ctx.open_db() as conn:
+        sentiment, emotion = await asyncio.to_thread(score_text, message.content)
+
+        with self.ctx.open_db() as conn:
             record_member_activity(
                 conn,
                 message.guild.id,
@@ -498,9 +532,6 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     message_ts,
                 )
 
-            # Real-time VADER sentiment scoring
-            sentiment, emotion = score_text(message.content)
-
             store_message(
                 conn,
                 message_id=message.id,
@@ -517,7 +548,6 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 embeds=[_discord_embed_to_dict(e) for e in message.embeds],
             )
 
-            # Also populate message_sentiment table for health dashboard
             if sentiment is not None:
                 conn.execute(
                     "INSERT OR IGNORE INTO message_sentiment "
@@ -551,7 +581,6 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 ts=message_ts,
             )
 
-            # Record reply and mention interactions for the connection web
             interaction_targets = [uid for uid in mention_ids]
             if (
                 reply_to_id
@@ -560,7 +589,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             ):
                 ref = message.reference.resolved
                 if (
-                    (not ref.author.bot or ref.author.id in ctx.recorded_bot_user_ids)
+                    (not ref.author.bot or ref.author.id in self.ctx.recorded_bot_user_ids)
                     and ref.author.id != message.author.id
                     and ref.author.id not in interaction_targets
                 ):
@@ -575,46 +604,43 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     message_id=message.id,
                 )
 
-            # Health dashboard: track message velocity for anomaly detection
             velocity_tracker.record_message(
                 conn, message.guild.id, message.channel.id, ts=message_ts
             )
 
         result = await award_message_xp(
             message,
-            bot=bot,
-            db_path=ctx.db_path,
-            xp_pair_states=ctx.xp_pair_states,
-            excluded_channel_ids=ctx.xp_excluded_channel_ids,
-            settings=ctx.xp_settings,
+            bot=self.bot,
+            db_path=self.ctx.db_path,
+            xp_pair_states=self.ctx.xp_pair_states,
+            excluded_channel_ids=self.ctx.xp_excluded_channel_ids,
+            settings=self.ctx.xp_settings,
         )
         if result is not None and isinstance(message.author, discord.Member):
             await handle_level_progress(
                 message.author,
                 result,
                 "text_message",
-                level_5_role_id=ctx.level_5_role_id,
-                level_up_log_channel_id=ctx.level_up_log_channel_id,
-                level_5_log_channel_id=ctx.level_5_log_channel_id,
-                settings=ctx.xp_settings,
-                db_path=ctx.db_path,
+                level_5_role_id=self.ctx.level_5_role_id,
+                level_up_log_channel_id=self.ctx.level_up_log_channel_id,
+                level_5_log_channel_id=self.ctx.level_5_log_channel_id,
+                settings=self.ctx.xp_settings,
+                db_path=self.ctx.db_path,
             )
 
-        if message.author.id in ctx.watched_users:
-            await _dm_watchers(message)
+        if message.author.id in self.ctx.watched_users:
+            await self._dm_watchers(message)
 
-    async def _dm_watchers(message: discord.Message) -> None:
-        watchers = list(ctx.watched_users.get(message.author.id, set()))
+    async def _dm_watchers(self, message: discord.Message) -> None:
+        watchers = list(self.ctx.watched_users.get(message.author.id, set()))
         if not watchers:
             return
 
-        # Only notify watchers when the AI detects a rule violation.
-        # If ANTHROPIC_API_KEY is not set, fall back to notifying on every message.
         reason = ""
-        if _anthropic_client is not None:
+        if self._anthropic_client is not None:
             try:
                 is_violation, reason = await ai_check_watched_message(
-                    _anthropic_client, message, db_path=ctx.db_path
+                    self._anthropic_client, message, db_path=self.ctx.db_path
                 )
             except Exception as exc:
                 log.warning(
@@ -622,7 +648,7 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     message.author.display_name,
                     exc,
                 )
-                is_violation = True  # fail open: DM watchers if the AI check errors
+                is_violation = True
             if not is_violation:
                 return
 
@@ -641,7 +667,9 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
 
         for watcher_id in watchers:
             try:
-                watcher = bot.get_user(watcher_id) or await bot.fetch_user(watcher_id)
+                watcher = (
+                    self.bot.get_user(watcher_id) or await self.bot.fetch_user(watcher_id)
+                )
             except discord.HTTPException as exc:
                 log.warning(
                     "Could not fetch watcher (id=%s) while relaying post from %s: %s",
@@ -660,18 +688,18 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                     exc,
                 )
 
-    @bot.event
-    async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         delay = 1
         deadline = asyncio.get_event_loop().time() + 30
         while True:
             try:
                 result = await award_image_reaction_xp(
                     payload,
-                    bot=bot,
-                    db_path=ctx.db_path,
-                    excluded_channel_ids=ctx.xp_excluded_channel_ids,
-                    settings=ctx.xp_settings,
+                    bot=self.bot,
+                    db_path=self.ctx.db_path,
+                    excluded_channel_ids=self.ctx.xp_excluded_channel_ids,
+                    settings=self.ctx.xp_settings,
                 )
                 break
             except discord.HTTPException as exc:
@@ -691,17 +719,16 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 member,
                 award,
                 "image_reaction",
-                level_5_role_id=ctx.level_5_role_id,
-                level_up_log_channel_id=ctx.level_up_log_channel_id,
-                level_5_log_channel_id=ctx.level_5_log_channel_id,
-                settings=ctx.xp_settings,
-                db_path=ctx.db_path,
+                level_5_role_id=self.ctx.level_5_role_id,
+                level_up_log_channel_id=self.ctx.level_up_log_channel_id,
+                level_5_log_channel_id=self.ctx.level_5_log_channel_id,
+                settings=self.ctx.xp_settings,
+                db_path=self.ctx.db_path,
             )
 
         if payload.guild_id:
-            with ctx.open_db() as conn:
+            with self.ctx.open_db() as conn:
                 adjust_reaction_count(conn, payload.message_id, str(payload.emoji), +1)
-                # Record individual reaction for quality scoring
                 row = conn.execute(
                     "SELECT author_id, channel_id FROM messages WHERE message_id = ?",
                     (payload.message_id,),
@@ -717,25 +744,31 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                         ts=int(discord.utils.utcnow().timestamp()),
                     )
 
-    @bot.event
-    async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
+    @commands.Cog.listener()
+    async def on_raw_reaction_remove(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
         if payload.guild_id:
-            with ctx.open_db() as conn:
+            with self.ctx.open_db() as conn:
                 adjust_reaction_count(conn, payload.message_id, str(payload.emoji), -1)
 
-    @bot.event
-    async def on_raw_message_delete(payload: discord.RawMessageDeleteEvent):
+    @commands.Cog.listener()
+    async def on_raw_message_delete(
+        self, payload: discord.RawMessageDeleteEvent
+    ) -> None:
         if payload.guild_id is None:
             return
         from services.auto_delete_service import remove_tracked_auto_delete_message
 
         remove_tracked_auto_delete_message(
-            ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
+            self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
         )
-        with ctx.open_db() as conn:
+        with self.ctx.open_db() as conn:
             delete_message(conn, payload.message_id)
 
-    async def _dm_admin_permission_warning(guild: discord.Guild, message: str) -> None:
+    async def _dm_admin_permission_warning(
+        self, guild: discord.Guild, message: str
+    ) -> None:
         owner = guild.owner
         if owner is None:
             return
@@ -744,14 +777,16 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    @bot.event
-    async def on_member_update(before: discord.Member, after: discord.Member) -> None:
+    @commands.Cog.listener()
+    async def on_member_update(
+        self, before: discord.Member, after: discord.Member
+    ) -> None:
         before_ids = {r.id for r in before.roles}
         after_ids = {r.id for r in after.roles}
         if before_ids == after_ids:
             return
         now = time.time()
-        with ctx.open_db() as conn:
+        with self.ctx.open_db() as conn:
             for role in after.roles:
                 if role.id not in before_ids:
                     log_role_event(
@@ -763,12 +798,11 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                         conn, after.guild.id, after.id, role.name, "remove", ts=now
                     )
 
-    @bot.event
-    async def on_member_join(member: discord.Member) -> None:
-        # Jail rejoin detection — re-apply jail if member has an active one
-        await check_jail_rejoin(ctx, member)
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member) -> None:
+        await check_jail_rejoin(self.ctx, member)
 
-        with ctx.open_db() as conn:
+        with self.ctx.open_db() as conn:
             now = time.time()
             upsert_known_user(
                 conn,
@@ -781,12 +815,13 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 current_member=True,
             )
             record_member_event(conn, member.guild.id, member.id, "join", now)
-            check_join_raid(conn, member.guild.id, member.id, member.created_at.timestamp(), now)
+            check_join_raid(
+                conn, member.guild.id, member.id, member.created_at.timestamp(), now
+            )
 
-        # Invite tracking — detect who invited this member
         inviter_id, invite_code = await detect_inviter(member.guild)
         if inviter_id is not None:
-            with ctx.open_db() as conn:
+            with self.ctx.open_db() as conn:
                 record_invite(conn, member.guild.id, inviter_id, member.id, invite_code)
             log.info(
                 "Invite tracked: %s invited by %s (code: %s)",
@@ -795,35 +830,33 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 invite_code,
             )
 
-        # Welcome message
-        if ctx.welcome_channel_id > 0:
-            channel = member.guild.get_channel(ctx.welcome_channel_id)
+        if self.ctx.welcome_channel_id > 0:
+            channel = member.guild.get_channel(self.ctx.welcome_channel_id)
             if isinstance(channel, discord.TextChannel):
                 try:
                     ping = (
-                        f"<@&{ctx.welcome_ping_role_id}>"
-                        if ctx.welcome_ping_role_id > 0
+                        f"<@&{self.ctx.welcome_ping_role_id}>"
+                        if self.ctx.welcome_ping_role_id > 0
                         else None
                     )
                     await channel.send(
                         content=ping,
-                        embed=build_welcome_embed(member, ctx.welcome_message),
+                        embed=build_welcome_embed(member, self.ctx.welcome_message),
                     )
                 except discord.Forbidden:
                     log.warning(
                         "Missing permission to send welcome message in #%s.",
                         channel.name,
                     )
-                    await _dm_admin_permission_warning(
+                    await self._dm_admin_permission_warning(
                         member.guild,
-                        f"Missing permission to send welcome messages in <#{ctx.welcome_channel_id}>.",
+                        f"Missing permission to send welcome messages in <#{self.ctx.welcome_channel_id}>.",
                     )
                 except discord.HTTPException as exc:
                     log.error("Failed to send welcome message: %s", exc)
 
-        # Ping greeter chat channel if configured
-        if ctx.greeter_chat_channel_id > 0:
-            greeter_channel = member.guild.get_channel(ctx.greeter_chat_channel_id)
+        if self.ctx.greeter_chat_channel_id > 0:
+            greeter_channel = member.guild.get_channel(self.ctx.greeter_chat_channel_id)
             if isinstance(greeter_channel, discord.TextChannel):
                 try:
                     await greeter_channel.send(f"@here - {member.mention} has arrived")
@@ -835,45 +868,47 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 except discord.HTTPException as exc:
                     log.error("Failed to send greeter chat ping: %s", exc)
 
-    @bot.event
-    async def on_member_remove(member: discord.Member) -> None:
-        with ctx.open_db() as conn:
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member) -> None:
+        with self.ctx.open_db() as conn:
             now = time.time()
             mark_member_left(conn, member.guild.id, member.id)
             record_member_event(conn, member.guild.id, member.id, "leave", now)
 
-        if ctx.leave_channel_id <= 0:
+        if self.ctx.leave_channel_id <= 0:
             return
-        channel = member.guild.get_channel(ctx.leave_channel_id)
+        channel = member.guild.get_channel(self.ctx.leave_channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
         try:
-            await channel.send(embed=build_leave_embed(member, ctx.leave_message))
+            await channel.send(embed=build_leave_embed(member, self.ctx.leave_message))
         except discord.Forbidden:
             log.warning(
                 "Missing permission to send leave message in #%s.", channel.name
             )
-            await _dm_admin_permission_warning(
+            await self._dm_admin_permission_warning(
                 member.guild,
-                f"Missing permission to send leave messages in <#{ctx.leave_channel_id}>.",
+                f"Missing permission to send leave messages in <#{self.ctx.leave_channel_id}>.",
             )
         except discord.HTTPException as exc:
             log.error("Failed to send leave message: %s", exc)
 
-    @bot.event
-    async def on_raw_bulk_message_delete(payload: discord.RawBulkMessageDeleteEvent):
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(
+        self, payload: discord.RawBulkMessageDeleteEvent
+    ) -> None:
         if payload.guild_id is None:
             return
         from services.auto_delete_service import remove_tracked_auto_delete_messages
 
         remove_tracked_auto_delete_messages(
-            ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
+            self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
         )
-        with ctx.open_db() as conn:
+        with self.ctx.open_db() as conn:
             delete_messages_bulk(conn, payload.message_ids)
 
-    @bot.event
-    async def on_interaction(interaction: discord.Interaction) -> None:
+    @commands.Cog.listener()
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
         if (
             interaction.type == discord.InteractionType.application_command
             and interaction.data
@@ -883,7 +918,6 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
             opts: list[dict] = data.get("options") or []
             parts: list[str] = [str(cmd)]
             for opt in opts:
-                # Subcommand groups / subcommands nest one level deeper
                 if opt.get("type") in (1, 2) and opt.get("options"):
                     parts.append(str(opt["name"]))
                     for sub in opt["options"]:
@@ -901,34 +935,6 @@ def register_events(bot: Bot, ctx: AppContext) -> None:
                 guild_name,
             )
 
-    @bot.tree.error
-    async def on_app_command_error(
-        interaction: discord.Interaction, error: app_commands.AppCommandError
-    ) -> None:
-        if isinstance(error, app_commands.CommandNotFound):
-            missing_name = getattr(error, "name", "unknown")
-            log.warning(
-                "Received unknown slash command '%s' in guild %s (user %s). "
-                "This is usually stale command registration.",
-                missing_name,
-                interaction.guild.name if interaction.guild else interaction.guild_id,
-                interaction.user,
-            )
-            try:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(
-                        "That command is out of date on this server. Please try again in a moment.",
-                        ephemeral=True,
-                    )
-            except discord.HTTPException:
-                pass
-            return
 
-        log.exception("Unhandled app command error: %s", error)
-        try:
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    "Command failed. Please try again.", ephemeral=True
-                )
-        except discord.HTTPException:
-            pass
+async def setup(bot: Bot) -> None:
+    await bot.add_cog(EventsCog(bot, bot.ctx))

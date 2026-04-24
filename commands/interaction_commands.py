@@ -89,7 +89,7 @@ async def _collect_scan_targets(
         archived_threads = getattr(channel, "archived_threads", None)
         if callable(archived_threads):
             try:
-                async for thread in archived_threads(limit=None):
+                async for thread in archived_threads(limit=None):  # type: ignore[misc]
                     await _add_channel(thread)
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -778,7 +778,7 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
             ts = message.created_at.timestamp()
 
             # Discord system guild_member_join messages — author IS the member
-            if message.type == discord.MessageType.guild_member_join:
+            if message.type == discord.MessageType.new_member:
                 pending.append((message.author.id, "join", ts))
                 joins += 1
                 continue

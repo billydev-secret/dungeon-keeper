@@ -987,6 +987,7 @@ def compute_cohort_retention(
             "d30": 0,
             "d90": 0,
             "badge": "no_data",
+            "latest_cohort_size": 0,
             "cohorts": [],
             "heatmap": [],
         }

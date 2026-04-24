@@ -11,6 +11,7 @@ from typing import Any, TypeAlias, TypedDict
 from collections.abc import Callable, Coroutine
 
 import discord
+from discord.ext import commands
 
 from db_utils import (
     GrantRoleConfig,
@@ -164,16 +165,21 @@ def load_runtime_config(db_path: Path, *, debug: bool) -> RuntimeConfig:
         }
 
 
-class Bot(discord.Client):
-    def __init__(self, *, intents: discord.Intents, debug: bool, guild_id: int):
-        super().__init__(intents=intents)
-        self.tree = discord.app_commands.CommandTree(self)
+class Bot(commands.Bot):
+    ctx: AppContext  # set by the entry point before bot.run()
+
+    def __init__(self, *, intents: discord.Intents, debug: bool, guild_id: int | str):
+        super().__init__(intents=intents, command_prefix=commands.when_mentioned)
         self.debug = debug
         self.guild_id = _parse_int_config(str(guild_id), key="guild_id")
         self.startup_task_factories: list[Callable[[], Coroutine[Any, Any, None]]] = []
         self.startup_tasks: list[asyncio.Task[None]] = []
+        self.extension_names: list[str] = []
 
     async def setup_hook(self) -> None:
+        for ext in self.extension_names:
+            await self.load_extension(ext)
+
         if self.debug:
             if self.guild_id <= 0:
                 print(
@@ -283,6 +289,8 @@ class AppContext:
     grant_roles: dict[str, GrantRoleConfig] = field(default_factory=dict)
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
     watched_users: dict[int, set[int]] = field(default_factory=dict)
+    mod_role_ids: set[int] = field(default_factory=set)
+    admin_role_ids: set[int] = field(default_factory=set)
 
     def open_db(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
         return open_db(self.db_path)
@@ -291,6 +299,14 @@ class AppContext:
         """Reload XP algorithm coefficients from the config DB."""
         with self.open_db() as conn:
             self.xp_settings = load_xp_settings(conn, self.guild_id)
+
+    def reload_permission_roles(self) -> None:
+        """Reload mod/admin role ID caches from the config DB."""
+        with self.open_db() as conn:
+            mod_raw = get_config_value(conn, "mod_role_ids", "")
+            admin_raw = get_config_value(conn, "admin_role_ids", "")
+        self.mod_role_ids = {int(x) for x in mod_raw.split(",") if x.strip().isdigit()}
+        self.admin_role_ids = {int(x) for x in admin_raw.split(",") if x.strip().isdigit()}
 
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
@@ -309,11 +325,20 @@ class AppContext:
     def set_config_value(self, key: str, value: str) -> str:
         with self.open_db() as conn:
             _db_set_config_value(conn, key, value, self.guild_id)
-            return get_config_value(conn, key, value, self.guild_id)
+            result = get_config_value(conn, key, value, self.guild_id)
+        if key == "mod_role_ids":
+            self.mod_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
+        elif key == "admin_role_ids":
+            self.admin_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
+        return result
 
     def delete_config_value(self, key: str) -> None:
         with self.open_db() as conn:
             delete_config_value(conn, key, self.guild_id)
+        if key == "mod_role_ids":
+            self.mod_role_ids = set()
+        elif key == "admin_role_ids":
+            self.admin_role_ids = set()
 
     def get_interaction_member(
         self, interaction: discord.Interaction
@@ -326,12 +351,7 @@ class AppContext:
         return interaction.guild.get_member(user.id)
 
     def get_bot_member(self, guild: discord.Guild) -> discord.Member | None:
-        if guild.me is not None:
-            return guild.me
-        bot_user = guild.client.user
-        if bot_user is None:
-            return None
-        return guild.get_member(bot_user.id)
+        return guild.me
 
     def get_guild_channel_or_thread(
         self, guild: discord.Guild, channel_id: int
@@ -368,12 +388,7 @@ class AppContext:
         perms = member.guild_permissions
         if perms.manage_guild or perms.administrator:
             return True
-        with self.open_db() as conn:
-            mod_raw = get_config_value(conn, "mod_role_ids", "")
-            admin_raw = get_config_value(conn, "admin_role_ids", "")
-        configured = {
-            int(x) for x in f"{mod_raw},{admin_raw}".split(",") if x.strip().isdigit()
-        }
+        configured = self.mod_role_ids | self.admin_role_ids
         return bool(configured & {r.id for r in member.roles})
 
     def is_admin(self, interaction: discord.Interaction) -> bool:
@@ -382,10 +397,7 @@ class AppContext:
             return False
         if member.guild_permissions.administrator:
             return True
-        with self.open_db() as conn:
-            raw = get_config_value(conn, "admin_role_ids", "")
-        configured = {int(x) for x in raw.split(",") if x.strip().isdigit()}
-        return bool(configured & {r.id for r in member.roles})
+        return bool(self.admin_role_ids & {r.id for r in member.roles})
 
     def reload_grant_roles(self) -> None:
         with self.open_db() as conn:

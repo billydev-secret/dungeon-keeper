@@ -25,6 +25,9 @@ def open_db(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-32000")
+    conn.execute("PRAGMA mmap_size=268435456")
     try:
         with conn:  # BEGIN … COMMIT/ROLLBACK
             yield conn

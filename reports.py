@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 import discord
 from discord import app_commands
@@ -267,13 +267,13 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         all_members = [m for m in guild.members if not m.bot]
         all_member_ids = [m.id for m in all_members]
 
-        if channel is not None or exclude_gif_only:
-            from services.message_store import query_last_substantive_activity
+        _use_substantive = channel is not None or exclude_gif_only
+        _ch_id = channel.id if channel else None
 
-            _ch_id = channel.id if channel else None
-
-            def _fetch_inactive():
-                with ctx.open_db() as conn:
+        def _fetch_inactive():
+            with ctx.open_db() as conn:
+                if _use_substantive:
+                    from services.message_store import query_last_substantive_activity
                     return query_last_substantive_activity(
                         conn,
                         guild.id,
@@ -281,13 +281,9 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
                         channel_id=_ch_id,
                         exclude_gif_only=exclude_gif_only,
                     )
-        else:
-
-            def _fetch_inactive():
-                with ctx.open_db() as conn:
-                    return ctx.get_member_last_activity_map(
-                        conn, guild.id, all_member_ids
-                    )
+                return ctx.get_member_last_activity_map(
+                    conn, guild.id, all_member_ids
+                )
 
         activities = await asyncio.to_thread(_fetch_inactive)
 
@@ -516,7 +512,7 @@ def register_reports(bot: Bot, ctx: AppContext) -> None:
         ]
 
         def _fetch():
-            return reports_data.get_join_times_data(members, res, ctx.tz_offset_hours)
+            return reports_data.get_join_times_data(members, cast(Literal["hour_of_day", "day_of_week"], res), ctx.tz_offset_hours)
 
         data = await asyncio.to_thread(_fetch)
 

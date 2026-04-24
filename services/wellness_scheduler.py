@@ -88,28 +88,24 @@ async def _process_blackout_transitions(bot: discord.Client, db_path: Path) -> N
     for guild in bot.guilds:
         with open_db(db_path) as conn:
             users = list_active_users(conn, guild.id)
-        for u in users:
-            if u.is_paused:
-                continue
-            with open_db(db_path) as conn:
+            for u in users:
+                if u.is_paused:
+                    continue
                 blackouts = list_blackouts(conn, guild.id, u.user_id)
                 active_marker_ids = set(
                     list_active_blackout_markers(conn, guild.id, u.user_id)
                 )
-            now_local = user_now(u.timezone)
-            currently_active_ids: set[int] = set()
-            newly_active: list[WellnessBlackout] = []
-            for b in blackouts:
-                if b.is_active_at(now_local):
-                    currently_active_ids.add(b.id)
-                    if b.id not in active_marker_ids:
-                        newly_active.append(b)
-            ended_ids = active_marker_ids - currently_active_ids
-
-            with open_db(db_path) as conn:
+                now_local = user_now(u.timezone)
+                currently_active_ids: set[int] = set()
+                newly_active: list[WellnessBlackout] = []
+                for b in blackouts:
+                    if b.is_active_at(now_local):
+                        currently_active_ids.add(b.id)
+                        if b.id not in active_marker_ids:
+                            newly_active.append(b)
+                ended_ids = active_marker_ids - currently_active_ids
                 for b in newly_active:
                     if mark_blackout_active(conn, guild.id, u.user_id, b.id):
-                        # New entry — DM user
                         member = guild.get_member(u.user_id)
                         if member:
                             asyncio.create_task(_send_blackout_entry_dm(member, b))
@@ -165,16 +161,15 @@ async def _credit_clean_days(bot: discord.Client, db_path: Path) -> None:
     for guild in bot.guilds:
         with open_db(db_path) as conn:
             users = list_active_users(conn, guild.id)
-        for u in users:
-            if u.is_paused:
-                continue
-            now_local = user_now(u.timezone)
-            # Catch up later in the same local day if the bot was offline or the
-            # minute-level tick missed the exact reset boundary.
-            if now_local.hour < u.daily_reset_hour:
-                continue
-            today_iso = now_local.date().isoformat()
-            with open_db(db_path) as conn:
+            for u in users:
+                if u.is_paused:
+                    continue
+                now_local = user_now(u.timezone)
+                # Catch up later in the same local day if the bot was offline or the
+                # minute-level tick missed the exact reset boundary.
+                if now_local.hour < u.daily_reset_hour:
+                    continue
+                today_iso = now_local.date().isoformat()
                 if has_clean_day_credit(conn, guild.id, u.user_id, today_iso):
                     continue
                 row = conn.execute(

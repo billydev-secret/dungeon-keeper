@@ -413,7 +413,7 @@ class TicketCloseButton(
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        tid = int((item.custom_id or "").split(":")[-1])
+        tid = int((item.custom_id or "").split(":")[-1])  # type: ignore[attr-defined]
         return cls(tid)
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -439,7 +439,7 @@ class TicketReopenButton(
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        tid = int((item.custom_id or "").split(":")[-1])
+        tid = int((item.custom_id or "").split(":")[-1])  # type: ignore[attr-defined]
         return cls(tid)
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -515,7 +515,7 @@ class TicketDeleteButton(
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        tid = int((item.custom_id or "").split(":")[-1])
+        tid = int((item.custom_id or "").split(":")[-1])  # type: ignore[attr-defined]
         return cls(tid)
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -864,7 +864,7 @@ class PolicyVoteYesButton(
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        pid = int((item.custom_id or "").split(":")[-1])
+        pid = int((item.custom_id or "").split(":")[-1])  # type: ignore[attr-defined]
         return cls(pid)
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -888,7 +888,7 @@ class PolicyVoteNoButton(
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        pid = int((item.custom_id or "").split(":")[-1])
+        pid = int((item.custom_id or "").split(":")[-1])  # type: ignore[attr-defined]
         return cls(pid)
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -912,7 +912,7 @@ class PolicyVoteAbstainButton(
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        pid = int((item.custom_id or "").split(":")[-1])
+        pid = int((item.custom_id or "").split(":")[-1])  # type: ignore[attr-defined]
         return cls(pid)
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -1223,11 +1223,18 @@ async def _do_jail(
     jailed_role_id = _get_config(ctx, "jailed_role_id")
     jailed_role = guild.get_role(jailed_role_id) if jailed_role_id else None
     if not jailed_role:
-        jailed_role = await guild.create_role(
-            name="Jailed",
-            reason="Dungeon Keeper jail system setup",
-            permissions=discord.Permissions.none(),
-        )
+        try:
+            jailed_role = await guild.create_role(
+                name="Jailed",
+                reason="Dungeon Keeper jail system setup",
+                permissions=discord.Permissions.none(),
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I don't have permission to create roles. Grant **Manage Roles** and try again.",
+                ephemeral=True,
+            )
+            return
         ctx.set_config_value("jailed_role_id", str(jailed_role.id))
         # Deny view + send on all channels
         for channel in guild.channels:
@@ -1292,9 +1299,16 @@ async def _do_jail(
                 manage_messages=True,
             )
 
-    jail_channel = await guild.create_text_channel(
-        ch_name, category=category, overwrites=overwrites  # type: ignore[arg-type]
-    )
+    try:
+        jail_channel = await guild.create_text_channel(
+            ch_name, category=category, overwrites=overwrites  # type: ignore[arg-type]
+        )
+    except discord.Forbidden:
+        await interaction.followup.send(
+            "I don't have permission to create channels. Grant **Manage Channels** and try again.",
+            ephemeral=True,
+        )
+        return
 
     # DB record
     with ctx.open_db() as conn:

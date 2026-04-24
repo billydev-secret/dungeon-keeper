@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 
 
 def _flatten_embeds(embeds: list[dict]) -> str | None:
@@ -333,7 +334,7 @@ def store_message(
     mention_ids: list[int],
     sentiment: float | None = None,
     emotion: str | None = None,
-    embeds: list[dict] = (),
+    embeds: Sequence[dict] = (),
 ) -> None:
     """Store a message and its related data. Silently skips if already stored.
 

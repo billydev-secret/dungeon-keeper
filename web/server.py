@@ -15,15 +15,18 @@ import time
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
+from typing import Any, cast
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import StreamingResponse
 
 from services.auto_delete_service import init_auto_delete_tables
 from services.booster_roles import init_booster_role_tables
+from services.confessions_service import init_db as init_confessions_db
 from services.health_service import init_health_tables
 from services.moderation import init_moderation_tables
 from services.wellness_service import init_wellness_tables
@@ -175,6 +178,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
         init_health_tables(conn)
         init_booster_role_tables(conn)
         init_auto_delete_tables(conn)
+    init_confessions_db(ctx.db_path)
 
     # ── OAuth routes (login / callback / logout) ────────────────────
     from web.routes import oauth as oauth_routes
@@ -201,6 +205,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])
+
+    from web.routes import todo as todo_routes
+
+    app.include_router(todo_routes.router, prefix="/api", tags=["todos"])
 
     # ── Health dashboard routes ────────────────────────────────────
     from web.routes import health as health_routes
@@ -233,10 +241,13 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
             path = request.url.path
             if not (path.startswith("/static/") and path.endswith(".js")):
                 return response
-            chunks: list[bytes] = []
-            async for chunk in response.body_iterator:
-                chunks.append(chunk)
-            body = b"".join(chunks)
+            raw_chunks: list[Any] = []
+            async for chunk in cast(StreamingResponse, response).body_iterator:
+                raw_chunks.append(chunk)
+            body = b"".join(
+                c if isinstance(c, bytes) else bytes(c) if isinstance(c, memoryview) else c.encode()
+                for c in raw_chunks
+            )
             try:
                 text = body.decode("utf-8")
             except UnicodeDecodeError:

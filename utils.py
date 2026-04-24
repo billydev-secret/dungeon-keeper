@@ -22,14 +22,7 @@ def get_interaction_member(interaction: discord.Interaction) -> discord.Member |
 
 def get_bot_member(guild: discord.Guild) -> discord.Member | None:
     """Get the bot's member object for a guild."""
-    if guild.me is not None:
-        return guild.me
-
-    bot_user = guild.client.user
-    if bot_user is None:
-        return None
-
-    return guild.get_member(bot_user.id)
+    return guild.me
 
 
 def format_user_for_log(

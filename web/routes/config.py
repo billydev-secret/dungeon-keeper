@@ -40,6 +40,11 @@ from services.inactivity_prune_service import (
 from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from xp_system import _XP_COEFF_PREFIX, DEFAULT_XP_SETTINGS
+from services.confessions_service import (
+    GuildConfig as _ConfessionsGuildConfig,
+    get_config as _confessions_get_config,
+    upsert_config as _confessions_upsert_config,
+)
 
 router = APIRouter()
 
@@ -132,6 +137,45 @@ def _xp_coefficients(conn, guild_id: int = 0) -> dict:
         "voice_min_humans": _i("voice_min_humans", d.voice_min_humans),
         "manual_grant_xp": _f("manual_grant_xp", d.manual_grant_xp),
         "level_curve_factor": _f("level_curve_factor", d.level_curve_factor),
+    }
+
+
+# ── Confessions config helper ─────────────────────────────────────────
+
+
+def _confessions_section(db_path, guild_id: int, bot, conn) -> dict:
+    cfg = _confessions_get_config(db_path, guild_id)
+    if cfg is None:
+        return {"configured": False}
+    guild = bot.get_guild(guild_id) if bot is not None else None
+
+    def _name(uid: int) -> str:
+        if guild:
+            m = guild.get_member(uid)
+            if m:
+                return m.display_name
+        row = conn.execute(
+            "SELECT display_name, username FROM known_users WHERE guild_id = ? AND user_id = ?",
+            (guild_id, uid),
+        ).fetchone()
+        return (row["display_name"] or row["username"] or str(uid)) if row else str(uid)
+
+    return {
+        "configured": True,
+        "dest_channel_id": str(cfg.dest_channel_id),
+        "log_channel_id": str(cfg.log_channel_id),
+        "cooldown_seconds": cfg.cooldown_seconds,
+        "max_chars": cfg.max_chars,
+        "panic": cfg.panic,
+        "replies_enabled": cfg.replies_enabled,
+        "notify_op_on_reply": cfg.notify_op_on_reply,
+        "per_day_limit": cfg.per_day_limit,
+        "launcher_channel_id": str(cfg.launcher_channel_id),
+        "launcher_message_id": str(cfg.launcher_message_id),
+        "blocked_users": [
+            {"id": str(uid), "name": _name(uid)}
+            for uid in sorted(cfg.blocked_set())
+        ],
     }
 
 
@@ -350,6 +394,7 @@ async def get_config(
                     }
                     for r in list_auto_delete_rules_for_guild(ctx.db_path, guild_id)
                 ],
+                "confessions": _confessions_section(ctx.db_path, guild_id, bot, conn),
             }
 
     return await run_query(_q)
@@ -1003,3 +1048,128 @@ async def remove_auto_delete(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+# ── Confessions config ───────────────────────────────────────────────
+
+
+class ConfessionsConfigUpdate(BaseModel):
+    dest_channel_id: str | None = None
+    log_channel_id: str | None = None
+    cooldown_seconds: int | None = None
+    max_chars: int | None = None
+    panic: bool | None = None
+    replies_enabled: bool | None = None
+    notify_op_on_reply: bool | None = None
+    per_day_limit: int | None = None
+
+
+@router.put("/config/confessions")
+async def update_confessions(
+    request: Request,
+    body: ConfessionsConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        cfg = _confessions_get_config(ctx.db_path, guild_id)
+        if cfg is None:
+            dest = int(body.dest_channel_id or 0)
+            log = int(body.log_channel_id or 0)
+            cfg = _ConfessionsGuildConfig(guild_id=guild_id, dest_channel_id=dest, log_channel_id=log)
+        if body.dest_channel_id is not None:
+            cfg.dest_channel_id = int(body.dest_channel_id)
+        if body.log_channel_id is not None:
+            cfg.log_channel_id = int(body.log_channel_id)
+        if body.cooldown_seconds is not None:
+            cfg.cooldown_seconds = body.cooldown_seconds
+        if body.max_chars is not None:
+            cfg.max_chars = body.max_chars
+        if body.panic is not None:
+            cfg.panic = body.panic
+        if body.replies_enabled is not None:
+            cfg.replies_enabled = body.replies_enabled
+        if body.notify_op_on_reply is not None:
+            cfg.notify_op_on_reply = body.notify_op_on_reply
+        if body.per_day_limit is not None:
+            cfg.per_day_limit = body.per_day_limit
+        _confessions_upsert_config(ctx.db_path, cfg)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.put("/config/confessions/block/{user_id}")
+async def block_confessions_user(
+    user_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        cfg = _confessions_get_config(ctx.db_path, guild_id)
+        if cfg is None:
+            raise HTTPException(404, "Confessions not configured for this guild")
+        s = cfg.blocked_set()
+        s.add(int(user_id))
+        cfg.blocked_user_ids = sorted(s)
+        _confessions_upsert_config(ctx.db_path, cfg)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/confessions/block/{user_id}")
+async def unblock_confessions_user(
+    user_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        cfg = _confessions_get_config(ctx.db_path, guild_id)
+        if cfg is None:
+            raise HTTPException(404, "Confessions not configured for this guild")
+        s = cfg.blocked_set()
+        s.discard(int(user_id))
+        cfg.blocked_user_ids = sorted(s)
+        _confessions_upsert_config(ctx.db_path, cfg)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class PostButtonRequest(BaseModel):
+    channel_id: str
+
+
+@router.post("/config/confessions/post-button")
+async def post_confessions_button(
+    request: Request,
+    body: PostButtonRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    cog = getattr(bot, "cogs", {}).get("ConfessionsCog")
+    if cog is None:
+        raise HTTPException(503, "Confessions module not loaded")
+
+    success = await cog.web_post_launcher(guild_id, int(body.channel_id))
+    if not success:
+        raise HTTPException(500, "Failed to post confession button — check channel and bot permissions")
+    return {"ok": True}

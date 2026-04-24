@@ -8,6 +8,11 @@ repos:
         entry: ./.venv/Scripts/python.exe -m ruff check .
         language: system
         pass_filenames: false
+      - id: pyright
+        name: pyright
+        entry: ./.venv/Scripts/python.exe -m pyright
+        language: system
+        pass_filenames: false
       # - id: mypy
       #   name: mypy
       #   entry: ./.venv/Scripts/python.exe -m mypy . --exclude .venv

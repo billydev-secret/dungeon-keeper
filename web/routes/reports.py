@@ -428,7 +428,6 @@ async def greeter_response(
             sessions = reports_data.get_greeter_log_sessions(
                 conn,
                 guild_id,
-                log_channel_id,
                 since_ts=cutoff_ts,
             )
             if not sessions:
@@ -939,7 +938,7 @@ async def quality_score(
             scores = compute_quality_scores(
                 conn,
                 guild_id,
-                members,
+                members,  # type: ignore[arg-type]
                 window_days=days,
                 min_active_days=min_active_days,
             )

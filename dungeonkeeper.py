@@ -10,71 +10,23 @@ import discord
 from dotenv import load_dotenv
 
 from app_context import AppContext, Bot, load_runtime_config
-from commands.activity_commands import register_activity_commands
-from commands.privacy_commands import register_privacy_commands
-from commands.ai_mod_commands import register_ai_mod_commands
-from commands.auto_delete_commands import register_auto_delete_commands
-from commands.config_commands import register_config_commands
-from commands.denizen_commands import register_denizen_commands
-from commands.drama_commands import register_drama_commands
-from commands.foolsday_commands import register_foolsday_commands
-from commands.gender_commands import register_gender_commands
-from commands.inactivity_prune_commands import register_inactivity_prune_commands
-from commands.interaction_commands import register_interaction_commands
-from commands.invite_commands import register_invite_commands
-from commands.jail_commands import register_jail_commands
-from commands.mod_commands import register_mod_commands
-from commands.spoiler_commands import register_spoiler_commands
-from commands.watch_commands import (
-    init_watch_tables,
-    load_watched_users,
-    register_watch_commands,
-)
-from commands.welcome_commands import register_welcome_commands
-from commands.wellness_admin_commands import register_wellness_admin_commands
-from commands.wellness_commands import register_wellness_commands
-from commands.xp_commands import register_xp_commands
-from db_utils import (
-    init_config_db,
-    init_grant_role_tables,
-    migrate_grant_roles,
-    open_db,
-)
-from handlers.events import register_events
-from reports import register_reports
-from services.auto_delete_service import auto_delete_loop, init_auto_delete_tables
-from services.booster_roles import BoosterRoleDynamicButton, init_booster_role_tables
-from services.gender_service import init_gender_tables
-from services.health_service import init_health_tables
-from services.inactivity_prune_service import (
-    inactivity_prune_loop,
-    init_inactivity_prune_tables,
-)
-from services.interaction_graph import init_interaction_tables
-from services.invite_tracker import init_invite_tables
-from services.member_quality_score import init_quality_score_tables
-from services.message_store import (
-    init_known_channels_table,
-    init_known_users_table,
-    init_member_events_table,
-    init_message_tables,
-)
-from services.moderation import init_moderation_tables
+from config import load_config
+from id_remap import build_remap
+from migrations import apply_migrations_sync
+from safety import check_bot_identity, check_db_path, check_guild_membership, print_startup_banner
+from commands.watch_commands import load_watched_users
+from db_utils import migrate_grant_roles, open_db
+from services.auto_delete_service import auto_delete_loop
+from services.booster_roles import BoosterRoleDynamicButton
+from services.inactivity_prune_service import inactivity_prune_loop
 from services.voice_xp_service import voice_xp_loop
 from services.wellness_partners import (
     WellnessPartnerAcceptButton,
     WellnessPartnerDeclineButton,
 )
 from services.db_backup import db_backup_loop
-from services.wellness_scheduler import (
-    wellness_active_list_loop,
-    wellness_tick_loop,
-    wellness_weekly_report_loop,
-)
-from services.wellness_service import init_wellness_tables
 from services.xp_service import handle_level_progress
 from utils import format_guild_for_log
-from xp_system import init_xp_tables
 
 # ==============================
 # Bootstrap
@@ -129,32 +81,15 @@ _setup_logging()
 
 log = logging.getLogger("dungeonkeeper.bot")
 
-TOKEN = os.getenv("DISCORD_TOKEN")
-DB_PATH = Path(__file__).with_name("dungeonkeeper.db")
+_boot_cfg = load_config()
+check_db_path(_boot_cfg)
+
+DB_PATH = Path(_boot_cfg.db_path)
 
 # ==============================
 # Database initialization
 # ==============================
-init_config_db(DB_PATH)
-
-with open_db(DB_PATH) as _conn:
-    init_xp_tables(_conn)
-    init_auto_delete_tables(_conn)
-    init_watch_tables(_conn)
-    init_inactivity_prune_tables(_conn)
-    init_interaction_tables(_conn)
-    init_invite_tables(_conn)
-    init_message_tables(_conn)
-    init_known_users_table(_conn)
-    init_known_channels_table(_conn)
-    init_member_events_table(_conn)
-    init_grant_role_tables(_conn)
-    init_booster_role_tables(_conn)
-    init_quality_score_tables(_conn)
-    init_gender_tables(_conn)
-    init_moderation_tables(_conn)
-    init_wellness_tables(_conn)
-    init_health_tables(_conn)
+apply_migrations_sync(DB_PATH)
 
 # ==============================
 # Runtime config + context
@@ -204,32 +139,55 @@ with open_db(DB_PATH) as _conn:
 
 ctx.reload_grant_roles()
 ctx.reload_xp_settings()
+ctx.reload_permission_roles()
 
 # ==============================
-# Event handlers + commands
+# Cog extensions
 # ==============================
-register_events(bot, ctx)
-register_activity_commands(bot, ctx)
-register_interaction_commands(bot, ctx)
-register_ai_mod_commands(bot, ctx)
-register_xp_commands(bot, ctx)
-register_denizen_commands(bot, ctx)
-register_spoiler_commands(bot, ctx)
-register_auto_delete_commands(bot, ctx)
-register_inactivity_prune_commands(bot, ctx)
-register_drama_commands(bot, ctx)
-register_mod_commands(bot, ctx)
-register_config_commands(bot, ctx)
-register_welcome_commands(bot, ctx)
-register_reports(bot, ctx)
-register_watch_commands(bot, ctx)
-register_foolsday_commands(bot, ctx)
-register_gender_commands(bot, ctx)
-register_invite_commands(bot, ctx)
-register_jail_commands(bot, ctx)
-register_wellness_admin_commands(bot, ctx)
-register_wellness_commands(bot, ctx)
-register_privacy_commands(bot, ctx)
+bot.ctx = ctx
+bot.extension_names = [
+    "cogs.events_cog",
+    "cogs.ai_mod_cog",
+    "cogs.denizen_cog",
+    "cogs.foolsday_cog",
+    "cogs.interaction_cog",
+    "cogs.invite_cog",
+    "cogs.jail_cog",
+    "cogs.mod_cog",
+    "cogs.privacy_cog",
+    "cogs.reports_cog",
+    "cogs.todo_cog",
+    "cogs.watch_cog",
+    "cogs.welcome_cog",
+    "cogs.wellness_admin_cog",
+    "cogs.wellness_cog",
+    "cogs.xp_cog",
+    "cogs.confessions_cog",
+    "cogs.dm_perms_cog",
+    "cogs.birthday_cog",
+    "cogs.dev_cog",
+    "cogs.setup_cog",
+    "cogs.starboard_cog",
+]
+
+# ==============================
+# Safety on_ready checks (spec §8)
+# ==============================
+@bot.event
+async def on_ready() -> None:
+    if bot.user:
+        check_bot_identity(_boot_cfg, bot.user)
+    print_startup_banner(_boot_cfg, bot.user)
+    await check_guild_membership(_boot_cfg, bot)
+
+    if _boot_cfg.is_dev:
+        guild = bot.get_guild(_boot_cfg.guild_id)
+        if guild:
+            import aiosqlite
+            async with aiosqlite.connect(str(DB_PATH)) as _remap_db:
+                _remap_db.row_factory = aiosqlite.Row
+                await build_remap(_remap_db, guild)
+
 
 # Register persistent booster-role buttons so they survive restarts
 bot.add_dynamic_items(BoosterRoleDynamicButton)
@@ -262,12 +220,6 @@ bot.startup_task_factories.append(
 bot.startup_task_factories.append(lambda: auto_delete_loop(bot, DB_PATH))
 
 bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, DB_PATH))
-
-bot.startup_task_factories.append(lambda: wellness_tick_loop(bot, DB_PATH))
-
-bot.startup_task_factories.append(lambda: wellness_active_list_loop(bot, DB_PATH))
-
-bot.startup_task_factories.append(lambda: wellness_weekly_report_loop(bot, DB_PATH))
 
 bot.startup_task_factories.append(lambda: db_backup_loop(bot, DB_PATH))
 
@@ -545,7 +497,7 @@ async def _reports_batch_loop() -> None:
                             try:
                                 _put(name, params, fn(conn, gid, **kwargs))
                             except Exception:
-                                pass
+                                log.exception("Reports cache warming failed for %s", name)
 
                         # join-times needs the member snapshot list, not a conn arg
                         try:
@@ -555,7 +507,7 @@ async def _reports_batch_loop() -> None:
                                 reports_data.get_join_times_data(member_snapshots, "hour_of_day", tz),
                             )
                         except Exception:
-                            pass
+                            log.exception("Reports cache warming failed for join-times")
 
                         if nsfw_ids:
                             try:
@@ -565,7 +517,7 @@ async def _reports_batch_loop() -> None:
                                     reports_data.get_nsfw_gender_data(conn, gid, "week", nsfw_ids, tz, False),
                                 )
                             except Exception:
-                                pass
+                                log.exception("Reports cache warming failed for nsfw-gender")
 
                 await asyncio.to_thread(_warm)
                 log.info("Reports cache warmed for guild %s", format_guild_for_log(guild))
@@ -629,8 +581,6 @@ async def _shutdown() -> None:
 
 async def _run_bot() -> None:
     """Start the bot with proper signal handling for graceful shutdown."""
-    if not TOKEN:
-        raise RuntimeError("DISCORD_TOKEN is not set.")
     loop = asyncio.get_running_loop()
 
     # Install signal handlers (Unix-style; on Windows only SIGINT works via loop)
@@ -644,7 +594,7 @@ async def _run_bot() -> None:
 
     try:
         async with bot:
-            await bot.start(TOKEN)
+            await bot.start(_boot_cfg.token)
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
@@ -655,6 +605,4 @@ async def _run_bot() -> None:
 # Run
 # ==============================
 if __name__ == "__main__":
-    if not TOKEN:
-        raise RuntimeError("DISCORD_TOKEN is not set.")
     asyncio.run(_run_bot())

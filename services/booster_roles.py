@@ -399,7 +399,7 @@ async def sync_swatches(
 
     # Discover swatch files
     # role_key → (label, hex1, hex2, file_path, sort_order)
-    found: dict[str, tuple[str, str, str, int]] = {}
+    found: dict[str, tuple[str, str, str, str, int]] = {}
     for entry in os.listdir(swatch_dir):
         ext = os.path.splitext(entry)[1].lower()
         if ext not in _IMAGE_EXTS:
