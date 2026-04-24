@@ -141,8 +141,16 @@ async def _execute_grant(
     if log_channel_id > 0:
         log_channel = guild.get_channel(log_channel_id)
         if isinstance(log_channel, discord.TextChannel):
+            audit_embed = discord.Embed(
+                description=(
+                    f"{member.display_name} was granted {role.name}"
+                    f" by {interaction.user.display_name}."
+                ),
+                color=discord.Color.green(),
+            )
             await log_channel.send(
-                f"{member.display_name} was granted {role.name} by {interaction.user.display_name}."
+                embed=audit_embed,
+                allowed_mentions=discord.AllowedMentions.none(),
             )
 
 
