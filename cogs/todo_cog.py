@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+from services.todo_service import create_todo
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -33,11 +34,7 @@ class TodoCog(commands.Cog):
             )
             return
         with self.ctx.open_db() as conn:
-            cur = conn.execute(
-                "INSERT INTO todos (guild_id, added_by, task, created_at) VALUES (?, ?, ?, ?)",
-                (interaction.guild.id, interaction.user.id, task, time.time()),
-            )
-            todo_id = cur.lastrowid
+            todo_id = create_todo(conn, interaction.guild.id, interaction.user.id, task)
         await interaction.response.send_message(
             f"Todo #{todo_id} added: {task}", ephemeral=True
         )

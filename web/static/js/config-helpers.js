@@ -97,3 +97,19 @@ export function showStatus(el, ok, msg) {
   el.textContent = msg || (ok ? "Saved" : "Error");
   if (ok) setTimeout(() => { el.textContent = ""; }, 3000);
 }
+
+export function buildField(labelText, control, hint) {
+  const div = document.createElement("div");
+  div.className = "field";
+  const lbl = document.createElement("label");
+  lbl.textContent = labelText;
+  div.appendChild(lbl);
+  div.appendChild(control);
+  if (hint) {
+    const h = document.createElement("div");
+    h.className = "field-hint";
+    h.textContent = hint;
+    div.appendChild(h);
+  }
+  return div;
+}

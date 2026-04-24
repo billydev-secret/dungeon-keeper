@@ -226,7 +226,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             thread = await sent.create_thread(name=thread_name_from_content(content), auto_archive_duration=10080)
             update_discord_thread_id(db_path, interaction.guild.id, sent.id, thread.id)
             try:
-                await sent.edit(view=ConfessionsCog.build_reply_button_view(sent.id))
+                await thread.send(view=ConfessionsCog.build_reply_button_view(sent.id))
             except discord.HTTPException:
                 pass
         except discord.HTTPException:

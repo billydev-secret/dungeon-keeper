@@ -14,7 +14,7 @@ from config import load_config
 from id_remap import build_remap
 from migrations import apply_migrations_sync
 from safety import check_bot_identity, check_db_path, check_guild_membership, print_startup_banner
-from commands.watch_commands import load_watched_users
+from services.watch_service import load_watched_users
 from db_utils import migrate_grant_roles, open_db
 from services.auto_delete_service import auto_delete_loop
 from services.booster_roles import BoosterRoleDynamicButton
@@ -102,7 +102,6 @@ intents.presences = True
 intents.message_content = True
 
 bot = Bot(intents=intents, debug=_cfg["debug"], guild_id=_cfg["guild_id"])
-bot.db_path = DB_PATH  # type: ignore[attr-defined]  # used by persistent button callbacks
 
 ctx = AppContext(
     bot=bot,

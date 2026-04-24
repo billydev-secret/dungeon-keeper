@@ -1,4 +1,4 @@
-import { loadConfig, loadChannels, apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { loadConfig, loadChannels, apiPut, apiDelete, showStatus, buildField } from "../config-helpers.js";
 import { api, esc } from "../api.js";
 
 function buildSelect(name, channels, selectedId, allowNone) {
@@ -36,21 +36,6 @@ function buildBoolSelect(name, value, trueLabel, falseLabel) {
   return sel;
 }
 
-function buildField(labelText, control, hint) {
-  const div = document.createElement("div");
-  div.className = "field";
-  const lbl = document.createElement("label");
-  lbl.textContent = labelText;
-  div.appendChild(lbl);
-  div.appendChild(control);
-  if (hint) {
-    const h = document.createElement("div");
-    h.className = "field-hint";
-    h.textContent = hint;
-    div.appendChild(h);
-  }
-  return div;
-}
 
 function buildNumberInput(name, min, max, value) {
   const inp = document.createElement("input");

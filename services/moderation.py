@@ -64,6 +64,51 @@ def fmt_duration(seconds: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Jail role snapshot / restore (pure)
+# ---------------------------------------------------------------------------
+
+
+def compute_roles_to_snapshot(
+    member_role_ids: list[int],
+    default_role_id: int,
+    jailed_role_id: int,
+) -> list[int]:
+    """Return the role IDs to save when jailing a member.
+
+    Excludes the @everyone role (can't be stripped or re-added) and the Jailed
+    role itself (would reapply the jail on release). Preserves input order so
+    tests can assert it.
+    """
+    return [
+        rid for rid in member_role_ids
+        if rid != default_role_id and rid != jailed_role_id
+    ]
+
+
+def compute_roles_to_restore(
+    stored_role_ids: list[int],
+    available_role_ids: set[int],
+) -> tuple[list[int], list[int]]:
+    """Split stored role IDs into (restorable, missing).
+
+    A role is *restorable* if it still exists in the guild (its ID appears in
+    *available_role_ids*). Otherwise it's *missing* — the role was deleted
+    while the member was jailed and cannot be given back.
+
+    Returns two lists preserving the input order so the caller can log the
+    missing set meaningfully.
+    """
+    restorable: list[int] = []
+    missing: list[int] = []
+    for rid in stored_role_ids:
+        if rid in available_role_ids:
+            restorable.append(rid)
+        else:
+            missing.append(rid)
+    return restorable, missing
+
+
+# ---------------------------------------------------------------------------
 # Database schema
 # ---------------------------------------------------------------------------
 

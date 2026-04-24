@@ -39,6 +39,34 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.message_xp")
 
 
+def split_award_into_text_and_reply(
+    total_awarded_xp: float,
+    reply_bonus_xp: float,
+    cooldown_multiplier: float,
+    duplicate_multiplier: float,
+    pair_multiplier: float,
+) -> tuple[float, float]:
+    """Split the awarded XP for an event into (text_amount, reply_amount).
+
+    The reply bonus — before multipliers — is `reply_bonus_xp`. It's subject
+    to the same three multipliers as the base message XP (cooldown, duplicate,
+    pair). The text portion is the remainder after subtracting the scaled
+    reply bonus, floored at 0 so a tiny rounding mismatch never produces a
+    negative text award.
+
+    Both returns are rounded to 2 decimal places to match the DB column
+    precision. If there's no reply bonus, reply portion is exactly 0.0.
+    """
+    if reply_bonus_xp <= 0:
+        return round(total_awarded_xp, 2), 0.0
+    reply_award = round(
+        reply_bonus_xp * cooldown_multiplier * duplicate_multiplier * pair_multiplier,
+        2,
+    )
+    text_award = round(max(0.0, total_awarded_xp - reply_award), 2)
+    return text_award, reply_award
+
+
 async def award_message_xp(
     message: discord.Message,
     bot: discord.Client,
@@ -108,16 +136,13 @@ async def award_message_xp(
             message_norm=breakdown.normalized_content,
             settings=settings,
         )
-        reply_award = 0.0
-        if breakdown.reply_bonus_xp > 0:
-            reply_award = round(
-                breakdown.reply_bonus_xp
-                * breakdown.cooldown_multiplier
-                * breakdown.duplicate_multiplier
-                * breakdown.pair_multiplier,
-                2,
-            )
-        text_award = round(max(0.0, award.awarded_xp - reply_award), 2)
+        text_award, reply_award = split_award_into_text_and_reply(
+            total_awarded_xp=award.awarded_xp,
+            reply_bonus_xp=breakdown.reply_bonus_xp,
+            cooldown_multiplier=breakdown.cooldown_multiplier,
+            duplicate_multiplier=breakdown.duplicate_multiplier,
+            pair_multiplier=breakdown.pair_multiplier,
+        )
         record_xp_event(
             conn,
             message.guild.id,

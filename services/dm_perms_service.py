@@ -325,6 +325,27 @@ def load_panel_settings(db_path: Path) -> dict[int, dict[str, Optional[int]]]:
     }
 
 
+def get_dms_config(db_path: Path, guild_id: int) -> dict[str, int]:
+    """Return all DM-perms config fields for one guild in a single connection."""
+    with open_db(db_path) as conn:
+        req = conn.execute(
+            "SELECT channel_id FROM dm_request_channels WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+        aud = conn.execute(
+            "SELECT channel_id FROM dm_audit_channels WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+        pan = conn.execute(
+            "SELECT panel_channel_id, panel_message_id FROM dm_panel_settings WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()
+    return {
+        "request_channel_id": int(req["channel_id"]) if req else 0,
+        "audit_channel_id": int(aud["channel_id"]) if aud else 0,
+        "panel_channel_id": int(pan["panel_channel_id"]) if pan and pan["panel_channel_id"] else 0,
+        "panel_message_id": int(pan["panel_message_id"]) if pan and pan["panel_message_id"] else 0,
+    }
+
+
 def set_panel_settings(
     db_path: Path, guild_id: int, panel_channel_id: Optional[int], panel_message_id: Optional[int]
 ) -> None:

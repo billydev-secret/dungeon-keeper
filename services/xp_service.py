@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,44 @@ if TYPE_CHECKING:
     GuildTextLike = discord.TextChannel | discord.Thread
 
 log = logging.getLogger("dungeonkeeper.xp_service")
+
+
+class LevelRoleDecision(Enum):
+    """Outcome of the level-role eligibility check."""
+
+    GRANT = "grant"
+    SKIP_NOT_CONFIGURED = "skip_not_configured"
+    SKIP_BELOW_THRESHOLD = "skip_below_threshold"
+    SKIP_ROLE_MISSING = "skip_role_missing"
+    SKIP_ALREADY_HAS = "skip_already_has"
+
+
+def should_grant_level_role(
+    new_level: int,
+    role_grant_level: int,
+    level_role_id: int,
+    role_exists: bool,
+    member_already_has_role: bool,
+) -> LevelRoleDecision:
+    """Decide whether a member qualifies for the level-reward role.
+
+    Checks run in fixed priority order so a skip reason stays stable even if
+    later inputs change:
+      1. Reward role not configured (id <= 0)   → SKIP_NOT_CONFIGURED
+      2. Member's level below threshold         → SKIP_BELOW_THRESHOLD
+      3. Configured role doesn't exist in guild → SKIP_ROLE_MISSING
+      4. Member already has the role            → SKIP_ALREADY_HAS
+      5. Otherwise                              → GRANT
+    """
+    if level_role_id <= 0:
+        return LevelRoleDecision.SKIP_NOT_CONFIGURED
+    if new_level < role_grant_level:
+        return LevelRoleDecision.SKIP_BELOW_THRESHOLD
+    if not role_exists:
+        return LevelRoleDecision.SKIP_ROLE_MISSING
+    if member_already_has_role:
+        return LevelRoleDecision.SKIP_ALREADY_HAS
+    return LevelRoleDecision.GRANT
 
 
 def channel_is_xp_allowed(
@@ -43,15 +82,25 @@ async def maybe_grant_level_role(
     db_path: Path | None = None,
 ) -> None:
     """Grant a level reward role to a member if they qualify."""
-    if level_role_id <= 0:
+    role = (
+        member.guild.get_role(level_role_id) if level_role_id > 0 else None
+    )
+    decision = should_grant_level_role(
+        new_level=new_level,
+        role_grant_level=settings.role_grant_level,
+        level_role_id=level_role_id,
+        role_exists=role is not None,
+        member_already_has_role=role is not None and role in member.roles,
+    )
+
+    if decision is LevelRoleDecision.SKIP_NOT_CONFIGURED:
         log.debug(
             "Skipping level %s role grant for %s: reward role is not configured.",
             settings.role_grant_level,
             format_user_for_log(member),
         )
         return
-
-    if new_level < settings.role_grant_level:
+    if decision is LevelRoleDecision.SKIP_BELOW_THRESHOLD:
         log.debug(
             "Skipping level %s role grant for %s: member level is %s.",
             settings.role_grant_level,
@@ -59,17 +108,15 @@ async def maybe_grant_level_role(
             new_level,
         )
         return
-
-    role = member.guild.get_role(level_role_id)
-    if role is None:
+    if decision is LevelRoleDecision.SKIP_ROLE_MISSING:
         log.warning(
             "Level %s reward role %s was not found.",
             settings.role_grant_level,
             level_role_id,
         )
         return
-
-    if role in member.roles:
+    if decision is LevelRoleDecision.SKIP_ALREADY_HAS:
+        assert role is not None  # Guaranteed by decision branch
         log.debug(
             "Skipping level %s role grant for %s: role %s is already assigned.",
             settings.role_grant_level,
@@ -78,6 +125,7 @@ async def maybe_grant_level_role(
         )
         return
 
+    assert role is not None  # decision == GRANT implies role exists
     try:
         await member.add_roles(
             role, reason=f"Reached level {settings.role_grant_level}"

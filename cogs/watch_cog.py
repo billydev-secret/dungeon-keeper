@@ -8,6 +8,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.watch_service import add_watched_user, remove_watched_user
+
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
@@ -49,18 +51,18 @@ class WatchCog(commands.Cog):
             )
             return
 
+        if interaction.guild_id is None:
+            await interaction.response.send_message(
+                "This command must be used in a server.", ephemeral=True
+            )
+            return
+
         guild_id = interaction.guild_id
         watcher_id = interaction.user.id
         watched_id = user.id
 
         with ctx.open_db() as conn:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO watched_users (guild_id, watched_user_id, watcher_user_id)
-                VALUES (?, ?, ?)
-                """,
-                (guild_id, watched_id, watcher_id),
-            )
+            add_watched_user(conn, guild_id, watched_id, watcher_id)
 
         ctx.watched_users.setdefault(watched_id, set()).add(watcher_id)
 
@@ -81,15 +83,18 @@ class WatchCog(commands.Cog):
             )
             return
 
+        if interaction.guild_id is None:
+            await interaction.response.send_message(
+                "This command must be used in a server.", ephemeral=True
+            )
+            return
+
         guild_id = interaction.guild_id
         watcher_id = interaction.user.id
         watched_id = user.id
 
         with ctx.open_db() as conn:
-            conn.execute(
-                "DELETE FROM watched_users WHERE guild_id = ? AND watched_user_id = ? AND watcher_user_id = ?",
-                (guild_id, watched_id, watcher_id),
-            )
+            remove_watched_user(conn, guild_id, watched_id, watcher_id)
 
         if watched_id in ctx.watched_users:
             ctx.watched_users[watched_id].discard(watcher_id)

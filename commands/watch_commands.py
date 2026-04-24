@@ -11,39 +11,15 @@ Commands (all mod-only, under the /watch group):
 
 from __future__ import annotations
 
-import sqlite3
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 
+from services.watch_service import add_watched_user, remove_watched_user
+
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
-
-
-def init_watch_tables(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS watched_users (
-            guild_id       INTEGER NOT NULL,
-            watched_user_id INTEGER NOT NULL,
-            watcher_user_id INTEGER NOT NULL,
-            PRIMARY KEY (guild_id, watched_user_id, watcher_user_id)
-        )
-        """
-    )
-
-
-def load_watched_users(conn: sqlite3.Connection, guild_id: int) -> dict[int, set[int]]:
-    """Return {watched_user_id: {watcher_user_id, ...}} for the given guild."""
-    rows = conn.execute(
-        "SELECT watched_user_id, watcher_user_id FROM watched_users WHERE guild_id = ?",
-        (guild_id,),
-    ).fetchall()
-    result: dict[int, set[int]] = {}
-    for row in rows:
-        result.setdefault(row["watched_user_id"], set()).add(row["watcher_user_id"])
-    return result
 
 
 def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
@@ -77,18 +53,18 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
+        if interaction.guild_id is None:
+            await interaction.response.send_message(
+                "This command must be used in a server.", ephemeral=True
+            )
+            return
+
         guild_id = interaction.guild_id
         watcher_id = interaction.user.id
         watched_id = user.id
 
         with ctx.open_db() as conn:
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO watched_users (guild_id, watched_user_id, watcher_user_id)
-                VALUES (?, ?, ?)
-                """,
-                (guild_id, watched_id, watcher_id),
-            )
+            add_watched_user(conn, guild_id, watched_id, watcher_id)
 
         ctx.watched_users.setdefault(watched_id, set()).add(watcher_id)
 
@@ -109,15 +85,18 @@ def register_watch_commands(bot: Bot, ctx: AppContext) -> None:
             )
             return
 
+        if interaction.guild_id is None:
+            await interaction.response.send_message(
+                "This command must be used in a server.", ephemeral=True
+            )
+            return
+
         guild_id = interaction.guild_id
         watcher_id = interaction.user.id
         watched_id = user.id
 
         with ctx.open_db() as conn:
-            conn.execute(
-                "DELETE FROM watched_users WHERE guild_id = ? AND watched_user_id = ? AND watcher_user_id = ?",
-                (guild_id, watched_id, watcher_id),
-            )
+            remove_watched_user(conn, guild_id, watched_id, watcher_id)
 
         if watched_id in ctx.watched_users:
             ctx.watched_users[watched_id].discard(watcher_id)

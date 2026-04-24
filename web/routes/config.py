@@ -38,9 +38,7 @@ from services.inactivity_prune_service import (
     remove_prune_exception,
 )
 from services.dm_perms_service import (
-    load_audit_channels,
-    load_panel_settings,
-    load_request_channels,
+    get_dms_config,
     set_audit_channel,
     set_panel_settings,
     set_request_channel,
@@ -51,6 +49,7 @@ from xp_system import _XP_COEFF_PREFIX, DEFAULT_XP_SETTINGS
 from services.confessions_service import (
     GuildConfig as _ConfessionsGuildConfig,
     get_config as _confessions_get_config,
+    get_config_conn as _confessions_get_config_conn,
     upsert_config as _confessions_upsert_config,
 )
 
@@ -148,41 +147,34 @@ def _xp_coefficients(conn, guild_id: int = 0) -> dict:
     }
 
 
+def _lookup_member_name(uid: int, guild, conn, guild_id: int) -> str:
+    if guild:
+        m = guild.get_member(uid)
+        if m:
+            return m.display_name
+    row = conn.execute(
+        "SELECT display_name, username FROM known_users WHERE guild_id = ? AND user_id = ?",
+        (guild_id, uid),
+    ).fetchone()
+    return (row["display_name"] or row["username"] or str(uid)) if row else str(uid)
+
+
 # ── DM perms config helper ────────────────────────────────────────────
 
 
 def _dms_section(db_path, guild_id: int) -> dict:
-    request_channels = load_request_channels(db_path)
-    audit_channels = load_audit_channels(db_path)
-    panel_settings = load_panel_settings(db_path)
-    panel = panel_settings.get(guild_id, {})
-    return {
-        "request_channel_id": str(request_channels.get(guild_id) or 0),
-        "audit_channel_id": str(audit_channels.get(guild_id) or 0),
-        "panel_channel_id": str(panel.get("panel_channel_id") or 0),
-        "panel_message_id": str(panel.get("panel_message_id") or 0),
-    }
+    cfg = get_dms_config(db_path, guild_id)
+    return {k: str(v) for k, v in cfg.items()}
 
 
 # ── Confessions config helper ─────────────────────────────────────────
 
 
-def _confessions_section(db_path, guild_id: int, bot, conn) -> dict:
-    cfg = _confessions_get_config(db_path, guild_id)
+def _confessions_section(guild_id: int, bot, conn) -> dict:
+    cfg = _confessions_get_config_conn(conn, guild_id)
     if cfg is None:
         return {"configured": False}
     guild = bot.get_guild(guild_id) if bot is not None else None
-
-    def _name(uid: int) -> str:
-        if guild:
-            m = guild.get_member(uid)
-            if m:
-                return m.display_name
-        row = conn.execute(
-            "SELECT display_name, username FROM known_users WHERE guild_id = ? AND user_id = ?",
-            (guild_id, uid),
-        ).fetchone()
-        return (row["display_name"] or row["username"] or str(uid)) if row else str(uid)
 
     return {
         "configured": True,
@@ -197,7 +189,7 @@ def _confessions_section(db_path, guild_id: int, bot, conn) -> dict:
         "launcher_channel_id": str(cfg.launcher_channel_id),
         "launcher_message_id": str(cfg.launcher_message_id),
         "blocked_users": [
-            {"id": str(uid), "name": _name(uid)}
+            {"id": str(uid), "name": _lookup_member_name(uid, guild, conn, guild_id)}
             for uid in sorted(cfg.blocked_set())
         ],
     }
@@ -228,21 +220,8 @@ async def get_config(
             bot = getattr(ctx, "bot", None)
             prune_guild = bot.get_guild(guild_id) if bot is not None else None
 
-            def _member_name(uid: int) -> str:
-                if prune_guild is not None:
-                    m = prune_guild.get_member(uid)
-                    if m is not None:
-                        return m.display_name
-                row = conn.execute(
-                    "SELECT display_name, username FROM known_users WHERE guild_id = ? AND user_id = ?",
-                    (guild_id, uid),
-                ).fetchone()
-                if row is not None:
-                    return row["display_name"] or row["username"] or str(uid)
-                return str(uid)
-
             exempt_users = [
-                {"id": str(uid), "name": _member_name(uid)}
+                {"id": str(uid), "name": _lookup_member_name(uid, prune_guild, conn, guild_id)}
                 for uid in sorted(prune_exempt_ids)
             ]
 
@@ -418,7 +397,7 @@ async def get_config(
                     }
                     for r in list_auto_delete_rules_for_guild(ctx.db_path, guild_id)
                 ],
-                "confessions": _confessions_section(ctx.db_path, guild_id, bot, conn),
+                "confessions": _confessions_section(guild_id, bot, conn),
                 "dms": _dms_section(ctx.db_path, guild_id),
             }
 

@@ -7,7 +7,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from services.message_store import get_known_users_bulk
+from web.helpers import resolve_names as _resolve_names
 from services.moderation import (
     claim_ticket,
     close_ticket,
@@ -40,38 +40,6 @@ from web.schemas import (
 router = APIRouter()
 
 
-def _resolve_names(ctx, guild, entries, *id_name_pairs):
-    if not entries:
-        return
-    _guild_id = guild.id if guild else 0
-    unresolved: set[int] = set()
-    for entry in entries:
-        for id_field, name_field in id_name_pairs:
-            uid = entry.get(id_field)
-            if uid:
-                if guild:
-                    member = guild.get_member(int(uid))
-                    if member:
-                        entry[name_field] = member.display_name
-                        continue
-                unresolved.add(int(uid))
-    if unresolved:
-        with ctx.open_db() as conn:
-            known = get_known_users_bulk(conn, _guild_id, list(unresolved))
-        for entry in entries:
-            for id_field, name_field in id_name_pairs:
-                if entry.get(name_field):
-                    continue
-                uid = entry.get(id_field)
-                if uid and int(uid) in known:
-                    entry[name_field] = known[int(uid)]
-    for entry in entries:
-        for id_field, name_field in id_name_pairs:
-            if entry.get(name_field):
-                continue
-            uid = entry.get(id_field)
-            if uid:
-                entry[name_field] = f"User {uid}"
 
 
 # ── Summary stats ─────────────────────────────────────────────────────────

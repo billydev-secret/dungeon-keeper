@@ -191,13 +191,7 @@ def _create_tables(conn: sqlite3.Connection) -> None:
     """)
 
 
-def get_config(db_path: Path, guild_id: int) -> Optional[GuildConfig]:
-    with open_db(db_path) as conn:
-        row = conn.execute(
-            "SELECT * FROM confession_config WHERE guild_id = ?", (guild_id,)
-        ).fetchone()
-    if not row:
-        return None
+def _row_to_guild_config(row) -> GuildConfig:
     return GuildConfig(
         guild_id=row["guild_id"],
         dest_channel_id=row["dest_channel_id"],
@@ -213,6 +207,22 @@ def get_config(db_path: Path, guild_id: int) -> Optional[GuildConfig]:
         launcher_message_id=row["launcher_message_id"],
         blocked_user_ids=json.loads(row["blocked_user_ids"] or "[]"),
     )
+
+
+def get_config(db_path: Path, guild_id: int) -> Optional[GuildConfig]:
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM confession_config WHERE guild_id = ?", (guild_id,)
+        ).fetchone()
+    return _row_to_guild_config(row) if row else None
+
+
+def get_config_conn(conn, guild_id: int) -> Optional[GuildConfig]:
+    """Read confession config using an already-open connection."""
+    row = conn.execute(
+        "SELECT * FROM confession_config WHERE guild_id = ?", (guild_id,)
+    ).fetchone()
+    return _row_to_guild_config(row) if row else None
 
 
 def upsert_config(db_path: Path, cfg: GuildConfig) -> None:

@@ -25,6 +25,8 @@ from services.moderation import (
     claim_ticket,
     close_policy_ticket,
     close_ticket,
+    compute_roles_to_restore,
+    compute_roles_to_snapshot,
     create_jail,
     create_policy_ticket,
     create_ticket,
@@ -1246,9 +1248,11 @@ async def _do_jail(
                 pass
 
     # Snapshot roles
-    stored_roles = [
-        r.id for r in target.roles if r != guild.default_role and r.id != jailed_role.id
-    ]
+    stored_roles = compute_roles_to_snapshot(
+        [r.id for r in target.roles],
+        default_role_id=guild.default_role.id,
+        jailed_role_id=jailed_role.id,
+    )
 
     # Strip roles + assign Jailed
     try:
@@ -1405,14 +1409,11 @@ async def _do_unjail(
 
     # Restore roles
     stored = json.loads(jail["stored_roles"])
-    roles_to_add: list[discord.Role] = []
-    missing: list[int] = []
-    for rid in stored:
-        role = guild.get_role(rid)
-        if role:
-            roles_to_add.append(role)
-        else:
-            missing.append(rid)
+    available_role_ids = {r.id for r in guild.roles}
+    restorable_ids, missing = compute_roles_to_restore(stored, available_role_ids)
+    roles_to_add: list[discord.Role] = [
+        r for r in (guild.get_role(rid) for rid in restorable_ids) if r is not None
+    ]
 
     try:
         await target.edit(roles=roles_to_add, reason=f"Unjailed: {reason}")

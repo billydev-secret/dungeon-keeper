@@ -219,6 +219,44 @@ _BULK_DELETE_MAX_AGE = (
 _BULK_CHUNK = 100
 
 
+# ---------------------------------------------------------------------------
+# Pure scheduling / partition decisions
+# ---------------------------------------------------------------------------
+
+
+def is_rule_due(now_ts: float, last_run_ts: float, interval_seconds: int) -> bool:
+    """Return True if a rule's interval has elapsed since its last run.
+
+    A rule that has never run (last_run_ts == 0) is always due. Uses strict `>=`
+    so a rule with a 60-second interval can fire at exactly t+60.
+    """
+    return (now_ts - last_run_ts) >= interval_seconds
+
+
+def partition_messages_by_age(
+    messages: list[tuple[int, float]],
+    now_ts: float,
+    bulk_age_limit: int = _BULK_DELETE_MAX_AGE,
+) -> tuple[list[int], list[int]]:
+    """Split (message_id, created_at) pairs into (bulk_eligible, individual_only).
+
+    Discord's bulk-delete endpoint rejects messages older than 14 days; we use a
+    13-day buffer. Messages at or under the threshold are bulk-eligible; older
+    ones must be deleted one at a time.
+
+    Returns two lists of message IDs, each preserving the input order.
+    """
+    bulk_cutoff_ts = now_ts - bulk_age_limit
+    bulk: list[int] = []
+    individual: list[int] = []
+    for msg_id, created_at in messages:
+        if created_at > bulk_cutoff_ts:
+            bulk.append(msg_id)
+        else:
+            individual.append(msg_id)
+    return bulk, individual
+
+
 def pop_due_auto_delete_message_ids(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -288,15 +326,12 @@ async def delete_tracked_messages_older_than(
             break
 
         now = time.time()
-        bulk_cutoff = now - _BULK_DELETE_MAX_AGE
-
-        bulk = [(mid, ts) for mid, ts in due if ts > bulk_cutoff]
-        old = [(mid, ts) for mid, ts in due if ts <= bulk_cutoff]
+        bulk_ids, old_ids = partition_messages_by_age(due, now)
 
         # Bulk-delete recent messages in chunks of 100
         abort = False
-        for i in range(0, len(bulk), _BULK_CHUNK):
-            chunk_ids = [mid for mid, _ in bulk[i : i + _BULK_CHUNK]]
+        for i in range(0, len(bulk_ids), _BULK_CHUNK):
+            chunk_ids = bulk_ids[i : i + _BULK_CHUNK]
             partials = [channel.get_partial_message(mid) for mid in chunk_ids]
             try:
                 await channel.delete_messages(partials, reason=reason)
@@ -323,12 +358,12 @@ async def delete_tracked_messages_older_than(
                     db_path, guild_id, channel.id, set(chunk_ids)
                 )
 
-            if i + _BULK_CHUNK < len(bulk):
+            if i + _BULK_CHUNK < len(bulk_ids):
                 await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
 
         # Individual delete for messages older than 13 days
         next_delete_at = 0.0
-        for mid, _ in old:
+        for mid in old_ids:
             now_monotonic = time.monotonic()
             if now_monotonic < next_delete_at:
                 await asyncio.sleep(next_delete_at - now_monotonic)
@@ -460,7 +495,7 @@ async def process_auto_delete_tick(
         interval_seconds = int(rule["interval_seconds"])
         last_run_ts = float(rule["last_run_ts"])
 
-        if now_ts - last_run_ts < interval_seconds:
+        if not is_rule_due(now_ts, last_run_ts, interval_seconds):
             continue
 
         guild = bot.get_guild(guild_id)

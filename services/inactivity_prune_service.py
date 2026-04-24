@@ -121,7 +121,46 @@ def get_prune_exception_ids(db_path: Path, guild_id: int) -> set[int]:
 
 
 # ---------------------------------------------------------------------------
-# Prune logic
+# Prune decision (pure)
+# ---------------------------------------------------------------------------
+
+
+def compute_prune_targets(
+    role_members: list[tuple[int, bool]],
+    exception_ids: set[int],
+    activity_map: dict,
+    cutoff_ts: float,
+) -> list[int]:
+    """Return user IDs eligible for pruning.
+
+    A user is pruned iff all of:
+    - not a bot
+    - not in the exception list
+    - has an activity record with created_at < cutoff_ts
+
+    Members with no activity record are NOT pruned — missing data is treated
+    as "no signal," not as "inactive since epoch."
+
+    *role_members* is a list of (user_id, is_bot) tuples. *activity_map* maps
+    user_id → an object with a .created_at float attribute (e.g.
+    xp_system.MemberActivity), or can be any dict that returns such an object.
+    """
+    result: list[int] = []
+    for user_id, is_bot in role_members:
+        if is_bot:
+            continue
+        if user_id in exception_ids:
+            continue
+        activity = activity_map.get(user_id)
+        if activity is None:
+            continue
+        if activity.created_at < cutoff_ts:
+            result.append(user_id)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Prune execution (Discord-side)
 # ---------------------------------------------------------------------------
 
 
@@ -152,47 +191,55 @@ async def run_prune_for_guild(
         return
 
     exceptions = get_prune_exception_ids(db_path, guild_id)
-    candidates = [m for m in role.members if not m.bot and m.id not in exceptions]
-    if not candidates:
+    role_members = [(m.id, m.bot) for m in role.members]
+    if not role_members:
         return
 
-    cutoff_ts = (discord.utils.utcnow().timestamp()) - inactivity_days * 86400
-    candidate_ids = [m.id for m in candidates]
+    cutoff_ts = discord.utils.utcnow().timestamp() - inactivity_days * 86400
+    candidate_ids = [uid for uid, is_bot in role_members if not is_bot and uid not in exceptions]
+    if not candidate_ids:
+        return
 
     with open_db(db_path) as conn:
         activity_map = get_member_last_activity_map(conn, guild_id, candidate_ids)
 
+    target_ids = set(
+        compute_prune_targets(role_members, exceptions, activity_map, cutoff_ts)
+    )
+    if not target_ids:
+        return
+
+    members_by_id = {m.id: m for m in role.members}
     pruned: list[discord.Member] = []
     next_action_at = 0.0
-    for member in candidates:
-        activity = activity_map.get(member.id)
-        if activity is None:
+    for user_id in target_ids:
+        member = members_by_id.get(user_id)
+        if member is None:
             continue
-        if activity.created_at < cutoff_ts:
-            now = time.monotonic()
-            if now < next_action_at:
-                await asyncio.sleep(next_action_at - now)
-            try:
-                await member.remove_roles(
-                    role,
-                    reason=f"Inactivity prune: no activity in {inactivity_days} days",
-                )
-                pruned.append(member)
-            except discord.Forbidden:
-                log.warning(
-                    "Inactivity prune: missing permission to remove role from %s (%s).",
-                    member,
-                    member.id,
-                )
-            except discord.HTTPException as exc:
-                log.warning(
-                    "Inactivity prune: HTTP error removing role from %s: %s",
-                    member,
-                    exc,
-                )
-            next_action_at = (
-                time.monotonic() + AUTO_DELETE_SETTINGS.role_modify_pause_seconds
+        now = time.monotonic()
+        if now < next_action_at:
+            await asyncio.sleep(next_action_at - now)
+        try:
+            await member.remove_roles(
+                role,
+                reason=f"Inactivity prune: no activity in {inactivity_days} days",
             )
+            pruned.append(member)
+        except discord.Forbidden:
+            log.warning(
+                "Inactivity prune: missing permission to remove role from %s (%s).",
+                member,
+                member.id,
+            )
+        except discord.HTTPException as exc:
+            log.warning(
+                "Inactivity prune: HTTP error removing role from %s: %s",
+                member,
+                exc,
+            )
+        next_action_at = (
+            time.monotonic() + AUTO_DELETE_SETTINGS.role_modify_pause_seconds
+        )
 
     if pruned:
         log.info(
