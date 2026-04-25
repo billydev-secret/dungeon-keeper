@@ -31,7 +31,7 @@ from utils import format_guild_for_log
 # ==============================
 # Bootstrap
 # ==============================
-load_dotenv()
+load_dotenv(override=True)
 
 _parser = argparse.ArgumentParser(description="DungeonKeeper Discord bot")
 _parser.add_argument("--debug", action="store_true", help="Sync commands to dev guild only")
@@ -148,8 +148,6 @@ bot.extension_names = [
     "cogs.events_cog",
     "cogs.ai_mod_cog",
     "cogs.denizen_cog",
-    "cogs.foolsday_cog",
-    "cogs.interaction_cog",
     "cogs.invite_cog",
     "cogs.jail_cog",
     "cogs.mod_cog",
@@ -157,8 +155,6 @@ bot.extension_names = [
     "cogs.reports_cog",
     "cogs.todo_cog",
     "cogs.watch_cog",
-    "cogs.welcome_cog",
-    "cogs.wellness_admin_cog",
     "cogs.wellness_cog",
     "cogs.xp_cog",
     "cogs.confessions_cog",
