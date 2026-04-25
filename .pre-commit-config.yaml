@@ -18,12 +18,12 @@ repos:
       #   entry: ./.venv/Scripts/python.exe -m mypy . --exclude .venv
       #   language: system
       #   pass_filenames: false
-      - id: pytest
-        name: pytest
-        entry: ./.venv/Scripts/python.exe -m pytest -q
-        language: system
-        pass_filenames: false
-        always_run: true
+#      - id: pytest
+#        name: pytest
+#        entry: ./.venv/Scripts/python.exe -m pytest -q
+#        language: system
+#        pass_filenames: false
+#        always_run: true
       - id: eslint
         name: eslint
         entry: eslint

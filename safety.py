@@ -89,15 +89,17 @@ def check_bot_identity(cfg: Config, bot_user: discord.ClientUser) -> None:
 
 
 async def check_guild_membership(cfg: Config, bot: discord.Client) -> None:
-    """Assert bot is only in the configured guild (spec §8.3).
+    """Assert bot is in the configured guild (spec §8.3).
 
-    Leaves and shuts down if found in any other guild.
+    In dev: leaves any unexpected guild and shuts down (prevents the dev bot
+    from acting in the wrong server). In prod: only logs unexpected guilds,
+    since the prod bot may legitimately serve multiple servers.
     """
     wrong = [g for g in bot.guilds if g.id != cfg.guild_id]
-    if wrong:
+    if wrong and cfg.is_dev:
         for g in wrong:
             log.critical(
-                "SAFETY: bot is in unexpected guild %d (%r) — leaving and shutting down.",
+                "SAFETY: dev bot is in unexpected guild %d (%r) — leaving and shutting down.",
                 g.id,
                 g.name,
             )
@@ -106,6 +108,8 @@ async def check_guild_membership(cfg: Config, bot: discord.Client) -> None:
             except Exception:
                 pass
         sys.exit(1)
+    for g in wrong:
+        log.warning("bot is in additional guild %d (%r)", g.id, g.name)
 
     if not any(g.id == cfg.guild_id for g in bot.guilds):
         log.critical(
