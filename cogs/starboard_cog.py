@@ -148,7 +148,10 @@ class StarboardCog(commands.Cog):
 
         # No existing post — fetch original to get author and content.
         orig_channel = self.bot.get_channel(payload.channel_id)
-        if not isinstance(orig_channel, discord.TextChannel):
+        if not isinstance(
+            orig_channel,
+            (discord.TextChannel, discord.VoiceChannel, discord.StageChannel, discord.Thread),
+        ):
             return
         try:
             message = await orig_channel.fetch_message(message_id)
