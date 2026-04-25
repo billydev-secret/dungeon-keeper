@@ -38,65 +38,65 @@ function render(container, rules, channels) {
     const interval = bestUnit(r.interval_seconds);
     const chName = channelName(channels, r.channel_id);
     return `
-      <form class="config-form" style="margin-bottom:24px; padding:16px; background:var(--bg-alt); border-radius:6px;" data-channel="${r.channel_id}">
-        <h3 style="margin:0 0 8px; font-size:15px;">${chName}</h3>
-        <div style="display:flex; gap:12px; flex-wrap:wrap;">
-          <div class="field" style="flex:1; min-width:180px;">
+      <form class="form card" style="margin-bottom:16px;" data-channel="${r.channel_id}">
+        <div class="section-label">${chName}</div>
+        <div class="field-row">
+          <div class="field">
             <label>Delete Age</label>
             <div style="display:flex; gap:4px;">
-              <input type="number" name="age_value" value="${age.value}" min="1" style="width:80px;" />
+              <input type="number" name="age_value" value="${age.value}" min="1" style="max-width:90px;" />
               <select name="age_unit">${unitOptions(age.unit)}</select>
             </div>
           </div>
-          <div class="field" style="flex:1; min-width:180px;">
+          <div class="field">
             <label>Run Interval</label>
             <div style="display:flex; gap:4px;">
-              <input type="number" name="interval_value" value="${interval.value}" min="1" style="width:80px;" />
+              <input type="number" name="interval_value" value="${interval.value}" min="1" style="max-width:90px;" />
               <select name="interval_unit">${unitOptions(interval.unit)}</select>
             </div>
           </div>
         </div>
-        <div class="field-hint" style="margin-bottom:8px;">Last run: ${formatTs(r.last_run_ts)}</div>
+        <div class="field-hint">Last run: ${formatTs(r.last_run_ts)}</div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit">Save</button>
-          <button type="button" class="btn-danger" data-remove="${r.channel_id}">Remove</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+          <button type="button" class="btn btn-danger" data-remove="${r.channel_id}">Remove</button>
           <span data-status></span>
         </div>
       </form>`;
   }
 
   container.innerHTML = `
-    <div class="panel" style="overflow-y:auto;">
+    <div class="panel">
       <header>
         <h2>Auto-Delete Schedules</h2>
         <div class="subtitle">Recurring message cleanup per channel</div>
       </header>
       <div data-rules>${rules.length ? rules.map(ruleRow).join("") : '<div class="empty">No auto-delete schedules configured.</div>'}</div>
-      <hr style="margin:24px 0; border-color:var(--border);" />
-      <form class="config-form" data-add-form style="padding:16px; background:var(--bg-alt); border-radius:6px;">
-        <h3 style="margin:0 0 8px; font-size:15px;">Add Schedule</h3>
+
+      <div class="section-label">Add Schedule</div>
+      <form class="form card" data-add-form>
         <div class="field">
           <label>Channel</label>
           <select name="channel_id">${channelSelect(channels, "0", { allowNone: false })}</select>
         </div>
-        <div style="display:flex; gap:12px; flex-wrap:wrap;">
-          <div class="field" style="flex:1; min-width:180px;">
+        <div class="field-row">
+          <div class="field">
             <label>Delete Age</label>
             <div style="display:flex; gap:4px;">
-              <input type="number" name="age_value" value="30" min="1" style="width:80px;" />
+              <input type="number" name="age_value" value="30" min="1" style="max-width:90px;" />
               <select name="age_unit">${unitOptions(86400)}</select>
             </div>
           </div>
-          <div class="field" style="flex:1; min-width:180px;">
+          <div class="field">
             <label>Run Interval</label>
             <div style="display:flex; gap:4px;">
-              <input type="number" name="interval_value" value="1" min="1" style="width:80px;" />
+              <input type="number" name="interval_value" value="1" min="1" style="max-width:90px;" />
               <select name="interval_unit">${unitOptions(86400)}</select>
             </div>
           </div>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit">Add</button>
+          <button type="submit" class="btn btn-primary">Add</button>
           <span data-add-status></span>
         </div>
       </form>

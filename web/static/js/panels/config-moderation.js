@@ -10,12 +10,12 @@ export function mount(container) {
     // Build category options from channels (Discord categories are type 4, but
     // the meta endpoint returns text channels — we accept channel IDs here)
     container.innerHTML = `
-      <div class="panel" style="overflow-y:auto;">
+      <div class="panel">
         <header>
           <h2>Moderation</h2>
           <div class="subtitle">Jail, ticket, warning, and logging settings</div>
         </header>
-        <form class="config-form" data-form>
+        <form class="form" data-form>
           <div class="field">
             <label>Jailed Role</label>
             <select name="jailed_role_id">${roleSelect(roles, m.jailed_role_id)}</select>
@@ -63,7 +63,7 @@ export function mount(container) {
             <input type="number" name="warning_threshold" min="1" max="99" value="${m.warning_threshold}" />
             <div class="field-hint">Number of active warnings before auto-action</div>
           </div>
-          <div><button type="submit">Save</button><span data-status></span></div>
+          <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
       </div>
     `;

@@ -37,7 +37,7 @@ function memberSearch(members, onPick, getExcludedIds) {
     });
     const show = matches.slice(0, 80);
     if (!show.length) {
-      list.innerHTML = `<div class="filter-select-item"><em style="color:var(--text-dim)">No matches</em></div>`;
+      list.innerHTML = `<div class="filter-select-item"><em style="color:var(--ink-dim)">No matches</em></div>`;
       return;
     }
     list.innerHTML = show
@@ -96,12 +96,12 @@ export function mount(container) {
     let exemptions = (p.exemptions || []).slice();
 
     container.innerHTML = `
-      <div class="panel" style="overflow-y:auto;">
+      <div class="panel">
         <header>
           <h2>Inactivity Prune</h2>
           <div class="subtitle">Automatically remove a role from inactive members</div>
         </header>
-        <form class="config-form" data-form>
+        <form class="form" data-form>
           <div class="field">
             <label>Role to Prune</label>
             <select name="role_id">${roleSelect(roles, p.role_id)}</select>
@@ -111,33 +111,25 @@ export function mount(container) {
             <label>Inactivity Threshold (days)</label>
             <input type="number" name="inactivity_days" min="1" max="365" value="${p.inactivity_days || ""}" placeholder="30" />
           </div>
-          <div><button type="submit">Save</button><span data-status></span></div>
+          <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
 
-        <hr style="margin:24px 0; border-color:var(--grid);" />
+        <div class="section-label">Exemptions</div>
+        <div class="field-hint" style="margin-bottom:10px;">
+          Members on this list are never pruned, even if they exceed the inactivity threshold.
+        </div>
+        <div data-exempt-picker style="margin-bottom:12px;"></div>
+        <div data-exempt-list></div>
 
-        <section>
-          <h3 style="margin:0 0 6px; font-size:15px;">Exemptions</h3>
-          <div class="field-hint" style="margin-bottom:10px;">
-            Members on this list are never pruned, even if they exceed the inactivity threshold.
-          </div>
-          <div data-exempt-picker style="margin-bottom:12px;"></div>
-          <div data-exempt-list></div>
-        </section>
-
-        <hr style="margin:24px 0; border-color:var(--grid);" />
-
-        <section>
-          <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
-            <h3 style="margin:0; font-size:15px;">Preview</h3>
-            <button type="button" data-preview-btn>Refresh preview</button>
-            <span data-preview-status style="color:var(--text-dim); font-size:13px;"></span>
-          </div>
-          <div class="field-hint" style="margin-bottom:10px;">
-            Shows who would be removed <em>right now</em> using the settings above (including unsaved exemption changes).
-          </div>
-          <div data-preview></div>
-        </section>
+        <div class="section-label">
+          <span>Preview</span>
+          <button type="button" class="btn btn-sm" data-preview-btn>Refresh preview</button>
+          <span data-preview-status style="color:var(--ink-dim); font-size:12px; text-transform:none; letter-spacing:0; font-weight:400;"></span>
+        </div>
+        <div class="field-hint" style="margin-bottom:10px;">
+          Shows who would be removed <em>right now</em> using the settings above (including unsaved exemption changes).
+        </div>
+        <div data-preview></div>
       </div>
     `;
 
@@ -254,8 +246,8 @@ export function mount(container) {
                     <tr>
                       <td>${esc(c.name)}</td>
                       <td style="text-align:right; font-variant-numeric: tabular-nums;">${esc(String(c.days_inactive))}</td>
-                      <td style="color:var(--text-dim);">${esc(fmtTs(c.last_activity_ts))}</td>
-                      <td><button type="button" data-exempt-from-preview="${esc(c.id)}" data-exempt-name="${esc(c.name)}">Exempt</button></td>
+                      <td style="color:var(--ink-dim);">${esc(fmtTs(c.last_activity_ts))}</td>
+                      <td><button type="button" class="btn btn-sm" data-exempt-from-preview="${esc(c.id)}" data-exempt-name="${esc(c.name)}">Exempt</button></td>
                     </tr>`
                 )
                 .join("")}

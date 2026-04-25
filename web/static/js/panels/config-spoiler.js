@@ -9,24 +9,24 @@ export function mount(container) {
     const activeSet = new Set(s.spoiler_required_channels);
 
     container.innerHTML = `
-      <div class="panel" style="overflow-y:auto;">
+      <div class="panel">
         <header>
           <h2>Spoiler Guard</h2>
           <div class="subtitle">Channels where all images must be spoilered</div>
         </header>
-        <form class="config-form" data-form>
+        <form class="form" data-form>
           <div class="field">
             <label>Spoiler-Required Channels</label>
-            <div data-checkboxes style="max-height:300px; overflow-y:auto; background:var(--bg-sidebar); border-radius:4px; padding:8px;">
+            <div data-checkboxes class="checkbox-list">
               ${channels.map((ch) => `
-                <label style="display:flex; align-items:center; gap:6px; padding:3px 4px; font-size:13px; cursor:pointer;">
+                <label>
                   <input type="checkbox" name="channels" value="${ch.id}" ${activeSet.has(ch.id) ? "checked" : ""} />
                   #${ch.name}
                 </label>
               `).join("")}
             </div>
           </div>
-          <div><button type="submit">Save</button><span data-status></span></div>
+          <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
       </div>
     `;

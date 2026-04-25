@@ -26,11 +26,11 @@ export function mount(container) {
     let promptCards = "";
     for (const p of data.prompts) {
       const badge = p.is_override
-        ? `<span class="ai-badge ai-badge-custom">custom</span>`
-        : `<span class="ai-badge ai-badge-default">default</span>`;
+        ? `<span class="chip chip-warning">custom</span>`
+        : `<span class="chip chip-neutral">default</span>`;
       const modelBadge = p.model_is_override
-        ? `<span class="ai-badge ai-badge-custom">custom</span>`
-        : `<span class="ai-badge ai-badge-default">global</span>`;
+        ? `<span class="chip chip-warning">custom</span>`
+        : `<span class="chip chip-neutral">global</span>`;
       promptCards += `
         <div class="ai-prompt-card" data-key="${p.key}">
           <div class="ai-prompt-header">
@@ -42,22 +42,22 @@ export function mount(container) {
             <select class="ai-cmd-model">
               ${modelOptions(data.known_models, p.model_is_override ? p.model : "", { allowGlobal: true })}
             </select>
-            <button type="button" class="ai-btn ai-btn-save" data-action="save-model" style="padding:4px 10px;">Save</button>
+            <button type="button" class="btn btn-primary btn-sm" data-action="save-model">Save</button>
             <span class="save-status" data-model-status></span>
           </div>
           <textarea class="ai-prompt-text" rows="8">${esc(p.text)}</textarea>
           <div class="ai-prompt-actions">
-            <button type="button" class="ai-btn ai-btn-save" data-action="save">Save Prompt</button>
-            <button type="button" class="ai-btn ai-btn-reset" data-action="reset">Reset to Default</button>
-            <button type="button" class="ai-btn ai-btn-test" data-action="test">Test</button>
+            <button type="button" class="btn btn-primary" data-action="save">Save Prompt</button>
+            <button type="button" class="btn btn-ghost" data-action="reset">Reset to Default</button>
+            <button type="button" class="btn" data-action="test">Test</button>
             <span class="save-status" data-prompt-status></span>
           </div>
           <div class="ai-test-area" style="display:none">
             <label>Test input (user message)</label>
             <textarea class="ai-test-input" rows="3" placeholder="Type a sample user message to send with this system prompt…"></textarea>
             <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-              <button type="button" class="ai-btn ai-btn-save" data-action="run-test">Run Test</button>
-              <span class="ai-test-status" style="font-size:12px;color:var(--text-dim)"></span>
+              <button type="button" class="btn btn-primary btn-sm" data-action="run-test">Run Test</button>
+              <span class="ai-test-status" style="font-size:12px;color:var(--ink-dim)"></span>
             </div>
             <pre class="ai-test-output"></pre>
           </div>
@@ -65,8 +65,8 @@ export function mount(container) {
     }
 
     const apiKeyNote = data.has_api_key
-      ? `<span style="color:var(--success)">ANTHROPIC_API_KEY is set</span>`
-      : `<span style="color:var(--danger)">ANTHROPIC_API_KEY is not set — AI features are disabled</span>`;
+      ? `<span class="chip chip-success">ANTHROPIC_API_KEY is set</span>`
+      : `<span class="chip chip-danger">ANTHROPIC_API_KEY is not set — AI features are disabled</span>`;
 
     container.innerHTML = `
       <div class="panel">
@@ -75,20 +75,20 @@ export function mount(container) {
           <div class="subtitle">Model selection, system prompts, and prompt testing</div>
         </header>
 
-        <div style="margin-bottom:16px;font-size:13px;">${apiKeyNote}</div>
+        <div style="margin-bottom:16px;">${apiKeyNote}</div>
 
-        <form class="config-form" data-models-form style="max-width:100%">
-          <h3 style="margin:0 0 4px;font-size:14px;">Global Default Models</h3>
+        <div class="section-label">Global Default Models</div>
+        <form class="form" data-models-form style="max-width:none;">
           <div class="field-hint" style="margin-bottom:8px;">Commands use these unless overridden per-command below</div>
-          <div style="display:flex;gap:16px;flex-wrap:wrap;">
-            <div class="field" style="flex:1;min-width:220px;">
+          <div class="field-row">
+            <div class="field">
               <label>Moderation Model</label>
               <select name="mod_model">
                 ${modelOptions(data.known_models, data.mod_model)}
               </select>
               <div class="field-hint">Default for /ai review, scan, channel, query, and watch</div>
             </div>
-            <div class="field" style="flex:1;min-width:220px;">
+            <div class="field">
               <label>Wellness Model</label>
               <select name="wellness_model">
                 ${modelOptions(data.known_models, data.wellness_model)}
@@ -96,12 +96,10 @@ export function mount(container) {
               <div class="field-hint">Default for weekly wellness encouragement notes</div>
             </div>
           </div>
-          <div><button type="submit">Save Defaults</button><span data-status></span></div>
+          <div><button type="submit" class="btn btn-primary">Save Defaults</button><span data-status></span></div>
         </form>
 
-        <hr style="border:none;border-top:1px solid var(--grid);margin:20px 0;">
-
-        <h3 style="margin:0 0 12px;font-size:14px;">Commands</h3>
+        <div class="section-label">Commands</div>
         <div class="ai-prompts-list">
           ${promptCards}
         </div>
@@ -130,10 +128,10 @@ export function mount(container) {
       const key = card.dataset.key;
       const textarea = card.querySelector(".ai-prompt-text");
       const status = card.querySelector("[data-prompt-status]");
-      const badge = card.querySelector(".ai-badge");
+      const badge = card.querySelector(".ai-prompt-header .chip");
       const modelSelect = card.querySelector(".ai-cmd-model");
       const modelStatus = card.querySelector("[data-model-status]");
-      const modelBadge = card.querySelector(".ai-model-row .ai-badge");
+      const modelBadge = card.querySelector(".ai-model-row .chip");
       const testArea = card.querySelector(".ai-test-area");
       const testInput = card.querySelector(".ai-test-input");
       const testOutput = card.querySelector(".ai-test-output");
@@ -147,10 +145,10 @@ export function mount(container) {
           try {
             await apiPut(`/api/config/ai/prompts/${key}/model`, { model: modelSelect.value });
             if (modelSelect.value) {
-              modelBadge.className = "ai-badge ai-badge-custom";
+              modelBadge.className = "chip chip-warning";
               modelBadge.textContent = "custom";
             } else {
-              modelBadge.className = "ai-badge ai-badge-default";
+              modelBadge.className = "chip chip-neutral";
               modelBadge.textContent = "global";
             }
             showStatus(modelStatus, true);
@@ -162,7 +160,7 @@ export function mount(container) {
         if (action === "save") {
           try {
             await apiPut(`/api/config/ai/prompts/${key}`, { text: textarea.value });
-            badge.className = "ai-badge ai-badge-custom";
+            badge.className = "chip chip-warning";
             badge.textContent = "custom";
             showStatus(status, true);
           } catch (err) {
@@ -181,7 +179,7 @@ export function mount(container) {
             const p = fresh.prompts.find((x) => x.key === key);
             if (p) {
               textarea.value = p.text;
-              badge.className = "ai-badge ai-badge-default";
+              badge.className = "chip chip-neutral";
               badge.textContent = "default";
             }
             showStatus(status, true, "Reset");

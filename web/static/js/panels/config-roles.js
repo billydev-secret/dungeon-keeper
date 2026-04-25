@@ -22,16 +22,17 @@ function render(container, grants, channels, roles) {
     const g = grants[name];
     const perms = g.permissions || [];
     const permListHTML = perms.length
-      ? perms.map((p, i) => `
-          <span class="perm-tag" style="display:inline-flex; align-items:center; gap:4px; padding:2px 8px; background:var(--bg); border-radius:4px; margin:2px;">
+      ? `<div class="tag-list">${perms.map((p, i) => `
+          <span class="tag">
             ${permLabel(p, roles)}
-            <button type="button" class="perm-remove" data-grant="${name}" data-idx="${i}" style="border:none; background:none; cursor:pointer; color:var(--danger, #e55); font-weight:bold; padding:0 2px;">&times;</button>
-          </span>`).join("")
-      : '<em style="color:var(--text-muted);">mod-only (no explicit permissions)</em>';
+            <button type="button" class="tag-remove perm-remove" data-grant="${name}" data-idx="${i}" title="Remove">&times;</button>
+          </span>`).join("")}</div>`
+      : '<em style="color:var(--ink-mute);">mod-only (no explicit permissions)</em>';
 
     return `
-      <div class="role-card" style="margin-bottom:24px; padding:16px; background:var(--bg-alt); border-radius:6px;" data-grant="${name}">
-        <form class="config-form" data-save-form="${name}">
+      <div class="role-card card" style="margin-bottom:16px;" data-grant="${name}">
+        <div class="section-label">${name}</div>
+        <form class="form" data-save-form="${name}">
           <div class="field">
             <label>Label</label>
             <input type="text" name="label" value="${g.label || name}" />
@@ -55,19 +56,19 @@ function render(container, grants, channels, roles) {
           <div class="field">
             <label>Grant Permissions</label>
             <div data-perm-list="${name}" style="margin-bottom:8px;">${permListHTML}</div>
-            <div style="display:flex; gap:4px; flex-wrap:wrap; align-items:center;">
+            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
               <select data-perm-type="${name}" style="width:auto;">
                 <option value="role">Role</option>
                 <option value="user">User ID</option>
               </select>
               <select data-perm-role="${name}" style="width:auto;">${roleSelect(roles, "0", { allowNone: false })}</select>
               <input type="text" data-perm-user="${name}" placeholder="User ID" style="width:140px; display:none;" />
-              <button type="button" data-perm-add="${name}" style="white-space:nowrap;">Add</button>
+              <button type="button" class="btn btn-sm" data-perm-add="${name}">Add</button>
             </div>
           </div>
           <div style="display:flex; gap:8px; align-items:center;">
-            <button type="submit">Save</button>
-            <button type="button" class="btn-danger" data-remove-role="${name}">Remove Role</button>
+            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" class="btn btn-danger" data-remove-role="${name}">Remove Role</button>
             <span data-status></span>
           </div>
         </form>
@@ -75,15 +76,15 @@ function render(container, grants, channels, roles) {
   }
 
   container.innerHTML = `
-    <div class="panel" style="overflow-y:auto;">
+    <div class="panel">
       <header>
         <h2>Role Grants</h2>
         <div class="subtitle">Configure grant roles (denizen, nsfw, veteran, etc.)</div>
       </header>
       <div data-grants>${names.length ? names.map(renderRole).join("") : '<div class="empty">No grant roles configured.</div>'}</div>
-      <hr style="margin:24px 0; border-color:var(--border);" />
-      <form class="config-form" data-add-role-form style="padding:16px; background:var(--bg-alt); border-radius:6px;">
-        <h3 style="margin:0 0 8px; font-size:15px;">Add Grant Role</h3>
+
+      <div class="section-label">Add Grant Role</div>
+      <form class="form card" data-add-role-form>
         <div class="field">
           <label>Key (short lowercase identifier)</label>
           <input type="text" name="grant_name" required placeholder="e.g. denizen, nsfw" pattern="[a-z0-9_]+" />
@@ -109,7 +110,7 @@ function render(container, grants, channels, roles) {
           <textarea name="grant_message" placeholder="Welcome {member} to {role}!"></textarea>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit">Add</button>
+          <button type="submit" class="btn btn-primary">Add</button>
           <span data-add-status></span>
         </div>
       </form>
@@ -169,14 +170,15 @@ function render(container, grants, channels, roles) {
     const perms = g._perms || [];
     const listEl = container.querySelector(`[data-perm-list="${name}"]`);
     if (!perms.length) {
-      listEl.innerHTML = '<em style="color:var(--text-muted);">mod-only (no explicit permissions)</em>';
+      listEl.innerHTML = '<em style="color:var(--ink-mute);">mod-only (no explicit permissions)</em>';
       return;
     }
-    listEl.innerHTML = perms.map((p, i) => `
-      <span class="perm-tag" style="display:inline-flex; align-items:center; gap:4px; padding:2px 8px; background:var(--bg); border-radius:4px; margin:2px;">
+    const tagsHTML = perms.map((p, i) => `
+      <span class="tag">
         ${permLabel(p, roles)}
-        <button type="button" class="perm-remove" data-grant="${name}" data-idx="${i}" style="border:none; background:none; cursor:pointer; color:var(--danger, #e55); font-weight:bold; padding:0 2px;">&times;</button>
+        <button type="button" class="tag-remove perm-remove" data-grant="${name}" data-idx="${i}" title="Remove">&times;</button>
       </span>`).join("");
+    listEl.innerHTML = `<div class="tag-list">${tagsHTML}</div>`;
   }
 
   // Save handlers

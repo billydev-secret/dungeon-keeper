@@ -60,7 +60,6 @@ export function mount(container) {
     while (container.firstChild) container.removeChild(container.firstChild);
     const panel = document.createElement("div");
     panel.className = "panel";
-    panel.style.overflowY = "auto";
     container.appendChild(panel);
 
     const header = document.createElement("header");
@@ -76,14 +75,14 @@ export function mount(container) {
     if (channels.length === 0) {
       const warn = document.createElement("div");
       warn.className = "field-hint";
-      warn.style.cssText = "margin-bottom:12px; color:var(--text-dim);";
+      warn.style.cssText = "margin-bottom:12px; color:var(--ink-dim);";
       warn.textContent = "Channel list unavailable — enter channel IDs directly, or restart the bot and refresh.";
       panel.appendChild(warn);
     }
 
     // ── Channel settings form ────────────────────────────────────────
     const form = document.createElement("form");
-    form.className = "config-form";
+    form.className = "form";
     panel.appendChild(form);
 
     const reqCtrl = buildChannelInput("request_channel_id", channels, d.request_channel_id);
@@ -103,6 +102,7 @@ export function mount(container) {
     const saveRow = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
+    saveBtn.className = "btn btn-primary";
     saveBtn.textContent = "Save Settings";
     const saveStatus = document.createElement("span");
     saveRow.appendChild(saveBtn);
@@ -124,17 +124,13 @@ export function mount(container) {
     });
 
     // ── Panel button launcher ────────────────────────────────────────
-    const hr = document.createElement("hr");
-    hr.style.cssText = "margin:24px 0; border-color:var(--grid);";
-    panel.appendChild(hr);
+    const lh3 = document.createElement("div");
+    lh3.className = "section-label";
+    lh3.textContent = "Request Panel";
+    panel.appendChild(lh3);
 
     const lsec = document.createElement("section");
     panel.appendChild(lsec);
-
-    const lh3 = document.createElement("h3");
-    lh3.style.cssText = "margin:0 0 6px; font-size:15px;";
-    lh3.textContent = "Request Panel";
-    lsec.appendChild(lh3);
 
     if (d.panel_channel_id && d.panel_channel_id !== "0") {
       const curHint = document.createElement("div");
@@ -152,13 +148,13 @@ export function mount(container) {
     lsec.appendChild(lhint);
 
     const pbForm = document.createElement("form");
-    pbForm.className = "config-form";
-    pbForm.style.cssText = "display:flex; gap:8px; align-items:flex-end;";
+    pbForm.className = "form";
+    pbForm.style.cssText = "display:flex; gap:8px; align-items:flex-end; max-width:none;";
     lsec.appendChild(pbForm);
 
     const pbField = document.createElement("div");
     pbField.className = "field";
-    pbField.style.cssText = "margin:0; flex:1;";
+    pbField.style.cssText = "flex:1;";
     const pbLabel = document.createElement("label");
     pbLabel.textContent = "Channel";
     const pbCtrl = buildChannelInput("pb_channel_id", channels, d.panel_channel_id || "0");
@@ -169,6 +165,7 @@ export function mount(container) {
     const pbRow = document.createElement("div");
     const pbBtn = document.createElement("button");
     pbBtn.type = "submit";
+    pbBtn.className = "btn btn-primary";
     pbBtn.textContent = "Post Panel";
     const pbStatus = document.createElement("span");
     pbStatus.style.marginLeft = "6px";

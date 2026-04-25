@@ -60,7 +60,6 @@ export function mount(container) {
     clearChildren(container);
     const panel = document.createElement("div");
     panel.className = "panel";
-    panel.style.overflowY = "auto";
     container.appendChild(panel);
 
     const header = document.createElement("header");
@@ -74,12 +73,12 @@ export function mount(container) {
     panel.appendChild(header);
 
     const note = document.createElement("p");
-    note.style.cssText = "color:var(--text-dim); margin-bottom:1rem; font-size:13px;";
+    note.style.cssText = "color:var(--ink-dim); margin-bottom:1rem; font-size:13px;";
     note.textContent = "The bot announces birthdays once per day at or after 9 AM (server time).";
     panel.appendChild(note);
 
     const form = document.createElement("form");
-    form.className = "config-form";
+    form.className = "form";
     panel.appendChild(form);
 
     const chanSel = buildSelect("birthday_channel_id", channels, b.birthday_channel_id || "0");
@@ -107,7 +106,7 @@ export function mount(container) {
     previewLbl.textContent = "Preview";
     const preview = document.createElement("div");
     preview.style.cssText =
-      "padding:10px 12px; background:var(--bg-sidebar); border-radius:6px; font-size:14px; white-space:pre-wrap;";
+      "padding:10px 12px; background:var(--bg-input); border: 1px solid var(--rule); border-radius: var(--r-sm); font-size:14px; white-space:pre-wrap; color:var(--ink);";
     renderPreview(preview, messageVal, sampleName);
     previewWrap.appendChild(previewLbl);
     previewWrap.appendChild(preview);
@@ -120,6 +119,7 @@ export function mount(container) {
     const saveRow = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
+    saveBtn.className = "btn btn-primary";
     saveBtn.textContent = "Save";
     const saveStatus = document.createElement("span");
     saveRow.appendChild(saveBtn);

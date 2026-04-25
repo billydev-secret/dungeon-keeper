@@ -79,7 +79,6 @@ export function mount(container) {
     clearChildren(container);
     const panel = document.createElement("div");
     panel.className = "panel";
-    panel.style.overflowY = "auto";
     container.appendChild(panel);
 
     const header = document.createElement("header");
@@ -94,7 +93,7 @@ export function mount(container) {
 
     // ── Settings form ──────────────────────────────────────────────────
     const form = document.createElement("form");
-    form.className = "config-form";
+    form.className = "form";
     panel.appendChild(form);
 
     form.appendChild(
@@ -133,6 +132,7 @@ export function mount(container) {
     const saveRow = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
+    saveBtn.className = "btn btn-primary";
     saveBtn.textContent = "Save Settings";
     const saveStatus = document.createElement("span");
     saveRow.appendChild(saveBtn);
@@ -166,18 +166,14 @@ export function mount(container) {
     });
 
     // ── Excluded channels ──────────────────────────────────────────────
-    const hr = document.createElement("hr");
-    hr.style.cssText = "margin:24px 0; border-color:var(--grid);";
-    panel.appendChild(hr);
+    const exHeader = document.createElement("div");
+    exHeader.className = "section-label";
+    exHeader.textContent = "Excluded Channels";
+    panel.appendChild(exHeader);
 
     const exForm = document.createElement("form");
-    exForm.className = "config-form";
+    exForm.className = "form";
     panel.appendChild(exForm);
-
-    const exHeader = document.createElement("h3");
-    exHeader.style.cssText = "margin:0 0 6px; font-size:15px;";
-    exHeader.textContent = "Excluded Channels";
-    exForm.appendChild(exHeader);
 
     const exHint = document.createElement("div");
     exHint.className = "field-hint";
@@ -186,10 +182,9 @@ export function mount(container) {
     exForm.appendChild(exHint);
 
     const exBox = document.createElement("div");
-    exBox.style.cssText = "max-height:300px; overflow-y:auto; background:var(--bg-sidebar); border-radius:4px; padding:8px;";
+    exBox.className = "checkbox-list";
     for (const ch of channels) {
       const lbl = document.createElement("label");
-      lbl.style.cssText = "display:flex; align-items:center; gap:6px; padding:3px 4px; font-size:13px; cursor:pointer;";
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.name = "excluded";
@@ -206,6 +201,7 @@ export function mount(container) {
     exRow.style.marginTop = "10px";
     const exBtn = document.createElement("button");
     exBtn.type = "submit";
+    exBtn.className = "btn btn-primary";
     exBtn.textContent = "Save Excluded Channels";
     const exStatus = document.createElement("span");
     exRow.appendChild(exBtn);

@@ -61,7 +61,6 @@ export function mount(container) {
     container.innerHTML = "";
     const panel = document.createElement("div");
     panel.className = "panel";
-    panel.style.overflowY = "auto";
     container.appendChild(panel);
 
     const header = document.createElement("header");
@@ -76,13 +75,13 @@ export function mount(container) {
 
     if (!c || !c.configured) {
       const note = document.createElement("p");
-      note.style.color = "var(--text-dim)";
+      note.style.color = "var(--ink-dim)";
       note.style.marginBottom = "1rem";
       note.textContent = "Confessions are not yet configured. Set destination and log channels to enable.";
       panel.appendChild(note);
 
       const form = document.createElement("form");
-      form.className = "config-form";
+      form.className = "form";
       panel.appendChild(form);
 
       const destSel = buildSelect("dest_channel_id", channels, "0", false);
@@ -94,6 +93,7 @@ export function mount(container) {
       const row = document.createElement("div");
       const saveBtn = document.createElement("button");
       saveBtn.type = "submit";
+      saveBtn.className = "btn btn-primary";
       saveBtn.textContent = "Enable Confessions";
       const statusEl = document.createElement("span");
       row.appendChild(saveBtn);
@@ -119,7 +119,7 @@ export function mount(container) {
 
     // ── Settings form ──────────────────────────────────────────────────
     const form = document.createElement("form");
-    form.className = "config-form";
+    form.className = "form";
     panel.appendChild(form);
 
     const destSel = buildSelect("dest_channel_id", channels, c.dest_channel_id);
@@ -139,6 +139,7 @@ export function mount(container) {
     const saveRow = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
+    saveBtn.className = "btn btn-primary";
     saveBtn.textContent = "Save Settings";
     const saveStatus = document.createElement("span");
     saveRow.appendChild(saveBtn);
@@ -166,17 +167,13 @@ export function mount(container) {
     });
 
     // ── Blocked users ──────────────────────────────────────────────────
-    const hr = document.createElement("hr");
-    hr.style.cssText = "margin:24px 0; border-color:var(--grid);";
-    panel.appendChild(hr);
+    const sh3 = document.createElement("div");
+    sh3.className = "section-label";
+    sh3.textContent = "Blocked Users";
+    panel.appendChild(sh3);
 
     const section = document.createElement("section");
     panel.appendChild(section);
-
-    const sh3 = document.createElement("h3");
-    sh3.style.cssText = "margin:0 0 6px; font-size:15px;";
-    sh3.textContent = "Blocked Users";
-    section.appendChild(sh3);
 
     const shint = document.createElement("div");
     shint.className = "field-hint";
@@ -189,13 +186,13 @@ export function mount(container) {
     renderBlocked(blockedList, c.blocked_users);
 
     const blockForm = document.createElement("form");
-    blockForm.className = "config-form";
-    blockForm.style.cssText = "margin-top:12px; display:flex; gap:8px; align-items:flex-end;";
+    blockForm.className = "form";
+    blockForm.style.cssText = "margin-top:12px; display:flex; gap:8px; align-items:flex-end; max-width:none;";
     section.appendChild(blockForm);
 
     const bfField = document.createElement("div");
     bfField.className = "field";
-    bfField.style.cssText = "margin:0; flex:1;";
+    bfField.style.cssText = "flex:1;";
     const bfLabel = document.createElement("label");
     bfLabel.textContent = "Block User by ID";
     const bfInput = document.createElement("input");
@@ -211,6 +208,7 @@ export function mount(container) {
     const bfRow = document.createElement("div");
     const bfBtn = document.createElement("button");
     bfBtn.type = "submit";
+    bfBtn.className = "btn";
     bfBtn.textContent = "Block";
     const bfStatus = document.createElement("span");
     bfStatus.style.marginLeft = "6px";
@@ -236,17 +234,13 @@ export function mount(container) {
     });
 
     // ── Post-button launcher ───────────────────────────────────────────
-    const hr2 = document.createElement("hr");
-    hr2.style.cssText = "margin:24px 0; border-color:var(--grid);";
-    panel.appendChild(hr2);
+    const lh3 = document.createElement("div");
+    lh3.className = "section-label";
+    lh3.textContent = "Button Launcher";
+    panel.appendChild(lh3);
 
     const lsec = document.createElement("section");
     panel.appendChild(lsec);
-
-    const lh3 = document.createElement("h3");
-    lh3.style.cssText = "margin:0 0 6px; font-size:15px;";
-    lh3.textContent = "Button Launcher";
-    lsec.appendChild(lh3);
 
     if (c.launcher_channel_id !== "0") {
       const currentHint = document.createElement("div");
@@ -265,13 +259,13 @@ export function mount(container) {
     lsec.appendChild(lhint);
 
     const pbForm = document.createElement("form");
-    pbForm.className = "config-form";
-    pbForm.style.cssText = "display:flex; gap:8px; align-items:flex-end;";
+    pbForm.className = "form";
+    pbForm.style.cssText = "display:flex; gap:8px; align-items:flex-end; max-width:none;";
     lsec.appendChild(pbForm);
 
     const pbField = document.createElement("div");
     pbField.className = "field";
-    pbField.style.cssText = "margin:0; flex:1;";
+    pbField.style.cssText = "flex:1;";
     const pbLabel = document.createElement("label");
     pbLabel.textContent = "Channel";
     const pbSel = buildSelect("pb_channel_id", channels, c.dest_channel_id);
@@ -282,6 +276,7 @@ export function mount(container) {
     const pbRow = document.createElement("div");
     const pbBtn = document.createElement("button");
     pbBtn.type = "submit";
+    pbBtn.className = "btn btn-primary";
     pbBtn.textContent = "Post Button";
     const pbStatus = document.createElement("span");
     pbStatus.style.marginLeft = "6px";

@@ -705,6 +705,108 @@ a { text-decoration: none; }
   color: var(--ink-mute);
   line-height: 1.4;
 }
+.save-status {
+  font-size: 12px;
+  margin-left: 12px;
+}
+.save-ok  { color: var(--green); }
+.save-err { color: var(--red); }
+
+/* Scrollable list of checkboxes (config-spoiler, config-welcome). */
+.checkbox-list {
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--bg-input);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 8px;
+}
+.checkbox-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.checkbox-list label:hover { color: var(--ink-bright); }
+
+/* Tag pill (closeable). Used by config-roles permission tags. */
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  color: var(--ink);
+}
+.tag-remove {
+  border: none;
+  background: none;
+  color: var(--ink-mute);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 50%;
+}
+.tag-remove:hover { color: var(--red); background: var(--red-soft); }
+
+/* Explanation / context block. Used inside cards and panels for "How
+   this works" copy. Dim body, bright <strong>, gold accent rail. */
+.note {
+  background: var(--bg-card);
+  border: 1px solid var(--rule-soft);
+  border-left: 3px solid var(--gold-solid);
+  border-radius: var(--r-sm);
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-dim);
+}
+.note strong { color: var(--ink-bright); font-weight: 600; }
+.note code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-input);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--ink);
+}
+
+/* Collapsible section inside a form. */
+.form-section {
+  margin-top: 8px;
+  border-top: 1px solid var(--rule-soft);
+  padding-top: 12px;
+}
+.form-section-summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-bright);
+  padding: 4px 0;
+  margin-bottom: 4px;
+  user-select: none;
+  list-style: none;
+}
+.form-section-summary::before {
+  content: "▸";
+  display: inline-block;
+  width: 1em;
+  color: var(--ink-mute);
+  transition: transform 0.15s;
+}
+.form-section[open] > .form-section-summary::before { transform: rotate(90deg); }
 
 /* ── Chip ──────────────────────────────────────────────────────────
    Small status pills. Replaces .t-chip, .w-chip, .h-kind, .ai-badge,
@@ -970,60 +1072,8 @@ a { text-decoration: none; }
 }
 
 /* ── Config forms ──────────────────────────────────────────────────── */
-
-.config-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  max-width: 640px;
-}
-.config-form .field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.config-form .field label {
-  font-size: 12px;
-  color: var(--ink-dim);
-  font-weight: 600;
-}
-.config-form .field input,
-.config-form .field textarea,
-.config-form .field select {
-  background: var(--bg-rail);
-  color: var(--ink);
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  padding: 8px 10px;
-  font-size: 13px;
-  font-family: inherit;
-}
-.config-form textarea {
-  min-height: 80px;
-  resize: vertical;
-}
-.config-form .field-hint {
-  font-size: 11px;
-  color: var(--ink-dim);
-}
-.config-form button[type="submit"] {
-  align-self: flex-start;
-  background: var(--gold-solid);
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  padding: 8px 20px;
-  font-size: 13px;
-  cursor: pointer;
-  font-weight: 600;
-}
-.config-form button[type="submit"]:hover { opacity: 0.85; }
-.config-form .save-status {
-  font-size: 12px;
-  margin-left: 12px;
-}
-.config-form .save-ok { color: var(--green); }
-.config-form .save-err { color: var(--red); }
+/* Forms now use the canonical .form / .field / .btn primitives defined
+   above. The legacy .config-form rules have been retired (Phase 2). */
 
 /* ── AI config ────────────────────────────────────────────────────────── */
 
@@ -1044,18 +1094,7 @@ a { text-decoration: none; }
 .ai-prompt-header strong {
   font-size: 13px;
 }
-.ai-badge {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  padding: 1px 6px;
-  border-radius: 3px;
-  margin-left: 6px;
-  vertical-align: middle;
-}
-.ai-badge-default { background: var(--rule); color: var(--ink-dim); }
-.ai-badge-custom  { background: var(--gold-solid); color: #fff; }
+/* AI badges retired (Phase 2) — use .chip / .chip-warning / .chip-neutral */
 .ai-model-row {
   display: flex;
   align-items: center;

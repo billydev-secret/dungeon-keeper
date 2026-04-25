@@ -8,12 +8,12 @@ export function mount(container) {
     const w = config.welcome;
 
     container.innerHTML = `
-      <div class="panel" style="overflow-y:auto;">
+      <div class="panel">
         <header>
           <h2>Welcome & Leave</h2>
           <div class="subtitle">Welcome/leave channels, messages, greeter settings</div>
         </header>
-        <form class="config-form" data-form>
+        <form class="form" data-form>
           <div class="field">
             <label>Welcome Channel</label>
             <select name="welcome_channel_id">${channelSelect(channels, w.welcome_channel_id)}</select>
@@ -48,7 +48,7 @@ export function mount(container) {
             <select name="join_leave_log_channel_id">${channelSelect(channels, w.join_leave_log_channel_id)}</select>
             <div class="field-hint">Used by the Greeter Response report to time joins, greetings, and early departures.</div>
           </div>
-          <div><button type="submit">Save</button><span data-status></span></div>
+          <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
       </div>
     `;

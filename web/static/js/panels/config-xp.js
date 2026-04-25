@@ -8,12 +8,12 @@ export function mount(container) {
     const xp = config.xp;
 
     container.innerHTML = `
-      <div class="panel" style="overflow-y:auto;">
+      <div class="panel">
         <header>
           <h2>XP Logging</h2>
           <div class="subtitle">XP role grants, log channels, and excluded channels</div>
         </header>
-        <form class="config-form" data-form>
+        <form class="form" data-form>
           <div class="field">
             <label>Level 5 Role</label>
             <select name="level_5_role_id">${roleSelect(roles, xp.level_5_role_id)}</select>
@@ -37,17 +37,17 @@ export function mount(container) {
             <div class="field-hint">Channels where XP is not earned (Ctrl/Cmd-click to select multiple)</div>
           </div>
 
-          <details class="algo-tuning" open>
-            <summary><h3 style="display:inline; font-size:1rem;">Algorithm Tuning</h3></summary>
-            <div class="algo-explanation" style="margin:8px 0 12px; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.5; color:var(--text-muted, #949ba4);">
-              <strong style="color:var(--text-normal, #dbdee1);">How XP works:</strong>
+          <details class="form-section" open>
+            <summary class="form-section-summary">Algorithm Tuning</summary>
+            <div class="note" style="margin: 8px 0 14px;">
+              <strong>How XP works:</strong>
               Each message earns <code>word_count &times; word_xp</code> base XP, plus a reply bonus if replying to another human.
               Multipliers reduce XP for rapid-fire messages (cooldown), duplicate content, and back-and-forth farming between two users.
               Voice XP is awarded per interval while in a voice channel with enough humans.
               Level thresholds follow <code>factor &times; (level &minus; 1)&sup2;</code>.
             </div>
 
-            <h4 style="margin:12px 0 6px; font-size:0.85rem; color:var(--text-muted, #949ba4);">Text XP</h4>
+            <div class="section-label">Text XP</div>
             <div class="field">
               <label>XP per Word</label>
               <input type="number" name="message_word_xp" step="0.01" min="0" value="${xp.message_word_xp}" />
@@ -64,7 +64,7 @@ export function mount(container) {
               <div class="field-hint">XP per reaction received on image posts (default 0.17)</div>
             </div>
 
-            <h4 style="margin:12px 0 6px; font-size:0.85rem; color:var(--text-muted, #949ba4);">Cooldown</h4>
+            <div class="section-label">Cooldown</div>
             <div class="field">
               <label>Cooldown Thresholds (seconds)</label>
               <input type="text" name="cooldown_thresholds_seconds" value="${xp.cooldown_thresholds_seconds}" />
@@ -76,7 +76,7 @@ export function mount(container) {
               <div class="field-hint">XP multiplier at each cooldown tier (default 0.35,0.6,0.85)</div>
             </div>
 
-            <h4 style="margin:12px 0 6px; font-size:0.85rem; color:var(--text-muted, #949ba4);">Anti-Farm</h4>
+            <div class="section-label">Anti-Farm</div>
             <div class="field">
               <label>Duplicate Multiplier</label>
               <input type="number" name="duplicate_multiplier" step="0.01" min="0" max="1" value="${xp.duplicate_multiplier}" />
@@ -93,7 +93,7 @@ export function mount(container) {
               <div class="field-hint">XP multiplier during pair farming penalty (default 0.5)</div>
             </div>
 
-            <h4 style="margin:12px 0 6px; font-size:0.85rem; color:var(--text-muted, #949ba4);">Voice XP</h4>
+            <div class="section-label">Voice XP</div>
             <div class="field">
               <label>Voice XP per Interval</label>
               <input type="number" name="voice_award_xp" step="0.01" min="0" value="${xp.voice_award_xp}" />
@@ -110,7 +110,7 @@ export function mount(container) {
               <div class="field-hint">Minimum humans in voice channel for XP to count (default 2)</div>
             </div>
 
-            <h4 style="margin:12px 0 6px; font-size:0.85rem; color:var(--text-muted, #949ba4);">Leveling</h4>
+            <div class="section-label">Leveling</div>
             <div class="field">
               <label>Manual Grant XP</label>
               <input type="number" name="manual_grant_xp" step="0.1" min="0" value="${xp.manual_grant_xp}" />
@@ -123,7 +123,7 @@ export function mount(container) {
             </div>
           </details>
 
-          <div><button type="submit">Save</button><span data-status></span></div>
+          <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
       </div>
     `;

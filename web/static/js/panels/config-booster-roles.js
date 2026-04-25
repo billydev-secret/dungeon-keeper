@@ -12,8 +12,8 @@ export function mount(container) {
 function render(container, boosterRoles, roles) {
   function roleCard(r) {
     return `
-      <form class="config-form" style="margin-bottom:24px; padding:16px; background:var(--bg-alt); border-radius:6px;" data-key="${r.role_key}">
-        <h3 style="margin:0 0 8px; font-size:15px;">${r.role_key}</h3>
+      <form class="form card" style="margin-bottom:16px;" data-key="${r.role_key}">
+        <div class="section-label">${r.role_key}</div>
         <div class="field">
           <label>Label</label>
           <input type="text" name="label" value="${r.label}" />
@@ -31,23 +31,23 @@ function render(container, boosterRoles, roles) {
           <input type="number" name="sort_order" value="${r.sort_order}" min="0" />
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit">Save</button>
-          <button type="button" class="btn-danger" data-remove="${r.role_key}">Remove</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+          <button type="button" class="btn btn-danger" data-remove="${r.role_key}">Remove</button>
           <span data-status></span>
         </div>
       </form>`;
   }
 
   container.innerHTML = `
-    <div class="panel" style="overflow-y:auto;">
+    <div class="panel">
       <header>
         <h2>Booster Roles</h2>
         <div class="subtitle">Custom color roles for server boosters. Use <code>/config booster</code> in Discord to sync swatches.</div>
       </header>
       <div data-roles>${boosterRoles.length ? boosterRoles.map(roleCard).join("") : '<div class="empty">No booster roles configured.</div>'}</div>
-      <hr style="margin:24px 0; border-color:var(--border);" />
-      <form class="config-form" data-add-form style="padding:16px; background:var(--bg-alt); border-radius:6px;">
-        <h3 style="margin:0 0 8px; font-size:15px;">Add Booster Role</h3>
+
+      <div class="section-label">Add Booster Role</div>
+      <form class="form card" data-add-form>
         <div class="field">
           <label>Key (short lowercase identifier)</label>
           <input type="text" name="role_key" required placeholder="e.g. ruby, sapphire" pattern="[a-z0-9_]+" />
@@ -69,7 +69,7 @@ function render(container, boosterRoles, roles) {
           <input type="number" name="sort_order" value="0" min="0" />
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
-          <button type="submit">Add</button>
+          <button type="submit" class="btn btn-primary">Add</button>
           <span data-add-status></span>
         </div>
       </form>

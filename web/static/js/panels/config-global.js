@@ -13,7 +13,7 @@ export function mount(container) {
           <h2>Global Config</h2>
           <div class="subtitle">Timezone, mod channel, bypass roles, and recorded bots</div>
         </header>
-        <form class="config-form" data-form>
+        <form class="form" data-form>
           <div class="field">
             <label>Timezone Offset (hours from UTC)</label>
             <input type="number" step="0.5" name="tz_offset_hours" value="${g.tz_offset_hours}" />
@@ -38,7 +38,7 @@ export function mount(container) {
             <input type="text" name="booster_swatch_dir" value="${g.booster_swatch_dir || ""}" />
             <div class="field-hint">Folder with booster color swatch images</div>
           </div>
-          <div><button type="submit">Save</button><span data-status></span></div>
+          <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
       </div>
     `;
