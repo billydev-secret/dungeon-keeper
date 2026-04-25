@@ -85,6 +85,8 @@ const SECTIONS = [
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
       { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js" },
       { id: "config-confessions", label: "Confessions",      module: "./panels/config-confessions.js" },
+      { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js" },
+      { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js" },
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js" },
       { id: "config-ai",          label: "AI Commands",      module: "./panels/config-ai.js" },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },

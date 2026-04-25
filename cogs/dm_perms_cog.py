@@ -13,11 +13,8 @@ from discord.ext import commands
 
 from services.dm_perms_service import (
     DM_ROLE_NAMES,
-    ROLE_DM_ASK,
-    ROLE_DM_CLOSED,
     add_consent_pair,
     build_panel_embed,
-    get_audit_log,
     get_consent_pair_meta,
     init_db,
     load_audit_channels,
@@ -31,10 +28,8 @@ from services.dm_perms_service import (
     remove_request,
     request_type_label,
     resolve_mode,
-    set_audit_channel,
     set_member_dm_mode,
     set_panel_settings,
-    set_request_channel,
     upsert_request,
     write_audit_log,
 )
@@ -585,9 +580,7 @@ class DmPermsCog(commands.Cog):
         embed.add_field(
             name="Your Commands",
             value=(
-                "`/dm_info` — View your full DM status\n"
                 "`/dm_set_mode` — Set your DM preference\n"
-                "`/dm_ask @user` — Send DM request\n"
                 "`/dm_revoke @user` — Revoke relationship\n"
                 "`/dm_status @user` — Check relationship status\n"
             ),
@@ -595,76 +588,10 @@ class DmPermsCog(commands.Cog):
         )
         embed.add_field(
             name="Moderator Tools",
-            value=(
-                "`/dm_request_channel_set` — Set DM request channel\n"
-                "`/dm_request_panel_set` — Set DM request panel channel\n"
-                "`/dm_request_panel_refresh` — Repost panel\n"
-                "`/dm_set_audit_channel` — Configure audit log channel\n"
-                "`/dm_audit_user` — View per-user audit history\n"
-                "`/dm_debug_list` — View all stored relationships\n"
-                "`/dm_debug_set` — Manually create relationship\n"
-                "`/dm_debug_remove` — Remove relationship\n"
-            ),
+            value="`/dm_request_panel_refresh` — Repost panel\n",
             inline=False,
         )
         embed.set_footer(text="DM relationships are logged for audit transparency.")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="dm_info", description="Show your DM mode and current permission relationships.")
-    @app_commands.guild_only()
-    async def dm_info(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild and isinstance(interaction.user, discord.Member)
-        guild_id = interaction.guild.id
-        member = interaction.user
-        role_names = {r.name for r in member.roles}
-
-        if ROLE_DM_CLOSED in role_names:
-            mode, mode_desc = "CLOSED", "No one may DM you."
-        elif ROLE_DM_ASK in role_names:
-            mode, mode_desc = "ASK", "DM requests require mutual approval."
-        else:
-            mode, mode_desc = "OPEN", "Anyone may DM you."
-
-        pair_set = self.consent_pairs.get(guild_id, set())
-        mutual: set[int] = set()
-        outgoing: set[int] = set()
-        incoming: set[int] = set()
-        for a, b in pair_set:
-            if a == member.id:
-                if (b, a) in pair_set:
-                    mutual.add(b)
-                else:
-                    outgoing.add(b)
-            elif b == member.id:
-                if (a, b) not in pair_set:
-                    incoming.add(a)
-
-        def _name(uid: int) -> str:
-            u = interaction.guild.get_member(uid)  # type: ignore[union-attr]
-            return u.display_name if u else f"Unknown({uid})"
-
-        def _sorted_ids(ids: set[int]) -> list[int]:
-            return sorted(ids, key=lambda uid: _name(uid).lower())
-
-        def _format_line(other_id: int) -> str:
-            meta = get_consent_pair_meta(self.ctx.db_path, guild_id, member.id, other_id)
-            t = request_type_label(meta.get("type") if meta else None)
-            reason = (meta.get("reason") or "").strip() if meta else ""
-            short = reason[:57] + "..." if len(reason) > 60 else reason
-            return f"• {_name(other_id)} — {t}" + (f' — "{short}"' if short else "")
-
-        embed = discord.Embed(title="📬 Your DM Information", color=discord.Color.gold())
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        embed.add_field(name="Current Mode", value=f"**{mode}**\n{mode_desc}", inline=False)
-
-        mutual_lines = [_format_line(uid) for uid in _sorted_ids(mutual)]
-        if mutual_lines:
-            embed.add_field(name=f"✅ Mutual Permissions ({len(mutual_lines)})", value="\n".join(mutual_lines), inline=False)
-        if not mutual_lines:
-            embed.add_field(name="No Stored Permissions", value="You currently have no DM permissions recorded.", inline=False)
-
-        embed.set_footer(text="Use /dm_ask or /dm_revoke to manage permissions.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="dm_set_mode", description="Set your DM request mode.")
@@ -689,20 +616,6 @@ class DmPermsCog(commands.Cog):
             color=discord.Color.gold(),
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="dm_allow", description="Create a mutual DM permission relationship with a user.")
-    @app_commands.guild_only()
-    @app_commands.describe(user="User to grant mutual permission with")
-    async def dm_allow(self, interaction: discord.Interaction, user: discord.Member) -> None:
-        assert interaction.guild and interaction.user
-        guild_id = interaction.guild.id
-        self.consent_pairs.setdefault(guild_id, set())
-        self.consent_pairs[guild_id].add((interaction.user.id, user.id))
-        self.consent_pairs[guild_id].add((user.id, interaction.user.id))
-        add_consent_pair(self.ctx.db_path, guild_id, interaction.user.id, user.id)
-        await interaction.response.send_message(
-            f"You and {user.mention} may now connect.", ephemeral=True
-        )
 
     @app_commands.command(name="dm_revoke", description="Remove DM permission relationship with another user.")
     @app_commands.guild_only()
@@ -774,69 +687,7 @@ class DmPermsCog(commands.Cog):
             f"**DM status — you & {user.display_name}**\n\n{result}", ephemeral=True
         )
 
-    @app_commands.command(name="dm_ask", description="Send a DM permission request to a user.")
-    @app_commands.guild_only()
-    @app_commands.choices(request_type=[
-        app_commands.Choice(name="Direct Message", value="dm"),
-        app_commands.Choice(name="Friend Request", value="friend"),
-    ])
-    @app_commands.describe(
-        user="User you want to contact",
-        request_type="Choose DM or friend request",
-        reason="Optional context shown to the recipient",
-    )
-    async def dm_ask(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        request_type: Optional[app_commands.Choice[str]] = None,
-        reason: Optional[str] = None,
-    ) -> None:
-        await self._submit_dm_request(
-            interaction, user,
-            request_type.value if request_type else "dm",
-            reason or "",
-        )
-
     # ── Admin commands ────────────────────────────────────────────────────────
-
-    @app_commands.command(name="dm_request_channel_set", description="Set the channel where DM requests are posted.")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_channels=True)
-    @app_commands.describe(channel="Channel to send DM requests to")
-    async def dm_request_channel_set(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        assert interaction.guild
-        self.request_channels[interaction.guild.id] = channel.id
-        set_request_channel(self.ctx.db_path, interaction.guild.id, channel.id)
-        await interaction.response.send_message(f"✅ DM requests will now go to {channel.mention}.")
-
-    @app_commands.command(name="dm_request_panel_set", description="Set the channel that holds the DM request button panel.")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_channels=True)
-    @app_commands.describe(channel="Channel where the DM request panel should be pinned")
-    async def dm_request_panel_set(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        assert interaction.guild
-        self.panel_settings[interaction.guild.id] = {
-            "panel_channel_id": channel.id,
-            "panel_message_id": self.panel_settings.get(interaction.guild.id, {}).get("panel_message_id"),
-        }
-        await interaction.response.defer(ephemeral=True)
-        message_id = await self._ensure_panel(interaction.guild, channel.id, force_repost=True)
-        if message_id is None:
-            await interaction.followup.send(
-                "I couldn't post the panel there — check that I have permission to send messages in that channel.",
-                ephemeral=True,
-            )
-            return
-        write_audit_log(
-            self.ctx.db_path, interaction.guild.id, "dm_request_panel_set",
-            actor_id=interaction.user.id, notes=f"channel={channel.id}",
-        )
-        await interaction.followup.send(f"✅ Panel is live in {channel.mention}.", ephemeral=True)
 
     @app_commands.command(name="dm_request_panel_refresh", description="Repost the DM request panel so it is the newest message.")
     @app_commands.guild_only()
@@ -858,47 +709,6 @@ class DmPermsCog(commands.Cog):
             )
             return
         await interaction.followup.send("✅ Panel bumped to the bottom.", ephemeral=True)
-
-    @app_commands.command(name="dm_set_audit_channel", description="Set the channel used for DM permission audit logs.")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(channel="Channel to send audit logs to")
-    async def dm_set_audit_channel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        assert interaction.guild
-        self.audit_channels[interaction.guild.id] = channel.id
-        set_audit_channel(self.ctx.db_path, interaction.guild.id, channel.id)
-        await interaction.response.send_message(f"📜 Audit logs will now go to {channel.mention}.")
-
-    @app_commands.command(name="dm_audit_user", description="Show DM permission audit history for a user.")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(user="User to inspect", limit="Number of recent entries to show (default 10)")
-    async def dm_audit_user(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        limit: app_commands.Range[int, 1, 50] = 10,
-    ) -> None:
-        assert interaction.guild
-        data = get_audit_log(self.ctx.db_path, interaction.guild.id, user_id=user.id, limit=limit)
-        if not data:
-            await interaction.response.send_message("No audit entries found for that user.", ephemeral=True)
-            return
-        lines = []
-        for entry in data:
-            ts = datetime.datetime.fromtimestamp(entry["timestamp"]).strftime("%Y-%m-%d %H:%M UTC")
-            lines.append(f"**{ts}** — {entry['action']}" + (f": {entry['notes']}" if entry.get("notes") else ""))
-        output = "\n".join(lines)
-        if len(output) > 3500:
-            output = output[:3500] + "\n... (truncated)"
-        embed = discord.Embed(
-            title=f"📜 Audit History — {user.display_name}",
-            description=output,
-            color=discord.Color.blurple(),
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: Bot) -> None:

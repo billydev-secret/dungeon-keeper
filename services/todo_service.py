@@ -1,4 +1,4 @@
-"""Todo list — DB helpers extracted from todo_cog for testability."""
+"""To do list — DB helpers extracted from todo_cog for testability."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ def create_todo(
     added_by: int,
     task: str,
 ) -> int:
-    """Insert a new todo and return its ID."""
+    """Insert a new to do and return its ID."""
     cur = conn.execute(
         "INSERT INTO todos (guild_id, added_by, task, created_at) VALUES (?, ?, ?, ?)",
         (guild_id, added_by, task, time.time()),
@@ -39,7 +39,7 @@ def complete_todo(
     guild_id: int,
     todo_id: int,
 ) -> bool:
-    """Mark a todo complete. Returns True if a row was updated."""
+    """Mark a to do complete. Returns True if a row was updated."""
     cur = conn.execute(
         "UPDATE todos SET completed_at = ? WHERE id = ? AND guild_id = ? AND completed_at IS NULL",
         (time.time(), todo_id, guild_id),
@@ -52,7 +52,7 @@ def delete_todo(
     guild_id: int,
     todo_id: int,
 ) -> bool:
-    """Delete a todo by ID. Returns True if deleted."""
+    """Delete a to do by ID. Returns True if deleted."""
     cur = conn.execute(
         "DELETE FROM todos WHERE id = ? AND guild_id = ?",
         (todo_id, guild_id),

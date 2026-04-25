@@ -1,10 +1,10 @@
-import { loadConfig, loadChannels, loadRoles, channelSelect, apiPut, showStatus } from "../config-helpers.js";
+import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
 
   (async () => {
-    const [config, channels] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
+    const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
     const g = config.global;
 
     container.innerHTML = `
@@ -24,9 +24,9 @@ export function mount(container) {
             <select name="mod_channel_id">${channelSelect(channels, g.mod_channel_id)}</select>
           </div>
           <div class="field">
-            <label>Bypass Role IDs</label>
-            <input type="text" name="bypass_role_ids" value="${g.bypass_role_ids.join(", ")}" />
-            <div class="field-hint">Roles that bypass spoiler guard and other restrictions (comma-separated IDs)</div>
+            <label>Bypass Roles</label>
+            <select name="bypass_role_ids" multiple size="6">${roleSelectMulti(roles, g.bypass_role_ids)}</select>
+            <div class="field-hint">Roles that bypass spoiler guard and other restrictions (Ctrl/Cmd-click to select multiple)</div>
           </div>
           <div class="field">
             <label>Recorded Bot User IDs</label>
@@ -52,7 +52,7 @@ export function mount(container) {
         await apiPut("/api/config/global", {
           tz_offset_hours: parseFloat(fd.get("tz_offset_hours")) || 0,
           mod_channel_id: fd.get("mod_channel_id"),
-          bypass_role_ids: fd.get("bypass_role_ids").split(",").map((s) => s.trim()).filter(Boolean),
+          bypass_role_ids: Array.from(form.querySelector('select[name="bypass_role_ids"]').selectedOptions).map((o) => o.value),
           recorded_bot_user_ids: fd.get("recorded_bot_user_ids").split(",").map((s) => s.trim()).filter(Boolean),
           booster_swatch_dir: fd.get("booster_swatch_dir"),
         });

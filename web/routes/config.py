@@ -52,6 +52,13 @@ from services.confessions_service import (
     get_config_conn as _confessions_get_config_conn,
     upsert_config as _confessions_upsert_config,
 )
+from services.starboard_service import (
+    get_starboard_config as _get_starboard_config,
+    upsert_starboard_config as _upsert_starboard_config,
+)
+
+_STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
+_BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂"
 
 router = APIRouter()
 
@@ -165,6 +172,51 @@ def _lookup_member_name(uid: int, guild, conn, guild_id: int) -> str:
 def _dms_section(db_path, guild_id: int) -> dict:
     cfg = get_dms_config(db_path, guild_id)
     return {k: str(v) for k, v in cfg.items()}
+
+
+# ── Starboard config helper ──────────────────────────────────────────
+
+
+def _starboard_section(conn, guild_id: int) -> dict:
+    import sqlite3
+
+    try:
+        row = _get_starboard_config(conn, guild_id)
+    except sqlite3.OperationalError:
+        row = None
+    if row:
+        channel_id = int(row["channel_id"])
+        threshold = int(row["threshold"])
+        emoji = row["emoji"]
+        enabled = bool(row["enabled"])
+    else:
+        channel_id = 0
+        threshold = 3
+        emoji = "⭐"
+        enabled = True
+    return {
+        "channel_id": str(channel_id),
+        "threshold": threshold,
+        "emoji": emoji,
+        "enabled": enabled,
+        "excluded_channels": [
+            str(i) for i in _id_set_list(conn, _STARBOARD_EXCLUDED_BUCKET, guild_id)
+        ],
+    }
+
+
+# ── Birthday config helper ────────────────────────────────────────────
+
+
+def _birthday_section(conn, guild_id: int) -> dict:
+    return {
+        "birthday_channel_id": str(
+            _int_val(conn, "birthday_channel_id", guild_id=guild_id)
+        ),
+        "birthday_message": _str_val(
+            conn, "birthday_message", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
+        ),
+    }
 
 
 # ── Confessions config helper ─────────────────────────────────────────
@@ -399,6 +451,8 @@ async def get_config(
                 ],
                 "confessions": _confessions_section(guild_id, bot, conn),
                 "dms": _dms_section(ctx.db_path, guild_id),
+                "starboard": _starboard_section(conn, guild_id),
+                "birthday": _birthday_section(conn, guild_id),
             }
 
     return await run_query(_q)
@@ -1232,3 +1286,100 @@ async def post_dms_panel(
     set_panel_settings(ctx.db_path, guild_id, channel_id, message_id)
     cog.panel_settings[guild_id] = {"panel_channel_id": channel_id, "panel_message_id": message_id}
     return {"ok": True}
+
+
+# ── Starboard config ─────────────────────────────────────────────────
+
+
+class StarboardConfigUpdate(BaseModel):
+    channel_id: str | None = None
+    threshold: int | None = None
+    emoji: str | None = None
+    enabled: bool | None = None
+    excluded_channels: list[str] | None = None
+
+
+@router.put("/config/starboard")
+async def update_starboard(
+    request: Request,
+    body: StarboardConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = _get_starboard_config(conn, guild_id)
+            channel_id = int(row["channel_id"]) if row else 0
+            threshold = int(row["threshold"]) if row else 3
+            emoji = row["emoji"] if row else "⭐"
+            enabled = int(row["enabled"]) if row else 1
+
+            if body.channel_id is not None:
+                channel_id = int(body.channel_id)
+            if body.threshold is not None:
+                if body.threshold < 1:
+                    raise HTTPException(400, "Threshold must be at least 1")
+                threshold = body.threshold
+            if body.emoji is not None:
+                stripped = body.emoji.strip()
+                if not stripped:
+                    raise HTTPException(400, "Emoji cannot be empty")
+                emoji = stripped
+            if body.enabled is not None:
+                enabled = 1 if body.enabled else 0
+
+            _upsert_starboard_config(
+                conn,
+                guild_id,
+                channel_id=channel_id,
+                threshold=threshold,
+                emoji=emoji,
+                enabled=enabled,
+            )
+
+            if body.excluded_channels is not None:
+                clear_config_id_bucket(conn, _STARBOARD_EXCLUDED_BUCKET, guild_id)
+                for cid in body.excluded_channels:
+                    add_config_id(
+                        conn, _STARBOARD_EXCLUDED_BUCKET, int(cid), guild_id
+                    )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── Birthday config ──────────────────────────────────────────────────
+
+
+class BirthdayConfigUpdate(BaseModel):
+    birthday_channel_id: str | None = None
+    birthday_message: str | None = None
+
+
+@router.put("/config/birthday")
+async def update_birthday(
+    request: Request,
+    body: BirthdayConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.birthday_channel_id is not None:
+                set_config_value(
+                    conn, "birthday_channel_id", body.birthday_channel_id, guild_id
+                )
+            if body.birthday_message is not None:
+                msg = body.birthday_message.strip()
+                if not msg:
+                    raise HTTPException(400, "Message cannot be empty")
+                set_config_value(conn, "birthday_message", msg, guild_id)
+        return {"ok": True}
+
+    return await run_query(_q)

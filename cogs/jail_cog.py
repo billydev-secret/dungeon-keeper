@@ -59,7 +59,6 @@ from commands.jail_commands import (
     remove_ticket_participant,
     add_ticket_participant,
     reopen_ticket,
-    revoke_warning,
     start_policy_vote,
     write_audit,
 )
@@ -1269,56 +1268,6 @@ class JailCog(commands.Cog):
         active = sum(1 for w in warns if not w["revoked"])
         embed.set_footer(text=f"{active} active / {len(warns)} total")
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ── /revokewarn ───────────────────────────────────────────────────────
-
-    @app_commands.command(
-        name="revokewarn",
-        description="Cancel a warning by ID. It stays in history but no longer counts.",
-    )
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.describe(
-        user="Member", warning_id="Warning ID to revoke", reason="Reason for revoking"
-    )
-    async def revokewarn_cmd(
-        self,
-        interaction: discord.Interaction,
-        user: discord.Member,
-        warning_id: int,
-        reason: str | None = None,
-    ) -> None:
-        ctx = self.ctx
-        member = interaction.user
-        guild = interaction.guild
-        if (
-            not isinstance(member, discord.Member)
-            or guild is None
-            or not _is_mod(member, ctx)
-        ):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-
-        with ctx.open_db() as conn:
-            ok = revoke_warning(conn, warning_id, revoked_by=member.id, reason=reason or "")
-            if not ok:
-                await interaction.response.send_message(
-                    f"Warning #{warning_id} not found or already revoked.", ephemeral=True
-                )
-                return
-            remaining = get_active_warning_count(conn, guild.id, user.id)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="warning_revoke",
-                actor_id=member.id,
-                target_id=user.id,
-                extra={"warning_id": warning_id, "reason": reason or "", "remaining": remaining},
-            )
-
-        await interaction.response.send_message(
-            f"✅ Warning #{warning_id} revoked. {user.mention} now has **{remaining}** active warning(s).",
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
 
     # ── /modinfo ──────────────────────────────────────────────────────────
 

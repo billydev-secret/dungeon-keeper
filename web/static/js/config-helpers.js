@@ -54,6 +54,38 @@ export function roleSelect(roles, selected, { allowNone = true } = {}) {
   return html;
 }
 
+export function channelSelectMulti(channels, selected) {
+  const selectedIds = new Set(
+    (Array.isArray(selected)
+      ? selected
+      : String(selected || "").split(","))
+      .map((s) => String(s).trim())
+      .filter(Boolean),
+  );
+  let html = "";
+  for (const ch of channels) {
+    const sel = selectedIds.has(ch.id) ? " selected" : "";
+    html += `<option value="${ch.id}"${sel}>#${ch.name}</option>`;
+  }
+  return html;
+}
+
+export function roleSelectMulti(roles, selected) {
+  const selectedIds = new Set(
+    (Array.isArray(selected)
+      ? selected
+      : String(selected || "").split(","))
+      .map((s) => String(s).trim())
+      .filter(Boolean),
+  );
+  let html = "";
+  for (const r of roles) {
+    const sel = selectedIds.has(r.id) ? " selected" : "";
+    html += `<option value="${r.id}"${sel}>@${r.name}</option>`;
+  }
+  return html;
+}
+
 export function multiIdList(ids, nameMap) {
   if (!ids || !ids.length) return "<em>none</em>";
   return ids.map((id) => nameMap[id] || id).join(", ");

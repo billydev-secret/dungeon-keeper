@@ -1,4 +1,4 @@
-import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, showStatus } from "../config-helpers.js";
+import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
@@ -42,14 +42,14 @@ export function mount(container) {
             <div class="field-hint">Where transcripts are posted (falls back to log channel if empty)</div>
           </div>
           <div class="field">
-            <label>Mod Role IDs</label>
-            <input type="text" name="mod_role_ids" value="${m.mod_role_ids}" />
-            <div class="field-hint">Comma-separated role IDs for moderators</div>
+            <label>Mod Roles</label>
+            <select name="mod_role_ids" multiple size="6">${roleSelectMulti(roles, m.mod_role_ids)}</select>
+            <div class="field-hint">Roles granted moderator permissions (Ctrl/Cmd-click to select multiple)</div>
           </div>
           <div class="field">
-            <label>Admin Role IDs</label>
-            <input type="text" name="admin_role_ids" value="${m.admin_role_ids}" />
-            <div class="field-hint">Comma-separated role IDs for admins (can escalate tickets)</div>
+            <label>Admin Roles</label>
+            <select name="admin_role_ids" multiple size="6">${roleSelectMulti(roles, m.admin_role_ids)}</select>
+            <div class="field-hint">Roles granted admin permissions — can escalate tickets (Ctrl/Cmd-click to select multiple)</div>
           </div>
           <div class="field">
             <label>Notify on Ticket Create</label>
@@ -70,6 +70,11 @@ export function mount(container) {
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");
+    const collectMulti = (name) =>
+      Array.from(form.querySelector(`select[name="${name}"]`).selectedOptions)
+        .map((o) => o.value)
+        .join(",");
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -80,8 +85,8 @@ export function mount(container) {
           ticket_category_id: fd.get("ticket_category_id") || "0",
           log_channel_id: fd.get("log_channel_id"),
           transcript_channel_id: fd.get("transcript_channel_id"),
-          mod_role_ids: fd.get("mod_role_ids"),
-          admin_role_ids: fd.get("admin_role_ids"),
+          mod_role_ids: collectMulti("mod_role_ids"),
+          admin_role_ids: collectMulti("admin_role_ids"),
           ticket_notify_on_create: fd.get("ticket_notify_on_create"),
           warning_threshold: parseInt(fd.get("warning_threshold")) || 3,
         });

@@ -60,8 +60,10 @@ def migrate_confessions(src_path: Path, dst: sqlite3.Connection, dry_run: bool) 
 
     # ── guild_config → confession_config ─────────────────────────────────────
     rows = src.execute("SELECT * FROM guild_config").fetchall()
+    guild_dest_channel: dict[int, int] = {}
     n = 0
     for r in rows:
+        guild_dest_channel[int(r["guild_id"])] = int(r["dest_channel_id"] or 0)
         params = (
             r["guild_id"],
             r["dest_channel_id"],
@@ -73,14 +75,14 @@ def migrate_confessions(src_path: Path, dst: sqlite3.Connection, dry_run: bool) 
             r["notify_op_on_reply"],
             r["per_day_limit"],
             r["blocked_user_ids"],
-            _or_none(r["launcher_channel_id"]),
-            _or_none(r["launcher_message_id"]),
+            r["launcher_channel_id"],
+            r["launcher_message_id"],
         )
         if not dry_run:
             dst_cur.execute(
                 """INSERT OR IGNORE INTO confession_config
-                   (guild_id, dest_channel_id, log_channel_id, cooldown, max_chars,
-                    panic, replies_enabled, ping_op, per_day, blocked_users,
+                   (guild_id, dest_channel_id, log_channel_id, cooldown_seconds, max_chars,
+                    panic, replies_enabled, notify_op_on_reply, per_day_limit, blocked_user_ids,
                     launcher_channel_id, launcher_message_id)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 params,
@@ -97,15 +99,15 @@ def migrate_confessions(src_path: Path, dst: sqlite3.Connection, dry_run: bool) 
         params = (
             r["guild_id"],
             r["author_id"],
-            float(r["last_confess_at"]),
-            float(r["last_reply_at"]),
-            r["day_key"],
-            r["day_count"],
+            int(r["last_confess_at"] or 0),
+            int(r["last_reply_at"] or 0),
+            r["day_key"] or "",
+            r["day_count"] or 0,
         )
         if not dry_run:
             dst_cur.execute(
                 """INSERT OR IGNORE INTO confession_rate_limits
-                   (guild_id, user_id, last_confession_ts, last_reply_ts, daily_key, daily_count)
+                   (guild_id, author_id, last_confess_at, last_reply_at, day_key, day_count)
                    VALUES (?,?,?,?,?,?)""",
                 params,
             )
@@ -115,27 +117,29 @@ def migrate_confessions(src_path: Path, dst: sqlite3.Connection, dry_run: bool) 
     counts["confession_rate_limits"] = n
 
     # ── thread_posts → confession_threads ─────────────────────────────────────
-    # confession_threads has: guild_id, message_id, root_message_id, author_id,
-    #                         thread_id (NULL), reply_btn_message_id (NULL), emoji (NULL), created_at
+    # New schema requires channel_id (NOT NULL). The old schema didn't track it,
+    # so we fall back to the guild's dest_channel_id — where confessions are posted.
     rows = src.execute("SELECT * FROM thread_posts").fetchall()
     n = 0
     for r in rows:
         params = (
             r["guild_id"],
             r["message_id"],
+            guild_dest_channel.get(int(r["guild_id"]), 0),
             r["root_message_id"],
             r["original_author_id"],
-            None,   # thread_id — not tracked in old schema
-            None,   # reply_btn_message_id
-            None,   # emoji
-            float(r["created_at"]),
+            -1,   # notify_original_author — unknown, use "unset" sentinel
+            0,    # discord_thread_id — not tracked in old schema
+            0,    # reply_button_message_id
+            int(float(r["created_at"] or 0)),
         )
         if not dry_run:
             dst_cur.execute(
                 """INSERT OR IGNORE INTO confession_threads
-                   (guild_id, message_id, root_message_id, author_id,
-                    thread_id, reply_btn_message_id, emoji, created_at)
-                   VALUES (?,?,?,?,?,?,?,?)""",
+                   (guild_id, message_id, channel_id, root_message_id,
+                    original_author_id, notify_original_author,
+                    discord_thread_id, reply_button_message_id, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
                 params,
             )
             n += dst_cur.rowcount
@@ -166,25 +170,24 @@ def migrate_dm_perms(src_path: Path, dst: sqlite3.Connection, dry_run: bool) -> 
     dst_cur = dst.cursor()
 
     # ── consent_pairs → dm_consent_pairs ──────────────────────────────────────
-    # Old schema stores (user_low, user_high) as a deduped pair.
-    # New schema stores (user_a_id, user_b_id) where user_a < user_b.
+    # Both schemas use (user_low, user_high) as the deduped pair.
     rows = src.execute("SELECT * FROM consent_pairs").fetchall()
     n = 0
     for r in rows:
         params = (
             r["guild_id"],
-            r["user_low"],   # already the smaller ID
+            r["user_low"],
             r["user_high"],
-            "dm",            # rel_type unknown — default to dm
-            None,            # reason
-            None,            # created_at
-            None,            # source_msg_id
-            None,            # source_channel_id
+            "dm",   # rel_type unknown — default to dm
+            "",     # reason (NOT NULL DEFAULT '')
+            0.0,    # created_at (NOT NULL DEFAULT 0)
+            None,   # source_msg_id
+            None,   # source_channel_id
         )
         if not dry_run:
             dst_cur.execute(
                 """INSERT OR IGNORE INTO dm_consent_pairs
-                   (guild_id, user_a_id, user_b_id, rel_type, reason,
+                   (guild_id, user_low, user_high, rel_type, reason,
                     created_at, source_msg_id, source_channel_id)
                    VALUES (?,?,?,?,?,?,?,?)""",
                 params,
@@ -260,8 +263,8 @@ def migrate_dm_perms(src_path: Path, dst: sqlite3.Connection, dry_run: bool) -> 
             r["actor_id"],
             r["user1_id"],
             r["user2_id"],
-            r["action"],
-            ts,
+            r["action"] or "",   # NOT NULL
+            ts if ts is not None else 0.0,   # NOT NULL
             notes or None,
         )
         if not dry_run:

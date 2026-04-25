@@ -66,8 +66,15 @@ def _build_help_pages(
                         "Open a private ticket with the mod team. "
                         "Only you and mods can see the channel.",
                     ),
-                    ("/foolsday_exclude", "Opt out of the April Fools name shuffle."),
-                    ("/foolsday_join", "Join an active name shuffle."),
+                    ("/birthday set", "Set your own birthday."),
+                    ("/wellness setup", "Opt in to wellness — pick timezone and enforcement style."),
+                    ("/wellness away on", "Turn on your away auto-reply."),
+                    ("/wellness away off", "Turn off your away auto-reply."),
+                    ("/confess", "Open the anonymous confession form."),
+                    ("/dm_help", "Overview of the DM request system."),
+                    ("/dm_set_mode", "Set your DM preference (open / ask / closed)."),
+                    ("/dm_status @user", "Check whether mutual DM permission exists."),
+                    ("/dm_revoke @user", "Revoke a DM permission relationship."),
                 ]
             ),
         )
@@ -85,9 +92,7 @@ def _build_help_pages(
         pages.append(
             _page(
                 "Role Grants",
-                "Give community roles to members. "
-                "Manage roles and permissions in `/config roles`.\n\n"
-                + _fmt(grant_cmds),
+                "Give community roles to members.\n\n" + _fmt(grant_cmds),
             )
         )
 
@@ -96,11 +101,7 @@ def _build_help_pages(
             _page(
                 "XP Grant",
                 "Award XP for contributions outside normal chat — events, art, helpful DMs, etc.\n\n"
-                + _fmt(
-                    [
-                        ("/xp_give member:@user", "Award 20 XP to a member."),
-                    ]
-                ),
+                + _fmt([("/xp_give member:@user", "Award 20 XP to a member.")]),
             )
         )
 
@@ -113,11 +114,6 @@ def _build_help_pages(
                 + _fmt(
                     [
                         (
-                            "/setup",
-                            "First-time setup — creates jail role, categories, log channels, and role pickers. "
-                            "Admin only. Re-run to adjust.",
-                        ),
-                        (
                             "/jail user:@user duration:24h reason:...",
                             "Place a member in a private jail channel. "
                             "Duration: `30m`, `2h`, `7d`, or omit for indefinite.",
@@ -126,14 +122,8 @@ def _build_help_pages(
                             "/unjail user:@user reason:...",
                             "Release a jailed member. Restores their roles and saves a transcript.",
                         ),
-                        (
-                            "/pull user:@user",
-                            "Bring someone into this jail/ticket channel.",
-                        ),
-                        (
-                            "/remove user:@user",
-                            "Remove someone you pulled into this channel.",
-                        ),
+                        ("/pull user:@user", "Bring someone into this jail/ticket channel."),
+                        ("/remove user:@user", "Remove someone you pulled into this channel."),
                     ]
                 )
                 + "\n\n**⚠️ Warnings**\n"
@@ -148,10 +138,6 @@ def _build_help_pages(
                             "List all warnings for a member (active + revoked).",
                         ),
                         (
-                            "/revokewarn user:@user warning_id:42 reason:...",
-                            "Cancel a warning by ID. Stays in history but stops counting.",
-                        ),
-                        (
                             "/modinfo user:@user",
                             "Full mod profile: jail status, warnings, and tickets. Run this first.",
                         ),
@@ -161,25 +147,24 @@ def _build_help_pages(
                 + _fmt(
                     [
                         (
-                            "/ticket panel channel:#support",
-                            "Post the ticket button in a channel. Users click it to open a private ticket.",
-                        ),
-                        (
                             "/ticket close reason:...",
                             "Close this ticket. It becomes read-only with Reopen/Delete buttons.",
                         ),
                         ("/ticket reopen", "Reopen a closed ticket."),
-                        (
-                            "/ticket delete",
-                            "Delete a closed ticket. A transcript is saved first.",
-                        ),
-                        (
-                            "/ticket claim",
-                            "Claim this ticket — you'll get DM pings on new activity.",
-                        ),
+                        ("/ticket delete", "Delete a closed ticket. A transcript is saved first."),
+                        ("/ticket claim", "Claim this ticket — you'll get DM pings on new activity."),
                         (
                             "/ticket escalate reason:...",
                             "Bring admins into this ticket and ping them.",
+                        ),
+                    ]
+                )
+                + "\n\n**🧹 Cleanup**\n"
+                + _fmt(
+                    [
+                        (
+                            "/purge count:50",
+                            "Bulk-delete messages. Use `after:19:35` for time-based, or both.",
                         ),
                     ]
                 ),
@@ -189,76 +174,12 @@ def _build_help_pages(
         pages.append(
             _page(
                 "Reports",
-                "Charts and tables about members, roles, and engagement.\n\n"
-                + _fmt(
+                _fmt(
                     [
-                        ("/report list_role role:@Role", "List every member who has a role."),
-                        ("/report inactive_role role:@Role days:7", "Members of a role who haven't posted in N days."),
-                        ("/report inactive time_period:7d", "All members inactive for a period. Add `channel:` or `exclude_gif_only:True`."),
-                        ("/report oldest_sfw count:10", "Members without NSFW access, ranked by longest silence."),
-                        ("/xp_level_review level:5", "How long does it take to reach a level? Histogram with stats."),
-                        ("/purge count:50", "Bulk-delete messages. Use `after:19:35` for time-based, or both."),
-                        ("/dropoff period:week", "Who disengaged the most? Compares two consecutive windows. Add `member:@user` for a full profile instead."),
-                        ("/burst_ranking limit:5", "Who sparks conversation when they return vs. who posts quietly?"),
-                        ("/interaction_heatmap timescale:week", "Matrix heatmap of who talks to whom (replies + mentions)."),
-                        ("/report role_growth resolution:week", "Cumulative role grants over time. Add `roles:Name1,Name2` to filter."),
                         ("/report promotion_review", "Members past level 5 who still lack NSFW access."),
-                        ("/report message_cadence resolution:day", "Time between messages as a candlestick chart. Green = speeding up."),
-                        ("/report join_times resolution:hour_of_day", "When do new members join? By hour or day of week."),
-                        ("/report quality_scores", "Ranked quality scores: engagement, consistency, resonance, activity."),
-                        ("/report message_rate days:7", "When is the server busy? Messages per 10-min slot, averaged."),
-                        ("/report greeter_response days:30", "How long do new members wait for a greeter hello?"),
-                        ("/report nsfw_gender resolution:week", "NSFW posting by gender. `display:bar` or `display:line`."),
-                        ("/report backfill_roles", "Sync role events with current state. Run after bulk role edits."),
-                    ]
-                ),
-            )
-        )
-
-        pages.append(
-            _page(
-                "Activity & Graphs",
-                "Visual tools for understanding engagement.\n\n"
-                + _fmt(
-                    [
-                        ("/activity resolution:day mode:xp", "Bar chart of messages or XP over time. Scope with `member:` or `channel:`. Resolutions: hour, day, week, month, hour_of_day, day_of_week."),
-                        ("/session_burst member:@user", "How active is someone in the hour after a break? Shows whether they spark conversation or post quietly."),
-                        ("/connection_web timescale:week", "Network graph of replies and mentions. Add `member:@user` to focus. Key options: `min_pct`, `layers`, `limit`."),
-                        ("/chilling_effect lookback_days:30", "Who makes others go quiet when they arrive? Correlation-based."),
-                        ("/invite_web member:@user", "Who invited whom, as a network graph."),
-                    ]
-                ),
-            )
-        )
-
-        pages.append(
-            _page(
-                "Fun",
-                "Seasonal tools.\n\n"
-                + _fmt(
-                    [
-                        ("/foolsday action:shuffle", "Randomize nicknames for active members. `action:restore` to undo."),
-                        ("/foolsday_exclude user:@User", "Exclude a member from the shuffle."),
-                        ("/foolsday_join user:@User", "Add a member to the active shuffle."),
-                        ("/foolsday_include user", "Remove someone from the exclusion list."),
-                        ("/foolsday_exclusions", "List excluded members."),
-                        ("/foolsday_samename name", "Give everyone the same name (random or custom). Restore to undo."),
-                        ("/foolsday_repair", "Fix broken mappings by walking through each one."),
-                    ]
-                ),
-            )
-        )
-
-        pages.append(
-            _page(
-                "Data Management",
-                "Populate and maintain bot data.\n\n"
-                + _fmt(
-                    [
-                        ("/interaction_scan days:0", "Backfill the interaction graph from message history. Run once after setup. `reset:True` clears old data first."),
-                        ("/gender set member:@user gender:Female", "Tag a member as Male, Female, or Non-binary for NSFW analytics."),
-                        ("/gender check member:@user", "See a member's current gender tag."),
-                        ("/gender classify", "Step through unclassified members one by one with buttons."),
+                        ("/quality_leave add member:@user days:30", "Put a member on leave (pauses quality scoring)."),
+                        ("/quality_leave remove member:@user", "End a member's leave of absence."),
+                        ("/quality_leave list", "List members currently on leave."),
                     ]
                 ),
             )
@@ -287,8 +208,8 @@ def _build_help_pages(
                     [
                         ("/ai review member:@user days:7", "AI flags rule violations and patterns in a member's recent messages."),
                         ("/ai scan count:50", "AI scans the last N messages in this channel for rule violations."),
-                        ("/ai channel question:... minutes:60", "Ask the AI about a channel's recent activity. e.g. *'Did anyone harass a new member?'*"),
-                        ("/ai query member:@user question:...", "Ask the AI about a member's message history. e.g. *'Has this person been hostile toward newcomers?'*"),
+                        ("/ai channel question:... minutes:60", "Ask the AI about a channel's recent activity."),
+                        ("/ai query member:@user question:...", "Ask the AI about a member's message history."),
                     ]
                 ),
             )
@@ -296,31 +217,14 @@ def _build_help_pages(
 
         pages.append(
             _page(
-                "Configuration",
-                "Use `/config <section>` to open a settings panel.\n\n"
-                "**`/config global`** — Timezone, mod channel, bypass roles\n"
-                "**`/config roles`** — Grant roles, permissions, log channels, messages\n"
-                "**`/config xp`** — XP channels, level-5 role, grant allowlist\n"
-                "**`/config welcome`** — Welcome/leave channels and message templates\n"
-                "**`/config spoiler`** — Spoiler-guard channel list\n"
-                "**`/config prune`** — Inactivity prune role and threshold\n"
-                "**`/config booster`** — Cosmetic role picker for boosters\n\n"
-                "**Related commands**\n"
-                + _fmt(
+                "Server Tools",
+                _fmt(
                     [
-                        ("/xp_excluded_channels", "Show which channels have XP turned off."),
-                        ("/xp_backfill_history days:30", "Scan past messages to fill XP gaps."),
-                        ("/welcome_preview", "Preview the welcome message."),
-                        ("/leave_preview", "Preview the leave message."),
-                        ("/inactivity_prune status", "Current prune rule, threshold, and exemptions."),
-                        ("/inactivity_prune exempt member:@user", "Protect a member from pruning."),
-                        ("/inactivity_prune unexempt member:@user", "Remove a prune exemption."),
-                        ("/inactivity_prune run", "Run a prune now instead of waiting for the daily schedule."),
-                        ("/auto_delete del_age:30d run:1d", "Delete old messages, optionally on a schedule. `run:once` or `run:off`."),
-                        ("/auto_delete_configs", "View and manage all auto-delete schedules."),
-                        ("/quality_leave add member:@user days:30", "Put a member on leave (pauses quality scoring)."),
-                        ("/quality_leave remove member:@user", "End a member's leave of absence."),
-                        ("/quality_leave list", "List members currently on leave."),
+                        ("/setup", "First-time bot setup — jail role, categories, log channels."),
+                        ("/starboard channel|threshold|emoji|toggle|status", "Configure the starboard."),
+                        ("/todo", "Add a task to the server todo list."),
+                        ("/policy open|vote|close|list", "Policy proposals and voting."),
+                        ("/delete_user user:@user", "Admin: purge a user's data."),
                     ]
                 ),
             )

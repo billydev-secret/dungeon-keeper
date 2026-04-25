@@ -1,4 +1,4 @@
-import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, showStatus } from "../config-helpers.js";
+import { loadConfig, loadChannels, loadRoles, channelSelect, channelSelectMulti, roleSelect, apiPut, showStatus } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
@@ -32,9 +32,9 @@ export function mount(container) {
             <div class="field-hint">Comma-separated user IDs allowed to use /xp grant</div>
           </div>
           <div class="field">
-            <label>XP Excluded Channel IDs</label>
-            <input type="text" name="xp_excluded_channel_ids" value="${xp.xp_excluded_channel_ids.join(", ")}" />
-            <div class="field-hint">Comma-separated channel IDs where XP is not earned</div>
+            <label>XP Excluded Channels</label>
+            <select name="xp_excluded_channel_ids" multiple size="6">${channelSelectMulti(channels, xp.xp_excluded_channel_ids)}</select>
+            <div class="field-hint">Channels where XP is not earned (Ctrl/Cmd-click to select multiple)</div>
           </div>
 
           <details class="algo-tuning" open>
@@ -139,7 +139,7 @@ export function mount(container) {
           level_5_log_channel_id: fd.get("level_5_log_channel_id"),
           level_up_log_channel_id: fd.get("level_up_log_channel_id"),
           xp_grant_allowed_user_ids: fd.get("xp_grant_allowed_user_ids").split(",").map((s) => s.trim()).filter(Boolean),
-          xp_excluded_channel_ids: fd.get("xp_excluded_channel_ids").split(",").map((s) => s.trim()).filter(Boolean),
+          xp_excluded_channel_ids: Array.from(form.querySelector('select[name="xp_excluded_channel_ids"]').selectedOptions).map((o) => o.value),
           // Algorithm coefficients
           message_word_xp: parseFloat(fd.get("message_word_xp")),
           reply_bonus_xp: parseFloat(fd.get("reply_bonus_xp")),
