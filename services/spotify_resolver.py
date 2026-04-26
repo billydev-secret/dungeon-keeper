@@ -122,8 +122,29 @@ class SpotifyResolver:
             )
 
         if kind == "playlist":
-            playlist = await self._call(client.playlist, ident, fields="name")
-            tracks, truncated = await self._page_playlist_tracks(client, ident)
+            # Editorial/algorithmic playlists (Daily Mix, Discover Weekly,
+            # Song/Artist Radio, etc.) start with `37i9`. Spotify removed API
+            # access to these for new apps in November 2024 — they 404 silently.
+            if ident.startswith("37i9"):
+                raise SpotifyResolveError(
+                    "Spotify restricted API access to editorial playlists "
+                    "(Daily Mix, Discover Weekly, Song/Artist Radio) in late "
+                    "2024. Use a user-created playlist instead."
+                )
+            try:
+                playlist = await self._call(client.playlist, ident, fields="name")
+                tracks, truncated = await self._page_playlist_tracks(client, ident)
+            except SpotifyResolveError as exc:
+                cause = exc.__cause__
+                if isinstance(cause, SpotifyException):
+                    if cause.http_status == 401:
+                        raise SpotifyResolveError(
+                            "Playlist is private — the bot can only access "
+                            "public playlists."
+                        ) from cause
+                    if cause.http_status == 404:
+                        raise SpotifyResolveError("Playlist not found.") from cause
+                raise
             return SpotifyResolveResult(
                 kind="playlist",
                 name=playlist.get("name"),
@@ -206,15 +227,16 @@ class SpotifyResolver:
         return results
 
     async def _call(self, fn, *args, **kwargs):
-        """Invoke a sync spotipy method off-loop, retrying on 429."""
+        """Invoke a sync spotipy method off-loop, retrying on 429.
+
+        Status codes are passed through unwrapped; callers translate them into
+        kind-specific messages (a generic 404 here previously mislabeled
+        editorial-playlist restrictions as "private or doesn't exist").
+        """
         for attempt, backoff in enumerate((*_RETRY_BACKOFF_S, None)):
             try:
                 return await asyncio.to_thread(fn, *args, **kwargs)
             except SpotifyException as exc:
-                if exc.http_status == 404:
-                    raise SpotifyResolveError(
-                        "Playlist is private or doesn't exist"
-                    ) from exc
                 if exc.http_status == 429 and backoff is not None:
                     log.warning(
                         "spotify 429, backing off %.1fs (attempt %d)",
