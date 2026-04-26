@@ -213,19 +213,32 @@ class SpotifyResolver:
             except SpotifyResolveError as exc:
                 cause = exc.__cause__
                 if isinstance(cause, SpotifyException):
+                    user_authed = fetch_client is not client
                     if cause.http_status == 401:
                         msg = (
                             "Playlist is private — the bot can only access "
                             "public playlists."
                         )
-                        if fetch_client is not client:
-                            # User-OAuth path was used; the playlist isn't
-                            # owned by or shared with the authorized account.
+                        if user_authed:
                             msg = (
                                 "Playlist is private and not shared with the "
                                 "authorized bot owner account."
                             )
                         raise SpotifyResolveError(msg) from cause
+                    if cause.http_status == 403:
+                        # User-OAuth was used but the authorized account
+                        # doesn't have access (different owner / not shared).
+                        if user_authed:
+                            raise SpotifyResolveError(
+                                "Playlist isn't accessible to the authorized "
+                                "Spotify account. Likely owned by a different "
+                                "account — re-run /spotify_authorize while "
+                                "signed in as the playlist owner."
+                            ) from cause
+                        raise SpotifyResolveError(
+                            "Spotify forbade this playlist (403). It may be "
+                            "region-locked or restricted."
+                        ) from cause
                     if cause.http_status == 404:
                         raise SpotifyResolveError("Playlist not found.") from cause
                 raise
