@@ -279,6 +279,11 @@ class MusicCog(commands.Cog):
         warn = ""
         if result.truncated:
             warn = f"\n(Playlist truncated to first {len(result.tracks)} tracks.)"
+        if result.kind == "artist":
+            return added, (
+                f"Queued **{added}** top track{'s' if added != 1 else ''} by "
+                f"**{result.name or 'Unknown'}**."
+            )
         kind_label = "playlist" if result.kind == "playlist" else "album"
         return added, (
             f"Queued **{added}** track{'s' if added != 1 else ''} from "

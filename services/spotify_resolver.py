@@ -29,9 +29,13 @@ _RETRY_BACKOFF_S = (1.0, 2.0, 4.0)
 
 
 _SPOTIFY_URL_RE = re.compile(
-    r"(?:https?://)?(?:open\.)?spotify\.com/(track|playlist|album)/([A-Za-z0-9]+)"
-    r"|spotify:(track|playlist|album):([A-Za-z0-9]+)"
+    r"(?:https?://)?(?:open\.)?spotify\.com/(track|playlist|album|artist)/([A-Za-z0-9]+)"
+    r"|spotify:(track|playlist|album|artist):([A-Za-z0-9]+)"
 )
+
+# Market for artist top-tracks lookups. Top-track lists vary by country;
+# ClientCredentials auth has no user token, so we can't use ``from_token``.
+_ARTIST_TOP_TRACKS_MARKET = "US"
 
 
 class SpotifyResolveError(RuntimeError):
@@ -53,7 +57,7 @@ class SpotifyTrack:
 
 @dataclass(frozen=True)
 class SpotifyResolveResult:
-    kind: Literal["track", "playlist", "album"]
+    kind: Literal["track", "playlist", "album", "artist"]
     name: str | None
     tracks: list[SpotifyTrack]
     truncated: bool = False
@@ -125,6 +129,17 @@ class SpotifyResolver:
                 name=playlist.get("name"),
                 tracks=tracks,
                 truncated=truncated,
+            )
+
+        if kind == "artist":
+            artist = await self._call(client.artist, ident)
+            top = await self._call(
+                client.artist_top_tracks, ident, country=_ARTIST_TOP_TRACKS_MARKET
+            )
+            return SpotifyResolveResult(
+                kind="artist",
+                name=artist.get("name"),
+                tracks=[_track_from_api(t) for t in top.get("tracks", [])],
             )
 
         raise SpotifyResolveError(f"Unsupported Spotify URL kind: {kind}")
