@@ -18,21 +18,21 @@ export function mount(container) {
           <div class="w-row">
             <div class="w-row-main"><strong>${esc(p.other_name)}</strong></div>
             <div class="w-row-actions">
-              <button class="btn-danger" data-dissolve="${p.id}">Dissolve</button>
+              <button class="btn btn-sm btn-danger" data-dissolve="${p.id}">Dissolve</button>
             </div>
           </div>
         `).join("")
-      : '<div class="w-empty">No active partnerships.</div>';
+      : '<div class="empty">No active partnerships.</div>';
 
     const pendingHTML = pending.length
-      ? `<h3>Pending</h3>` + pending.map(p => `
+      ? `<div class="section-label">Pending</div>` + pending.map(p => `
           <div class="w-row w-row-muted">
             <div class="w-row-main">
               <strong>${esc(p.other_name)}</strong>
-              <span class="w-chip w-chip-dim">${p.is_requester ? "You requested" : "Awaiting your response in DMs"}</span>
+              <span class="chip chip-neutral">${p.is_requester ? "You requested" : "Awaiting your response in DMs"}</span>
             </div>
             <div class="w-row-actions">
-              <button class="btn-danger" data-dissolve="${p.id}">Cancel</button>
+              <button class="btn btn-sm btn-danger" data-dissolve="${p.id}">Cancel</button>
             </div>
           </div>
         `).join("")
@@ -46,17 +46,15 @@ export function mount(container) {
       <div class="w-list">${acceptedHTML}</div>
       ${pendingHTML}
 
-      <section class="w-section">
-        <h3>Request Partner</h3>
-        <form data-req-form class="w-form w-inline-form">
-          <div class="field">
-            <label>Discord User ID</label>
-            <input type="text" name="user_id" required placeholder="e.g. 123456789012345678" />
-          </div>
-          <button type="submit">Send Request</button>
-          <span data-req-status></span>
-        </form>
-      </section>
+      <div class="section-label">Request Partner</div>
+      <form data-req-form class="form w-inline-form">
+        <div class="field">
+          <label>Discord User ID</label>
+          <input type="text" name="user_id" required placeholder="e.g. 123456789012345678" />
+        </div>
+        <button type="submit" class="btn btn-primary">Send Request</button>
+        <span data-req-status></span>
+      </form>
     `;
 
     // Dissolve

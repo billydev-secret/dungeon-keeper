@@ -19,64 +19,60 @@ export function mount(container) {
 
     // Overview cards
     const overviewHTML = `
-      <div class="w-grid">
-        <div class="w-card">
-          <div class="w-card-label">Active Users</div>
-          <div class="w-card-big">${dash.active_count}</div>
+      <div class="card-grid">
+        <div class="card">
+          <div class="stat-label">Active Users</div>
+          <div class="stat-value">${dash.active_count}</div>
         </div>
-        <div class="w-card">
-          <div class="w-card-label">Exempt Channels</div>
-          <div class="w-card-big">${dash.exempt_channels.length}</div>
+        <div class="card">
+          <div class="stat-label">Exempt Channels</div>
+          <div class="stat-value">${dash.exempt_channels.length}</div>
         </div>
-        <div class="w-card">
-          <div class="w-card-label">Default Enforcement</div>
-          <div class="w-card-big">${esc(dash.config?.default_enforcement || "—")}</div>
+        <div class="card">
+          <div class="stat-label">Default Enforcement</div>
+          <div class="stat-value">${esc(dash.config?.default_enforcement || "—")}</div>
         </div>
       </div>`;
 
     // Defaults form
     const cfg = defaults.config || {};
     const defaultsHTML = `
-      <section class="w-section">
-        <h3>Server Defaults</h3>
-        <form data-defaults-form class="w-form">
-          <div class="field">
-            <label>Default Enforcement</label>
-            <select name="default_enforcement">
-              ${defaults.enforcement_levels.map(e => `<option value="${e}"${e === cfg.default_enforcement ? " selected" : ""}>${e}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field">
-            <label>Crisis Resource URL</label>
-            <input type="url" name="crisis_resource_url" value="${esc(cfg.crisis_resource_url || "")}" placeholder="https://findahelpline.com/" />
-          </div>
-          <div><button type="submit">Save</button><span data-defaults-status></span></div>
-        </form>
-      </section>`;
+      <div class="section-label">Server Defaults</div>
+      <form data-defaults-form class="form">
+        <div class="field">
+          <label>Default Enforcement</label>
+          <select name="default_enforcement">
+            ${defaults.enforcement_levels.map(e => `<option value="${e}"${e === cfg.default_enforcement ? " selected" : ""}>${e}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label>Crisis Resource URL</label>
+          <input type="url" name="crisis_resource_url" value="${esc(cfg.crisis_resource_url || "")}" placeholder="https://findahelpline.com/" />
+        </div>
+        <div><button type="submit" class="btn btn-primary">Save</button><span data-defaults-status></span></div>
+      </form>`;
 
     // Users table
     const usersHTML = users.users.length ? `
-      <section class="w-section">
-        <h3>Active Users</h3>
-        <table class="w-table">
-          <thead><tr><th>User</th><th>Timezone</th><th>Enforcement</th><th>Status</th><th>Actions</th></tr></thead>
-          <tbody>
-            ${users.users.map(u => `
-              <tr data-uid="${u.user_id}">
-                <td>${esc(u.name)}</td>
-                <td>${esc(u.timezone)}</td>
-                <td>${esc(u.enforcement_level)}</td>
-                <td>${u.is_paused ? '<span class="w-badge w-badge-warn">Paused</span>' : '<span class="w-badge w-badge-ok">Active</span>'}</td>
-                <td>
-                  ${u.is_paused
-                    ? `<button data-resume-uid="${u.user_id}">Resume</button>`
-                    : `<button data-pause-uid="${u.user_id}">Pause 60m</button>`}
-                </td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      </section>` : "";
+      <div class="section-label">Active Users</div>
+      <table class="w-table">
+        <thead><tr><th>User</th><th>Timezone</th><th>Enforcement</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+          ${users.users.map(u => `
+            <tr data-uid="${u.user_id}">
+              <td>${esc(u.name)}</td>
+              <td>${esc(u.timezone)}</td>
+              <td>${esc(u.enforcement_level)}</td>
+              <td>${u.is_paused ? '<span class="chip chip-warning">Paused</span>' : '<span class="chip chip-success">Active</span>'}</td>
+              <td>
+                ${u.is_paused
+                  ? `<button class="btn btn-sm" data-resume-uid="${u.user_id}">Resume</button>`
+                  : `<button class="btn btn-sm" data-pause-uid="${u.user_id}">Pause 60m</button>`}
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>` : "";
 
     // Exempt channels
     const exemptListHTML = exempt.exempt.length
@@ -84,25 +80,23 @@ export function mount(container) {
           <div class="w-row">
             <div class="w-row-main">#${esc(ch.name)}</div>
             <div class="w-row-actions">
-              <button class="btn-danger" data-unexempt="${ch.id}">Remove</button>
+              <button class="btn btn-sm btn-danger" data-unexempt="${ch.id}">Remove</button>
             </div>
           </div>
         `).join("")
-      : '<div class="w-empty">No exempt channels.</div>';
+      : '<div class="empty">No exempt channels.</div>';
 
     const channelOptsHTML = exempt.channel_options.length
       ? exempt.channel_options.map(c => `<option value="${c.id}">#${esc(c.name)}</option>`).join("")
       : '<option value="">No channels available</option>';
 
     const exemptHTML = `
-      <section class="w-section">
-        <h3>Exempt Channels</h3>
-        <div class="w-list">${exemptListHTML}</div>
-        <form data-exempt-form class="w-form w-inline-form" style="margin-top:12px;">
-          <select name="channel_id">${channelOptsHTML}</select>
-          <button type="submit">Add</button>
-        </form>
-      </section>`;
+      <div class="section-label">Exempt Channels</div>
+      <div class="w-list">${exemptListHTML}</div>
+      <form data-exempt-form class="form w-inline-form" style="margin-top:12px;">
+        <select name="channel_id">${channelOptsHTML}</select>
+        <button type="submit" class="btn btn-primary">Add</button>
+      </form>`;
 
     container.querySelector(".panel").innerHTML = `
       <header>
@@ -135,7 +129,7 @@ export function mount(container) {
       btn.addEventListener("click", async () => {
         try {
           await wPost(`/api/wellness/admin/users/${btn.dataset.pauseUid}/pause`, { minutes: 60 });
-          btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="w-badge w-badge-warn">Paused</span>';
+          btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="chip chip-warning">Paused</span>';
           btn.textContent = "Done";
           btn.disabled = true;
         } catch (e) { alert(e.message); }
@@ -145,7 +139,7 @@ export function mount(container) {
       btn.addEventListener("click", async () => {
         try {
           await wPost(`/api/wellness/admin/users/${btn.dataset.resumeUid}/resume`, {});
-          btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="w-badge w-badge-ok">Active</span>';
+          btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="chip chip-success">Active</span>';
           btn.textContent = "Done";
           btn.disabled = true;
         } catch (e) { alert(e.message); }

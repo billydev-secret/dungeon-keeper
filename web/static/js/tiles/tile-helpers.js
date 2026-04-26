@@ -1,18 +1,18 @@
 // Shared helpers for tile renderers.
 
 const BADGE_COLORS = {
-  excellent: "var(--success)",
-  healthy: "var(--success)",
-  needs_work: "var(--warning)",
-  warning: "var(--warning)",
-  critical: "var(--danger)",
-  clear: "var(--success)",
-  active: "var(--danger)",
-  no_data: "var(--text-dim)",
+  excellent: "var(--green)",
+  healthy: "var(--green)",
+  needs_work: "var(--yellow)",
+  warning: "var(--yellow)",
+  critical: "var(--red)",
+  clear: "var(--green)",
+  active: "var(--red)",
+  no_data: "var(--ink-dim)",
 };
 
 export function badgeHTML(badge) {
-  const color = BADGE_COLORS[badge] || "var(--text-dim)";
+  const color = BADGE_COLORS[badge] || "var(--ink-dim)";
   const label = badge.replace(/_/g, " ");
   return `<span class="health-tile-badge" style="background:${color}">${label}</span>`;
 }
@@ -31,7 +31,7 @@ export function sparklineSVG(data, { width = 180, height = 32, color = "#E6B84C"
   `;
 }
 
-export function miniBarHTML(items, { maxVal, color = "var(--accent)" } = {}) {
+export function miniBarHTML(items, { maxVal, color = "var(--gold-solid)" } = {}) {
   if (!items || !items.length) return "";
   const mx = maxVal || Math.max(...items.map(i => i.value), 1);
   return items.map(i => {

@@ -15,19 +15,19 @@ export function mount(container) {
           <div class="w-row${b.enabled ? "" : " w-row-muted"}" data-bo-id="${b.id}">
             <div class="w-row-main">
               <strong>${esc(b.name)}</strong>
-              <span class="w-chip">${esc(b.start_str)} &rarr; ${esc(b.end_str)}</span>
-              <span class="w-chip w-chip-dim">${esc(b.days_str)}</span>
+              <span class="chip">${esc(b.start_str)} &rarr; ${esc(b.end_str)}</span>
+              <span class="chip chip-neutral">${esc(b.days_str)}</span>
             </div>
             <div class="w-row-actions">
               <label class="w-toggle">
                 <input type="checkbox" data-toggle-bo="${b.id}" ${b.enabled ? "checked" : ""} />
                 <span class="w-toggle-track"></span>
               </label>
-              <button class="btn-danger" data-del-bo="${b.id}">Remove</button>
+              <button class="btn btn-sm btn-danger" data-del-bo="${b.id}">Remove</button>
             </div>
           </div>
         `).join("")
-      : '<div class="w-empty">No blackouts yet. Pick a template or build one below.</div>';
+      : '<div class="empty">No blackouts yet. Pick a template or build one below.</div>';
 
     const tplHTML = d.templates.map(t => {
       const labels = {
@@ -46,19 +46,16 @@ export function mount(container) {
       </header>
       <div class="w-list">${listHTML}</div>
 
-      <section class="w-section">
-        <h3>Quick Templates</h3>
-        <div class="w-tpl-grid">${tplHTML}</div>
-      </section>
+      <div class="section-label">Quick Templates</div>
+      <div class="w-tpl-grid">${tplHTML}</div>
 
-      <section class="w-section">
-        <h3>Custom Blackout</h3>
-        <form data-add-form class="w-form">
+      <div class="section-label">Custom Blackout</div>
+      <form data-add-form class="form">
           <div class="field">
             <label>Name</label>
             <input type="text" name="name" required maxlength="40" placeholder="e.g. focus block" />
           </div>
-          <div class="w-form-row">
+          <div class="field-row">
             <div class="field">
               <label>Start</label>
               <input type="time" name="start" required value="22:00" />
@@ -78,9 +75,8 @@ export function mount(container) {
             <label><input type="checkbox" name="days" value="sat" checked />Sat</label>
             <label><input type="checkbox" name="days" value="sun" checked />Sun</label>
           </fieldset>
-          <div><button type="submit">Add Blackout</button><span data-add-status></span></div>
-        </form>
-      </section>
+          <div><button type="submit" class="btn btn-primary">Add Blackout</button><span data-add-status></span></div>
+      </form>
     `;
 
     // Toggle

@@ -215,14 +215,10 @@ const FILTERS = {
 export function mount(container) {
   container.innerHTML = `
     <div class="panel">
-      <div class="panel-head">
-        <div>
-          <h1 class="panel-title">Jails <em>&amp; holds</em></h1>
-          <div class="sub" style="font-size:13px;color:var(--ink-dim);margin-top:6px">
-            Members currently restricted from posting, plus recent releases.
-          </div>
-        </div>
-      </div>
+      <header>
+        <h2>Jails <em>&amp; holds</em></h2>
+        <div class="subtitle">Members currently restricted from posting, plus recent releases.</div>
+      </header>
 
       <div class="mod-stats" data-stats>
         <div class="mod-stat open"><div class="lbl">Currently jailed</div><div class="v">—</div><div class="sub">loading…</div></div>

@@ -5,7 +5,7 @@ repos:
     hooks:
       - id: ruff
         name: ruff
-        entry: ./.venv/Scripts/python.exe -m ruff check .
+        entry: ./.venv/Scripts/python.exe -m ruff check --fix .
         language: system
         pass_filenames: false
       - id: pyright

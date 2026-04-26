@@ -1,0 +1,100 @@
+# Lavalink v4 + LavaSrc (Spotify) configuration.
+#
+# - Listens on 127.0.0.1 only — never expose Lavalink to the internet.
+# - Secrets resolved from env: LAVALINK_PASSWORD, SPOTIFY_CLIENT_ID, SPOTIFY_CLIENT_SECRET.
+# - Pin specific LavaSrc release in scripts/setup_lavalink.py and verify the
+#   filename of the jar dropped into ./plugins matches the version below.
+#
+# Bump versions in lockstep with setup_lavalink.py.
+server:
+  port: ${LAVALINK_PORT:2333}
+  address: 127.0.0.1
+
+lavalink:
+  plugins:
+    - dependency: "com.github.topi314.lavasrc:lavasrc-plugin:4.2.0"
+      repository: "https://maven.lavalink.dev/releases"
+    # Built-in YouTube source breaks whenever YouTube changes player JS.
+    # The youtube-source plugin from lavalink-devs is actively maintained
+    # against those changes -- use it instead.
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.18.0"
+      repository: "https://maven.lavalink.dev/releases"
+  server:
+    password: ${LAVALINK_PASSWORD}
+    sources:
+      # Disable built-in YouTube; youtube-source plugin handles it.
+      youtube: false
+      bandcamp: false
+      soundcloud: false
+      twitch: false
+      vimeo: false
+      http: false
+      local: false
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    opusEncodingQuality: 10
+    resamplingQuality: LOW
+    trackStuckThresholdMs: 10000
+    useSeekGhosting: true
+    youtubePlaylistLoadLimit: 6
+    playerUpdateInterval: 5
+    youtubeSearchEnabled: true
+    soundcloudSearchEnabled: false
+
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    # Client list rotates as YouTube blocks specific clients. The plugin's
+    # README is the source of truth for the current recommended set.
+    clients:
+      - MUSIC
+      - ANDROID_VR
+      - WEB
+      - WEBEMBEDDED
+  lavasrc:
+    providers:
+      # Try ISRC first (LavaSrc substitutes the metadata's ISRC into %ISRC%).
+      - "ytsearch:\"%ISRC%\""
+      # Fall back to title + artist search.
+      - "ytsearch:%QUERY%"
+    sources:
+      spotify: true
+      applemusic: false
+      deezer: false
+      yandexmusic: false
+      flowerytts: false
+      youtube: false
+    spotify:
+      clientId: ${SPOTIFY_CLIENT_ID}
+      clientSecret: ${SPOTIFY_CLIENT_SECRET}
+      countryCode: US
+      playlistLoadLimit: 6
+      albumLoadLimit: 6
+
+metrics:
+  prometheus:
+    enabled: false
+
+logging:
+  file:
+    path: ./logs/
+  level:
+    root: INFO
+    lavalink: INFO
+    # Surface every REST PATCH (player updates, voice state, play commands)
+    # so we can tell whether wavelink is actually reaching Lavalink.
+    lavalink.server.io: DEBUG
+    lavalink.server.player: DEBUG
+    # Koe is Lavalink's voice library -- it owns the UDP audio stream to
+    # Discord's voice servers. If audio doesn't reach Discord, the failure
+    # shows up here.
+    moe.kyokobot.koe: DEBUG
+  request:
+    enabled: true
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 3

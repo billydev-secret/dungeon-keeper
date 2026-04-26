@@ -52,8 +52,8 @@ export function mount(container) {
 
     const rows = allMessages.map(m => {
       const eng = m.engagement || 0;
-      const engColor = eng >= 5 ? "var(--success)" : eng >= 2 ? "var(--warning, #e6b84c)" : "var(--text-dim)";
-      const sentColor = m.sentiment >= 0.3 ? "var(--success)" : m.sentiment <= -0.3 ? "var(--danger)" : "var(--text-dim)";
+      const engColor = eng >= 5 ? "var(--green)" : eng >= 2 ? "var(--yellow)" : "var(--ink-dim)";
+      const sentColor = m.sentiment >= 0.3 ? "var(--green)" : m.sentiment <= -0.3 ? "var(--red)" : "var(--ink-dim)";
       const emotionColor = EMOTION_COLORS[m.emotion] || "#949ba4";
       const channel = m.channel_name ? "#" + esc(m.channel_name) : m.channel_id;
 
@@ -67,7 +67,7 @@ export function mount(container) {
           <td class="sf-panel-content">${esc(m.content || "")}</td>
           <td style="text-align:center;">${m.is_reply ? "\u21A9" : ""}</td>
           <td style="text-align:center;">${m.connections || 0}</td>
-          <td style="white-space:nowrap;color:var(--text-dim);font-size:12px;">${fmtTime(m.ts)}</td>
+          <td style="white-space:nowrap;color:var(--ink-dim);font-size:12px;">${fmtTime(m.ts)}</td>
         </tr>
       `;
     }).join("");
@@ -136,7 +136,7 @@ export function mount(container) {
               <th>Eng.</th><th>Sent.</th><th>Emotion</th><th>Author</th>
               <th>Channel</th><th>Content</th><th>Reply</th><th>Conn.</th><th>Time</th>
             </tr></thead>
-            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:var(--text-dim)">No messages match filters</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:var(--ink-dim)">No messages match filters</td></tr>'}</tbody>
           </table>
           </div>
           ${allMessages.length < total ? '<div style="text-align:center;margin-top:10px;"><button class="sf-filter-btn" id="mf-load-more">Load more</button></div>' : ""}

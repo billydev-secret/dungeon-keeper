@@ -163,6 +163,8 @@ bot.extension_names = [
     "cogs.dev_cog",
     "cogs.setup_cog",
     "cogs.starboard_cog",
+    "cogs.music_cog",
+    "cogs.voice_master_cog",
 ]
 
 # ==============================
@@ -562,6 +564,16 @@ async def _shutdown() -> None:
         _layout_executor.shutdown(wait=False)
     except (ImportError, AttributeError):
         pass
+
+    # Unload the music cog FIRST so cog_unload() runs and shuts down Lavalink
+    # cleanly. bot.close() does NOT iterate cogs. Wrap in wait_for so a hung
+    # Lavalink stop can't deadlock shutdown.
+    try:
+        await asyncio.wait_for(
+            bot.unload_extension("cogs.music_cog"), timeout=15.0
+        )
+    except (asyncio.TimeoutError, Exception) as exc:
+        log.warning("music cog unload failed/timed out: %s", exc)
 
     # Close the bot (disconnects from Discord gateway)
     if not bot.is_closed():

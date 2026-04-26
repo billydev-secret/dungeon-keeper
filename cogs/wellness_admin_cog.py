@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.embeds import WELLNESS_OVERVIEW, WELLNESS_PRIMARY
 from commands.wellness_commands import (
     _format_days_mask,
     _format_minute,
@@ -256,7 +257,7 @@ class WellnessAdminCog(commands.Cog):
                 "Members can now run `/wellness setup` to opt in."
                 + manage_messages_warning
             ),
-            color=discord.Color.from_str("#7BC97B"),
+            color=WELLNESS_PRIMARY,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -405,7 +406,7 @@ class WellnessAdminCog(commands.Cog):
         embed = discord.Embed(
             title="🌿 Wellness — Exempt Channels",
             description="\n".join(lines),
-            color=discord.Color.from_str("#7BC97B"),
+            color=WELLNESS_PRIMARY,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -780,7 +781,7 @@ class WellnessAdminCog(commands.Cog):
         slow_mode_total = int(slow_mode_count_row["n"]) if slow_mode_count_row else 0
         paused_total = sum(1 for u in users if u.is_paused)
 
-        embed = discord.Embed(title="🌿 Wellness — server overview", color=0x5A8A6B)
+        embed = discord.Embed(title="🌿 Wellness — server overview", color=WELLNESS_OVERVIEW)
         embed.add_field(name="Active participants", value=str(len(users)), inline=True)
         embed.add_field(name="Currently paused", value=str(paused_total), inline=True)
         embed.add_field(name="In slow mode", value=str(slow_mode_total), inline=True)

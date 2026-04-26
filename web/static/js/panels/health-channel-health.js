@@ -4,16 +4,16 @@ import { makeHorizontalBarChart, makeBarChart, makeDoughnutChart } from "../char
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 function scoreColor(score) {
-  if (score >= 75) return "var(--success)";
-  if (score >= 50) return "var(--warning)";
-  return "var(--danger)";
+  if (score >= 75) return "var(--green)";
+  if (score >= 50) return "var(--yellow)";
+  return "var(--red)";
 }
 
 const STATUS_COLORS = {
-  healthy: "var(--success)",
-  flagged: "var(--warning)",
-  dormant: "var(--text-dim)",
-  archive: "var(--danger)",
+  healthy: "var(--green)",
+  flagged: "var(--yellow)",
+  dormant: "var(--ink-dim)",
+  archive: "var(--red)",
 };
 
 export function mount(container) {
@@ -37,7 +37,7 @@ export function mount(container) {
     const tableRows = sorted.map(ch => `
       <tr class="ch-row-${ch.status}">
         <td>#${esc(ch.channel_name || ch.channel_id)}</td>
-        <td><span class="health-tile-badge" style="background:${STATUS_COLORS[ch.status] || "var(--text-dim)"};font-size:11px;">${ch.status}</span></td>
+        <td><span class="health-tile-badge" style="background:${STATUS_COLORS[ch.status] || "var(--ink-dim)"};font-size:11px;">${ch.status}</span></td>
         <td style="color:${scoreColor(ch.score)}">${ch.score}</td>
         <td>${ch.msgs_per_day}</td>
         <td>${ch.unique_weekly_users}</td>
@@ -53,13 +53,13 @@ export function mount(container) {
         <div class="subtitle">${d.active_count} active &middot; ${d.flagged_count} flagged &middot; ${d.dormant_count} dormant &middot; ${d.archive_count || 0} archive candidates</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 14px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+      <details class="panel-about">
+        <summary>About this report</summary>
+        <div class="note">
           Each channel gets a health score (0–100) based on message volume, unique users, conversation depth, and activity distribution.
-          <strong style="color:var(--text-normal, #dbdee1);">Healthy</strong> channels have regular activity from multiple people.
-          <strong style="color:var(--text-normal, #dbdee1);">Flagged</strong> channels are still active but declining or dominated by very few people.
-          <strong style="color:var(--text-normal, #dbdee1);">Dormant</strong> channels have little to no recent activity. <strong style="color:var(--text-normal, #dbdee1);">Archive candidates</strong> have been dead long enough to consider removing.
+          <strong>Healthy</strong> channels have regular activity from multiple people.
+          <strong>Flagged</strong> channels are still active but declining or dominated by very few people.
+          <strong>Dormant</strong> channels have little to no recent activity. <strong>Archive candidates</strong> have been dead long enough to consider removing.
         </div>
       </details>
 

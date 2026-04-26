@@ -6,7 +6,7 @@ export function renderTile(el, data, names) {
     value: Math.round(ch.score),
   }));
   const flagged = data.flagged_count
-    ? `<span class="health-tile-badge" style="background:var(--warning)">${data.flagged_count} flagged</span>`
+    ? `<span class="health-tile-badge" style="background:var(--yellow)">${data.flagged_count} flagged</span>`
     : "";
 
   el.innerHTML = `
@@ -15,7 +15,7 @@ export function renderTile(el, data, names) {
       ${flagged}
     </div>
     <div class="health-tile-metric">${data.active_count} <span class="health-tile-unit">active</span></div>
-    ${miniBarHTML(bars, { maxVal: 100, color: "var(--success)" })}
+    ${miniBarHTML(bars, { maxVal: 100, color: "var(--green)" })}
     <div class="health-tile-companions">
       <span>${data.dormant_count} dormant</span>
       <span>${data.archive_count || 0} archive</span>

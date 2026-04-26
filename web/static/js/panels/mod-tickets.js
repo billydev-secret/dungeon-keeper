@@ -283,14 +283,10 @@ const FILTERS = {
 export function mount(container) {
   container.innerHTML = `
     <div class="panel">
-      <div class="panel-head">
-        <div>
-          <h1 class="panel-title">Active <em>tickets</em></h1>
-          <div class="sub" style="font-size:13px;color:var(--ink-dim);margin-top:6px">
-            Flagged messages, auto-mod hits, and member reports awaiting review.
-          </div>
-        </div>
-      </div>
+      <header>
+        <h2>Active <em>tickets</em></h2>
+        <div class="subtitle">Flagged messages, auto-mod hits, and member reports awaiting review.</div>
+      </header>
 
       <section class="mod-split">
         <div class="ticket-list-wrap">

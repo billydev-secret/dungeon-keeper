@@ -6,7 +6,9 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
+from services.todo_service import create_todo
 from web.helpers import resolve_names as _resolve_names
 from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
@@ -14,6 +16,12 @@ from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 router = APIRouter()
 
 _MOD = Depends(require_perms({"moderator"}))
+
+_MAX_TASK_LEN = 500
+
+
+class TodoCreateBody(BaseModel):
+    task: str
 
 
 
@@ -68,6 +76,32 @@ async def list_todos(
         ("completed_by", "completed_by_name"),
     )
     return result
+
+
+@router.post("/todos")
+async def create_todo_endpoint(
+    request: Request,
+    body: TodoCreateBody,
+    user: AuthenticatedUser = _MOD,
+):
+    task = (body.task or "").strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="Task cannot be empty.")
+    if len(task) > _MAX_TASK_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task must be {_MAX_TASK_LEN} characters or fewer.",
+        )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return create_todo(conn, guild_id, user.user_id, task)
+
+    todo_id = await run_query(_q)
+    return {"ok": True, "id": todo_id}
 
 
 @router.post("/todos/{todo_id}/complete")

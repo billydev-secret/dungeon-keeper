@@ -1,0 +1,4 @@
+[lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+"tests/conftest.py" = ["E402"]
+"tests/web/conftest.py" = ["E402"]

@@ -18,7 +18,7 @@ export function mount(container) {
       const cells = checkpoints.map(cp => {
         const val = c[cp];
         if (val === null || val === undefined) {
-          return `<td style="color:var(--text-muted, #949ba4)" title="Cohort hasn't aged to this checkpoint yet">—</td>`;
+          return `<td style="color:var(--ink-mute)" title="Cohort hasn't aged to this checkpoint yet">—</td>`;
         }
         const bg = val >= 60 ? "rgba(127,143,58,0.3)" : val >= 30 ? "rgba(230,184,76,0.3)" : val > 0 ? "rgba(158,59,46,0.3)" : "transparent";
         return `<td style="background:${bg}">${val}%</td>`;
@@ -37,10 +37,10 @@ export function mount(container) {
         <div class="subtitle">${headlineSub}</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 14px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
-          Members are grouped into weekly <strong style="color:var(--text-normal, #dbdee1);">cohorts</strong> by when they joined.
+      <details class="panel-about">
+        <summary>About this report</summary>
+        <div class="note">
+          Members are grouped into weekly <strong>cohorts</strong> by when they joined.
           "D7 Retention" means the percentage of a cohort that sent at least one message 7 days after joining — and so on for D30, D60, D90.
           The table below tracks each cohort week over time, and the curves show whether your onboarding is improving or declining.
         </div>

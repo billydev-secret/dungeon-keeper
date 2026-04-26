@@ -76,11 +76,11 @@ export function mount(container, initialParams) {
         ? invitees.map(i => `
             <tr class="invitee-row">
               <td colspan="2" style="padding-left:2rem">${esc(i.invitee_name || i.invitee_id)}</td>
-              <td colspan="3" style="color:${i.active ? "var(--color-success, #57f287)" : "var(--text-muted, #949ba4)"}">
+              <td colspan="3" style="color:${i.active ? "var(--color-success, #57f287)" : "var(--ink-mute)"}">
                 ${i.active ? "Active" : "Inactive"}
               </td>
             </tr>`).join("")
-        : `<tr class="invitee-row"><td colspan="5" style="padding-left:2rem; color:var(--text-muted,#949ba4)">No invitees recorded</td></tr>`;
+        : `<tr class="invitee-row"><td colspan="5" style="padding-left:2rem; color:var(--ink-mute)">No invitees recorded</td></tr>`;
 
       return mainRow + inviteeRows;
     }).join("");

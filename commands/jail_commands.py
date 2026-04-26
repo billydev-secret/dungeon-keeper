@@ -18,6 +18,14 @@ import discord
 from discord import app_commands
 
 from db_utils import get_config_value
+from services.embeds import (
+    MOD_INFO as CLR_INFO,
+    MOD_JAIL as CLR_JAIL,
+    MOD_POLICY as CLR_POLICY,
+    MOD_SUCCESS as CLR_SUCCESS,
+    MOD_TICKET as CLR_TICKET,
+    MOD_WARNING as CLR_WARNING,
+)
 from services.moderation import (
     add_policy,
     add_ticket_participant,
@@ -64,13 +72,6 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.jail_commands")
-
-# Embed colours matching spec §12
-CLR_JAIL = discord.Color.from_str("#E74C3C")
-CLR_TICKET = discord.Color.from_str("#3498DB")
-CLR_SUCCESS = discord.Color.from_str("#2ECC71")
-CLR_INFO = discord.Color.from_str("#95A5A6")
-CLR_WARNING = discord.Color.from_str("#F1C40F")
 
 
 # ---------------------------------------------------------------------------
@@ -612,7 +613,7 @@ class TicketDeleteButton(
 # Policy vote persistent buttons
 # ---------------------------------------------------------------------------
 
-CLR_POLICY = discord.Color.from_str("#9B59B6")  # purple for policy actions
+# CLR_POLICY now imported above from services.embeds
 
 
 async def _handle_policy_vote(

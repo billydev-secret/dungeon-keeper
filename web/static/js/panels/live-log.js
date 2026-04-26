@@ -12,15 +12,15 @@ export function mount(container) {
         <label style="flex-direction:row;align-items:center;gap:6px;">
           <input type="checkbox" data-autoscroll checked /> Auto-scroll
         </label>
-        <button data-clear style="background:var(--bg-sidebar);color:var(--text);border:1px solid var(--grid);border-radius:4px;padding:5px 14px;font-size:12px;cursor:pointer;">Clear</button>
+        <button data-clear class="btn btn-sm">Clear</button>
       </div>
       <pre data-log style="
         flex:1;min-height:0;overflow:auto;
-        background:var(--bg-sidebar);border-radius:6px;padding:12px;
+        background:var(--bg-rail);border-radius:6px;padding:12px;
         font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;
-        color:var(--text);margin:0;
+        color:var(--ink);margin:0;
       "></pre>
-      <div data-status style="font-size:11px;color:var(--text-dim);margin-top:4px;"></div>
+      <div data-status style="font-size:11px;color:var(--ink-dim);margin-top:4px;"></div>
     </div>
   `;
 
@@ -35,10 +35,10 @@ export function mount(container) {
   let evtSource = null;
 
   const LEVEL_COLORS = {
-    "ERROR": "var(--danger)",
-    "WARNING": "var(--warning)",
-    "CRITICAL": "var(--danger)",
-    "DEBUG": "var(--text-dim)",
+    "ERROR": "var(--red)",
+    "WARNING": "var(--yellow)",
+    "CRITICAL": "var(--red)",
+    "DEBUG": "var(--ink-dim)",
   };
 
   function colorize(text) {

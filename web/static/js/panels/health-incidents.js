@@ -39,9 +39,9 @@ export function mount(container) {
         <div class="subtitle">${d.active_count} active incident${d.active_count !== 1 ? "s" : ""}</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 14px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+      <details class="panel-about">
+        <summary>About this report</summary>
+        <div class="note">
           Incidents are automatically detected when activity patterns deviate sharply from normal — things like sudden message spikes, mass joins/leaves, or sentiment crashes.
           Each incident is categorized by type and severity. Active incidents haven't been resolved yet and may need moderator attention.
         </div>

@@ -54,7 +54,7 @@ export function mount(container, initialParams) {
       </div>
 
       <div class="ihm-transport">
-        <button data-btn="play" title="Play / Pause">&#9654;</button>
+        <button data-btn="play" class="btn btn-icon" title="Play / Pause">&#9654;</button>
         <input type="range" data-scrubber min="0" value="0" step="1" />
         <span data-frame-label class="ihm-frame-label"></span>
         <label>Speed

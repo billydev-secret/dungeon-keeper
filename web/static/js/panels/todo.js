@@ -97,14 +97,17 @@ const FILTERS = {
 export function mount(container) {
   container.innerHTML = `
     <div class="panel">
-      <div class="panel-head">
-        <div>
-          <h1 class="panel-title">Todo List</h1>
-          <div class="sub" style="font-size:13px;color:var(--ink-dim);margin-top:6px">
-            Server-wide tasks added via <code>/todo</code>.
-          </div>
-        </div>
-      </div>
+      <header>
+        <h2>Todo List</h2>
+        <div class="subtitle">Server-wide tasks added via <code>/todo</code>.</div>
+      </header>
+
+      <form class="todo-add" data-add-form style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-start;">
+        <input type="text" data-add-input maxlength="500" placeholder="Add a new task…"
+               style="flex:1;padding:8px 10px;border:1px solid var(--rule);border-radius:4px;background:var(--bg-rail);color:var(--ink);font-size:13px;font-family:inherit;" />
+        <button type="submit" class="act-btn" data-add-btn>Add</button>
+        <span data-add-status style="font-size:12px;align-self:center;"></span>
+      </form>
 
       <div class="mod-stats" data-stats>
         <div class="mod-stat open"><div class="lbl">Pending</div><div class="v">—</div></div>
@@ -136,6 +139,10 @@ export function mount(container) {
   const listEl = container.querySelector("[data-list]");
   const detailEl = container.querySelector("[data-detail]");
   const filterGroup = container.querySelector("[data-filter-group]");
+  const addForm = container.querySelector("[data-add-form]");
+  const addInput = container.querySelector("[data-add-input]");
+  const addBtn = container.querySelector("[data-add-btn]");
+  const addStatus = container.querySelector("[data-add-status]");
 
   const state = { todos: [], filter: "pending", activeId: null, completing: false };
 
@@ -168,6 +175,29 @@ export function mount(container) {
       detailEl.innerHTML = "";
     }
   }
+
+  addForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const task = addInput.value.trim();
+    if (!task) return;
+    addBtn.disabled = true;
+    addStatus.textContent = "";
+    addStatus.style.color = "";
+    try {
+      await apiPost("/api/todos", { task });
+      addInput.value = "";
+      state.filter = "pending";
+      filterGroup.querySelectorAll("button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.filter === "pending");
+      });
+      await refresh();
+    } catch (err) {
+      addStatus.textContent = err.message;
+      addStatus.style.color = "var(--red, #e55)";
+    } finally {
+      addBtn.disabled = false;
+    }
+  });
 
   filterGroup.addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-filter]");

@@ -12,7 +12,7 @@ export function renderTile(el, data, names) {
       ${badgeHTML(data.badge)}
     </div>
     <div class="health-tile-metric">${data.median_response_time}<span class="health-tile-unit">min</span></div>
-    ${miniBarHTML(bars, { color: "var(--info)" })}
+    ${miniBarHTML(bars, { color: "var(--plum)" })}
     <div class="health-tile-companions">
       <span>Gini: ${data.workload_gini || "—"}</span>
       <span>${data.total_actions_7d} actions (7d)</span>

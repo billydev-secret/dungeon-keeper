@@ -179,6 +179,11 @@ class TimeToLevel5Response(BaseModel):
 # ── Activity ────────────────────────────────────────────────────────────
 
 
+class ActivitySeriesSchema(BaseModel):
+    source: str
+    counts: list[float]
+
+
 class ActivityResponse(BaseModel):
     resolution: str
     window_label: str
@@ -189,6 +194,7 @@ class ActivityResponse(BaseModel):
     show_members: bool
     y_label: str
     tz_label: str
+    series: list[ActivitySeriesSchema] = []
 
 
 # ── Invite effectiveness ───────────────────────────────────────────────
@@ -636,3 +642,210 @@ class AnimatedHeatmapResponse(BaseModel):
     users: list[AnimatedHeatmapUser]
     frames: list[AnimatedHeatmapFrame]
     global_max: int
+
+
+# ── Dropoff ─────────────────────────────────────────────────────────────
+
+
+class DropoffEntrySchema(BaseModel):
+    user_id: str
+    user_name: str = ""
+    msgs_prev: int
+    msgs_recent: int
+    drop_pct: float
+    channels_recent: int
+    replies_recent: int
+    initiations_recent: int
+    avg_msg_len_recent: float
+    deep_convos_recent: int
+    first_activity_day: int | None = None
+    server_msgs_prev: int
+    server_msgs_recent: int
+
+
+class DropoffResponse(BaseModel):
+    entries: list[DropoffEntrySchema]
+    period_label: str
+
+
+# ── Session burst (per-member) ─────────────────────────────────────────
+
+
+class SessionBurstResponse(BaseModel):
+    user_id: str
+    user_name: str = ""
+    pre_bins: list[float]
+    post_bins: list[float]
+    sessions: int
+    pre_avg: float
+    post_avg: float
+    overall_rate: float
+    pre_window_minutes: int
+    post_window_minutes: int
+    bin_minutes: int
+
+
+# ── XP level review (any level) ────────────────────────────────────────
+
+
+class XpLevelReviewMember(BaseModel):
+    user_id: str
+    display_name: str = ""
+    days: float
+
+
+class XpLevelReviewBucket(BaseModel):
+    label: str
+    count: int
+
+
+class XpLevelReviewResponse(BaseModel):
+    level: int
+    window_label: str
+    count: int
+    mean_days: float
+    median_days: float
+    stddev_days: float
+    mode_days: int
+    xp_required: float
+    histogram: list[XpLevelReviewBucket]
+    members: list[XpLevelReviewMember]
+
+
+# ── Chilling effect ────────────────────────────────────────────────────
+
+
+class ChillingVictim(BaseModel):
+    user_id: str
+    user_name: str = ""
+    last_message_ts: int
+    last_message_preview: str = ""
+
+
+class ChillingEvent(BaseModel):
+    channel_id: str
+    channel_name: str = ""
+    entry_ts: int
+    entry_user_id: str
+    entry_user_name: str = ""
+    entry_preview: str = ""
+    victims: list[ChillingVictim]
+
+
+class ChillingPersonRanked(BaseModel):
+    user_id: str
+    user_name: str = ""
+    silence_count: int
+    total_victims: int
+    sample_events: list[ChillingEvent]
+
+
+class ChillingEffectResponse(BaseModel):
+    lookback_days: int
+    channel_id: str | None = None
+    channel_count: int
+    total_events: int
+    ranked: list[ChillingPersonRanked]
+
+
+# ── Member list reports ────────────────────────────────────────────────
+
+
+class MemberRowSchema(BaseModel):
+    user_id: str
+    display_name: str = ""
+    last_message_ts: float | None = None
+    last_message_channel_id: str | None = None
+    days_since_last: float | None = None
+
+
+class ListRoleResponse(BaseModel):
+    role_id: str
+    role_name: str = ""
+    total: int
+    members: list[MemberRowSchema]
+
+
+class InactiveRoleResponse(BaseModel):
+    role_id: str
+    role_name: str = ""
+    days: int
+    total: int
+    inactive_count: int
+    tracking_coverage: int
+    members: list[MemberRowSchema]
+
+
+class InactiveResponse(BaseModel):
+    period_seconds: int
+    period_label: str
+    channel_id: str | None = None
+    total: int
+    members: list[MemberRowSchema]
+
+
+class OldestSfwResponse(BaseModel):
+    nsfw_role_id: str | None = None
+    nsfw_role_name: str = ""
+    sfw_total: int
+    members: list[MemberRowSchema]
+
+
+# ── Welcome / leave preview ────────────────────────────────────────────
+
+
+class EmbedPreview(BaseModel):
+    title: str = ""
+    description: str = ""
+    color: int | None = None
+    thumbnail_url: str | None = None
+    footer: str = ""
+
+
+class WelcomePreviewResponse(BaseModel):
+    welcome: EmbedPreview
+    leave: EmbedPreview
+    sample_user_name: str = ""
+
+
+# ── Gender ─────────────────────────────────────────────────────────────
+
+
+class GenderEntrySchema(BaseModel):
+    user_id: str
+    display_name: str = ""
+    gender: str
+    set_by: str
+    set_at: float
+
+
+class GenderListResponse(BaseModel):
+    classified: list[GenderEntrySchema]
+
+
+class GenderUnclassifiedResponse(BaseModel):
+    members: list[MemberRowSchema]
+    total: int
+
+
+class GenderSetRequest(BaseModel):
+    user_id: str
+    gender: str  # 'male' | 'female' | 'nonbinary'
+
+
+class OkResponse(BaseModel):
+    ok: bool = True
+    message: str = ""
+
+
+# ── Admin backfill jobs ────────────────────────────────────────────────
+
+
+class BackfillRequest(BaseModel):
+    days: int = 0  # 0 = all available history
+
+
+class BackfillStartedResponse(BaseModel):
+    ok: bool = True
+    job: str
+    message: str = ""

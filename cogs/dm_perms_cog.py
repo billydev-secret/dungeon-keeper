@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.embeds import DM_ACCEPT, DM_DENY, DM_PENDING, DM_PRIMARY
 from services.dm_perms_service import (
     DM_ROLE_NAMES,
     add_consent_pair,
@@ -78,7 +79,7 @@ class AskConsentView(discord.ui.View):
             timeout_embed = discord.Embed(
                 title="⌛ Request expired",
                 description="This one didn't get a response in time — it's been 24 hours.",
-                color=discord.Color.orange(),
+                color=DM_PENDING,
             )
             timeout_embed.add_field(name="Request Type", value=request_type_label(self.request_type), inline=True)
             timeout_embed.add_field(name="Reason", value=self.reason or "—", inline=False)
@@ -100,7 +101,7 @@ class AskConsentView(discord.ui.View):
                         f"to **{target.display_name if target else self.target_id}** in **{guild.name}** "
                         "expired after 24 hours without a response."
                     ),
-                    color=discord.Color.orange(),
+                    color=DM_PENDING,
                 )
                 exp_embed.add_field(name="Request Type", value=request_type_label(self.request_type), inline=True)
                 exp_embed.add_field(name="Reason", value=self.reason or "—", inline=False)
@@ -155,7 +156,7 @@ class AskConsentView(discord.ui.View):
 
         success_embed = discord.Embed(
             title="✅ Connection accepted!",
-            color=discord.Color.green(),
+            color=DM_ACCEPT,
         )
         success_embed.description = (
             f"**{requester.display_name}** ↔ **{target.display_name}**\n\n"
@@ -194,7 +195,7 @@ class AskConsentView(discord.ui.View):
         deny_embed = discord.Embed(
             title="❌ Request declined",
             description="No worries — the request was turned down.",
-            color=discord.Color.red(),
+            color=DM_DENY,
         )
         deny_embed.add_field(name="Request Type", value=request_type_label(self.request_type), inline=True)
         deny_embed.add_field(name="Reason", value=self.reason or "—", inline=False)
@@ -214,7 +215,7 @@ class AskConsentView(discord.ui.View):
                         f"Your {request_type_label(self.request_type).lower()} request "
                         f"to **{target.display_name if target else self.target_id}** in **{guild.name}** was declined."
                     ),
-                    color=discord.Color.red(),
+                    color=DM_DENY,
                 )
                 req_embed.add_field(name="Request Type", value=request_type_label(self.request_type), inline=True)
                 req_embed.add_field(name="Reason", value=self.reason or "—", inline=False)
@@ -415,7 +416,7 @@ class DmPermsCog(commands.Cog):
                 f"A member of **{guild.name}** would like to connect.\n\n"
                 "This request expires in 24 hours."
             ),
-            color=discord.Color.gold(),
+            color=DM_PRIMARY,
         )
         embed.set_author(name=requester.display_name, icon_url=requester.display_avatar.url)
         embed.set_footer(text="You can revoke this permission at any time with /dm_revoke")
@@ -452,7 +453,7 @@ class DmPermsCog(commands.Cog):
                 f"in **{guild.name}** has been delivered.\n\nYou'll get a DM when they respond. "
                 "The request expires in 24 hours."
             ),
-            color=discord.Color.gold(),
+            color=DM_PRIMARY,
         )
         sender_embed.add_field(name="Request Type", value=request_type_label(req_type), inline=True)
         sender_embed.add_field(name="Reason", value=reason_clean or "—", inline=False)
@@ -568,7 +569,7 @@ class DmPermsCog(commands.Cog):
         embed = discord.Embed(
             title="📬 DM Request System",
             description="Control how users may request DM access with you.",
-            color=discord.Color.gold(),
+            color=DM_PRIMARY,
         )
         if interaction.guild.icon:
             embed.set_thumbnail(url=interaction.guild.icon.url)
@@ -613,7 +614,7 @@ class DmPermsCog(commands.Cog):
         embed = discord.Embed(
             title="DM preference updated",
             description=f"You're now set to **{mode.value.upper()}**.",
-            color=discord.Color.gold(),
+            color=DM_PRIMARY,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -646,7 +647,7 @@ class DmPermsCog(commands.Cog):
                 f"**{interaction.user.display_name}** ↔ **{user.display_name}**\n\n"
                 "The DM connection between you two has been removed."
             ),
-            color=discord.Color.red(),
+            color=DM_DENY,
         )
         revoked_embed.add_field(name="Request Type", value=request_type_label(meta.get("type") if meta else None), inline=True)
         revoked_embed.add_field(name="Reason", value=(meta.get("reason") or "—") if meta else "—", inline=False)

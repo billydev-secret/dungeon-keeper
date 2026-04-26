@@ -57,10 +57,10 @@ export function mount(container) {
       const data = await api("/api/moderation/policy-tickets", params);
 
       statsEl.innerHTML = `
-        <div class="stat-card stat-info"><div class="stat-value">${data.open_count}</div><div class="stat-label">Open</div></div>
-        <div class="stat-card stat-warning"><div class="stat-value">${data.voting_count}</div><div class="stat-label">Voting</div></div>
-        <div class="stat-card"><div class="stat-value">${data.closed_count}</div><div class="stat-label">Closed</div></div>
-        <div class="stat-card"><div class="stat-value">${data.total_count}</div><div class="stat-label">Total</div></div>
+        <div class="stat stat-info"><div class="stat-value">${data.open_count}</div><div class="stat-label">Open</div></div>
+        <div class="stat stat-warning"><div class="stat-value">${data.voting_count}</div><div class="stat-label">Voting</div></div>
+        <div class="stat"><div class="stat-value">${data.closed_count}</div><div class="stat-label">Closed</div></div>
+        <div class="stat"><div class="stat-value">${data.total_count}</div><div class="stat-label">Total</div></div>
       `;
 
       if (!data.policy_tickets.length) {

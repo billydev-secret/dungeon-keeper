@@ -32,7 +32,7 @@ function filterSelect(placeholder, options) {
     const lc = filter.toLowerCase();
     const matches = lc ? options.filter((o) => o.label.toLowerCase().includes(lc)) : options;
     const show = lc ? matches : matches.slice(0, 300);
-    list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--text-dim)">(none)</em></div>` +
+    list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--ink-dim)">(none)</em></div>` +
       show.map((o) => `<div class="filter-select-item" data-id="${esc(o.id)}">${esc(o.label)}</div>`).join("");
   }
   input.addEventListener("focus", () => { render(input.value); list.style.display = "block"; });
@@ -53,15 +53,15 @@ export function mount(container, initialParams) {
         <div class="subtitle">Visual network of who interacts with whom</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 10px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About these metrics</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
-          <strong style="color:var(--text-normal, #dbdee1);">Clustering</strong> is how much people form tight friend groups (target 0.25–0.55).
-          <strong style="color:var(--text-normal, #dbdee1);">Density</strong> is the fraction of all possible connections that exist.
-          <strong style="color:var(--text-normal, #dbdee1);">Reciprocity</strong> is how often interactions go both ways.
-          <strong style="color:var(--text-normal, #dbdee1);">Small-world</strong> is clustering ÷ density — >3 means tight local groups with short global paths.
-          <strong style="color:var(--text-normal, #dbdee1);">Avg path</strong> is the average hops between any two people.
-          <strong style="color:var(--text-normal, #dbdee1);">Bridge users</strong> connect otherwise separate groups.
+      <details class="panel-about">
+        <summary>About these metrics</summary>
+        <div class="note">
+          <strong>Clustering</strong> is how much people form tight friend groups (target 0.25–0.55).
+          <strong>Density</strong> is the fraction of all possible connections that exist.
+          <strong>Reciprocity</strong> is how often interactions go both ways.
+          <strong>Small-world</strong> is clustering ÷ density — >3 means tight local groups with short global paths.
+          <strong>Avg path</strong> is the average hops between any two people.
+          <strong>Bridge users</strong> connect otherwise separate groups.
         </div>
       </details>
 
@@ -120,7 +120,7 @@ export function mount(container, initialParams) {
       </div>
       <div data-graph-wrap style="position:relative; height:60vh; min-height:300px; min-width:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
         <canvas data-graph></canvas>
-        <button data-fullscreen title="Toggle fullscreen" style="position:absolute;top:6px;right:6px;z-index:5;background:rgba(0,0,0,0.5);border:1px solid #3f4147;color:#dbdee1;border-radius:4px;width:28px;height:28px;font-size:14px;cursor:pointer;padding:0;">⛶</button>
+        <button data-fullscreen class="btn btn-icon" title="Toggle fullscreen" style="position:absolute;top:6px;right:6px;z-index:5;background:rgba(0,0,0,0.5);">⛶</button>
       </div>
       <div data-legend style="margin-top:4px; font-size:11px; color:#949ba4;">
         Drag nodes · Scroll to zoom · Pan background · Node size = interactions · Edge width = weight · Node color = detected community

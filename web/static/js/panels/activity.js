@@ -18,6 +18,22 @@ const MODES = [
 
 const DEFAULT_EXCLUDED_CHANNEL_NAMES = ["games", "cat-bot"];
 
+const SOURCE_LABELS = {
+  text:        "Messages",
+  reply:       "Reply bonus",
+  image_react: "Image reaction",
+  voice:       "Voice",
+  grant:       "Manual grant",
+};
+const SOURCE_COLORS = {
+  text:        "#5865f2",
+  reply:       "#57f287",
+  image_react: "#fee75c",
+  voice:       "#eb459e",
+  grant:       "#faa61a",
+};
+const FALLBACK_SOURCE_COLOR = "#949ba4";
+
 function filterSelect(placeholder, options) {
   const wrap = document.createElement("div");
   wrap.className = "filter-select";
@@ -35,7 +51,7 @@ function filterSelect(placeholder, options) {
   function render(filter) {
     const lc = filter.toLowerCase();
     const matches = lc ? options.filter((o) => o.label.toLowerCase().includes(lc)) : options;
-    list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--text-dim)">(all)</em></div>` +
+    list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--ink-dim)">(all)</em></div>` +
       (lc ? matches : matches.slice(0, 300)).map((o) => `<div class="filter-select-item" data-id="${escHtml(o.id)}">${escHtml(o.label)}</div>`).join("");
   }
 
@@ -133,9 +149,9 @@ export function mount(container, initialParams) {
       const name = ch ? ch.name : id;
       return `<button class="role-pill" data-id="${esc(id)}" style="
         display:inline-flex;align-items:center;gap:4px;
-        background:var(--bg-alt);border:1px solid var(--grid);border-radius:14px;
-        padding:3px 10px;font-size:12px;color:var(--text);cursor:pointer;
-      ">#${esc(name)} <span style="color:var(--text-dim);font-weight:700;">&times;</span></button>`;
+        background:var(--bg-alt);border:1px solid var(--rule);border-radius:14px;
+        padding:3px 10px;font-size:12px;color:var(--ink);cursor:pointer;
+      ">#${esc(name)} <span style="color:var(--ink-dim);font-weight:700;">&times;</span></button>`;
     }).join("");
   }
 
@@ -244,10 +260,16 @@ export function mount(container, initialParams) {
           ...data,
           labels: data.labels.slice(lo, hi + 1),
           counts: data.counts.slice(lo, hi + 1),
-          member_counts: data.member_counts.slice(lo, hi + 1),
+          member_counts: (data.member_counts || []).slice(lo, hi + 1),
+          series: (data.series || []).map((s) => ({
+            source: s.source,
+            counts: s.counts.slice(lo, hi + 1),
+          })),
         };
         const title = `${data.y_label} — ${data.window_label} (${data.tz_label})`;
-        if (sliced.show_members && sliced.member_counts.length) {
+        const hasSeries = sliced.series.length > 0;
+        const hasMembers = sliced.show_members && sliced.member_counts.length > 0;
+        if (hasSeries || hasMembers) {
           chart = _makeActivityChart(canvas, sliced, title);
         } else {
           chart = makeBarChart(canvas, { labels: sliced.labels, data: sliced.counts, title, yLabel: data.y_label });
@@ -276,60 +298,95 @@ export function mount(container, initialParams) {
 
 function _makeActivityChart(canvas, data, title) {
   const ctx = canvas.getContext("2d");
+  const hasSeries = Array.isArray(data.series) && data.series.length > 0;
+  const hasMembers = data.show_members && Array.isArray(data.member_counts) && data.member_counts.length > 0;
+
+  const datasets = [];
+  if (hasSeries) {
+    for (const s of data.series) {
+      datasets.push({
+        label: SOURCE_LABELS[s.source] || s.source,
+        data: s.counts,
+        backgroundColor: SOURCE_COLORS[s.source] || FALLBACK_SOURCE_COLOR,
+        borderRadius: 2,
+        order: 2,
+        yAxisID: "y",
+        stack: "xp",
+      });
+    }
+  } else {
+    datasets.push({
+      label: data.y_label,
+      data: data.counts,
+      backgroundColor: "#E6B84C",
+      borderRadius: 3,
+      order: 2,
+      yAxisID: "y",
+    });
+  }
+  if (hasMembers) {
+    datasets.push({
+      label: "Unique Members",
+      data: data.member_counts,
+      type: "line",
+      borderColor: "#B36A92",
+      backgroundColor: "transparent",
+      borderWidth: 2,
+      pointRadius: 2,
+      tension: 0.3,
+      order: 1,
+      yAxisID: "y1",
+    });
+  }
+
+  const scales = {
+    x: {
+      stacked: hasSeries,
+      ticks: { color: "#dbdee1", maxRotation: 45 },
+      grid: { color: "#3f4147" },
+    },
+    y: {
+      position: "left",
+      stacked: hasSeries,
+      title: { display: true, text: data.y_label, color: "#dbdee1" },
+      ticks: { color: "#dbdee1" },
+      grid: { color: "#3f4147" },
+      beginAtZero: true,
+    },
+  };
+  if (hasMembers) {
+    scales.y1 = {
+      position: "right",
+      title: { display: true, text: "Unique Members", color: "#B36A92" },
+      ticks: { color: "#B36A92" },
+      grid: { drawOnChartArea: false },
+      beginAtZero: true,
+    };
+  }
+
   return new Chart(ctx, {
     type: "bar",
-    data: {
-      labels: data.labels,
-      datasets: [
-        {
-          label: data.y_label,
-          data: data.counts,
-          backgroundColor: "#E6B84C",
-          borderRadius: 3,
-          order: 2,
-          yAxisID: "y",
-        },
-        {
-          label: "Unique Members",
-          data: data.member_counts,
-          type: "line",
-          borderColor: "#B36A92",
-          backgroundColor: "transparent",
-          borderWidth: 2,
-          pointRadius: 2,
-          tension: 0.3,
-          order: 1,
-          yAxisID: "y1",
-        },
-      ],
-    },
+    data: { labels: data.labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
+      interaction: hasSeries ? { mode: "index", intersect: false } : undefined,
       plugins: {
         title: { display: true, text: title, color: "#dbdee1" },
         legend: { labels: { color: "#dbdee1" } },
+        tooltip: hasSeries ? {
+          callbacks: {
+            footer: (items) => {
+              const total = items.reduce((sum, it) => {
+                const v = it.dataset.yAxisID === "y" ? it.parsed.y : 0;
+                return sum + (Number.isFinite(v) ? v : 0);
+              }, 0);
+              return `Total XP: ${total.toFixed(1)}`;
+            },
+          },
+        } : undefined,
       },
-      scales: {
-        x: {
-          ticks: { color: "#dbdee1", maxRotation: 45 },
-          grid: { color: "#3f4147" },
-        },
-        y: {
-          position: "left",
-          title: { display: true, text: data.y_label, color: "#dbdee1" },
-          ticks: { color: "#dbdee1" },
-          grid: { color: "#3f4147" },
-          beginAtZero: true,
-        },
-        y1: {
-          position: "right",
-          title: { display: true, text: "Unique Members", color: "#B36A92" },
-          ticks: { color: "#B36A92" },
-          grid: { drawOnChartArea: false },
-          beginAtZero: true,
-        },
-      },
+      scales,
     },
   });
 }

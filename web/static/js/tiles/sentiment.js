@@ -19,7 +19,7 @@ export function renderTile(el, data, names) {
 
   function msgSnippet(m, _label) {
     const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
-    const scoreColor = m.sentiment >= 0 ? "var(--success)" : "var(--danger)";
+    const scoreColor = m.sentiment >= 0 ? "var(--green)" : "var(--red)";
     const author = uNames[m.author_id] || "";
     const channel = chNames[m.channel_id] ? "#" + chNames[m.channel_id] : "";
     const snippet = m.content && m.content.length > 60
@@ -40,8 +40,8 @@ export function renderTile(el, data, names) {
   const topMsg = outliers.top.length ? msgSnippet(outliers.top[0], "top") : "";
   const botMsg = outliers.bottom.length ? msgSnippet(outliers.bottom[0], "bottom") : "";
   const outlierHTML = (topMsg || botMsg) ? `
-    <div style="margin-top:6px;border-top:1px solid var(--border, #3f4147);padding-top:6px;">
-      <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">Outliers (&plusmn;1&sigma;)</div>
+    <div style="margin-top:6px;border-top:1px solid var(--rule);padding-top:6px;">
+      <div style="font-size:11px;color:var(--ink-dim);margin-bottom:4px;">Outliers (&plusmn;1&sigma;)</div>
       ${topMsg}${botMsg}
     </div>
   ` : "";

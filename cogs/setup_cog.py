@@ -10,6 +10,7 @@ from discord.ext import commands
 from commands.jail_commands import CLR_TICKET, TicketPanelButton
 from db_utils import get_config_value
 from services.dm_perms_service import set_panel_settings, set_request_channel
+from services.embeds import MOD_SUCCESS
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -197,7 +198,7 @@ class SetupCog(commands.Cog):
         embed = discord.Embed(
             title="Setup Complete",
             description="\n".join(lines),
-            color=discord.Color.green(),
+            color=MOD_SUCCESS,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 

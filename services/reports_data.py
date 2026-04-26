@@ -29,8 +29,8 @@ from services.activity_graphs import (
     query_message_rate_drops,
     query_nsfw_gender_activity,
     query_role_growth,
-    query_xp_activity,
-    query_xp_histogram,
+    query_xp_activity_with_breakdown,
+    query_xp_histogram_with_breakdown,
 )
 
 # ---------------------------------------------------------------------------
@@ -591,6 +591,11 @@ def get_greeter_response_data(
 # ---------------------------------------------------------------------------
 
 
+class ActivitySeries(TypedDict):
+    source: str
+    counts: list[float]
+
+
 class ActivityData(TypedDict):
     resolution: str
     window_label: str
@@ -601,6 +606,7 @@ class ActivityData(TypedDict):
     show_members: bool
     y_label: str
     tz_label: str
+    series: list[ActivitySeries]
 
 
 def get_activity_data(
@@ -617,9 +623,10 @@ def get_activity_data(
     tz_label = f"UTC{utc_offset_hours:+g}" if utc_offset_hours else "UTC"
     show_members = user_id is None
 
+    series: list[ActivitySeries] = []
     if mode == "xp":
         if resolution in ("hour_of_day", "day_of_week"):
-            labels, xp_totals = query_xp_histogram(
+            labels, xp_totals, by_source = query_xp_histogram_with_breakdown(
                 conn,
                 guild_id,
                 resolution,  # type: ignore[arg-type]
@@ -633,7 +640,12 @@ def get_activity_data(
             member_counts: list[int] = []
             show_members = False
         else:
-            labels, xp_totals, member_counts = query_xp_activity(
+            (
+                labels,
+                xp_totals,
+                member_counts,
+                by_source,
+            ) = query_xp_activity_with_breakdown(
                 conn,
                 guild_id,
                 resolution,
@@ -644,6 +656,12 @@ def get_activity_data(
                 utc_offset_hours=utc_offset_hours,
             )
             counts = xp_totals
+        series = [
+            {"source": src, "counts": vals}
+            for src, vals in sorted(
+                by_source.items(), key=lambda kv: -sum(kv[1])
+            )
+        ]
         y_label = "XP Earned"
     else:
         if resolution in ("hour_of_day", "day_of_week"):
@@ -674,7 +692,7 @@ def get_activity_data(
             counts = [float(c) for c in msg_counts]
         y_label = "Messages"
 
-    return {
+    result: ActivityData = {
         "resolution": resolution,
         "window_label": _WINDOW_LABELS.get(resolution, resolution),
         "mode": mode,
@@ -684,7 +702,9 @@ def get_activity_data(
         "show_members": show_members,
         "y_label": y_label,
         "tz_label": tz_label,
+        "series": series,
     }
+    return result
 
 
 # ---------------------------------------------------------------------------

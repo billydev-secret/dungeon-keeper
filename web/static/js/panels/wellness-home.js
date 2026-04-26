@@ -21,7 +21,7 @@ export function mount(container) {
     }
 
     const pausedHTML = d.paused_until && d.paused_until > Date.now() / 1000
-      ? `<div class="w-badge w-badge-warn">Paused until ${new Date(d.paused_until * 1000).toLocaleTimeString()}</div>`
+      ? `<div class="chip chip-warning" style="margin-top:8px;">Paused until ${new Date(d.paused_until * 1000).toLocaleTimeString()}</div>`
       : "";
 
     container.querySelector(".panel").innerHTML = `
@@ -30,42 +30,41 @@ export function mount(container) {
         <div class="subtitle">Your wellness dashboard</div>
       </header>
 
-      <div class="w-grid">
-        <div class="w-card w-card-hero">
+      <div class="card-grid">
+        <div class="card w-card-hero">
           <div class="w-streak-badge">${esc(d.streak.badge)}</div>
           <div class="w-streak-days">${d.streak.current_days} day streak</div>
           <div class="w-streak-sub">Personal best: ${d.streak.personal_best} &middot; Next: ${esc(d.next_milestone_text)}</div>
           ${pausedHTML}
         </div>
 
-        <div class="w-card">
-          <div class="w-card-label">Caps</div>
-          <div class="w-card-big">${d.caps_count}</div>
+        <div class="card">
+          <div class="stat-label">Caps</div>
+          <div class="stat-value">${d.caps_count}</div>
           <a href="#/wellness-caps" class="w-card-link">Manage</a>
         </div>
 
-        <div class="w-card">
-          <div class="w-card-label">Active Blackouts</div>
-          <div class="w-card-big">${d.blackouts_count}</div>
+        <div class="card">
+          <div class="stat-label">Active Blackouts</div>
+          <div class="stat-value">${d.blackouts_count}</div>
           <a href="#/wellness-blackouts" class="w-card-link">Manage</a>
         </div>
 
-        <div class="w-card">
-          <div class="w-card-label">Partners</div>
-          <div class="w-card-big">${d.partners_count}${d.pending_partners_count ? ` <span class="w-pending">(${d.pending_partners_count} pending)</span>` : ""}</div>
+        <div class="card">
+          <div class="stat-label">Partners</div>
+          <div class="stat-value">${d.partners_count}${d.pending_partners_count ? ` <span class="w-pending">(${d.pending_partners_count} pending)</span>` : ""}</div>
           <a href="#/wellness-partners" class="w-card-link">Manage</a>
         </div>
 
-        <div class="w-card">
-          <div class="w-card-label">Away</div>
-          <div class="w-card-big">${d.away_enabled ? "On" : "Off"}</div>
+        <div class="card">
+          <div class="stat-label">Away</div>
+          <div class="stat-value">${d.away_enabled ? "On" : "Off"}</div>
           <a href="#/wellness-away" class="w-card-link">Configure</a>
         </div>
       </div>
 
-      <section class="w-section">
-        <h3>Settings</h3>
-        <form data-settings-form class="w-form">
+      <div class="section-label">Settings</div>
+      <form data-settings-form class="form">
           <div class="field">
             <label>Timezone</label>
             <input type="text" name="timezone" value="${esc(d.timezone)}" />
@@ -89,21 +88,18 @@ export function mount(container) {
           <div class="field">
             <label><input type="checkbox" name="public_commitment" ${d.public_commitment ? "checked" : ""} /> Public commitment</label>
           </div>
-          <div><button type="submit">Save</button><span data-status></span></div>
-        </form>
-      </section>
+          <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
+      </form>
 
-      <section class="w-section">
-        <h3>Quick Actions</h3>
-        <div class="w-actions">
-          <form data-pause-form class="w-inline-form">
-            <input type="number" name="minutes" min="1" max="10080" value="60" style="width:80px" />
-            <button type="submit">Pause (minutes)</button>
-            <span data-pause-status></span>
-          </form>
-          <button data-resume-btn>Resume</button>
-        </div>
-      </section>
+      <div class="section-label">Quick Actions</div>
+      <div class="w-actions">
+        <form data-pause-form class="w-inline-form">
+          <input type="number" name="minutes" min="1" max="10080" value="60" style="width:80px" />
+          <button type="submit" class="btn">Pause (minutes)</button>
+          <span data-pause-status></span>
+        </form>
+        <button data-resume-btn class="btn">Resume</button>
+      </div>
 
       ${d.crisis_resource_url ? `<div class="w-crisis"><a href="${esc(d.crisis_resource_url)}" target="_blank" rel="noopener">Crisis resources</a></div>` : ""}
     `;

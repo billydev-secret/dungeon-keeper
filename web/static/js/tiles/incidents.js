@@ -6,7 +6,7 @@ export function renderTile(el, data) {
   const maxDot = Math.max(...(data.timeline || []), 1);
   const dots = (data.timeline || []).map((cnt, i) => {
     const size = cnt ? Math.max(6, Math.round((cnt / maxDot) * 16)) : 4;
-    const color = cnt ? "var(--danger)" : "var(--text-dim)";
+    const color = cnt ? "var(--red)" : "var(--ink-dim)";
     return `<div class="incident-dot" style="width:${size}px;height:${size}px;background:${color}" title="${days[i]}: ${cnt}"></div>`;
   }).join("");
 

@@ -7,7 +7,7 @@ export function renderTile(el, data, names) {
 
   const rows = msgs.slice(0, 6).map(m => {
     const positive = m.sentiment >= 0.5;
-    const color = positive ? "var(--success)" : "var(--danger)";
+    const color = positive ? "var(--green)" : "var(--red)";
     const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
     const channel = chNames[m.channel_id] ? "#" + chNames[m.channel_id] : "";
     const author = uNames[m.author_id] || "";
@@ -31,8 +31,8 @@ export function renderTile(el, data, names) {
       <span class="health-tile-label">Sentiment Feed</span>
     </div>
     <div class="health-tile-companions" style="margin-bottom:6px;">
-      <span style="color:var(--success)">${data.positive_24h} positive (24h)</span>
-      <span style="color:var(--danger)">${data.negative_24h} negative (24h)</span>
+      <span style="color:var(--green)">${data.positive_24h} positive (24h)</span>
+      <span style="color:var(--red)">${data.negative_24h} negative (24h)</span>
     </div>
     ${rows || '<div class="home-dim">No extreme sentiment messages yet</div>'}
   `;

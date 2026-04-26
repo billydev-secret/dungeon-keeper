@@ -31,7 +31,7 @@ function filterSelect(placeholder, options) {
       : options;
     const show = lc ? matches : matches.slice(0, 300);
     list.innerHTML = `<div class="filter-select-item" data-id="">
-        <em style="color:var(--text-dim)">(any)</em>
+        <em style="color:var(--ink-dim)">(any)</em>
       </div>` +
       show.map((o) => `<div class="filter-select-item" data-id="${esc(o.id)}">${esc(o.label)}</div>`).join("");
   }
@@ -115,7 +115,7 @@ export function mount(container) {
           <option value="">Loading models…</option>
         </select>
         <input type="text" data-ai-query placeholder="Ask AI: e.g. &quot;show me popular messages from today&quot;" class="ai-query-input" />
-        <button data-ai-search class="msg-search-btn ai-btn">Ask AI</button>
+        <button data-ai-search class="btn btn-primary">Ask AI</button>
         <span data-ai-status class="ai-status"></span>
       </div>
       <div class="controls msg-search-controls">
@@ -182,10 +182,10 @@ export function mount(container) {
           </select>
         </label>
         <label>&nbsp;
-          <button data-search class="msg-search-btn">Search</button>
+          <button data-search class="btn btn-primary">Search</button>
         </label>
         <label>&nbsp;
-          <button data-download class="msg-search-btn" style="display:none">Download JSON</button>
+          <button data-download class="btn" style="display:none">Download JSON</button>
         </label>
       </div>
       <div data-results class="msg-results"></div>
@@ -455,10 +455,10 @@ export function mount(container) {
     if (data.pages > 1) {
       let pagerHtml = `<span class="msg-pager-info">Page ${data.page} of ${data.pages} (${data.total} results)</span> `;
       if (data.page > 1) {
-        pagerHtml += `<button data-page="${data.page - 1}">\u25C0 Prev</button> `;
+        pagerHtml += `<button class="btn btn-sm" data-page="${data.page - 1}">\u25C0 Prev</button> `;
       }
       if (data.page < data.pages) {
-        pagerHtml += `<button data-page="${data.page + 1}">Next \u25B6</button>`;
+        pagerHtml += `<button class="btn btn-sm" data-page="${data.page + 1}">Next \u25B6</button>`;
       }
       pagerEl.innerHTML = pagerHtml;
       pagerEl.querySelectorAll("button[data-page]").forEach((btn) => {

@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.embeds import XP_PRIMARY
 from services.xp_service import handle_level_progress
 from xp_system import (
     XP_SOURCE_GRANT,
@@ -244,7 +245,7 @@ class XpCog(commands.Cog):
             embed = discord.Embed(
                 title="XP Leaderboards",
                 description=description,
-                color=discord.Color.blurple(),
+                color=XP_PRIMARY,
             )
             embed.add_field(name="💬 Text", value="No tracked text XP yet.", inline=True)
             embed.add_field(

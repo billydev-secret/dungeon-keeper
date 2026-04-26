@@ -19,13 +19,13 @@ export function mount(container) {
         <div class="subtitle">Message distribution inequality &middot; ${d.gini} (${d.badge})</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 14px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
-          The <strong style="color:var(--text-normal, #dbdee1);">Gini coefficient</strong> measures how evenly messages are spread across members.
+      <details class="panel-about">
+        <summary>About this report</summary>
+        <div class="note">
+          The <strong>Gini coefficient</strong> measures how evenly messages are spread across members.
           0 means everyone posts equally; 1 means one person writes everything. Most healthy communities land between 0.5–0.75.
-          The <strong style="color:var(--text-normal, #dbdee1);">Lorenz curve</strong> visualizes this — the further it bows from the diagonal, the more concentrated activity is.
-          The <strong style="color:var(--text-normal, #dbdee1);">Palma ratio</strong> compares the top 10% to the bottom 40% — a high ratio means a small group dominates conversation.
+          The <strong>Lorenz curve</strong> visualizes this — the further it bows from the diagonal, the more concentrated activity is.
+          The <strong>Palma ratio</strong> compares the top 10% to the bottom 40% — a high ratio means a small group dominates conversation.
         </div>
       </details>
 

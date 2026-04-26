@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from db_utils import add_config_id, get_config_id_set, remove_config_id
+from services.embeds import STARBOARD_PRIMARY
 from services.starboard_service import (
     add_reactor,
     get_effective_star_count,
@@ -37,7 +38,7 @@ _EXCLUDED_BUCKET = "starboard_excluded_channels"
 def _build_embed(message: discord.Message, star_count: int, emoji: str) -> discord.Embed:
     embed = discord.Embed(
         description=message.content[:2000] if message.content else None,
-        color=discord.Color.gold(),
+        color=STARBOARD_PRIMARY,
         timestamp=message.created_at,
     )
     channel_name = getattr(message.channel, "name", str(message.channel.id))
@@ -354,7 +355,7 @@ class StarboardCog(commands.Cog):
             " ".join(f"<#{cid}>" for cid in sorted(excluded_ids)) if excluded_ids else "*none*"
         )
 
-        embed = discord.Embed(title="Starboard Configuration", color=discord.Color.gold())
+        embed = discord.Embed(title="Starboard Configuration", color=STARBOARD_PRIMARY)
         embed.add_field(name="Status", value=state, inline=True)
         embed.add_field(name="Channel", value=channel_mention, inline=True)
         embed.add_field(name="Threshold", value=str(cfg["threshold"]), inline=True)

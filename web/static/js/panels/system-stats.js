@@ -32,9 +32,9 @@ function pctBar(pct, color) {
 }
 
 function pctColor(pct) {
-  if (pct < 60) return "var(--success)";
-  if (pct < 85) return "var(--warning)";
-  return "var(--danger)";
+  if (pct < 60) return "var(--green)";
+  if (pct < 85) return "var(--yellow)";
+  return "var(--red)";
 }
 
 function renderStats(container, data) {
@@ -46,17 +46,18 @@ function renderStats(container, data) {
   for (const iface of data.interfaces) {
     // Skip loopback and inactive interfaces
     if (iface.bytes_sent === 0 && iface.bytes_recv === 0) continue;
+    const errCount = iface.errin + iface.errout;
     ifaceRows += `<tr>
       <td style="white-space:nowrap">${iface.name}</td>
-      <td style="text-align:right;font-variant-numeric:tabular-nums">${fmtBytes(iface.bytes_sent)}</td>
-      <td style="text-align:right;font-variant-numeric:tabular-nums">${fmtBytes(iface.bytes_recv)}</td>
-      <td style="text-align:right;font-variant-numeric:tabular-nums">${fmtRate(iface.send_rate)}</td>
-      <td style="text-align:right;font-variant-numeric:tabular-nums">${fmtRate(iface.recv_rate)}</td>
-      <td style="text-align:right;color:${iface.errin + iface.errout > 0 ? 'var(--danger)' : 'var(--text-dim)'}">${iface.errin + iface.errout}</td>
+      <td class="num">${fmtBytes(iface.bytes_sent)}</td>
+      <td class="num">${fmtBytes(iface.bytes_recv)}</td>
+      <td class="num">${fmtRate(iface.send_rate)}</td>
+      <td class="num">${fmtRate(iface.recv_rate)}</td>
+      <td class="num ${errCount > 0 ? 'num-err' : 'num-dim'}">${errCount}</td>
     </tr>`;
   }
 
-  container.innerHTML = `<div class="panel" style="overflow-y:auto">
+  container.innerHTML = `<div class="panel">
     <header>
       <h2>System Stats</h2>
       <div class="subtitle">Host OS &mdash; uptime ${fmtUptime(data.uptime)}</div>
@@ -84,30 +85,30 @@ function renderStats(container, data) {
         <div class="home-card-label">Network totals</div>
         <div style="display:flex;gap:20px;margin-top:4px">
           <div>
-            <div style="font-size:11px;color:var(--text-dim)">Sent</div>
+            <div style="font-size:11px;color:var(--ink-dim)">Sent</div>
             <div style="font-size:18px;font-weight:700">${fmtBytes(data.network.total_bytes_sent)}</div>
-            <div style="font-size:12px;color:var(--accent)">${fmtRate(data.network.send_rate)}</div>
+            <div style="font-size:12px;color:var(--gold-solid)">${fmtRate(data.network.send_rate)}</div>
           </div>
           <div>
-            <div style="font-size:11px;color:var(--text-dim)">Received</div>
+            <div style="font-size:11px;color:var(--ink-dim)">Received</div>
             <div style="font-size:18px;font-weight:700">${fmtBytes(data.network.total_bytes_recv)}</div>
-            <div style="font-size:12px;color:var(--accent)">${fmtRate(data.network.recv_rate)}</div>
+            <div style="font-size:12px;color:var(--gold-solid)">${fmtRate(data.network.recv_rate)}</div>
           </div>
         </div>
       </div>
     </div>
 
-    <h3 style="font-size:15px;margin:0 0 10px">Network interfaces</h3>
+    <div class="section-label">Network interfaces</div>
     <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr>
             <th>Interface</th>
-            <th style="text-align:right">Sent</th>
-            <th style="text-align:right">Recv</th>
-            <th style="text-align:right">Send rate</th>
-            <th style="text-align:right">Recv rate</th>
-            <th style="text-align:right">Errors</th>
+            <th class="num">Sent</th>
+            <th class="num">Recv</th>
+            <th class="num">Send rate</th>
+            <th class="num">Recv rate</th>
+            <th class="num">Errors</th>
           </tr>
         </thead>
         <tbody>${ifaceRows || '<tr><td colspan="6" class="empty">No active interfaces</td></tr>'}</tbody>

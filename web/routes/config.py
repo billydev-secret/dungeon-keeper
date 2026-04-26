@@ -561,6 +561,60 @@ async def update_welcome(
     return await run_query(_q)
 
 
+@router.get("/config/welcome/preview")
+async def welcome_preview(
+    request: Request,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Render welcome and leave embeds for the calling admin (used as a sample member)."""
+    from services.welcome_service import (
+        DEFAULT_LEAVE_MESSAGE,
+        DEFAULT_WELCOME_MESSAGE,
+        build_leave_embed,
+        build_welcome_embed,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(503, "Guild not available")
+
+    member = guild.get_member(int(user.user_id))
+    if member is None:
+        # Fall back to bot user as a stand-in
+        member = guild.me  # type: ignore[assignment]
+    if member is None:
+        raise HTTPException(503, "No member context available for preview")
+
+    with ctx.open_db() as conn:
+        welcome_msg = get_config_value(
+            conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
+        )
+        leave_msg = get_config_value(
+            conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
+        )
+
+    welcome_embed = build_welcome_embed(member, welcome_msg)
+    leave_embed = build_leave_embed(member, leave_msg)
+
+    def _to_dict(e) -> dict:
+        return {
+            "title": e.title or "",
+            "description": e.description or "",
+            "color": e.color.value if e.color else None,
+            "thumbnail_url": e.thumbnail.url if e.thumbnail and e.thumbnail.url else None,
+            "footer": e.footer.text if e.footer and e.footer.text else "",
+        }
+
+    return {
+        "welcome": _to_dict(welcome_embed),
+        "leave": _to_dict(leave_embed),
+        "sample_user_name": member.display_name,
+    }
+
+
 class XpConfigUpdate(BaseModel):
     level_5_role_id: str | None = None
     level_5_log_channel_id: str | None = None

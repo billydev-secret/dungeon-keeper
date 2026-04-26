@@ -7,8 +7,8 @@ export function renderTile(el, data, names) {
 
   const rows = msgs.slice(0, 6).map(m => {
     const eng = m.engagement || 0;
-    const engColor = eng >= 5 ? "var(--success)" : eng >= 2 ? "var(--warning, #e6b84c)" : "var(--text-dim)";
-    const sentColor = m.sentiment >= 0.3 ? "var(--success)" : m.sentiment <= -0.3 ? "var(--danger)" : "var(--text-dim)";
+    const engColor = eng >= 5 ? "var(--green)" : eng >= 2 ? "var(--yellow)" : "var(--ink-dim)";
+    const sentColor = m.sentiment >= 0.3 ? "var(--green)" : m.sentiment <= -0.3 ? "var(--red)" : "var(--ink-dim)";
     const channel = chNames[m.channel_id] ? "#" + chNames[m.channel_id] : "";
     const author = uNames[m.author_id] || "";
     const snippet = m.content && m.content.length > 60
@@ -33,7 +33,7 @@ export function renderTile(el, data, names) {
     </div>
     <div class="health-tile-companions" style="margin-bottom:6px;">
       <span>${(data.total_24h || 0).toLocaleString()} messages (24h)</span>
-      <span style="color:var(--success)">${data.high_engagement_24h || 0} high engagement</span>
+      <span style="color:var(--green)">${data.high_engagement_24h || 0} high engagement</span>
     </div>
     ${rows || '<div class="home-dim">No messages yet</div>'}
   `;

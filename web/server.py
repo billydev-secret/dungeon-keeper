@@ -226,6 +226,23 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
         wellness_admin.router, prefix="/api/wellness/admin", tags=["wellness-admin"]
     )
 
+    # ── Gender classification ───────────────────────────────────────
+    from web.routes import gender as gender_routes
+
+    app.include_router(gender_routes.router, prefix="/api/gender", tags=["gender"])
+
+    # ── Admin backfill jobs ─────────────────────────────────────────
+    from web.routes import admin_backfill as admin_backfill_routes
+
+    app.include_router(
+        admin_backfill_routes.router, prefix="/api/admin", tags=["admin-backfill"]
+    )
+
+    # ── Voice Master admin ──────────────────────────────────────────
+    from web.routes import voice_master as voice_master_routes
+
+    app.include_router(voice_master_routes.router, prefix="/api", tags=["voice-master"])
+
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()
 

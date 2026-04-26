@@ -23,7 +23,7 @@ export function mount(container) {
         <div class="subtitle">When enabled, the bot replies to mentions on your behalf</div>
       </header>
 
-      <form data-away-form class="w-form">
+      <form data-away-form class="form">
         <div class="field">
           <label>
             <input type="checkbox" name="enabled" ${d.enabled ? "checked" : ""} />
@@ -38,7 +38,7 @@ export function mount(container) {
           <div class="w-preview-label">Preview</div>
           <div data-preview-text>${esc(d.message || "(no message set)")}</div>
         </div>
-        <div><button type="submit">Save</button><span data-status></span></div>
+        <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
       </form>
     `;
 

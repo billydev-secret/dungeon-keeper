@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.embeds import WELLNESS_PRIMARY
 from services.wellness_scheduler import (
     wellness_active_list_loop,
     wellness_tick_loop,
@@ -74,7 +75,7 @@ def _render_away_preview(
     return discord.Embed(
         title=f"💚 {member.display_name} is away",
         description=text or AWAY_DEFAULT_TEXT,
-        color=discord.Color.from_str("#7BC97B"),
+        color=WELLNESS_PRIMARY,
     )
 
 
@@ -132,7 +133,7 @@ class _SetupWizardView(discord.ui.View):
                 "or a crisis resource.\n\n"
                 "**Step 1 of 2** — 🕐 What's your timezone?"
             ),
-            color=discord.Color.from_str("#7BC97B"),
+            color=WELLNESS_PRIMARY,
         )
 
     def _build_step2_embed(self) -> discord.Embed:
@@ -145,7 +146,7 @@ class _SetupWizardView(discord.ui.View):
                     for k in ("gentle", "cooldown", "slow_mode", "gradual")
                 )
             ),
-            color=discord.Color.from_str("#7BC97B"),
+            color=WELLNESS_PRIMARY,
         )
 
     def _build_done_embed(self, member: discord.Member) -> discord.Embed:
@@ -161,7 +162,7 @@ class _SetupWizardView(discord.ui.View):
                 "• `/wellness away on` — Set a custom away message anytime\n"
                 "• `/wellness settings` — Fine-tune your preferences"
             ),
-            color=discord.Color.from_str("#7BC97B"),
+            color=WELLNESS_PRIMARY,
         )
 
     async def _on_tz_pick(self, interaction: discord.Interaction) -> None:

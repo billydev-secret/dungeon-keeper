@@ -12,6 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.embeds import AUTO_DELETE_PRIMARY
 from services.auto_delete_service import (
     format_duration_seconds,
     list_auto_delete_rules_for_guild,
@@ -84,7 +85,7 @@ async def _send_ephemeral_text_chunks(
 def _build_config_embed(rules: list[Any], guild: discord.Guild) -> discord.Embed:
     embed = discord.Embed(
         title="🗑️  Auto-Delete Schedules",
-        color=discord.Color.from_str("#992D22"),
+        color=AUTO_DELETE_PRIMARY,
     )
     lines: list[str] = []
     for i, rule in enumerate(rules, 1):

@@ -13,7 +13,7 @@ export function mount(container) {
     if (!d.reports.length) {
       container.querySelector(".panel").innerHTML = `
         <header><h2>Weekly Reports</h2></header>
-        <div class="w-empty">No weekly reports yet. Reports are generated each Sunday.</div>`;
+        <div class="empty">No weekly reports yet. Reports are generated each Sunday.</div>`;
       return;
     }
 
@@ -31,7 +31,7 @@ export function mount(container) {
         <div class="w-report">
           <div class="w-report-header">
             <strong>Week ${r.iso_week}, ${r.iso_year}</strong>
-            <span class="w-chip w-chip-dim">${esc(r.week_start)}</span>
+            <span class="chip chip-neutral">${esc(r.week_start)}</span>
           </div>
           ${statsHTML}
           ${r.ai_text ? `<div class="w-report-ai">${esc(r.ai_text)}</div>` : ""}

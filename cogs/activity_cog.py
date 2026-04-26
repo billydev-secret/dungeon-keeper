@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.embeds import ACTIVITY_DANGER, ACTIVITY_PRIMARY
 from services.activity_graphs import (
     _HOD_LABELS,
     _WINDOW_LABELS,
@@ -160,7 +161,7 @@ def _fmt_detail(
             f"{bl_title} trend: **{_arrow(p.server_msgs_prev, p.server_msgs_recent)}** msgs ({srv_trend})\n"
             f"Last seen: {_last_seen_str(p.last_seen_ts)}"
         ),
-        color=discord.Color.orange(),
+        color=ACTIVITY_PRIMARY,
     )
     if member and member.display_avatar:
         embed.set_thumbnail(url=member.display_avatar.url)
@@ -525,7 +526,7 @@ class ActivityCog(commands.Cog):
         embed = discord.Embed(
             title=title,
             description=header + "\n".join(lines),
-            color=discord.Color.red(),
+            color=ACTIVITY_DANGER,
         )
         embed.set_footer(text=f"Prior {period_label} vs most recent {period_label}")
 

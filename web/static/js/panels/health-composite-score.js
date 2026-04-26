@@ -40,14 +40,14 @@ export function mount(container) {
         <div class="subtitle">Weighted aggregate of all health dimensions</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 14px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+      <details class="panel-about">
+        <summary>About this report</summary>
+        <div class="note">
           This score combines every health dimension into a single 0–100 number.
           Each dimension (activity, retention, sentiment, etc.) is scored individually, then weighted by how much it matters.
           The breakdown below shows which areas are strong and which are dragging the score down.
-          The <strong style="color:var(--text-normal, #dbdee1);">radar chart</strong> makes imbalances easy to spot — a lopsided shape means some areas need attention.
-          <strong style="color:var(--text-normal, #dbdee1);">Recommendations</strong> at the bottom suggest the highest-impact improvements.
+          The <strong>radar chart</strong> makes imbalances easy to spot — a lopsided shape means some areas need attention.
+          <strong>Recommendations</strong> at the bottom suggest the highest-impact improvements.
         </div>
       </details>
 

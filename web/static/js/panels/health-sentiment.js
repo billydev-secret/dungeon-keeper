@@ -31,7 +31,7 @@ export function mount(container) {
 
     function msgRow(m) {
       const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
-      const scoreColor = m.sentiment >= 0 ? "var(--success, #7F8F3A)" : "var(--danger, #9E3B2E)";
+      const scoreColor = m.sentiment >= 0 ? "var(--green)" : "var(--red)";
       const channel = m.channel_name ? "#" + esc(m.channel_name) : "";
       const content = esc((m.content || "").slice(0, 100));
       return `<tr>
@@ -39,7 +39,7 @@ export function mount(container) {
         <td class="sf-panel-author">${esc(m.author_name || m.author_id || "")}</td>
         <td class="sf-panel-channel">${channel}</td>
         <td class="sf-panel-content" title="${esc(m.content || "")}">${content}</td>
-        <td style="white-space:nowrap;color:var(--text-dim);font-size:12px;">${fmtTime(m.ts)}</td>
+        <td style="white-space:nowrap;color:var(--ink-dim);font-size:12px;">${fmtTime(m.ts)}</td>
       </tr>`;
     }
 
@@ -61,12 +61,12 @@ export function mount(container) {
         <div class="subtitle">Emotional temperature of the community</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 14px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+      <details class="panel-about">
+        <summary>About this report</summary>
+        <div class="note">
           Messages are scored from &minus;1 (very negative) to +1 (very positive) using automated sentiment analysis.
-          The <strong style="color:var(--text-normal, #dbdee1);">positive-to-negative ratio</strong> is a quick health check — above 3:1 is a good sign.
-          <strong style="color:var(--text-normal, #dbdee1);">Negative spikes</strong> flag time windows where the average tone dropped sharply, which often correlates with drama or conflict.
+          The <strong>positive-to-negative ratio</strong> is a quick health check — above 3:1 is a good sign.
+          <strong>Negative spikes</strong> flag time windows where the average tone dropped sharply, which often correlates with drama or conflict.
         </div>
       </details>
 

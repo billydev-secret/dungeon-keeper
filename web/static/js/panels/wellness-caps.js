@@ -45,20 +45,20 @@ export function mount(container) {
           <div class="w-row" data-cap-id="${c.id}">
             <div class="w-row-main">
               <strong>${esc(c.label)}</strong>
-              <span class="w-chip">${c.scope}</span>
-              <span class="w-chip">${c.window}</span>
-              <span class="w-chip">${c.limit} msgs</span>
-              ${c.exclude_exempt ? '<span class="w-chip w-chip-dim">excl. exempt</span>' : ""}
+              <span class="chip">${c.scope}</span>
+              <span class="chip">${c.window}</span>
+              <span class="chip">${c.limit} msgs</span>
+              ${c.exclude_exempt ? '<span class="chip chip-neutral">excl. exempt</span>' : ""}
             </div>
             <div class="w-row-actions">
               <input type="number" min="1" value="${c.limit}" style="width:70px" data-edit-limit />
-              <button data-save-cap="${c.id}">Save</button>
-              <button class="btn-danger" data-del-cap="${c.id}">Remove</button>
+              <button class="btn btn-sm" data-save-cap="${c.id}">Save</button>
+              <button class="btn btn-sm btn-danger" data-del-cap="${c.id}">Remove</button>
               <span data-cap-status="${c.id}"></span>
             </div>
           </div>
         `).join("")
-      : '<div class="w-empty">No manual caps.</div>';
+      : '<div class="empty">No manual caps.</div>';
 
     // Compute a good max for sliders
     const maxAvg = Math.max(...bucketAvgs, 1);
@@ -116,41 +116,40 @@ export function mount(container) {
       </div>
 
       <div class="w-histo-actions">
-        <button data-save-histo>Save Caps</button>
-        <button data-reset-histo class="btn-secondary">Reset to Averages</button>
+        <button class="btn btn-primary" data-save-histo>Save Caps</button>
+        <button class="btn btn-ghost" data-reset-histo>Reset to Averages</button>
         <span data-histo-status></span>
       </div>
 
-      <details class="w-section w-histo-legacy">
-        <summary><h3>Manual Caps</h3></summary>
+      <details class="form-section w-histo-legacy">
+        <summary class="form-section-summary">Manual Caps</summary>
         <div class="w-list">${flatCapsHTML}</div>
-        <section class="w-section">
-          <h3>Add Manual Cap</h3>
-          <form data-add-form class="w-form">
+
+        <div class="section-label">Add Manual Cap</div>
+        <form data-add-form class="form">
+          <div class="field">
+            <label>Label</label>
+            <input type="text" name="label" required maxlength="40" placeholder="e.g. daily limit" />
+          </div>
+          <div class="field-row">
             <div class="field">
-              <label>Label</label>
-              <input type="text" name="label" required maxlength="40" placeholder="e.g. daily limit" />
-            </div>
-            <div class="w-form-row">
-              <div class="field">
-                <label>Scope</label>
-                <select name="scope">${caps.scopes.map(s => `<option value="${s}">${s}</option>`).join("")}</select>
-              </div>
-              <div class="field">
-                <label>Window</label>
-                <select name="window">${caps.windows.map(w => `<option value="${w}">${w}</option>`).join("")}</select>
-              </div>
-              <div class="field">
-                <label>Limit</label>
-                <input type="number" name="limit" min="1" value="50" required />
-              </div>
+              <label>Scope</label>
+              <select name="scope">${caps.scopes.map(s => `<option value="${s}">${s}</option>`).join("")}</select>
             </div>
             <div class="field">
-              <label><input type="checkbox" name="exclude_exempt" checked /> Exclude exempt channels</label>
+              <label>Window</label>
+              <select name="window">${caps.windows.map(w => `<option value="${w}">${w}</option>`).join("")}</select>
             </div>
-            <div><button type="submit">Add Cap</button><span data-add-status></span></div>
-          </form>
-        </section>
+            <div class="field">
+              <label>Limit</label>
+              <input type="number" name="limit" min="1" value="50" required />
+            </div>
+          </div>
+          <div class="field">
+            <label><input type="checkbox" name="exclude_exempt" checked /> Exclude exempt channels</label>
+          </div>
+          <div><button type="submit" class="btn btn-primary">Add Cap</button><span data-add-status></span></div>
+        </form>
       </details>
     `;
 

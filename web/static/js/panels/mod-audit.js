@@ -94,7 +94,7 @@ export function mount(container) {
       }).join("");
 
       tableWrap.innerHTML = `
-        <div style="color:var(--text-dim);font-size:12px;margin-bottom:8px;">Showing ${data.entries.length} of ${data.total} entries</div>
+        <div style="color:var(--ink-dim);font-size:12px;margin-bottom:8px;">Showing ${data.entries.length} of ${data.total} entries</div>
         <table class="data-table">
           <thead><tr>
             <th>Action</th><th>Actor</th><th>Target</th><th>Details</th><th>Time</th>

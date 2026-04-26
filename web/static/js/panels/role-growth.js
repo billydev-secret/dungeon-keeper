@@ -93,9 +93,9 @@ export function mount(container, initialParams) {
     selectedWrap.innerHTML = [...selected].map((name) => `
       <button class="role-pill" data-role="${name}" style="
         display:inline-flex;align-items:center;gap:4px;
-        background:var(--bg-alt);border:1px solid var(--grid);border-radius:14px;
-        padding:3px 10px 3px 10px;font-size:12px;color:var(--text);cursor:pointer;
-      ">${name} <span style="color:var(--text-dim);font-weight:700;">&times;</span></button>
+        background:var(--bg-alt);border:1px solid var(--rule);border-radius:14px;
+        padding:3px 10px 3px 10px;font-size:12px;color:var(--ink);cursor:pointer;
+      ">${name} <span style="color:var(--ink-dim);font-weight:700;">&times;</span></button>
     `).join("");
     updateHashState();
   }

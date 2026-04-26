@@ -91,14 +91,10 @@ function renderDetail(w) {
 export function mount(container) {
   container.innerHTML = `
     <div class="panel">
-      <div class="panel-head">
-        <div>
-          <h1 class="panel-title">Warnings</h1>
-          <div class="sub" style="font-size:13px;color:var(--ink-dim);margin-top:6px">
-            Active and expired warnings for server members.
-          </div>
-        </div>
-      </div>
+      <header>
+        <h2>Warnings</h2>
+        <div class="subtitle">Active and expired warnings for server members.</div>
+      </header>
 
       <div class="mod-stats" data-stats></div>
 
@@ -153,8 +149,8 @@ export function mount(container) {
       const data = await api("/api/moderation/warnings");
 
       statsEl.innerHTML = `
-        <div class="stat-card stat-warning"><div class="stat-value">${data.active_count}</div><div class="stat-label">Active</div></div>
-        <div class="stat-card"><div class="stat-value">${data.total_count}</div><div class="stat-label">Total</div></div>
+        <div class="stat stat-warning"><div class="stat-value">${data.active_count}</div><div class="stat-label">Active</div></div>
+        <div class="stat"><div class="stat-value">${data.total_count}</div><div class="stat-label">Total</div></div>
       `;
 
       state.warnings = data.warnings || [];

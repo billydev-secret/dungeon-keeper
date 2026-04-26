@@ -5,6 +5,7 @@ Discord moderation and community utility bot with:
 - Role workflows for new member intake
 - Spoiler guard channel controls
 - Auto-delete schedules with DB-tracked message queues
+- Music playback (YouTube + Spotify) via Lavalink — see "Music cog setup" below
 
 ## Quick Start
 
@@ -18,6 +19,28 @@ cp .env.example .env            # fill in DISCORD_TOKEN
 ```
 
 For full setup instructions (bot permissions, guild configuration, production deployment) see [DEPLOYMENT.md](DEPLOYMENT.md).
+
+## Music cog setup
+
+The music cog runs Lavalink as a child process. One-time setup:
+
+1. Install **Java 17 or newer** and ensure `java` is on `PATH`
+   ([Temurin downloads](https://adoptium.net/temurin/releases/?version=17)).
+2. Create a Spotify app at <https://developer.spotify.com/dashboard> (Client
+   Credentials flow — no redirect URI needed). Copy the Client ID and Secret.
+3. Run the installer to download Lavalink + LavaSrc:
+   ```
+   python scripts/setup_lavalink.py
+   ```
+4. Fill in the music section of `.env`:
+   ```
+   SPOTIFY_CLIENT_ID=...
+   SPOTIFY_CLIENT_SECRET=...
+   LAVALINK_PASSWORD=<random>
+   ```
+5. Start the bot — Lavalink starts automatically on cog load. If startup fails,
+   the rest of the bot keeps running and music commands return "Music is
+   currently unavailable."
 
 ## Environment
 

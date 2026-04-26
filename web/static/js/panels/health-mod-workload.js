@@ -34,12 +34,12 @@ export function mount(container) {
         <div class="subtitle">${d.total_actions_7d} total activity this week</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 14px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+      <details class="panel-about">
+        <summary>About this report</summary>
+        <div class="note">
           Combines audit-log actions (jails, warns, ticket ops) with mod-channel messages to give a full picture of who's active.
-          <strong style="color:var(--text-normal, #dbdee1);">Workload Gini</strong> shows whether the work is shared evenly — close to 1 means one mod is doing almost everything.
-          <strong style="color:var(--text-normal, #dbdee1);">Escalation rate</strong> tracks how often warnings lead to jails. <strong style="color:var(--text-normal, #dbdee1);">Recidivism</strong> tracks repeat offenders within 14 days.
+          <strong>Workload Gini</strong> shows whether the work is shared evenly — close to 1 means one mod is doing almost everything.
+          <strong>Escalation rate</strong> tracks how often warnings lead to jails. <strong>Recidivism</strong> tracks repeat offenders within 14 days.
         </div>
       </details>
 

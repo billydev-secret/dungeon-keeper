@@ -28,7 +28,7 @@ function heatmapGridHTML(grid, { label = null, showValues = false, compact = fal
       const alpha = Math.max(intensity, 0.04);
       const bg = `rgba(230,184,76,${alpha.toFixed(2)})`;
       const text = showValues && v > 0 ? Math.round(v) : "";
-      const textColor = intensity > 0.6 ? "var(--bg)" : "var(--text-dim)";
+      const textColor = intensity > 0.6 ? "var(--bg)" : "var(--ink-dim)";
       html += `<td class="${cellClass}" style="background:${bg};color:${textColor}" title="${DOW[d]} ${h}:00 — ${v} msgs/hr">${text}</td>`;
     }
     html += '</tr>';

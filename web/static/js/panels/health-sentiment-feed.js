@@ -34,7 +34,7 @@ export function mount(container) {
 
     const rows = msgs.map(m => {
       const positive = m.sentiment >= 0.5;
-      const scoreColor = positive ? "var(--success)" : "var(--danger)";
+      const scoreColor = positive ? "var(--green)" : "var(--red)";
       const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
       const emotionColor = EMOTION_COLORS[m.emotion] || "#949ba4";
       const channel = m.channel_name ? "#" + esc(m.channel_name) : m.channel_id;
@@ -46,7 +46,7 @@ export function mount(container) {
           <td class="sf-panel-author">${esc(m.author_name || m.author_id)}</td>
           <td class="sf-panel-channel">${channel}</td>
           <td class="sf-panel-content">${esc(m.content || "")}</td>
-          <td style="white-space:nowrap;color:var(--text-dim);font-size:12px;">${fmtTime(m.ts)}</td>
+          <td style="white-space:nowrap;color:var(--ink-dim);font-size:12px;">${fmtTime(m.ts)}</td>
         </tr>
       `;
     }).join("");
@@ -62,12 +62,12 @@ export function mount(container) {
       <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Positive (24h)</div>
-          <div class="home-card-big" style="color:var(--success)">${d.positive_24h}</div>
+          <div class="home-card-big" style="color:var(--green)">${d.positive_24h}</div>
           <div class="home-card-sub">Score &ge; 0.5</div>
         </div>
         <div class="home-card">
           <div class="home-card-label">Negative (24h)</div>
-          <div class="home-card-big" style="color:var(--danger)">${d.negative_24h}</div>
+          <div class="home-card-big" style="color:var(--red)">${d.negative_24h}</div>
           <div class="home-card-sub">Score &le; &minus;0.5</div>
         </div>
       </div>
@@ -86,7 +86,7 @@ export function mount(container) {
               <th>Score</th><th>Emotion</th><th>Author</th>
               <th>Channel</th><th>Content</th><th>Time</th>
             </tr></thead>
-            <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:var(--text-dim)">No messages</td></tr>'}</tbody>
+            <tbody>${rows || '<tr><td colspan="6" style="text-align:center;color:var(--ink-dim)">No messages</td></tr>'}</tbody>
           </table>
           </div>
         </div>

@@ -32,18 +32,6 @@
   --r:    8px;
   --sidebar-w:           240px;
   --sidebar-collapsed-w: 56px;
-
-  /* Legacy aliases — existing panel CSS reads these */
-  --bg-sidebar:   var(--bg-rail);
-  --text:         var(--ink);
-  --text-dim:     var(--ink-dim);
-  --grid:         var(--rule);
-  --accent:       var(--gold-solid);
-  --accent-hover: #b88a2c;
-  --success:      var(--green);
-  --danger:       var(--red);
-  --warning:      var(--yellow);
-  --info:         var(--plum);
 }
 
 * { box-sizing: border-box; }
@@ -417,7 +405,7 @@ a { text-decoration: none; }
 }
 .user-avatar.status-idle::after { background: var(--yellow, #f0b232); }
 .user-avatar.status-dnd::after { background: var(--red, #ed4245); }
-.user-avatar.status-offline::after { background: var(--text-dim, #888); }
+.user-avatar.status-offline::after { background: var(--ink-mute); }
 .user-avatar-img {
   width: 100%;
   height: 100%;
@@ -451,36 +439,6 @@ a { text-decoration: none; }
 .collapsed .user-meta,
 .collapsed .user-bar .logout-link { display: none; }
 .collapsed .user-bar { justify-content: center; }
-
-/* ── Panel head (page title bar) ──────────────────────────────────── */
-
-.panel-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  margin-bottom: 20px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--rule);
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.panel-title {
-  font-size: 30px;
-  font-weight: 700;
-  color: var(--ink-bright);
-  line-height: 1.1;
-  letter-spacing: -0.015em;
-  margin: 0;
-}
-.panel-title em { font-style: normal; color: var(--gold); }
-.kicker {
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--ink-mute);
-  margin-bottom: 6px;
-}
 
 /* ── Panel container ───────────────────────────────────────────────── */
 
@@ -520,6 +478,7 @@ a { text-decoration: none; }
   color: var(--ink-bright);
   letter-spacing: -0.005em;
 }
+.panel h2 em { font-style: normal; color: var(--gold); }
 .panel .subtitle { color: var(--ink-dim); font-size: 13px; }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -530,48 +489,9 @@ a { text-decoration: none; }
    them; until then, both layers coexist and look the same.
    ════════════════════════════════════════════════════════════════════ */
 
-/* ── Page header ────────────────────────────────────────────────────
-   Markup:
-     <header class="page-header">
-       <div>
-         <h2 class="page-header-title">Title</h2>
-         <div class="page-header-sub">Subtitle</div>
-       </div>
-       <div class="page-header-actions">…buttons…</div>
-     </header>
-   The legacy <header><h2>…<div class="subtitle"> pattern keeps
-   working through the .panel header rules above. */
-
-.page-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  margin-bottom: 18px;
-}
-.page-header-title {
-  margin: 0 0 4px;
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--ink-bright);
-  letter-spacing: -0.005em;
-  line-height: 1.2;
-}
-.page-header-sub {
-  font-size: 13px;
-  color: var(--ink-dim);
-}
-.page-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 /* ── Card ──────────────────────────────────────────────────────────
    Generic content container. Replaces .w-card, .home-card, .ai-prompt-card,
-   .stat-card, .user-card chrome. */
+   and .user-card chrome. */
 
 .card {
   background: var(--bg-card);
@@ -579,9 +499,6 @@ a { text-decoration: none; }
   border-radius: var(--r);
   padding: 16px 18px;
 }
-.card-flush  { padding: 0; }
-.card-tight  { padding: 12px 14px; }
-.card-accent { border-left: 3px solid var(--gold-solid); }
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -664,7 +581,6 @@ a { text-decoration: none; }
   gap: 14px;
   max-width: 640px;
 }
-.form-row,
 .field-row {
   display: flex;
   gap: 12px;
@@ -808,6 +724,29 @@ a { text-decoration: none; }
 }
 .form-section[open] > .form-section-summary::before { transform: rotate(90deg); }
 
+/* "About this report" expandable explanation block on health panels. */
+.panel-about {
+  margin: 4px 0 18px;
+}
+.panel-about > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-mute);
+  user-select: none;
+  padding: 4px 0;
+  list-style: none;
+}
+.panel-about > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--ink-mute);
+  transition: transform 0.15s;
+}
+.panel-about[open] > summary::before { transform: rotate(90deg); }
+.panel-about > summary:hover { color: var(--ink-dim); }
+.panel-about > .note { margin-top: 6px; }
+
 /* ── Chip ──────────────────────────────────────────────────────────
    Small status pills. Replaces .t-chip, .w-chip, .h-kind, .ai-badge,
    .home-mod-pill, ad-hoc tag spans. */
@@ -828,19 +767,11 @@ a { text-decoration: none; }
 .chip-success { background: var(--green-soft); color: var(--green); }
 .chip-warning { background: var(--gold-soft);  color: var(--gold-solid); }
 .chip-danger  { background: var(--red-soft);   color: var(--red); }
-.chip-info    { background: var(--plum-soft);  color: var(--plum); }
 .chip-neutral { background: var(--rule-soft);  color: var(--ink-dim); }
 
 /* ── Stat tile ─────────────────────────────────────────────────────
-   Kpi-style number with label and optional accent. Replaces .mod-stat
-   and .stat-card. Use inside .stat-grid. */
+   Kpi-style number with label and optional accent. */
 
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
-  margin-bottom: 16px;
-}
 .stat {
   background: var(--bg-card);
   border-radius: var(--r);
@@ -863,15 +794,19 @@ a { text-decoration: none; }
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
-.stat-sub {
-  font-size: 11px;
-  color: var(--ink-dim);
-  margin-top: 2px;
-}
-.stat-success { border-left-color: var(--green); }
 .stat-warning { border-left-color: var(--gold-solid); }
-.stat-danger  { border-left-color: var(--red); }
 .stat-info    { border-left-color: var(--plum); }
+
+/* ── Numeric cell ──────────────────────────────────────────────────
+   Right-aligned tabular-numeric. Use on <td> / <th> in data tables
+   for currency, counts, rates, etc. */
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.num-dim { color: var(--ink-dim); }
+.num-err { color: var(--red); }
 
 /* ── Section label ─────────────────────────────────────────────────
    Tiny uppercase divider used between groups inside a panel/card.
@@ -1135,18 +1070,7 @@ a { text-decoration: none; }
   align-items: center;
   margin-top: 8px;
 }
-.ai-btn {
-  border: none;
-  border-radius: 4px;
-  padding: 6px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.ai-btn-save  { background: var(--gold-solid); color: #fff; }
-.ai-btn-reset { background: var(--rule); color: var(--ink-dim); }
-.ai-btn-test  { background: var(--plum); color: #fff; }
-.ai-btn:hover { opacity: 0.85; }
+/* AI buttons retired (Phase 5) — use .btn / .btn-primary / .btn-ghost */
 .ai-test-area {
   margin-top: 10px;
   padding-top: 10px;
@@ -1188,17 +1112,7 @@ a { text-decoration: none; }
 
 /* ── Message search ──────────────────────────────────────────────────── */
 
-.msg-search-btn {
-  background: var(--gold-solid);
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  padding: 6px 18px;
-  font-size: 13px;
-  cursor: pointer;
-  font-weight: 600;
-}
-.msg-search-btn:hover { opacity: 0.85; }
+/* .msg-search-btn retired (Phase 5) — use .btn / .btn-primary */
 
 .msg-results {
   display: flex;
@@ -1417,30 +1331,6 @@ a { text-decoration: none; }
   color: var(--ink-dim);
   margin-top: 2px;
 }
-.stat-card {
-  background: var(--bg-alt);
-  border-radius: 6px;
-  padding: 12px 20px;
-  min-width: 100px;
-  text-align: center;
-  border-left: 3px solid var(--rule);
-}
-.stat-card .stat-value {
-  font-size: 24px;
-  font-weight: 700;
-}
-.stat-card .stat-label {
-  font-size: 11px;
-  color: var(--ink-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  margin-top: 2px;
-}
-.stat-danger  { border-left-color: var(--red); }
-.stat-info    { border-left-color: var(--plum); }
-.stat-warning { border-left-color: var(--yellow); }
-.stat-success { border-left-color: var(--green); }
-
 .table-scroll {
   flex: 1;
   overflow: auto;
@@ -1867,25 +1757,17 @@ a { text-decoration: none; }
 }
 
 /* ── Wellness ──────────────────────────────────────────────────────── */
+/* Most wellness chrome (.w-card, .w-grid, .w-form, .w-empty, .w-chip,
+   .w-badge, .w-section) was migrated to canonical primitives in Phase 3.
+   What remains here is wellness-specific: the streak hero, row layout,
+   custom toggle, day picker, template buttons, away preview, weekly
+   reports, admin table, histogram caps. */
 
-.w-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 14px;
-  margin-bottom: 20px;
-}
-.w-card {
-  background: var(--bg-alt);
-  border-radius: 8px;
-  padding: 16px;
-}
 .w-card-hero {
   grid-column: 1 / -1;
   text-align: center;
   padding: 24px 16px;
 }
-.w-card-label { color: var(--ink-dim); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
-.w-card-big { font-size: 28px; font-weight: 700; }
 .w-card-link { font-size: 12px; color: var(--gold-solid); text-decoration: none; }
 .w-card-link:hover { text-decoration: underline; }
 .w-streak-badge { font-size: 48px; margin-bottom: 4px; }
@@ -1893,31 +1775,7 @@ a { text-decoration: none; }
 .w-streak-sub { color: var(--ink-dim); font-size: 13px; margin-top: 4px; }
 .w-pending { font-size: 13px; color: var(--ink-dim); font-weight: 400; }
 
-.w-section { margin-top: 24px; }
-.w-section h3 { font-size: 15px; margin: 0 0 10px; color: var(--ink); }
-
-.w-form .field { margin-bottom: 12px; }
-.w-form .field label { display: block; font-size: 13px; color: var(--ink-dim); margin-bottom: 4px; }
-.w-form input[type="text"],
-.w-form input[type="number"],
-.w-form input[type="url"],
-.w-form input[type="time"],
-.w-form textarea,
-.w-form select {
-  background: var(--bg);
-  border: 1px solid var(--rule);
-  color: var(--ink);
-  padding: 6px 10px;
-  border-radius: 4px;
-  font-size: 13px;
-}
-.w-form textarea { width: 100%; resize: vertical; }
-.w-form button[type="submit"],
-.w-form button { background: var(--gold-solid); color: #000; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-.w-form button:hover { background: var(--accent-hover); }
-.w-form-row { display: flex; gap: 12px; flex-wrap: wrap; }
-.w-form-row .field { flex: 1; min-width: 120px; }
-.w-inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.w-inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; max-width: none; }
 
 .w-list { margin-bottom: 16px; }
 .w-row {
@@ -1926,7 +1784,7 @@ a { text-decoration: none; }
   align-items: center;
   padding: 10px 14px;
   background: var(--bg-alt);
-  border-radius: 6px;
+  border-radius: var(--r);
   margin-bottom: 6px;
   gap: 10px;
   flex-wrap: wrap;
@@ -1934,25 +1792,15 @@ a { text-decoration: none; }
 .w-row-muted { opacity: .55; }
 .w-row-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .w-row-actions { display: flex; align-items: center; gap: 6px; }
-.w-row-actions input { background: var(--bg); border: 1px solid var(--rule); color: var(--ink); padding: 4px 6px; border-radius: 4px; font-size: 13px; }
-.w-row-actions button { background: var(--bg); border: 1px solid var(--rule); color: var(--ink); padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.w-row-actions button:hover { border-color: var(--gold-solid); }
-.btn-danger { color: var(--red) !important; }
-.btn-danger:hover { border-color: var(--red) !important; }
-
-.w-chip {
-  display: inline-block;
-  background: var(--bg);
-  border-radius: 10px;
-  padding: 2px 8px;
-  font-size: 12px;
+.w-row-actions input {
+  background: var(--bg-input);
+  border: 1px solid var(--rule);
   color: var(--ink);
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-family: inherit;
 }
-.w-chip-dim { color: var(--ink-dim); }
-
-.w-badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 4px; }
-.w-badge-ok { background: var(--green); color: #fff; }
-.w-badge-warn { background: var(--yellow); color: #000; }
 
 .w-toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
 .w-toggle input { opacity: 0; width: 0; height: 0; }
@@ -1991,17 +1839,12 @@ a { text-decoration: none; }
 .w-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .w-table th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--rule); color: var(--ink-dim); font-size: 12px; text-transform: uppercase; }
 .w-table td { padding: 8px 10px; border-bottom: 1px solid var(--rule); }
-.w-table button { background: var(--bg); border: 1px solid var(--rule); color: var(--ink); padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.w-table button:hover { border-color: var(--gold-solid); }
 
-.w-empty { color: var(--ink-dim); font-size: 13px; padding: 12px 0; }
 .w-notice { color: var(--ink-dim); padding: 20px 0; }
 .w-notice code { background: var(--bg-alt); padding: 2px 6px; border-radius: 3px; font-size: 13px; }
 .w-crisis { margin-top: 24px; font-size: 12px; }
 .w-crisis a { color: var(--gold-solid); }
 .w-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.w-actions button { background: var(--bg-alt); border: 1px solid var(--rule); color: var(--ink); padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; }
-.w-actions button:hover { border-color: var(--gold-solid); }
 
 /* ── Wellness Histogram Caps ──────────────────────────────────────── */
 
@@ -2085,19 +1928,8 @@ a { text-decoration: none; }
 .w-histo-actions {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 20px;
 }
-.w-histo-actions button {
-  background: var(--gold-solid); color: #000; border: none;
-  padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px;
-}
-.w-histo-actions button:hover { background: var(--accent-hover); }
-.w-histo-actions .btn-secondary {
-  background: var(--bg-alt); color: var(--ink); border: 1px solid var(--rule);
-}
-.w-histo-actions .btn-secondary:hover { border-color: var(--gold-solid); }
 
 .w-histo-legacy { margin-top: 16px; }
-.w-histo-legacy summary { cursor: pointer; }
-.w-histo-legacy summary h3 { display: inline; font-size: 14px; color: var(--ink-dim); }
 
 /* ── Health Dashboard ─────────────────────────────────────────────── */
 

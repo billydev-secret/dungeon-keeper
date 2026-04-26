@@ -25,21 +25,29 @@ from web.schemas import (
     AnimatedHeatmapResponse,
     BurstRankingResponse,
     ChannelComparisonResponse,
+    ChillingEffectResponse,
+    DropoffResponse,
     GreeterResponseResponse,
+    InactiveResponse,
+    InactiveRoleResponse,
     InteractionGraphResponse,
     InviteEffectivenessResponse,
     JoinTimesResponse,
+    ListRoleResponse,
     MessageCadenceResponse,
     MessageRateDropsResponse,
     MessageRateResponse,
     NsfwGenderResponse,
+    OldestSfwResponse,
     QualityScoreResponse,
     ReactionAnalyticsResponse,
     RetentionResponse,
     RoleGrowthResponse,
+    SessionBurstResponse,
     TimeToLevel5Response,
     VoiceActivityResponse,
     XpLeaderboardResponse,
+    XpLevelReviewResponse,
 )
 
 router = APIRouter()
@@ -1063,3 +1071,583 @@ async def interaction_heatmap(
     )
     _resolve_names(ctx, guild, result.get("users", []), ("user_id", "user_name"))
     return result
+
+
+# ── Dropoff ────────────────────────────────────────────────────────────
+
+
+_PERIOD_SECONDS: dict[str, int] = {
+    "hour": 3600,
+    "day": 86400,
+    "week": 7 * 86400,
+    "month": 30 * 86400,
+}
+
+
+@router.get("/dropoff", response_model=DropoffResponse)
+async def dropoff(
+    request: Request,
+    period: Literal["hour", "day", "week", "month"] = "week",
+    channel_id: str | None = None,
+    limit: int = 10,
+    user_id: str | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Members who disengaged most over the last *period* vs the period before."""
+    from services.activity_graphs import query_dropoff_profiles
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+
+    period_secs = _PERIOD_SECONDS[period]
+    ch_id_int: int | None = int(channel_id) if channel_id else None
+    user_id_int: int | None = int(user_id) if user_id else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            profiles = query_dropoff_profiles(
+                conn,
+                guild_id,
+                period_secs,
+                channel_id=ch_id_int,
+                limit=max(1, min(50, limit)),
+                target_user_id=user_id_int,
+            )
+        return {
+            "period_label": f"Last {period}",
+            "entries": [
+                {
+                    "user_id": str(p.user_id),
+                    "user_name": "",
+                    "msgs_prev": p.msgs_prev,
+                    "msgs_recent": p.msgs_recent,
+                    "drop_pct": (
+                        round((p.msgs_prev - p.msgs_recent) / p.msgs_prev * 100.0, 1)
+                        if p.msgs_prev > 0
+                        else 0.0
+                    ),
+                    "channels_recent": p.channels_recent,
+                    "replies_recent": p.replies_recent,
+                    "initiations_recent": p.initiations_recent,
+                    "avg_msg_len_recent": round(p.avg_len_recent, 1),
+                    "deep_convos_recent": p.deep_convos_recent,
+                    "first_activity_day": p.first_activity_day,
+                    "server_msgs_prev": p.server_msgs_prev,
+                    "server_msgs_recent": p.server_msgs_recent,
+                }
+                for p in profiles
+            ],
+        }
+
+    result = await cached_run_query(
+        "dropoff",
+        guild_id,
+        {"period": period, "channel_id": channel_id, "limit": limit, "user_id": user_id},
+        _q,
+        ttl=300,
+    )
+    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
+    return result
+
+
+# ── Session burst (per-member) ─────────────────────────────────────────
+
+
+@router.get("/session-burst", response_model=SessionBurstResponse)
+async def session_burst(
+    request: Request,
+    user_id: str,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Per-member session burst — server activity in 2-min bins around their session starts."""
+    from services.activity_graphs import (
+        _BIN_MINUTES,
+        _POST_WINDOW_MINUTES,
+        _PRE_WINDOW_MINUTES,
+        query_session_burst,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    user_id_int = int(user_id)
+
+    def _q():
+        with ctx.open_db() as conn:
+            pre_sessions, post_sessions, overall_rate = query_session_burst(
+                conn, guild_id, user_id_int
+            )
+        n = len(pre_sessions)
+        if n == 0:
+            return {
+                "user_id": str(user_id_int),
+                "user_name": "",
+                "pre_bins": [],
+                "post_bins": [],
+                "sessions": 0,
+                "pre_avg": 0.0,
+                "post_avg": 0.0,
+                "overall_rate": overall_rate,
+                "pre_window_minutes": _PRE_WINDOW_MINUTES,
+                "post_window_minutes": _POST_WINDOW_MINUTES,
+                "bin_minutes": _BIN_MINUTES,
+            }
+        pre_bins = [sum(s[i] for s in pre_sessions) / n for i in range(len(pre_sessions[0]))]
+        post_bins = [sum(s[i] for s in post_sessions) / n for i in range(len(post_sessions[0]))]
+        pre_avg = sum(pre_bins) / len(pre_bins) if pre_bins else 0.0
+        post_avg = sum(post_bins) / len(post_bins) if post_bins else 0.0
+        return {
+            "user_id": str(user_id_int),
+            "user_name": "",
+            "pre_bins": pre_bins,
+            "post_bins": post_bins,
+            "sessions": n,
+            "pre_avg": round(pre_avg, 2),
+            "post_avg": round(post_avg, 2),
+            "overall_rate": round(overall_rate, 2),
+            "pre_window_minutes": _PRE_WINDOW_MINUTES,
+            "post_window_minutes": _POST_WINDOW_MINUTES,
+            "bin_minutes": _BIN_MINUTES,
+        }
+
+    result = await run_query(_q)
+    _resolve_names(ctx, guild, [result], ("user_id", "user_name"))
+    return result
+
+
+# ── XP level review (any level) ────────────────────────────────────────
+
+
+@router.get("/xp-level-review", response_model=XpLevelReviewResponse)
+async def xp_level_review(
+    request: Request,
+    level: int,
+    days: int | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Generalized version of /time-to-level-5 — works for any level (2–100)."""
+    import statistics
+    from collections import Counter
+    from datetime import datetime, timedelta, timezone
+
+    from xp_system import get_time_to_level_details, xp_required_for_level
+
+    if not (2 <= level <= 100):
+        raise HTTPException(400, "level must be between 2 and 100")
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    guild = ctx.bot.get_guild(guild_id) if ctx.bot else None
+
+    since_ts: float | None = None
+    if days is not None:
+        since_ts = (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
+
+    def _q():
+        with ctx.open_db() as conn:
+            details = get_time_to_level_details(
+                conn, guild_id, level, since_ts=since_ts
+            )
+
+        if not details:
+            return {
+                "level": level,
+                "window_label": f"Last {days} Days" if days else "All Time",
+                "count": 0,
+                "mean_days": 0.0,
+                "median_days": 0.0,
+                "stddev_days": 0.0,
+                "mode_days": 0,
+                "xp_required": xp_required_for_level(level),
+                "histogram": [],
+                "members": [],
+            }
+
+        durations = [d["seconds"] for d in details]
+        days_list = [s / 86400.0 for s in durations]
+        mean_d = statistics.mean(days_list)
+        median_d = statistics.median(days_list)
+        stddev_d = statistics.pstdev(days_list) if len(days_list) > 1 else 0.0
+
+        day_ints = [int(d) for d in days_list]
+        counts = Counter(day_ints)
+        mode_d = counts.most_common(1)[0][0] if counts else 0
+
+        max_day = max(day_ints)
+        histogram = [{"label": f"{d}d", "count": counts.get(d, 0)} for d in range(0, max_day + 1)]
+
+        members = [
+            {
+                "user_id": str(d["user_id"]),
+                "display_name": "",
+                "days": round(d["seconds"] / 86400.0, 1),
+            }
+            for d in details
+        ]
+
+        return {
+            "level": level,
+            "window_label": f"Last {days} Days" if days else "All Time",
+            "count": len(durations),
+            "mean_days": round(mean_d, 1),
+            "median_days": round(median_d, 1),
+            "stddev_days": round(stddev_d, 1),
+            "mode_days": mode_d,
+            "xp_required": xp_required_for_level(level),
+            "histogram": histogram,
+            "members": members,
+        }
+
+    result = await cached_run_query(
+        "xp-level-review",
+        guild_id,
+        {"level": level, "days": days},
+        _q,
+        ttl=300,
+    )
+    _resolve_names(ctx, guild, result.get("members", []), ("user_id", "display_name"))
+    return result
+
+
+# ── Chilling effect ────────────────────────────────────────────────────
+
+
+@router.get("/chilling-effect", response_model=ChillingEffectResponse)
+async def chilling_effect(
+    request: Request,
+    lookback_days: int = 30,
+    channel_id: str | None = None,
+    entry_gap_minutes: int = 60,
+    window_minutes: int = 30,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Identify members whose arrival in a channel correlates with others going quiet."""
+    from datetime import datetime, timezone
+
+    from commands.drama_commands import _analyze_chilling_effect
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+
+    cutoff_ts = int(datetime.now(timezone.utc).timestamp()) - lookback_days * 86400
+    ch_id_int: int | None = int(channel_id) if channel_id else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            events, channel_count = _analyze_chilling_effect(
+                conn,
+                guild_id,
+                cutoff_ts=cutoff_ts,
+                entry_gap_seconds=entry_gap_minutes * 60,
+                window_seconds=window_minutes * 60,
+                channel_id=ch_id_int,
+            )
+
+        # Aggregate by entry user
+        by_user: dict[int, dict] = {}
+        for ch_id, ts, author_id, content, victims in events:
+            bucket = by_user.setdefault(
+                author_id,
+                {"silence_count": 0, "total_victims": 0, "events": []},
+            )
+            bucket["silence_count"] += 1
+            bucket["total_victims"] += len(victims)
+            bucket["events"].append((ch_id, ts, author_id, content, victims))
+
+        ranked = []
+        for uid, info in sorted(
+            by_user.items(),
+            key=lambda kv: (kv[1]["total_victims"], kv[1]["silence_count"]),
+            reverse=True,
+        ):
+            sample_events = []
+            for ch_id, ts, author_id, content, victims in info["events"][:2]:
+                sample_events.append(
+                    {
+                        "channel_id": str(ch_id),
+                        "channel_name": "",
+                        "entry_ts": ts,
+                        "entry_user_id": str(author_id),
+                        "entry_user_name": "",
+                        "entry_preview": (content or "")[:90],
+                        "victims": [
+                            {
+                                "user_id": str(v_uid),
+                                "user_name": "",
+                                "last_message_ts": v_ts,
+                                "last_message_preview": (v_content or "")[:90],
+                            }
+                            for v_uid, v_ts, v_content in victims[:5]
+                        ],
+                    }
+                )
+            ranked.append(
+                {
+                    "user_id": str(uid),
+                    "user_name": "",
+                    "silence_count": info["silence_count"],
+                    "total_victims": info["total_victims"],
+                    "sample_events": sample_events,
+                }
+            )
+
+        return {
+            "lookback_days": lookback_days,
+            "channel_id": channel_id,
+            "channel_count": channel_count,
+            "total_events": len(events),
+            "ranked": ranked,
+        }
+
+    result = await cached_run_query(
+        "chilling-effect",
+        guild_id,
+        {
+            "lookback_days": lookback_days,
+            "channel_id": channel_id,
+            "entry_gap_minutes": entry_gap_minutes,
+            "window_minutes": window_minutes,
+        },
+        _q,
+        ttl=600,
+    )
+
+    # Resolve display names
+    ranked = result.get("ranked", [])
+    _resolve_names(ctx, guild, ranked, ("user_id", "user_name"))
+    for entry in ranked:
+        for ev in entry.get("sample_events", []):
+            _resolve_names(ctx, guild, [ev], ("entry_user_id", "entry_user_name"))
+            _resolve_names(ctx, guild, ev.get("victims", []), ("user_id", "user_name"))
+            if guild:
+                ch = guild.get_channel(int(ev["channel_id"]))
+                if ch:
+                    ev["channel_name"] = ch.name
+    return result
+
+
+# ── Member list reports ────────────────────────────────────────────────
+
+
+def _activity_to_row(uid: int, display_name: str, activity, now_ts: float) -> dict:
+    last_ts: float | None = activity.created_at if activity else None
+    return {
+        "user_id": str(uid),
+        "display_name": display_name,
+        "last_message_ts": last_ts,
+        "last_message_channel_id": str(activity.channel_id) if activity else None,
+        "days_since_last": (
+            round((now_ts - last_ts) / 86400.0, 1) if last_ts else None
+        ),
+    }
+
+
+@router.get("/list-role", response_model=ListRoleResponse)
+async def list_role(
+    request: Request,
+    role_id: str,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    import time as _time
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(503, "Guild not available")
+
+    role = guild.get_role(int(role_id))
+    if role is None:
+        raise HTTPException(404, "Role not found")
+
+    members_sorted = sorted(role.members, key=lambda m: m.display_name.lower())
+    member_ids = [m.id for m in members_sorted]
+
+    def _q():
+        with ctx.open_db() as conn:
+            return ctx.get_member_last_activity_map(conn, guild_id, member_ids)
+
+    activities = await run_query(_q)
+    now_ts = _time.time()
+    rows = [_activity_to_row(m.id, m.display_name, activities.get(m.id), now_ts) for m in members_sorted]
+
+    return {
+        "role_id": role_id,
+        "role_name": role.name,
+        "total": len(rows),
+        "members": rows,
+    }
+
+
+@router.get("/inactive-role", response_model=InactiveRoleResponse)
+async def inactive_role(
+    request: Request,
+    role_id: str,
+    days: int = 7,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    import time as _time
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(503, "Guild not available")
+
+    role = guild.get_role(int(role_id))
+    if role is None:
+        raise HTTPException(404, "Role not found")
+
+    days = max(1, min(365, days))
+    cutoff_ts = _time.time() - days * 86400
+    members_sorted = sorted(role.members, key=lambda m: m.display_name.lower())
+    member_ids = [m.id for m in members_sorted]
+
+    def _q():
+        with ctx.open_db() as conn:
+            return ctx.get_member_last_activity_map(conn, guild_id, member_ids)
+
+    activities = await run_query(_q)
+    now_ts = _time.time()
+
+    inactive = []
+    for m in members_sorted:
+        a = activities.get(m.id)
+        if a is None or a.created_at < cutoff_ts:
+            inactive.append(_activity_to_row(m.id, m.display_name, a, now_ts))
+
+    return {
+        "role_id": role_id,
+        "role_name": role.name,
+        "days": days,
+        "total": len(member_ids),
+        "inactive_count": len(inactive),
+        "tracking_coverage": len(activities),
+        "members": inactive,
+    }
+
+
+@router.get("/inactive", response_model=InactiveResponse)
+async def inactive(
+    request: Request,
+    period_seconds: int = 7 * 86400,
+    channel_id: str | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    import time as _time
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(503, "Guild not available")
+
+    period_seconds = max(60, min(365 * 86400, period_seconds))
+    cutoff_ts = _time.time() - period_seconds
+
+    members_all = [m for m in guild.members if not m.bot]
+    member_ids = [m.id for m in members_all]
+    ch_id_int: int | None = int(channel_id) if channel_id else None
+
+    def _q():
+        from xp_system import MemberActivity
+
+        with ctx.open_db() as conn:
+            if ch_id_int is not None:
+                act_map: dict[int, MemberActivity] = {}
+                for uid in member_ids:
+                    row = conn.execute(
+                        """
+                        SELECT channel_id, message_id, created_at
+                        FROM xp_events
+                        WHERE guild_id = ? AND user_id = ? AND channel_id = ?
+                        ORDER BY created_at DESC LIMIT 1
+                        """,
+                        (guild_id, uid, ch_id_int),
+                    ).fetchone()
+                    if row:
+                        act_map[uid] = MemberActivity(
+                            user_id=uid,
+                            channel_id=int(row[0]),
+                            message_id=int(row[1] or 0),
+                            created_at=float(row[2]),
+                        )
+                return act_map
+            return ctx.get_member_last_activity_map(conn, guild_id, member_ids)
+
+    activities = await run_query(_q)
+    now_ts = _time.time()
+    rows = []
+    for m in members_all:
+        a = activities.get(m.id)
+        if a is None or a.created_at < cutoff_ts:
+            rows.append(_activity_to_row(m.id, m.display_name, a, now_ts))
+    rows.sort(key=lambda r: r["last_message_ts"] or 0)
+
+    days = period_seconds / 86400.0
+    label = f"{days:.0f}d" if days >= 1 else f"{period_seconds // 3600}h"
+
+    return {
+        "period_seconds": period_seconds,
+        "period_label": label,
+        "channel_id": channel_id,
+        "total": len(rows),
+        "members": rows,
+    }
+
+
+@router.get("/oldest-sfw", response_model=OldestSfwResponse)
+async def oldest_sfw(
+    request: Request,
+    count: int = 10,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    import time as _time
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(503, "Guild not available")
+
+    count = max(1, min(100, count))
+
+    nsfw_cfg = ctx.grant_roles.get("nsfw") if hasattr(ctx, "grant_roles") else None
+    nsfw_role_id = nsfw_cfg["role_id"] if nsfw_cfg else 0
+    nsfw_role = guild.get_role(int(nsfw_role_id)) if nsfw_role_id else None
+
+    sfw_members = [
+        m for m in guild.members
+        if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
+    ]
+    member_ids = [m.id for m in sfw_members]
+
+    def _q():
+        with ctx.open_db() as conn:
+            return ctx.get_member_last_activity_map(conn, guild_id, member_ids)
+
+    activities = await run_query(_q)
+    now_ts = _time.time()
+
+    sorted_members = sorted(
+        sfw_members,
+        key=lambda m: activities[m.id].created_at if m.id in activities else 0,
+    )
+    top = sorted_members[:count]
+    rows = [_activity_to_row(m.id, m.display_name, activities.get(m.id), now_ts) for m in top]
+
+    return {
+        "nsfw_role_id": str(nsfw_role.id) if nsfw_role else None,
+        "nsfw_role_name": nsfw_role.name if nsfw_role else "",
+        "sfw_total": len(sfw_members),
+        "members": rows,
+    }

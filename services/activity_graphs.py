@@ -432,6 +432,144 @@ def query_xp_histogram(
     return labels, [totals_by_bucket.get(i, 0.0) for i in range(n)]
 
 
+def query_xp_activity_with_breakdown(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Resolution,
+    *,
+    user_id: int | None = None,
+    channel_id: int | None = None,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
+    utc_offset_hours: float = 0,
+) -> tuple[list[str], list[float], list[int], dict[str, list[float]]]:
+    """Same as ``query_xp_activity`` but also returns per-source XP totals.
+
+    Returns (labels, xp_totals, unique_member_counts, by_source) where
+    ``by_source`` maps each ``xp_events.source`` value to a list of XP totals
+    aligned to ``labels``.
+    """
+    now = datetime.now(timezone.utc)
+    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
+    offset_secs = int(utc_offset_hours * 3600)
+    bucket_expr = _strftime_expr(
+        resolution, since_ts=since_ts, utc_offset_secs=offset_secs
+    )
+
+    params: list[object] = [guild_id, since_ts]
+    where = "guild_id = ? AND created_at >= ?"
+    if user_id is not None:
+        where += " AND user_id = ?"
+        params.append(user_id)
+    if channel_id is not None:
+        where += " AND channel_id = ?"
+        params.append(channel_id)
+    where = _append_exclusions(where, params, exclude_user_ids, exclude_channel_ids)
+
+    members_rows = conn.execute(
+        f"""
+        SELECT {bucket_expr} AS bucket,
+               COUNT(DISTINCT user_id) AS member_count
+        FROM xp_events
+        WHERE {where}
+        GROUP BY bucket
+        """,
+        params,
+    ).fetchall()
+
+    source_rows = conn.execute(
+        f"""
+        SELECT {bucket_expr} AS bucket, source,
+               COALESCE(SUM(amount), 0) AS xp_total
+        FROM xp_events
+        WHERE {where}
+        GROUP BY bucket, source
+        """,
+        params,
+    ).fetchall()
+
+    keys = [k for k, _ in bucket_sequence]
+    key_to_idx = {k: i for i, k in enumerate(keys)}
+    n = len(keys)
+
+    members_by_key = {str(row[0]): int(row[1]) for row in members_rows}
+
+    by_source: dict[str, list[float]] = {}
+    for bucket_key, src, total in source_rows:
+        idx = key_to_idx.get(str(bucket_key))
+        if idx is None:
+            continue
+        series = by_source.setdefault(str(src), [0.0] * n)
+        series[idx] = round(float(total), 1)
+
+    labels = [label for _, label in bucket_sequence]
+    xp_totals = [
+        round(sum(series[i] for series in by_source.values()), 1)
+        for i in range(n)
+    ]
+    member_counts = [members_by_key.get(k, 0) for k in keys]
+    return labels, xp_totals, member_counts, by_source
+
+
+def query_xp_histogram_with_breakdown(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Literal["hour_of_day", "day_of_week"],
+    *,
+    user_id: int | None = None,
+    channel_id: int | None = None,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
+    utc_offset_hours: float = 0,
+) -> tuple[list[str], list[float], dict[str, list[float]]]:
+    """Same as ``query_xp_histogram`` but also returns per-source XP totals."""
+    offset_secs = int(utc_offset_hours * 3600)
+    shifted = f"(created_at + {offset_secs})" if offset_secs else "created_at"
+    if resolution == "hour_of_day":
+        expr = f"CAST(strftime('%H', datetime({shifted}, 'unixepoch')) AS INTEGER)"
+        labels = _HOD_LABELS
+        n = 24
+    else:
+        expr = f"CAST(strftime('%w', datetime({shifted}, 'unixepoch')) AS INTEGER)"
+        labels = _DOW_LABELS
+        n = 7
+
+    params: list[object] = [guild_id]
+    where = "guild_id = ?"
+    if user_id is not None:
+        where += " AND user_id = ?"
+        params.append(user_id)
+    if channel_id is not None:
+        where += " AND channel_id = ?"
+        params.append(channel_id)
+    where = _append_exclusions(where, params, exclude_user_ids, exclude_channel_ids)
+
+    rows = conn.execute(
+        f"""
+        SELECT {expr} AS bucket, source,
+               COALESCE(SUM(amount), 0) AS xp_total
+        FROM xp_events
+        WHERE {where}
+        GROUP BY bucket, source
+        """,
+        params,
+    ).fetchall()
+
+    by_source: dict[str, list[float]] = {}
+    for bucket, src, total in rows:
+        idx = int(bucket)
+        if not (0 <= idx < n):
+            continue
+        series = by_source.setdefault(str(src), [0.0] * n)
+        series[idx] = round(float(total), 1)
+
+    totals = [
+        round(sum(series[i] for series in by_source.values()), 1)
+        for i in range(n)
+    ]
+    return labels, totals, by_source
+
+
 # ---------------------------------------------------------------------------
 # Message-rate drop analysis
 # ---------------------------------------------------------------------------

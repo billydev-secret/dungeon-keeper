@@ -8,6 +8,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.embeds import COLOR_BLURPLE, COLOR_GREEN
 from services.gender_service import (
     VALID_GENDERS,
     get_gender,
@@ -75,7 +76,7 @@ class _ClassifyView(discord.ui.View):
         member = self._current_member()
         if member is None:
             return discord.Embed(
-                description="No more members to classify.", color=discord.Color.green()
+                description="No more members to classify.", color=COLOR_GREEN
             )
         remaining = self._total - self._index
         account_age_days = (discord.utils.utcnow() - member.created_at).days
@@ -90,7 +91,7 @@ class _ClassifyView(discord.ui.View):
                 f"**{member.display_name}**\n"
                 f"Account age: {account_age_days}d — Joined: {joined_days}d ago"
             ),
-            color=discord.Color.blurple(),
+            color=COLOR_BLURPLE,
         )
         if member.display_avatar:
             embed.set_thumbnail(url=member.display_avatar.url)
@@ -106,7 +107,7 @@ class _ClassifyView(discord.ui.View):
                 await interaction.response.edit_message(
                     embed=discord.Embed(
                         description="No more members to classify.",
-                        color=discord.Color.green(),
+                        color=COLOR_GREEN,
                     ),
                     view=None,
                 )
@@ -118,7 +119,7 @@ class _ClassifyView(discord.ui.View):
                 await interaction.response.edit_message(
                     embed=discord.Embed(
                         description="All done — no more unclassified members.",
-                        color=discord.Color.green(),
+                        color=COLOR_GREEN,
                     ),
                     view=None,
                 )
@@ -138,7 +139,7 @@ class _ClassifyView(discord.ui.View):
             await interaction.response.edit_message(
                 embed=discord.Embed(
                     description="Reached the end of the list.",
-                    color=discord.Color.green(),
+                    color=COLOR_GREEN,
                 ),
                 view=None,
             )
@@ -155,7 +156,7 @@ class _ClassifyView(discord.ui.View):
         await interaction.response.edit_message(
             embed=discord.Embed(
                 description=f"Stopped — classified {classified} member(s) this session.",
-                color=discord.Color.green(),
+                color=COLOR_GREEN,
             ),
             view=None,
         )

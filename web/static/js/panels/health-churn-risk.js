@@ -47,15 +47,15 @@ export function mount(container) {
         <div class="subtitle">${d.at_risk_count} members at risk</div>
       </header>
 
-      <details class="panel-about" style="margin:8px 0 14px;">
-        <summary style="cursor:pointer; font-size:0.85rem; color:var(--text-muted, #949ba4);">About this report</summary>
-        <div style="margin:6px 0 0; padding:10px 14px; background:var(--bg-secondary, #2b2d31); border-radius:6px; font-size:0.85rem; line-height:1.6; color:var(--text-muted, #949ba4);">
+      <details class="panel-about">
+        <summary>About this report</summary>
+        <div class="note">
           Each member gets a risk score (0–100) based on five signals:
-          <strong style="color:var(--text-normal, #dbdee1);">Frequency</strong> — are they posting less often?
-          <strong style="color:var(--text-normal, #dbdee1);">Channels</strong> — are they visiting fewer channels?
-          <strong style="color:var(--text-normal, #dbdee1);">Reciprocity</strong> — are fewer people replying to them?
-          <strong style="color:var(--text-normal, #dbdee1);">Sentiment</strong> — has their tone turned negative?
-          <strong style="color:var(--text-normal, #dbdee1);">Gap</strong> — how long since they were last seen?
+          <strong>Frequency</strong> — are they posting less often?
+          <strong>Channels</strong> — are they visiting fewer channels?
+          <strong>Reciprocity</strong> — are fewer people replying to them?
+          <strong>Sentiment</strong> — has their tone turned negative?
+          <strong>Gap</strong> — how long since they were last seen?
           Members in the <em>critical</em> tier (80+) are likely about to leave.
         </div>
       </details>
