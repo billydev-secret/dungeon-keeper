@@ -184,8 +184,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     # ── OAuth routes (login / callback / logout) ────────────────────
     from web.routes import oauth as oauth_routes
+    from web.routes import spotify_oauth as spotify_oauth_routes
 
     app.include_router(oauth_routes.router, tags=["auth"])
+    app.include_router(spotify_oauth_routes.router, tags=["spotify-auth"])
 
     # ── API routes ──────────────────────────────────────────────────
     from web.routes import ai_config as ai_config_routes

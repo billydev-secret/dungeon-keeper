@@ -47,6 +47,9 @@ log = logging.getLogger("dungeonkeeper.music")
 _IDLE_DISCONNECT_S = 60
 _AUTOPLAY_QUEUE_BATCH = 50
 _REJOIN_NODE_WAIT_S = 30
+# Initial volume on every fresh voice connect. New users often don't know how
+# to lower it; 20% is a friendly default that nobody complains about.
+_DEFAULT_VOLUME = 20
 
 
 class MusicCog(commands.Cog):
@@ -68,7 +71,7 @@ class MusicCog(commands.Cog):
     async def cog_load(self) -> None:
         lavalink = LavalinkManager()
         self._lavalink = lavalink
-        self._spotify = SpotifyResolver()
+        self._spotify = SpotifyResolver(db_path=self.ctx.db_path)
         try:
             await lavalink.start()
             node = wavelink.Node(
@@ -165,6 +168,7 @@ class MusicCog(commands.Cog):
             log.warning("voice connect failed: %s", exc)
             await self._ephemeral(interaction, f"Couldn't join voice: {exc}")
             return None
+        await player.set_volume(_DEFAULT_VOLUME)
         q = self._queue(guild.id)
         q.voice_channel_id = member.voice.channel.id
         log.info(
@@ -580,7 +584,8 @@ class MusicCog(commands.Cog):
             # If we're not already in the channel, join it now.
             if guild.voice_client is None:
                 try:
-                    await member.voice.channel.connect(cls=wavelink.Player)
+                    player = await member.voice.channel.connect(cls=wavelink.Player)
+                    await player.set_volume(_DEFAULT_VOLUME)
                 except Exception as exc:
                     log.warning("24/7 join failed: %s", exc)
                     msg += f"\n(Couldn't join right now: {exc})"
@@ -933,6 +938,7 @@ class MusicCog(commands.Cog):
                     except Exception as exc:
                         log.warning("24/7 rejoin connect failed: %s", exc)
                         continue
+                    await player.set_volume(_DEFAULT_VOLUME)
                     queue = self._queue(s.guild_id)
                     queue.voice_channel_id = s.voice_channel_id
                     queue.autoplay_playlist_url = s.autoplay_playlist_url

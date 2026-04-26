@@ -477,3 +477,61 @@ def test_channel_comparison_resolves_names_from_guild_and_db(ctx, make_client):
     data = response.json()
     assert data["channels"][0]["channel_name"] == "live-channel"
     assert data["channels"][1]["channel_name"] == "archived-channel"
+
+
+def _mk_channel(spec_cls, *, ch_id: int, name: str, category=None, nsfw: bool = False):
+    """Build a MagicMock that passes isinstance(ch, spec_cls)."""
+    import discord
+    from unittest.mock import MagicMock
+
+    ch = MagicMock(spec=spec_cls)
+    ch.id = ch_id
+    ch.name = name
+    ch.category = category
+    if spec_cls is not discord.CategoryChannel:
+        ch.nsfw = nsfw
+    return ch
+
+
+def test_meta_channels_default_returns_text_and_thread_only(ctx, make_client):
+    import discord
+
+    category = _mk_channel(discord.CategoryChannel, ch_id=10, name="General")
+    text_ch = _mk_channel(discord.TextChannel, ch_id=11, name="general", category=category)
+    voice_ch = _mk_channel(discord.VoiceChannel, ch_id=12, name="Lobby", category=category)
+    thread_ch = _mk_channel(discord.Thread, ch_id=13, name="thread-a", category=None)
+
+    guild = SimpleNamespace(channels=[category, text_ch, voice_ch, thread_ch])
+    ctx.bot = SimpleNamespace(
+        get_guild=lambda gid: guild if gid == ctx.guild_id else None
+    )
+    client = make_client()
+
+    response = client.get("/api/meta/channels")
+    assert response.status_code == 200
+    data = response.json()
+    types_returned = sorted(c["type"] for c in data)
+    assert types_returned == ["text", "thread"]
+
+
+def test_meta_channels_includes_voice_and_category_when_requested(ctx, make_client):
+    import discord
+
+    category = _mk_channel(discord.CategoryChannel, ch_id=10, name="General")
+    text_ch = _mk_channel(discord.TextChannel, ch_id=11, name="general", category=category)
+    voice_ch = _mk_channel(discord.VoiceChannel, ch_id=12, name="Lobby", category=category)
+
+    guild = SimpleNamespace(channels=[category, text_ch, voice_ch])
+    ctx.bot = SimpleNamespace(
+        get_guild=lambda gid: guild if gid == ctx.guild_id else None
+    )
+    client = make_client()
+
+    response = client.get("/api/meta/channels?types=text,voice,category")
+    assert response.status_code == 200
+    data = response.json()
+    by_id = {c["id"]: c for c in data}
+    assert by_id["10"]["type"] == "category"
+    assert by_id["11"]["type"] == "text"
+    assert by_id["12"]["type"] == "voice"
+    assert by_id["12"]["name"] == "Lobby"

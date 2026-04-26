@@ -1,6 +1,7 @@
 """Developer tools — hot-reload cog extensions."""
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 import discord
@@ -46,6 +47,24 @@ class DevCog(commands.Cog):
         else:
             await self.bot.tree.sync()
         await interaction.followup.send(f"Reloaded `{extension}`.", ephemeral=True)
+
+
+    @app_commands.command(
+        name="spotify_authorize",
+        description="(Owner) Get a one-time link to authorize Spotify private-playlist access.",
+    )
+    async def spotify_authorize(self, interaction: discord.Interaction) -> None:
+        if not await self.bot.is_owner(interaction.user):
+            await interaction.response.send_message("Bot owner only.", ephemeral=True)
+            return
+        base = os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").rstrip("/")
+        if base.endswith("/callback"):
+            base = base[: -len("/callback")]
+        url = f"{base}/spotify/authorize"
+        await interaction.response.send_message(
+            f"Click to authorize Spotify (admin login required): {url}",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: Bot) -> None:

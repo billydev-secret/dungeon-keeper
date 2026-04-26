@@ -1,4 +1,4 @@
-import { loadChannels, showStatus, buildField } from "../config-helpers.js";
+import { showStatus, buildField } from "../config-helpers.js";
 
 async function apiGet(path) {
   const res = await fetch(path, { credentials: "same-origin" });
@@ -39,7 +39,7 @@ function selectFromChannels(name, channels, selectedId, kind) {
   none.textContent = "(unset)";
   sel.appendChild(none);
   for (const ch of channels) {
-    if (kind && ch.kind !== kind) continue;
+    if (kind && ch.type !== kind) continue;
     const opt = document.createElement("option");
     opt.value = ch.id;
     opt.textContent = (kind === "voice" ? "🔊 " : kind === "category" ? "📁 " : "# ") + ch.name;
@@ -108,7 +108,7 @@ export function mount(container) {
     try {
       [cfg, channels] = await Promise.all([
         apiGet("/api/voice-master/config"),
-        loadChannels(),
+        apiGet("/api/meta/channels?types=text,voice,category"),
       ]);
     } catch (err) {
       loading.textContent = "Failed to load: " + err.message;

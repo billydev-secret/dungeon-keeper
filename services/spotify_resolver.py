@@ -11,12 +11,16 @@ its providers config. This module exists to:
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
+import httpx
 import spotipy
 from spotipy.exceptions import SpotifyException
 from spotipy.oauth2 import SpotifyClientCredentials
@@ -68,10 +72,15 @@ class SpotifyResolver:
         self,
         client_id: str | None = None,
         client_secret: str | None = None,
+        db_path: Path | None = None,
     ) -> None:
         self._client_id = client_id or os.getenv("SPOTIFY_CLIENT_ID", "")
         self._client_secret = client_secret or os.getenv("SPOTIFY_CLIENT_SECRET", "")
+        self._db_path = db_path
         self._client: spotipy.Spotify | None = None
+        # Bot-owner OAuth token cache (refreshed from DB-stored refresh token).
+        self._user_client: spotipy.Spotify | None = None
+        self._user_token_expires_at: float = 0.0
 
     def _ensure_client(self) -> spotipy.Spotify:
         if self._client is None:
@@ -86,6 +95,69 @@ class SpotifyResolver:
             )
             self._client = spotipy.Spotify(auth_manager=auth, retries=0)
         return self._client
+
+    async def _get_user_client(self) -> spotipy.Spotify | None:
+        """Return a spotipy client authed as the bot owner, or None if unconfigured.
+
+        Reads the refresh token persisted by the OAuth callback at
+        /spotify/callback (stored via ``set_config_value`` under
+        ``spotify_bot_refresh_token``). Refreshes the access token shortly
+        before expiry and caches the resulting client in memory.
+        """
+        if self._db_path is None:
+            return None
+        if (
+            self._user_client is not None
+            and time.time() < self._user_token_expires_at - 60
+        ):
+            return self._user_client
+        refresh_token = await asyncio.to_thread(self._read_refresh_token)
+        if not refresh_token:
+            return None
+        try:
+            access_token, expires_in = await self._refresh_user_token(refresh_token)
+        except SpotifyResolveError:
+            log.warning("Spotify user-OAuth refresh failed; falling back to client credentials")
+            self._user_client = None
+            return None
+        self._user_token_expires_at = time.time() + expires_in
+        self._user_client = spotipy.Spotify(auth=access_token, retries=0)
+        return self._user_client
+
+    def _read_refresh_token(self) -> str:
+        from db_utils import get_config_value, open_db
+
+        assert self._db_path is not None
+        with open_db(self._db_path) as conn:
+            return get_config_value(conn, "spotify_bot_refresh_token", "") or ""
+
+    async def _refresh_user_token(self, refresh_token: str) -> tuple[str, int]:
+        if not self._client_id or not self._client_secret:
+            raise SpotifyResolveError("Spotify credentials missing")
+        auth_value = base64.b64encode(
+            f"{self._client_id}:{self._client_secret}".encode("utf-8")
+        ).decode("ascii")
+        async with httpx.AsyncClient(timeout=10.0) as session:
+            resp = await session.post(
+                "https://accounts.spotify.com/api/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                },
+                headers={
+                    "Authorization": f"Basic {auth_value}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+        if resp.status_code != 200:
+            raise SpotifyResolveError(
+                f"Spotify refresh failed: {resp.status_code} {resp.text[:200]}"
+            )
+        payload = resp.json()
+        access_token = payload.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise SpotifyResolveError("Spotify refresh response missing access_token")
+        return access_token, int(payload.get("expires_in", 3600))
 
     @staticmethod
     def is_spotify_url(s: str) -> bool:
@@ -131,17 +203,29 @@ class SpotifyResolver:
                     "(Daily Mix, Discover Weekly, Song/Artist Radio) in late "
                     "2024. Use a user-created playlist instead."
                 )
+            # Prefer the bot-owner's OAuth token (unlocks their private and
+            # collaborative playlists). Falls back to Client Credentials when
+            # not configured or the refresh fails.
+            fetch_client = await self._get_user_client() or client
             try:
-                playlist = await self._call(client.playlist, ident, fields="name")
-                tracks, truncated = await self._page_playlist_tracks(client, ident)
+                playlist = await self._call(fetch_client.playlist, ident, fields="name")
+                tracks, truncated = await self._page_playlist_tracks(fetch_client, ident)
             except SpotifyResolveError as exc:
                 cause = exc.__cause__
                 if isinstance(cause, SpotifyException):
                     if cause.http_status == 401:
-                        raise SpotifyResolveError(
+                        msg = (
                             "Playlist is private — the bot can only access "
                             "public playlists."
-                        ) from cause
+                        )
+                        if fetch_client is not client:
+                            # User-OAuth path was used; the playlist isn't
+                            # owned by or shared with the authorized account.
+                            msg = (
+                                "Playlist is private and not shared with the "
+                                "authorized bot owner account."
+                            )
+                        raise SpotifyResolveError(msg) from cause
                     if cause.http_status == 404:
                         raise SpotifyResolveError("Playlist not found.") from cause
                 raise

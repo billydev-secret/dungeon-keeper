@@ -270,28 +270,45 @@ async def meta_members(
 @router.get("/meta/channels", response_model=list[ChannelMeta])
 async def meta_channels(
     request: Request,
+    types: str = "text,thread",
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     import discord
+
+    requested = {t.strip().lower() for t in types.split(",") if t.strip()}
+    type_map: list[tuple[type, str]] = [
+        (discord.TextChannel, "text"),
+        (discord.VoiceChannel, "voice"),
+        (discord.CategoryChannel, "category"),
+        (discord.Thread, "thread"),
+    ]
+    allowed = [(cls, label) for cls, label in type_map if label in requested]
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
     if guild is not None:
-        return [
-            ChannelMeta(
-                id=str(ch.id),
-                name=ch.name,
-                type="text" if isinstance(ch, discord.TextChannel) else "thread",
-                category=ch.category.name if ch.category is not None else None,
-                nsfw=getattr(ch, "nsfw", False),
+        out: list[ChannelMeta] = []
+        for ch in guild.channels:
+            label = next((lab for cls, lab in allowed if isinstance(ch, cls)), None)
+            if label is None:
+                continue
+            parent = getattr(ch, "category", None)
+            out.append(
+                ChannelMeta(
+                    id=str(ch.id),
+                    name=ch.name,
+                    type=label,
+                    category=parent.name if parent is not None else None,
+                    nsfw=getattr(ch, "nsfw", False),
+                )
             )
-            for ch in guild.channels
-            if isinstance(ch, (discord.TextChannel, discord.Thread))
-        ]
+        return out
 
-    # Fallback: derive channel list from messages table.
+    # Fallback: derive channel list from messages table (text channels only).
+    if "text" not in requested:
+        return []
     with ctx.open_db() as conn:
         rows = conn.execute(
             """
