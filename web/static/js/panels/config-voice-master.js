@@ -191,9 +191,9 @@ export function mount(container) {
       const fd = new FormData(form);
       const saveable = [...form.querySelectorAll('input[name="saveable_fields"]:checked')].map(el => el.value);
       const payload = {
-        hub_channel_id: parseInt(fd.get("hub_channel_id"), 10) || 0,
-        category_id: parseInt(fd.get("category_id"), 10) || 0,
-        control_channel_id: parseInt(fd.get("control_channel_id"), 10) || 0,
+        hub_channel_id: String(fd.get("hub_channel_id") || "0"),
+        category_id: String(fd.get("category_id") || "0"),
+        control_channel_id: String(fd.get("control_channel_id") || "0"),
         default_name_template: String(fd.get("default_name_template") || ""),
         default_user_limit: parseInt(fd.get("default_user_limit"), 10) || 0,
         default_bitrate: parseInt(fd.get("default_bitrate"), 10) || 0,

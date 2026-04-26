@@ -38,9 +38,9 @@ log = logging.getLogger("dungeonkeeper.web.voice_master")
 
 
 class ConfigPayload(BaseModel):
-    hub_channel_id: int
-    category_id: int
-    control_channel_id: int
+    hub_channel_id: str
+    category_id: str
+    control_channel_id: str
     default_name_template: str
     default_user_limit: int
     default_bitrate: int
@@ -82,10 +82,10 @@ async def get_config(
             cfg = load_voice_master_config(conn, guild_id)
             patterns = list_name_blocklist(conn, guild_id)
         return {
-            "hub_channel_id": cfg.hub_channel_id,
-            "category_id": cfg.category_id,
-            "control_channel_id": cfg.control_channel_id,
-            "panel_message_id": cfg.panel_message_id,
+            "hub_channel_id": str(cfg.hub_channel_id),
+            "category_id": str(cfg.category_id),
+            "control_channel_id": str(cfg.control_channel_id),
+            "panel_message_id": str(cfg.panel_message_id),
             "default_name_template": cfg.default_name_template,
             "default_user_limit": cfg.default_user_limit,
             "default_bitrate": cfg.default_bitrate,
@@ -118,11 +118,24 @@ async def set_config(
     if not chosen.issubset(valid_fields):
         raise HTTPException(400, f"Unknown fields: {chosen - valid_fields}")
 
+    def _to_id(raw: str) -> str:
+        s = (raw or "").strip()
+        if not s:
+            return "0"
+        try:
+            return str(int(s))
+        except ValueError:
+            raise HTTPException(400, f"Invalid channel ID: {raw!r}")
+
+    hub_id = _to_id(payload.hub_channel_id)
+    category_id = _to_id(payload.category_id)
+    control_id = _to_id(payload.control_channel_id)
+
     def _q() -> None:
         with ctx.open_db() as conn:
-            set_voice_master_config_value(conn, guild_id, "voice_master_hub_channel_id", str(payload.hub_channel_id))
-            set_voice_master_config_value(conn, guild_id, "voice_master_category_id", str(payload.category_id))
-            set_voice_master_config_value(conn, guild_id, "voice_master_control_channel_id", str(payload.control_channel_id))
+            set_voice_master_config_value(conn, guild_id, "voice_master_hub_channel_id", hub_id)
+            set_voice_master_config_value(conn, guild_id, "voice_master_category_id", category_id)
+            set_voice_master_config_value(conn, guild_id, "voice_master_control_channel_id", control_id)
             set_voice_master_config_value(conn, guild_id, "voice_master_default_name_template", payload.default_name_template)
             set_voice_master_config_value(conn, guild_id, "voice_master_default_user_limit", str(payload.default_user_limit))
             set_voice_master_config_value(conn, guild_id, "voice_master_default_bitrate", str(payload.default_bitrate))

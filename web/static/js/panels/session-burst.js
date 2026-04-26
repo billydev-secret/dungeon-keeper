@@ -12,7 +12,7 @@ export function mount(container, initialParams) {
         <label>Member ID
           <input type="text" data-control="user_id" placeholder="Discord user id" />
         </label>
-        <button data-action="run">Run</button>
+        <button class="btn btn-primary" data-action="run">Run</button>
       </div>
       <div data-status></div>
       <div data-chart-wrap></div>

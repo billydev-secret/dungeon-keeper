@@ -62,12 +62,12 @@ export function mount(container) {
       return;
     }
     const m = queue[cursor];
-    const buttons = GENDERS.map((g) => `<button data-gender="${g.value}">${g.label}</button>`).join(" ");
+    const buttons = GENDERS.map((g) => `<button class="btn" data-gender="${g.value}">${g.label}</button>`).join(" ");
     classifyPane.innerHTML = `
       <div style="padding:24px; text-align:center;">
         <div style="font-size:1.5em; margin-bottom:8px;">${esc(m.display_name || m.user_id)}</div>
         <div class="subtitle" style="margin-bottom:16px;">${cursor + 1} of ${queue.length}</div>
-        <div style="display:flex; gap:8px; justify-content:center;">${buttons}<button data-skip>Skip</button></div>
+        <div style="display:flex; gap:8px; justify-content:center;">${buttons}<button class="btn btn-ghost" data-skip>Skip</button></div>
         <div data-cstatus style="margin-top:12px;"></div>
       </div>
     `;
