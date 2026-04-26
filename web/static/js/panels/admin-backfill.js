@@ -11,7 +11,7 @@ export function mount(container) {
       <div class="form">
         <h3>Role events</h3>
         <p class="field-hint">Sync the role_events log with current server state. Adds missing grant/remove events. Idempotent and fast.</p>
-        <button data-action="roles">Run role backfill</button>
+        <button class="btn btn-primary" data-action="roles">Run role backfill</button>
         <div data-status="roles" style="margin-top:8px;"></div>
       </div>
 
@@ -23,7 +23,7 @@ export function mount(container) {
         <label>Days to scan (0 = all available)
           <input type="number" data-control="xp-days" min="0" max="3650" value="30" />
         </label>
-        <button data-action="xp">Start XP backfill</button>
+        <button class="btn btn-primary" data-action="xp">Start XP backfill</button>
         <div data-status="xp" style="margin-top:8px;"></div>
       </div>
 
@@ -39,7 +39,7 @@ export function mount(container) {
           <input type="text" data-control="int-channel" placeholder="leave blank for all readable channels" />
         </label>
         <label><input type="checkbox" data-control="int-reset" /> Reset existing data first</label>
-        <button data-action="interactions">Start interaction backfill</button>
+        <button class="btn btn-primary" data-action="interactions">Start interaction backfill</button>
         <div data-status="interactions" style="margin-top:8px;"></div>
       </div>
     </div>
