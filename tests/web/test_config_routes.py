@@ -246,6 +246,30 @@ def test_booster_role_upsert_and_delete(authed_client, fake_ctx):
     assert "fire" not in [r["role_key"] for r in roles]
 
 
+def test_get_config_exposes_booster_panel_channel(authed_client, fake_ctx):
+    """Config GET surfaces the most recently posted booster panel channel."""
+    from services.booster_roles import replace_booster_panel_refs
+
+    with open_db(fake_ctx.db_path) as conn:
+        replace_booster_panel_refs(
+            conn, fake_ctx.guild_id, [(7777, 1), (7777, 2), (7777, 3)]
+        )
+        conn.commit()
+
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["booster_panel_channel_id"] == "7777"
+
+
+def test_post_booster_panel_requires_bot(authed_client):
+    """Without a live bot, the repost endpoint returns 503 rather than 500."""
+    resp = authed_client.post(
+        "/api/config/booster-roles/post-panel",
+        json={"channel_id": "12345"},
+    )
+    assert resp.status_code == 503
+
+
 # ── PUT /api/config/auto-delete/{channel_id} ─────────────────────────
 
 

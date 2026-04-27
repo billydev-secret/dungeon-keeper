@@ -147,6 +147,7 @@ bot.ctx = ctx
 bot.extension_names = [
     "cogs.events_cog",
     "cogs.activity_cog",
+    "cogs.config_cog",
     "cogs.ai_mod_cog",
     "cogs.denizen_cog",
     "cogs.invite_cog",

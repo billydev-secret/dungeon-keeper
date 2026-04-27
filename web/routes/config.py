@@ -28,7 +28,9 @@ from services.auto_delete_service import (
 )
 from services.booster_roles import (
     delete_booster_role,
+    get_booster_panel_refs,
     get_booster_roles,
+    post_or_update_booster_panel,
     upsert_booster_role,
 )
 from services.inactivity_prune_service import (
@@ -268,6 +270,7 @@ async def get_config(
             prune_rule = _get_prune_rule(ctx.db_path, guild_id)
             prune_exempt_ids = get_prune_exception_ids(ctx.db_path, guild_id)
             grant_roles = get_grant_roles(conn, guild_id)
+            booster_panel_refs = get_booster_panel_refs(conn, guild_id)
 
             bot = getattr(ctx, "bot", None)
             prune_guild = bot.get_guild(guild_id) if bot is not None else None
@@ -438,6 +441,9 @@ async def get_config(
                     }
                     for r in get_booster_roles(conn, guild_id)
                 ],
+                "booster_panel_channel_id": (
+                    str(booster_panel_refs[0][0]) if booster_panel_refs else "0"
+                ),
                 "auto_delete": [
                     {
                         "channel_id": str(r["channel_id"]),
@@ -1111,6 +1117,43 @@ async def remove_booster_role(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+class BoosterPanelPostRequest(BaseModel):
+    channel_id: str
+
+
+@router.post("/config/booster-roles/post-panel")
+async def post_booster_panel(
+    request: Request,
+    body: BoosterPanelPostRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Re-post the booster cosmetic role panel in the chosen channel."""
+    import discord
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+    try:
+        channel_id = int(body.channel_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid channel_id")
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        raise HTTPException(400, "Channel must be a text channel in this guild")
+
+    msgs = await post_or_update_booster_panel(ctx.db_path, guild, channel)
+    if not msgs:
+        raise HTTPException(400, "No booster roles configured.")
+    return {"ok": True, "message_count": len(msgs)}
 
 
 # ── Auto-delete schedules ────────────────────────────────────────────
