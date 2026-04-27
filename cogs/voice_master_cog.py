@@ -42,6 +42,7 @@ from services.voice_master_service import (
     default_profile,
     delete_active_channel,
     get_active_channel,
+    get_owned_channel,
     insert_active_channel,
     list_active_channels,
     list_blocked,
@@ -480,6 +481,23 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         guild = member.guild
         async with self._create_locks[member.id]:
+            # If the member already owns a live channel, return them to it
+            # rather than kicking them out of the Hub.
+            with self.ctx.open_db() as conn:
+                existing = get_owned_channel(conn, guild.id, member.id)
+            if existing is not None:
+                live = guild.get_channel(existing.channel_id)
+                if isinstance(live, discord.VoiceChannel):
+                    with self._suppress_voice_errors():
+                        await member.move_to(
+                            live,
+                            reason="Voice Master: returning to existing channel",
+                        )
+                    return
+                # Stale DB row — clean it up so the cap check below is accurate.
+                with self.ctx.open_db() as conn:
+                    delete_active_channel(conn, existing.channel_id)
+
             now = time.time()
             last = self._last_create.get(member.id, 0.0)
             if cfg.create_cooldown_s > 0 and (now - last) < cfg.create_cooldown_s:

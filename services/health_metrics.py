@@ -1060,6 +1060,135 @@ def compute_cohort_retention(
 # ---------------------------------------------------------------------------
 
 
+def compute_user_churn_score(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    *,
+    now: float | None = None,
+) -> dict:
+    """Compute the 0-100 churn risk score and signal breakdown for one user.
+
+    Mirrors ``compute_churn_risk``'s per-user signals so the slash command
+    can show a single member's risk without scanning the whole guild.
+    Returns ``{score, tier, signals, last_seen}`` where ``tier`` is one of
+    ``clear`` | ``watch`` | ``declining`` | ``critical``.
+    """
+    now = now or time.time()
+
+    recent_msgs = conn.execute(
+        "SELECT COUNT(*) FROM messages WHERE guild_id=? AND author_id=? AND ts>=?",
+        (guild_id, user_id, _ts(7, now=now)),
+    ).fetchone()[0]
+    prev_msgs = conn.execute(
+        "SELECT COUNT(*) FROM messages WHERE guild_id=? AND author_id=? AND ts>=? AND ts<?",
+        (guild_id, user_id, _ts(14, now=now), _ts(7, now=now)),
+    ).fetchone()[0]
+    if prev_msgs > 0:
+        freq_decline = max(0.0, 1 - recent_msgs / prev_msgs)
+    elif recent_msgs == 0:
+        freq_decline = 1.0
+    else:
+        freq_decline = 0.0
+
+    recent_chs = conn.execute(
+        "SELECT COUNT(DISTINCT channel_id) FROM messages WHERE guild_id=? AND author_id=? AND ts>=?",
+        (guild_id, user_id, _ts(7, now=now)),
+    ).fetchone()[0]
+    prev_chs = conn.execute(
+        "SELECT COUNT(DISTINCT channel_id) FROM messages WHERE guild_id=? AND author_id=? AND ts>=? AND ts<?",
+        (guild_id, user_id, _ts(21, now=now), _ts(7, now=now)),
+    ).fetchone()[0]
+    if prev_chs > 0:
+        ch_narrow = max(0.0, 1 - recent_chs / prev_chs)
+    elif recent_chs == 0:
+        ch_narrow = 1.0
+    else:
+        ch_narrow = 0.0
+
+    recent_inbound = conn.execute(
+        "SELECT COUNT(*) FROM user_interactions_log "
+        "WHERE guild_id=? AND to_user_id=? AND ts>=?",
+        (guild_id, user_id, _ts(7, now=now)),
+    ).fetchone()[0]
+    prev_inbound = conn.execute(
+        "SELECT COUNT(*) FROM user_interactions_log "
+        "WHERE guild_id=? AND to_user_id=? AND ts>=? AND ts<?",
+        (guild_id, user_id, _ts(14, now=now), _ts(7, now=now)),
+    ).fetchone()[0]
+    if prev_inbound > 0:
+        recip_loss = max(0.0, 1 - recent_inbound / prev_inbound)
+    elif recent_inbound == 0:
+        recip_loss = 1.0
+    else:
+        recip_loss = 0.0
+
+    sent_row = conn.execute(
+        "SELECT AVG(ms.sentiment) FROM message_sentiment ms "
+        "JOIN messages m ON ms.message_id = m.message_id "
+        "WHERE m.guild_id=? AND m.author_id=? AND m.ts>=?",
+        (guild_id, user_id, _ts(7, now=now)),
+    ).fetchone()
+    recent_sent = sent_row[0] if sent_row and sent_row[0] is not None else 0
+    prev_sent_row = conn.execute(
+        "SELECT AVG(ms.sentiment) FROM message_sentiment ms "
+        "JOIN messages m ON ms.message_id = m.message_id "
+        "WHERE m.guild_id=? AND m.author_id=? AND m.ts>=? AND m.ts<?",
+        (guild_id, user_id, _ts(14, now=now), _ts(7, now=now)),
+    ).fetchone()
+    prev_sent = (
+        prev_sent_row[0] if prev_sent_row and prev_sent_row[0] is not None else 0
+    )
+    sent_decline = max(0.0, prev_sent - recent_sent) / 2
+
+    msg_ts_rows = conn.execute(
+        "SELECT ts FROM messages WHERE guild_id=? AND author_id=? AND ts>=? ORDER BY ts",
+        (guild_id, user_id, _ts(30, now=now)),
+    ).fetchall()
+    max_gap = 0.0
+    if len(msg_ts_rows) >= 2:
+        for i in range(1, len(msg_ts_rows)):
+            gap = msg_ts_rows[i]["ts"] - msg_ts_rows[i - 1]["ts"]
+            max_gap = max(max_gap, gap)
+    if msg_ts_rows:
+        max_gap = max(max_gap, now - msg_ts_rows[-1]["ts"])
+    gap_score = min(1.0, max_gap / (14 * _DAY))
+
+    score = round(
+        (
+            freq_decline * 0.30
+            + ch_narrow * 0.25
+            + recip_loss * 0.20
+            + sent_decline * 0.15
+            + gap_score * 0.10
+        )
+        * 100
+    )
+    score = min(100, max(0, score))
+
+    if score >= 80:
+        tier = "critical"
+    elif score >= 50:
+        tier = "declining"
+    elif score >= 30:
+        tier = "watch"
+    else:
+        tier = "clear"
+
+    return {
+        "score": score,
+        "tier": tier,
+        "signals": {
+            "frequency": round(freq_decline * 100),
+            "channels": round(ch_narrow * 100),
+            "reciprocity": round(recip_loss * 100),
+            "sentiment": round(sent_decline * 100),
+            "gap": round(gap_score * 100),
+        },
+        "last_seen": float(msg_ts_rows[-1]["ts"]) if msg_ts_rows else 0.0,
+    }
+
+
 def compute_churn_risk(
     conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
 ) -> dict:
@@ -1252,14 +1381,13 @@ def compute_mod_workload(
         mod_params = ()
 
     # Collect mod-related channel IDs: mod chat + ticket/jail/policy channels
+    from db_utils import get_config_value
+
     mod_channel_ids: set[int] = set()
-    # mod_channel_id from config
-    _mc_row = conn.execute(
-        "SELECT value FROM config WHERE key='mod_channel_id'"
-    ).fetchone()
-    if _mc_row and _mc_row["value"] and _mc_row["value"] != "0":
+    mc_raw = get_config_value(conn, "mod_channel_id", "0", guild_id)
+    if mc_raw and mc_raw != "0":
         try:
-            mod_channel_ids.add(int(_mc_row["value"]))
+            mod_channel_ids.add(int(mc_raw))
         except ValueError:
             pass
     # Active ticket channels

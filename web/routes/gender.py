@@ -6,7 +6,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from services.gender_service import (
     VALID_GENDERS,
-    get_gender_map,
     get_unclassified_member_ids,
     set_gender,
 )
@@ -39,28 +38,33 @@ async def list_classified(
 
     def _q():
         with ctx.open_db() as conn:
-            gmap = get_gender_map(conn, guild_id, member_ids)
             rows: list[dict] = []
-            for uid, gender in gmap.items():
-                meta = conn.execute(
-                    "SELECT set_by, set_at FROM member_gender "
-                    "WHERE guild_id = ? AND user_id = ?",
-                    (guild_id, uid),
-                ).fetchone()
-                rows.append(
-                    {
-                        "user_id": str(uid),
-                        "display_name": "",
-                        "gender": gender,
-                        "set_by": str(int(meta["set_by"])) if meta else "0",
-                        "set_at": float(meta["set_at"]) if meta else 0.0,
-                    }
-                )
+            if not member_ids:
+                return {"classified": rows}
+            batch_size = 800
+            for i in range(0, len(member_ids), batch_size):
+                batch = member_ids[i : i + batch_size]
+                placeholders = ",".join("?" for _ in batch)
+                results = conn.execute(
+                    f"SELECT user_id, gender, set_by, set_at FROM member_gender "
+                    f"WHERE guild_id = ? AND user_id IN ({placeholders})",
+                    [guild_id, *batch],
+                ).fetchall()
+                for r in results:
+                    rows.append(
+                        {
+                            "user_id": str(int(r["user_id"])),
+                            "display_name": "",
+                            "gender": str(r["gender"]),
+                            "set_by": str(int(r["set_by"])) if r["set_by"] is not None else "0",
+                            "set_at": float(r["set_at"]) if r["set_at"] is not None else 0.0,
+                        }
+                    )
             rows.sort(key=lambda r: r["set_at"], reverse=True)
             return {"classified": rows}
 
     result = await run_query(_q)
-    _resolve_names(ctx, guild, result["classified"], ("user_id", "display_name"))
+    await _resolve_names(ctx, guild, result["classified"], ("user_id", "display_name"))
     return result
 
 

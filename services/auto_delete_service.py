@@ -125,21 +125,29 @@ def list_auto_delete_rules(db_path: Path) -> list[sqlite3.Row]:
         ).fetchall()
 
 
+def list_auto_delete_rules_for_guild_with_conn(
+    conn: sqlite3.Connection,
+    guild_id: int,
+) -> list[sqlite3.Row]:
+    """List auto-delete rules for a guild using an existing connection."""
+    return conn.execute(
+        """
+        SELECT guild_id, channel_id, max_age_seconds, interval_seconds, last_run_ts
+        FROM auto_delete_rules
+        WHERE guild_id = ?
+        ORDER BY channel_id
+        """,
+        (guild_id,),
+    ).fetchall()
+
+
 def list_auto_delete_rules_for_guild(
     db_path: Path,
     guild_id: int,
 ) -> list[sqlite3.Row]:
     """List auto-delete rules for a specific guild."""
     with open_db(db_path) as conn:
-        return conn.execute(
-            """
-            SELECT guild_id, channel_id, max_age_seconds, interval_seconds, last_run_ts
-            FROM auto_delete_rules
-            WHERE guild_id = ?
-            ORDER BY channel_id
-            """,
-            (guild_id,),
-        ).fetchall()
+        return list_auto_delete_rules_for_guild_with_conn(conn, guild_id)
 
 
 def auto_delete_rule_exists(

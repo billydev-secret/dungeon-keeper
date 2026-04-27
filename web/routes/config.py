@@ -22,7 +22,7 @@ from services.auto_delete_service import (
     format_duration_seconds as _fmt_dur,
 )
 from services.auto_delete_service import (
-    list_auto_delete_rules_for_guild,
+    list_auto_delete_rules_for_guild_with_conn,
     remove_auto_delete_rule,
     upsert_auto_delete_rule,
 )
@@ -38,7 +38,7 @@ from services.inactivity_prune_service import (
     remove_prune_exception,
 )
 from services.dm_perms_service import (
-    get_dms_config,
+    get_dms_config_with_conn,
     set_audit_channel,
     set_panel_settings,
     set_request_channel,
@@ -169,8 +169,8 @@ def _lookup_member_name(uid: int, guild, conn, guild_id: int) -> str:
 # ── DM perms config helper ────────────────────────────────────────────
 
 
-def _dms_section(db_path, guild_id: int) -> dict:
-    cfg = get_dms_config(db_path, guild_id)
+def _dms_section_with_conn(conn, guild_id: int) -> dict:
+    cfg = get_dms_config_with_conn(conn, guild_id)
     return {k: str(v) for k, v in cfg.items()}
 
 
@@ -447,10 +447,10 @@ async def get_config(
                         "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
                         "interval_display": _fmt_dur(int(r["interval_seconds"])),
                     }
-                    for r in list_auto_delete_rules_for_guild(ctx.db_path, guild_id)
+                    for r in list_auto_delete_rules_for_guild_with_conn(conn, guild_id)
                 ],
                 "confessions": _confessions_section(guild_id, bot, conn),
-                "dms": _dms_section(ctx.db_path, guild_id),
+                "dms": _dms_section_with_conn(conn, guild_id),
                 "starboard": _starboard_section(conn, guild_id),
                 "birthday": _birthday_section(conn, guild_id),
             }

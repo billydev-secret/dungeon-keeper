@@ -424,7 +424,7 @@ async def greeter_response(
             detail="No greeter response data found for the selected period.",
         )
 
-    _resolve_names(
+    await _resolve_names(
         ctx,
         guild,
         result.get("entries", []),
@@ -533,7 +533,7 @@ async def invite_effectiveness(
         {"days": days, "active_days": active_days},
         _q,
     )
-    _resolve_names(
+    await _resolve_names(
         ctx, guild, result.get("inviters", []), ("inviter_id", "inviter_name")
     )
     all_invitees = [
@@ -541,7 +541,7 @@ async def invite_effectiveness(
         for inviter in result.get("inviters", [])
         for invitee in inviter.get("invitees", [])
     ]
-    _resolve_names(ctx, guild, all_invitees, ("invitee_id", "invitee_name"))
+    await _resolve_names(ctx, guild, all_invitees, ("invitee_id", "invitee_name"))
     return result
 
 
@@ -581,15 +581,15 @@ async def interaction_graph(
         {"days": days, "limit": limit, "metrics": want_metrics, "res": round(resolution, 2)},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("nodes", []), ("user_id", "user_name"))
-    _resolve_names(
+    await _resolve_names(ctx, guild, result.get("nodes", []), ("user_id", "user_name"))
+    await _resolve_names(
         ctx,
         guild,
         result.get("edges", []),
         ("from_id", "from_name"),
         ("to_id", "to_name"),
     )
-    _resolve_names(
+    await _resolve_names(
         ctx,
         guild,
         result.get("top_pairs", []),
@@ -598,7 +598,7 @@ async def interaction_graph(
     )
     metrics = result.get("metrics")
     if metrics and metrics.get("bridge_users"):
-        _resolve_names(ctx, guild, metrics["bridge_users"], ("user_id", "user_name"))
+        await _resolve_names(ctx, guild, metrics["bridge_users"], ("user_id", "user_name"))
     return result
 
 
@@ -632,7 +632,7 @@ async def retention(
         {"period_days": period_days, "min_previous": min_previous},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
@@ -666,7 +666,7 @@ async def voice_activity(
         {"days": days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("top_users", []), ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, result.get("top_users", []), ("user_id", "user_name"))
     return result
 
 
@@ -694,7 +694,7 @@ async def xp_leaderboard(
         {"days": days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("leaderboard", []), ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, result.get("leaderboard", []), ("user_id", "user_name"))
     return result
 
 
@@ -726,8 +726,8 @@ async def reaction_analytics(
         {"days": days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("top_givers", []), ("user_id", "user_name"))
-    _resolve_names(
+    await _resolve_names(ctx, guild, result.get("top_givers", []), ("user_id", "user_name"))
+    await _resolve_names(
         ctx, guild, result.get("top_receivers", []), ("user_id", "user_name")
     )
     return result
@@ -763,7 +763,7 @@ async def message_rate_drops(
         {"period_days": period_days, "min_previous": min_previous},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
@@ -797,7 +797,7 @@ async def burst_ranking(
         {"min_sessions": min_sessions, "days": days},
         _q,
     )
-    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
@@ -935,7 +935,7 @@ async def quality_score(
         _q,
         ttl=300,
     )
-    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
@@ -1031,7 +1031,7 @@ async def time_to_level_5(
         ttl=300,
     )
 
-    _resolve_names(ctx, guild, result.get("members", []), ("user_id", "display_name"))
+    await _resolve_names(ctx, guild, result.get("members", []), ("user_id", "display_name"))
 
     return result
 
@@ -1069,7 +1069,7 @@ async def interaction_heatmap(
         _q,
         ttl=300,
     )
-    _resolve_names(ctx, guild, result.get("users", []), ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, result.get("users", []), ("user_id", "user_name"))
     return result
 
 
@@ -1148,7 +1148,7 @@ async def dropoff(
         _q,
         ttl=300,
     )
-    _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
     return result
 
 
@@ -1214,7 +1214,7 @@ async def session_burst(
         }
 
     result = await run_query(_q)
-    _resolve_names(ctx, guild, [result], ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, [result], ("user_id", "user_name"))
     return result
 
 
@@ -1308,7 +1308,7 @@ async def xp_level_review(
         _q,
         ttl=300,
     )
-    _resolve_names(ctx, guild, result.get("members", []), ("user_id", "display_name"))
+    await _resolve_names(ctx, guild, result.get("members", []), ("user_id", "display_name"))
     return result
 
 
@@ -1419,11 +1419,11 @@ async def chilling_effect(
 
     # Resolve display names
     ranked = result.get("ranked", [])
-    _resolve_names(ctx, guild, ranked, ("user_id", "user_name"))
+    await _resolve_names(ctx, guild, ranked, ("user_id", "user_name"))
     for entry in ranked:
         for ev in entry.get("sample_events", []):
-            _resolve_names(ctx, guild, [ev], ("entry_user_id", "entry_user_name"))
-            _resolve_names(ctx, guild, ev.get("victims", []), ("user_id", "user_name"))
+            await _resolve_names(ctx, guild, [ev], ("entry_user_id", "entry_user_name"))
+            await _resolve_names(ctx, guild, ev.get("victims", []), ("user_id", "user_name"))
             if guild:
                 ch = guild.get_channel(int(ev["channel_id"]))
                 if ch:
@@ -1562,23 +1562,29 @@ async def inactive(
 
         with ctx.open_db() as conn:
             if ch_id_int is not None:
+                if not member_ids:
+                    return {}
                 act_map: dict[int, MemberActivity] = {}
-                for uid in member_ids:
-                    row = conn.execute(
-                        """
-                        SELECT channel_id, message_id, created_at
+                batch_size = 800
+                for i in range(0, len(member_ids), batch_size):
+                    batch = member_ids[i : i + batch_size]
+                    placeholders = ",".join("?" for _ in batch)
+                    rows = conn.execute(
+                        f"""
+                        SELECT user_id, channel_id, message_id, MAX(created_at) AS created_at
                         FROM xp_events
-                        WHERE guild_id = ? AND user_id = ? AND channel_id = ?
-                        ORDER BY created_at DESC LIMIT 1
+                        WHERE guild_id = ? AND channel_id = ? AND user_id IN ({placeholders})
+                        GROUP BY user_id
                         """,
-                        (guild_id, uid, ch_id_int),
-                    ).fetchone()
-                    if row:
+                        [guild_id, ch_id_int, *batch],
+                    ).fetchall()
+                    for row in rows:
+                        uid = int(row["user_id"])
                         act_map[uid] = MemberActivity(
                             user_id=uid,
-                            channel_id=int(row[0]),
-                            message_id=int(row[1] or 0),
-                            created_at=float(row[2]),
+                            channel_id=int(row["channel_id"]),
+                            message_id=int(row["message_id"] or 0),
+                            created_at=float(row["created_at"]),
                         )
                 return act_map
             return ctx.get_member_last_activity_map(conn, guild_id, member_ids)

@@ -621,12 +621,30 @@ class MusicCog(commands.Cog):
     # Wavelink event handlers
     # ------------------------------------------------------------------
 
+    def _tts_is_interrupting(self, guild_id: int) -> bool:
+        """Whether the TTS cog is currently interrupting music in this guild.
+
+        Reads ``bot.tts_playback`` lazily so this cog still works if the TTS
+        cog isn't loaded (or fails to load). Music handlers bail out while
+        a TTS clip is playing so the music queue isn't churned by the
+        replace/start events fired by the TTS track itself.
+        """
+        playback = getattr(self.bot, "tts_playback", None)
+        if playback is None:
+            return False
+        try:
+            return bool(playback.is_interrupting(guild_id))
+        except Exception:
+            return False
+
     @commands.Cog.listener()
     async def on_wavelink_track_start(
         self, payload: wavelink.TrackStartEventPayload
     ) -> None:
         player = payload.player
         if player is None or player.guild is None:
+            return
+        if self._tts_is_interrupting(player.guild.id):
             return
         queue = self._queue(player.guild.id)
         queue.current = payload.track
@@ -638,6 +656,8 @@ class MusicCog(commands.Cog):
     ) -> None:
         player = payload.player
         if player is None or player.guild is None:
+            return
+        if self._tts_is_interrupting(player.guild.id):
             return
         queue = self._queue(player.guild.id)
         next_track = queue.next()

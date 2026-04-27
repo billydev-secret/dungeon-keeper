@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
@@ -110,6 +112,27 @@ def _check_edit_budget(
     return can_edit(now, row.last_edit_at_1, row.last_edit_at_2)
 
 
+def _maybe_save_profile_field(
+    conn,
+    cfg,
+    *,
+    guild_id: int,
+    owner_id: int,
+    saveable_key: str,
+    profile_field: str,
+    value: object,
+) -> None:
+    """Persist a profile field iff this guild's config permits saving it.
+
+    ``saveable_key`` is the cfg.saveable_fields entry (e.g. "name", "limit",
+    "locked", "hidden"); ``profile_field`` is the column on VoiceProfile
+    (e.g. "saved_name", "saved_limit", "locked", "hidden").
+    """
+    if cfg.disable_saves or saveable_key not in cfg.saveable_fields:
+        return
+    update_profile_field(conn, guild_id, owner_id, field=profile_field, value=value)
+
+
 async def _gate_and_record_edit(
     interaction: discord.Interaction,
     row: ActiveChannel,
@@ -165,14 +188,11 @@ async def _apply_lock(
         return
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
-        if not cfg.disable_saves and "locked" in cfg.saveable_fields:
-            update_profile_field(
-                conn,
-                channel.guild.id,
-                row.owner_id,
-                field="locked",
-                value=locked,
-            )
+        _maybe_save_profile_field(
+            conn, cfg,
+            guild_id=channel.guild.id, owner_id=row.owner_id,
+            saveable_key="locked", profile_field="locked", value=locked,
+        )
         write_audit(
             conn,
             guild_id=channel.guild.id,
@@ -218,14 +238,11 @@ async def _apply_rename(
         return
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
-        if not cfg.disable_saves and "name" in cfg.saveable_fields:
-            update_profile_field(
-                conn,
-                channel.guild.id,
-                row.owner_id,
-                field="saved_name",
-                value=new_name,
-            )
+        _maybe_save_profile_field(
+            conn, cfg,
+            guild_id=channel.guild.id, owner_id=row.owner_id,
+            saveable_key="name", profile_field="saved_name", value=new_name,
+        )
         write_audit(
             conn,
             guild_id=channel.guild.id,
@@ -498,14 +515,11 @@ async def _apply_limit(
         return
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
-        if not cfg.disable_saves and "limit" in cfg.saveable_fields:
-            update_profile_field(
-                conn,
-                channel.guild.id,
-                row.owner_id,
-                field="saved_limit",
-                value=new_limit,
-            )
+        _maybe_save_profile_field(
+            conn, cfg,
+            guild_id=channel.guild.id, owner_id=row.owner_id,
+            saveable_key="limit", profile_field="saved_limit", value=new_limit,
+        )
         write_audit(
             conn,
             guild_id=channel.guild.id,
@@ -544,14 +558,11 @@ async def _apply_hide(
         return
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
-        if not cfg.disable_saves and "hidden" in cfg.saveable_fields:
-            update_profile_field(
-                conn,
-                channel.guild.id,
-                row.owner_id,
-                field="hidden",
-                value=hidden,
-            )
+        _maybe_save_profile_field(
+            conn, cfg,
+            guild_id=channel.guild.id, owner_id=row.owner_id,
+            saveable_key="hidden", profile_field="hidden", value=hidden,
+        )
         write_audit(
             conn,
             guild_id=channel.guild.id,
@@ -569,102 +580,63 @@ async def _apply_hide(
 # ---------------------------------------------------------------------------
 
 
-class LockButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:lock"):
-    def __init__(self) -> None:
+@dataclass(frozen=True)
+class _ButtonSpec:
+    label: str
+    emoji: str
+    style: discord.ButtonStyle
+    on_click: Callable[
+        [discord.Interaction, discord.VoiceChannel, "ActiveChannel"],
+        Awaitable[None],
+    ]
+
+
+_BUTTON_REGISTRY: dict[str, _ButtonSpec] = {}
+
+
+def _register_button(
+    action: str,
+    *,
+    label: str,
+    emoji: str,
+    style: discord.ButtonStyle,
+    on_click: Callable[
+        [discord.Interaction, discord.VoiceChannel, "ActiveChannel"],
+        Awaitable[None],
+    ],
+) -> None:
+    _BUTTON_REGISTRY[action] = _ButtonSpec(label, emoji, style, on_click)
+
+
+class _PanelButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"voice_master:(?P<action>\w+)",
+):
+    def __init__(self, action: str) -> None:
+        spec = _BUTTON_REGISTRY[action]
         super().__init__(
             discord.ui.Button(
-                label="Lock",
-                emoji="🔒",
-                style=discord.ButtonStyle.secondary,
-                custom_id="voice_master:lock",
+                label=spec.label,
+                emoji=spec.emoji,
+                style=spec.style,
+                custom_id=f"voice_master:{action}",
             )
         )
+        self._action = action
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
+        return cls(match["action"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        spec = _BUTTON_REGISTRY.get(self._action)
+        if spec is None:
+            return
         resolved = await _resolve_owned_channel(interaction)
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
-        await _apply_lock(interaction, channel, row, locked=True)
-
-
-class UnlockButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:unlock"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Unlock",
-                emoji="🔓",
-                style=discord.ButtonStyle.secondary,
-                custom_id="voice_master:unlock",
-            )
-        )
-
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
-        await _apply_lock(interaction, channel, row, locked=False)
-
-
-class HideButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:hide"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Hide",
-                emoji="👁️",
-                style=discord.ButtonStyle.secondary,
-                custom_id="voice_master:hide",
-            )
-        )
-
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
-        await _apply_hide(interaction, channel, row, hidden=True)
-
-
-class RenameButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:rename"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Rename",
-                emoji="✏️",
-                style=discord.ButtonStyle.primary,
-                custom_id="voice_master:rename",
-            )
-        )
-
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await interaction.response.send_modal(_RenameModal(channel.id))
+        await spec.on_click(interaction, channel, row)
 
 
 class _RenameModal(discord.ui.Modal, title="Rename voice channel"):
@@ -695,29 +667,6 @@ class _RenameModal(discord.ui.Modal, title="Rename voice channel"):
         if not await _gate_and_record_edit(interaction, row):
             return
         await _apply_rename(interaction, channel, row, new_name=self.new_name.value)
-
-
-class LimitButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:limit"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Limit",
-                emoji="🔢",
-                style=discord.ButtonStyle.primary,
-                custom_id="voice_master:limit",
-            )
-        )
-
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await interaction.response.send_modal(_LimitModal(channel.id))
 
 
 class _LimitModal(discord.ui.Modal, title="Set user limit"):
@@ -894,66 +843,6 @@ class _UserPickerView(discord.ui.View):
         await self._run(interaction, remember=True)
 
 
-class InviteButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:invite"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Invite",
-                emoji="👋",
-                style=discord.ButtonStyle.success,
-                custom_id="voice_master:invite",
-            )
-        )
-
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, _row = resolved
-        view = _UserPickerView(
-            channel_id=channel.id, owner_id=interaction.user.id, mode="invite"
-        )
-        await interaction.response.send_message(
-            "Pick a member to invite, then choose how to grant access:",
-            view=view,
-            ephemeral=True,
-        )
-
-
-class KickButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:kick"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Kick",
-                emoji="🚫",
-                style=discord.ButtonStyle.danger,
-                custom_id="voice_master:kick",
-            )
-        )
-
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, _row = resolved
-        view = _UserPickerView(
-            channel_id=channel.id, owner_id=interaction.user.id, mode="kick"
-        )
-        await interaction.response.send_message(
-            "Pick a member to kick, then choose whether to also block them:",
-            view=view,
-            ephemeral=True,
-        )
-
-
 class _ResetConfirmView(discord.ui.View):
     """Two-button confirm: 'just this channel' vs 'channel + saved profile'."""
 
@@ -1000,107 +889,129 @@ class _ResetConfirmView(discord.ui.View):
         await self._run(interaction, also_profile=True)
 
 
-class ResetButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:reset"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Reset",
-                emoji="🧹",
-                style=discord.ButtonStyle.secondary,
-                custom_id="voice_master:reset",
-            )
-        )
-
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, _row = resolved
-        view = _ResetConfirmView(
-            channel_id=channel.id, owner_id=interaction.user.id
-        )
-        await interaction.response.send_message(
-            "Choose what to reset. Both actions wipe per-member permissions on this channel.",
-            view=view,
-            ephemeral=True,
-        )
+# ── Action handlers — one per panel button ───────────────────────────────
 
 
-class TransferButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:transfer"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Transfer",
-                emoji="👑",
-                style=discord.ButtonStyle.primary,
-                custom_id="voice_master:transfer",
-            )
-        )
-
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, _row = resolved
-        in_channel = [m for m in channel.members if not m.bot]
-        view = _TransferPickerView(
-            channel_id=channel.id,
-            owner_id=interaction.user.id,
-            in_channel=in_channel,
-        )
-        await interaction.response.send_message(
-            "Transfer ownership to a member currently in your channel:",
-            view=view,
-            ephemeral=True,
-        )
+async def _on_lock(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    if not await _gate_and_record_edit(interaction, row):
+        return
+    await _apply_lock(interaction, channel, row, locked=True)
 
 
-class UnhideButton(discord.ui.DynamicItem[discord.ui.Button], template=r"voice_master:unhide"):
-    def __init__(self) -> None:
-        super().__init__(
-            discord.ui.Button(
-                label="Unhide",
-                emoji="👀",
-                style=discord.ButtonStyle.secondary,
-                custom_id="voice_master:unhide",
-            )
-        )
+async def _on_unlock(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    if not await _gate_and_record_edit(interaction, row):
+        return
+    await _apply_lock(interaction, channel, row, locked=False)
 
-    @classmethod
-    async def from_custom_id(cls, interaction, item, match, /):
-        return cls()
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
-        await _apply_hide(interaction, channel, row, hidden=False)
+async def _on_hide(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    if not await _gate_and_record_edit(interaction, row):
+        return
+    await _apply_hide(interaction, channel, row, hidden=True)
+
+
+async def _on_unhide(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    if not await _gate_and_record_edit(interaction, row):
+        return
+    await _apply_hide(interaction, channel, row, hidden=False)
+
+
+async def _on_rename(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    await interaction.response.send_modal(_RenameModal(channel.id))
+
+
+async def _on_limit(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    await interaction.response.send_modal(_LimitModal(channel.id))
+
+
+async def _on_invite(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    view = _UserPickerView(
+        channel_id=channel.id, owner_id=interaction.user.id, mode="invite"
+    )
+    await interaction.response.send_message(
+        "Pick a member to invite, then choose how to grant access:",
+        view=view,
+        ephemeral=True,
+    )
+
+
+async def _on_kick(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    view = _UserPickerView(
+        channel_id=channel.id, owner_id=interaction.user.id, mode="kick"
+    )
+    await interaction.response.send_message(
+        "Pick a member to kick, then choose whether to also block them:",
+        view=view,
+        ephemeral=True,
+    )
+
+
+async def _on_transfer(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    in_channel = [m for m in channel.members if not m.bot]
+    view = _TransferPickerView(
+        channel_id=channel.id,
+        owner_id=interaction.user.id,
+        in_channel=in_channel,
+    )
+    await interaction.response.send_message(
+        "Transfer ownership to a member currently in your channel:",
+        view=view,
+        ephemeral=True,
+    )
+
+
+async def _on_reset(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    view = _ResetConfirmView(
+        channel_id=channel.id, owner_id=interaction.user.id
+    )
+    await interaction.response.send_message(
+        "Choose what to reset. Both actions wipe per-member permissions on this channel.",
+        view=view,
+        ephemeral=True,
+    )
+
+
+_register_button("lock",     label="Lock",     emoji="🔒",   style=discord.ButtonStyle.secondary, on_click=_on_lock)
+_register_button("unlock",   label="Unlock",   emoji="🔓",   style=discord.ButtonStyle.secondary, on_click=_on_unlock)
+_register_button("hide",     label="Hide",     emoji="👁️",  style=discord.ButtonStyle.secondary, on_click=_on_hide)
+_register_button("unhide",   label="Unhide",   emoji="👀",   style=discord.ButtonStyle.secondary, on_click=_on_unhide)
+_register_button("rename",   label="Rename",   emoji="✏️",  style=discord.ButtonStyle.primary,   on_click=_on_rename)
+_register_button("limit",    label="Limit",    emoji="🔢",   style=discord.ButtonStyle.primary,   on_click=_on_limit)
+_register_button("invite",   label="Invite",   emoji="👋",   style=discord.ButtonStyle.success,   on_click=_on_invite)
+_register_button("kick",     label="Kick",     emoji="🚫",   style=discord.ButtonStyle.danger,    on_click=_on_kick)
+_register_button("transfer", label="Transfer", emoji="👑",   style=discord.ButtonStyle.primary,   on_click=_on_transfer)
+_register_button("reset",    label="Reset",    emoji="🧹",   style=discord.ButtonStyle.secondary, on_click=_on_reset)
 
 
 # Order in which buttons appear on the panel. Update this when adding new ones.
-PANEL_BUTTON_CLASSES = (
-    LockButton,
-    UnlockButton,
-    HideButton,
-    UnhideButton,
-    RenameButton,
-    LimitButton,
-    InviteButton,
-    KickButton,
-    TransferButton,
-    ResetButton,
+PANEL_BUTTON_ACTIONS = (
+    "lock", "unlock", "hide", "unhide",
+    "rename", "limit", "invite", "kick",
+    "transfer", "reset",
 )
+
+# Backward-compat alias for the cog's `add_dynamic_items` registration loop.
+PANEL_BUTTON_CLASSES = (_PanelButton,)
 
 
 # ---------------------------------------------------------------------------
@@ -1125,8 +1036,8 @@ def build_panel_embed() -> discord.Embed:
 
 def build_panel_view() -> discord.ui.View:
     view = discord.ui.View(timeout=None)
-    for cls in PANEL_BUTTON_CLASSES:
-        view.add_item(cls())
+    for action in PANEL_BUTTON_ACTIONS:
+        view.add_item(_PanelButton(action))
     return view
 
 

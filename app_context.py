@@ -343,12 +343,9 @@ class AppContext:
     def get_interaction_member(
         self, interaction: discord.Interaction
     ) -> discord.Member | None:
-        user = interaction.user
-        if isinstance(user, discord.Member):
-            return user
-        if interaction.guild is None:
-            return None
-        return interaction.guild.get_member(user.id)
+        from utils import get_interaction_member as _impl
+
+        return _impl(interaction)
 
     def get_bot_member(self, guild: discord.Guild) -> discord.Member | None:
         return guild.me
@@ -356,22 +353,9 @@ class AppContext:
     def get_guild_channel_or_thread(
         self, guild: discord.Guild, channel_id: int
     ) -> GuildTextLike | None:
-        resolver = getattr(guild, "get_channel_or_thread", None)
-        if callable(resolver):
-            channel = resolver(channel_id)
-            if isinstance(channel, (discord.TextChannel, discord.Thread)):
-                return channel
-            return None
+        from utils import get_guild_channel_or_thread as _impl
 
-        channel = guild.get_channel(channel_id)
-        if isinstance(channel, discord.TextChannel):
-            return channel
-
-        thread = guild.get_thread(channel_id)
-        if isinstance(thread, discord.Thread):
-            return thread
-
-        return None
+        return _impl(guild, channel_id)
 
     def get_xp_config_target_channel(
         self, interaction: discord.Interaction

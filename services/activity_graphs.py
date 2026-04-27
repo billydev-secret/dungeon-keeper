@@ -54,6 +54,25 @@ _BAR_ACCENT = "#eb459e"  # pink for unique-members line
 _TEXT = "#dcddde"
 _GRID = "#40444b"
 
+# XP source palette — kept in lock-step with web/static/js/panels/activity.js
+# so the slash command and dashboard render the same product.
+_XP_SOURCE_COLORS = {
+    "text":        "#5865f2",
+    "reply":       "#57f287",
+    "image_react": "#fee75c",
+    "voice":       "#eb459e",
+    "grant":       "#faa61a",
+}
+_XP_SOURCE_LABELS = {
+    "text":        "Messages",
+    "reply":       "Reply bonus",
+    "image_react": "Image reaction",
+    "voice":       "Voice",
+    "grant":       "Manual grant",
+}
+_XP_SOURCE_FALLBACK = "#949ba4"
+_XP_SOURCE_ORDER = ["text", "reply", "image_react", "voice", "grant"]
+
 
 # ---------------------------------------------------------------------------
 # Bucket sequence builders
@@ -1269,11 +1288,15 @@ def render_activity_chart(
     show_members: bool = True,
     y_label: str = "Messages",
     bar_label: str = "Messages",
+    by_source: dict[str, list[float]] | None = None,
 ) -> bytes:
     """
     Render an activity bar chart (values + unique members overlay) as PNG bytes.
 
     show_members is ignored when a specific member is being graphed.
+    When ``by_source`` is provided and non-empty, bars are stacked per source
+    using the dashboard XP palette, ignoring ``msg_counts``/``bar_label`` for
+    bar drawing (the totals still drive y-axis auto-scaling).
     """
     n = len(labels)
     fig_width = max(9, n * 0.42)
@@ -1283,7 +1306,30 @@ def render_activity_chart(
     ax1.set_facecolor(_BG)
 
     x = list(range(n))
-    ax1.bar(x, msg_counts, color=_BAR, width=0.75, zorder=2, label=bar_label)
+    has_breakdown = bool(by_source) and any(any(v) for v in (by_source or {}).values())
+    if has_breakdown:
+        assert by_source is not None
+        ordered = [s for s in _XP_SOURCE_ORDER if s in by_source]
+        ordered += [s for s in by_source if s not in _XP_SOURCE_ORDER]
+        bottoms = [0.0] * n
+        for src in ordered:
+            values = by_source[src]
+            if not any(values):
+                continue
+            color = _XP_SOURCE_COLORS.get(src, _XP_SOURCE_FALLBACK)
+            label = _XP_SOURCE_LABELS.get(src, src)
+            ax1.bar(
+                x,
+                values,
+                bottom=bottoms,
+                color=color,
+                width=0.75,
+                zorder=2,
+                label=label,
+            )
+            bottoms = [b + v for b, v in zip(bottoms, values)]
+    else:
+        ax1.bar(x, msg_counts, color=_BAR, width=0.75, zorder=2, label=bar_label)
 
     # Unique member overlay line (server-wide only)
     if show_members and any(c > 0 for c in member_counts):
@@ -1335,6 +1381,16 @@ def render_activity_chart(
 
     for spine in ax1.spines.values():
         spine.set_visible(False)
+
+    if has_breakdown:
+        ax1.legend(
+            facecolor=_BG,
+            edgecolor=_GRID,
+            labelcolor=_TEXT,
+            fontsize=8,
+            loc="upper left",
+            framealpha=0.85,
+        )
 
     plt.tight_layout(pad=1.2)
 

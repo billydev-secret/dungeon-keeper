@@ -80,31 +80,25 @@ log = logging.getLogger("dungeonkeeper.jail_commands")
 
 
 def _get_mod_role_ids(ctx: AppContext) -> set[int]:
-    with ctx.open_db() as conn:
-        raw = get_config_value(conn, "mod_role_ids", "")
-    return {int(x) for x in raw.split(",") if x.strip().isdigit()}
+    return set(ctx.mod_role_ids)
 
 
 def _get_admin_role_ids(ctx: AppContext) -> set[int]:
-    with ctx.open_db() as conn:
-        raw = get_config_value(conn, "admin_role_ids", "")
-    return {int(x) for x in raw.split(",") if x.strip().isdigit()}
+    return set(ctx.admin_role_ids)
 
 
 def _is_mod(member: discord.Member, ctx: AppContext) -> bool:
     """Check if member has mod access via configured roles or manage_guild."""
     if member.guild_permissions.manage_guild or member.guild_permissions.administrator:
         return True
-    mod_ids = _get_mod_role_ids(ctx)
-    return bool(mod_ids & {r.id for r in member.roles})
+    return bool(ctx.mod_role_ids & {r.id for r in member.roles})
 
 
 def _is_admin(member: discord.Member, ctx: AppContext) -> bool:
     """Check if member has admin access via the Discord ADMINISTRATOR bit or a configured admin role."""
     if member.guild_permissions.administrator:
         return True
-    admin_ids = _get_admin_role_ids(ctx)
-    return bool(admin_ids & {r.id for r in member.roles})
+    return bool(ctx.admin_role_ids & {r.id for r in member.roles})
 
 
 def _get_config(ctx: AppContext, key: str, default: str = "0") -> int:

@@ -70,7 +70,7 @@ async def list_todos(
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
-    _resolve_names(
+    await _resolve_names(
         ctx, guild, result["todos"],
         ("added_by", "added_by_name"),
         ("completed_by", "completed_by_name"),

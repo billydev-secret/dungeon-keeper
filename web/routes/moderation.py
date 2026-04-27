@@ -146,7 +146,7 @@ async def list_jails(
             return {"active_count": active, "total_count": len(jails), "jails": jails}
 
     result = await run_query(_q)
-    _resolve_names(
+    await _resolve_names(
         ctx,
         guild,
         result["jails"],
@@ -217,7 +217,7 @@ async def list_tickets(
             }
 
     result = await run_query(_q)
-    _resolve_names(
+    await _resolve_names(
         ctx,
         guild,
         result["tickets"],
@@ -347,7 +347,7 @@ async def get_ticket_detail(
     subject = data["subject"]
     history = data["history"]
 
-    _resolve_names(
+    await _resolve_names(
         ctx,
         guild,
         [ticket],
@@ -370,7 +370,7 @@ async def get_ticket_detail(
         if member and member.joined_at:
             subject["joined_at"] = member.joined_at.timestamp()
 
-    _resolve_names(ctx, guild, history, ("actor_id", "actor_name"))
+    await _resolve_names(ctx, guild, history, ("actor_id", "actor_name"))
 
     return {**ticket, "subject": subject, "history": history}
 
@@ -786,7 +786,7 @@ async def list_warnings(
             }
 
     result = await run_query(_q)
-    _resolve_names(
+    await _resolve_names(
         ctx,
         guild,
         result["warnings"],
@@ -851,7 +851,7 @@ async def list_policy_tickets(
             }
 
     result = await run_query(_q)
-    _resolve_names(ctx, guild, result["policy_tickets"], ("creator_id", "creator_name"))
+    await _resolve_names(ctx, guild, result["policy_tickets"], ("creator_id", "creator_name"))
     return result
 
 
@@ -884,6 +884,11 @@ async def transcript(
 
 # ── Audit log ─────────────────────────────────────────────────────────────
 
+# Cache audit_log COUNT(*) per (guild_id, action) for 60s — the table grows
+# constantly and the panel polls; recomputing total on every poll is wasteful.
+_AUDIT_TOTAL_CACHE: dict[tuple[int, str | None], tuple[float, int]] = {}
+_AUDIT_TOTAL_TTL = 60.0
+
 
 @router.get("/moderation/audit", response_model=AuditLogResponse)
 async def audit_log(
@@ -899,6 +904,8 @@ async def audit_log(
     limit = min(limit, 200)
 
     def _q():
+        import time as _t
+
         with ctx.open_db() as conn:
             clauses = ["guild_id = ?"]
             params: list = [guild_id]
@@ -906,10 +913,19 @@ async def audit_log(
                 clauses.append("action = ?")
                 params.append(action)
             where = " AND ".join(clauses)
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM audit_log WHERE {where}",
-                params,
-            ).fetchone()[0]
+
+            cache_key = (guild_id, action)
+            now = _t.monotonic()
+            cached = _AUDIT_TOTAL_CACHE.get(cache_key)
+            if cached and now - cached[0] < _AUDIT_TOTAL_TTL:
+                total = cached[1]
+            else:
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM audit_log WHERE {where}",
+                    params,
+                ).fetchone()[0]
+                _AUDIT_TOTAL_CACHE[cache_key] = (now, total)
+
             rows = conn.execute(
                 f"SELECT * FROM audit_log WHERE {where} ORDER BY created_at DESC LIMIT ?",
                 params + [limit],
@@ -929,7 +945,7 @@ async def audit_log(
             return {"total": total, "entries": entries}
 
     result = await run_query(_q)
-    _resolve_names(
+    await _resolve_names(
         ctx,
         guild,
         result["entries"],

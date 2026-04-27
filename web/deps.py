@@ -23,12 +23,19 @@ _log = logging.getLogger("dungeonkeeper.web.cache")
 _report_cache: dict[str, tuple[float, str, int, object]] = {}
 # key → (expires_at, report_name, guild_id, result)
 _DEFAULT_TTL = 3600  # seconds (1 hour — batch warmer refreshes on the same cadence)
+_CACHE_MAX_ENTRIES = 2048
 
 
 def _make_cache_key(name: str, guild_id: int, params: dict) -> str:
     """Build a deterministic cache key from endpoint name + params."""
     raw = json.dumps({"n": name, "g": guild_id, **params}, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _evict_expired(now: float) -> None:
+    expired = [k for k, (exp, *_) in _report_cache.items() if exp <= now]
+    for k in expired:
+        _report_cache.pop(k, None)
 
 
 async def cached_run_query(
@@ -54,6 +61,13 @@ async def cached_run_query(
             return result  # type: ignore[return-value]
 
     result = await asyncio.to_thread(fn)
+    if len(_report_cache) >= _CACHE_MAX_ENTRIES:
+        _evict_expired(now)
+        # Still over cap after pruning expired? Drop the oldest-expiring entries.
+        if len(_report_cache) >= _CACHE_MAX_ENTRIES:
+            overflow = len(_report_cache) - _CACHE_MAX_ENTRIES + 1
+            for k, _v in sorted(_report_cache.items(), key=lambda kv: kv[1][0])[:overflow]:
+                _report_cache.pop(k, None)
     _report_cache[key] = (now + ttl, name, guild_id, result)
     _log.debug("cache MISS %s (stored for %ds)", name, ttl)
     return result  # type: ignore[return-value]

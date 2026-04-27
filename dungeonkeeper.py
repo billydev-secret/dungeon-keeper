@@ -146,6 +146,7 @@ ctx.reload_permission_roles()
 bot.ctx = ctx
 bot.extension_names = [
     "cogs.events_cog",
+    "cogs.activity_cog",
     "cogs.ai_mod_cog",
     "cogs.denizen_cog",
     "cogs.invite_cog",
@@ -164,6 +165,7 @@ bot.extension_names = [
     "cogs.setup_cog",
     "cogs.starboard_cog",
     "cogs.music_cog",
+    "cogs.tts_cog",
     "cogs.voice_master_cog",
 ]
 

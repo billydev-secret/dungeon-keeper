@@ -29,7 +29,7 @@ lavalink:
       twitch: false
       vimeo: false
       http: false
-      local: false
+      local: true
     bufferDurationMs: 400
     frameBufferDurationMs: 5000
     opusEncodingQuality: 10

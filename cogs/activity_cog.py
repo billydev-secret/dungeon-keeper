@@ -21,12 +21,14 @@ from services.activity_graphs import (
     query_message_activity,
     query_message_histogram,
     query_session_burst,
-    query_xp_activity,
-    query_xp_histogram,
+    query_xp_activity_with_breakdown,
+    query_xp_histogram_with_breakdown,
     render_activity_chart,
     render_burst_ranking_chart,
     render_session_burst_chart,
 )
+from services.health_metrics import compute_user_churn_score
+from services.member_quality_score import compute_quality_scores
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -354,7 +356,7 @@ class ActivityCog(commands.Cog):
             def _query_xp():
                 with ctx.open_db() as conn:
                     if resolution in ("hour_of_day", "day_of_week"):
-                        _labels, _xp_totals = query_xp_histogram(
+                        _labels, _xp_totals, _by_source = query_xp_histogram_with_breakdown(
                             conn,
                             guild.id,
                             cast(Literal["hour_of_day", "day_of_week"], resolution),
@@ -362,9 +364,14 @@ class ActivityCog(commands.Cog):
                             channel_id=channel_id,
                             utc_offset_hours=utc_offset,
                         )
-                        return _labels, _xp_totals, [], False
+                        return _labels, _xp_totals, [], False, _by_source
                     else:
-                        _labels, _xp_totals, _member_counts = query_xp_activity(
+                        (
+                            _labels,
+                            _xp_totals,
+                            _member_counts,
+                            _by_source,
+                        ) = query_xp_activity_with_breakdown(
                             conn,
                             guild.id,
                             resolution,
@@ -377,9 +384,16 @@ class ActivityCog(commands.Cog):
                             _xp_totals,
                             _member_counts,
                             member is None and channel is None,
+                            _by_source,
                         )
 
-            labels, counts, member_counts, show_members = await asyncio.to_thread(_query_xp)
+            (
+                labels,
+                counts,
+                member_counts,
+                show_members,
+                by_source,
+            ) = await asyncio.to_thread(_query_xp)
             y_label = "XP Earned"
             bar_label = "XP"
             empty_msg = f"No XP activity recorded for the {window_label.lower()}."
@@ -413,6 +427,7 @@ class ActivityCog(commands.Cog):
                         )
 
             labels, counts, member_counts, show_members = await asyncio.to_thread(_query_activity)
+            by_source = {}
             y_label = "Messages"
             bar_label = "Messages"
             empty_msg = f"No message activity recorded for the {window_label.lower()}."
@@ -431,12 +446,104 @@ class ActivityCog(commands.Cog):
             show_members=show_members,
             y_label=y_label,
             bar_label=bar_label,
+            by_source=by_source if mode == "xp" else None,
         )
 
-        await interaction.followup.send(
-            file=discord.File(io.BytesIO(chart_bytes), filename="activity.png"),
-            ephemeral=True,
+        chart_file = discord.File(io.BytesIO(chart_bytes), filename="activity.png")
+        if member is not None:
+            embed = await self._build_member_profile_embed(guild, member)
+            await interaction.followup.send(
+                file=chart_file,
+                embed=embed,
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                file=chart_file,
+                ephemeral=True,
+            )
+
+    @staticmethod
+    def _quality_stars(score_unit: float) -> str:
+        """Render a 0..1 score as a 5-star rating with half-star precision."""
+        s = max(0.0, min(1.0, score_unit))
+        # Round to nearest half-star
+        halves = int(round(s * 10))  # 0..10
+        full = halves // 2
+        half = halves % 2
+        empty = 5 - full - half
+        return "★" * full + ("⯪" if half else "") + "☆" * empty
+
+    async def _build_member_profile_embed(
+        self,
+        guild: discord.Guild,
+        member: discord.User,
+    ) -> discord.Embed:
+        """Compose churn-risk + quality-score summary for one member."""
+        ctx = self.ctx
+        bot_guild = ctx.bot.get_guild(guild.id) if ctx.bot else guild
+        members_seq = list(getattr(bot_guild, "members", []) or [])
+
+        def _compute():
+            with ctx.open_db() as conn:
+                churn = compute_user_churn_score(conn, guild.id, member.id)
+                qs_list = compute_quality_scores(conn, guild.id, members_seq)
+                qs = next((q for q in qs_list if q.user_id == member.id), None)
+                return churn, qs
+
+        churn, qs = await asyncio.to_thread(_compute)
+
+        tier_color = {
+            "clear": ACTIVITY_PRIMARY,
+            "watch": 0xF1C40F,        # yellow
+            "declining": 0xE67E22,    # orange
+            "critical": ACTIVITY_DANGER,
+        }.get(churn["tier"], ACTIVITY_PRIMARY)
+
+        embed = discord.Embed(
+            title=f"{member.display_name} — Churn & Quality",
+            color=tier_color,
         )
+        if member.display_avatar:
+            embed.set_thumbnail(url=member.display_avatar.url)
+
+        # Churn block
+        sig = churn["signals"]
+        churn_lines = (
+            f"**Score:** {churn['score']}/100 · **Tier:** {churn['tier']}\n"
+            f"```\n"
+            f"Frequency    {sig['frequency']:>3d}%\n"
+            f"Channels     {sig['channels']:>3d}%\n"
+            f"Reciprocity  {sig['reciprocity']:>3d}%\n"
+            f"Sentiment    {sig['sentiment']:>3d}%\n"
+            f"Visit gap    {sig['gap']:>3d}%\n"
+            f"```"
+        )
+        embed.add_field(name="Churn risk", value=churn_lines, inline=False)
+
+        # Quality block
+        if qs is None or qs.status != "Active":
+            status = qs.status if qs else "No data"
+            embed.add_field(
+                name="Quality score",
+                value=f"_{status}_ — not enough activity in the last 90 days for a percentile-ranked score.",
+                inline=False,
+            )
+        else:
+            stars = self._quality_stars(qs.final_score)
+            quality_lines = (
+                f"**{stars}**  {qs.final_score * 100:.1f} / 100\n"
+                f"```\n"
+                f"Engagement   {qs.engagement_given * 100:>3.0f}% (40%)\n"
+                f"Consistency  {qs.consistency_recency * 100:>3.0f}% (25%)\n"
+                f"Resonance    {qs.content_resonance * 100:>3.0f}% (20%)\n"
+                f"Posting      {qs.posting_activity * 100:>3.0f}% (15%)\n"
+                f"```"
+                f"Active days: {qs.active_days} · Active weeks: {qs.active_weeks}"
+            )
+            embed.add_field(name="Quality score", value=quality_lines, inline=False)
+
+        return embed
 
     @app_commands.command(
         name="dropoff",
