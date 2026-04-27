@@ -26,7 +26,14 @@ from services.voice_master_service import (
     set_voice_master_config_value,
 )
 from web.auth import AuthenticatedUser
-from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web.deps import (
+    cached_run_query,
+    get_active_guild_id,
+    get_ctx,
+    invalidate_report_cache,
+    require_perms,
+    run_query,
+)
 
 router = APIRouter()
 log = logging.getLogger("dungeonkeeper.web.voice_master")
@@ -235,35 +242,36 @@ async def list_channels(
     bot = ctx.bot
     guild = bot.get_guild(guild_id)
 
-    def _db_q() -> list[Any]:
+    def _compute() -> dict[str, Any]:
         with ctx.open_db() as conn:
-            return list_active_channels(conn, guild_id)
+            rows = list_active_channels(conn, guild_id)
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            ch = guild.get_channel(r.channel_id) if guild else None
+            owner = guild.get_member(r.owner_id) if guild else None
+            member_count = (
+                len([m for m in ch.members if not m.bot])
+                if isinstance(ch, discord.VoiceChannel)
+                else 0
+            )
+            out.append({
+                "channel_id": r.channel_id,
+                "channel_name": ch.name if ch else "(deleted)",
+                "owner_id": r.owner_id,
+                "owner_name": owner.display_name if owner else None,
+                "owner_in_channel": (
+                    owner.voice is not None and owner.voice.channel is not None
+                    and owner.voice.channel.id == r.channel_id
+                ) if owner else False,
+                "members_count": member_count,
+                "created_at": r.created_at,
+                "owner_left_at": r.owner_left_at,
+            })
+        return {"channels": out}
 
-    rows = await run_query(_db_q)
-
-    out: list[dict[str, Any]] = []
-    for r in rows:
-        ch = guild.get_channel(r.channel_id) if guild else None
-        owner = guild.get_member(r.owner_id) if guild else None
-        member_count = (
-            len([m for m in ch.members if not m.bot])
-            if isinstance(ch, discord.VoiceChannel)
-            else 0
-        )
-        out.append({
-            "channel_id": r.channel_id,
-            "channel_name": ch.name if ch else "(deleted)",
-            "owner_id": r.owner_id,
-            "owner_name": owner.display_name if owner else None,
-            "owner_in_channel": (
-                owner.voice is not None and owner.voice.channel is not None
-                and owner.voice.channel.id == r.channel_id
-            ) if owner else False,
-            "members_count": member_count,
-            "created_at": r.created_at,
-            "owner_left_at": r.owner_left_at,
-        })
-    return {"channels": out}
+    return await cached_run_query(
+        "voice-master-channels", guild_id, {}, _compute, ttl=10
+    )
 
 
 @router.post("/voice-master/channels/{channel_id}/force-delete")
@@ -293,6 +301,7 @@ async def force_delete(
             with ctx.open_db() as conn:
                 delete_active_channel(conn, channel_id)
         await run_query(_del)
+        invalidate_report_cache("voice-master-channels", guild_id)
         return {"status": "ok", "note": "channel was already deleted"}
 
     try:
@@ -313,6 +322,7 @@ async def force_delete(
             )
 
     await run_query(_persist)
+    invalidate_report_cache("voice-master-channels", guild_id)
     return {"status": "ok"}
 
 
@@ -374,6 +384,7 @@ async def force_transfer(
             )
 
     await run_query(_persist)
+    invalidate_report_cache("voice-master-channels", guild_id)
     return {"status": "ok"}
 
 

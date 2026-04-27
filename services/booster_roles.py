@@ -196,10 +196,8 @@ class BoosterRoleDynamicButton(
             )
             return
 
-        # Look up the DB path from the bot
-        db_path: Path = getattr(interaction.client, "db_path", Path("bot.db"))
-
-        with open_db(db_path) as conn:
+        ctx = interaction.client._booster_ctx  # type: ignore[attr-defined]
+        with ctx.open_db() as conn:
             roles = get_booster_roles(conn, guild.id)
 
         target = next((r for r in roles if r["role_key"] == self.key), None)
@@ -297,16 +295,29 @@ async def post_or_update_booster_panel(
     if not roles:
         return []
 
-    # Delete old panel messages
+    # Delete old panel messages — bulk-delete per channel (≤100 at a time) so a
+    # large panel doesn't burn through the per-channel DELETE bucket and 429.
     with open_db(db_path) as conn:
         old_refs = get_booster_panel_refs(conn, guild.id)
-    for old_channel_id, old_message_id in old_refs:
-        try:
-            old_ch = guild.get_channel(old_channel_id)
-            if old_ch is not None and isinstance(old_ch, discord.TextChannel):
-                await old_ch.get_partial_message(old_message_id).delete()
-        except (discord.NotFound, discord.HTTPException):
-            pass
+    by_channel: dict[int, list[int]] = {}
+    for ch_id, msg_id in old_refs:
+        by_channel.setdefault(ch_id, []).append(msg_id)
+    for ch_id, msg_ids in by_channel.items():
+        old_ch = guild.get_channel(ch_id)
+        if not isinstance(old_ch, discord.TextChannel):
+            continue
+        partials = [old_ch.get_partial_message(mid) for mid in msg_ids]
+        for i in range(0, len(partials), 100):
+            chunk = partials[i : i + 100]
+            try:
+                await old_ch.delete_messages(chunk)
+            except (discord.NotFound, discord.HTTPException, discord.ClientException):
+                # Bulk delete rejects messages >14 days old; fall back per-message.
+                for pm in chunk:
+                    try:
+                        await pm.delete()
+                    except (discord.NotFound, discord.HTTPException):
+                        pass
 
     # Header message
     header = await channel.send("**Pick your booster cosmetic role:**")

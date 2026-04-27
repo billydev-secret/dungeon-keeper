@@ -27,6 +27,7 @@ from services.interaction_graph import (
 )
 from services.invite_tracker import query_invite_web
 from services.message_store import record_member_event, set_reaction_count, store_message
+from services.name_resolver import resolve_display_names
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -283,29 +284,9 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
         # rely on the member cache, which can be stale (left members still
         # cached, current members not yet cached).
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-        name_map: dict[int, str] = {}
-        for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i : i + 100]
-            try:
-                fetched = await guild.query_members(user_ids=batch, limit=100)
-                for m in fetched:
-                    name_map[m.id] = m.display_name
-            except (discord.ClientException, discord.HTTPException):
-                # Members intent not available — fall back to cache
-                for uid in batch:
-                    cached = guild.get_member(uid)
-                    if cached:
-                        name_map[uid] = cached.display_name
-
-        # Fetch display names for users who left the server.
-        for uid in candidate_ids:
-            if uid not in name_map:
-                try:
-                    fetched_user = await bot.fetch_user(uid)
-                    name_map[uid] = fetched_user.display_name
-                except discord.NotFound:
-                    pass
-
+        name_map = await resolve_display_names(
+            bot=bot, guild=guild, db_path=ctx.db_path, user_ids=candidate_ids,
+        )
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
 
         loop = asyncio.get_running_loop()
@@ -558,18 +539,9 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
 
         # Resolve display names
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-        name_map: dict[int, str] = {}
-        for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i : i + 100]
-            try:
-                fetched = await guild.query_members(user_ids=batch, limit=100)
-                for m in fetched:
-                    name_map[m.id] = m.display_name
-            except (discord.ClientException, discord.HTTPException):
-                for uid in batch:
-                    cached = guild.get_member(uid)
-                    if cached:
-                        name_map[uid] = cached.display_name
+        name_map = await resolve_display_names(
+            bot=bot, guild=guild, db_path=ctx.db_path, user_ids=candidate_ids,
+        )
 
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
 
@@ -661,27 +633,9 @@ def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
 
         # Resolve display names
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-        name_map: dict[int, str] = {}
-        for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i : i + 100]
-            try:
-                fetched = await guild.query_members(user_ids=batch, limit=100)
-                for m in fetched:
-                    name_map[m.id] = m.display_name
-            except (discord.ClientException, discord.HTTPException):
-                for uid in batch:
-                    cached = guild.get_member(uid)
-                    if cached:
-                        name_map[uid] = cached.display_name
-
-        # Fetch names for users who left
-        for uid in candidate_ids:
-            if uid not in name_map:
-                try:
-                    fetched_user = await bot.fetch_user(uid)
-                    name_map[uid] = fetched_user.display_name
-                except discord.NotFound:
-                    pass
+        name_map = await resolve_display_names(
+            bot=bot, guild=guild, db_path=ctx.db_path, user_ids=candidate_ids,
+        )
 
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
         if not edges:

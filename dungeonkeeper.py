@@ -189,7 +189,9 @@ async def on_ready() -> None:
                 await build_remap(_remap_db, guild)
 
 
-# Register persistent booster-role buttons so they survive restarts
+# Register persistent booster-role buttons so they survive restarts.
+# Expose ctx to the DynamicItem callback (mirrors the jail/_vm_ctx pattern).
+bot._booster_ctx = ctx  # type: ignore[attr-defined]
 bot.add_dynamic_items(BoosterRoleDynamicButton)
 
 # Register persistent wellness-partner request buttons so DM Accept/Decline survive restarts

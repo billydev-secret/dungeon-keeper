@@ -1631,29 +1631,31 @@ async def oldest_sfw(
     nsfw_role_id = nsfw_cfg["role_id"] if nsfw_cfg else 0
     nsfw_role = guild.get_role(int(nsfw_role_id)) if nsfw_role_id else None
 
-    sfw_members = [
-        m for m in guild.members
-        if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
-    ]
-    member_ids = [m.id for m in sfw_members]
-
-    def _q():
+    def _compute():
+        sfw_members = [
+            m for m in guild.members
+            if not m.bot and (nsfw_role is None or nsfw_role not in m.roles)
+        ]
+        member_ids = [m.id for m in sfw_members]
         with ctx.open_db() as conn:
-            return ctx.get_member_last_activity_map(conn, guild_id, member_ids)
+            activities = ctx.get_member_last_activity_map(conn, guild_id, member_ids)
+        now_ts = _time.time()
+        sorted_members = sorted(
+            sfw_members,
+            key=lambda m: activities[m.id].created_at if m.id in activities else 0,
+        )
+        top = sorted_members[:count]
+        rows = [
+            _activity_to_row(m.id, m.display_name, activities.get(m.id), now_ts)
+            for m in top
+        ]
+        return {
+            "nsfw_role_id": str(nsfw_role.id) if nsfw_role else None,
+            "nsfw_role_name": nsfw_role.name if nsfw_role else "",
+            "sfw_total": len(sfw_members),
+            "members": rows,
+        }
 
-    activities = await run_query(_q)
-    now_ts = _time.time()
-
-    sorted_members = sorted(
-        sfw_members,
-        key=lambda m: activities[m.id].created_at if m.id in activities else 0,
+    return await cached_run_query(
+        "oldest-sfw", guild_id, {"count": count}, _compute, ttl=300
     )
-    top = sorted_members[:count]
-    rows = [_activity_to_row(m.id, m.display_name, activities.get(m.id), now_ts) for m in top]
-
-    return {
-        "nsfw_role_id": str(nsfw_role.id) if nsfw_role else None,
-        "nsfw_role_name": nsfw_role.name if nsfw_role else "",
-        "sfw_total": len(sfw_members),
-        "members": rows,
-    }

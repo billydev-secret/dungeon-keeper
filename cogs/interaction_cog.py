@@ -19,6 +19,7 @@ from services.interaction_graph import (
     render_interaction_heatmap,
 )
 from services.invite_tracker import query_invite_web
+from services.name_resolver import resolve_display_names
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -172,26 +173,12 @@ class InteractionCog(commands.Cog):
             return
 
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-        name_map: dict[int, str] = {}
-        for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i : i + 100]
-            try:
-                fetched = await guild.query_members(user_ids=batch, limit=100)
-                for m in fetched:
-                    name_map[m.id] = m.display_name
-            except (discord.ClientException, discord.HTTPException):
-                for uid in batch:
-                    cached = guild.get_member(uid)
-                    if cached:
-                        name_map[uid] = cached.display_name
-
-        for uid in candidate_ids:
-            if uid not in name_map:
-                try:
-                    fetched_user = await self.bot.fetch_user(uid)
-                    name_map[uid] = fetched_user.display_name
-                except discord.NotFound:
-                    pass
+        name_map = await resolve_display_names(
+            bot=self.bot,
+            guild=guild,
+            db_path=self.ctx.db_path,
+            user_ids=candidate_ids,
+        )
 
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
 
@@ -281,18 +268,12 @@ class InteractionCog(commands.Cog):
             return
 
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-        name_map: dict[int, str] = {}
-        for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i : i + 100]
-            try:
-                fetched = await guild.query_members(user_ids=batch, limit=100)
-                for m in fetched:
-                    name_map[m.id] = m.display_name
-            except (discord.ClientException, discord.HTTPException):
-                for uid in batch:
-                    cached = guild.get_member(uid)
-                    if cached:
-                        name_map[uid] = cached.display_name
+        name_map = await resolve_display_names(
+            bot=self.bot,
+            guild=guild,
+            db_path=self.ctx.db_path,
+            user_ids=candidate_ids,
+        )
 
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
 
@@ -384,26 +365,12 @@ class InteractionCog(commands.Cog):
             return
 
         candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
-        name_map: dict[int, str] = {}
-        for i in range(0, len(candidate_ids), 100):
-            batch = candidate_ids[i : i + 100]
-            try:
-                fetched = await guild.query_members(user_ids=batch, limit=100)
-                for m in fetched:
-                    name_map[m.id] = m.display_name
-            except (discord.ClientException, discord.HTTPException):
-                for uid in batch:
-                    cached = guild.get_member(uid)
-                    if cached:
-                        name_map[uid] = cached.display_name
-
-        for uid in candidate_ids:
-            if uid not in name_map:
-                try:
-                    fetched_user = await self.bot.fetch_user(uid)
-                    name_map[uid] = fetched_user.display_name
-                except discord.NotFound:
-                    pass
+        name_map = await resolve_display_names(
+            bot=self.bot,
+            guild=guild,
+            db_path=self.ctx.db_path,
+            user_ids=candidate_ids,
+        )
 
         edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
         if not edges:
