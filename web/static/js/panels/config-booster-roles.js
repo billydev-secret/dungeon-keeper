@@ -52,9 +52,21 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     <div class="panel">
       <header>
         <h2>Booster Roles</h2>
-        <div class="subtitle">Custom color roles for server boosters. Use <code>/config booster</code> in Discord to sync swatches.</div>
+        <div class="subtitle">Custom color roles for server boosters.</div>
       </header>
       <div data-roles>${boosterRoles.length ? boosterRoles.map(roleCard).join("") : '<div class="empty">No booster roles configured.</div>'}</div>
+
+      <div class="section-label">Sync Swatches</div>
+      <form class="form card" data-sync-form>
+        <div class="field-hint" style="margin-bottom:10px;">
+          Scans the configured swatch directory and creates/updates/removes
+          booster roles (with gradient colors) to match the files on disk.
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button type="submit" class="btn btn-primary" data-sync-btn>Sync Swatches</button>
+          <span data-sync-status></span>
+        </div>
+      </form>
 
       <div class="section-label">Add Booster Role</div>
       <form class="form card" data-add-form>
@@ -167,6 +179,45 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
       );
     } catch (err) {
       showStatus(addStatus, false, err.message);
+    }
+  });
+
+  // Sync swatches handler
+  const syncForm = container.querySelector("[data-sync-form]");
+  const syncBtn = container.querySelector("[data-sync-btn]");
+  const syncStatus = container.querySelector("[data-sync-status]");
+  syncForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    syncBtn.disabled = true;
+    showStatus(syncStatus, true, "Syncing…");
+    try {
+      const res = await fetch("/api/config/booster-roles/sync-swatches", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || res.statusText);
+      }
+      const data = await res.json();
+      const parts = [];
+      if (data.created?.length) parts.push(`created ${data.created.length}`);
+      if (data.removed?.length) parts.push(`removed ${data.removed.length}`);
+      const msg = parts.length ? parts.join(", ") : "already in sync";
+      showStatus(syncStatus, true, msg);
+      const fresh = await loadConfig();
+      render(
+        container,
+        fresh.booster_roles || [],
+        fresh.booster_panel_channel_id || "0",
+        roles,
+        channels,
+      );
+    } catch (err) {
+      showStatus(syncStatus, false, err.message);
+    } finally {
+      syncBtn.disabled = false;
     }
   });
 

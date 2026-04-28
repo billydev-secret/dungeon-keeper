@@ -31,6 +31,7 @@ from services.booster_roles import (
     get_booster_panel_refs,
     get_booster_roles,
     post_or_update_booster_panel,
+    sync_swatches,
     upsert_booster_role,
 )
 from services.inactivity_prune_service import (
@@ -1154,6 +1155,30 @@ async def post_booster_panel(
     if not msgs:
         raise HTTPException(400, "No booster roles configured.")
     return {"ok": True, "message_count": len(msgs)}
+
+
+@router.post("/config/booster-roles/sync-swatches")
+async def sync_booster_swatches(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Scan the configured swatch directory; create/remove roles to match."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+
+    try:
+        created, removed = await sync_swatches(ctx.db_path, guild)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "created": created, "removed": removed}
 
 
 # ── Auto-delete schedules ────────────────────────────────────────────
