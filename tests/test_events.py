@@ -9,7 +9,7 @@ import discord
 import pytest
 from discord import app_commands
 
-from cogs.events_cog import EventsCog, _on_tree_error
+from cogs.events_cog import EventsCog, _collect_backfill_channels, _on_tree_error
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -274,6 +274,89 @@ async def test_award_triggers_level_progress(mock_award, mock_level):
     assert args[0] == member
     assert args[1] == award_result
     assert args[2] == "image_reaction"
+
+
+# ── _collect_backfill_channels ────────────────────────────────────────
+
+def _make_channel(spec, channel_id: int, *, can_read: bool = True) -> MagicMock:
+    ch = MagicMock(spec=spec)
+    ch.id = channel_id
+    perms = MagicMock()
+    perms.read_message_history = can_read
+    ch.permissions_for = MagicMock(return_value=perms)
+    return ch
+
+
+def _empty_async_iter():
+    async def _gen():
+        if False:
+            yield None
+    return _gen()
+
+
+async def test_collect_backfill_includes_forum_voice_stage():
+    """Forum threads, voice channels, and stage channels must be indexed.
+
+    Regression: forum posts were never backfilled because the loop only
+    walked guild.text_channels, so /delete_me silently missed them.
+    """
+    text = _make_channel(discord.TextChannel, 1)
+    text.threads = []
+    text.archived_threads = MagicMock(return_value=_empty_async_iter())
+
+    forum_thread_active = _make_channel(discord.Thread, 200)
+    forum_thread_archived = _make_channel(discord.Thread, 201)
+    forum = _make_channel(discord.ForumChannel, 100)
+    forum.threads = [forum_thread_active]
+
+    async def _archived_forum(**_kwargs):
+        yield forum_thread_archived
+    forum.archived_threads = _archived_forum
+
+    voice = _make_channel(discord.VoiceChannel, 300)
+    stage = _make_channel(discord.StageChannel, 400)
+
+    guild = MagicMock(spec=discord.Guild)
+    guild.text_channels = [text]
+    guild.forums = [forum]
+    guild.voice_channels = [voice]
+    guild.stage_channels = [stage]
+
+    me = MagicMock(spec=discord.Member)
+    result = await _collect_backfill_channels(guild, me)
+
+    ids = {c.id for c in result}
+    assert {1, 200, 201, 300, 400}.issubset(ids), (
+        f"missing channels in backfill: got {ids}"
+    )
+    # Forum channel itself must NOT be in the list — it has no .history()
+    assert 100 not in ids
+
+
+async def test_collect_backfill_skips_unreadable_channels():
+    text = _make_channel(discord.TextChannel, 1, can_read=False)
+    text.threads = []
+    text.archived_threads = MagicMock(return_value=_empty_async_iter())
+    forum = _make_channel(discord.ForumChannel, 2, can_read=False)
+    forum.threads = []
+
+    async def _archived_forum(**_kwargs):
+        if False:
+            yield None
+    forum.archived_threads = _archived_forum
+
+    voice = _make_channel(discord.VoiceChannel, 3, can_read=False)
+    stage = _make_channel(discord.StageChannel, 4, can_read=False)
+
+    guild = MagicMock(spec=discord.Guild)
+    guild.text_channels = [text]
+    guild.forums = [forum]
+    guild.voice_channels = [voice]
+    guild.stage_channels = [stage]
+
+    me = MagicMock(spec=discord.Member)
+    result = await _collect_backfill_channels(guild, me)
+    assert result == []
 
 
 # ── on_app_command_error ──────────────────────────────────────────────

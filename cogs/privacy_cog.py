@@ -11,6 +11,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.privacy_service import purge_user_data
+
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
@@ -127,7 +129,10 @@ async def _delete_discord_messages(
         if not message_ids:
             continue
 
-        if not isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)):
+        if not isinstance(
+            channel,
+            (discord.TextChannel, discord.VoiceChannel, discord.StageChannel, discord.Thread),
+        ):
             # Unsupported channel type — count as gone
             deleted += len(message_ids)
             if on_progress:
@@ -224,9 +229,16 @@ async def _run_deletion(
         guild, user_id, msg_rows, on_progress=_progress
     )
 
+    # Purge XP, activity, known_users, wellness, and any per-message rows that
+    # the on_raw_message_delete listener didn't catch (e.g. messages we
+    # couldn't reach on Discord but still hold metadata for).
+    with ctx.open_db() as conn:
+        purge_user_data(conn, guild.id, user_id)
+
     lines = [
-        "All done. Here's what was removed from Discord:",
-        f"Messages deleted: **{discord_deleted}**",
+        "All done. Here's what was removed:",
+        f"Discord messages deleted: **{discord_deleted}**",
+        "Server-side data (XP, activity, profile): **cleared**",
     ]
     if discord_replaced:
         lines.append(

@@ -39,12 +39,7 @@ from web.schemas import (
 
 router = APIRouter()
 
-
-
-
 # ── Summary stats ─────────────────────────────────────────────────────────
-
-
 @router.get("/moderation/stats", response_model=ModerationStatsResponse)
 async def moderation_stats(
     request: Request,
