@@ -1239,6 +1239,41 @@ a { text-decoration: none; }
   background: var(--gold-solid);
   color: #fff;
 }
+.filter-select-item.taken {
+  color: var(--ink-dim);
+}
+.filter-select-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.filter-select-chips:empty {
+  display: none;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px 4px 2px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.filter-chip-x {
+  background: transparent;
+  border: none;
+  color: var(--ink-dim);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+.filter-chip-x:hover {
+  color: var(--ink);
+}
 
 /* ── Inactivity prune panel ──────────────────────────────────────────── */
 

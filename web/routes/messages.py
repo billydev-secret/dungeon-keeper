@@ -30,15 +30,15 @@ SORT_OPTIONS = Literal[
 @router.get("/messages/search")
 async def search_messages(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-    author: str | None = Query(None, description="Filter by author user ID"),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    author: list[str] | None = Query(None, description="Filter by author user ID(s)"),
     mentions: str | None = Query(
         None, description="Filter to messages that mention this user ID"
     ),
     reply_to: str | None = Query(
         None, description="Filter to messages that are replies to this user ID"
     ),
-    channel: str | None = Query(None, description="Filter by channel ID"),
+    channel: list[str] | None = Query(None, description="Filter by channel ID(s)"),
     regex: str | None = Query(
         None, description="PCRE-style regex to match against message content"
     ),
@@ -107,7 +107,11 @@ async def search_messages(
             params: list[object] = [guild_id]
 
             if author:
-                author_ids = _resolve_user(conn, author)
+                author_ids: list[int] = []
+                for a in author:
+                    author_ids.extend(_resolve_user(conn, a))
+                # Dedupe while preserving order
+                author_ids = list(dict.fromkeys(author_ids))
                 if not author_ids:
                     return {
                         "messages": [],
@@ -124,8 +128,14 @@ async def search_messages(
                     clauses.append(f"m.author_id IN ({placeholders})")
                     params.extend(author_ids)
             if channel:
-                clauses.append("m.channel_id = ?")
-                params.append(int(channel))
+                channel_filter_ids = [int(c) for c in channel]
+                if len(channel_filter_ids) == 1:
+                    clauses.append("m.channel_id = ?")
+                    params.append(channel_filter_ids[0])
+                else:
+                    placeholders = ",".join("?" * len(channel_filter_ids))
+                    clauses.append(f"m.channel_id IN ({placeholders})")
+                    params.extend(channel_filter_ids)
             if reply_to:
                 reply_to_ids = _resolve_user(conn, reply_to)
                 if not reply_to_ids:
@@ -377,11 +387,11 @@ async def search_messages(
 @router.get("/messages/search/export")
 async def export_messages(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-    author: str | None = Query(None),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    author: list[str] | None = Query(None),
     mentions: str | None = Query(None),
     reply_to: str | None = Query(None),
-    channel: str | None = Query(None),
+    channel: list[str] | None = Query(None),
     regex: str | None = Query(None),
     before: int | None = Query(None),
     after: int | None = Query(None),
@@ -432,7 +442,10 @@ async def export_messages(
             params: list[object] = [guild_id]
 
             if author:
-                author_ids = _resolve_user(conn, author)
+                author_ids: list[int] = []
+                for a in author:
+                    author_ids.extend(_resolve_user(conn, a))
+                author_ids = list(dict.fromkeys(author_ids))
                 if not author_ids:
                     return []
                 if len(author_ids) == 1:
@@ -443,8 +456,14 @@ async def export_messages(
                     clauses.append(f"m.author_id IN ({placeholders})")
                     params.extend(author_ids)
             if channel:
-                clauses.append("m.channel_id = ?")
-                params.append(int(channel))
+                channel_filter_ids = [int(c) for c in channel]
+                if len(channel_filter_ids) == 1:
+                    clauses.append("m.channel_id = ?")
+                    params.append(channel_filter_ids[0])
+                else:
+                    placeholders = ",".join("?" * len(channel_filter_ids))
+                    clauses.append(f"m.channel_id IN ({placeholders})")
+                    params.extend(channel_filter_ids)
             if reply_to:
                 reply_to_ids = _resolve_user(conn, reply_to)
                 if not reply_to_ids:
@@ -657,8 +676,8 @@ You are a search filter translator for a Discord message archive. Convert the us
 natural language query into a JSON object of search filters.
 
 Available filters:
-- "author": user ID (as a string) or username substring
-- "channel": channel ID (as a string)
+- "author": user ID (as a string) or username substring; OR an array of either to match any of several authors
+- "channel": channel ID (as a string); OR an array of channel IDs to match any of several channels
 - "mentions": user ID or username of a mentioned user
 - "reply_to": user ID or username being replied to
 - "regex": PCRE pattern to match message content (case-insensitive)
@@ -708,7 +727,7 @@ class AiQueryRequest(BaseModel):
 @router.get("/messages/ai-models")
 async def list_ai_models(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     """Return available AI model IDs for the query feature."""
     ctx = get_ctx(request)
@@ -731,7 +750,7 @@ async def list_ai_models(
 async def ai_query(
     request: Request,
     body: AiQueryRequest,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     """Translate a natural language query into structured search filters using AI."""
     api_key = os.getenv("ANTHROPIC_API_KEY")

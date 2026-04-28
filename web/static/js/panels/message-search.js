@@ -85,6 +85,126 @@ function filterSelect(placeholder, options) {
   };
 }
 
+/**
+ * Build a multi-select chip widget. Same dropdown UX as filterSelect, but
+ * picking an option appends a removable chip and the input clears for the next.
+ */
+function multiFilterSelect(placeholder, options) {
+  const wrap = document.createElement("div");
+  wrap.className = "filter-select multi-filter-select";
+
+  const chipsRow = document.createElement("div");
+  chipsRow.className = "filter-select-chips";
+  wrap.appendChild(chipsRow);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = placeholder;
+  input.className = "filter-select-input";
+  wrap.appendChild(input);
+
+  const list = document.createElement("div");
+  list.className = "filter-select-list";
+  wrap.appendChild(list);
+
+  const selected = new Map();
+
+  function renderChips() {
+    while (chipsRow.firstChild) chipsRow.removeChild(chipsRow.firstChild);
+    for (const [id, label] of selected.entries()) {
+      const chip = document.createElement("span");
+      chip.className = "filter-chip";
+      chip.dataset.id = id;
+      chip.textContent = label;
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "filter-chip-x";
+      x.setAttribute("aria-label", "Remove");
+      x.textContent = "×";
+      chip.appendChild(x);
+      chipsRow.appendChild(chip);
+    }
+  }
+
+  function renderList(filter) {
+    const lc = filter.toLowerCase();
+    const matches = lc
+      ? options.filter((o) => o.label.toLowerCase().includes(lc))
+      : options;
+    const show = lc ? matches : matches.slice(0, 300);
+    while (list.firstChild) list.removeChild(list.firstChild);
+    for (const o of show) {
+      const item = document.createElement("div");
+      item.className = "filter-select-item";
+      item.dataset.id = o.id;
+      const taken = selected.has(o.id);
+      item.textContent = taken ? `${o.label} ✓` : o.label;
+      if (taken) item.classList.add("taken");
+      list.appendChild(item);
+    }
+  }
+
+  input.addEventListener("focus", () => {
+    renderList(input.value);
+    list.style.display = "block";
+  });
+
+  input.addEventListener("input", () => {
+    renderList(input.value);
+    list.style.display = "block";
+  });
+
+  list.addEventListener("mousedown", (e) => {
+    const item = e.target.closest(".filter-select-item");
+    if (!item) return;
+    const id = item.dataset.id;
+    if (!id || selected.has(id)) return;
+    const opt = options.find((o) => o.id === id);
+    selected.set(id, opt ? opt.label : id);
+    input.value = "";
+    renderChips();
+    renderList("");
+  });
+
+  chipsRow.addEventListener("click", (e) => {
+    const x = e.target.closest(".filter-chip-x");
+    if (!x) return;
+    const chip = x.closest(".filter-chip");
+    if (!chip) return;
+    selected.delete(chip.dataset.id);
+    renderChips();
+    renderList(input.value);
+  });
+
+  input.addEventListener("blur", () => {
+    setTimeout(() => { list.style.display = "none"; }, 150);
+  });
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      list.style.display = "none";
+      input.blur();
+    }
+  });
+
+  function setValues(ids) {
+    selected.clear();
+    for (const raw of ids || []) {
+      const id = String(raw);
+      const opt = options.find((o) => o.id === id);
+      selected.set(id, opt ? opt.label : id);
+    }
+    renderChips();
+  }
+
+  return {
+    el: wrap,
+    getValues: () => Array.from(selected.keys()),
+    setValues,
+    getInput: () => input,
+  };
+}
+
 /** Format a sentiment score as a short label with emoji. */
 function sentimentBadge(val) {
   if (val == null) return "";
@@ -122,9 +242,7 @@ export function mount(container) {
         <label>Author<span data-slot="author"></span></label>
         <label>Mentions<span data-slot="mentions"></span></label>
         <label>Reply To<span data-slot="reply_to"></span></label>
-        <label>Channel
-          <select data-field="channel"><option value="">All channels</option></select>
-        </label>
+        <label>Channel<span data-slot="channel"></span></label>
         <label>Regex
           <input type="text" data-field="regex" placeholder="PCRE pattern" />
         </label>
@@ -193,7 +311,6 @@ export function mount(container) {
     </div>
   `;
 
-  const channelSel = container.querySelector('[data-field="channel"]');
   const regexInput = container.querySelector('[data-field="regex"]');
   const sortSel = container.querySelector('[data-field="sort"]');
   const emotionSel = container.querySelector('[data-field="emotion"]');
@@ -216,14 +333,16 @@ export function mount(container) {
   const aiSearchBtn = container.querySelector("[data-ai-search]");
   const aiStatusEl = container.querySelector("[data-ai-status]");
 
-  // Placeholder filter-selects (replaced once members load)
-  let authorFS = filterSelect("Loading…", []);
+  // Placeholder filter-selects (replaced once members/channels load)
+  let authorFS = multiFilterSelect("Loading…", []);
   let mentionsFS = filterSelect("Loading…", []);
   let replyFS = filterSelect("Loading…", []);
+  let channelFS = multiFilterSelect("Loading…", []);
 
   container.querySelector('[data-slot="author"]').appendChild(authorFS.el);
   container.querySelector('[data-slot="mentions"]').appendChild(mentionsFS.el);
   container.querySelector('[data-slot="reply_to"]').appendChild(replyFS.el);
+  container.querySelector('[data-slot="channel"]').appendChild(channelFS.el);
 
   // Load members, channels, and AI models in parallel
   (async () => {
@@ -233,14 +352,6 @@ export function mount(container) {
         api("/api/meta/channels"),
       ]);
 
-      // Populate channel dropdown
-      for (const ch of channels) {
-        const opt = document.createElement("option");
-        opt.value = ch.id;
-        opt.textContent = `#${ch.name}`;
-        channelSel.appendChild(opt);
-      }
-
       // Build member options
       const memberOpts = members.map((m) => ({
         id: m.id,
@@ -249,18 +360,29 @@ export function mount(container) {
       })).sort((a, b) => a.left - b.left || a.label.localeCompare(b.label));
       memberOpts.forEach((o) => { if (o.left) o.label += " (left)"; });
 
-      // Replace placeholder filter-selects with populated ones
-      function replaceFS(slot, oldFS) {
-        const fs = filterSelect("Type to filter…", memberOpts);
+      // Build channel options
+      const channelOpts = channels.map((ch) => ({
+        id: String(ch.id),
+        label: `#${ch.name}`,
+      }));
+
+      function replaceMulti(oldFS, opts) {
+        const fs = multiFilterSelect("Type to filter…", opts);
         oldFS.el.replaceWith(fs.el);
         return fs;
       }
-      authorFS = replaceFS("author", authorFS);
-      mentionsFS = replaceFS("mentions", mentionsFS);
-      replyFS = replaceFS("reply_to", replyFS);
+      function replaceSingle(oldFS, opts) {
+        const fs = filterSelect("Type to filter…", opts);
+        oldFS.el.replaceWith(fs.el);
+        return fs;
+      }
+      authorFS = replaceMulti(authorFS, memberOpts);
+      channelFS = replaceMulti(channelFS, channelOpts);
+      mentionsFS = replaceSingle(mentionsFS, memberOpts);
+      replyFS = replaceSingle(replyFS, memberOpts);
 
       // Wire up Enter key on the new inputs
-      [authorFS, mentionsFS, replyFS].forEach((fs) => {
+      [authorFS, mentionsFS, replyFS, channelFS].forEach((fs) => {
         fs.getInput().addEventListener("keydown", (e) => {
           if (e.key === "Enter") doSearch(1);
         });
@@ -313,9 +435,10 @@ export function mount(container) {
     }
   }
 
+  const toArray = (v) => v == null ? [] : Array.isArray(v) ? v.map(String) : [String(v)];
+
   function applyFilters(f) {
     // Reset all controls first
-    channelSel.value = "";
     regexInput.value = "";
     sortSel.value = "newest";
     emotionSel.value = "";
@@ -327,14 +450,15 @@ export function mount(container) {
     maxLenInput.value = "";
     afterDtInput.value = "";
     beforeDtInput.value = "";
-    authorFS.setValue("");
+    authorFS.setValues([]);
+    channelFS.setValues([]);
     mentionsFS.setValue("");
     replyFS.setValue("");
 
-    if (f.author) authorFS.setValue(String(f.author));
+    if (f.author) authorFS.setValues(toArray(f.author));
+    if (f.channel) channelFS.setValues(toArray(f.channel));
     if (f.mentions) mentionsFS.setValue(String(f.mentions));
     if (f.reply_to) replyFS.setValue(String(f.reply_to));
-    if (f.channel) channelSel.value = String(f.channel);
     if (f.regex) regexInput.value = f.regex;
     if (f.sort) sortSel.value = f.sort;
     if (f.emotion) emotionSel.value = f.emotion;
@@ -361,14 +485,12 @@ export function mount(container) {
 
   function buildFilterParams() {
     const params = new URLSearchParams();
-    const authorVal = authorFS.getValue();
-    if (authorVal) params.set("author", authorVal);
+    for (const id of authorFS.getValues()) params.append("author", id);
+    for (const id of channelFS.getValues()) params.append("channel", id);
     const mentionsVal = mentionsFS.getValue();
     if (mentionsVal) params.set("mentions", mentionsVal);
     const replyVal = replyFS.getValue();
     if (replyVal) params.set("reply_to", replyVal);
-    const channelVal = channelSel.value;
-    if (channelVal) params.set("channel", channelVal);
     const regexVal = regexInput.value.trim();
     if (regexVal) params.set("regex", regexVal);
     const emotionVal = emotionSel.value;
