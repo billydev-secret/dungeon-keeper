@@ -90,8 +90,19 @@ async def _delete_discord_messages(
         if channel is None:
             try:
                 channel = await guild.fetch_channel(channel_id)
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-                # Channel not resolvable — try deleting by ID directly anyway
+            except discord.NotFound:
+                # Channel deleted on Discord — its messages are gone with it.
+                log.info(
+                    "Channel %d no longer exists — counting %d messages as already gone",
+                    channel_id,
+                    len(message_ids),
+                )
+                deleted += len(message_ids)
+                if on_progress:
+                    await on_progress(deleted, failed, replaced)
+                continue
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                # Bot lost access or transient error — try direct deletion as a fallback.
                 log.warning("Cannot resolve channel %d (%s) — attempting direct deletion", channel_id, exc)
                 partial = discord.PartialMessageable(
                     state=guild._state, id=channel_id, guild_id=guild.id  # type: ignore[arg-type]
@@ -110,7 +121,33 @@ async def _delete_discord_messages(
                     await asyncio.sleep(0.5)
                 continue
 
-        # Forum thread OPs: message_id == channel_id (Discord snowflake parity)
+        if not isinstance(
+            channel,
+            (discord.TextChannel, discord.VoiceChannel, discord.StageChannel, discord.Thread),
+        ):
+            # Unsupported channel type — count as gone
+            deleted += len(message_ids)
+            if on_progress:
+                await on_progress(deleted, failed, replaced)
+            continue
+
+        # Unarchive threads so we can delete from them (and so forum-OP re-post
+        # works — Discord rejects sends to archived threads with code 50083).
+        # Re-archive at the end of the per-channel block.
+        was_archived = isinstance(channel, discord.Thread) and channel.archived
+        if was_archived:
+            try:
+                await channel.edit(archived=False)  # type: ignore[union-attr]
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Cannot unarchive thread %d: %s", channel_id, exc)
+                failed += len(message_ids)
+                if on_progress:
+                    await on_progress(deleted, failed, replaced)
+                continue
+
+        # Forum thread OPs: message_id == channel_id (Discord snowflake parity).
+        # Delete the OP and re-post its content under the bot so the thread —
+        # and any replies from other members — survives.
         if _is_forum_thread(channel) and channel_id in message_ids:
             try:
                 op = await channel.fetch_message(channel_id)  # type: ignore[union-attr]
@@ -127,29 +164,12 @@ async def _delete_discord_messages(
             await asyncio.sleep(0.5)
 
         if not message_ids:
+            if was_archived:
+                try:
+                    await channel.edit(archived=True)  # type: ignore[union-attr]
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
             continue
-
-        if not isinstance(
-            channel,
-            (discord.TextChannel, discord.VoiceChannel, discord.StageChannel, discord.Thread),
-        ):
-            # Unsupported channel type — count as gone
-            deleted += len(message_ids)
-            if on_progress:
-                await on_progress(deleted, failed, replaced)
-            continue
-
-        # Unarchive threads so we can delete from them, then re-archive after
-        was_archived = isinstance(channel, discord.Thread) and channel.archived
-        if was_archived:
-            try:
-                await channel.edit(archived=False)  # type: ignore[union-attr]
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Cannot unarchive thread %d: %s", channel_id, exc)
-                failed += len(message_ids)
-                if on_progress:
-                    await on_progress(deleted, failed, replaced)
-                continue
 
         cutoff = datetime.now(timezone.utc) - _FOURTEEN_DAYS
         recent: list[int] = []
