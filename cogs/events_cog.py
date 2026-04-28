@@ -20,6 +20,7 @@ from services.auto_delete_service import (
     auto_delete_rule_exists,
     track_auto_delete_message,
 )
+from services.discord_scan import collect_messageable_channels
 from services.incident_detection import check_join_raid, velocity_tracker
 from services.interaction_graph import record_interactions
 from services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
@@ -86,84 +87,7 @@ def _counts_as_member_activity(message: discord.Message) -> bool:
     }
 
 
-_BackfillChannel = (
-    discord.TextChannel | discord.VoiceChannel | discord.StageChannel | discord.Thread
-)
-
-
-async def _collect_backfill_channels(
-    guild: discord.Guild,
-    me: discord.Member | None,
-) -> list[_BackfillChannel]:
-    """All readable channels and threads where members can post.
-
-    Includes text, voice, and stage channels (which all carry text chat),
-    plus active and archived threads of text and forum channels. Forum
-    channels themselves are skipped — only their threads (the "posts")
-    contain messages.
-    """
-    channels: list[_BackfillChannel] = []
-    seen_ids: set[int] = set()
-
-    def _can_read(ch: discord.abc.GuildChannel | discord.Thread) -> bool:
-        return not me or ch.permissions_for(me).read_message_history
-
-    async def _add_threads(parent: discord.TextChannel | discord.ForumChannel) -> None:
-        for thread in parent.threads:
-            if thread.id in seen_ids or not _can_read(thread):
-                continue
-            channels.append(thread)
-            seen_ids.add(thread.id)
-
-        try:
-            async for archived in parent.archived_threads(limit=None):
-                if archived.id in seen_ids or not _can_read(archived):
-                    continue
-                channels.append(archived)
-                seen_ids.add(archived.id)
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-
-        # Private archived threads (text channels only — forum posts have no
-        # "private" variant). joined=True bypasses manage_threads by listing
-        # only threads the bot is already a member of.
-        if isinstance(parent, discord.TextChannel):
-            try:
-                async for archived in parent.archived_threads(
-                    private=True, joined=True, limit=None
-                ):
-                    if archived.id in seen_ids:
-                        continue
-                    channels.append(archived)
-                    seen_ids.add(archived.id)
-            except (discord.Forbidden, discord.HTTPException):
-                pass
-
-    for channel in guild.text_channels:
-        if not _can_read(channel):
-            continue
-        channels.append(channel)
-        seen_ids.add(channel.id)
-        await _add_threads(channel)
-
-    for forum in getattr(guild, "forums", []):
-        if not _can_read(forum):
-            continue
-        await _add_threads(forum)
-
-    for vc in guild.voice_channels:
-        if vc.id in seen_ids or not _can_read(vc):
-            continue
-        channels.append(vc)
-        seen_ids.add(vc.id)
-
-    for sc in getattr(guild, "stage_channels", []):
-        if sc.id in seen_ids or not _can_read(sc):
-            continue
-        channels.append(sc)
-        seen_ids.add(sc.id)
-
-    return channels
+_collect_backfill_channels = collect_messageable_channels
 
 
 async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:

@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.discord_scan import find_user_messages
 from services.privacy_service import purge_user_data
 
 if TYPE_CHECKING:
@@ -214,39 +215,85 @@ async def _delete_discord_messages(
     return deleted, failed, replaced
 
 
+async def _edit_or_send(
+    interaction: discord.Interaction, content: str
+) -> None:
+    """Update the deletion status. After ~15 minutes the interaction token
+    expires (long scans can hit this); fall back to a regular channel send."""
+    try:
+        await interaction.edit_original_response(content=content, view=None)
+        return
+    except (discord.HTTPException, discord.NotFound):
+        pass
+    channel = interaction.channel
+    if isinstance(channel, (discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel)):
+        try:
+            await channel.send(f"<@{interaction.user.id}> {content}")
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
 async def _run_deletion(
     ctx: AppContext,
     guild: discord.Guild,
     user_id: int,
     original_interaction: discord.Interaction,
 ) -> None:
-    with ctx.open_db() as conn:
-        msg_rows = conn.execute(
-            "SELECT message_id, channel_id FROM messages WHERE guild_id = ? AND author_id = ?",
-            (guild.id, user_id),
-        ).fetchall()
+    # Phase 1 — scan Discord directly. Authoritative: doesn't depend on what
+    # the local index has captured, so messages from before the bot joined,
+    # from downtime, or from channels that were never backfilled all show up.
+    last_scan_update = 0.0
 
-    msg_rows = [(int(r[0]), int(r[1])) for r in msg_rows]
+    async def _scan_progress(done: int, total: int, found: int) -> None:
+        nonlocal last_scan_update
+        # Throttle edits — Discord rate-limits edit_original_response.
+        now = asyncio.get_event_loop().time()
+        if done < total and now - last_scan_update < 2.0:
+            return
+        last_scan_update = now
+        await _edit_or_send(
+            original_interaction,
+            f"Scanning the server for your messages — channel **{done}/{total}** "
+            f"(**{found}** found so far)…",
+        )
+
+    msg_rows = await find_user_messages(
+        guild, user_id, on_progress=_scan_progress
+    )
     total = len(msg_rows)
 
+    if total == 0:
+        with ctx.open_db() as conn:
+            purge_user_data(conn, guild.id, user_id)
+        await _edit_or_send(
+            original_interaction,
+            "All done. No messages found in any channel I can read. "
+            "Server-side data (XP, activity, profile): **cleared**.",
+        )
+        return
+
+    # Phase 2 — delete what we found.
     def _render_bar(done: int) -> str:
         width = 20
         filled = round(width * done / total) if total else width
         bar = "█" * filled + "░" * (width - filled)
         return f"`[{bar}]` {done}/{total}"
 
-    async def _progress(deleted: int, failed: int, replaced: int) -> None:
+    last_delete_update = 0.0
+
+    async def _delete_progress(deleted: int, failed: int, replaced: int) -> None:
+        nonlocal last_delete_update
         done = deleted + failed + replaced
-        try:
-            await original_interaction.edit_original_response(
-                content=f"Deleting… {_render_bar(done)}",
-                view=None,
-            )
-        except discord.HTTPException:
-            pass
+        now = asyncio.get_event_loop().time()
+        if done < total and now - last_delete_update < 1.5:
+            return
+        last_delete_update = now
+        await _edit_or_send(
+            original_interaction, f"Deleting… {_render_bar(done)}"
+        )
 
     discord_deleted, discord_failed, discord_replaced = await _delete_discord_messages(
-        guild, user_id, msg_rows, on_progress=_progress
+        guild, user_id, msg_rows, on_progress=_delete_progress
     )
 
     # Purge XP, activity, known_users, wellness, and any per-message rows that
@@ -267,9 +314,7 @@ async def _run_deletion(
     if discord_failed:
         lines.append(f"Messages that couldn't be deleted (no access): **{discord_failed}**")
 
-    await original_interaction.edit_original_response(
-        content="\n".join(lines), view=None
-    )
+    await _edit_or_send(original_interaction, "\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
