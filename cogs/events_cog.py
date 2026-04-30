@@ -26,8 +26,6 @@ from services.interaction_graph import record_interactions
 from services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from services.message_store import (
     adjust_reaction_count,
-    delete_message,
-    delete_messages_bulk,
     mark_member_left,
     record_member_event,
     record_reaction,
@@ -729,11 +727,14 @@ class EventsCog(commands.Cog):
             return
         from services.auto_delete_service import remove_tracked_auto_delete_message
 
+        # Auto-delete tracking is per-message bookkeeping; clear it so we
+        # don't try to re-delete a Discord message that's already gone.
         remove_tracked_auto_delete_message(
             self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_id
         )
-        with self.ctx.open_db() as conn:
-            delete_message(conn, payload.message_id)
+        # The messages table itself is a permanent local archive — we never
+        # remove rows when Discord deletes a message, so historical content
+        # (sentiment, XP audits, mod review) survives.
 
     async def _dm_admin_permission_warning(
         self, guild: discord.Guild, message: str
@@ -870,11 +871,11 @@ class EventsCog(commands.Cog):
             return
         from services.auto_delete_service import remove_tracked_auto_delete_messages
 
+        # Auto-delete tracking only — the messages table is a permanent
+        # archive (see on_raw_message_delete for the rationale).
         remove_tracked_auto_delete_messages(
             self.ctx.db_path, payload.guild_id, payload.channel_id, payload.message_ids
         )
-        with self.ctx.open_db() as conn:
-            delete_messages_bulk(conn, payload.message_ids)
 
     @commands.Cog.listener()
     async def on_interaction(self, interaction: discord.Interaction) -> None:

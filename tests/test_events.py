@@ -211,7 +211,9 @@ async def test_no_guild_id_ignored_on_delete(mock_remove):
 
 
 @patch("services.auto_delete_service.remove_tracked_auto_delete_message")
-async def test_with_guild_id_removes_message(mock_remove):
+async def test_with_guild_id_clears_auto_delete_tracking(mock_remove):
+    """Auto-delete tracking is per-message bookkeeping and is cleared, but the
+    messages table itself is a permanent archive — see _archive_only test."""
     ctx = _make_ctx()
     cog = EventsCog(_make_bot(), ctx)
     payload = MagicMock(spec=discord.RawMessageDeleteEvent)
@@ -220,6 +222,21 @@ async def test_with_guild_id_removes_message(mock_remove):
     payload.message_id = 999
     await cog.on_raw_message_delete(payload)
     mock_remove.assert_called_once_with(ctx.db_path, 1, 10, 999)
+
+
+async def test_message_archive_is_permanent_on_delete():
+    """The messages table is never modified by on_raw_message_delete — the
+    archive is preserved even after Discord forgets the message."""
+    ctx = _make_ctx()
+    cog = EventsCog(_make_bot(), ctx)
+    payload = MagicMock(spec=discord.RawMessageDeleteEvent)
+    payload.guild_id = 1
+    payload.channel_id = 10
+    payload.message_id = 999
+    with patch("services.auto_delete_service.remove_tracked_auto_delete_message"):
+        await cog.on_raw_message_delete(payload)
+    # No DB connection should be opened to mutate the messages table.
+    ctx.open_db.assert_not_called()
 
 
 # ── on_raw_bulk_message_delete ────────────────────────────────────────
@@ -235,7 +252,9 @@ async def test_no_guild_id_ignored_on_bulk_delete(mock_remove):
 
 
 @patch("services.auto_delete_service.remove_tracked_auto_delete_messages")
-async def test_with_guild_id_removes_messages(mock_remove):
+async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove):
+    """Same as the single-delete case: clear tracking, but never touch the
+    messages table itself (the archive is permanent)."""
     ctx = _make_ctx()
     cog = EventsCog(_make_bot(), ctx)
     payload = MagicMock(spec=discord.RawBulkMessageDeleteEvent)
@@ -244,6 +263,7 @@ async def test_with_guild_id_removes_messages(mock_remove):
     payload.message_ids = {100, 101, 102}
     await cog.on_raw_bulk_message_delete(payload)
     mock_remove.assert_called_once_with(ctx.db_path, 1, 10, {100, 101, 102})
+    ctx.open_db.assert_not_called()
 
 
 # ── on_raw_reaction_add ───────────────────────────────────────────────

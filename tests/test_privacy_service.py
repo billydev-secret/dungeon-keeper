@@ -131,3 +131,40 @@ def test_idempotent_on_empty_db(db):
     with open_db(db) as conn:
         count = purge_user_data(conn, GUILD, USER)
     assert count == 0
+
+
+# ── keep_messages=True ────────────────────────────────────────────────
+
+
+def test_keep_messages_preserves_message_rows(db):
+    """/delete_me uses keep_messages=True to keep the user's local archive."""
+    with open_db(db) as conn:
+        _insert_message(conn, GUILD, USER, 1)
+        _insert_message(conn, GUILD, USER, 2)
+        count = purge_user_data(conn, GUILD, USER, keep_messages=True)
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE guild_id = ? AND author_id = ?",
+            (GUILD, USER),
+        ).fetchone()[0]
+    # Returns the count for the summary even though nothing was deleted.
+    assert count == 2
+    assert remaining == 2
+
+
+def test_keep_messages_still_clears_xp(db):
+    """Other PII (XP, activity, profile) is purged even when messages are kept."""
+    with open_db(db) as conn:
+        _insert_message(conn, GUILD, USER, 1)
+        _insert_xp(conn, GUILD, USER)
+        _insert_known_user(conn, GUILD, USER)
+        purge_user_data(conn, GUILD, USER, keep_messages=True)
+        xp_remaining = conn.execute(
+            "SELECT COUNT(*) FROM member_xp WHERE guild_id = ? AND user_id = ?",
+            (GUILD, USER),
+        ).fetchone()[0]
+        known_remaining = conn.execute(
+            "SELECT COUNT(*) FROM known_users WHERE guild_id = ? AND user_id = ?",
+            (GUILD, USER),
+        ).fetchone()[0]
+    assert xp_remaining == 0
+    assert known_remaining == 0

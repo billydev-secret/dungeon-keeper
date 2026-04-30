@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import timezone
+
 from services.auto_delete_service import (
     _BULK_DELETE_MAX_AGE,
+    compute_startup_scan_after,
     is_rule_due,
     partition_messages_by_age,
 )
@@ -116,3 +119,39 @@ def test_partition_respects_custom_age_limit():
     bulk, individual = partition_messages_by_age(messages, now, bulk_age_limit=150)
     assert bulk == [101]
     assert individual == [102]
+
+
+# ── compute_startup_scan_after ────────────────────────────────────────
+
+
+def test_scan_after_never_run_returns_none():
+    # last_run_ts == 0 means the rule has never run; scan everything.
+    assert compute_startup_scan_after(last_run_ts=0.0, max_age_seconds=86400) is None
+
+
+def test_scan_after_recent_run_returns_window_lower_bound():
+    last_run = 1_000_000.0
+    max_age = 86400  # 1 day
+    bound = compute_startup_scan_after(last_run_ts=last_run, max_age_seconds=max_age)
+    assert bound is not None
+    assert bound.tzinfo is timezone.utc
+    # Lower bound is last_run - max_age: anything older was already swept.
+    assert bound.timestamp() == last_run - max_age
+
+
+def test_scan_after_returns_none_when_bound_predates_epoch():
+    # Bot just started but max_age is enormous and last_run was very recent —
+    # bound goes negative, fall back to full scan.
+    assert compute_startup_scan_after(last_run_ts=10.0, max_age_seconds=86400) is None
+
+
+def test_scan_after_bound_exactly_at_epoch_returns_none():
+    # Boundary: bound_ts == 0 also means "scan everything".
+    assert (
+        compute_startup_scan_after(last_run_ts=86400.0, max_age_seconds=86400) is None
+    )
+
+
+def test_scan_after_negative_last_run_returns_none():
+    # Defensive: corrupted DB returns negative last_run_ts.
+    assert compute_startup_scan_after(last_run_ts=-1.0, max_age_seconds=60) is None

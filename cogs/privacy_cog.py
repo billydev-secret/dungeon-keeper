@@ -264,15 +264,18 @@ async def _run_deletion(
 
     if total == 0:
         with ctx.open_db() as conn:
-            purge_user_data(conn, guild.id, user_id)
+            purge_user_data(conn, guild.id, user_id, keep_messages=True)
         await _edit_or_send(
             original_interaction,
             "All done. No messages found in any channel I can read. "
-            "Server-side data (XP, activity, profile): **cleared**.",
+            "Server-side data (XP, activity, profile): **cleared** "
+            "(your message archive is preserved).",
         )
         return
 
-    # Phase 2 — delete what we found.
+    # Phase 2 — delete what we found on Discord. The local archive is safe:
+    # on_raw_message_delete no longer touches the messages table, so the
+    # user's records here survive the Discord-side deletion.
     def _render_bar(done: int) -> str:
         width = 20
         filled = round(width * done / total) if total else width
@@ -296,16 +299,16 @@ async def _run_deletion(
         guild, user_id, msg_rows, on_progress=_delete_progress
     )
 
-    # Purge XP, activity, known_users, wellness, and any per-message rows that
-    # the on_raw_message_delete listener didn't catch (e.g. messages we
-    # couldn't reach on Discord but still hold metadata for).
+    # Purge XP, activity, known_users, wellness — but keep the messages table
+    # rows so the user retains a local archive of what they posted.
     with ctx.open_db() as conn:
-        purge_user_data(conn, guild.id, user_id)
+        purge_user_data(conn, guild.id, user_id, keep_messages=True)
 
     lines = [
         "All done. Here's what was removed:",
         f"Discord messages deleted: **{discord_deleted}**",
-        "Server-side data (XP, activity, profile): **cleared**",
+        "Server-side data (XP, activity, profile): **cleared** "
+        "(your message archive is preserved)",
     ]
     if discord_replaced:
         lines.append(

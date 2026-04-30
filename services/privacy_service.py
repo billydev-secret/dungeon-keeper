@@ -5,8 +5,23 @@ from __future__ import annotations
 import sqlite3
 
 
-def purge_user_data(conn: sqlite3.Connection, guild_id: int, user_id: int) -> int:
-    """Delete all DB records for *user_id* in *guild_id*. Returns message count removed."""
+def purge_user_data(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    *,
+    keep_messages: bool = False,
+) -> int:
+    """Delete all DB records for *user_id* in *guild_id*. Returns the count of
+    message rows that exist for the user (and were removed unless
+    *keep_messages* is set).
+
+    *keep_messages*: when True, the messages table and its child tables
+    (attachments, mentions, embeds, reactions, sentiment, processed_messages)
+    are left untouched. Used by ``/delete_me`` so users can keep a local
+    archive of what they posted even after the Discord copies are gone.
+    Other PII (XP, activity, profile, wellness) is still cleared.
+    """
     msg_ids = [
         r[0]
         for r in conn.execute(
@@ -15,7 +30,7 @@ def purge_user_data(conn: sqlite3.Connection, guild_id: int, user_id: int) -> in
         ).fetchall()
     ]
 
-    if msg_ids:
+    if msg_ids and not keep_messages:
         ph = ",".join("?" * len(msg_ids))
         for table in (
             "message_attachments",

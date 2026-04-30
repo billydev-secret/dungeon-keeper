@@ -26,6 +26,9 @@ class AutoDeleteSettings:
     bulk_delete_pause_seconds: float = 1.1
     # Pause between bulk role/permission modifications (seconds)
     role_modify_pause_seconds: float = 0.25
+    # Max channels processed concurrently during startup catch-up
+    # (per-channel rate buckets don't conflict, so this safely N-folds throughput)
+    startup_concurrency: int = 6
 
 
 def _default_run_keywords() -> dict[str, str]:

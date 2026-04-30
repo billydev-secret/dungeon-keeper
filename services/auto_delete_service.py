@@ -6,7 +6,7 @@ import asyncio
 import logging
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -239,6 +239,28 @@ def is_rule_due(now_ts: float, last_run_ts: float, interval_seconds: int) -> boo
     so a rule with a 60-second interval can fire at exactly t+60.
     """
     return (now_ts - last_run_ts) >= interval_seconds
+
+
+def compute_startup_scan_after(
+    last_run_ts: float,
+    max_age_seconds: int,
+) -> datetime | None:
+    """Return the lower-bound datetime for a bounded startup history scan.
+
+    A previous run at ``last_run_ts`` already swept every message whose
+    ``created_at`` was at most ``last_run_ts - max_age_seconds``, so on the
+    next startup we only need to scan messages created after that bound.
+
+    Returns ``None`` when the rule has never run, or when the bound would land
+    at/before the unix epoch — both cases mean "scan the entire channel
+    history", which is the only safe thing to do without prior-run state.
+    """
+    if last_run_ts <= 0:
+        return None
+    bound_ts = last_run_ts - max_age_seconds
+    if bound_ts <= 0:
+        return None
+    return datetime.fromtimestamp(bound_ts, tz=timezone.utc)
 
 
 def partition_messages_by_age(
@@ -553,21 +575,36 @@ async def _scan_and_delete_channel_history(
     cutoff: datetime,
     *,
     reason: str,
+    after: datetime | None = None,
+    db_path: Path | None = None,
+    guild_id: int | None = None,
 ) -> tuple[int, int]:
     """Scan channel history and delete unpinned messages older than cutoff datetime.
 
     Uses bulk delete (up to 100 per request) for messages < 13 days old,
-    and individual deletes for older messages.
+    and individual deletes for older messages. When ``after`` is set, the
+    history walk skips anything created at or before that bound — used by
+    the startup catch-up to avoid re-scanning history that a previous run
+    already swept.
+
+    When ``db_path`` and ``guild_id`` are both provided, the walk also reads
+    past ``cutoff`` and inserts younger messages into ``auto_delete_messages``
+    so the live tick path can age them out later. Without this, messages
+    posted during bot downtime (when ``on_message`` doesn't fire) would
+    become permanent orphans — invisible to the tick path forever.
     """
+    track_messages = db_path is not None and guild_id is not None
     channel_name = getattr(channel, "name", str(channel.id))
     start_time = time.monotonic()
     deleted = 0
     failed = 0
     scanned = 0
+    cutoff_ts = cutoff.timestamp()
     bulk_cutoff_ts = time.time() - _BULK_DELETE_MAX_AGE
 
     bulk_batch: list[discord.PartialMessage] = []
     old_batch: list[discord.PartialMessage] = []
+    tracking_batch: list[tuple[int, float]] = []
 
     async def _flush_bulk() -> bool:
         nonlocal deleted, failed
@@ -586,12 +623,28 @@ async def _scan_and_delete_channel_history(
         await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
         return True
 
-    async for message in channel.history(limit=None, before=cutoff, oldest_first=True):
+    history_kwargs: dict[str, Any] = {
+        "limit": None,
+        "oldest_first": True,
+    }
+    if after is not None:
+        history_kwargs["after"] = after
+    # When tracking is off, cap the walk at `cutoff` (we only care about
+    # already-eligible messages). When tracking is on we walk past cutoff
+    # so we can pick up downtime-posted messages that aren't yet eligible.
+    if not track_messages:
+        history_kwargs["before"] = cutoff
+
+    async for message in channel.history(**history_kwargs):
         if message.pinned:
             continue
-        scanned += 1
-
         msg_ts = message.created_at.timestamp() if message.created_at else 0.0
+
+        if track_messages and msg_ts > cutoff_ts:
+            tracking_batch.append((message.id, msg_ts))
+            continue
+
+        scanned += 1
         if msg_ts > bulk_cutoff_ts:
             bulk_batch.append(channel.get_partial_message(message.id))
             if len(bulk_batch) >= _BULK_CHUNK:
@@ -607,6 +660,26 @@ async def _scan_and_delete_channel_history(
                     return deleted, failed
         else:
             old_batch.append(channel.get_partial_message(message.id))
+
+    if track_messages and tracking_batch:
+        # db_path / guild_id are non-None when track_messages is True; the
+        # asserts pin that for the type checker.
+        assert db_path is not None
+        assert guild_id is not None
+        with open_db(db_path) as conn:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO auto_delete_messages
+                    (guild_id, channel_id, message_id, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                [(guild_id, channel.id, mid, ts) for mid, ts in tracking_batch],
+            )
+        log.debug(
+            "Auto-delete scan #%s: tracked %s downtime messages",
+            channel_name,
+            len(tracking_batch),
+        )
 
     if scanned == 0:
         return 0, 0
@@ -677,39 +750,49 @@ async def _scan_and_delete_channel_history(
     return deleted, failed
 
 
-async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
-    """On startup, scan every auto-delete channel for messages that should already be gone."""
+async def _run_startup_for_rule(
+    bot: discord.Client,
+    db_path: Path,
+    rule: sqlite3.Row,
+    now_ts: float,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    """Run startup catch-up for a single auto-delete rule (held inside a semaphore)."""
     from datetime import timedelta
 
     from utils import get_guild_channel_or_thread
 
-    rules = list_auto_delete_rules(db_path)
-    if not rules:
+    guild_id = int(rule["guild_id"])
+    channel_id = int(rule["channel_id"])
+    max_age_seconds = int(rule["max_age_seconds"])
+    interval_seconds = int(rule["interval_seconds"])
+    last_run_ts = float(rule["last_run_ts"])
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
         return
 
-    now_ts = time.time()
-    for rule in rules:
-        guild_id = int(rule["guild_id"])
-        channel_id = int(rule["channel_id"])
-        max_age_seconds = int(rule["max_age_seconds"])
+    channel = get_guild_channel_or_thread(guild, channel_id)
+    if channel is None:
+        log.warning(
+            "Auto-delete startup: channel %s not found in guild %s; skipping.",
+            channel_id,
+            format_guild_for_log(guild, guild_id),
+        )
+        return
 
-        guild = bot.get_guild(guild_id)
-        if guild is None:
-            continue
+    cutoff = discord.utils.utcnow() - timedelta(seconds=max_age_seconds)
+    after = compute_startup_scan_after(last_run_ts, max_age_seconds)
 
-        channel = get_guild_channel_or_thread(guild, channel_id)
-        if channel is None:
-            log.warning(
-                "Auto-delete startup: channel %s not found in guild %s; skipping.",
-                channel_id,
-                format_guild_for_log(guild, guild_id),
-            )
-            continue
-
-        cutoff = discord.utils.utcnow() - timedelta(seconds=max_age_seconds)
+    async with semaphore:
         try:
             deleted, failed = await _scan_and_delete_channel_history(
-                channel, cutoff, reason="Auto-delete startup catchup"
+                channel,
+                cutoff,
+                reason="Auto-delete startup catchup",
+                after=after,
+                db_path=db_path,
+                guild_id=guild_id,
             )
             if failed > 0:
                 log.info(
@@ -719,7 +802,11 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
                     deleted,
                     failed,
                 )
-            touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
+            # Only advance the schedule if the rule was already overdue at boot.
+            # Otherwise a restart would push the next regular tick out by a full
+            # interval relative to its real schedule.
+            if is_rule_due(now_ts, last_run_ts, interval_seconds):
+                touch_auto_delete_rule_run(db_path, guild_id, channel_id, now_ts)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -729,9 +816,25 @@ async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
                 channel.name,
             )
 
-        # Pause between channels so delete buckets from the previous channel
-        # can settle before we start fetching and deleting in the next one.
-        await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
+
+async def run_startup_auto_delete(bot: discord.Client, db_path: Path) -> None:
+    """On startup, scan every auto-delete channel for messages that should already be gone.
+
+    Channels are processed in parallel (gated by ``startup_concurrency``) since
+    Discord's rate-limit buckets are per-channel and don't conflict across channels.
+    Each rule's history scan is bounded to the gap window since the previous run,
+    so a frequently-restarted bot doesn't re-walk months of history every boot.
+    """
+    rules = list_auto_delete_rules(db_path)
+    if not rules:
+        return
+
+    now_ts = time.time()
+    semaphore = asyncio.Semaphore(AUTO_DELETE_SETTINGS.startup_concurrency)
+
+    await asyncio.gather(
+        *(_run_startup_for_rule(bot, db_path, rule, now_ts, semaphore) for rule in rules)
+    )
 
 
 async def auto_delete_loop(bot: discord.Client, db_path: Path) -> None:
