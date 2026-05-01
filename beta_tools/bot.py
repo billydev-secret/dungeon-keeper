@@ -36,7 +36,7 @@ class DkToolsBot(commands.Bot):
         """Called once after login. Wire up puppets, webhook fleet, slash commands."""
         # Imported here to avoid circular import: slash modules import DkToolsBot for typing.
         from beta_tools.personas import load_puppet_personas
-        from beta_tools.slash import register_all  # type: ignore[import-untyped]
+        from beta_tools.slash import register_all
 
         personas = load_puppet_personas("fixtures/beta_puppets.yaml")
         pm = PuppetManager(
