@@ -11,11 +11,15 @@ def create_todo(
     guild_id: int,
     added_by: int,
     task: str,
+    *,
+    description: str | None = None,
+    source_message_url: str | None = None,
 ) -> int:
     """Insert a new to do and return its ID."""
     cur = conn.execute(
-        "INSERT INTO todos (guild_id, added_by, task, created_at) VALUES (?, ?, ?, ?)",
-        (guild_id, added_by, task, time.time()),
+        "INSERT INTO todos (guild_id, added_by, task, description, source_message_url, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (guild_id, added_by, task, description, source_message_url, time.time()),
     )
     return cur.lastrowid  # type: ignore[return-value]
 

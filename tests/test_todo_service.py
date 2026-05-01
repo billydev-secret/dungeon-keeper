@@ -140,3 +140,35 @@ def test_delete_wrong_guild_returns_false(db):
     with open_db(db) as conn:
         todo_id = create_todo(conn, GUILD, USER, "Task")
         assert delete_todo(conn, 999, todo_id) is False
+
+
+# ── create_todo with new optional fields ─────────────────────────────
+
+
+def test_create_with_description_and_source_url(db):
+    with open_db(db) as conn:
+        todo_id = create_todo(
+            conn,
+            GUILD,
+            USER,
+            "Message from @alice in #general",
+            description="hello world\n\nfollow up next week",
+            source_message_url="https://discord.com/channels/1/2/3",
+        )
+        row = conn.execute(
+            "SELECT description, source_message_url FROM todos WHERE id = ?",
+            (todo_id,),
+        ).fetchone()
+    assert row["description"] == "hello world\n\nfollow up next week"
+    assert row["source_message_url"] == "https://discord.com/channels/1/2/3"
+
+
+def test_create_without_new_fields_leaves_them_null(db):
+    with open_db(db) as conn:
+        todo_id = create_todo(conn, GUILD, USER, "Plain task")
+        row = conn.execute(
+            "SELECT description, source_message_url FROM todos WHERE id = ?",
+            (todo_id,),
+        ).fetchone()
+    assert row["description"] is None
+    assert row["source_message_url"] is None
