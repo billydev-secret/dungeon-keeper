@@ -39,12 +39,13 @@ class DkToolsBot(commands.Bot):
         from beta_tools.slash import register_all  # type: ignore[import-untyped]
 
         personas = load_puppet_personas("fixtures/beta_puppets.yaml")
-        self.puppet_manager = PuppetManager(
+        pm = PuppetManager(
             personas=personas,
             tokens=self.beta_cfg.puppet_tokens,
             expected_ids=self.beta_cfg.puppet_expected_ids,
             expected_guild_id=self.main_cfg.guild_id,
         )
+        self.puppet_manager = pm
         self.webhook_fleet = WebhookFleet()
 
         # Register all /beta slash commands scoped to the test guild.
@@ -54,9 +55,9 @@ class DkToolsBot(commands.Bot):
         log.info("registered /beta commands to guild %d", self.main_cfg.guild_id)
 
         # Connect puppets and apply personas.
-        log.info("starting %d puppets", len(self.puppet_manager.handles))
-        await self.puppet_manager.start_all()
-        await self.puppet_manager.apply_personas()
+        log.info("starting %d puppets", len(pm.handles))
+        await pm.start_all()
+        await pm.apply_personas()
         log.info("puppets ready")
 
     async def on_ready(self) -> None:
