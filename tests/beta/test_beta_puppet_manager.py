@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -102,3 +102,46 @@ async def test_apply_persona_renames_when_name_differs(three_personas):
     fake_user.edit.assert_awaited_once()
     _, kwargs = fake_user.edit.call_args
     assert kwargs["username"] == "Alice"
+
+
+async def test_apply_persona_does_not_fetch_avatar_when_url_matches(three_personas):
+    """Avatar fetch should be skipped when the persona's URL already matches user.display_avatar.url."""
+    from beta_tools.puppet_manager import _apply_persona
+
+    persona = three_personas[0]  # alice, https://x/a.png
+    fake_user = MagicMock()
+    fake_user.name = "OldName"  # name differs, triggers edit
+    fake_user.display_avatar.url = "https://x/a.png"  # avatar matches
+    fake_user.edit = AsyncMock()
+
+    fake_client = MagicMock()
+    fake_client.user = fake_user
+
+    with patch("beta_tools.puppet_manager.aiohttp.ClientSession") as mock_session:
+        await _apply_persona(fake_client, persona)
+        mock_session.assert_not_called()  # avatar URL matched, so no HTTP fetch
+
+    fake_user.edit.assert_awaited_once()
+    _, kwargs = fake_user.edit.call_args
+    assert "avatar" not in kwargs
+    assert kwargs["username"] == "Alice"
+
+
+async def test_start_all_raises_when_puppet_task_fails(three_personas):
+    """If a puppet's start task crashes (bad token), start_all should raise — not hang."""
+    from beta_tools.puppet_manager import PuppetManager
+
+    pm = PuppetManager(
+        personas=three_personas,
+        tokens=("bad1", "bad2", "bad3"),
+        expected_ids=(1, 2, 3),
+        expected_guild_id=9001,
+    )
+
+    # Patch _new_puppet_client to return a fake client whose start() raises immediately.
+    fake_client = MagicMock()
+    fake_client.start = AsyncMock(side_effect=RuntimeError("simulated bad token"))
+
+    with patch("beta_tools.puppet_manager._new_puppet_client", return_value=fake_client):
+        with pytest.raises(RuntimeError, match="failed to start"):
+            await pm.start_all()

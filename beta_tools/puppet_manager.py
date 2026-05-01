@@ -58,13 +58,42 @@ class PuppetManager:
         raise KeyError(f"no puppet with key {key!r}")
 
     async def start_all(self) -> None:
-        """Connect all 3 puppets to the gateway and wait until all are ready."""
+        """Connect all 3 puppets to the gateway and wait until all are ready.
+
+        Raises if any puppet's start task crashes (bad token, network failure)
+        or fails to become ready within a 60-second timeout.
+        """
         for h in self.handles:
             client = _new_puppet_client(h, self.expected_guild_id)
             h.client = client
             h.task = asyncio.create_task(client.start(h.token), name=f"puppet-{h.key}")
-        # Wait for all to be ready (or for any to error out).
-        await asyncio.gather(*(h.ready.wait() for h in self.handles))
+
+        # Race: either all 3 ready events fire, or any start task crashes first.
+        ready_waits = [asyncio.create_task(h.ready.wait(), name=f"ready-{h.key}") for h in self.handles]
+        start_tasks = [h.task for h in self.handles if h.task is not None]
+        watched = ready_waits + start_tasks
+
+        done, pending = await asyncio.wait(
+            watched,
+            timeout=60.0,
+            return_when=asyncio.FIRST_EXCEPTION,
+        )
+
+        # Cancel anything still pending (we're either done or about to error out).
+        for f in pending:
+            f.cancel()
+
+        # If any start task crashed, raise its exception.
+        for h in self.handles:
+            if h.task is not None and h.task.done() and not h.task.cancelled():
+                exc = h.task.exception()
+                if exc is not None:
+                    raise RuntimeError(f"puppet {h.key!r} failed to start") from exc
+
+        # All start tasks are still running but did some of them not become ready?
+        unready = [h.key for h in self.handles if not h.ready.is_set()]
+        if unready:
+            raise RuntimeError(f"puppets never became ready (timeout): {unready}")
 
     async def apply_personas(self) -> None:
         """Idempotent: apply persona display_name + avatar to each connected puppet."""
@@ -95,7 +124,8 @@ def _new_puppet_client(handle: PuppetHandle, expected_guild_id: int) -> discord.
     async def on_ready() -> None:
         user = client.user
         if user is None:
-            log.critical("puppet %r on_ready fired but client.user is None", handle.key)
+            log.critical("puppet %r on_ready fired but client.user is None — cannot validate identity", handle.key)
+            handle.ready.set()  # unblock start_all so it can timeout/error cleanly
             return
         log.info("puppet %r connected as %s (id=%d)", handle.key, user, user.id)
         check_puppet_identity(user, handle.expected_id, handle.key)
@@ -148,6 +178,13 @@ async def _apply_persona(client: discord.Client, persona: Persona) -> None:
             log.exception("failed to fetch avatar for persona %r", persona.key)
             # Proceed with name update only
             edit_kwargs.pop("avatar", None)
+
+    if not edit_kwargs:
+        log.warning(
+            "puppet %r: avatar fetch failed and no other updates needed; skipping edit",
+            persona.key,
+        )
+        return
 
     log.info("applying persona %r: name_update=%s avatar_update=%s",
              persona.key, needs_name_update, "avatar" in edit_kwargs)
