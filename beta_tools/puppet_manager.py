@@ -73,7 +73,7 @@ class PuppetManager:
         start_tasks = [h.task for h in self.handles if h.task is not None]
         watched = ready_waits + start_tasks
 
-        done, pending = await asyncio.wait(
+        _, pending = await asyncio.wait(
             watched,
             timeout=60.0,
             return_when=asyncio.FIRST_EXCEPTION,
