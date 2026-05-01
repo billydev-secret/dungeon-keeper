@@ -86,7 +86,7 @@ async def test_puppets_list_handler_lists_handles(three_personas):
     assert kwargs.get("ephemeral") is True
 
 
-async def test_puppets_list_handler_rejects_non_mod(three_personas):
+async def test_puppets_list_handler_rejects_non_mod():
     from beta_tools.slash.puppets import _puppets_list_handler
 
     bot = MagicMock()
@@ -125,7 +125,7 @@ async def test_puppets_impersonate_handler_dispatches_to_puppet(three_personas):
     interaction.followup.send.assert_awaited_once()
 
 
-async def test_puppets_impersonate_handler_rejects_unknown_key(three_personas):
+async def test_puppets_impersonate_handler_rejects_unknown_key():
     from beta_tools.slash.puppets import _puppets_impersonate_handler
 
     bot = MagicMock()

@@ -64,7 +64,7 @@ class PuppetManager:
         or fails to become ready within a 60-second timeout.
         """
         for h in self.handles:
-            client = _new_puppet_client(h, self.expected_guild_id)
+            client = new_puppet_client(h, self.expected_guild_id)
             h.client = client
             h.task = asyncio.create_task(client.start(h.token), name=f"puppet-{h.key}")
 
@@ -112,7 +112,7 @@ class PuppetManager:
                     log.exception("error closing puppet %r", h.key)
 
 
-def _new_puppet_client(handle: PuppetHandle, expected_guild_id: int) -> discord.Client:
+def new_puppet_client(handle: PuppetHandle, expected_guild_id: int) -> discord.Client:
     """Build a fresh discord.Client wired with on_ready safety checks."""
     intents = discord.Intents.default()
     intents.message_content = False  # puppets don't need to read others' messages

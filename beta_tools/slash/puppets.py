@@ -76,9 +76,9 @@ async def _puppets_reconnect_handler(bot, interaction: discord.Interaction, *, k
             log.exception("error closing puppet %r before reconnect", key)
     # Build a fresh client and start it.
     import asyncio
-    from beta_tools.puppet_manager import _new_puppet_client
+    from beta_tools.puppet_manager import new_puppet_client
     handle.ready.clear()
-    handle.client = _new_puppet_client(handle, bot.main_cfg.guild_id)
+    handle.client = new_puppet_client(handle, bot.main_cfg.guild_id)
     handle.task = asyncio.create_task(handle.client.start(handle.token), name=f"puppet-{handle.key}")
     await handle.ready.wait()
     await interaction.followup.send(f"Puppet `{key}` reconnected.", ephemeral=True)

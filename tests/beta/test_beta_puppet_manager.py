@@ -138,10 +138,10 @@ async def test_start_all_raises_when_puppet_task_fails(three_personas):
         expected_guild_id=9001,
     )
 
-    # Patch _new_puppet_client to return a fake client whose start() raises immediately.
+    # Patch new_puppet_client to return a fake client whose start() raises immediately.
     fake_client = MagicMock()
     fake_client.start = AsyncMock(side_effect=RuntimeError("simulated bad token"))
 
-    with patch("beta_tools.puppet_manager._new_puppet_client", return_value=fake_client):
+    with patch("beta_tools.puppet_manager.new_puppet_client", return_value=fake_client):
         with pytest.raises(RuntimeError, match="failed to start"):
             await pm.start_all()
