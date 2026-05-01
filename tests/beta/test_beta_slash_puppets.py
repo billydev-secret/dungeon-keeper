@@ -163,3 +163,101 @@ async def test_ghosts_impersonate_handler_uses_webhook_fleet():
         fake_channel, content="hi", username="ghost_test", avatar_url="https://x/g.png",
     )
     interaction.followup.send.assert_awaited_once()
+
+
+async def test_puppets_reload_handler_happy_path(three_personas, monkeypatch):
+    """Reload reads YAML, updates handle personas, calls apply_personas."""
+    from beta_tools.slash import puppets as puppets_module
+    from beta_tools.slash.puppets import _puppets_reload_handler
+    from beta_tools.puppet_manager import PuppetHandle
+
+    new_personas = [
+        Persona(key="alice", display_name="NewAlice", avatar_url="https://x/a2.png",
+                activity_weight=1.0, channel_affinities={"general": 1.0},
+                voice_likely=True, message_length_bias="short"),
+        Persona(key="bob", display_name="NewBob", avatar_url="https://x/b2.png",
+                activity_weight=1.0, channel_affinities={"general": 1.0},
+                voice_likely=False, message_length_bias="medium"),
+        Persona(key="clara", display_name="NewClara", avatar_url="https://x/c2.png",
+                activity_weight=1.0, channel_affinities={"general": 1.0},
+                voice_likely=True, message_length_bias="long"),
+    ]
+    monkeypatch.setattr(puppets_module, "load_puppet_personas", lambda _path: new_personas)
+
+    bot = MagicMock()
+    bot.puppet_manager = MagicMock()
+    bot.puppet_manager.handles = [
+        PuppetHandle(key="alice", persona=three_personas[0], token="t1", expected_id=1),
+        PuppetHandle(key="bob", persona=three_personas[1], token="t2", expected_id=2),
+        PuppetHandle(key="clara", persona=three_personas[2], token="t3", expected_id=3),
+    ]
+    bot.puppet_manager.apply_personas = AsyncMock()
+
+    interaction = _mod_interaction()
+    interaction.response.defer = AsyncMock()
+
+    await _puppets_reload_handler(bot, interaction)
+
+    bot.puppet_manager.apply_personas.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    args, kwargs = interaction.followup.send.call_args
+    assert "Reloaded 3" in args[0]
+    assert kwargs.get("ephemeral") is True
+
+
+async def test_puppets_reload_handler_count_mismatch(three_personas, monkeypatch):
+    """If the YAML has != current puppet count, reload reports the mismatch."""
+    from beta_tools.slash import puppets as puppets_module
+    from beta_tools.slash.puppets import _puppets_reload_handler
+    from beta_tools.puppet_manager import PuppetHandle
+
+    new_personas = [
+        Persona(key="alice", display_name="NewAlice", avatar_url="https://x/a2.png",
+                activity_weight=1.0, channel_affinities={"general": 1.0},
+                voice_likely=True, message_length_bias="short"),
+        Persona(key="bob", display_name="NewBob", avatar_url="https://x/b2.png",
+                activity_weight=1.0, channel_affinities={"general": 1.0},
+                voice_likely=False, message_length_bias="medium"),
+    ]
+    monkeypatch.setattr(puppets_module, "load_puppet_personas", lambda _path: new_personas)
+
+    bot = MagicMock()
+    bot.puppet_manager = MagicMock()
+    bot.puppet_manager.handles = [
+        PuppetHandle(key="alice", persona=three_personas[0], token="t1", expected_id=1),
+        PuppetHandle(key="bob", persona=three_personas[1], token="t2", expected_id=2),
+        PuppetHandle(key="clara", persona=three_personas[2], token="t3", expected_id=3),
+    ]
+    bot.puppet_manager.apply_personas = AsyncMock()
+
+    interaction = _mod_interaction()
+    interaction.response.defer = AsyncMock()
+
+    await _puppets_reload_handler(bot, interaction)
+
+    bot.puppet_manager.apply_personas.assert_not_called()
+    interaction.followup.send.assert_awaited_once()
+    args, kwargs = interaction.followup.send.call_args
+    assert "Reload failed" in args[0]
+    assert "2 personas" in args[0]
+    assert "3 puppets" in args[0]
+
+
+async def test_puppets_reconnect_handler_rejects_unknown_key():
+    """Reconnect with a missing key sends a clear error."""
+    from beta_tools.slash.puppets import _puppets_reconnect_handler
+
+    bot = MagicMock()
+    bot.puppet_manager = MagicMock()
+    bot.puppet_manager.get_handle = MagicMock(side_effect=KeyError("nobody"))
+
+    interaction = _mod_interaction()
+    interaction.response.defer = AsyncMock()
+
+    await _puppets_reconnect_handler(bot, interaction, key="nobody")
+
+    bot.puppet_manager.get_handle.assert_called_once_with("nobody")
+    interaction.followup.send.assert_awaited_once()
+    args, kwargs = interaction.followup.send.call_args
+    assert "Unknown puppet" in args[0] or "nobody" in args[0]
+    assert kwargs.get("ephemeral") is True

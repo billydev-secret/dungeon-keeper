@@ -7,6 +7,7 @@ Slash commands register in setup_hook() once the bot is logged in.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import discord
@@ -38,7 +39,8 @@ class DkToolsBot(commands.Bot):
         from beta_tools.personas import load_puppet_personas
         from beta_tools.slash import register_all
 
-        personas = load_puppet_personas("fixtures/beta_puppets.yaml")
+        fixtures_dir = Path(__file__).resolve().parent.parent / "fixtures"
+        personas = load_puppet_personas(fixtures_dir / "beta_puppets.yaml")
         pm = PuppetManager(
             personas=personas,
             tokens=self.beta_cfg.puppet_tokens,

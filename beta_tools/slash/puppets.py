@@ -7,6 +7,7 @@ import logging
 import discord
 from discord import app_commands
 
+from beta_tools.personas import load_puppet_personas
 from beta_tools.slash._base import reject_if_not_mod
 
 log = logging.getLogger("beta_tools.slash.puppets")
@@ -41,8 +42,9 @@ async def _puppets_reload_handler(bot, interaction: discord.Interaction) -> None
         await interaction.response.send_message("Puppet manager not initialized yet.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
-    from beta_tools.personas import load_puppet_personas
-    new_personas = load_puppet_personas("fixtures/beta_puppets.yaml")
+    from pathlib import Path
+    fixtures_dir = Path(__file__).resolve().parent.parent.parent / "fixtures"
+    new_personas = load_puppet_personas(fixtures_dir / "beta_puppets.yaml")
     if len(new_personas) != len(bot.puppet_manager.handles):
         await interaction.followup.send(
             f"Reload failed: fixture has {len(new_personas)} personas but {len(bot.puppet_manager.handles)} puppets are connected.",

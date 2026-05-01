@@ -28,7 +28,6 @@ def _setup_logging() -> None:
     stream = logging.StreamHandler()
     stream.setFormatter(formatter)
     log_path = Path(__file__).parent.parent / "log_beta_tools.txt"
-    log_path.write_text("", encoding="utf-8")
     file_handler = logging.handlers.RotatingFileHandler(
         log_path, encoding="utf-8", maxBytes=2_000_000, backupCount=1,
     )
