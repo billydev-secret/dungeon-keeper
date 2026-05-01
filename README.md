@@ -249,3 +249,23 @@ Run hooks across all files:
 ```powershell
 .\.venv\Scripts\pre-commit.exe run --all-files
 ```
+
+### Running the beta tools sidecar (dev only)
+
+The sidecar drives synthetic Discord activity in the test guild for moderator
+testers to exercise. It refuses to run outside `BOT_ENV=dev`.
+
+1. Register a new Discord application "Dungeon Keeper Tools" plus 3 puppet
+   apps ("Puppet Alice", "Puppet Bob", "Puppet Clara") in the Developer
+   Portal. Get a bot token + bot user ID for each.
+2. Invite all 4 to the test guild with the `bot` scope.
+3. Fill in the new env vars in `.env` (see `.env.example`).
+4. In one terminal: `BOT_ENV=dev python -m dungeonkeeper`
+5. In another terminal: `BOT_ENV=dev python -m beta_tools`
+
+Verify with `/beta-puppets-list` in the test guild — all 3 puppets should
+show as connected. Use `/beta-puppets-impersonate alice #general "hello"`
+to test that puppet sends are working.
+
+See `docs/superpowers/specs/2026-04-30-beta-tools-sidecar-design.md` for the
+full design.
