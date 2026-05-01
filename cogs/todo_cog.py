@@ -12,6 +12,32 @@ if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
 
+_MAX_CONTENT_LEN = 1500
+_NO_TEXT_MARKER = "[no text content]"
+
+
+def _format_task_label(*, author_display: str, channel_name: str) -> str:
+    """Build the headline shown in the todo list for a message-derived todo."""
+    return f"Message from @{author_display} in #{channel_name}"
+
+
+def _format_description(*, message_content: str, notes: str) -> str:
+    """Build the description column: message content (truncated) then notes below.
+
+    Either part may be empty. If the message has no text, '[no text content]' is
+    used so the source link still has framing.
+    """
+    head = message_content
+    if len(head) > _MAX_CONTENT_LEN:
+        head = head[:_MAX_CONTENT_LEN] + "…"
+    if not head:
+        head = _NO_TEXT_MARKER
+    notes = notes.strip() if notes else ""
+    if not notes:
+        return head
+    return f"{head}\n\n{notes}"
+
+
 class TodoCog(commands.Cog):
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
