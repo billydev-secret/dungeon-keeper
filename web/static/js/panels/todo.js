@@ -70,6 +70,16 @@ function renderDetail(t, completing) {
   const statusChip = t.completed_at
     ? '<span class="t-chip closed">Done</span>'
     : '<span class="t-chip open">Pending</span>';
+  const descriptionBlock = t.description
+    ? `<div class="td-section">Description</div>
+       <div style="font-size:14px;color:var(--ink);line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:4px 8px 8px">${esc(t.description)}</div>`
+    : "";
+  const sourceBlock = t.source_message_url
+    ? `<div class="td-section">Source</div>
+       <div style="padding:4px 8px 8px;font-size:14px;">
+         <a href="${esc(t.source_message_url)}" target="_blank" rel="noopener noreferrer" style="color:var(--accent, #5af);word-break:break-all">Jump to message ↗</a>
+       </div>`
+    : "";
   return `
     <div class="td-head">
       <div class="td-crumb">#${esc(t.id)} &nbsp;&middot;&nbsp; added ${esc(fmtAge(t.created_at))} ago</div>
@@ -83,6 +93,8 @@ function renderDetail(t, completing) {
     <div class="td-body">
       <div class="td-section">Task</div>
       <div style="font-size:14px;color:var(--ink);line-height:1.5;white-space:pre-wrap;word-break:break-word;padding:4px 8px 8px">${esc(t.task)}</div>
+      ${descriptionBlock}
+      ${sourceBlock}
       ${completedLine}
     </div>
     ${completeBtn}`;
