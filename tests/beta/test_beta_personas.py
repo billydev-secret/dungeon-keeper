@@ -83,3 +83,57 @@ def test_load_puppet_personas_rejects_duplicate_keys(tmp_path):
     p.write_text(yaml_text, encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate"):
         load_puppet_personas(p)
+
+
+def test_load_puppet_personas_rejects_missing_required_field(tmp_path):
+    yaml_text = """\
+- key: alice
+  display_name: Alice
+  avatar_url: https://example.com/a.png
+  activity_weight: 1.0
+  channel_affinities: {general: 1.0}
+  voice_likely: true
+  message_length_bias: short
+- key: bob
+  display_name: Bob
+  avatar_url: https://example.com/b.png
+  activity_weight: 1.0
+  voice_likely: true
+  message_length_bias: short
+"""
+    p = tmp_path / "puppets.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    with pytest.raises(ValueError, match="persona #1 missing required field 'channel_affinities'"):
+        load_puppet_personas(p)
+
+
+def test_load_puppet_personas_rejects_non_dict_channel_affinities(tmp_path):
+    yaml_text = """\
+- key: alice
+  display_name: Alice
+  avatar_url: https://example.com/a.png
+  activity_weight: 1.0
+  channel_affinities: general
+  voice_likely: true
+  message_length_bias: short
+"""
+    p = tmp_path / "puppets.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    with pytest.raises(ValueError, match="channel_affinities must be a mapping"):
+        load_puppet_personas(p)
+
+
+def test_load_puppet_personas_rejects_null_key(tmp_path):
+    yaml_text = """\
+- key: ~
+  display_name: Alice
+  avatar_url: https://example.com/a.png
+  activity_weight: 1.0
+  channel_affinities: {general: 1.0}
+  voice_likely: true
+  message_length_bias: short
+"""
+    p = tmp_path / "puppets.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid key"):
+        load_puppet_personas(p)
