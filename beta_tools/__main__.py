@@ -63,7 +63,7 @@ async def _main() -> None:
 
     bot_task = asyncio.create_task(bot.start(beta_cfg.tools_token), name="dk-tools-bot")
     stop_task = asyncio.create_task(stop_event.wait(), name="stop-wait")
-    done, pending = await asyncio.wait(
+    _, pending = await asyncio.wait(
         {bot_task, stop_task}, return_when=asyncio.FIRST_COMPLETED,
     )
     log.info("shutting down")
