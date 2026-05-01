@@ -1,0 +1,38 @@
+# Beta tools puppet roster (3 personas, one per BETA_PUPPET_TOKEN_N).
+# Order matters: index 0 → BETA_PUPPET_TOKEN_1, etc.
+# Replace avatar_url with real URLs after registering the puppet apps in
+# the Discord Developer Portal.
+
+- key: alice
+  display_name: Alice
+  avatar_url: https://i.imgur.com/REPLACE_ME_alice.png
+  activity_weight: 1.0
+  channel_affinities:
+    general: 0.5
+    photos: 0.2
+    drama: 0.1
+    random: 0.2
+  voice_likely: true
+  message_length_bias: short
+
+- key: bob
+  display_name: Bob the Builder
+  avatar_url: https://i.imgur.com/REPLACE_ME_bob.png
+  activity_weight: 1.5
+  channel_affinities:
+    general: 0.3
+    drama: 0.5
+    random: 0.2
+  voice_likely: false
+  message_length_bias: medium
+
+- key: clara
+  display_name: Clara
+  avatar_url: https://i.imgur.com/REPLACE_ME_clara.png
+  activity_weight: 0.8
+  channel_affinities:
+    general: 0.4
+    photos: 0.4
+    random: 0.2
+  voice_likely: true
+  message_length_bias: long
