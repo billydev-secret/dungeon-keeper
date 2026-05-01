@@ -45,7 +45,8 @@ async def list_todos(
 
         with ctx.open_db() as conn:
             rows = conn.execute(
-                f"SELECT id, added_by, task, created_at, completed_at, completed_by"
+                f"SELECT id, added_by, task, description, source_message_url,"
+                f" created_at, completed_at, completed_by"
                 f" FROM todos WHERE {where} ORDER BY created_at DESC LIMIT 200",
                 params,
             ).fetchall()
@@ -56,6 +57,8 @@ async def list_todos(
                 "added_by": str(r["added_by"]),
                 "added_by_name": "",
                 "task": r["task"],
+                "description": r["description"],
+                "source_message_url": r["source_message_url"],
                 "created_at": r["created_at"],
                 "completed_at": r["completed_at"],
                 "completed_by": str(r["completed_by"]) if r["completed_by"] else None,
