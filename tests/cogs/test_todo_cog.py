@@ -47,6 +47,14 @@ def test_description_neither_uses_no_text_marker():
     assert _format_description(message_content="", notes="") == "[no text content]"
 
 
+def test_description_whitespace_only_content_uses_no_text_marker():
+    assert _format_description(message_content="   \n\t ", notes="") == "[no text content]"
+    assert (
+        _format_description(message_content="   ", notes="follow up")
+        == "[no text content]\n\nfollow up"
+    )
+
+
 def test_description_truncates_long_content():
     long = "x" * (_MAX_CONTENT_LEN + 50)
     out = _format_description(message_content=long, notes="")

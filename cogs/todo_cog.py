@@ -30,7 +30,7 @@ def _format_description(*, message_content: str, notes: str) -> str:
     Either part may be empty. If the message has no text, '[no text content]' is
     used so the source link still has framing.
     """
-    head = message_content
+    head = (message_content or "").strip()
     if len(head) > _MAX_CONTENT_LEN:
         head = head[:_MAX_CONTENT_LEN] + "…"
     if not head:
