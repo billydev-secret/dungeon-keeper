@@ -350,6 +350,9 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             if not isinstance(reply_channel, discord.Thread):
                 await self.cog._safe_ephemeral(interaction, "Confession thread is unavailable.")
                 return
+            if reply_channel.locked:
+                await self.cog._safe_ephemeral(interaction, "This confession thread is locked.")
+                return
 
             try:
                 reply_msg = await reply_channel.send(content=reply_content, allowed_mentions=discord.AllowedMentions.none())
@@ -680,6 +683,11 @@ class ConfessionsCog(commands.Cog):
                     await self._safe_ephemeral(interaction, "This confession can no longer be replied to.")
                     return
                 discord_thread_id = get_discord_thread_id(self.ctx.db_path, interaction.guild.id, root_message_id)
+                if discord_thread_id:
+                    thread_obj = self.bot.get_channel(discord_thread_id)
+                    if isinstance(thread_obj, discord.Thread) and thread_obj.locked:
+                        await self._safe_ephemeral(interaction, "This confession thread is locked.")
+                        return
                 if not interaction.response.is_done():
                     await interaction.response.send_modal(
                         ReplyModal(
