@@ -28,19 +28,28 @@ def test_setup_function_exists():
     assert asyncio.iscoroutinefunction(mod.setup), "setup() must be a coroutine function"
 
 
-def test_veil_status_command_registered():
-    """/veil_status app_commands.Command must be registered on VeilCog."""
+def test_veil_group_and_submit_registered():
+    """`veil` app_commands.Group and `submit` subcommand must be on VeilCog."""
     from discord import app_commands
 
     mod = importlib.import_module("cogs.veil_cog")
     cog_cls = mod.VeilCog
 
-    # Collect all app_commands.Command objects attached to the cog class
-    command_names = [
+    # There should be a Group named "veil" registered on the cog
+    group_names = [
         item.name
         for item in cog_cls.__cog_app_commands__
-        if isinstance(item, app_commands.Command)
+        if isinstance(item, app_commands.Group)
     ]
-    assert "veil_status" in command_names, (
-        f"/veil_status not found in VeilCog app commands; found: {command_names}"
+    assert "veil" in group_names, (
+        f"'veil' Group not found in VeilCog app commands; found: {group_names}"
+    )
+
+    # The "veil" group must have a "submit" subcommand
+    veil_group = next(
+        item for item in cog_cls.__cog_app_commands__ if item.name == "veil"
+    )
+    sub_names = [cmd.name for cmd in veil_group.commands]
+    assert "submit" in sub_names, (
+        f"'submit' not found in /veil subcommands; found: {sub_names}"
     )

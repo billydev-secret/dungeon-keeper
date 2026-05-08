@@ -43,7 +43,7 @@ from services.moderation import (
     escalate_ticket,
     fmt_duration,
     generate_transcript,
-    render_transcript_html,
+    render_transcript_markdown,
     get_active_jail,
     get_active_warning_count,
     get_expired_jails,
@@ -191,9 +191,9 @@ async def _collect_and_post_transcript(
             content=transcript,
         )
 
-    # Build HTML file
-    html_bytes = render_transcript_html(transcript).encode("utf-8")
-    filename = f"{record_type}-{record_id}-transcript.html"
+    # Build Markdown file
+    html_bytes = render_transcript_markdown(transcript).encode("utf-8")
+    filename = f"{record_type}-{record_id}-transcript.md"
 
     # Post to transcript channel
     transcript_ch_id = _get_config(ctx, "transcript_channel_id")
