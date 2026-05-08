@@ -252,6 +252,7 @@ async def test_cog_load_registers_game_views_from_db(sync_db_path: Path):
         insert_round(conn, guild_id=GUILD_ID, submitter_id=1002, answer_id=1002)
 
     cog = _make_cog(str(sync_db_path))
+    add_view_mock: MagicMock = cog.bot.add_view  # type: ignore[assignment]
     await cog.cog_load()
 
-    assert cog.bot.add_view.call_count == 2  # type: ignore[attr-defined]
+    assert add_view_mock.call_count == 2
