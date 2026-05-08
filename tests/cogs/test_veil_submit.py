@@ -239,3 +239,19 @@ def _fake_game_message() -> MagicMock:
     msg.edit = AsyncMock()
     msg.guild = MagicMock()
     return msg
+
+
+@pytest.mark.asyncio
+async def test_cog_load_registers_game_views_from_db(sync_db_path: Path):
+    """cog_load queries active rounds and calls bot.add_view for each."""
+    from services.veil_repo import insert_round
+    from db_utils import open_db
+
+    with open_db(sync_db_path) as conn:
+        insert_round(conn, guild_id=GUILD_ID, submitter_id=1001, answer_id=1001)
+        insert_round(conn, guild_id=GUILD_ID, submitter_id=1002, answer_id=1002)
+
+    cog = _make_cog(str(sync_db_path))
+    await cog.cog_load()
+
+    assert cog.bot.add_view.call_count == 2  # type: ignore[attr-defined]
