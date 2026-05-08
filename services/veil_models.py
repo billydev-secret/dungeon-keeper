@@ -14,15 +14,15 @@ class BoundingBox:
 
     @property
     def width(self) -> float:
-        return self.x2 - self.x1
+        return max(0.0, self.x2 - self.x1)
 
     @property
     def height(self) -> float:
-        return self.y2 - self.y1
+        return max(0.0, self.y2 - self.y1)
 
     @property
     def area(self) -> float:
-        return max(0.0, self.width) * max(0.0, self.height)
+        return self.width * self.height
 
 
 @dataclass
