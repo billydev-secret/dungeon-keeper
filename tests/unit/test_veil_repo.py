@@ -11,6 +11,7 @@ from services.veil_repo import (
     count_unique_guessers_for_round,
     delete_optin,
     get_active_rounds_for_guild,
+    get_all_active_round_ids,
     get_all_optins_for_guild,
     get_guesses_for_round,
     get_last_guess_by_user_for_round,
@@ -214,3 +215,29 @@ def test_set_round_reroll_count(sync_db_path: Path):
         r = get_round(conn, rid)
     assert r is not None
     assert r.reroll_count == 3
+
+
+def test_get_all_active_round_ids_returns_empty_when_no_rounds(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        result = get_all_active_round_ids(conn)
+    assert result == []
+
+
+def test_get_all_active_round_ids_returns_unsolved_and_solved(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        rid1 = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_B)
+        rid2 = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_B)
+        mark_round_solved(conn, rid2, solver_id=USER_B,
+                          guesses_to_solve=1, unique_guessers_to_solve=1)
+        result = get_all_active_round_ids(conn)
+    ids_solved = {(rid, solved) for rid, solved in result}
+    assert (rid1, False) in ids_solved
+    assert (rid2, True) in ids_solved
+
+
+def test_get_all_active_round_ids_excludes_deleted(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        rid = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_B)
+        soft_delete_round(conn, rid)
+        result = get_all_active_round_ids(conn)
+    assert result == []

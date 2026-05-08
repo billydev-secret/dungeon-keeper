@@ -280,3 +280,10 @@ def get_all_optins_for_guild(conn: sqlite3.Connection, guild_id: int) -> list[Ve
         "SELECT * FROM veil_optins WHERE guild_id = ? ORDER BY opted_in_at ASC", (guild_id,)
     ).fetchall()
     return [_row_to_optin(r) for r in rows]
+
+
+def get_all_active_round_ids(conn: sqlite3.Connection) -> list[tuple[int, bool]]:
+    rows = conn.execute(
+        "SELECT id, solved_at IS NOT NULL AS solved FROM veil_rounds WHERE deleted_at IS NULL"
+    ).fetchall()
+    return [(row["id"], bool(row["solved"])) for row in rows]
