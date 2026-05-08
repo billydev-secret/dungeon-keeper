@@ -16,7 +16,7 @@ if str(_ROOT) not in sys.path:
 import aiosqlite
 
 from config import Config
-from migrations import apply_migrations
+from migrations import apply_migrations, apply_migrations_sync
 from tests.fakes import FakeGuild, FakeRole, FakeUser, fake_interaction as _fake_interaction
 
 
@@ -71,3 +71,14 @@ def mod_user(guild_with_mods) -> FakeUser:
 @pytest.fixture
 def regular_user() -> FakeUser:
     return FakeUser(id=3001, name="regular_user", roles=[])
+
+
+@pytest.fixture
+def sync_db_path(tmp_path: Path) -> Path:
+    """Sync SQLite DB at tmp_path with the full schema applied.
+
+    Use in tests that call open_db() directly (sync sqlite3 code).
+    """
+    db_path = tmp_path / "test.db"
+    apply_migrations_sync(db_path)
+    return db_path
