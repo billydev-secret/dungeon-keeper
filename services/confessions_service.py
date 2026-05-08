@@ -182,10 +182,11 @@ def _create_tables(conn: sqlite3.Connection) -> None:
     )
     conn.execute("""
         CREATE TABLE IF NOT EXISTS confession_emoji_assignments (
-            guild_id INTEGER NOT NULL,
+            guild_id        INTEGER NOT NULL,
             root_message_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            emoji_index INTEGER NOT NULL,
+            user_id         INTEGER NOT NULL,
+            emoji_index     INTEGER NOT NULL,
+            name_index      INTEGER NOT NULL DEFAULT -1,
             PRIMARY KEY (guild_id, root_message_id, user_id)
         )
     """)
