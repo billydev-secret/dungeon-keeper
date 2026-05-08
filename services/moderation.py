@@ -787,7 +787,8 @@ def render_transcript_markdown(transcript: dict[str, Any]) -> str:
                 if etitle:
                     lines.append(f"> **{_md_esc(etitle)}**")
                 if edesc:
-                    lines.append(f"> {edesc}")
+                    for edesc_line in edesc.split("\n"):
+                        lines.append(f"> {edesc_line}")
             for a in m.get("attachments", []) or []:
                 fn = _md_esc(str(a.get("filename", "file")))
                 url = str(a.get("url", ""))

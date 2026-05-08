@@ -109,3 +109,26 @@ def test_policy_ticket_type_formatted():
     t = _make_transcript(type="policy_ticket")
     md = render_transcript_markdown(t)
     assert "# Policy Ticket #42" in md
+
+
+def test_embed_multiline_description_all_lines_blockquoted():
+    t = _make_transcript(
+        message_count=1,
+        messages=[
+            {
+                "author_name": "Bot",
+                "content": "",
+                "timestamp": "2026-05-08T14:10:01+00:00",
+                "embeds": [
+                    {
+                        "title": "Policy Vote",
+                        "description": "Line one.\nLine two.\nLine three.",
+                    }
+                ],
+            }
+        ],
+    )
+    md = render_transcript_markdown(t)
+    assert "> Line one." in md
+    assert "> Line two." in md
+    assert "> Line three." in md
