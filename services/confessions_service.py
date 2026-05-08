@@ -189,6 +189,16 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (guild_id, root_message_id, user_id)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS confession_pools (
+            guild_id        INTEGER NOT NULL,
+            root_message_id INTEGER NOT NULL,
+            pool_type       TEXT NOT NULL,
+            remaining_json  TEXT NOT NULL DEFAULT '[]',
+            cycle           INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, root_message_id, pool_type)
+        )
+    """)
 
 
 def _row_to_guild_config(row) -> GuildConfig:
