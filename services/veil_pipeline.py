@@ -72,7 +72,7 @@ def filter_candidates(
 
     filtered = [d for d in detections if not _overlaps_face(d)]
     if not filtered and fallback and detections:
-        return [detections[0]]
+        return [max(detections, key=lambda d: d.score)]
     return filtered
 
 
