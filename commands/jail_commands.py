@@ -192,7 +192,7 @@ async def _collect_and_post_transcript(
         )
 
     # Build Markdown file
-    html_bytes = render_transcript_markdown(transcript).encode("utf-8")
+    md_bytes = render_transcript_markdown(transcript).encode("utf-8")
     filename = f"{record_type}-{record_id}-transcript.md"
 
     # Post to transcript channel
@@ -208,11 +208,11 @@ async def _collect_and_post_transcript(
                 color=CLR_INFO,
             )
             await ch.send(
-                embed=embed, file=discord.File(io.BytesIO(html_bytes), filename)
+                embed=embed, file=discord.File(io.BytesIO(md_bytes), filename)
             )
 
     # DM to user
-    await _dm_user(user, file=discord.File(io.BytesIO(html_bytes), filename))
+    await _dm_user(user, file=discord.File(io.BytesIO(md_bytes), filename))
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -741,7 +741,7 @@ def _fmt_ts(iso: str) -> str:
         return iso or ""
 
 
-_MD_SPECIAL = re.compile(r'([\\`*_{}\[\]()#+!|])')
+_MD_SPECIAL = re.compile(r'([\\`*_{}\[\]()#+!|])')  # - and . omitted: not structural in rendered positions
 
 
 def _md_esc(s: str) -> str:
