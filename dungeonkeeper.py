@@ -169,6 +169,7 @@ bot.extension_names = [
     "cogs.music_cog",
     "cogs.tts_cog",
     "cogs.voice_master_cog",
+    "cogs.veil_cog",
 ]
 
 # ==============================

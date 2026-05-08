@@ -28,7 +28,7 @@ def detect_faces(image_bytes: bytes) -> list[BoundingBox]:
     img_w, img_h = img.size
     arr = np.array(img)
 
-    mp_face = mp.solutions.face_detection
+    mp_face = mp.solutions.face_detection  # type: ignore[attr-defined]
     with mp_face.FaceDetection(model_selection=0, min_detection_confidence=0.5) as detector:
         result = detector.process(arr)
 
