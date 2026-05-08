@@ -180,19 +180,16 @@ def get_ephemeral_anon_identity(db_path: Path, guild_id: int, root_message_id: i
 
 def build_anon_reply(
     content: str,
-    user_id: int,
-    root_message_id: int,
     *,
     is_op: bool,
     circle: Optional[str] = None,
+    anon_name: Optional[str] = None,
 ) -> str:
     safe = defang_everyone_here(content)
     if is_op:
         prefix = f"{_OP_CIRCLE} [OP]"
     else:
-        resolved_circle = circle if circle is not None else anon_circle(user_id, root_message_id)
-        tag = anon_id(user_id, root_message_id)
-        prefix = f"{resolved_circle} {tag}"
+        prefix = f"{circle} {anon_name}"
     msg = f"{prefix}\n{safe}"
     if len(msg) > MAX_DISCORD_MESSAGE_LENGTH:
         msg = f"{prefix}\n{safe[:MAX_DISCORD_MESSAGE_LENGTH - len(prefix) - 1]}"

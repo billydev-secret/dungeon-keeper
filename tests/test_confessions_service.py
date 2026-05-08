@@ -6,18 +6,19 @@ from pathlib import Path
 
 
 from services.confessions_service import (
+    MAX_DISCORD_MESSAGE_LENGTH,
     _ANON_ADJECTIVES,
     _ANON_ANIMALS,
     _ANON_CIRCLES,
     _COLOR_POOL_SIZE,
     _NAME_POOL_SIZE,
+    _OP_CIRCLE,
     anon_circle_from_index,
     anon_name_from_index,
-    pop_pool_index,
-)
-from services.confessions_service import (
+    build_anon_reply,
     get_ephemeral_anon_identity,
     get_or_assign_anon_identity,
+    pop_pool_index,
 )
 
 
@@ -186,3 +187,27 @@ def test_ephemeral_and_persistent_share_pool(sync_db_path: Path):
         _, emoji_idx = get_ephemeral_anon_identity(sync_db_path, guild_id=1, root_message_id=root)
         seen_colors.add(emoji_idx)
     assert seen_colors == set(range(pool_size))
+
+
+def test_build_anon_reply_op():
+    result = build_anon_reply("hello world", is_op=True)
+    assert result.startswith(f"{_OP_CIRCLE} [OP]\n")
+    assert "hello world" in result
+
+
+def test_build_anon_reply_non_op():
+    result = build_anon_reply("secret stuff", is_op=False, circle="🔴", anon_name="Brave Owl")
+    assert result.startswith("🔴 Brave Owl\n")
+    assert "secret stuff" in result
+
+
+def test_build_anon_reply_truncates():
+    long_content = "x" * (MAX_DISCORD_MESSAGE_LENGTH + 100)
+    result = build_anon_reply(long_content, is_op=False, circle="🔵", anon_name="Tiny Fox")
+    assert len(result) <= MAX_DISCORD_MESSAGE_LENGTH
+
+
+def test_build_anon_reply_defangs_everyone():
+    result = build_anon_reply("@everyone listen up", is_op=False, circle="🟢", anon_name="Quiet Yak")
+    assert "@everyone" not in result
+    assert "@​everyone" in result

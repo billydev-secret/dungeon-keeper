@@ -18,13 +18,15 @@ from services.confessions_service import (
     ERROR_USER_BLOCKED,
     MAX_DISCORD_MESSAGE_LENGTH,
     MIN_REPLY_COOLDOWN_SECONDS,
-    _ANON_CIRCLES,
+    anon_circle_from_index,
+    anon_name_from_index,
     build_anon_reply,
     check_and_bump_limits,
     defang_everyone_here,
     get_config,
     get_discord_thread_id,
-    get_or_assign_emoji_index,
+    get_ephemeral_anon_identity,
+    get_or_assign_anon_identity,
     get_thread_info,
     init_db,
     jump_link,
@@ -259,6 +261,7 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         parent_channel_id: int,
         parent_message_id: int,
         thread_id: int = 0,
+        ephemeral: bool = False,
     ) -> None:
         super().__init__()
         self.cog = cog
@@ -266,6 +269,7 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         self.parent_channel_id = parent_channel_id
         self.parent_message_id = parent_message_id
         self.thread_id = thread_id
+        self.ephemeral = ephemeral
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         assert interaction.guild and interaction.user
@@ -334,10 +338,19 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
 
         is_op = parent_author_id > 0 and interaction.user.id == parent_author_id
         circle = None
+        anon_name = None
         if not is_op:
-            emoji_idx = get_or_assign_emoji_index(db_path, interaction.guild.id, root_message_id, interaction.user.id)
-            circle = _ANON_CIRCLES[emoji_idx]
-        reply_content = build_anon_reply(content, interaction.user.id, root_message_id, is_op=is_op, circle=circle)
+            if self.ephemeral:
+                name_idx, emoji_idx = get_ephemeral_anon_identity(
+                    db_path, interaction.guild.id, root_message_id
+                )
+            else:
+                name_idx, emoji_idx = get_or_assign_anon_identity(
+                    db_path, interaction.guild.id, root_message_id, interaction.user.id
+                )
+            circle = anon_circle_from_index(emoji_idx)
+            anon_name = anon_name_from_index(name_idx)
+        reply_content = build_anon_reply(content, is_op=is_op, circle=circle, anon_name=anon_name)
 
         if self.thread_id:
             reply_channel = self.cog.bot.get_channel(self.thread_id)
