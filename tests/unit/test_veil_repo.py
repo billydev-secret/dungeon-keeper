@@ -23,8 +23,10 @@ from services.veil_repo import (
     is_opted_in,
     mark_round_solved,
     set_round_answer_optout,
+    set_round_reroll_count,
     set_veil_config_value,
     soft_delete_round,
+    update_round_message,
     upsert_optin,
 )
 
@@ -192,3 +194,23 @@ def test_get_all_optins_for_guild(sync_db_path: Path):
         upsert_optin(conn, USER_B, GUILD)
         optins = get_all_optins_for_guild(conn, GUILD)
     assert {o.user_id for o in optins} == {USER_A, USER_B}
+
+
+def test_update_round_message(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        rid = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_B)
+        update_round_message(conn, rid, message_id=42, crop_url="https://example.com/crop.jpg", crop_path="/tmp/crop.jpg")
+        r = get_round(conn, rid)
+    assert r is not None
+    assert r.message_id == 42
+    assert r.crop_url == "https://example.com/crop.jpg"
+    assert r.crop_path == "/tmp/crop.jpg"
+
+
+def test_set_round_reroll_count(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        rid = insert_round(conn, guild_id=GUILD, submitter_id=USER_A, answer_id=USER_B)
+        set_round_reroll_count(conn, rid, 3)
+        r = get_round(conn, rid)
+    assert r is not None
+    assert r.reroll_count == 3
