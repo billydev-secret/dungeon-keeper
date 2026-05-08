@@ -127,6 +127,57 @@ def pop_pool_index(
     return idx
 
 
+def get_or_assign_anon_identity(
+    db_path: Path, guild_id: int, root_message_id: int, user_id: int
+) -> tuple[int, int]:
+    """Return (name_index, emoji_index) for a persistent anonymous identity in a thread.
+
+    Legacy rows with name_index=-1 are backfilled using the original hash algorithm.
+    """
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT name_index, emoji_index FROM confession_emoji_assignments "
+            "WHERE guild_id = ? AND root_message_id = ? AND user_id = ?",
+            (guild_id, root_message_id, user_id),
+        ).fetchone()
+        if row:
+            name_idx = int(row["name_index"])
+            emoji_idx = int(row["emoji_index"])
+            if name_idx == -1:
+                # Legacy row: derive name_index from original hash, preserve emoji_index
+                digest = hashlib.sha256(f"{user_id}:{root_message_id}".encode()).digest()
+                adj_idx = int.from_bytes(digest[0:2], "big") % len(_ANON_ADJECTIVES)
+                animal_idx = int.from_bytes(digest[2:4], "big") % len(_ANON_ANIMALS)
+                name_idx = adj_idx * len(_ANON_ANIMALS) + animal_idx
+                conn.execute(
+                    "UPDATE confession_emoji_assignments SET name_index = ? "
+                    "WHERE guild_id = ? AND root_message_id = ? AND user_id = ?",
+                    (name_idx, guild_id, root_message_id, user_id),
+                )
+            return name_idx, emoji_idx
+        name_idx = pop_pool_index(conn, guild_id, root_message_id, "name", _NAME_POOL_SIZE)
+        emoji_idx = pop_pool_index(conn, guild_id, root_message_id, "color", _COLOR_POOL_SIZE)
+        conn.execute(
+            "INSERT OR IGNORE INTO confession_emoji_assignments "
+            "(guild_id, root_message_id, user_id, emoji_index, name_index) VALUES (?, ?, ?, ?, ?)",
+            (guild_id, root_message_id, user_id, emoji_idx, name_idx),
+        )
+        row = conn.execute(
+            "SELECT name_index, emoji_index FROM confession_emoji_assignments "
+            "WHERE guild_id = ? AND root_message_id = ? AND user_id = ?",
+            (guild_id, root_message_id, user_id),
+        ).fetchone()
+        return int(row["name_index"]), int(row["emoji_index"])
+
+
+def get_ephemeral_anon_identity(db_path: Path, guild_id: int, root_message_id: int) -> tuple[int, int]:
+    """Return (name_index, emoji_index) for a one-shot ephemeral identity; not stored."""
+    with open_db(db_path) as conn:
+        name_idx = pop_pool_index(conn, guild_id, root_message_id, "name", _NAME_POOL_SIZE)
+        emoji_idx = pop_pool_index(conn, guild_id, root_message_id, "color", _COLOR_POOL_SIZE)
+    return name_idx, emoji_idx
+
+
 def build_anon_reply(
     content: str,
     user_id: int,

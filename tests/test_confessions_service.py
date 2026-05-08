@@ -15,6 +15,10 @@ from services.confessions_service import (
     anon_name_from_index,
     pop_pool_index,
 )
+from services.confessions_service import (
+    get_ephemeral_anon_identity,
+    get_or_assign_anon_identity,
+)
 
 
 def test_anon_name_from_index_first():
@@ -98,3 +102,87 @@ def test_pop_pool_index_name_and_color_are_independent(sync_db_path: Path):
     assert pool_types == {"name", "color"}
     assert 0 <= n < _NAME_POOL_SIZE
     assert 0 <= c < _COLOR_POOL_SIZE
+
+
+def test_persistent_identity_stable(sync_db_path: Path):
+    """Same user same thread always returns same (name_idx, emoji_idx)."""
+    a = get_or_assign_anon_identity(sync_db_path, guild_id=1, root_message_id=1000, user_id=42)
+    b = get_or_assign_anon_identity(sync_db_path, guild_id=1, root_message_id=1000, user_id=42)
+    assert a == b
+
+
+def test_persistent_identity_unique_per_user(sync_db_path: Path):
+    """Two different users in the same thread get different name and color indices."""
+    a = get_or_assign_anon_identity(sync_db_path, guild_id=1, root_message_id=1001, user_id=10)
+    b = get_or_assign_anon_identity(sync_db_path, guild_id=1, root_message_id=1001, user_id=11)
+    assert a[0] != b[0], "name_index should differ"
+    assert a[1] != b[1], "emoji_index should differ"
+
+
+def test_persistent_identity_valid_range(sync_db_path: Path):
+    name_idx, emoji_idx = get_or_assign_anon_identity(sync_db_path, guild_id=1, root_message_id=1002, user_id=99)
+    assert 0 <= name_idx < _NAME_POOL_SIZE
+    assert 0 <= emoji_idx < _COLOR_POOL_SIZE
+
+
+def test_persistent_identity_writes_to_db(sync_db_path: Path):
+    get_or_assign_anon_identity(sync_db_path, guild_id=1, root_message_id=1003, user_id=77)
+    with sqlite3.connect(str(sync_db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT name_index, emoji_index FROM confession_emoji_assignments "
+            "WHERE guild_id=1 AND root_message_id=1003 AND user_id=77"
+        ).fetchone()
+    assert row is not None
+    assert row["name_index"] >= 0
+    assert row["emoji_index"] >= 0
+
+
+def test_persistent_identity_legacy_backfill(sync_db_path: Path):
+    """Existing rows with name_index=-1 get a valid name_index on next call."""
+    with sqlite3.connect(str(sync_db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "INSERT INTO confession_emoji_assignments (guild_id, root_message_id, user_id, emoji_index, name_index) "
+            "VALUES (1, 9999, 55, 3, -1)"
+        )
+        conn.commit()
+    name_idx, emoji_idx = get_or_assign_anon_identity(sync_db_path, guild_id=1, root_message_id=9999, user_id=55)
+    assert name_idx >= 0
+    assert emoji_idx == 3  # original emoji preserved
+
+
+def test_ephemeral_identity_does_not_write_to_assignments(sync_db_path: Path):
+    get_ephemeral_anon_identity(sync_db_path, guild_id=1, root_message_id=2000)
+    with sqlite3.connect(str(sync_db_path)) as conn:
+        rows = conn.execute(
+            "SELECT * FROM confession_emoji_assignments WHERE guild_id=1 AND root_message_id=2000"
+        ).fetchall()
+    assert len(rows) == 0
+
+
+def test_ephemeral_identity_valid_range(sync_db_path: Path):
+    name_idx, emoji_idx = get_ephemeral_anon_identity(sync_db_path, guild_id=1, root_message_id=2001)
+    assert 0 <= name_idx < _NAME_POOL_SIZE
+    assert 0 <= emoji_idx < _COLOR_POOL_SIZE
+
+
+def test_ephemeral_identity_advances_pool(sync_db_path: Path):
+    """Two consecutive ephemeral calls to the same thread return different indices."""
+    a = get_ephemeral_anon_identity(sync_db_path, guild_id=1, root_message_id=2002)
+    b = get_ephemeral_anon_identity(sync_db_path, guild_id=1, root_message_id=2002)
+    assert a != b
+
+
+def test_ephemeral_and_persistent_share_pool(sync_db_path: Path):
+    """Ephemeral and persistent calls compete for the same color pool (no reuse within a cycle)."""
+    pool_size = _COLOR_POOL_SIZE
+    seen_colors: set[int] = set()
+    root = 3000
+    for user_id in range(pool_size // 2):
+        _, emoji_idx = get_or_assign_anon_identity(sync_db_path, guild_id=1, root_message_id=root, user_id=user_id)
+        seen_colors.add(emoji_idx)
+    for _ in range(pool_size - pool_size // 2):
+        _, emoji_idx = get_ephemeral_anon_identity(sync_db_path, guild_id=1, root_message_id=root)
+        seen_colors.add(emoji_idx)
+    assert seen_colors == set(range(pool_size))
