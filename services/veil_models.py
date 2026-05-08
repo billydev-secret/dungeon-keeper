@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -62,15 +61,15 @@ class VeilRound:
     reroll_count: int
     allow_reuse: bool
     is_reuse: bool
-    original_round_id: Optional[int]
+    original_round_id: int | None
     reuse_blocked: bool
     created_at: float
-    solved_at: Optional[float]
-    solver_id: Optional[int]
-    guesses_to_solve: Optional[int]
-    unique_guessers_to_solve: Optional[int]
+    solved_at: float | None
+    solver_id: int | None
+    guesses_to_solve: int | None
+    unique_guessers_to_solve: int | None
     answer_optout: bool
-    deleted_at: Optional[float]
+    deleted_at: float | None
 
 
 @dataclass

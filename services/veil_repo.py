@@ -1,10 +1,8 @@
-# services/veil_repo.py
 """Veil cog — DB query layer (sync sqlite3)."""
 from __future__ import annotations
 
 import sqlite3
 import time
-from typing import Optional
 
 from db_utils import get_config_value, parse_bool, set_config_value
 from services.veil_models import VeilConfig, VeilGuess, VeilOptin, VeilRound
@@ -90,7 +88,7 @@ def insert_round(
     candidate_count: int = 0,
     allow_reuse: bool = False,
     is_reuse: bool = False,
-    original_round_id: Optional[int] = None,
+    original_round_id: int | None = None,
 ) -> int:
     cur = conn.execute(
         """
@@ -107,7 +105,7 @@ def insert_round(
     return cur.lastrowid  # type: ignore[return-value]
 
 
-def get_round(conn: sqlite3.Connection, round_id: int) -> Optional[VeilRound]:
+def get_round(conn: sqlite3.Connection, round_id: int) -> VeilRound | None:
     row = conn.execute("SELECT * FROM veil_rounds WHERE id = ?", (round_id,)).fetchone()
     return _row_to_round(row) if row else None
 
@@ -177,6 +175,7 @@ def get_reusable_rounds(
           AND solved_at IS NOT NULL AND created_at <= ?
           AND deleted_at IS NULL
         ORDER BY created_at ASC
+        LIMIT 200
         """,
         (guild_id, cutoff),
     ).fetchall()
@@ -229,7 +228,7 @@ def count_unique_guessers_for_round(conn: sqlite3.Connection, round_id: int) -> 
 
 def get_last_guess_by_user_for_round(
     conn: sqlite3.Connection, round_id: int, guesser_id: int
-) -> Optional[VeilGuess]:
+) -> VeilGuess | None:
     row = conn.execute(
         """
         SELECT * FROM veil_guesses
@@ -263,7 +262,7 @@ def delete_optin(conn: sqlite3.Connection, user_id: int, guild_id: int) -> bool:
     return (cur.rowcount or 0) > 0
 
 
-def get_optin(conn: sqlite3.Connection, user_id: int, guild_id: int) -> Optional[VeilOptin]:
+def get_optin(conn: sqlite3.Connection, user_id: int, guild_id: int) -> VeilOptin | None:
     row = conn.execute(
         "SELECT * FROM veil_optins WHERE user_id = ? AND guild_id = ?", (user_id, guild_id)
     ).fetchone()

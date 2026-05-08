@@ -5,6 +5,16 @@ from pathlib import Path
 
 from services.veil_models import BoundingBox, Detection
 
+_detector = None
+
+
+def _get_detector():  # type: ignore[return]
+    global _detector
+    if _detector is None:
+        from nudenet import NudeDetector  # type: ignore[import-untyped]  # noqa: PLC0415
+        _detector = NudeDetector()
+    return _detector
+
 
 def detect(image_path: str | Path) -> list[Detection]:
     """Run NudeNet detection on *image_path* and return a list of Detections.
@@ -15,10 +25,7 @@ def detect(image_path: str | Path) -> list[Detection]:
     Box conversion: NudeNet returns ``[x, y, width, height]``; we convert to
     ``BoundingBox(x1=x, y1=y, x2=x+w, y2=y+h)``.
     """
-    from nudenet import NudeDetector  # type: ignore[import-untyped]  # noqa: PLC0415
-
-    detector = NudeDetector()
-    raw_results = detector.detect(str(image_path))
+    raw_results = _get_detector().detect(str(image_path))
 
     detections: list[Detection] = []
     for item in raw_results:

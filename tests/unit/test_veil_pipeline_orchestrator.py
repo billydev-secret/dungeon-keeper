@@ -218,10 +218,8 @@ class TestRunReroll:
         img_w: int = 500,
         img_h: int = 500,
         render_return: bytes = b"reroll-jpeg",
-    ) -> bytes | None:
+    ) -> bytes:
         mock_pil = _make_pil_mock(img_w, img_h)
-        mock_face_det = MagicMock()
-        mock_face_det.detect_faces.return_value = []
         mock_crop_ren = MagicMock()
         mock_crop_ren.render_crop.return_value = render_return
 
@@ -229,13 +227,12 @@ class TestRunReroll:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_face_detector": mock_face_det,
                 "services.veil_crop_renderer": mock_crop_ren,
             },
         ):
             from services.veil_pipeline import run_reroll  # noqa: PLC0415
 
-            return run_reroll(b"fake-image-bytes", existing_crops, "medium")
+            return run_reroll(b"fake-image-bytes", existing_crops)
 
     def test_returns_bytes_on_success(self):
         result = self._run([])
@@ -261,20 +258,17 @@ class TestRunReroll:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_face_detector": mock_face_det,
                 "services.veil_crop_renderer": mock_crop_ren,
             },
         ):
             from services.veil_pipeline import run_reroll  # noqa: PLC0415
 
-            run_reroll(b"fake-bytes", [], "medium")
+            run_reroll(b"fake-bytes", [])
 
         assert mock_crop_ren.render_crop.call_count == 1
 
     def test_render_crop_receives_none_cache_path(self):
         mock_pil = _make_pil_mock()
-        mock_face_det = MagicMock()
-        mock_face_det.detect_faces.return_value = []
         mock_crop_ren = MagicMock()
         mock_crop_ren.render_crop.return_value = b"reroll-jpeg"
 
@@ -282,13 +276,12 @@ class TestRunReroll:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_face_detector": mock_face_det,
                 "services.veil_crop_renderer": mock_crop_ren,
             },
         ):
             from services.veil_pipeline import run_reroll  # noqa: PLC0415
 
-            run_reroll(b"fake-bytes", [], "medium")
+            run_reroll(b"fake-bytes", [])
 
         call_kwargs = mock_crop_ren.render_crop.call_args
         cache_path_used = call_kwargs.kwargs.get("cache_path") or call_kwargs[1].get("cache_path")
