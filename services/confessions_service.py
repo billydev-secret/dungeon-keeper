@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -71,6 +72,9 @@ _ANON_CIRCLES = [
 ]
 _OP_CIRCLE = "⭐"
 
+_NAME_POOL_SIZE = len(_ANON_ADJECTIVES) * len(_ANON_ANIMALS)
+_COLOR_POOL_SIZE = len(_ANON_CIRCLES)
+
 
 def anon_id(user_id: int, root_message_id: int) -> str:
     digest = hashlib.sha256(f"{user_id}:{root_message_id}".encode()).digest()
@@ -82,6 +86,45 @@ def anon_id(user_id: int, root_message_id: int) -> str:
 def anon_circle(user_id: int, root_message_id: int) -> str:
     digest = hashlib.sha256(f"c:{user_id}:{root_message_id}".encode()).digest()
     return _ANON_CIRCLES[int.from_bytes(digest[:2], "big") % len(_ANON_CIRCLES)]
+
+
+def anon_name_from_index(name_index: int) -> str:
+    return f"{_ANON_ADJECTIVES[name_index // len(_ANON_ANIMALS)]} {_ANON_ANIMALS[name_index % len(_ANON_ANIMALS)]}"
+
+
+def anon_circle_from_index(emoji_index: int) -> str:
+    return _ANON_CIRCLES[emoji_index]
+
+
+def pop_pool_index(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    root_message_id: int,
+    pool_type: str,
+    pool_size: int,
+) -> int:
+    """Pop the next index from a per-thread shuffled pool, reshuffling when exhausted."""
+    row = conn.execute(
+        "SELECT remaining_json, cycle FROM confession_pools "
+        "WHERE guild_id = ? AND root_message_id = ? AND pool_type = ?",
+        (guild_id, root_message_id, pool_type),
+    ).fetchone()
+    cycle = row["cycle"] if row else 0
+    remaining: list[int] = json.loads(row["remaining_json"]) if row else []
+    if not remaining:
+        remaining = list(range(pool_size))
+        random.shuffle(remaining)
+        if row:
+            cycle += 1
+    idx = remaining.pop()
+    conn.execute("""
+        INSERT INTO confession_pools (guild_id, root_message_id, pool_type, remaining_json, cycle)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, root_message_id, pool_type) DO UPDATE SET
+            remaining_json = excluded.remaining_json,
+            cycle = excluded.cycle
+    """, (guild_id, root_message_id, pool_type, json.dumps(remaining), cycle))
+    return idx
 
 
 def build_anon_reply(
