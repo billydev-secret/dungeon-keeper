@@ -1,7 +1,6 @@
 """Cog-level tests for the Veil guess flow."""
 from __future__ import annotations
 
-from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -71,7 +70,10 @@ def _make_select_view(
 
 @pytest.mark.asyncio
 async def test_correct_first_guess_marks_solved_and_edits_message():
-    view = _make_select_view()
+    game_msg = MagicMock()
+    game_msg.edit = AsyncMock()
+    game_msg.guild = MagicMock()
+    view = _make_select_view(game_message=game_msg)
     interaction = fake_interaction(user=FakeMember(id=9999))
     interaction.response.edit_message = AsyncMock()
 
@@ -80,17 +82,20 @@ async def test_correct_first_guess_marks_solved_and_edits_message():
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
          patch("cogs.veil_cog._do_mark_solved", return_value=(3, 2)), \
-         patch.object(type(view._select), "values", new=property(lambda self: [str(2001)])):
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
-    cast(AsyncMock, view.game_message.edit).assert_called_once()
+    game_msg.edit.assert_called_once()
     call_content = interaction.response.edit_message.call_args.kwargs.get("content", "")
     assert "correct" in call_content.lower()
 
 
 @pytest.mark.asyncio
 async def test_correct_guess_already_solved_does_not_edit_game_message():
-    view = _make_select_view()
+    game_msg = MagicMock()
+    game_msg.edit = AsyncMock()
+    game_msg.guild = MagicMock()
+    view = _make_select_view(game_message=game_msg)
     interaction = fake_interaction(user=FakeMember(id=9999))
     interaction.response.edit_message = AsyncMock()
 
@@ -98,17 +103,20 @@ async def test_correct_guess_already_solved_does_not_edit_game_message():
 
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
-         patch.object(type(view._select), "values", new=property(lambda self: [str(2001)])):
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
-    cast(AsyncMock, view.game_message.edit).assert_not_called()
+    game_msg.edit.assert_not_called()
     call_content = interaction.response.edit_message.call_args.kwargs.get("content", "")
     assert "already" in call_content.lower() or "someone" in call_content.lower()
 
 
 @pytest.mark.asyncio
 async def test_wrong_guess_sends_not_it_message():
-    view = _make_select_view()
+    game_msg = MagicMock()
+    game_msg.edit = AsyncMock()
+    game_msg.guild = MagicMock()
+    view = _make_select_view(game_message=game_msg)
     interaction = fake_interaction(user=FakeMember(id=9999))
     interaction.response.edit_message = AsyncMock()
 
@@ -116,10 +124,10 @@ async def test_wrong_guess_sends_not_it_message():
 
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
-         patch.object(type(view._select), "values", new=property(lambda self: [str(3333)])):
+         patch.object(type(view._select), "values", new=property(lambda _: [str(3333)])):
         await view._on_select(interaction)
 
-    cast(AsyncMock, view.game_message.edit).assert_not_called()
+    game_msg.edit.assert_not_called()
     call_content = interaction.response.edit_message.call_args.kwargs.get("content", "")
     assert "not it" in call_content.lower()
 
@@ -134,7 +142,7 @@ async def test_select_is_disabled_after_guess():
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
          patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1)), \
-         patch.object(type(view._select), "values", new=property(lambda self: [str(2001)])):
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
     assert view._select.disabled is True

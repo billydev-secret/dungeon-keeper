@@ -7,9 +7,8 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-from typing import Any
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
@@ -181,7 +180,7 @@ class GuessSelectView(discord.ui.View):
         self,
         bot: "Bot",
         round_id: int,
-        veil_members: list[discord.Member],
+        veil_members: Sequence[discord.Member],
         game_message: discord.Message,
     ) -> None:
         super().__init__(timeout=60)
