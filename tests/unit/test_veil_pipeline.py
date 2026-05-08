@@ -65,10 +65,10 @@ def test_padded_crop_medium_adds_25_percent():
 
 
 def test_padded_crop_clamps_to_zero():
-    # bbox near top-left; padding would push x1/y1 negative
-    r = compute_padded_crop(_bb(5, 5, 55, 55), "hard", 100, 100)
-    assert r.x1 >= 0.0
-    assert r.y1 >= 0.0
+    # easy pad = 0.60 * 50 = 30 > origin offset of 5 → x1 would be -25 without clamp
+    r = compute_padded_crop(_bb(5, 5, 55, 55), "easy", 100, 100)
+    assert r.x1 == pytest.approx(0.0)
+    assert r.y1 == pytest.approx(0.0)
 
 
 def test_padded_crop_clamps_to_image_edge():
