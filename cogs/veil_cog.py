@@ -26,6 +26,7 @@ from services.veil_repo import (
     insert_round,
     mark_round_solved,
     set_round_reroll_count,
+    set_veil_config_value,
     update_round_message,
 )
 
@@ -34,12 +35,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.veil")
 
-_VEIL_CACHE = Path("veil_cache")
-
 
 # ── Pure validation helpers (module-level so they're patchable in tests) ─────
 
 def _has_veil_role(member: Any, veil_role_id: int) -> bool:
+    if veil_role_id == 0:
+        return True
     return any(r.id == veil_role_id for r in member.roles)
 
 
@@ -134,6 +135,11 @@ def _do_mark_solved(
     return guess_count, unique_count
 
 
+def _do_set_config(db_path: Path, guild_id: int, key: str, value: str) -> None:
+    with open_db(db_path) as conn:
+        set_veil_config_value(conn, guild_id, key, value)
+
+
 def _do_load_active_rounds(db_path: Path) -> list[tuple[int, bool]]:
     from services.veil_repo import get_all_active_round_ids  # noqa: PLC0415  # type: ignore[attr-defined]
     with open_db(db_path) as conn:
@@ -147,7 +153,7 @@ def _game_embed(round_id: int) -> discord.Embed:
         title=f"Round #{round_id}",
         description="Submitted by an anonymous member",
         color=discord.Color.from_rgb(80, 20, 100),
-    ).set_image(url="attachment://veil_crop.jpg")
+    )
 
 
 def _solved_embed(
@@ -157,10 +163,12 @@ def _solved_embed(
     solver_mention: str,
     guess_count: int,
     unique_count: int,
+    *,
+    crop_url: str = "",
 ) -> discord.Embed:
     guesses_txt = f"{guess_count} guess{'es' if guess_count != 1 else ''}"
     guessers_txt = f"{unique_count} guesser{'s' if unique_count != 1 else ''}"
-    return discord.Embed(
+    emb = discord.Embed(
         title=f"✅ Round #{round_id} — Solved!",
         color=discord.Color.green(),
         description=(
@@ -169,6 +177,9 @@ def _solved_embed(
             f"**Solved by:** {solver_mention} in {guesses_txt} (across {guessers_txt})"
         ),
     )
+    if crop_url:
+        emb.set_image(url=crop_url)
+    return emb
 
 
 # ── Views ─────────────────────────────────────────────────────────────────────
@@ -231,6 +242,7 @@ class GuessSelectView(discord.ui.View):
             solved_emb = _solved_embed(
                 self.round_id, answer_mention, submitter_mention,
                 interaction.user.mention, guess_count, unique_count,
+                crop_url=round_row.crop_url,
             )
             new_game_view = GameView(self.bot, self.round_id, solved=True)
             await self.game_message.edit(embed=solved_emb, view=new_game_view)
@@ -300,64 +312,127 @@ class GameView(discord.ui.View):
 
 
 class SubmitPreviewView(discord.ui.View):
-    """Ephemeral view shown to the submitter after pipeline runs."""
+    """Ephemeral preview shown to the submitter; Post publishes to the game channel.
 
-    _MAX_REROLLS = 3
+    The round row is only inserted to the DB when Post is clicked, so a timeout
+    or dismissal before posting leaves no orphan record.
+    """
 
     def __init__(
         self,
         bot: "Bot",
-        round_id: int,
         crops: list[bytes],
-        game_message: discord.Message,
+        guild_id: int,
+        veil_channel_id: int,
+        *,
+        submitter_id: int,
+        answer_id: int,
+        difficulty: str,
+        allow_reuse: bool,
+        candidate_count: int,
+        veil_role_id: int = 0,
     ) -> None:
         super().__init__(timeout=300)
         self.bot = bot
-        self.round_id = round_id
         self.crops = crops
         self.crop_index = 0
-        self.rerolls_used = 0
-        self.game_message = game_message
+        self.total_rerolls = 0
+        self.guild_id = guild_id
+        self.veil_channel_id = veil_channel_id
+        self._submitter_id = submitter_id
+        self._answer_id = answer_id
+        self._difficulty = difficulty
+        self._allow_reuse = allow_reuse
+        self._candidate_count = candidate_count
+        self._veil_role_id = veil_role_id
 
-        remaining = min(self._MAX_REROLLS, len(crops) - 1)
         self.reroll_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-            label=f"Re-roll ({remaining} left)",
+            label=f"Re-roll (1/{len(crops)})",
             style=discord.ButtonStyle.secondary,
-            disabled=remaining == 0,
+            disabled=len(crops) <= 1,
         )
         self.reroll_btn.callback = self._on_reroll
         self.add_item(self.reroll_btn)
 
-    async def _on_reroll(self, interaction: discord.Interaction) -> None:
-        self.crop_index += 1
-        self.rerolls_used += 1
-        remaining = min(self._MAX_REROLLS - self.rerolls_used, len(self.crops) - 1 - self.crop_index)
-
-        await asyncio.to_thread(
-            _do_set_reroll_count, self.bot.ctx.db_path, self.round_id, self.rerolls_used
+        self.post_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="Post",
+            style=discord.ButtonStyle.success,
         )
+        self.post_btn.callback = self._on_post
+        self.add_item(self.post_btn)
+
+    async def _on_reroll(self, interaction: discord.Interaction) -> None:
+        self.crop_index = (self.crop_index + 1) % len(self.crops)
+        self.total_rerolls += 1
+        self.reroll_btn.label = f"Re-roll ({self.crop_index + 1}/{len(self.crops)})"
 
         new_crop = self.crops[self.crop_index]
-
-        new_game_file = discord.File(io.BytesIO(new_crop), filename="veil_crop.jpg")
-        await self.game_message.edit(
-            embed=_game_embed(self.round_id),
-            attachments=[new_game_file],
-        )
-
-        if remaining <= 0:
-            self.reroll_btn.disabled = True
-        else:
-            self.reroll_btn.label = f"Re-roll ({remaining} left)"
-
         preview_file = discord.File(io.BytesIO(new_crop), filename="preview.jpg")
         preview_embed = discord.Embed(
             title="Your crop preview",
-            description=f"Re-rolls remaining: {remaining}",
+            description=f"Crop {self.crop_index + 1} of {len(self.crops)} — click Post when happy",
         ).set_image(url="attachment://preview.jpg")
         await interaction.response.edit_message(
             embed=preview_embed,
             attachments=[preview_file],
+            view=self,
+        )
+
+    async def _on_post(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        veil_channel = interaction.guild.get_channel(self.veil_channel_id)
+        if veil_channel is None or not isinstance(
+            veil_channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
+        ):
+            await interaction.followup.send(
+                "Veil channel not found — ask an admin to check the config.", ephemeral=True
+            )
+            return
+
+        db_path = self.bot.ctx.db_path
+        round_id = await asyncio.to_thread(
+            _do_insert_round,
+            db_path,
+            guild_id=self.guild_id,
+            submitter_id=self._submitter_id,
+            answer_id=self._answer_id,
+            channel_id=self.veil_channel_id,
+            difficulty=self._difficulty,
+            allow_reuse=self._allow_reuse,
+            candidate_count=self._candidate_count,
+        )
+
+        if self.total_rerolls:
+            await asyncio.to_thread(_do_set_reroll_count, db_path, round_id, self.total_rerolls)
+
+        crop = self.crops[self.crop_index]
+        crop_file = discord.File(io.BytesIO(crop), filename="SPOILER_veil_crop.jpg")
+        game_view = GameView(self.bot, round_id)
+        self.bot.add_view(game_view)
+        role_ping = f"<@&{self._veil_role_id}>" if self._veil_role_id else None
+        game_msg = await veil_channel.send(
+            content=role_ping,
+            embed=_game_embed(round_id),
+            file=crop_file,
+            view=game_view,
+        )
+
+        crop_url = game_msg.attachments[0].url if game_msg.attachments else ""
+        await asyncio.to_thread(
+            _do_update_round_message,
+            db_path,
+            round_id,
+            game_msg.id,
+            crop_url,
+            "",
+        )
+
+        self.reroll_btn.disabled = True
+        self.post_btn.disabled = True
+        await interaction.edit_original_response(
+            content=f"✅ Posted to {veil_channel.mention}!",
             view=self,
         )
 
@@ -421,7 +496,7 @@ class VeilCog(commands.Cog):
 
         image_bytes = await image.read()
 
-        dim_ok, _w, _h = await asyncio.to_thread(
+        dim_ok, *_ = await asyncio.to_thread(
             _validate_dimensions, image_bytes, config.min_image_dimension_px
         )
         if not dim_ok:
@@ -441,64 +516,66 @@ class VeilCog(commands.Cog):
                 tmp_path,
                 image_bytes,
                 config.crop_difficulty,
-                candidate_count=3,
+                candidate_count=10,
             )
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        if not pipeline_result.candidates:
+        if not pipeline_result.crops:
             await interaction.followup.send(
                 "Couldn't find a viable crop region — try a different image.", ephemeral=True
             )
             return
 
-        round_id = await asyncio.to_thread(
-            _do_insert_round,
-            db_path,
-            guild_id=interaction.guild.id,
-            submitter_id=interaction.user.id,
-            answer_id=interaction.user.id,
-            channel_id=config.veil_channel_id,
-            difficulty=config.crop_difficulty,
-            allow_reuse=allow_reuse,
-            candidate_count=len(pipeline_result.candidates),
-        )
-
-        _VEIL_CACHE.mkdir(exist_ok=True)
-        cache_path = _VEIL_CACHE / f"{round_id}.jpg"
-        cache_path.write_bytes(pipeline_result.crops[0])
-
-        veil_channel = interaction.guild.get_channel(config.veil_channel_id)
-        if veil_channel is None or not isinstance(
-            veil_channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
-        ):
-            await interaction.followup.send(
-                "Veil channel not found — ask an admin to check the config.", ephemeral=True
-            )
-            return
-
-        crop_file = discord.File(io.BytesIO(pipeline_result.crops[0]), filename="veil_crop.jpg")
-        game_view = GameView(self.bot, round_id)
-        self.bot.add_view(game_view)
-        game_msg = await veil_channel.send(
-            embed=_game_embed(round_id), file=crop_file, view=game_view
-        )
-
-        crop_url = game_msg.attachments[0].url if game_msg.attachments else ""
-        await asyncio.to_thread(
-            _do_update_round_message, db_path, round_id, game_msg.id, crop_url, str(cache_path)
-        )
-
         preview_file = discord.File(io.BytesIO(pipeline_result.crops[0]), filename="preview.jpg")
-        remaining_rerolls = min(SubmitPreviewView._MAX_REROLLS, len(pipeline_result.crops) - 1)
         preview_embed = discord.Embed(
             title="Your crop preview",
-            description=f"Re-rolls remaining: {remaining_rerolls}",
+            description=f"Crop 1 of {len(pipeline_result.crops)} — click Post when happy",
         ).set_image(url="attachment://preview.jpg")
         await interaction.followup.send(
             embed=preview_embed,
             file=preview_file,
-            view=SubmitPreviewView(self.bot, round_id, pipeline_result.crops, game_msg),
+            view=SubmitPreviewView(
+                self.bot,
+                pipeline_result.crops,
+                interaction.guild.id,
+                config.veil_channel_id,
+                submitter_id=interaction.user.id,
+                answer_id=interaction.user.id,
+                difficulty=config.crop_difficulty,
+                allow_reuse=allow_reuse,
+                candidate_count=len(pipeline_result.candidates),
+                veil_role_id=config.veil_role_id,
+            ),
+            ephemeral=True,
+        )
+
+
+    @veil.command(name="setup", description="Configure the Veil game channel and role.")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        channel="The NSFW channel where game posts appear",
+        role="Role required to submit images (leave blank to allow everyone)",
+    )
+    async def veil_setup(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+        role: discord.Role | None = None,
+    ) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        db_path = self.bot.ctx.db_path
+        guild_id = interaction.guild.id
+
+        await asyncio.to_thread(_do_set_config, db_path, guild_id, "veil_channel_id", str(channel.id))
+        if role is not None:
+            await asyncio.to_thread(_do_set_config, db_path, guild_id, "veil_role_id", str(role.id))
+
+        role_line = f"\n- Veil role: {role.mention}" if role else ""
+        await interaction.followup.send(
+            f"Veil configured.\n- Game channel: {channel.mention}{role_line}",
             ephemeral=True,
         )
 

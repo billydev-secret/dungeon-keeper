@@ -29,6 +29,11 @@ class TestHasVeilRole:
         m = FakeMember(roles=[])
         assert _has_veil_role(m, 777) is False
 
+    def test_role_id_zero_always_returns_true(self):
+        from cogs.veil_cog import _has_veil_role
+        m = FakeMember(roles=[])
+        assert _has_veil_role(m, 0) is True
+
 
 class TestValidateMime:
     def test_jpeg_accepted(self):

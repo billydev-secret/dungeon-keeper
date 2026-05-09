@@ -176,57 +176,56 @@ async def test_game_view_rejects_submitter_guessing_own_round():
 
 # ── SubmitPreviewView re-roll tests ───────────────────────────────────────────
 
-@pytest.mark.asyncio
-async def test_reroll_cycles_to_next_crop_and_updates_game_message():
-    from cogs.veil_cog import SubmitPreviewView
+GUILD_ID = 9001
+VEIL_CHANNEL_ID = 8001
 
+
+def _make_preview_view(bot, crops):
+    from cogs.veil_cog import SubmitPreviewView
+    return SubmitPreviewView(
+        bot, crops, GUILD_ID, VEIL_CHANNEL_ID,
+        submitter_id=1001, answer_id=2001,
+        difficulty="medium", allow_reuse=False, candidate_count=len(crops),
+    )
+
+
+@pytest.mark.asyncio
+async def test_reroll_cycles_to_next_crop():
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
-    game_msg = MagicMock()
-    game_msg.edit = AsyncMock()
 
-    view = SubmitPreviewView(bot, ROUND_ID, [b"crop0", b"crop1", b"crop2"], game_msg)
+    view = _make_preview_view(bot, [b"crop0", b"crop1", b"crop2"])
     interaction = fake_interaction()
     interaction.response.edit_message = AsyncMock()
 
-    with patch("cogs.veil_cog._do_set_reroll_count"):
-        await view._on_reroll(interaction)
+    await view._on_reroll(interaction)
 
     assert view.crop_index == 1
-    game_msg.edit.assert_called_once()
     interaction.response.edit_message.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_reroll_button_disabled_after_max_rerolls():
-    from cogs.veil_cog import SubmitPreviewView
-
+async def test_reroll_wraps_around_to_first_crop():
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
-    game_msg = MagicMock()
-    game_msg.edit = AsyncMock()
 
-    # 4 crops available, MAX_REROLLS = 3
-    view = SubmitPreviewView(bot, ROUND_ID, [b"c0", b"c1", b"c2", b"c3"], game_msg)
-
+    view = _make_preview_view(bot, [b"c0", b"c1", b"c2"])
     interaction = fake_interaction()
     interaction.response.edit_message = AsyncMock()
 
-    with patch("cogs.veil_cog._do_set_reroll_count"):
-        for _ in range(3):
-            await view._on_reroll(interaction)
+    for _ in range(3):
+        await view._on_reroll(interaction)
 
-    assert view.reroll_btn.disabled is True
+    # After 3 rerolls on 3 crops we're back at index 0
+    assert view.crop_index == 0
+    assert view.reroll_btn.disabled is False
 
 
 @pytest.mark.asyncio
 async def test_reroll_button_disabled_when_only_one_crop():
-    from cogs.veil_cog import SubmitPreviewView
-
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
-    game_msg = MagicMock()
 
-    view = SubmitPreviewView(bot, ROUND_ID, [b"only-crop"], game_msg)
+    view = _make_preview_view(bot, [b"only-crop"])
 
     assert view.reroll_btn.disabled is True

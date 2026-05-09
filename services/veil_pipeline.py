@@ -9,14 +9,63 @@ import io
 import random
 from pathlib import Path
 
+import logging
+
 from services.veil_models import BoundingBox, Detection, PipelineResult
 
+log = logging.getLogger("dungeonkeeper.veil")
+
+_GENITAL_LABELS: frozenset[str] = frozenset({
+    "MALE_GENITALIA_EXPOSED",
+    "FEMALE_GENITALIA_EXPOSED",
+    "ANUS_EXPOSED",
+})
 
 DIFFICULTY_PADDING: dict[str, float] = {
     "easy": 0.60,
     "medium": 0.25,
     "hard": 0.05,
 }
+
+
+def _box_gap(a: BoundingBox, b: BoundingBox) -> float:
+    """Pixel distance between two boxes (0.0 when overlapping)."""
+    dx = max(0.0, max(a.x1, b.x1) - min(a.x2, b.x2))
+    dy = max(0.0, max(a.y1, b.y1) - min(a.y2, b.y2))
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def merge_sex_act_detections(detections: list[Detection]) -> list[Detection]:
+    """Merge overlapping/adjacent different-type genital detections into a SEX_ACT detection.
+
+    When NudeNet finds two different genital labels close together they likely
+    represent a penetration act. Merge their boxes so the pipeline crops the act
+    area rather than individual parts. The merged detection gets a boosted score
+    so it ranks first among candidates.
+    """
+    genitals = [d for d in detections if d.label in _GENITAL_LABELS]
+    merged: list[Detection] = []
+    for i in range(len(genitals)):
+        for j in range(i + 1, len(genitals)):
+            a, b = genitals[i], genitals[j]
+            if a.label == b.label:
+                continue
+            avg_size = (max(a.box.width, a.box.height) + max(b.box.width, b.box.height)) / 2.0
+            if avg_size == 0.0:
+                continue
+            if _box_gap(a.box, b.box) < avg_size * 0.5:
+                union = BoundingBox(
+                    min(a.box.x1, b.box.x1),
+                    min(a.box.y1, b.box.y1),
+                    max(a.box.x2, b.box.x2),
+                    max(a.box.y2, b.box.y2),
+                )
+                merged.append(Detection(
+                    label="SEX_ACT",
+                    score=min(1.0, max(a.score, b.score) + 0.15),
+                    box=union,
+                ))
+    return detections + merged
 
 
 def iou(box_a: BoundingBox, box_b: BoundingBox) -> float:
@@ -37,10 +86,17 @@ def compute_padded_crop(
     difficulty: str,
     img_w: int,
     img_h: int,
+    *,
+    rng: random.Random | None = None,
+    jitter_scale: float = 0.8,
 ) -> BoundingBox:
     """Apply difficulty-tuned padding and clamp to image bounds.
 
     Padding fraction applies to the larger dimension of the input bbox.
+
+    When *rng* is provided, the crop window is shifted asymmetrically by up to
+    ``jitter_scale * pad`` in each axis so the framing varies between crops.
+    The original detection bbox is guaranteed to remain inside the crop.
 
     Raises:
         ValueError: If difficulty is not "easy", "medium", or "hard".
@@ -50,11 +106,13 @@ def compute_padded_crop(
             f"Unknown difficulty {difficulty!r}; expected one of {list(DIFFICULTY_PADDING)}"
         )
     pad = DIFFICULTY_PADDING[difficulty] * max(bbox.width, bbox.height)
+    dx = rng.uniform(-pad * jitter_scale, pad * jitter_scale) if rng is not None else 0.0
+    dy = rng.uniform(-pad * jitter_scale, pad * jitter_scale) if rng is not None else 0.0
     return BoundingBox(
-        max(0.0, bbox.x1 - pad),
-        max(0.0, bbox.y1 - pad),
-        min(float(img_w), bbox.x2 + pad),
-        min(float(img_h), bbox.y2 + pad),
+        max(0.0, bbox.x1 - pad + dx),
+        max(0.0, bbox.y1 - pad + dy),
+        min(float(img_w), bbox.x2 + pad + dx),
+        min(float(img_h), bbox.y2 + pad + dy),
     )
 
 
@@ -135,23 +193,45 @@ def run_pipeline(
 
     from services.veil_nudenet import detect as nudenet_detect  # noqa: PLC0415
     from services.veil_face_detector import detect_faces  # noqa: PLC0415
+    from services.veil_pose_detector import detect_pose  # noqa: PLC0415
     from services.veil_crop_renderer import render_crop  # noqa: PLC0415
 
-    detections = nudenet_detect(image_path)
+    img_w, img_h = Image.open(io.BytesIO(image_bytes)).size
+
+    nudenet_dets = nudenet_detect(image_path)
+    log.info("nudenet raw detections: %s", [(d.label, round(d.score, 2)) for d in nudenet_dets])
+    nudenet_dets = merge_sex_act_detections(nudenet_dets)
+    if any(d.label == "SEX_ACT" for d in nudenet_dets):
+        log.info("sex act merge applied: %s", [(d.label, round(d.score, 2)) for d in nudenet_dets if d.label == "SEX_ACT"])
+
+    pose_dets = detect_pose(image_bytes)
+
+    detections = nudenet_dets + pose_dets
+
+    if not detections:
+        # Neither NudeNet nor pose found anything — fall back to full-image so
+        # the pipeline can still produce jittered crops for non-explicit images.
+        log.info("no detections from nudenet or pose — using full-image fallback")
+        detections = [Detection(
+            label="FULL_IMAGE_FALLBACK",
+            score=0.0,
+            box=BoundingBox(0.0, 0.0, float(img_w), float(img_h)),
+        )]
+
     face_boxes = detect_faces(image_bytes)
 
     filtered_candidates = filter_candidates(detections, face_boxes)
+    log.info("filtered candidates: %s", [(d.label, round(d.score, 2)) for d in filtered_candidates])
 
     top_candidates = sorted(filtered_candidates, key=lambda d: d.score, reverse=True)[
         :candidate_count
     ]
-
-    img_w, img_h = Image.open(io.BytesIO(image_bytes)).size
+    rng = random.Random()
 
     crop_bytes_list: list[bytes] = []
     for i, det in enumerate(top_candidates):
         crop_box = _clamp_to_image(
-            enforce_min_size(compute_padded_crop(det.box, difficulty, img_w, img_h)),
+            enforce_min_size(compute_padded_crop(det.box, difficulty, img_w, img_h, rng=rng)),
             img_w, img_h,
         )
         cache_path: Path | None = None
@@ -161,6 +241,19 @@ def run_pipeline(
             image_bytes, crop_box, cache_path=cache_path, jpeg_quality=jpeg_quality
         )
         crop_bytes_list.append(jpeg_bytes)
+
+    # Pad to candidate_count with jittered variants, cycling across all detections
+    # so re-rolls spread across body part matches rather than repeating the top one.
+    if top_candidates and len(crop_bytes_list) < candidate_count:
+        pad_i = 0
+        while len(crop_bytes_list) < candidate_count:
+            pad_det = top_candidates[pad_i % len(top_candidates)]
+            pad_i += 1
+            crop_box = _clamp_to_image(
+                enforce_min_size(compute_padded_crop(pad_det.box, difficulty, img_w, img_h, rng=rng)),
+                img_w, img_h,
+            )
+            crop_bytes_list.append(render_crop(image_bytes, crop_box, jpeg_quality=jpeg_quality))
 
     return PipelineResult(candidates=filtered_candidates, crops=crop_bytes_list)
 

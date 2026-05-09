@@ -183,8 +183,12 @@ async def test_submit_rejects_no_pipeline_candidates():
 
 
 @pytest.mark.asyncio
-async def test_submit_success_posts_game_and_sends_preview(sync_db_path: Path, monkeypatch, tmp_path):
-    """Full happy-path: pipeline returns a crop, game message posted, preview sent."""
+async def test_submit_success_sends_ephemeral_preview(sync_db_path: Path):
+    """Full happy-path: pipeline returns a crop, ephemeral preview sent to submitter.
+
+    The veil channel is NOT posted to at submit time — that happens only when
+    the submitter clicks the Post button in the preview.
+    """
     import io as _io
     from PIL import Image
     from services.veil_models import Detection, BoundingBox, PipelineResult
@@ -199,8 +203,6 @@ async def test_submit_success_posts_game_and_sends_preview(sync_db_path: Path, m
     member = _veil_member()
     guild = _guild(member)
 
-    # Set up a fake veil channel on the guild — use spec=discord.TextChannel so
-    # isinstance(fake_channel, (discord.TextChannel, ...)) passes in the cog.
     fake_channel = MagicMock(spec=discord.TextChannel)
     fake_channel.send = AsyncMock(return_value=_fake_game_message())
     guild.channels[VEIL_CHANNEL_ID] = fake_channel
@@ -211,9 +213,6 @@ async def test_submit_success_posts_game_and_sends_preview(sync_db_path: Path, m
     interaction.guild.get_channel = lambda cid: guild.channels.get(cid)
     interaction.user.id = member.id
 
-    # Patch _VEIL_CACHE so tests don't write into the repo working directory.
-    monkeypatch.setattr("cogs.veil_cog._VEIL_CACHE", tmp_path / "veil_cache")
-
     cog = _make_cog(str(sync_db_path))
     with patch("cogs.veil_cog._load_config", return_value=_cfg()):
         with patch("cogs.veil_cog.run_pipeline", return_value=fake_result):
@@ -222,8 +221,8 @@ async def test_submit_success_posts_game_and_sends_preview(sync_db_path: Path, m
                     with patch("cogs.veil_cog._do_set_reroll_count"):
                         await _submit(cog, interaction, _attachment(read_return=img_bytes))
 
-    # Game message posted to the veil channel
-    fake_channel.send.assert_called_once()
+    # Channel post deferred until the user clicks Post — not called here.
+    fake_channel.send.assert_not_called()
 
     # Ephemeral preview sent to submitter
     interaction.followup.send.assert_called_once()

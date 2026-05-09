@@ -39,7 +39,7 @@ class VeilConfig:
     guess_cooldown_seconds: int = 30
     crop_difficulty: str = "medium"
     min_image_dimension_px: int = 400
-    max_image_size_mb: int = 10
+    max_image_size_mb: int = 25
     reuse_enabled: bool = True
     reuse_quiet_hours: int = 24
     reuse_min_age_days: int = 30

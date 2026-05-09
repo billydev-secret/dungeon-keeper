@@ -59,6 +59,9 @@ class TestRunPipeline:
         mock_face_det = MagicMock()
         mock_face_det.detect_faces.return_value = face_boxes
 
+        mock_pose_det = MagicMock()
+        mock_pose_det.detect_pose.return_value = []
+
         mock_crop_ren = MagicMock()
         mock_crop_ren.render_crop.return_value = render_return
 
@@ -71,6 +74,7 @@ class TestRunPipeline:
                 "PIL": mock_pil,
                 "services.veil_nudenet": mock_nudenet,
                 "services.veil_face_detector": mock_face_det,
+                "services.veil_pose_detector": mock_pose_det,
                 "services.veil_crop_renderer": mock_crop_ren,
             },
         ):
@@ -108,7 +112,7 @@ class TestRunPipeline:
 
     def test_crops_contain_render_output(self):
         dets = [_det("BREAST", 0.9, 10, 10, 100, 100)]
-        result = self._run(dets, face_boxes=[], render_return=b"fake-jpeg")
+        result = self._run(dets, face_boxes=[], render_return=b"fake-jpeg", candidate_count=1)
         assert result.crops == [b"fake-jpeg"]
 
     def test_candidate_count_limits_crops(self):
@@ -132,18 +136,20 @@ class TestRunPipeline:
         # crops are generated in order of sorted-score — just verify 3 crops exist
         assert len(result.crops) == 3
 
-    def test_no_candidates_returns_empty_crops(self):
+    def test_no_detections_uses_full_image_fallback(self):
+        # When both nudenet and pose return nothing, the pipeline falls back to
+        # a FULL_IMAGE_FALLBACK detection so it can still produce crops.
         result = self._run([], face_boxes=[])
-        assert result.candidates == []
-        assert result.crops == []
+        assert len(result.candidates) == 1
+        assert result.candidates[0].label == "FULL_IMAGE_FALLBACK"
+        assert len(result.crops) > 0
 
     def test_face_filtered_detection_excluded(self):
-        # Detection whose box perfectly overlaps a face → filtered out
+        # Detection overlaps fully with a face; filter_candidates fallback=True
+        # returns the highest-score item anyway so the pipeline has something to crop.
         face = _bb(0, 0, 100, 100)
         det = _det("BREAST", 0.9, 0, 0, 100, 100)
-        result = self._run([det], face_boxes=[face])
-        # fallback=True in filter_candidates means we get 1 candidate back
-        # (the fallback highest-score item), so crops == 1
+        result = self._run([det], face_boxes=[face], candidate_count=1)
         assert len(result.crops) == 1
 
     def test_cache_path_passed_to_render_crop(self):
@@ -153,6 +159,8 @@ class TestRunPipeline:
         mock_nudenet.detect.return_value = [_det("BREAST", 0.9, 10, 10, 100, 100)]
         mock_face_det = MagicMock()
         mock_face_det.detect_faces.return_value = []
+        mock_pose_det = MagicMock()
+        mock_pose_det.detect_pose.return_value = []
         mock_crop_ren = MagicMock()
         mock_crop_ren.render_crop.return_value = b"cached-jpeg"
 
@@ -165,6 +173,7 @@ class TestRunPipeline:
                 "PIL": mock_pil,
                 "services.veil_nudenet": mock_nudenet,
                 "services.veil_face_detector": mock_face_det,
+                "services.veil_pose_detector": mock_pose_det,
                 "services.veil_crop_renderer": mock_crop_ren,
             },
         ):
@@ -172,8 +181,9 @@ class TestRunPipeline:
 
             run_pipeline(image_path, b"bytes", "medium", cache_dir=cache_dir)
 
-        call_kwargs = mock_crop_ren.render_crop.call_args
-        cache_path_used = call_kwargs.kwargs.get("cache_path") or call_kwargs[1].get("cache_path")
+        # First call is for the actual detection (has cache_path); padding calls don't.
+        first_call = mock_crop_ren.render_crop.call_args_list[0]
+        cache_path_used = first_call.kwargs.get("cache_path") or first_call[1].get("cache_path")
         assert cache_path_used is not None
         assert str(cache_path_used).endswith("img_0.jpg")
 
@@ -183,6 +193,8 @@ class TestRunPipeline:
         mock_nudenet.detect.return_value = [_det("BREAST", 0.9, 10, 10, 100, 100)]
         mock_face_det = MagicMock()
         mock_face_det.detect_faces.return_value = []
+        mock_pose_det = MagicMock()
+        mock_pose_det.detect_pose.return_value = []
         mock_crop_ren = MagicMock()
         mock_crop_ren.render_crop.return_value = b"jpeg"
 
@@ -192,6 +204,7 @@ class TestRunPipeline:
                 "PIL": mock_pil,
                 "services.veil_nudenet": mock_nudenet,
                 "services.veil_face_detector": mock_face_det,
+                "services.veil_pose_detector": mock_pose_det,
                 "services.veil_crop_renderer": mock_crop_ren,
             },
         ):

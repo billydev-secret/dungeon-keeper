@@ -4,6 +4,8 @@ No images, no models, no PIL. Only veil_models + veil_pipeline imports.
 """
 from __future__ import annotations
 
+import random
+
 import pytest
 
 from services.veil_models import BoundingBox, Detection
@@ -83,6 +85,23 @@ def test_padded_crop_unknown_difficulty_raises():
         compute_padded_crop(_bb(0, 0, 100, 100), "ultra", 500, 500)
 
 
+def test_padded_crop_jitter_shifts_position():
+    bb = _bb(100, 100, 200, 200)
+    no_jitter = compute_padded_crop(bb, "medium", 500, 500)
+    with_jitter = compute_padded_crop(bb, "medium", 500, 500, rng=random.Random(42))
+    assert (with_jitter.x1, with_jitter.y1) != (no_jitter.x1, no_jitter.y1)
+
+
+def test_padded_crop_jitter_detection_stays_inside():
+    bb = _bb(100, 100, 200, 200)
+    for seed in range(20):
+        r = compute_padded_crop(bb, "medium", 500, 500, rng=random.Random(seed))
+        assert r.x1 <= bb.x1
+        assert r.y1 <= bb.y1
+        assert r.x2 >= bb.x2
+        assert r.y2 >= bb.y2
+
+
 @pytest.mark.parametrize("difficulty", ["easy", "medium", "hard"])
 def test_padded_crop_all_difficulties_produce_valid_box(difficulty):
     r = compute_padded_crop(_bb(100, 100, 200, 200), difficulty, 500, 500)
@@ -160,3 +179,23 @@ def test_enforce_min_size_wide_short_expands_height_only():
 def test_enforce_min_size_default_min_is_200():
     r = enforce_min_size(_bb(0, 0, 100, 100))
     assert r.width == pytest.approx(200.0)
+
+
+# ── full-image fallback ───────────────────────────────────────────────────────
+
+def test_full_image_fallback_passes_filter():
+    # Simulates the fallback Detection created when NudeNet finds nothing.
+    full = _det("FULL_IMAGE_FALLBACK", 0.0, 0, 0, 500, 500)
+    result = filter_candidates([full], face_boxes=[])
+    assert len(result) == 1
+
+
+def test_full_image_fallback_produces_valid_padded_crop():
+    # hard difficulty (5% pad) on 500x500 full-image bbox stays within bounds.
+    r = compute_padded_crop(_bb(0, 0, 500, 500), "hard", 500, 500)
+    assert r.x1 >= 0.0
+    assert r.y1 >= 0.0
+    assert r.x2 <= 500.0
+    assert r.y2 <= 500.0
+    assert r.x1 < r.x2
+    assert r.y1 < r.y2
