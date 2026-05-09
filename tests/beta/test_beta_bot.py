@@ -59,3 +59,10 @@ async def test_on_guild_join_does_not_leave_test_guild(mock_main_cfg, mock_beta_
 
     await bot.on_guild_join(correct_guild)
     correct_guild.leave.assert_not_called()
+
+
+def test_dk_tools_bot_has_ambient_sim_attr(mock_main_cfg, mock_beta_cfg):
+    from beta_tools.bot import DkToolsBot
+    bot = DkToolsBot(main_cfg=mock_main_cfg, beta_cfg=mock_beta_cfg)
+    assert hasattr(bot, "ambient_sim")
+    assert bot.ambient_sim is None  # set later in on_ready

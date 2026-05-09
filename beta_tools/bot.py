@@ -1,6 +1,7 @@
+# beta_tools/bot.py
 """DkToolsBot — the sidecar bot's commands.Bot subclass.
 
-Owns the puppet manager, webhook fleet, and slash command tree.
+Owns the puppet manager, webhook fleet, ambient sim, and slash command tree.
 Slash commands register in setup_hook() once the bot is logged in.
 """
 
@@ -32,12 +33,25 @@ class DkToolsBot(commands.Bot):
         self.beta_cfg = beta_cfg
         self.puppet_manager: Optional[PuppetManager] = None
         self.webhook_fleet: Optional[WebhookFleet] = None
+        self.ambient_sim = None
+        self._chain = None
 
     async def setup_hook(self) -> None:
-        """Called once after login. Wire up puppets, webhook fleet, slash commands."""
-        # Imported here to avoid circular import: slash modules import DkToolsBot for typing.
+        from beta_tools.markov import MarkovChain
         from beta_tools.personas import load_puppet_personas
         from beta_tools.slash import register_all
+
+        # Load Markov chain if available
+        chain_path = Path(__file__).resolve().parent.parent / "fixtures" / "markov_chain.json"
+        if chain_path.exists():
+            self._chain = MarkovChain.load(chain_path)
+            log.info(
+                "loaded Markov chain: %d bigrams, corpus=%d",
+                self._chain.vocab_size,
+                self._chain.corpus_size,
+            )
+        else:
+            log.warning("fixtures/markov_chain.json not found — ambient sim will be unavailable")
 
         fixtures_dir = Path(__file__).resolve().parent.parent / "fixtures"
         personas = load_puppet_personas(fixtures_dir / "beta_puppets.yaml")
@@ -50,13 +64,11 @@ class DkToolsBot(commands.Bot):
         self.puppet_manager = pm
         self.webhook_fleet = WebhookFleet()
 
-        # Register all /beta slash commands scoped to the test guild.
         register_all(self)
         guild_obj = discord.Object(id=self.main_cfg.guild_id)
         await self.tree.sync(guild=guild_obj)
         log.info("registered /beta commands to guild %d", self.main_cfg.guild_id)
 
-        # Connect puppets and apply personas.
         log.info("starting %d puppets", len(pm.handles))
         await pm.start_all()
         await pm.apply_personas()
@@ -64,10 +76,30 @@ class DkToolsBot(commands.Bot):
 
     async def on_ready(self) -> None:
         assert self.user is not None
+        from beta_tools.ambient_sim import AmbientSim
         from beta_tools.safety import check_tools_bot_identity, check_tools_guild_membership
+
         check_tools_bot_identity(self.user, self.beta_cfg.tools_expected_id)
         await check_tools_guild_membership(self, self.main_cfg.guild_id)
-        log.info("DK Tools ready: %s (id=%d) in guild %d", self.user, self.user.id, self.main_cfg.guild_id)
+        log.info(
+            "DK Tools ready: %s (id=%d) in guild %d",
+            self.user, self.user.id, self.main_cfg.guild_id,
+        )
+
+        if self._chain is not None and self.puppet_manager is not None:
+            guild = self.get_guild(self.main_cfg.guild_id)
+            if guild is not None:
+                self.ambient_sim = AmbientSim(
+                    chain=self._chain,
+                    puppet_manager=self.puppet_manager,
+                    guild=guild,
+                    beta_cfg=self.beta_cfg,
+                )
+                if self.beta_cfg.ambient_autostart:
+                    self.ambient_sim.start()
+                    log.info("ambient sim auto-started")
+            else:
+                log.warning("guild not found in on_ready — ambient sim disabled")
 
     async def on_guild_join(self, guild: discord.Guild) -> None:
         if guild.id != self.main_cfg.guild_id:
@@ -81,6 +113,8 @@ class DkToolsBot(commands.Bot):
                 log.exception("failed to leave guild %d", guild.id)
 
     async def close(self) -> None:
+        if self.ambient_sim is not None:
+            await self.ambient_sim.stop()
         if self.puppet_manager is not None:
             await self.puppet_manager.close_all()
         await super().close()

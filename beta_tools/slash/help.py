@@ -29,5 +29,14 @@ def register(bot) -> None:
             ),
             inline=False,
         )
+        embed.add_field(
+            name="Ambient Sim",
+            value=(
+                "`/beta-ambient-start` — start the puppet chat simulation loop\n"
+                "`/beta-ambient-stop` — stop the loop\n"
+                "`/beta-ambient-status` — show state, post count, and corpus info\n"
+            ),
+            inline=False,
+        )
         embed.set_footer(text="More commands ship in later beta_tools plans.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
