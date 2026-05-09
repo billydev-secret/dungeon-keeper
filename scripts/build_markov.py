@@ -19,30 +19,15 @@ def _load_messages(db_path: str) -> list[str]:
     con = sqlite3.connect(db_path)
     con.row_factory = sqlite3.Row
     try:
-        # First, check if the source column exists
-        cursor = con.execute("PRAGMA table_info(messages)")
-        columns = {row[1] for row in cursor.fetchall()}
-
-        if "source" in columns:
-            query = """
-            SELECT m.content
-            FROM messages m
-            LEFT JOIN known_users ku
-                ON m.author_id = ku.user_id AND m.guild_id = ku.guild_id
-            WHERE m.content IS NOT NULL
-              AND m.source IS NULL
-              AND (ku.is_bot IS NULL OR ku.is_bot = 0)
-            """
-        else:
-            query = """
-            SELECT m.content
-            FROM messages m
-            LEFT JOIN known_users ku
-                ON m.author_id = ku.user_id AND m.guild_id = ku.guild_id
-            WHERE m.content IS NOT NULL
-              AND (ku.is_bot IS NULL OR ku.is_bot = 0)
-            """
-
+        query = """
+        SELECT m.content
+        FROM messages m
+        LEFT JOIN known_users ku
+            ON m.author_id = ku.user_id AND m.guild_id = ku.guild_id
+        WHERE m.content IS NOT NULL
+          AND m.source IS NULL
+          AND (ku.is_bot IS NULL OR ku.is_bot = 0)
+        """
         rows = con.execute(query).fetchall()
     finally:
         con.close()
