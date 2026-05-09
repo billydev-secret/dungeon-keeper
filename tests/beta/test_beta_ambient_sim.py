@@ -175,7 +175,7 @@ def test_pick_channel_returns_resolvable_channel():
     sim = _make_sim(handles=[handle, _make_handle("bob"), _make_handle("clara")])
     result = sim._pick_channel(handle)
     assert result is not None
-    ch, name = result
+    _, name = result
     assert name == "general"
 
 
@@ -184,7 +184,7 @@ def test_pick_channel_skips_unresolvable_names():
     sim = _make_sim(handles=[handle, _make_handle("bob"), _make_handle("clara")])
     result = sim._pick_channel(handle)
     assert result is not None
-    ch, name = result
+    _, name = result
     assert name == "general"
 
 
@@ -238,7 +238,7 @@ async def test_tick_sends_message_and_increments_posts():
     assert sim.posts_since_start == 1
     last = sim.last_post
     assert last is not None
-    key, ch_name, ts = last
+    key, ch_name, _ = last
     assert key == handle.key
     assert ch_name == "general"
 
