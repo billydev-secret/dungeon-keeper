@@ -89,12 +89,34 @@ def test_generate_unknown_bias_falls_back_to_medium(tmp_path):
 
 def test_generate_handles_dead_end_chain(tmp_path):
     from beta_tools.markov import MarkovChain
-    # A chain that immediately dead-ends
+    # A chain that immediately dead-ends — only one key, empty followers
     dead_end = {"hello world": []}
     p = _make_chain_file(tmp_path, dead_end)
     mc = MarkovChain.load(p)
     result = mc.generate("short")
     assert isinstance(result, str)
+    # With only one bigram key, dead-end recovery re-uses it forever;
+    # output should still be non-empty and within bounds
+    words = result.split()
+    assert len(words) >= 2  # at minimum the starting bigram
+    assert len(words) <= 15  # must respect max_words budget
+
+
+def test_generate_stops_at_sentence_ender(tmp_path):
+    from beta_tools.markov import MarkovChain
+    # Chain where follower words end in sentence-enders
+    # "hello there" -> ["friend.", "world!"]
+    chain = {
+        "hello there": ["friend.", "world!"],
+        "there friend.": ["bye"],
+        "there world!": ["bye"],
+    }
+    p = _make_chain_file(tmp_path, chain)
+    mc = MarkovChain.load(p)
+    for _ in range(20):
+        result = mc.generate("short")
+        words = result.split()
+        assert len(words) >= 5  # min_words for short
 
 
 def test_generate_stops_at_max_budget(tmp_path):

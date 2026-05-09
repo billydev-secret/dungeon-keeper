@@ -56,7 +56,7 @@ class MarkovChain:
             next_word = random.choice(followers)
             words.append(next_word)
 
-            if len(words) >= min_words and next_word[-1] in _SENTENCE_ENDERS:
+            if len(words) >= min_words and next_word and next_word[-1] in _SENTENCE_ENDERS:
                 break
 
             state = f"{words[-2]} {words[-1]}"
