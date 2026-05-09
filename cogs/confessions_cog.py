@@ -546,9 +546,19 @@ class ConfessionsCog(commands.Cog):
     def build_reply_button_view(root_message_id: int) -> discord.ui.View:
         view = discord.ui.View(timeout=None)
         view.add_item(discord.ui.Button(
-            label="Anonymously Reply",
+            label="🎭 Reply Anonymously",
             style=discord.ButtonStyle.secondary,
             custom_id=f"cr|{root_message_id}",
+        ))
+        view.add_item(discord.ui.Button(
+            label="🎲 Reply as Someone New",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"crn|{root_message_id}",
+        ))
+        view.add_item(discord.ui.Button(
+            label="❓ What's this?",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"crh|{root_message_id}",
         ))
         return view
 
@@ -617,7 +627,8 @@ class ConfessionsCog(commands.Cog):
         if get_thread_info(self.ctx.db_path, guild_id, msg.id):
             return True
         return any(
-            isinstance(_cid := getattr(child, "custom_id", None), str) and _cid.startswith("cr|")
+            isinstance(_cid := getattr(child, "custom_id", None), str)
+            and (_cid.startswith("cr|") or _cid.startswith("crn|"))
             for row in msg.components
             for child in getattr(row, "children", [])
         )
@@ -664,7 +675,12 @@ class ConfessionsCog(commands.Cog):
                     await interaction.response.send_modal(ConfessModal(self))
                 return
 
-            if custom_id != "cr" and not custom_id.startswith("cr|"):
+            if (
+                custom_id != "cr"
+                and not custom_id.startswith("cr|")
+                and not custom_id.startswith("crn|")
+                and not custom_id.startswith("crh|")
+            ):
                 return
             action = "anonymous reply"
 
@@ -708,6 +724,45 @@ class ConfessionsCog(commands.Cog):
                             parent_channel_id=cfg.dest_channel_id,
                             parent_message_id=root_message_id,
                             thread_id=discord_thread_id,
+                        )
+                    )
+                return
+
+            if custom_id.startswith("crh|"):
+                action = "help request"
+                await self._safe_ephemeral(
+                    interaction,
+                    "**🎭 Reply Anonymously** — gives you a consistent identity in this thread. "
+                    "Your name and color stay the same across all your replies here.\n\n"
+                    "**🎲 Reply as Someone New** — gives you a one-time random identity for just "
+                    "that message. A fresh name and color every time you click it.",
+                )
+                return
+
+            if custom_id.startswith("crn|"):
+                action = "ephemeral anonymous reply"
+                parts = custom_id.split("|")
+                if len(parts) != 2 or not parts[1].isdigit():
+                    await self._safe_ephemeral(interaction, "Invalid reply button.")
+                    return
+                root_message_id = int(parts[1])
+                if not get_thread_info(self.ctx.db_path, interaction.guild.id, root_message_id):
+                    await self._safe_ephemeral(interaction, "This confession can no longer be replied to.")
+                    return
+                discord_thread_id = get_discord_thread_id(self.ctx.db_path, interaction.guild.id, root_message_id)
+                if discord_thread_id:
+                    thread_obj = self.bot.get_channel(discord_thread_id)
+                    if isinstance(thread_obj, discord.Thread) and thread_obj.locked:
+                        await self._safe_ephemeral(interaction, "This confession thread is locked.")
+                        return
+                if not interaction.response.is_done():
+                    await interaction.response.send_modal(
+                        ReplyModal(
+                            self, cfg,
+                            parent_channel_id=cfg.dest_channel_id,
+                            parent_message_id=root_message_id,
+                            thread_id=discord_thread_id,
+                            ephemeral=True,
                         )
                     )
                 return
