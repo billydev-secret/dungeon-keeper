@@ -304,3 +304,44 @@ def test_auto_delete_rule_upsert_and_delete(authed_client, fake_ctx):
     assert resp.status_code == 200
     rules = list_auto_delete_rules_for_guild(fake_ctx.db_path, fake_ctx.guild_id)
     assert 3001 not in [r["channel_id"] for r in rules]
+
+
+# ── PUT /api/config/veil ──────────────────────────────────────────────
+
+
+def test_update_veil_channel(authed_client, fake_ctx):
+    resp = authed_client.put("/api/config/veil", json={"channel_id": "555"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        from db_utils import get_config_value
+        val = get_config_value(conn, "veil_channel_id", "0", fake_ctx.guild_id)
+    assert val == "555"
+
+
+def test_update_veil_crop_difficulty_hard(authed_client, fake_ctx):
+    resp = authed_client.put("/api/config/veil", json={"crop_difficulty": "hard"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        from db_utils import get_config_value
+        val = get_config_value(conn, "veil_crop_difficulty", "medium", fake_ctx.guild_id)
+    assert val == "hard"
+
+
+def test_update_veil_invalid_difficulty_returns_error(authed_client):
+    resp = authed_client.put("/api/config/veil", json={"crop_difficulty": "insane"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert "crop_difficulty" in data["detail"]
+
+
+def test_update_veil_reuse_disabled(authed_client, fake_ctx):
+    resp = authed_client.put("/api/config/veil", json={"reuse_enabled": False})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        from db_utils import get_config_value
+        val = get_config_value(conn, "veil_reuse_enabled", "1", fake_ctx.guild_id)
+    assert val == "0"

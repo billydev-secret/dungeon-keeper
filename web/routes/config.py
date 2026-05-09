@@ -1523,3 +1523,59 @@ async def update_birthday(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+_VEIL_VALID_DIFFICULTIES = {"easy", "medium", "hard"}
+
+
+class VeilConfigUpdate(BaseModel):
+    channel_id: str | None = None
+    role_id: str | None = None
+    crop_difficulty: str | None = None
+    guess_cooldown_seconds: int | None = None
+    min_image_dimension_px: int | None = None
+    max_image_size_mb: int | None = None
+    reuse_enabled: bool | None = None
+    reuse_quiet_hours: int | None = None
+    reuse_min_age_days: int | None = None
+    reuse_min_post_interval_hours: int | None = None
+
+
+@router.put("/config/veil")
+async def update_veil_config(
+    request: Request,
+    body: VeilConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    _require_primary_guild(request)
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        from services.veil_repo import set_veil_config_value
+        if body.crop_difficulty is not None and body.crop_difficulty not in _VEIL_VALID_DIFFICULTIES:
+            return {"ok": False, "detail": f"crop_difficulty must be one of {sorted(_VEIL_VALID_DIFFICULTIES)}"}
+        with ctx.open_db() as conn:
+            if body.channel_id is not None:
+                set_veil_config_value(conn, guild_id, "veil_channel_id", body.channel_id)
+            if body.role_id is not None:
+                set_veil_config_value(conn, guild_id, "veil_role_id", body.role_id)
+            if body.crop_difficulty is not None:
+                set_veil_config_value(conn, guild_id, "veil_crop_difficulty", body.crop_difficulty)
+            if body.guess_cooldown_seconds is not None:
+                set_veil_config_value(conn, guild_id, "veil_guess_cooldown_seconds", str(body.guess_cooldown_seconds))
+            if body.min_image_dimension_px is not None:
+                set_veil_config_value(conn, guild_id, "veil_min_image_dimension_px", str(body.min_image_dimension_px))
+            if body.max_image_size_mb is not None:
+                set_veil_config_value(conn, guild_id, "veil_max_image_size_mb", str(body.max_image_size_mb))
+            if body.reuse_enabled is not None:
+                set_veil_config_value(conn, guild_id, "veil_reuse_enabled", "1" if body.reuse_enabled else "0")
+            if body.reuse_quiet_hours is not None:
+                set_veil_config_value(conn, guild_id, "veil_reuse_quiet_hours", str(body.reuse_quiet_hours))
+            if body.reuse_min_age_days is not None:
+                set_veil_config_value(conn, guild_id, "veil_reuse_min_age_days", str(body.reuse_min_age_days))
+            if body.reuse_min_post_interval_hours is not None:
+                set_veil_config_value(conn, guild_id, "veil_reuse_min_post_interval_hours", str(body.reuse_min_post_interval_hours))
+        return {"ok": True}
+
+    return await run_query(_q)
