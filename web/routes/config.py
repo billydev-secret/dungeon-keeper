@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from db_utils import (
@@ -1592,3 +1593,59 @@ async def update_veil_config(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+# ── Bot identity (per-guild) ─────────────────────────────────────────
+
+
+@router.post("/config/bot-identity")
+async def update_bot_identity(
+    request: Request,
+    nick: str | None = Form(default=None),
+    avatar_url: str | None = Form(default=None),
+    avatar_file: UploadFile | None = File(default=None),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+
+    # Resolve avatar bytes: file takes priority over URL
+    avatar_bytes: bytes | None = None
+    if avatar_file is not None:
+        content = await avatar_file.read()
+        if content:
+            avatar_bytes = content
+    elif avatar_url:
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(avatar_url, follow_redirects=True, timeout=10.0)
+                response.raise_for_status()
+                avatar_bytes = response.content
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            raise HTTPException(400, f"Failed to fetch avatar URL: {exc}")
+
+    edit_kwargs: dict = {}
+    if nick is not None:
+        edit_kwargs["nick"] = nick
+    if avatar_bytes is not None:
+        edit_kwargs["avatar"] = avatar_bytes
+
+    if edit_kwargs:
+        try:
+            await guild.me.edit(**edit_kwargs)
+        except Exception as exc:
+            raise HTTPException(400, f"Discord rejected the update: {exc}")
+
+    return {
+        "ok": True,
+        "nick": guild.me.nick or "",
+        "avatar_url": str(guild.me.display_avatar.url),
+    }

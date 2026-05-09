@@ -577,3 +577,110 @@ def test_get_config_bot_identity_empty_nick_when_no_guild_nick(ctx, make_client)
     resp = client.get("/api/config")
     assert resp.status_code == 200
     assert resp.json()["bot_identity"]["nick"] == ""
+
+
+def test_post_bot_identity_updates_nick(ctx, make_client):
+    from types import SimpleNamespace
+    edit_calls = []
+    async def mock_edit(**kwargs): edit_calls.append(kwargs)
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            nick="OldName",
+            guild_avatar=None,
+            display_avatar=SimpleNamespace(url="https://cdn.discordapp.com/avatars/1/abc.png"),
+            edit=mock_edit,
+        )
+    )
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+    resp = client.post("/api/config/bot-identity", data={"nick": "NewName"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert edit_calls == [{"nick": "NewName"}]
+
+def test_post_bot_identity_fetches_avatar_url(ctx, make_client):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    edit_calls = []
+    async def mock_edit(**kwargs): edit_calls.append(kwargs)
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            nick=None, guild_avatar=None,
+            display_avatar=SimpleNamespace(url="https://cdn.discordapp.com/avatars/1/abc.png"),
+            edit=mock_edit,
+        )
+    )
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+    fake_image = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+    mock_response = SimpleNamespace(
+        status_code=200, content=fake_image, raise_for_status=lambda: None,
+    )
+    async def mock_get(url, **kwargs): return mock_response
+    with patch("web.routes.config.httpx.AsyncClient") as MockClient:
+        instance = AsyncMock()
+        instance.get = mock_get
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = instance
+        resp = client.post("/api/config/bot-identity", data={"avatar_url": "https://example.com/image.png"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert edit_calls[0]["avatar"] == fake_image
+
+def test_post_bot_identity_file_takes_priority_over_url(ctx, make_client):
+    from io import BytesIO
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    edit_calls = []
+    async def mock_edit(**kwargs): edit_calls.append(kwargs)
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            nick=None, guild_avatar=None,
+            display_avatar=SimpleNamespace(url="https://cdn.discordapp.com/avatars/1/abc.png"),
+            edit=mock_edit,
+        )
+    )
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+    file_bytes = b"\x89PNG\r\n\x1a\nFILE"
+    with patch("web.routes.config.httpx.AsyncClient") as MockClient:
+        MockClient.return_value.__aenter__ = AsyncMock()
+        MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+        resp = client.post(
+            "/api/config/bot-identity",
+            data={"avatar_url": "https://example.com/image.png"},
+            files={"avatar_file": ("avatar.png", BytesIO(file_bytes), "image/png")},
+        )
+    assert resp.status_code == 200
+    MockClient.return_value.__aenter__.assert_not_called()
+    assert edit_calls[0]["avatar"] == file_bytes
+
+def test_post_bot_identity_503_when_no_bot(ctx, make_client):
+    ctx.bot = None
+    client = make_client()
+    resp = client.post("/api/config/bot-identity", data={"nick": "NewName"})
+    assert resp.status_code == 503
+
+def test_post_bot_identity_400_on_bad_avatar_url(ctx, make_client):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+    import httpx as _httpx
+    async def mock_edit(**kwargs): pass
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            nick=None, guild_avatar=None,
+            display_avatar=SimpleNamespace(url="https://cdn.discordapp.com/avatars/1/abc.png"),
+            edit=mock_edit,
+        )
+    )
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
+    client = make_client()
+    with patch("web.routes.config.httpx.AsyncClient") as MockClient:
+        instance = AsyncMock()
+        instance.get = AsyncMock(side_effect=_httpx.RequestError("connection failed"))
+        instance.__aenter__ = AsyncMock(return_value=instance)
+        instance.__aexit__ = AsyncMock(return_value=False)
+        MockClient.return_value = instance
+        resp = client.post("/api/config/bot-identity", data={"avatar_url": "https://bad.example.com/img.png"})
+    assert resp.status_code == 400
