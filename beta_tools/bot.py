@@ -37,6 +37,7 @@ class DkToolsBot(commands.Bot):
         self._chain = None
 
     async def setup_hook(self) -> None:
+        # Imported here to avoid circular import: slash modules import DkToolsBot for typing.
         from beta_tools.markov import MarkovChain
         from beta_tools.personas import load_puppet_personas
         from beta_tools.slash import register_all
