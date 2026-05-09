@@ -688,6 +688,17 @@ class ConfessionsCog(commands.Cog):
                 await self._safe_ephemeral(interaction, "Invalid reply target.")
                 return
 
+            if custom_id.startswith("crh|"):
+                action = "help request"
+                await self._safe_ephemeral(
+                    interaction,
+                    "**🎭 Reply Anonymously** — gives you a consistent identity in this thread. "
+                    "Your name and color stay the same across all your replies here.\n\n"
+                    "**🎲 Reply as Someone New** — gives you a one-time random identity for just "
+                    "that message. A fresh name and color every time you click it.",
+                )
+                return
+
             cfg = get_config(self.ctx.db_path, interaction.guild.id)
             if not cfg:
                 await self._safe_ephemeral(interaction, "Bot is not configured.")
@@ -726,17 +737,6 @@ class ConfessionsCog(commands.Cog):
                             thread_id=discord_thread_id,
                         )
                     )
-                return
-
-            if custom_id.startswith("crh|"):
-                action = "help request"
-                await self._safe_ephemeral(
-                    interaction,
-                    "**🎭 Reply Anonymously** — gives you a consistent identity in this thread. "
-                    "Your name and color stay the same across all your replies here.\n\n"
-                    "**🎲 Reply as Someone New** — gives you a one-time random identity for just "
-                    "that message. A fresh name and color every time you click it.",
-                )
                 return
 
             if custom_id.startswith("crn|"):
