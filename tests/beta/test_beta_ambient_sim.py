@@ -1,6 +1,7 @@
 """Tests for beta_tools.ambient_sim.AmbientSim."""
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -273,3 +274,82 @@ async def test_tick_skips_when_puppet_cannot_see_channel():
         await sim._tick()
 
     assert sim.posts_since_start == 0
+
+
+# ── _loop error-recovery arms ─────────────────────────────────────────────────
+
+async def test_loop_continues_after_forbidden():
+    import discord
+    sim = _make_sim()
+    tick_calls = []
+    sleep_calls = []
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+        # After two sleep calls (one pre-tick sleep + one post-error... actually
+        # Forbidden has no extra sleep, so terminate after the second pre-tick sleep)
+        if len(sleep_calls) >= 2:
+            raise asyncio.CancelledError()
+
+    async def tick_side_effect():
+        tick_calls.append(1)
+        if len(tick_calls) == 1:
+            raise discord.Forbidden(MagicMock(), "no perms")
+        # second call: do nothing (success)
+
+    with patch.object(sim, "_tick", side_effect=tick_side_effect):
+        with patch("beta_tools.ambient_sim.asyncio.sleep", side_effect=fake_sleep):
+            try:
+                await sim._loop()
+            except asyncio.CancelledError:
+                pass
+
+    # loop survived the Forbidden error: _tick was called (and Forbidden was raised)
+    assert len(tick_calls) >= 1
+
+
+async def test_loop_sleeps_extra_after_http_exception():
+    import discord
+    sim = _make_sim()
+    sleep_calls = []
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+        if len(sleep_calls) >= 3:
+            raise asyncio.CancelledError()
+
+    async def tick_side_effect():
+        raise discord.HTTPException(MagicMock(), "rate limited")
+
+    with patch.object(sim, "_tick", side_effect=tick_side_effect):
+        with patch("beta_tools.ambient_sim.asyncio.sleep", side_effect=fake_sleep):
+            try:
+                await sim._loop()
+            except asyncio.CancelledError:
+                pass
+
+    from beta_tools.ambient_sim import _HTTP_ERROR_SLEEP
+    assert _HTTP_ERROR_SLEEP in sleep_calls
+
+
+async def test_loop_sleeps_extra_after_unexpected_exception():
+    sim = _make_sim()
+    sleep_calls = []
+
+    async def fake_sleep(delay):
+        sleep_calls.append(delay)
+        if len(sleep_calls) >= 3:
+            raise asyncio.CancelledError()
+
+    async def tick_side_effect():
+        raise RuntimeError("something went wrong")
+
+    with patch.object(sim, "_tick", side_effect=tick_side_effect):
+        with patch("beta_tools.ambient_sim.asyncio.sleep", side_effect=fake_sleep):
+            try:
+                await sim._loop()
+            except asyncio.CancelledError:
+                pass
+
+    from beta_tools.ambient_sim import _LOOP_ERROR_SLEEP
+    assert _LOOP_ERROR_SLEEP in sleep_calls
