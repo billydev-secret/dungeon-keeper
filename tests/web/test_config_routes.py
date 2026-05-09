@@ -246,6 +246,22 @@ def test_booster_role_upsert_and_delete(authed_client, fake_ctx):
     assert "fire" not in [r["role_key"] for r in roles]
 
 
+def test_get_config_includes_veil_section(authed_client):
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    v = resp.json()["veil"]
+    assert v["channel_id"] == "0"
+    assert v["role_id"] == "0"
+    assert v["crop_difficulty"] == "medium"
+    assert v["guess_cooldown_seconds"] == 30
+    assert v["min_image_dimension_px"] == 400
+    assert v["max_image_size_mb"] == 10
+    assert v["reuse_enabled"] is True
+    assert v["reuse_quiet_hours"] == 24
+    assert v["reuse_min_age_days"] == 30
+    assert v["reuse_min_post_interval_hours"] == 48
+
+
 def test_get_config_exposes_booster_panel_channel(authed_client, fake_ctx):
     """Config GET surfaces the most recently posted booster panel channel."""
     from services.booster_roles import replace_booster_panel_refs

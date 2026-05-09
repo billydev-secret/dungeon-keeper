@@ -59,6 +59,7 @@ from services.starboard_service import (
     get_starboard_config as _get_starboard_config,
     upsert_starboard_config as _upsert_starboard_config,
 )
+from services.veil_repo import get_veil_config as _get_veil_config
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂"
@@ -219,6 +220,22 @@ def _birthday_section(conn, guild_id: int) -> dict:
         "birthday_message": _str_val(
             conn, "birthday_message", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
         ),
+    }
+
+
+def _veil_section(conn, guild_id: int) -> dict:
+    vc = _get_veil_config(conn, guild_id)
+    return {
+        "channel_id": str(vc.veil_channel_id),
+        "role_id": str(vc.veil_role_id),
+        "crop_difficulty": vc.crop_difficulty,
+        "guess_cooldown_seconds": vc.guess_cooldown_seconds,
+        "min_image_dimension_px": vc.min_image_dimension_px,
+        "max_image_size_mb": vc.max_image_size_mb,
+        "reuse_enabled": vc.reuse_enabled,
+        "reuse_quiet_hours": vc.reuse_quiet_hours,
+        "reuse_min_age_days": vc.reuse_min_age_days,
+        "reuse_min_post_interval_hours": vc.reuse_min_post_interval_hours,
     }
 
 
@@ -460,6 +477,7 @@ async def get_config(
                 "dms": _dms_section_with_conn(conn, guild_id),
                 "starboard": _starboard_section(conn, guild_id),
                 "birthday": _birthday_section(conn, guild_id),
+                "veil": _veil_section(conn, guild_id),
             }
 
     return await run_query(_q)
