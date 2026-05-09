@@ -223,6 +223,15 @@ def _birthday_section(conn, guild_id: int) -> dict:
     }
 
 
+def _bot_identity_section(guild) -> dict:
+    if guild is None:
+        return {"nick": "", "avatar_url": ""}
+    return {
+        "nick": guild.me.nick or "",
+        "avatar_url": str(guild.me.display_avatar.url),
+    }
+
+
 def _veil_section(conn, guild_id: int) -> dict:
     vc = _get_veil_config(conn, guild_id)
     return {
@@ -477,6 +486,7 @@ async def get_config(
                 "dms": _dms_section_with_conn(conn, guild_id),
                 "starboard": _starboard_section(conn, guild_id),
                 "birthday": _birthday_section(conn, guild_id),
+                "bot_identity": _bot_identity_section(prune_guild),
                 "veil": _veil_section(conn, guild_id),
             }
 

@@ -535,3 +535,45 @@ def test_meta_channels_includes_voice_and_category_when_requested(ctx, make_clie
     assert by_id["11"]["type"] == "text"
     assert by_id["12"]["type"] == "voice"
     assert by_id["12"]["name"] == "Lobby"
+
+
+def test_get_config_includes_bot_identity_with_bot(ctx, make_client):
+    from types import SimpleNamespace
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            nick="DungeonBot",
+            guild_avatar=None,
+            display_avatar=SimpleNamespace(url="https://cdn.discordapp.com/avatars/1/abc.png"),
+        )
+    )
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild)
+    client = make_client()
+    resp = client.get("/api/config")
+    assert resp.status_code == 200
+    bi = resp.json()["bot_identity"]
+    assert bi["nick"] == "DungeonBot"
+    assert bi["avatar_url"] == "https://cdn.discordapp.com/avatars/1/abc.png"
+
+def test_get_config_bot_identity_falls_back_when_no_bot(ctx, make_client):
+    ctx.bot = None
+    client = make_client()
+    resp = client.get("/api/config")
+    assert resp.status_code == 200
+    bi = resp.json()["bot_identity"]
+    assert bi["nick"] == ""
+    assert bi["avatar_url"] == ""
+
+def test_get_config_bot_identity_empty_nick_when_no_guild_nick(ctx, make_client):
+    from types import SimpleNamespace
+    guild = SimpleNamespace(
+        me=SimpleNamespace(
+            nick=None,
+            guild_avatar=None,
+            display_avatar=SimpleNamespace(url="https://cdn.discordapp.com/avatars/1/abc.png"),
+        )
+    )
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild)
+    client = make_client()
+    resp = client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["bot_identity"]["nick"] == ""
