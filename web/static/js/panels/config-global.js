@@ -52,7 +52,7 @@ export function mount(container) {
 
         <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
           <h3 style="margin:0 0 1rem">Bot Identity <span style="font-weight:400;font-size:.85em;opacity:.6">(this server)</span></h3>
-          ${bi.avatar_url ? `<img data-avatar-preview src="${_esc(bi.avatar_url)}" alt="Bot avatar" style="width:64px;height:64px;border-radius:50%;object-fit:cover;margin-bottom:1rem;display:block" />` : ""}
+          <img data-avatar-preview src="${_esc(bi.avatar_url)}" alt="Bot avatar" style="width:64px;height:64px;border-radius:50%;object-fit:cover;margin-bottom:1rem;display:${bi.avatar_url ? "block" : "none"}" />
           <div class="field">
             <label>Nickname</label>
             <input type="text" data-nick value="${_esc(bi.nick)}" placeholder="Leave blank to clear nickname" />
@@ -119,7 +119,10 @@ export function mount(container) {
           throw new Error(`${res.status}: ${detail}`);
         }
         const data = await res.json();
-        if (avatarPreview && data.avatar_url) avatarPreview.src = data.avatar_url;
+        if (data.avatar_url) {
+          avatarPreview.src = data.avatar_url;
+          avatarPreview.style.display = "block";
+        }
         nickInput.value = data.nick || "";
         avatarUrlInput.value = "";
         avatarFileInput.value = "";
