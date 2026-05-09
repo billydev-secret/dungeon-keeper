@@ -336,7 +336,7 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             if parent_notify_pref not in (0, 1):
                 parent_notify_pref = 1 if cfg.notify_op_on_reply else 0
 
-        is_op = parent_author_id > 0 and interaction.user.id == parent_author_id
+        is_op = not self.ephemeral and parent_author_id > 0 and interaction.user.id == parent_author_id
         circle = None
         anon_name = None
         if not is_op:
