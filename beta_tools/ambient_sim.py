@@ -5,6 +5,7 @@ import asyncio
 import logging
 import random
 import time
+from collections import deque
 from typing import Optional
 
 import discord
@@ -41,6 +42,7 @@ class AmbientSim:
         self._last_post: Optional[tuple[str, str, float]] = None
         self._warned_channels: set[str] = set()
         self._last_puppet_key: Optional[str] = None
+        self._msg_history: dict[str, deque[discord.Message]] = {}
 
     @property
     def is_running(self) -> bool:
@@ -62,6 +64,7 @@ class AmbientSim:
         self._last_post = None
         self._warned_channels = set()
         self._last_puppet_key = None
+        self._msg_history = {}
         self._task = asyncio.create_task(self._loop(), name="ambient-sim")
         log.info("ambient sim started (rate_multiplier=%.2f)", self._beta_cfg.ambient_rate_multiplier)
 
@@ -134,12 +137,22 @@ class AmbientSim:
         if not text:
             return
 
-        await raw_channel.send(text)  # type: ignore[union-attr]  # _resolve_channel guarantees TextChannel
+        history = self._msg_history.get(channel_name)
+        reply_to = random.choice(list(history)) if history and random.random() < 0.5 else None
+        if reply_to is not None:
+            sent = await raw_channel.send(text, reference=reply_to, mention_author=False)  # type: ignore[union-attr]
+        else:
+            sent = await raw_channel.send(text)  # type: ignore[union-attr]
+
+        if channel_name not in self._msg_history:
+            self._msg_history[channel_name] = deque(maxlen=10)
+        self._msg_history[channel_name].append(sent)
+
         self._last_post_at = time.monotonic()
         self._last_post = (handle.key, channel_name, time.time())
         self._last_puppet_key = handle.key
         self._posts += 1
-        log.debug("ambient sim: %r posted in #%s", handle.key, channel_name)
+        log.debug("ambient sim: %r %s in #%s", handle.key, "replied" if reply_to else "posted", channel_name)
 
     async def _loop(self) -> None:
         log.info("ambient sim loop running")
