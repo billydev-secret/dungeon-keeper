@@ -546,7 +546,7 @@ def test_get_config_includes_bot_identity_with_bot(ctx, make_client):
             display_avatar=SimpleNamespace(url="https://cdn.discordapp.com/avatars/1/abc.png"),
         )
     )
-    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild)
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
     client = make_client()
     resp = client.get("/api/config")
     assert resp.status_code == 200
@@ -572,7 +572,7 @@ def test_get_config_bot_identity_empty_nick_when_no_guild_nick(ctx, make_client)
             display_avatar=SimpleNamespace(url="https://cdn.discordapp.com/avatars/1/abc.png"),
         )
     )
-    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild)
+    ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
     client = make_client()
     resp = client.get("/api/config")
     assert resp.status_code == 200

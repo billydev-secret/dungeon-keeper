@@ -223,6 +223,9 @@ def _birthday_section(conn, guild_id: int) -> dict:
     }
 
 
+# ── Bot identity section ─────────────────────────────────────────
+
+
 def _bot_identity_section(guild) -> dict:
     if guild is None:
         return {"nick": "", "avatar_url": ""}
