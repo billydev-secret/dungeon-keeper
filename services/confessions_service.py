@@ -76,17 +76,6 @@ _NAME_POOL_SIZE = len(_ANON_ADJECTIVES) * len(_ANON_ANIMALS)
 _COLOR_POOL_SIZE = len(_ANON_CIRCLES)
 
 
-def anon_id(user_id: int, root_message_id: int) -> str:
-    digest = hashlib.sha256(f"{user_id}:{root_message_id}".encode()).digest()
-    adj = _ANON_ADJECTIVES[int.from_bytes(digest[0:2], "big") % len(_ANON_ADJECTIVES)]
-    animal = _ANON_ANIMALS[int.from_bytes(digest[2:4], "big") % len(_ANON_ANIMALS)]
-    return f"{adj} {animal}"
-
-
-def anon_circle(user_id: int, root_message_id: int) -> str:
-    digest = hashlib.sha256(f"c:{user_id}:{root_message_id}".encode()).digest()
-    return _ANON_CIRCLES[int.from_bytes(digest[:2], "big") % len(_ANON_CIRCLES)]
-
 
 def anon_name_from_index(name_index: int) -> str:
     return f"{_ANON_ADJECTIVES[name_index // len(_ANON_ANIMALS)]} {_ANON_ANIMALS[name_index % len(_ANON_ANIMALS)]}"
@@ -433,28 +422,6 @@ def update_reply_button_message_id(
         )
 
 
-def get_or_assign_emoji_index(db_path: Path, guild_id: int, root_message_id: int, user_id: int) -> int:
-    with open_db(db_path) as conn:
-        row = conn.execute(
-            "SELECT emoji_index FROM confession_emoji_assignments WHERE guild_id = ? AND root_message_id = ? AND user_id = ?",
-            (guild_id, root_message_id, user_id),
-        ).fetchone()
-        if row:
-            return int(row["emoji_index"])
-        count_row = conn.execute(
-            "SELECT COUNT(*) AS cnt FROM confession_emoji_assignments WHERE guild_id = ? AND root_message_id = ?",
-            (guild_id, root_message_id),
-        ).fetchone()
-        idx = int(count_row["cnt"]) % len(_ANON_CIRCLES)
-        conn.execute(
-            "INSERT OR IGNORE INTO confession_emoji_assignments (guild_id, root_message_id, user_id, emoji_index) VALUES (?, ?, ?, ?)",
-            (guild_id, root_message_id, user_id, idx),
-        )
-        row = conn.execute(
-            "SELECT emoji_index FROM confession_emoji_assignments WHERE guild_id = ? AND root_message_id = ? AND user_id = ?",
-            (guild_id, root_message_id, user_id),
-        ).fetchone()
-        return int(row["emoji_index"])
 
 
 def check_and_bump_limits(
