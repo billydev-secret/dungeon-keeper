@@ -38,8 +38,6 @@ def _build_chain(messages: list[str]) -> dict[str, list[str]]:
     chain: dict[str, list[str]] = defaultdict(list)
     for msg in messages:
         words = msg.split()
-        if len(words) < 3:
-            continue
         for i in range(len(words) - 2):
             key = f"{words[i]} {words[i + 1]}"
             chain[key].append(words[i + 2])
