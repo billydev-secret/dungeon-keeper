@@ -1547,9 +1547,9 @@ async def update_veil_config(
     body: VeilConfigUpdate,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    _require_primary_guild(request)
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
 
     def _q():
         from services.veil_repo import set_veil_config_value
