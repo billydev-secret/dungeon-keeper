@@ -616,7 +616,7 @@ def test_post_bot_identity_fetches_avatar_url(ctx, make_client):
     mock_response = SimpleNamespace(
         status_code=200, content=fake_image, raise_for_status=lambda: None,
     )
-    async def mock_get(_url, **_kwargs): return mock_response
+    async def mock_get(*_a, **_kw): return mock_response
     with patch("web.routes.config.httpx.AsyncClient") as MockClient:
         instance = AsyncMock()
         instance.get = mock_get
@@ -664,7 +664,7 @@ def test_post_bot_identity_503_when_no_bot(ctx, make_client):
 
 def test_post_bot_identity_503_when_no_guild(ctx, make_client):
     from types import SimpleNamespace
-    ctx.bot = SimpleNamespace(get_guild=lambda gid: None)
+    ctx.bot = SimpleNamespace(get_guild=lambda _: None)
     client = make_client()
     resp = client.post("/api/config/bot-identity", data={"nick": "X"})
     assert resp.status_code == 503
@@ -673,7 +673,7 @@ def test_post_bot_identity_400_on_bad_avatar_url(ctx, make_client):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
     import httpx as _httpx
-    async def mock_edit(**kwargs): pass
+    async def mock_edit(**_): pass
     guild = SimpleNamespace(
         me=SimpleNamespace(
             nick=None, guild_avatar=None,
