@@ -1606,6 +1606,7 @@ async def update_bot_identity(
     avatar_file: UploadFile | None = File(default=None),
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
+    import discord
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     _require_primary_guild(request)
@@ -1641,7 +1642,7 @@ async def update_bot_identity(
     if edit_kwargs:
         try:
             await guild.me.edit(**edit_kwargs)
-        except Exception as exc:
+        except discord.HTTPException as exc:
             raise HTTPException(400, f"Discord rejected the update: {exc}")
 
     return {
