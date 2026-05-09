@@ -5,7 +5,7 @@ import asyncio
 import logging
 import random
 import time
-from typing import Optional, cast
+from typing import Optional
 
 import discord
 
@@ -126,14 +126,12 @@ class AmbientSim:
         if raw_channel is None:
             log.debug("puppet %r cannot see channel %r, skipping", handle.key, channel_name)
             return
-        # _resolve_channel guarantees the source is a TextChannel, so this cast is safe.
-        puppet_channel = cast(discord.abc.Messageable, raw_channel)
 
         text = self._chain.generate(handle.persona.message_length_bias)
         if not text:
             return
 
-        await puppet_channel.send(text)
+        await raw_channel.send(text)  # type: ignore[union-attr]  # _resolve_channel guarantees TextChannel
         self._last_post_at = time.monotonic()
         self._last_post = (handle.key, channel_name, time.time())
         self._posts += 1
