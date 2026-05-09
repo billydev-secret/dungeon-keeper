@@ -1,0 +1,991 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DungeonKeeper — Moderator Reference Guide</title>
+<style>
+  /* ── Variables ─────────────────────────────────────────────── */
+  :root {
+    --brand:      #5865F2;
+    --brand-dark: #4752c4;
+    --accent:     #57F287;
+    --warn:       #FEE75C;
+    --danger:     #ED4245;
+    --bg:         #ffffff;
+    --surface:    #f6f8fa;
+    --border:     #d0d7de;
+    --text:       #1a1a2e;
+    --muted:      #57606a;
+    --code-bg:    #f0f2f5;
+    --sidebar-w:  240px;
+    --max-w:      860px;
+    font-size: 15px;
+  }
+
+  /* ── Reset ─────────────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    line-height: 1.65;
+  }
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── Layout ────────────────────────────────────────────────── */
+  .layout {
+    display: flex;
+    min-height: 100vh;
+  }
+
+  /* ── Sidebar ───────────────────────────────────────────────── */
+  .sidebar {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 1.5rem 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  .sidebar-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0 1.25rem 0.75rem;
+  }
+  .sidebar nav ul { list-style: none; }
+  .sidebar nav li a {
+    display: block;
+    padding: 0.3rem 1.25rem;
+    font-size: 0.83rem;
+    color: var(--muted);
+    border-left: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .sidebar nav li a:hover,
+  .sidebar nav li a.active {
+    color: var(--brand);
+    border-left-color: var(--brand);
+    background: rgba(88,101,242,0.06);
+    text-decoration: none;
+  }
+  .sidebar nav li.section-header {
+    margin-top: 1rem;
+  }
+  .sidebar nav li.section-header a {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 0.85rem;
+  }
+
+  /* ── Main content ──────────────────────────────────────────── */
+  .content {
+    flex: 1;
+    padding: 3rem 4rem;
+    max-width: calc(var(--sidebar-w) + var(--max-w));
+  }
+
+  /* ── Print button ──────────────────────────────────────────── */
+  .print-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 2rem;
+  }
+  .btn-print {
+    background: var(--brand);
+    color: #fff;
+    border: none;
+    padding: 0.55rem 1.2rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    transition: background 0.15s;
+  }
+  .btn-print:hover { background: var(--brand-dark); }
+
+  /* ── Cover ─────────────────────────────────────────────────── */
+  .cover {
+    text-align: center;
+    padding: 3rem 0 4rem;
+    border-bottom: 2px solid var(--border);
+    margin-bottom: 3rem;
+  }
+  .cover-icon {
+    font-size: 3.5rem;
+    display: block;
+    margin-bottom: 1rem;
+  }
+  .cover h1 {
+    font-size: 2.4rem;
+    font-weight: 800;
+    color: var(--brand);
+    letter-spacing: -0.02em;
+  }
+  .cover .subtitle {
+    font-size: 1.1rem;
+    color: var(--muted);
+    margin-top: 0.4rem;
+  }
+  .cover .meta {
+    margin-top: 1.5rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+  }
+  .cover .meta span { display: flex; align-items: center; gap: 0.3rem; }
+
+  /* ── Headings ──────────────────────────────────────────────── */
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 3rem 0 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 2px solid var(--border);
+    scroll-margin-top: 1rem;
+  }
+  h2 .section-num {
+    display: inline-block;
+    background: var(--brand);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.1rem 0.45rem;
+    border-radius: 4px;
+    margin-right: 0.5rem;
+    vertical-align: middle;
+    position: relative;
+    top: -1px;
+  }
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 1.75rem 0 0.5rem;
+    scroll-margin-top: 1rem;
+  }
+  p { margin-bottom: 0.75rem; }
+
+  /* ── Command blocks ────────────────────────────────────────── */
+  .cmd-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--brand);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin: 0.75rem 0 1.25rem;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 0.875rem;
+  }
+  .cmd-block .cmd-name {
+    font-weight: 700;
+    color: var(--brand);
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+  .cmd-block .cmd-perm {
+    font-size: 0.78rem;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 0.2rem;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .cmd-block .cmd-desc {
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 0.875rem;
+    display: block;
+  }
+  .cmd-block .cmd-params {
+    margin-top: 0.35rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  /* ── Permission badges ─────────────────────────────────────── */
+  .perm {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .perm-all     { background: #daf4e9; color: #1a6b3c; }
+  .perm-mod     { background: #dce6ff; color: #2040a0; }
+  .perm-admin   { background: #fde8e9; color: #9a1c1f; }
+  .perm-owner   { background: #fff3cd; color: #7d5800; }
+
+  /* ── Callout boxes ─────────────────────────────────────────── */
+  .callout {
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    margin: 1.25rem 0;
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+  }
+  .callout-icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 0.05rem; }
+  .callout-body { flex: 1; }
+  .callout-body strong { display: block; margin-bottom: 0.25rem; font-size: 0.95rem; }
+  .callout-body p { margin-bottom: 0; font-size: 0.9rem; }
+  .callout-tip  { background: #eef2ff; border: 1px solid #c7d0ff; }
+  .callout-warn { background: #fffbe6; border: 1px solid #ffe566; }
+  .callout-info { background: #f0faf4; border: 1px solid #a8dfc0; }
+
+  /* ── Tables ────────────────────────────────────────────────── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    margin: 1rem 0 1.5rem;
+  }
+  th {
+    background: var(--surface);
+    font-weight: 700;
+    text-align: left;
+    padding: 0.6rem 0.75rem;
+    border-bottom: 2px solid var(--border);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+  }
+  td {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface); }
+  td code {
+    background: var(--code-bg);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.82rem;
+    font-family: "SFMono-Regular", Consolas, monospace;
+    color: var(--brand);
+  }
+
+  /* ── Lists ─────────────────────────────────────────────────── */
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  li { margin-bottom: 0.25rem; }
+
+  /* ── Step list ─────────────────────────────────────────────── */
+  .steps { list-style: none; padding: 0; counter-reset: steps; }
+  .steps li {
+    counter-increment: steps;
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    margin-bottom: 0.75rem;
+  }
+  .steps li::before {
+    content: counter(steps);
+    background: var(--brand);
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 700;
+    width: 1.4rem;
+    height: 1.4rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    margin-top: 0.15rem;
+  }
+
+  /* ── Perm matrix ────────────────────────────────────────────── */
+  .matrix { font-size: 0.85rem; }
+  .matrix td:first-child { font-family: monospace; color: var(--brand); font-size: 0.8rem; }
+
+  /* ── Section divider ────────────────────────────────────────── */
+  .section-break { page-break-before: always; }
+
+  /* ── Quick-ref table ────────────────────────────────────────── */
+  .qr-table td:nth-child(2) { white-space: nowrap; }
+
+  /* ── ═══════════════════════════════════════════════════════
+        PRINT STYLES
+     ═══════════════════════════════════════════════════════ */
+  @media print {
+    .sidebar, .print-bar { display: none !important; }
+    .layout { display: block; }
+    .content { padding: 0; max-width: 100%; }
+    body { font-size: 11pt; color: #000; }
+    h2 { page-break-after: avoid; margin-top: 2rem; font-size: 14pt; }
+    h3 { page-break-after: avoid; font-size: 11pt; }
+    .cmd-block { page-break-inside: avoid; }
+    .callout { page-break-inside: avoid; }
+    table { page-break-inside: auto; }
+    tr { page-break-inside: avoid; }
+    .section-break { page-break-before: always; }
+    .cover { page-break-after: always; border-bottom: none; }
+    a { color: #000; text-decoration: none; }
+    .perm { border: 1px solid currentColor; }
+    th { background: #eee !important; }
+    tr:hover td { background: transparent !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ── Sidebar TOC ──────────────────────────────────────────── -->
+  <aside class="sidebar">
+    <div class="sidebar-title">Contents</div>
+    <nav>
+      <ul>
+        <li><a href="#cover">DungeonKeeper</a></li>
+        <li class="section-header"><a href="#getting-started">1. Getting Started</a></li>
+        <li><a href="#permissions">Permission Levels</a></li>
+        <li><a href="#first-steps">First-Time Setup</a></li>
+        <li class="section-header"><a href="#moderation">2. Moderation Core</a></li>
+        <li><a href="#jail">Jail &amp; Release</a></li>
+        <li><a href="#warnings">Warnings</a></li>
+        <li><a href="#purge">Purge</a></li>
+        <li><a href="#context-menus">Context Menus</a></li>
+        <li class="section-header"><a href="#tickets">3. Ticket System</a></li>
+        <li><a href="#ticket-cmds">Ticket Commands</a></li>
+        <li><a href="#policies">Policy Voting</a></li>
+        <li class="section-header"><a href="#ai-tools">4. AI Tools ✦</a></li>
+        <li><a href="#ai-cmds">AI Commands</a></li>
+        <li class="section-header"><a href="#analytics">5. Analytics &amp; Watch ✦</a></li>
+        <li><a href="#watch">Watch List</a></li>
+        <li><a href="#activity">Activity Charts</a></li>
+        <li class="section-header"><a href="#community">6. Community &amp; XP</a></li>
+        <li><a href="#xp">XP System</a></li>
+        <li><a href="#roles">Role Grants</a></li>
+        <li><a href="#starboard">Starboard</a></li>
+        <li class="section-header"><a href="#voice">7. Voice Channels</a></li>
+        <li><a href="#voice-user">User Commands</a></li>
+        <li><a href="#voice-admin">Admin Commands</a></li>
+        <li class="section-header"><a href="#confessions">8. Confessions</a></li>
+        <li class="section-header"><a href="#wellness">9. Wellness</a></li>
+        <li class="section-header"><a href="#config">10. Configuration</a></li>
+        <li class="section-header"><a href="#quickref">Quick Reference</a></li>
+      </ul>
+    </nav>
+  </aside>
+
+  <!-- ── Main content ─────────────────────────────────────────── -->
+  <main class="content">
+
+    <!-- Print button -->
+    <div class="print-bar">
+      <button class="btn-print" onclick="window.print()">🖨 Print to PDF</button>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         COVER
+    ═══════════════════════════════════════════════════════════ -->
+    <div id="cover" class="cover">
+      <span class="cover-icon">⚔️</span>
+      <h1>DungeonKeeper</h1>
+      <div class="subtitle">Moderator Reference Guide</div>
+      <div class="meta">
+        <span>📅 May 2026</span>
+        <span>🔒 For mod team use</span>
+        <span>🤖 Discord Server Bot</span>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         1. GETTING STARTED
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="getting-started"><span class="section-num">1</span> Getting Started</h2>
+    <p>DungeonKeeper is an all-in-one server management bot. It handles moderation, ticketing, XP tracking, voice channels, AI-assisted content review, analytics, and more — all through Discord slash commands.</p>
+
+    <h3 id="permissions">Permission Levels</h3>
+    <p>Most commands require one of these roles or Discord permissions:</p>
+    <table>
+      <thead><tr><th>Level</th><th>How it's granted</th><th>What it unlocks</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="perm perm-all">Everyone</span></td>
+          <td>All server members</td>
+          <td>Opening tickets, XP leaderboards, voice channel controls (own channel), wellness opt-in, confessing</td>
+        </tr>
+        <tr>
+          <td><span class="perm perm-mod">Mod</span></td>
+          <td>Has the configured mod role, or <em>Manage Guild</em> permission</td>
+          <td>Jail, warnings, tickets management, watch list, analytics, purge, XP awards</td>
+        </tr>
+        <tr>
+          <td><span class="perm perm-admin">Admin</span></td>
+          <td>Has the configured admin role, or Discord <em>Administrator</em> permission</td>
+          <td>AI moderation, user data deletion, voice admin, policy voting finalization</td>
+        </tr>
+        <tr>
+          <td><span class="perm perm-owner">Bot Owner</span></td>
+          <td>Configured at bot startup</td>
+          <td>Reloading cogs, Spotify authorization</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="first-steps">First-Time Setup (Admin)</h3>
+    <ol class="steps">
+      <li>Run <code>/init</code> — creates all required bot channels and categories (mod-log, join-leave-log, ticket panel, etc.).</li>
+      <li>Run <code>/config global</code> — set your mod role IDs, admin role IDs, mod notification channel, and server timezone.</li>
+      <li>Run <code>/config roles</code> — configure which roles can be granted with <code>/grant</code>.</li>
+      <li>Run <code>/config xp</code> — set the Level 5 role, XP announcement channels, and excluded channels.</li>
+      <li>Run <code>/config welcome</code> — customize join/leave messages.</li>
+      <li>Optionally run <code>/voice-admin set-hub</code> to enable personal voice channels.</li>
+      <li>Optionally run <code>/starboard channel</code> to enable the starboard.</li>
+    </ol>
+
+    <!-- ══════════════════════════════════════════════════════════
+         2. MODERATION CORE
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="moderation" class="section-break"><span class="section-num">2</span> Moderation Core</h2>
+
+    <h3 id="jail">Jail &amp; Release</h3>
+    <p>The jail system moves a member to a private channel, strips all their roles, and logs everything. Jail transcripts are saved automatically for later review.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/jail user:@user duration:24h reason:Repeated rule 3 violations</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Places the member in a private jail channel and removes all their roles. The bot DMs them with the reason.</span>
+      <div class="cmd-params">
+        <strong>duration</strong> — accepts human durations: <code>30m</code>, <code>2h</code>, <code>7d</code>, <code>1w</code>, or leave blank for indefinite.<br>
+        <strong>reason</strong> — logged to audit trail and included in DM.
+      </div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/unjail user:@user reason:...</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Releases the member, restores their previous roles, and saves a full transcript of the jail conversation.</span>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Automatic release</strong>
+        <p>Timed jails expire automatically — you don't need to manually unjail after the duration. The bot checks every 30 seconds and releases with a logged reason.</p>
+      </div>
+    </div>
+
+    <h3 id="warnings">Warnings</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/warn user:@user reason:...</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Issues a warning to a member. Warnings are private — the member is not notified. Stored in the audit log. Admins are pinged when a threshold is reached.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/warnings user:@user</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Lists all active and revoked warnings for a member, with dates, reasons, and which mod issued each one.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/revokewarn &lt;warning-id&gt;</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Invalidates a specific warning (it stays in history as revoked, not deleted).</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/modinfo user:@user</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Full mod profile for a member — current jail status, all warnings, open tickets, join date, and account age.</span>
+    </div>
+
+    <h3 id="purge">Bulk Delete (Purge)</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/purge count:50 after:14:30</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — requires Manage Messages</span></span>
+      <span class="cmd-desc">Bulk-deletes messages. Specify a count, a cutoff time (HH:MM in server timezone), or both. Pinned messages are never deleted.</span>
+      <div class="cmd-params">
+        <strong>count</strong> — 1–1000 messages.<br>
+        <strong>after</strong> — only delete messages sent after this time today (e.g. <code>14:30</code>).
+      </div>
+    </div>
+
+    <h3 id="context-menus">Context Menus (Right-Click)</h3>
+    <p>Right-clicking on a <strong>user</strong> or <strong>message</strong> reveals DungeonKeeper actions:</p>
+    <table>
+      <thead><tr><th>Right-click target</th><th>Action</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>User</td>
+          <td><strong>Jail User</strong></td>
+          <td>Opens a modal to quickly jail the member without typing a slash command</td>
+        </tr>
+        <tr>
+          <td>Message</td>
+          <td><strong>Create Ticket from Message</strong></td>
+          <td>Opens a ticket pre-linked to the offending message</td>
+        </tr>
+        <tr>
+          <td>Message</td>
+          <td><strong>Add to Todo</strong></td>
+          <td>Adds the message to the server todo list with an optional note (mod-only)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ══════════════════════════════════════════════════════════
+         3. TICKET SYSTEM
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="tickets" class="section-break"><span class="section-num">3</span> Ticket System</h2>
+    <p>Tickets create private channels between the member and the mod team. Everything is logged — transcripts are saved before deletion. Always handle issues in a ticket, not DMs, so there's a paper trail.</p>
+
+    <div class="callout callout-warn">
+      <span class="callout-icon">⚠️</span>
+      <div class="callout-body">
+        <strong>Use tickets, not DMs</strong>
+        <p>Handling moderation issues in DMs leaves no record. Open a ticket so the full conversation is logged, searchable, and reviewable by the whole team.</p>
+      </div>
+    </div>
+
+    <h3 id="ticket-cmds">Ticket Commands</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ticket open</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Opens a private ticket channel visible to the member and all mods. Members can describe their issue in the opening modal.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ticket claim</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Assigns the ticket to you. You'll receive DM pings for new messages in that ticket until it's closed.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ticket escalate reason:...</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Brings admins into the ticket with a ping. Use when the issue is above your authority level.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ticket close reason:...</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Locks the channel and posts Reopen / Delete buttons. The channel remains visible for review until deleted.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ticket delete</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Permanently deletes the ticket channel. A full transcript is saved to the database first.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/pull user:@user &nbsp;&nbsp; /remove user:@user</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Add or remove a member from the current ticket/jail channel. Useful for bringing in witnesses or additional mods.</span>
+    </div>
+
+    <h3 id="policies">Policy Voting</h3>
+    <p>The policy system lets mods propose and vote on server rules democratically.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/policy open title:... description:...</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Creates a policy proposal with Yes / No / Abstain voting buttons for the mod team.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/policy list &nbsp;&nbsp; /policy close &nbsp;&nbsp; /policy vote</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">List all policies, finalize voting on a proposal, or trigger a vote on an existing proposal.</span>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         4. AI TOOLS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="ai-tools" class="section-break"><span class="section-num">4</span> AI Moderation Tools</h2>
+
+    <div class="callout callout-tip">
+      <span class="callout-icon">💡</span>
+      <div class="callout-body">
+        <strong>Pro Tip: These commands exist and you should use them</strong>
+        <p>The AI moderation commands use Claude to scan message history for rule violations, detect patterns you'd miss manually, and answer natural-language questions about member behavior. Before jailing someone or handling a complex report, run <code>/ai review @user</code> — it takes 5 seconds and often surfaces context you'd otherwise miss.</p>
+      </div>
+    </div>
+
+    <h3 id="ai-cmds">AI Commands</h3>
+    <p>All AI commands require <span class="perm perm-admin">Admin</span> and an active Anthropic API key.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ai review user:@user days:7</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Claude reads the member's last N days of messages and flags any rule violations with quoted examples and severity assessments.</span>
+      <div class="cmd-params"><strong>days</strong> — 1–30 (default 7).</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ai scan count:100</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Scans the most recent N messages in the current channel for rule violations. Useful after a report or during a heated situation.</span>
+      <div class="cmd-params"><strong>count</strong> — 10–200 (default 50).</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ai channel question:"Who has been most disruptive this hour?" minutes:60</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Ask Claude any natural-language question about recent channel activity. Results are scoped to the last N minutes.</span>
+      <div class="cmd-params"><strong>minutes</strong> — 1–1440 (default 60). Optionally specify a different <strong>channel</strong>.</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ai query user:@user question:"Has this member ever targeted a specific person?" days:14</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Ask Claude a specific question about a member's message history over a defined window. Great for investigating ban appeals or complex harassment reports.</span>
+      <div class="cmd-params"><strong>days</strong> — 1–30 (default 14).</div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         5. ANALYTICS & WATCH
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="analytics" class="section-break"><span class="section-num">5</span> Analytics &amp; Watch List</h2>
+
+    <div class="callout callout-tip">
+      <span class="callout-icon">💡</span>
+      <div class="callout-body">
+        <strong>Pro Tip: Catch problems before they escalate</strong>
+        <p>The analytics commands let you identify who's going quiet, who's stirring conflict, and who's at-risk of churning — before it becomes a problem. Run <code>/dropoff</code> weekly and <code>/chilling_effect</code> monthly to get ahead of server dynamics instead of reacting to them.</p>
+      </div>
+    </div>
+
+    <h3 id="watch">Watch List</h3>
+    <p>Silently monitor a member's public messages, forwarded to your DMs. If the AI key is active, only flagged messages come through.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/watch add user:@user</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Starts forwarding the member's public messages to your DMs. Completely invisible to the member. With AI enabled, only potentially problematic messages are forwarded.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/watch remove user:@user &nbsp;&nbsp; /watch list</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Stop watching a member, or see everyone you're currently monitoring.</span>
+    </div>
+
+    <h3 id="activity">Activity &amp; Engagement Analytics</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/activity resolution:day member:@user channel:#channel</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — requires Manage Guild</span></span>
+      <span class="cmd-desc">Bar chart of message volume or XP over time. Scope to a specific member, channel, or the whole server.</span>
+      <div class="cmd-params"><strong>resolution</strong> — hour / day / week / month / hour_of_day / day_of_week &nbsp;|&nbsp; <strong>mode</strong> — messages / xp.</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/dropoff period:week limit:10</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Lists the members whose engagement dropped the most between consecutive periods. Use this to find members drifting away before they leave.</span>
+      <div class="cmd-params"><strong>period</strong> — day / week / month &nbsp;|&nbsp; <strong>limit</strong> — 1–25.</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/session_burst member:@user</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Chart showing how active a member is in the minutes after they return from a break. Useful for understanding participation patterns.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/burst_ranking limit:10</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Ranks members by whether their presence drives conversations (burst starters) vs. posting without sparking replies.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/chilling_effect lookback_days:30 top:10</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Identifies members whose arrival correlates with others going quiet — useful for detecting subtle intimidation or social friction.</span>
+      <div class="cmd-params">All parameters optional. <strong>channel</strong> scopes to a single channel.</div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         6. COMMUNITY & XP
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="community" class="section-break"><span class="section-num">6</span> Community &amp; XP</h2>
+
+    <h3 id="xp">XP System</h3>
+    <p>Members earn XP by posting messages, replying, reacting to images, and spending time in voice channels. XP level-ups automatically grant configured roles and post announcements.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/xp_leaderboards timescale:week</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Shows the top XP earners and your own rank, with a breakdown by source (text / reply / voice / image-react / grant).</span>
+      <div class="cmd-params"><strong>timescale</strong> — hour / day / week / month / year / alltime.</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/xp_give member:@user</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span> or allowlisted members</span>
+      <span class="cmd-desc">Manually awards 20 XP to a member. Use to recognize contributions that the bot wouldn't automatically capture (e.g. helping in voice, organizing events).</span>
+    </div>
+
+    <h3 id="roles">Role Grants</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/grant role:denizen member:@user</span>
+      <span class="cmd-perm">Configured per role</span>
+      <span class="cmd-desc">Grants a configured community role to a member. Role options and who can grant them are set in <code>/config roles</code>. The action is logged and optionally announced.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/report promotion_review</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Messages</span></span>
+      <span class="cmd-desc">Lists members at Level 5 or above who haven't yet been granted the NSFW or next-tier role. Flags pruned members. Use during weekly check-ins.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/quality_leave add member:@user days:30</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Puts a member on Leave of Absence so their inactivity doesn't count against quality scoring. Use for members who announced a temporary break.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/quality_leave remove member:@user &nbsp;&nbsp; /quality_leave list</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">End a LOA or see all members currently on leave.</span>
+    </div>
+
+    <h3 id="starboard">Starboard</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/starboard channel:#best-of &nbsp; /starboard threshold:5 &nbsp; /starboard toggle</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Configure and enable the starboard. When a message receives enough star reactions, it's reposted to the starboard channel as a highlight.</span>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         7. VOICE CHANNELS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="voice" class="section-break"><span class="section-num">7</span> Voice Channel System</h2>
+    <p>Members join a configured <em>hub</em> voice channel to automatically get their own personal voice channel. They have full control over their channel; mods and admins have override tools.</p>
+
+    <h3 id="voice-user">Member / Channel Owner Commands</h3>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/voice lock</code> / <code>/voice unlock</code></td><td>Restrict or open the channel to non-allowlisted members</td></tr>
+        <tr><td><code>/voice hide</code> / <code>/voice unhide</code></td><td>Make the channel invisible / visible to others</td></tr>
+        <tr><td><code>/voice rename &lt;name&gt;</code></td><td>Set a custom channel name</td></tr>
+        <tr><td><code>/voice limit &lt;n&gt;</code></td><td>Set user capacity (1–99, or 0 for unlimited)</td></tr>
+        <tr><td><code>/voice invite @member</code></td><td>Add a member to the allowlist and invite them</td></tr>
+        <tr><td><code>/voice kick @member</code></td><td>Remove a member and add to blocklist</td></tr>
+        <tr><td><code>/voice transfer @member</code></td><td>Give channel ownership to another member</td></tr>
+        <tr><td><code>/voice claim</code></td><td>Claim an abandoned channel (owner left)</td></tr>
+        <tr><td><code>/voice trusted add/remove/list @user</code></td><td>Manage trust list (auto-invited on join)</td></tr>
+        <tr><td><code>/voice blocked add/remove/list @user</code></td><td>Manage block list (never allowed in)</td></tr>
+        <tr><td><code>/voice reset</code></td><td>Clear all permissions on the channel</td></tr>
+        <tr><td><code>/voice profile show/reset</code></td><td>View or delete your saved channel preferences</td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="voice-admin">Admin Override Commands</h3>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/voice-admin set-hub &lt;channel&gt;</code></td><td>Set the hub channel members join to create a personal channel</td></tr>
+        <tr><td><code>/voice-admin set-category &lt;cat&gt;</code></td><td>Set where new voice channels are created</td></tr>
+        <tr><td><code>/voice-admin set-default-name &lt;template&gt;</code></td><td>Name template, e.g. <code>{user}'s Room</code></td></tr>
+        <tr><td><code>/voice-admin show</code></td><td>View full voice configuration</td></tr>
+        <tr><td><code>/voice-admin force-delete &lt;channel&gt;</code></td><td>Admin-delete any personal channel</td></tr>
+        <tr><td><code>/voice-admin force-transfer &lt;ch&gt; @user</code></td><td>Reassign ownership of any channel</td></tr>
+        <tr><td><code>/voice-admin force-clear-profile @user</code></td><td>Wipe a user's saved channel settings</td></tr>
+        <tr><td><code>/voice-admin view-profile @user</code></td><td>Inspect a user's saved settings</td></tr>
+        <tr><td><code>/voice-admin name-blocklist add/remove/list</code></td><td>Block specific channel names</td></tr>
+        <tr><td><code>/voice-admin post-panel</code></td><td>Repost the voice control panel buttons</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ══════════════════════════════════════════════════════════
+         8. CONFESSIONS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="confessions" class="section-break"><span class="section-num">8</span> Anonymous Confessions</h2>
+    <p>The confessions system lets members post anonymously to a configured channel. Each confessor is assigned a colored emoji (e.g. 🔴🟢🔵) so mods can identify repeat posters without exposing identity to other members.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/confess</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Opens an anonymous submission modal (up to 4,000 characters). The confession is posted to the confessions channel with a colored emoji identifier visible only to mods.</span>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Mod capabilities in confessions</strong>
+        <p>Mods can see the emoji→member mapping in the mod log channel, block a specific member from confessing (without revealing their identity), and enable <em>panic mode</em> to temporarily suspend all new confessions.</p>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         9. WELLNESS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="wellness" class="section-break"><span class="section-num">9</span> Wellness System</h2>
+    <p>The wellness system is opt-in. Members choose an enforcement level, and the bot helps them maintain healthy Discord habits. Mods don't need to configure this — members self-enroll.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/wellness setup</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Opens the enrollment wizard. Member selects their timezone and enforcement level.</span>
+      <div class="cmd-params">
+        <strong>Enforcement modes:</strong><br>
+        <strong>Gentle</strong> — friendly DM reminders when activity spikes.<br>
+        <strong>Cooldown</strong> — short posting breaks when threshold exceeded.<br>
+        <strong>Slow Mode</strong> — Discord per-user slow mode applied automatically.<br>
+        <strong>Gradual</strong> — escalates from gentle → cooldown → slow mode.
+      </div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/wellness away on &nbsp;&nbsp; /wellness away off</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Enables an away auto-reply. When someone @mentions an away member, the bot replies automatically with a default or custom message (max 500 chars).</span>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         10. CONFIGURATION REFERENCE
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="config" class="section-break"><span class="section-num">10</span> Configuration Reference</h2>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/config section:[global|welcome|roles|xp|prune|spoiler|booster]</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
+      <span class="cmd-desc">Opens the settings panel for the chosen section. All settings are persistent across restarts.</span>
+    </div>
+
+    <table>
+      <thead><tr><th>Section</th><th>What you configure</th></tr></thead>
+      <tbody>
+        <tr><td><code>global</code></td><td>Mod role IDs, admin role IDs, mod notification channel, server timezone offset, greeter role</td></tr>
+        <tr><td><code>welcome</code></td><td>Join/leave message templates, announcement channel, ping role</td></tr>
+        <tr><td><code>roles</code></td><td>Which roles can be granted with <code>/grant</code> and who has permission to grant them</td></tr>
+        <tr><td><code>xp</code></td><td>Level-5 milestone role, XP announcement channels, channels excluded from XP</td></tr>
+        <tr><td><code>prune</code></td><td>Inactivity pruning threshold and schedule</td></tr>
+        <tr><td><code>spoiler</code></td><td>Channels requiring image spoiler tags, roles exempt from spoiler enforcement</td></tr>
+        <tr><td><code>booster</code></td><td>Booster role button panel configuration</td></tr>
+      </tbody>
+    </table>
+
+    <table>
+      <thead><tr><th>Setup Command</th><th>Permission</th><th>When to use</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>/init</code></td>
+          <td><span class="perm perm-admin">Admin</span></td>
+          <td>First-time setup — creates all bot channels and categories</td>
+        </tr>
+        <tr>
+          <td><code>/starboard status</code></td>
+          <td><span class="perm perm-mod">Mod</span></td>
+          <td>Check current starboard configuration</td>
+        </tr>
+        <tr>
+          <td><code>/help</code></td>
+          <td><span class="perm perm-all">Everyone</span></td>
+          <td>Browse all commands by category in an interactive dropdown</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- ══════════════════════════════════════════════════════════
+         QUICK REFERENCE
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="quickref" class="section-break">Quick Reference</h2>
+    <p>All commands at a glance. Sorted by feature area.</p>
+
+    <table class="qr-table">
+      <thead><tr><th>Command</th><th>Permission</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td colspan="3" style="background:var(--surface);font-weight:700;font-size:0.78rem;letter-spacing:0.04em;text-transform:uppercase;color:var(--muted)">Moderation</td></tr>
+        <tr><td><code>/jail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to private jail channel</td></tr>
+        <tr><td><code>/unjail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Release member, restore roles, save transcript</td></tr>
+        <tr><td><code>/warn</code></td><td><span class="perm perm-mod">Mod</span></td><td>Issue private warning</td></tr>
+        <tr><td><code>/warnings</code></td><td><span class="perm perm-mod">Mod</span></td><td>View member warning history</td></tr>
+        <tr><td><code>/revokewarn</code></td><td><span class="perm perm-mod">Mod</span></td><td>Invalidate a warning</td></tr>
+        <tr><td><code>/modinfo</code></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member</td></tr>
+        <tr><td><code>/purge</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
+        <tr><td colspan="3" style="background:var(--surface);font-weight:700;font-size:0.78rem;letter-spacing:0.04em;text-transform:uppercase;color:var(--muted)">Tickets</td></tr>
+        <tr><td><code>/ticket open</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open private support ticket</td></tr>
+        <tr><td><code>/ticket claim</code></td><td><span class="perm perm-mod">Mod</span></td><td>Claim ticket, get DM pings</td></tr>
+        <tr><td><code>/ticket escalate</code></td><td><span class="perm perm-mod">Mod</span></td><td>Ping admins into ticket</td></tr>
+        <tr><td><code>/ticket close</code></td><td><span class="perm perm-mod">Mod</span></td><td>Lock ticket with reopen/delete buttons</td></tr>
+        <tr><td><code>/ticket delete</code></td><td><span class="perm perm-mod">Mod</span></td><td>Permanently delete (transcript saved)</td></tr>
+        <tr><td><code>/pull</code> / <code>/remove</code></td><td><span class="perm perm-mod">Mod</span></td><td>Add or remove member from ticket/jail</td></tr>
+        <tr><td><code>/policy open</code></td><td><span class="perm perm-mod">Mod</span></td><td>Create a policy proposal with voting</td></tr>
+        <tr><td><code>/policy list</code></td><td><span class="perm perm-mod">Mod</span></td><td>View all policies</td></tr>
+        <tr><td colspan="3" style="background:var(--surface);font-weight:700;font-size:0.78rem;letter-spacing:0.04em;text-transform:uppercase;color:var(--muted)">AI Tools</td></tr>
+        <tr><td><code>/ai review</code></td><td><span class="perm perm-admin">Admin</span></td><td>Claude flags violations in member's messages</td></tr>
+        <tr><td><code>/ai scan</code></td><td><span class="perm perm-admin">Admin</span></td><td>Claude scans current channel for violations</td></tr>
+        <tr><td><code>/ai channel</code></td><td><span class="perm perm-admin">Admin</span></td><td>Ask Claude about recent channel activity</td></tr>
+        <tr><td><code>/ai query</code></td><td><span class="perm perm-admin">Admin</span></td><td>Ask Claude about a specific member's history</td></tr>
+        <tr><td colspan="3" style="background:var(--surface);font-weight:700;font-size:0.78rem;letter-spacing:0.04em;text-transform:uppercase;color:var(--muted)">Analytics &amp; Watch</td></tr>
+        <tr><td><code>/watch add</code></td><td><span class="perm perm-mod">Mod</span></td><td>Forward member's messages to your DMs silently</td></tr>
+        <tr><td><code>/watch list</code></td><td><span class="perm perm-mod">Mod</span></td><td>List members you're monitoring</td></tr>
+        <tr><td><code>/activity</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bar chart of message volume over time</td></tr>
+        <tr><td><code>/dropoff</code></td><td><span class="perm perm-mod">Mod</span></td><td>Members whose engagement dropped most</td></tr>
+        <tr><td><code>/session_burst</code></td><td><span class="perm perm-mod">Mod</span></td><td>Member's activity pattern after returning</td></tr>
+        <tr><td><code>/burst_ranking</code></td><td><span class="perm perm-mod">Mod</span></td><td>Who drives conversations when they arrive</td></tr>
+        <tr><td><code>/chilling_effect</code></td><td><span class="perm perm-mod">Mod</span></td><td>Who makes others go quiet when they arrive</td></tr>
+        <tr><td colspan="3" style="background:var(--surface);font-weight:700;font-size:0.78rem;letter-spacing:0.04em;text-transform:uppercase;color:var(--muted)">Community &amp; XP</td></tr>
+        <tr><td><code>/xp_leaderboards</code></td><td><span class="perm perm-all">Everyone</span></td><td>XP rankings by time window</td></tr>
+        <tr><td><code>/xp_give</code></td><td><span class="perm perm-mod">Mod</span></td><td>Award 20 XP to a member manually</td></tr>
+        <tr><td><code>/grant</code></td><td>Configured</td><td>Give a community role to a member</td></tr>
+        <tr><td><code>/report promotion_review</code></td><td><span class="perm perm-mod">Mod</span></td><td>Members at Level 5 without next role</td></tr>
+        <tr><td><code>/quality_leave add</code></td><td><span class="perm perm-mod">Mod</span></td><td>Put member on Leave of Absence</td></tr>
+        <tr><td><code>/starboard</code></td><td><span class="perm perm-mod">Mod</span></td><td>Configure message highlight channel</td></tr>
+        <tr><td colspan="3" style="background:var(--surface);font-weight:700;font-size:0.78rem;letter-spacing:0.04em;text-transform:uppercase;color:var(--muted)">Voice</td></tr>
+        <tr><td><code>/voice lock/unlock</code></td><td>Channel owner</td><td>Restrict/open personal voice channel</td></tr>
+        <tr><td><code>/voice rename</code></td><td>Channel owner</td><td>Rename your voice channel</td></tr>
+        <tr><td><code>/voice invite/kick</code></td><td>Channel owner</td><td>Allow or remove members</td></tr>
+        <tr><td><code>/voice-admin show</code></td><td><span class="perm perm-admin">Admin</span></td><td>View full voice configuration</td></tr>
+        <tr><td><code>/voice-admin force-delete</code></td><td><span class="perm perm-admin">Admin</span></td><td>Admin-delete any voice channel</td></tr>
+        <tr><td colspan="3" style="background:var(--surface);font-weight:700;font-size:0.78rem;letter-spacing:0.04em;text-transform:uppercase;color:var(--muted)">Configuration</td></tr>
+        <tr><td><code>/config</code></td><td><span class="perm perm-mod">Mod</span></td><td>Open settings panel (global/welcome/roles/xp/…)</td></tr>
+        <tr><td><code>/init</code></td><td><span class="perm perm-admin">Admin</span></td><td>Create all bot channels and categories</td></tr>
+        <tr><td><code>/help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
+      </tbody>
+    </table>
+
+    <p style="color:var(--muted);font-size:0.8rem;margin-top:2rem;text-align:center">
+      DungeonKeeper Moderator Reference Guide &nbsp;·&nbsp; May 2026
+    </p>
+
+  </main>
+</div>
+
+<script>
+  // Highlight active sidebar link on scroll
+  const headings = document.querySelectorAll('h2[id], h3[id]');
+  const links = document.querySelectorAll('.sidebar nav a[href^="#"]');
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const target = document.querySelector('.sidebar nav a[href="#' + e.target.id + '"]');
+        if (target) target.classList.add('active');
+      }
+    });
+  }, { rootMargin: '0px 0px -70% 0px' });
+  headings.forEach(h => observer.observe(h));
+</script>
+</body>
+</html>
