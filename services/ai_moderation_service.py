@@ -16,6 +16,13 @@ log = logging.getLogger("dungeonkeeper.ai_mod")
 
 DEFAULT_MODEL = "claude-opus-4-6"  # fallback; runtime default loaded from ai_config
 
+# Models that support adaptive thinking. Haiku never does.
+_THINKING_CAPABLE_PREFIXES = ("claude-opus-4", "claude-sonnet-4-6")
+
+
+def _supports_thinking(model: str) -> bool:
+    return any(model.startswith(p) for p in _THINKING_CAPABLE_PREFIXES)
+
 
 async def _chat(
     client: AsyncAnthropic,
@@ -46,8 +53,10 @@ async def _chat(
         "messages": [{"role": "user", "content": user_content}],
         "max_tokens": max_tokens,
     }
-    if use_thinking:
+    if use_thinking and _supports_thinking(model):
         kwargs["thinking"] = {"type": "adaptive"}
+    elif use_thinking:
+        log.warning("Thinking requested but model %s does not support it; skipping.", model)
 
     async with client.messages.stream(**kwargs) as stream:
         message = await stream.get_final_message()
