@@ -40,6 +40,7 @@ class AmbientSim:
         self._last_post_at: float = 0.0
         self._last_post: Optional[tuple[str, str, float]] = None
         self._warned_channels: set[str] = set()
+        self._last_puppet_key: Optional[str] = None
 
     @property
     def is_running(self) -> bool:
@@ -60,6 +61,7 @@ class AmbientSim:
         self._last_post_at = 0.0
         self._last_post = None
         self._warned_channels = set()
+        self._last_puppet_key = None
         self._task = asyncio.create_task(self._loop(), name="ambient-sim")
         log.info("ambient sim started (rate_multiplier=%.2f)", self._beta_cfg.ambient_rate_multiplier)
 
@@ -84,8 +86,9 @@ class AmbientSim:
 
     def _pick_puppet(self) -> PuppetHandle:
         handles = self._puppet_manager.handles
-        weights = [h.persona.activity_weight for h in handles]
-        return random.choices(handles, weights=weights, k=1)[0]
+        candidates = [h for h in handles if h.key != self._last_puppet_key] or handles
+        weights = [h.persona.activity_weight for h in candidates]
+        return random.choices(candidates, weights=weights, k=1)[0]
 
     def _resolve_channel(self, name: str) -> Optional[discord.TextChannel]:
         for ch in self._guild.text_channels:
@@ -134,6 +137,7 @@ class AmbientSim:
         await raw_channel.send(text)  # type: ignore[union-attr]  # _resolve_channel guarantees TextChannel
         self._last_post_at = time.monotonic()
         self._last_post = (handle.key, channel_name, time.time())
+        self._last_puppet_key = handle.key
         self._posts += 1
         log.debug("ambient sim: %r posted in #%s", handle.key, channel_name)
 

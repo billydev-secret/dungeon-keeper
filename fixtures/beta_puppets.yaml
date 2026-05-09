@@ -8,31 +8,36 @@
   avatar_url: https://i.imgur.com/REPLACE_ME_alice.png
   activity_weight: 1.0
   channel_affinities:
-    "💛│the-meadow": 0.5
-    "💛│selfies-and-mages": 0.2
-    "💛│big-feelings-room": 0.1
-    "💛│special-interests": 0.2
+    "💛│the-meadow": 1.0
+    "💛│selfies-and-mages": 1.0
+    "💛│big-feelings-room": 1.0
+    "💛│special-interests": 1.0
+    "💛│golden-girls": 1.0
   voice_likely: true
   message_length_bias: short
 
 - key: bob
   display_name: Bob the Builder
   avatar_url: https://i.imgur.com/REPLACE_ME_bob.png
-  activity_weight: 1.5
+  activity_weight: 1.0
   channel_affinities:
-    "💛│the-meadow": 0.3
-    "💛│big-feelings-room": 0.5
-    "💛│special-interests": 0.2
+    "💛│the-meadow": 1.0
+    "💛│selfies-and-mages": 1.0
+    "💛│big-feelings-room": 1.0
+    "💛│special-interests": 1.0
+    "💛│golden-girls": 1.0
   voice_likely: false
   message_length_bias: medium
 
 - key: clara
   display_name: Clara
   avatar_url: https://i.imgur.com/REPLACE_ME_clara.png
-  activity_weight: 0.8
+  activity_weight: 1.0
   channel_affinities:
-    "💛│the-meadow": 0.4
-    "💛│selfies-and-mages": 0.4
-    "💛│golden-girls": 0.2
+    "💛│the-meadow": 1.0
+    "💛│selfies-and-mages": 1.0
+    "💛│big-feelings-room": 1.0
+    "💛│special-interests": 1.0
+    "💛│golden-girls": 1.0
   voice_likely: true
   message_length_bias: long
