@@ -8,10 +8,10 @@
   avatar_url: https://i.imgur.com/REPLACE_ME_alice.png
   activity_weight: 1.0
   channel_affinities:
-    general: 0.5
-    photos: 0.2
-    drama: 0.1
-    random: 0.2
+    "💛│the-meadow": 0.5
+    "💛│selfies-and-mages": 0.2
+    "💛│big-feelings-room": 0.1
+    "💛│special-interests": 0.2
   voice_likely: true
   message_length_bias: short
 
@@ -20,9 +20,9 @@
   avatar_url: https://i.imgur.com/REPLACE_ME_bob.png
   activity_weight: 1.5
   channel_affinities:
-    general: 0.3
-    drama: 0.5
-    random: 0.2
+    "💛│the-meadow": 0.3
+    "💛│big-feelings-room": 0.5
+    "💛│special-interests": 0.2
   voice_likely: false
   message_length_bias: medium
 
@@ -31,8 +31,8 @@
   avatar_url: https://i.imgur.com/REPLACE_ME_clara.png
   activity_weight: 0.8
   channel_affinities:
-    general: 0.4
-    photos: 0.4
-    random: 0.2
+    "💛│the-meadow": 0.4
+    "💛│selfies-and-mages": 0.4
+    "💛│golden-girls": 0.2
   voice_likely: true
   message_length_bias: long
