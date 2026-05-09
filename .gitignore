@@ -11,6 +11,7 @@ __pycache__/
 .venv/
 /.claude/*
 backups/
+models/
 lavalink/Lavalink.jar
 lavalink/plugins/
 lavalink/logs/
