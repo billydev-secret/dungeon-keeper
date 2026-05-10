@@ -21,7 +21,13 @@ def _ensure_face_model() -> Path:
     model_path = _MODELS_DIR / "blaze_face_short_range.tflite"
     if not model_path.exists():
         log.info("downloading blaze_face_short_range.tflite…")
-        urllib.request.urlretrieve(_FACE_MODEL_URL, model_path)
+        tmp_path = model_path.with_suffix(model_path.suffix + ".tmp")
+        try:
+            urllib.request.urlretrieve(_FACE_MODEL_URL, tmp_path)
+            tmp_path.replace(model_path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
     return model_path
 
 

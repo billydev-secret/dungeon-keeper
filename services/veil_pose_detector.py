@@ -38,7 +38,13 @@ def _ensure_pose_model() -> Path:
     model_path = _MODELS_DIR / "pose_landmarker_full.task"
     if not model_path.exists():
         log.info("downloading pose_landmarker_full.task…")
-        urllib.request.urlretrieve(_POSE_MODEL_URL, model_path)
+        tmp_path = model_path.with_suffix(model_path.suffix + ".tmp")
+        try:
+            urllib.request.urlretrieve(_POSE_MODEL_URL, tmp_path)
+            tmp_path.replace(model_path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
     return model_path
 
 
