@@ -362,16 +362,13 @@
     <nav>
       <ul>
         <li><a href="#cover">DungeonKeeper</a></li>
-        <li class="section-header"><a href="#getting-started">1. Getting Started</a></li>
-        <li><a href="#permissions">Permission Levels</a></li>
-        <li><a href="#first-steps">First-Time Setup</a></li>
-        <li><a href="#functional-blocks">Functional Blocks at a Glance</a></li>
+        <li class="section-header"><a href="#functional-blocks">1. Functional Blocks at a Glance</a></li>
         <li class="section-header"><a href="#moderation">2. Moderation Core</a></li>
         <li><a href="#jail">Jail &amp; Release</a></li>
-        <li><a href="#warnings">Warnings</a></li>
+        <li><a href="#modinfo">Member Profile</a></li>
         <li><a href="#purge">Purge</a></li>
-        <li><a href="#context-menus">Context Menus</a></li>
-        <li class="section-header"><a href="#tickets">3. Tickets &amp; Policies</a></li>
+        <li class="section-header"><a href="#tickets">3. Tickets, Policies &amp; Warnings</a></li>
+        <li><a href="#warnings">Warnings</a></li>
         <li><a href="#ticket-cmds">Ticket Commands</a></li>
         <li><a href="#policies">Policy Voting</a></li>
         <li class="section-header"><a href="#ai-tools">4. AI Tools ✦</a></li>
@@ -402,16 +399,18 @@
         <li class="section-header"><a href="#network-analytics">12. Network Analytics</a></li>
         <li><a href="#connection-graphs">Connection Graphs</a></li>
         <li><a href="#interaction-scans">Backfill Scans</a></li>
-        <li class="section-header"><a href="#server-ops">13. Server Operations</a></li>
+        <li class="section-header"><a href="#server-ops">13. Cleanup &amp; Tagging</a></li>
         <li><a href="#auto-delete">Auto-Delete</a></li>
         <li><a href="#prune">Inactivity Prune</a></li>
         <li><a href="#gender">Gender Tagging</a></li>
-        <li><a href="#welcome-leave">Welcome / Leave</a></li>
         <li class="section-header"><a href="#special-events">14. Special Events</a></li>
         <li><a href="#foolsday">April Fools' Shuffle</a></li>
         <li><a href="#veil">Veil Image Game</a></li>
-        <li class="section-header"><a href="#config">15. Configuration</a></li>
-        <li class="section-header"><a href="#owner-tools">16. Developer / Owner Tools</a></li>
+        <li class="section-header"><a href="#setup">15. Setup &amp; Permissions</a></li>
+        <li><a href="#permissions">Permission Levels</a></li>
+        <li><a href="#first-steps">First-Time Setup</a></li>
+        <li class="section-header"><a href="#config">16. Configuration</a></li>
+        <li class="section-header"><a href="#owner-tools">17. Developer / Owner Tools</a></li>
         <li class="section-header"><a href="#quickref">Quick Reference</a></li>
       </ul>
     </nav>
@@ -440,57 +439,16 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         1. GETTING STARTED
+         1. FUNCTIONAL BLOCKS AT A GLANCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="getting-started"><span class="section-num">1</span> Getting Started</h2>
+    <h2 id="functional-blocks"><span class="section-num">1</span> Functional Blocks at a Glance</h2>
     <p>DungeonKeeper is an all-in-one server management bot. It handles moderation, ticketing, XP tracking, voice channels, AI-assisted content review, analytics, and more — all through Discord slash commands.</p>
-
-    <h3 id="permissions">Permission Levels</h3>
-    <p>Most commands require one of these roles or Discord permissions:</p>
-    <table>
-      <thead><tr><th>Level</th><th>How it's granted</th><th>What it unlocks</th></tr></thead>
-      <tbody>
-        <tr>
-          <td><span class="perm perm-all">Everyone</span></td>
-          <td>All server members</td>
-          <td>Opening tickets, XP leaderboards, voice channel controls (own channel), wellness opt-in, confessing</td>
-        </tr>
-        <tr>
-          <td><span class="perm perm-mod">Mod</span></td>
-          <td>Has the configured mod role, or <em>Manage Guild</em> permission</td>
-          <td>Jail, warnings, tickets management, watch list, analytics, purge, XP awards</td>
-        </tr>
-        <tr>
-          <td><span class="perm perm-admin">Admin</span></td>
-          <td>Has the configured admin role, or Discord <em>Administrator</em> permission</td>
-          <td>AI moderation, user data deletion, voice admin, policy voting finalization</td>
-        </tr>
-        <tr>
-          <td><span class="perm perm-owner">Bot Owner</span></td>
-          <td>Configured at bot startup</td>
-          <td>Reloading cogs, Spotify authorization</td>
-        </tr>
-      </tbody>
-    </table>
-
-    <h3 id="first-steps">First-Time Setup (Admin)</h3>
-    <ol class="steps">
-      <li>Run <code>/init</code> — creates all required bot channels and categories (mod-log, join-leave-log, ticket panel, etc.). For just the moderation/jail subset, <code>/setup</code> creates the jail role, jail channel, and mod log.</li>
-      <li>Run <code>/config global</code> — set your mod role IDs, admin role IDs, mod notification channel, and server timezone.</li>
-      <li>Run <code>/config roles</code> — configure which roles can be granted with <code>/grant</code>.</li>
-      <li>Run <code>/config xp</code> — set the Level 5 role, XP announcement channels, and excluded channels.</li>
-      <li>Run <code>/config welcome</code> — customize join/leave messages.</li>
-      <li>Optionally run <code>/voice-admin set-hub</code> to enable personal voice channels.</li>
-      <li>Optionally run <code>/starboard channel</code> to enable the starboard.</li>
-    </ol>
-
-    <h3 id="functional-blocks">Functional Blocks at a Glance</h3>
-    <p>The bot is split into ~30 cogs (functional blocks). This table is the bird's-eye view — each row links down to the section that documents the commands.</p>
+    <p>The bot is split into ~30 cogs (functional blocks). This table is the bird's-eye view — each row links down to the section that documents the commands. New admins should jump straight to <a href="#setup">§15 Setup &amp; Permissions</a> first.</p>
     <table class="qr-table">
       <thead><tr><th>Block</th><th>Section</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><strong>Moderation</strong></td><td><a href="#moderation">§2</a></td><td>Jail, warnings, purge, mod profile, right-click context menus.</td></tr>
-        <tr><td><strong>Tickets &amp; Policies</strong></td><td><a href="#tickets">§3</a></td><td>Private member↔mod ticket channels with transcripts; mod-team policy proposals with voting buttons.</td></tr>
+        <tr><td><strong>Tickets, Policies &amp; Warnings</strong></td><td><a href="#tickets">§3</a></td><td>Private member↔mod ticket channels with transcripts; mod-team policy proposals with voting buttons; per-member warnings with revoke history.</td></tr>
         <tr><td><strong>AI Tools ✦</strong></td><td><a href="#ai-tools">§4</a></td><td>Claude-powered review of a member's history, channel scans, and natural-language Q&amp;A about activity. Requires an Anthropic API key.</td></tr>
         <tr><td><strong>Activity &amp; Watch ✦</strong></td><td><a href="#analytics">§5</a></td><td>Charts of message volume, drop-off detection, burst rankings, plus the silent watch list (forwards a member's messages to your DMs).</td></tr>
         <tr><td><strong>Community &amp; XP</strong></td><td><a href="#community">§6</a></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). LOA system. Starboard.</td></tr>
@@ -500,10 +458,11 @@
         <tr><td><strong>Wellness</strong></td><td><a href="#wellness">§10</a></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides for caps, blackouts, and exempt channels.</td></tr>
         <tr><td><strong>Self-Service</strong></td><td><a href="#self-service">§11</a></td><td>Help dropdown, support link, bot invite, todo list, birthday registration, GDPR-style self-erasure.</td></tr>
         <tr><td><strong>Network Analytics</strong></td><td><a href="#network-analytics">§12</a></td><td>Force-directed graphs of who talks to whom, invite trees, interaction heatmaps, history backfill.</td></tr>
-        <tr><td><strong>Server Operations</strong></td><td><a href="#server-ops">§13</a></td><td>Auto-delete schedules, inactivity pruning, gender tagging, welcome/leave preview tools.</td></tr>
+        <tr><td><strong>Cleanup &amp; Tagging</strong></td><td><a href="#server-ops">§13</a></td><td>Auto-delete schedules, inactivity pruning, gender tagging.</td></tr>
         <tr><td><strong>Special Events</strong></td><td><a href="#special-events">§14</a></td><td>April Fools' nickname shuffle and the Veil NSFW image-guessing game.</td></tr>
-        <tr><td><strong>Configuration</strong></td><td><a href="#config">§15</a></td><td>Settings panel covering all configurable knobs; first-time setup commands.</td></tr>
-        <tr><td><strong>Developer / Owner</strong></td><td><a href="#owner-tools">§16</a></td><td>Cog hot-reload, Spotify OAuth bootstrap. Bot-owner only.</td></tr>
+        <tr><td><strong>Setup &amp; Permissions</strong></td><td><a href="#setup">§15</a></td><td>Permission levels and first-time-setup checklist for new admins.</td></tr>
+        <tr><td><strong>Configuration</strong></td><td><a href="#config">§16</a></td><td>Settings panel covering all configurable knobs.</td></tr>
+        <tr><td><strong>Developer / Owner</strong></td><td><a href="#owner-tools">§17</a></td><td>Cog hot-reload, Spotify OAuth bootstrap. Bot-owner only.</td></tr>
       </tbody>
     </table>
     <p style="font-size:0.82rem;color:var(--muted);margin-top:0.75rem">✦ marks blocks that depend on optional API keys (Anthropic for AI; sentiment analysis pipeline for some analytics).</p>
@@ -540,27 +499,7 @@
       </div>
     </div>
 
-    <h3 id="warnings">Warnings</h3>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/warn user:@user reason:...</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Issues a warning to a member. Warnings are private — the member is not notified. Stored in the audit log. Admins are pinged when a threshold is reached.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/warnings user:@user</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Lists all active and revoked warnings for a member, with dates, reasons, and which mod issued each one.</span>
-    </div>
-
-    <div class="callout callout-info">
-      <span class="callout-icon">ℹ️</span>
-      <div class="callout-body">
-        <strong>Revoking warnings</strong>
-        <p>There is no <code>/revokewarn</code> command. Run <code>/warnings @user</code> and use the <strong>Revoke</strong> button next to each warning. Revoked warnings stay in history (they don't disappear), they just no longer count toward thresholds.</p>
-      </div>
-    </div>
+    <h3 id="modinfo">Member Profile</h3>
 
     <div class="cmd-block">
       <span class="cmd-name">/modinfo user:@user</span>
@@ -580,40 +519,75 @@
       </div>
     </div>
 
-    <h3 id="context-menus">Context Menus (Right-Click)</h3>
-    <p>Right-clicking on a <strong>user</strong> or <strong>message</strong> reveals DungeonKeeper actions:</p>
-    <table>
-      <thead><tr><th>Right-click target</th><th>Action</th><th>What it does</th></tr></thead>
-      <tbody>
-        <tr>
-          <td>User</td>
-          <td><strong>Jail User</strong></td>
-          <td>Opens a modal to quickly jail the member without typing a slash command</td>
-        </tr>
-        <tr>
-          <td>Message</td>
-          <td><strong>Open Ticket About This Message</strong></td>
-          <td>Opens a ticket pre-linked to the offending message</td>
-        </tr>
-        <tr>
-          <td>Message</td>
-          <td><strong>Add to Todo</strong></td>
-          <td>Adds the message to the server todo list with an optional note (mod-only)</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="callout callout-tip" id="context-menus">
+      <span class="callout-icon">💡</span>
+      <div class="callout-body">
+        <strong>Pro Tip: Right-click context menus</strong>
+        <p>Faster than typing slash commands when you're already looking at the offending user or message. Right-click reveals these actions:</p>
+        <table style="margin-top:0.5rem;margin-bottom:0;">
+          <thead><tr><th>Right-click target</th><th>Action</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>User</td>
+              <td><strong>Jail User</strong></td>
+              <td>Opens a modal to quickly jail the member without typing a slash command</td>
+            </tr>
+            <tr>
+              <td>Message</td>
+              <td><strong>Open Ticket About This Message</strong></td>
+              <td>Opens a ticket pre-linked to the offending message</td>
+            </tr>
+            <tr>
+              <td>Message</td>
+              <td><strong>Add to Todo</strong></td>
+              <td>Adds the message to the server todo list with an optional note (mod-only)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         3. TICKET SYSTEM
+         3. TICKETS, POLICIES & WARNINGS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="tickets" class="section-break"><span class="section-num">3</span> Tickets &amp; Policies</h2>
-    <p>Tickets create private channels between the member and the mod team. Everything is logged — transcripts are saved before deletion. Always handle issues in a ticket, not DMs, so there's a paper trail.</p>
+    <h2 id="tickets" class="section-break"><span class="section-num">3</span> Tickets, Policies &amp; Warnings</h2>
+    <p>The escalation toolkit. Tickets create private channels between the member and the mod team (everything logged). Policies let mods propose and vote on rules. Warnings build a paper trail per member.</p>
 
     <div class="callout callout-warn">
       <span class="callout-icon">⚠️</span>
       <div class="callout-body">
         <strong>Use tickets, not DMs</strong>
         <p>Handling moderation issues in DMs leaves no record. Open a ticket so the full conversation is logged, searchable, and reviewable by the whole team.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-tip">
+      <span class="callout-icon">💡</span>
+      <div class="callout-body">
+        <strong>Pro Tip: Warn / Jail / Ticket — pick the right escalation</strong>
+        <p><strong>Warn</strong> when the rule violation is clear-cut and you want a paper trail without a conversation. <strong>Ticket</strong> when the situation needs context-gathering, the member has questions, or you'd otherwise be DMing them. <strong>Jail</strong> when the member needs to stop interacting <em>now</em> — it strips roles, cuts visibility, and saves a transcript automatically. A jail can absorb a ticket conversation; a warning can't.</p>
+      </div>
+    </div>
+
+    <h3 id="warnings">Warnings</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/warn user:@user reason:...</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Issues a warning to a member. Warnings are private — the member is not notified. Stored in the audit log. Admins are pinged when a threshold is reached.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/warnings user:@user</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Lists all active and revoked warnings for a member, with dates, reasons, and which mod issued each one.</span>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Revoking warnings</strong>
+        <p>Run <code>/warnings @user</code> to list warning IDs, then <code>/revokewarn user:@user warning_id:&lt;N&gt; reason:...</code> to revoke one. Revoked warnings stay in history (they don't disappear), they just no longer count toward thresholds.</p>
       </div>
     </div>
 
@@ -741,6 +715,14 @@
 
     <h3 id="watch">Watch List</h3>
     <p>Silently monitor a member's public messages, forwarded to your DMs. If the AI key is active, only flagged messages come through.</p>
+
+    <div class="callout callout-tip">
+      <span class="callout-icon">💡</span>
+      <div class="callout-body">
+        <strong>Pro Tip: Watch vs <code>/ai review</code></strong>
+        <p><strong><code>/watch</code></strong> is forward-looking — start it when you suspect someone <em>about to</em> cause trouble and want eyes on them as it happens. <strong><code>/ai review</code></strong> is backward-looking — run it once over the last week of someone's history when you're investigating a report. Use both together for a flagged user: <code>/ai review</code> for the receipts, <code>/watch add</code> to catch the next thing.</p>
+      </div>
+    </div>
 
     <div class="cmd-block">
       <span class="cmd-name">/watch add user:@user</span>
@@ -918,29 +900,19 @@
       <span class="cmd-desc">Play a YouTube URL, Spotify track / album / playlist / artist URL, or a free-text search. Joins your VC if the bot isn't already there. Default volume 20%.</span>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/skip &nbsp;&nbsp; /pause &nbsp;&nbsp; /resume &nbsp;&nbsp; /stop</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone in VC</span></span>
-      <span class="cmd-desc">Standard playback controls. <code>/stop</code> clears the queue and disconnects unless 24/7 is enabled for the channel.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/queue page:1 &nbsp;&nbsp; /nowplaying</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">View the queue (10 tracks per page) or repost the now-playing embed with the play/pause/skip control buttons.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/shuffle &nbsp;&nbsp; /loop mode:[off|track|queue]</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone in VC</span></span>
-      <span class="cmd-desc">Shuffle the queue (current track unaffected) or change the loop mode.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/disconnect</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone in VC</span></span>
-      <span class="cmd-desc">Force-disconnect from voice. If 24/7 was on for that channel, it's also disabled.</span>
-    </div>
+    <table>
+      <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/skip</code></td><td><span class="perm perm-all">In VC</span></td><td>Skip the current track</td></tr>
+        <tr><td><code>/pause</code> / <code>/resume</code></td><td><span class="perm perm-all">In VC</span></td><td>Pause or resume playback</td></tr>
+        <tr><td><code>/stop</code></td><td><span class="perm perm-all">In VC</span></td><td>Clear the queue. Disconnects unless 24/7 is on.</td></tr>
+        <tr><td><code>/shuffle</code></td><td><span class="perm perm-all">In VC</span></td><td>Shuffle the queue (current track unaffected)</td></tr>
+        <tr><td><code>/loop mode:[off|track|queue]</code></td><td><span class="perm perm-all">In VC</span></td><td>Set loop mode</td></tr>
+        <tr><td><code>/queue page:1</code></td><td><span class="perm perm-all">Everyone</span></td><td>View the queue (10 tracks per page)</td></tr>
+        <tr><td><code>/nowplaying</code></td><td><span class="perm perm-all">Everyone</span></td><td>Repost the now-playing embed with control buttons</td></tr>
+        <tr><td><code>/disconnect</code></td><td><span class="perm perm-all">In VC</span></td><td>Force-disconnect; also disables 24/7 for the channel</td></tr>
+      </tbody>
+    </table>
 
     <h3 id="music-247">24/7 Mode</h3>
 
@@ -948,19 +920,14 @@
       <span class="cmd-name">/247 enabled:true autoplay_playlist:&lt;spotify-url&gt;</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Channels</span></span>
       <span class="cmd-desc">Keep the bot in your current voice channel even when no one else is around, with optional Spotify autoplay. Only one channel per server can have 24/7 enabled at a time.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/247_status</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Show every voice channel in the server that has 24/7 enabled along with its autoplay playlist URL.</span>
+      <div class="cmd-params">Pair with <code>/247_status</code> (everyone) to list every 24/7 channel and its autoplay URL.</div>
     </div>
 
     <h3 id="tts">Text-to-Speech</h3>
 
     <div class="cmd-block">
       <span class="cmd-name">/tts text:"Hello chat" voice:Aria</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone in VC</span></span>
+      <span class="cmd-perm"><span class="perm perm-all">In VC</span></span>
       <span class="cmd-desc">Speak text in your voice channel using <code>edge-tts</code>. Music is paused, the line is spoken, then music resumes. Max 500 characters. <strong>voice</strong> autocompletes from the available list (default Aria, US female).</span>
     </div>
 
@@ -1053,62 +1020,31 @@
     </div>
 
     <h3 id="wellness-admin-section">Admin Commands</h3>
-    <p>The <code>/wellness-admin</code> group is admin-only. Use it to create infrastructure (the wellness role + private channel), set server defaults, manage exempt channels, and override individual users' caps / blackouts / settings.</p>
+    <p>The <code>/wellness-admin</code> group is admin-only. Use it to create infrastructure, set server defaults, and override individual users' caps / blackouts / settings on their behalf.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin setup [role_name] [channel_name] [crisis_resource_url]</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">First-time setup. Creates the wellness role and a private wellness channel. Warns if Manage Messages is missing.</span>
+    <div class="callout callout-tip">
+      <span class="callout-icon">💡</span>
+      <div class="callout-body">
+        <strong>Pro Tip: When to admin-override vs let the member self-manage</strong>
+        <p>Wellness is opt-in by design — most members should run <code>/wellness setup</code> themselves. Use admin overrides only when (a) the member has explicitly asked you to set something up they can't reach (e.g. accessibility, partnership setup), or (b) they're already enrolled and visibly struggling — in which case <code>/wellness-admin dashboard</code> first to see who's in slow mode, then <code>/wellness-admin cap add</code> or <code>blackout add</code> on their behalf. Don't impose caps on members who never opted in; that's a moderation problem, not a wellness one.</p>
+      </div>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin defaults [default_enforcement] [crisis_resource_url]</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Server-wide defaults: which enforcement style new opt-ins start at, plus a crisis-resource URL surfaced to members in distress.</span>
-      <div class="cmd-params"><strong>default_enforcement</strong> — gentle / cooldown / slow_mode / gradual.</div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin exempt add channel:#chan label:&lt;name&gt; &nbsp;&nbsp; /wellness-admin exempt remove &nbsp;&nbsp; /wellness-admin exempt list</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Mark channels exempt from cap counting (e.g. mod-only channels). Affects every member.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin cap add user:@m label:&lt;name&gt; scope:[global|channel|category|voice] window:[hourly|daily|weekly] limit:&lt;n&gt;</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Create a message cap on a member's behalf. Channel/category scopes need the corresponding <strong>channel</strong> or <strong>category</strong> argument. <strong>exclude_exempt</strong> defaults true.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin cap edit user:@m label:&lt;name&gt; new_limit:&lt;n&gt; &nbsp;&nbsp; /wellness-admin cap remove user:@m label:&lt;name&gt;</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Change the limit on, or remove, an existing cap for a member. <strong>label</strong> autocompletes from that user's existing caps.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin blackout add user:@m name:&lt;label&gt; start_time:HH:MM end_time:HH:MM days:&lt;list&gt;</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Create a daily blackout window during which the member is enforced into slow mode. <strong>days</strong> accepts <code>all</code>, <code>weekdays</code>, <code>weekends</code>, or a comma list (<code>mon,wed,fri</code>).</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin blackout remove user:@m name:&lt;label&gt;</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Delete a blackout. Name autocompletes.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin settings user:@m [enforcement_level] [notifications_pref] [public_commitment] [daily_reset_hour]</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Override one or more of a member's wellness settings. Each argument is optional; provide only the fields you want to change.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/wellness-admin dashboard</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Server-wide stats embed: active participants, paused members, members currently in slow mode, count of active caps and blackouts, partnerships, exempt channels, default enforcement, and top streak holders.</span>
-    </div>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/wellness-admin setup [role_name] [channel_name] [crisis_resource_url]</code></td><td>First-time setup. Creates the wellness role and a private wellness channel.</td></tr>
+        <tr><td><code>/wellness-admin defaults [default_enforcement] [crisis_resource_url]</code></td><td>Set server-wide enforcement default (<em>gentle / cooldown / slow_mode / gradual</em>) and crisis-resource URL.</td></tr>
+        <tr><td><code>/wellness-admin dashboard</code></td><td>Server-wide stats embed: participants, slow-mode count, active caps &amp; blackouts, partnerships, top streaks.</td></tr>
+        <tr><td><code>/wellness-admin exempt add</code> / <code>remove</code> / <code>list</code></td><td>Mark channels exempt from cap counting (e.g. mod-only channels). Server-wide.</td></tr>
+        <tr><td><code>/wellness-admin cap add user:@m label scope:[global|channel|category|voice] window:[hourly|daily|weekly] limit:&lt;n&gt;</code></td><td>Create a message cap on a member's behalf. <code>channel</code>/<code>category</code> scopes require the corresponding argument. <code>exclude_exempt</code> defaults true.</td></tr>
+        <tr><td><code>/wellness-admin cap edit user:@m label new_limit:&lt;n&gt;</code></td><td>Change a cap's limit. Label autocompletes from that user's caps.</td></tr>
+        <tr><td><code>/wellness-admin cap remove user:@m label</code></td><td>Remove a cap.</td></tr>
+        <tr><td><code>/wellness-admin blackout add user:@m name start_time:HH:MM end_time:HH:MM days:&lt;list&gt;</code></td><td>Daily slow-mode blackout window. <strong>days</strong>: <code>all</code> / <code>weekdays</code> / <code>weekends</code> / <code>mon,wed,fri</code>.</td></tr>
+        <tr><td><code>/wellness-admin blackout remove user:@m name</code></td><td>Delete a blackout. Name autocompletes.</td></tr>
+        <tr><td><code>/wellness-admin settings user:@m [enforcement_level] [notifications_pref] [public_commitment] [daily_reset_hour]</code></td><td>Override one or more of a member's wellness settings. Each argument optional.</td></tr>
+      </tbody>
+    </table>
 
     <!-- ══════════════════════════════════════════════════════════
          11. MEMBER SELF-SERVICE
@@ -1117,36 +1053,17 @@
     <p>Commands intended for the average member. Mods may also use them — they aren't restricted.</p>
 
     <h3 id="self-service-cmds">Personal Commands</h3>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/help</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Browse all commands by category in an interactive ephemeral dropdown. Useful when you forget a command name.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/support</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Posts an ephemeral link to the support Discord server.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/invite</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Generate a Discord OAuth invite link for adding the bot to another server (with the standard required permissions).</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/todo task:&lt;text&gt;</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Add a task to the server's shared todo list (max 500 chars). Mods can also add via right-click → <strong>Add to Todo</strong>.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/birthday set</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Open a modal to register your birthday (month + day). The bot announces birthdays daily after 9am server time in the configured channel.</span>
-    </div>
+    <p>All <span class="perm perm-all">Everyone</span>.</p>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/help</code></td><td>Browse all commands by category in an interactive ephemeral dropdown</td></tr>
+        <tr><td><code>/support</code></td><td>Ephemeral link to the support Discord server</td></tr>
+        <tr><td><code>/invite</code></td><td>Generate a Discord OAuth invite link for adding the bot to another server</td></tr>
+        <tr><td><code>/todo task:&lt;text&gt;</code></td><td>Add a task to the server's shared todo list (max 500 chars). Mods can also right-click → <strong>Add to Todo</strong>.</td></tr>
+        <tr><td><code>/birthday set</code></td><td>Register your birthday (month + day). Bot announces daily after 9am server time.</td></tr>
+      </tbody>
+    </table>
 
     <h3 id="privacy">Data Erasure (GDPR-style)</h3>
 
@@ -1203,9 +1120,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         13. SERVER OPERATIONS
+         13. CLEANUP & TAGGING
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="server-ops" class="section-break"><span class="section-num">13</span> Server Operations</h2>
+    <h2 id="server-ops" class="section-break"><span class="section-num">13</span> Cleanup &amp; Tagging</h2>
 
     <h3 id="auto-delete">Auto-Delete</h3>
     <p>Drop-in message cleanup. Schedule a channel to auto-delete posts older than a given age, on a recurring or one-shot basis. Pinned messages are never deleted.</p>
@@ -1257,14 +1174,6 @@
       <span class="cmd-name">/gender check member:@user &nbsp;&nbsp; /gender classify</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
       <span class="cmd-desc">View one member's tag, or step through every unclassified member one at a time with M / F / NB / Skip / Done buttons.</span>
-    </div>
-
-    <h3 id="welcome-leave">Welcome / Leave Previews</h3>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/welcome_preview &nbsp;&nbsp; /leave_preview</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Preview the configured welcome or leave embed using your own profile. Use these before publishing changes via <code>/config welcome</code> to verify formatting.</span>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
@@ -1321,9 +1230,53 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         15. CONFIGURATION REFERENCE
+         15. SETUP & PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">15</span> Configuration Reference</h2>
+    <h2 id="setup" class="section-break"><span class="section-num">15</span> Setup &amp; Permissions</h2>
+
+    <h3 id="permissions">Permission Levels</h3>
+    <p>Most commands require one of these roles or Discord permissions:</p>
+    <table>
+      <thead><tr><th>Level</th><th>How it's granted</th><th>What it unlocks</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="perm perm-all">Everyone</span></td>
+          <td>All server members</td>
+          <td>Opening tickets, XP leaderboards, voice channel controls (own channel), wellness opt-in, confessing</td>
+        </tr>
+        <tr>
+          <td><span class="perm perm-mod">Mod</span></td>
+          <td>Has the configured mod role, or <em>Manage Guild</em> permission</td>
+          <td>Jail, warnings, tickets management, watch list, analytics, purge, XP awards</td>
+        </tr>
+        <tr>
+          <td><span class="perm perm-admin">Admin</span></td>
+          <td>Has the configured admin role, or Discord <em>Administrator</em> permission</td>
+          <td>AI moderation, user data deletion, voice admin, policy voting finalization</td>
+        </tr>
+        <tr>
+          <td><span class="perm perm-owner">Bot Owner</span></td>
+          <td>Configured at bot startup</td>
+          <td>Reloading cogs, Spotify authorization</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="first-steps">First-Time Setup (Admin)</h3>
+    <ol class="steps">
+      <li>Run <code>/setup</code> — Phase 1 creates all required bot channels and categories (mod-log, join-leave-log, ticket panel, etc.); Phase 2 walks you through a 6-step wizard for mod/admin roles and jail/ticket categories.</li>
+      <li>Run <code>/config global</code> — set your mod role IDs, admin role IDs, mod notification channel, and server timezone.</li>
+      <li>Run <code>/config roles</code> — configure which roles can be granted with <code>/grant</code>.</li>
+      <li>Run <code>/config xp</code> — set the Level 5 role, XP announcement channels, and excluded channels.</li>
+      <li>Run <code>/config welcome</code> — customize join/leave messages.</li>
+      <li>Optionally run <code>/voice-admin set-hub</code> to enable personal voice channels.</li>
+      <li>Optionally run <code>/starboard channel</code> to enable the starboard.</li>
+    </ol>
+
+    <!-- ══════════════════════════════════════════════════════════
+         16. CONFIGURATION REFERENCE
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="config" class="section-break"><span class="section-num">16</span> Configuration Reference</h2>
 
     <div class="cmd-block">
       <span class="cmd-name">/config section:[global|welcome|roles|xp|prune|spoiler|booster]</span>
@@ -1344,31 +1297,21 @@
       </tbody>
     </table>
 
-    <table>
-      <thead><tr><th>Setup Command</th><th>Permission</th><th>When to use</th></tr></thead>
-      <tbody>
-        <tr>
-          <td><code>/init</code></td>
-          <td><span class="perm perm-admin">Admin</span></td>
-          <td>First-time setup — creates all bot channels and categories</td>
-        </tr>
-        <tr>
-          <td><code>/starboard status</code></td>
-          <td><span class="perm perm-mod">Mod</span></td>
-          <td>Check current starboard configuration</td>
-        </tr>
-        <tr>
-          <td><code>/help</code></td>
-          <td><span class="perm perm-all">Everyone</span></td>
-          <td>Browse all commands by category in an interactive dropdown</td>
-        </tr>
-      </tbody>
-    </table>
+    <div class="cmd-block" id="welcome-leave">
+      <span class="cmd-name">/welcome_preview &nbsp;&nbsp; /leave_preview</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Preview the configured welcome or leave embed using your own profile. Run after editing <code>/config welcome</code> to verify formatting before real members trigger it.</span>
+    </div>
+    <div class="cmd-block">
+      <span class="cmd-name">/starboard status</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Show the current starboard channel, threshold, emoji, and exclusion list.</span>
+    </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         16. DEVELOPER / OWNER TOOLS
+         17. DEVELOPER / OWNER TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">16</span> Developer / Owner Tools</h2>
+    <h2 id="owner-tools" class="section-break"><span class="section-num">17</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">
@@ -1387,20 +1330,40 @@
          QUICK REFERENCE
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="quickref" class="section-break">Quick Reference</h2>
-    <p>All commands at a glance. Sorted by feature area.</p>
+    <p>The 80/20 first, then the full dump grouped by feature area.</p>
 
     <table class="qr-table">
       <thead><tr><th>Command</th><th>Permission</th><th>Description</th></tr></thead>
       <tbody>
+        <tr><td colspan="3" class="qr-section">Most-Used (the 80/20)</td></tr>
+        <tr><td><code>/jail</code> / <code>/unjail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to jail / release with restored roles</td></tr>
+        <tr><td><code>/warn</code> / <code>/warnings</code> / <code>/revokewarn</code></td><td><span class="perm perm-mod">Mod</span></td><td>Issue / list / revoke warnings</td></tr>
+        <tr><td><code>/modinfo</code></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member (jail, warnings, tickets, age)</td></tr>
+        <tr><td><code>/purge</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
+        <tr><td><code>/ticket open</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private support ticket</td></tr>
+        <tr><td><code>/ticket claim</code> / <code>close</code></td><td><span class="perm perm-mod">Mod</span></td><td>Daily ticket lifecycle</td></tr>
+        <tr><td><code>/ai review</code></td><td><span class="perm perm-admin">Admin</span></td><td>Claude flags violations in a member's recent history</td></tr>
+        <tr><td><code>/ai scan</code></td><td><span class="perm perm-admin">Admin</span></td><td>Reach for this when a channel just got heated</td></tr>
+        <tr><td><code>/watch add</code></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
+        <tr><td><code>/dropoff</code></td><td><span class="perm perm-mod">Mod</span></td><td>Members whose engagement is falling — run weekly</td></tr>
+        <tr><td><code>/activity</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bar chart of message volume over time</td></tr>
+        <tr><td><code>/voice lock</code> / <code>rename</code> / <code>limit</code></td><td>Channel owner</td><td>Personal voice channel controls</td></tr>
+        <tr><td><code>/play</code></td><td><span class="perm perm-all">Everyone</span></td><td>Music — YouTube / Spotify / search</td></tr>
+        <tr><td><code>/confess</code></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mods see emoji ID mapping)</td></tr>
+        <tr><td><code>/todo</code></td><td><span class="perm perm-all">Everyone</span></td><td>Add to the server's shared todo list</td></tr>
+        <tr><td><code>/help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
+        <tr><td><code>/config</code></td><td><span class="perm perm-mod">Mod</span></td><td>Open settings panel (global / welcome / roles / xp / …)</td></tr>
+
         <tr><td colspan="3" class="qr-section">Moderation</td></tr>
         <tr><td><code>/jail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to private jail channel</td></tr>
         <tr><td><code>/unjail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Release member, restore roles, save transcript</td></tr>
         <tr><td><code>/warn</code></td><td><span class="perm perm-mod">Mod</span></td><td>Issue private warning</td></tr>
-        <tr><td><code>/warnings</code></td><td><span class="perm perm-mod">Mod</span></td><td>View member warning history (revoke via button)</td></tr>
+        <tr><td><code>/warnings</code></td><td><span class="perm perm-mod">Mod</span></td><td>View member warning history</td></tr>
+        <tr><td><code>/revokewarn</code></td><td><span class="perm perm-mod">Mod</span></td><td>Revoke a warning by ID (stays in history, stops counting)</td></tr>
         <tr><td><code>/modinfo</code></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member</td></tr>
         <tr><td><code>/purge</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
 
-        <tr><td colspan="3" class="qr-section">Tickets &amp; Policies</td></tr>
+        <tr><td colspan="3" class="qr-section">Tickets, Policies &amp; Warnings</td></tr>
         <tr><td><code>/ticket panel</code></td><td><span class="perm perm-mod">Mod</span></td><td>Re-post the persistent ticket-open button</td></tr>
         <tr><td><code>/ticket open</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open private support ticket</td></tr>
         <tr><td><code>/ticket claim</code></td><td><span class="perm perm-mod">Mod</span></td><td>Claim ticket, get DM pings</td></tr>
@@ -1489,12 +1452,11 @@
         <tr><td><code>/delete_me</code></td><td><span class="perm perm-all">Everyone</span></td><td>GDPR-style erasure of your data</td></tr>
         <tr><td><code>/delete_user</code></td><td><span class="perm perm-mod">Mod</span></td><td>GDPR-style erasure of a target user's data</td></tr>
 
-        <tr><td colspan="3" class="qr-section">Server Operations</td></tr>
+        <tr><td colspan="3" class="qr-section">Cleanup &amp; Tagging</td></tr>
         <tr><td><code>/auto_delete</code></td><td><span class="perm perm-mod">Mod</span></td><td>Delete old messages once or on a schedule</td></tr>
         <tr><td><code>/auto_delete_configs</code></td><td><span class="perm perm-mod">Mod</span></td><td>Manage existing auto-delete schedules</td></tr>
         <tr><td><code>/inactivity_prune</code></td><td><span class="perm perm-mod">Mod</span></td><td>status / exempt / unexempt / run</td></tr>
         <tr><td><code>/gender</code></td><td><span class="perm perm-mod">Mod</span></td><td>set / check / classify member gender tags</td></tr>
-        <tr><td><code>/welcome_preview</code> / <code>/leave_preview</code></td><td><span class="perm perm-mod">Mod</span></td><td>Preview welcome / leave embeds with your profile</td></tr>
 
         <tr><td colspan="3" class="qr-section">Special Events</td></tr>
         <tr><td><code>/foolsday</code></td><td><span class="perm perm-mod">Mod</span></td><td>Shuffle / restore April Fools' nicknames</td></tr>
@@ -1505,8 +1467,9 @@
 
         <tr><td colspan="3" class="qr-section">Configuration</td></tr>
         <tr><td><code>/config</code></td><td><span class="perm perm-mod">Mod</span></td><td>Open settings panel (global/welcome/roles/xp/…)</td></tr>
-        <tr><td><code>/init</code></td><td><span class="perm perm-admin">Admin</span></td><td>Create all bot channels and categories</td></tr>
-        <tr><td><code>/setup</code></td><td><span class="perm perm-admin">Admin</span></td><td>First-time jail / mod setup (subset of /init)</td></tr>
+        <tr><td><code>/welcome_preview</code> / <code>/leave_preview</code></td><td><span class="perm perm-mod">Mod</span></td><td>Preview welcome/leave embeds before publishing</td></tr>
+        <tr><td><code>/starboard status</code></td><td><span class="perm perm-mod">Mod</span></td><td>View current starboard config</td></tr>
+        <tr><td><code>/setup</code></td><td><span class="perm perm-admin">Admin</span></td><td>First-time bot setup: create channels + walk through role/category config</td></tr>
 
         <tr><td colspan="3" class="qr-section">Developer / Owner</td></tr>
         <tr><td><code>/reload_cog</code></td><td><span class="perm perm-owner">Bot Owner</span></td><td>Hot-reload one cog by name</td></tr>
