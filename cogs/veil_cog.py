@@ -238,7 +238,6 @@ def _do_audit(
 def _game_embed(round_id: int) -> discord.Embed:
     return discord.Embed(
         title=f"Round #{round_id}",
-        description="Submitted by an anonymous member",
         color=discord.Color.from_rgb(80, 20, 100),
     )
 
@@ -420,6 +419,19 @@ class GuessSelectView(discord.ui.View):
                 view=self,
             )
         else:
+            if round_row.solved_at is None:
+                new_count = await asyncio.to_thread(
+                    _do_count_guesses_for_round, db_path, self.round_id
+                )
+                new_view = GameView(
+                    self.bot, self.round_id, solved=False, guess_count=new_count
+                )
+                try:
+                    await self.game_message.edit(view=new_view)
+                except discord.HTTPException:
+                    log.exception(
+                        "veil: chip counter bump failed for round %d", self.round_id
+                    )
             await interaction.edit_original_response(
                 content="❌ Not it. Keep trying!",
                 view=self,
@@ -429,18 +441,46 @@ class GuessSelectView(discord.ui.View):
 class GameView(discord.ui.View):
     """Persistent public view attached to a game message."""
 
-    def __init__(self, bot: "Bot", round_id: int, *, solved: bool = False) -> None:
+    def __init__(
+        self,
+        bot: "Bot",
+        round_id: int,
+        *,
+        solved: bool = False,
+        guess_count: int = 0,
+    ) -> None:
         super().__init__(timeout=None)
         self.bot = bot
         self.round_id = round_id
+        self.guess_count = guess_count
 
         btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label="Guess late" if solved else "Guess",
             style=discord.ButtonStyle.primary,
             custom_id=f"veil_guess:{round_id}",
+            row=0,
         )
         btn.callback = self._guess_callback
         self.add_item(btn)
+
+        if not solved:
+            count_chip: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label=f"Guesses: {guess_count}",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"veil_chip_count:{round_id}",
+                disabled=True,
+                row=1,
+            )
+            # ▒ is U+2592 MEDIUM SHADE × 7 — a redaction bar, not a font glitch.
+            submitter_chip: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="Submitted by ▒▒▒▒▒▒▒",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"veil_chip_submitter:{round_id}",
+                disabled=True,
+                row=1,
+            )
+            self.add_item(count_chip)
+            self.add_item(submitter_chip)
 
     async def _guess_callback(self, interaction: discord.Interaction) -> None:
         assert interaction.guild and interaction.message
@@ -667,7 +707,12 @@ class VeilCog(commands.Cog):
             _do_load_unsolved_round_ids, db_path, limit=_COG_LOAD_VIEW_CAP
         )
         for rid in round_ids:
-            self.bot.add_view(GameView(self.bot, rid, solved=False))
+            count = await asyncio.to_thread(
+                _do_count_guesses_for_round, db_path, rid
+            )
+            self.bot.add_view(
+                GameView(self.bot, rid, solved=False, guess_count=count)
+            )
         log.info("veil: re-registered %d persistent GameViews (cap %d)",
                  len(round_ids), _COG_LOAD_VIEW_CAP)
 
@@ -921,6 +966,61 @@ class VeilCog(commands.Cog):
 
         await interaction.followup.send(
             f"Round #{round_id} deleted.", ephemeral=True
+        )
+
+
+    @veil.command(name="optin", description="Join the Veil pool — add the Veil role to yourself.")
+    async def veil_optin(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        db_path = self.bot.ctx.db_path
+        config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
+
+        if config.veil_role_id == 0:
+            await interaction.followup.send(
+                "Veil role is not configured. Ask an admin to run `/veil setup`.",
+                ephemeral=True,
+            )
+            return
+
+        role = interaction.guild.get_role(config.veil_role_id)
+        if role is None:
+            await interaction.followup.send(
+                "Veil role is configured but no longer exists. "
+                "Ask an admin to re-run `/veil setup`.",
+                ephemeral=True,
+            )
+            return
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if member is None:
+            await interaction.followup.send(
+                "Couldn't find you in this guild.", ephemeral=True
+            )
+            return
+
+        if _has_veil_role(member, config.veil_role_id):
+            await interaction.followup.send(
+                f"You're already in the Veil pool ({role.mention}).",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await member.add_roles(role, reason="Veil opt-in")
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I don't have permission to add that role. "
+                "Ask an admin to check my role permissions and hierarchy.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            f"Welcome to the Veil pool. You can now submit images and be guessed at. "
+            f"To leave, ask a mod to remove the {role.mention} role.",
+            ephemeral=True,
         )
 
 

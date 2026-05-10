@@ -50,3 +50,24 @@ async def test_cog_load_caps_total_views(sync_db_path: Path, monkeypatch):
     await cog.cog_load()  # type: ignore[attr-defined]
 
     assert add_view.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_cog_load_passes_current_guess_count_to_view(sync_db_path: Path):
+    """Reconstructed GameViews must carry the round's current guess count,
+    so the chip label reflects reality after a restart."""
+    from services.veil_repo import insert_guess
+
+    with open_db(sync_db_path) as conn:
+        rid = insert_round(conn, guild_id=1, submitter_id=10, answer_id=10)
+        for i in range(3):
+            insert_guess(conn, round_id=rid, guesser_id=100 + i,
+                         guessed_user_id=999, correct=False)
+
+    cog, add_view = _make_cog(sync_db_path)
+    await cog.cog_load()  # type: ignore[attr-defined]
+
+    assert add_view.call_count == 1
+    reconstructed_view = add_view.call_args_list[0].args[0]
+    labels = [c.label for c in reconstructed_view.children]
+    assert "Guesses: 3" in labels
