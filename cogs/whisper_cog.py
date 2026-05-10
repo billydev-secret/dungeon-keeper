@@ -24,6 +24,10 @@ from services.whisper_repo import (
     set_whisper_message_ids,
     update_whisper_state,
 )
+from services.whisper_service import (
+    SendValidationError,
+    validate_send,
+)
 
 if TYPE_CHECKING:
     from app_context import Bot
@@ -163,6 +167,122 @@ class WhisperCog(commands.Cog):
     @whisper_group.command(name="optout", description="Opt out of whispers.")
     async def whisper_optout(self, interaction: discord.Interaction) -> None:
         await self._optout_impl(interaction)
+
+    async def _send_impl(
+        self,
+        interaction: discord.Interaction,
+        *,
+        target: discord.Member,
+        message: str,
+    ) -> None:
+        assert interaction.guild is not None
+        cfg = await asyncio.to_thread(_load_config, self.ctx.db_path, interaction.guild.id)
+
+        sender_role_ids = {r.id for r in getattr(interaction.user, "roles", [])}
+        target_role_ids = {r.id for r in getattr(target, "roles", [])}
+        try:
+            validate_send(
+                cfg=cfg,
+                sender_role_ids=sender_role_ids,
+                target_role_ids=target_role_ids,
+                sender_id=interaction.user.id,
+                target_id=target.id,
+                message=message,
+            )
+        except SendValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
+            return
+
+        # 1) Insert row first so we can attach a per-whisper view to the DM
+        whisper_id = await asyncio.to_thread(
+            _do_insert_whisper,
+            self.ctx.db_path,
+            guild_id=interaction.guild.id,
+            sender_id=interaction.user.id,
+            target_id=target.id,
+            message=message.strip(),
+        )
+
+        # 2) DM target — rollback row if undeliverable
+        try:
+            dm_msg = await target.send(
+                f"Someone in **{interaction.guild.name}** sent you a secret message:\n"
+                f"```{message.strip()}```",
+                # WhisperDmView is added in Task 12; for Task 11 the DM has no view yet.
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            with open_db(self.ctx.db_path) as conn:
+                conn.execute("DELETE FROM whispers WHERE id = ?", (whisper_id,))
+            from services.whisper_service import ERROR_BOT_DM_FAILED  # noqa: PLC0415
+            await interaction.response.send_message(ERROR_BOT_DM_FAILED, ephemeral=True)
+            return
+
+        # 3) Public announcement in feed channel
+        feed_channel = interaction.guild.get_channel(cfg.channel_id)
+        feed_msg = None
+        if isinstance(feed_channel, discord.TextChannel):
+            try:
+                feed_msg = await feed_channel.send(
+                    f"\U0001f4ec Someone sent {target.mention} an anonymous message.",
+                    allowed_mentions=discord.AllowedMentions(users=[target]),
+                    # WhisperFeedView is added in Task 14; for Task 11 the feed post has no view yet.
+                )
+            except discord.HTTPException:
+                log.warning("Failed to post whisper announcement to feed channel")
+
+        # 4) Save message IDs for later edits
+        await asyncio.to_thread(
+            _do_set_message_ids,
+            self.ctx.db_path,
+            whisper_id,
+            channel_msg_id=feed_msg.id if feed_msg else 0,
+            dm_msg_id=dm_msg.id,
+        )
+
+        # 5) Mod log
+        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+        if isinstance(log_channel, discord.TextChannel):
+            try:
+                emb = discord.Embed(
+                    title="Whisper sent",
+                    description=message.strip(),
+                    timestamp=discord.utils.utcnow(),
+                )
+                emb.add_field(
+                    name="Sender",
+                    value=f"{interaction.user.mention} (`{interaction.user.id}`)",
+                    inline=False,
+                )
+                emb.add_field(
+                    name="Target",
+                    value=f"{target.mention} (`{target.id}`)",
+                    inline=False,
+                )
+                emb.add_field(name="Whisper ID", value=str(whisper_id), inline=False)
+                await log_channel.send(
+                    embed=emb, allowed_mentions=discord.AllowedMentions.none()
+                )
+            except discord.HTTPException:
+                log.warning("Failed to write whisper mod log")
+
+        # 6) Confirm to sender
+        await interaction.response.send_message("Whisper delivered.", ephemeral=True)
+
+    @whisper_group.command(
+        name="send",
+        description="Send an anonymous whisper to another opted-in member.",
+    )
+    @app_commands.describe(
+        target="Recipient (must be opted in)",
+        message="Your anonymous message",
+    )
+    async def whisper_send(
+        self,
+        interaction: discord.Interaction,
+        target: discord.Member,
+        message: str,
+    ) -> None:
+        await self._send_impl(interaction, target=target, message=message)
 
 
 async def setup(bot: Bot) -> None:
