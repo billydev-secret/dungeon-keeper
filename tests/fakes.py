@@ -48,6 +48,7 @@ class FakeUser:
 class FakeMember(FakeUser):
     """A FakeUser that also satisfies isinstance checks for discord.Member-like usage."""
     joined_at: float | None = None
+    guild: object | None = None
 
     def has_role(self, role_id: int) -> bool:
         return any(getattr(r, "id", r) == role_id for r in self.roles)

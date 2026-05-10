@@ -374,3 +374,45 @@ def get_all_active_round_ids(conn: sqlite3.Connection) -> list[tuple[int, bool]]
         "SELECT id, solved_at IS NOT NULL AS solved FROM veil_rounds WHERE deleted_at IS NULL"
     ).fetchall()
     return [(row["id"], bool(row["solved"])) for row in rows]
+
+
+def get_unsolved_round_ids(
+    conn: sqlite3.Connection, *, limit: int = 1000
+) -> list[int]:
+    """Round IDs that still need a persistent GameView at startup.
+
+    Solved rounds are skipped — their 'Guess late' button is fun-loop polish,
+    not load-bearing. Newest-first so the cap takes the most recently active.
+    """
+    rows = conn.execute(
+        """
+        SELECT id FROM veil_rounds
+        WHERE deleted_at IS NULL AND solved_at IS NULL
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def flag_user_open_rounds_optout(
+    conn: sqlite3.Connection, *, guild_id: int, user_id: int
+) -> int:
+    """Mark every open (unsolved, undeleted) round in this guild where *user_id*
+    is the answer as ``answer_optout=True``. Returns the number of rounds flagged.
+
+    Called when a user loses the Veil role — their consent has been revoked,
+    so existing rounds where they're the answer should become unsolvable.
+    Already-flagged rounds are unaffected.
+    """
+    cur = conn.execute(
+        """
+        UPDATE veil_rounds
+        SET answer_optout = 1
+        WHERE guild_id = ? AND answer_id = ?
+          AND solved_at IS NULL AND deleted_at IS NULL AND answer_optout = 0
+        """,
+        (guild_id, user_id),
+    )
+    return cur.rowcount or 0

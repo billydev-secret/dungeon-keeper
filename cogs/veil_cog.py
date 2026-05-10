@@ -22,8 +22,10 @@ from services.veil_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
     count_user_guesses_for_round,
+    flag_user_open_rounds_optout,
     get_last_guess_by_user_for_round,
     get_round,
+    get_unsolved_round_ids,
     get_veil_config,
     insert_audit_event,
     insert_guess,
@@ -38,6 +40,11 @@ from services.veil_repo import (
 
 # Hard cap on per-(user, round) guesses — kills brute-force-by-dropdown.
 MAX_GUESSES_PER_USER_ROUND = 5
+
+# Maximum number of persistent GameViews to re-register at startup. Bounds the
+# discord.py view-matching cost as the round backlog grows. Unsolved rounds
+# only — solved rounds use a "Guess late" button that's fun-loop polish.
+_COG_LOAD_VIEW_CAP = 1000
 
 if TYPE_CHECKING:
     from app_context import Bot
@@ -169,10 +176,16 @@ def _do_set_config(db_path: Path, guild_id: int, key: str, value: str) -> None:
         set_veil_config_value(conn, guild_id, key, value)
 
 
-def _do_load_active_rounds(db_path: Path) -> list[tuple[int, bool]]:
-    from services.veil_repo import get_all_active_round_ids  # noqa: PLC0415  # type: ignore[attr-defined]
+def _do_load_unsolved_round_ids(db_path: Path, *, limit: int) -> list[int]:
     with open_db(db_path) as conn:
-        return get_all_active_round_ids(conn)
+        return get_unsolved_round_ids(conn, limit=limit)
+
+
+def _do_flag_user_open_rounds_optout(
+    db_path: Path, *, guild_id: int, user_id: int
+) -> int:
+    with open_db(db_path) as conn:
+        return flag_user_open_rounds_optout(conn, guild_id=guild_id, user_id=user_id)
 
 
 def _do_soft_delete_round(db_path: Path, round_id: int) -> None:
@@ -435,6 +448,12 @@ class GameView(discord.ui.View):
         config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
 
         round_row = await asyncio.to_thread(_do_load_round, db_path, self.round_id)
+        if round_row and round_row.answer_optout:
+            await interaction.response.send_message(
+                "This round is no longer solvable — the answer opted out.",
+                ephemeral=True,
+            )
+            return
         if round_row and interaction.user.id == round_row.submitter_id:
             await interaction.response.send_message(
                 "You can't guess on your own round.", ephemeral=True
@@ -631,19 +650,54 @@ class SubmitPreviewView(discord.ui.View):
 # ── VeilCog ──────────────────────────────────────────────────────────────────
 
 class VeilCog(commands.Cog):
-    veil = app_commands.Group(name="veil", description="Veil guessing game commands.")
+    veil = app_commands.Group(
+        name="veil",
+        description="Veil guessing game commands.",
+        guild_only=True,
+    )
 
     def __init__(self, bot: "Bot") -> None:
         self.bot = bot
         super().__init__()
 
     async def cog_load(self) -> None:
-        """Re-register persistent GameViews for all active (non-deleted) rounds."""
+        """Re-register persistent GameViews for unsolved rounds (capped)."""
         db_path = self.bot.ctx.db_path
-        round_ids = await asyncio.to_thread(_do_load_active_rounds, db_path)
-        for rid, solved in round_ids:
-            self.bot.add_view(GameView(self.bot, rid, solved=solved))
-        log.info("veil: re-registered %d persistent GameViews", len(round_ids))
+        round_ids = await asyncio.to_thread(
+            _do_load_unsolved_round_ids, db_path, limit=_COG_LOAD_VIEW_CAP
+        )
+        for rid in round_ids:
+            self.bot.add_view(GameView(self.bot, rid, solved=False))
+        log.info("veil: re-registered %d persistent GameViews (cap %d)",
+                 len(round_ids), _COG_LOAD_VIEW_CAP)
+
+    @commands.Cog.listener()
+    async def on_member_update(
+        self, before: discord.Member, after: discord.Member
+    ) -> None:
+        """When a member loses the Veil role, flag their open rounds as
+        answer_optout so they can never be guessed again — even if they
+        re-acquire the role later."""
+        before_role_ids = {r.id for r in before.roles}
+        after_role_ids = {r.id for r in after.roles}
+        removed = before_role_ids - after_role_ids
+        if not removed:
+            return
+        db_path = self.bot.ctx.db_path
+        config = await asyncio.to_thread(_load_config, db_path, after.guild.id)
+        if config.veil_role_id == 0 or config.veil_role_id not in removed:
+            return
+        flagged = await asyncio.to_thread(
+            _do_flag_user_open_rounds_optout,
+            db_path,
+            guild_id=after.guild.id,
+            user_id=after.id,
+        )
+        if flagged:
+            log.info(
+                "veil: %d open rounds flagged answer_optout for user %d (role removed)",
+                flagged, after.id,
+            )
 
     @veil.command(name="submit", description="Submit an image to start a Veil round.")
     @app_commands.describe(
