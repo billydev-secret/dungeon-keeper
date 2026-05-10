@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
+
+WhisperState = Literal["pending", "shared", "hidden"]
+STATE_PENDING: WhisperState = "pending"
+STATE_SHARED: WhisperState = "shared"
+STATE_HIDDEN: WhisperState = "hidden"
 
 
 @dataclass
@@ -20,7 +26,7 @@ class Whisper:
     target_id: int
     message: str
     created_at: float
-    state: str  # 'pending' | 'shared' | 'hidden'
+    state: WhisperState
     solved: bool
     exposed: bool
     guesses_left: int

@@ -12,7 +12,14 @@ from discord import app_commands
 from discord.ext import commands
 
 from db_utils import open_db
-from services.whisper_models import Whisper, WhisperConfig
+from services.whisper_models import (
+    STATE_HIDDEN,
+    STATE_PENDING,
+    STATE_SHARED,
+    Whisper,
+    WhisperConfig,
+    WhisperState,
+)
 from services.whisper_repo import (
     decrement_guesses_left,
     get_whisper,
@@ -99,7 +106,7 @@ def _do_record_guess(
             mark_solved(conn, whisper_id)
 
 
-def _do_update_state(db_path: Path, whisper_id: int, new_state: str) -> None:
+def _do_update_state(db_path: Path, whisper_id: int, new_state: WhisperState) -> None:
     with open_db(db_path) as conn:
         update_whisper_state(conn, whisper_id, new_state)
 
@@ -110,7 +117,7 @@ def _do_mark_exposed(db_path: Path, whisper_id: int) -> None:
 
 
 def _do_list_received(
-    db_path: Path, *, guild_id: int, target_id: int, state: str
+    db_path: Path, *, guild_id: int, target_id: int, state: WhisperState
 ) -> list[Whisper]:
     with open_db(db_path) as conn:
         return list_received(conn, guild_id=guild_id, target_id=target_id, state=state)
@@ -207,7 +214,7 @@ class WhisperShareButton(
             return
 
         await asyncio.to_thread(
-            _do_update_state, self.bot.ctx.db_path, self.whisper_id, "shared"
+            _do_update_state, self.bot.ctx.db_path, self.whisper_id, STATE_SHARED
         )
 
         if interaction.guild:
@@ -286,7 +293,7 @@ class WhisperHideButton(
             return
 
         await asyncio.to_thread(
-            _do_update_state, self.bot.ctx.db_path, self.whisper_id, "hidden"
+            _do_update_state, self.bot.ctx.db_path, self.whisper_id, STATE_HIDDEN
         )
 
         # Drop Share/Hide from the DM view. Keep Guess if the target can
@@ -596,14 +603,14 @@ class WhisperFeedView(discord.ui.View):
             self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             target_id=interaction.user.id,
-            state="pending",
+            state=STATE_PENDING,
         )
         shared = await asyncio.to_thread(
             _do_list_received,
             self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             target_id=interaction.user.id,
-            state="shared",
+            state=STATE_SHARED,
         )
         all_whispers = pending + shared
         if not all_whispers:
@@ -612,7 +619,7 @@ class WhisperFeedView(discord.ui.View):
         lines = [f"You have {len(all_whispers)} whisper(s):"]
         for w in all_whispers[:25]:
             preview = (w.message[:60] + "…") if len(w.message) > 60 else w.message
-            tag = "[shared]" if w.state == "shared" else "[pending]"
+            tag = "[shared]" if w.state == STATE_SHARED else "[pending]"
             lines.append(f"• {tag} `{w.id}` — {preview}")
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
@@ -623,7 +630,7 @@ class WhisperFeedView(discord.ui.View):
             self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             target_id=interaction.user.id,
-            state="hidden",
+            state=STATE_HIDDEN,
         )
         if not hidden:
             await interaction.response.send_message("No hidden whispers.", ephemeral=True)

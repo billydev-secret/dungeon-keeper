@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.whisper_models import Whisper, WhisperConfig
+from services.whisper_models import Whisper, WhisperConfig, WhisperState
 from tests.fakes import FakeMember, fake_interaction
 
 ROLE = 7001
@@ -18,7 +18,7 @@ def _make_view():
     return WhisperFeedView(bot)
 
 
-def _w(state: str = "pending") -> Whisper:
+def _w(state: WhisperState = "pending") -> Whisper:
     return Whisper(
         id=1, guild_id=9001, sender_id=1001, target_id=2001, message="x",
         created_at=0.0, state=state, solved=False, exposed=False,

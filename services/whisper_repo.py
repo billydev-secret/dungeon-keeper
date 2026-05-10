@@ -5,7 +5,7 @@ import sqlite3
 import time
 
 from db_utils import get_config_value, set_config_value
-from services.whisper_models import Whisper, WhisperConfig, WhisperGuess
+from services.whisper_models import Whisper, WhisperConfig, WhisperGuess, WhisperState
 
 _CONFIG_DEFAULTS: dict[str, str] = {
     "whisper_role_id": "0",
@@ -90,7 +90,7 @@ def set_whisper_message_ids(
 
 
 def update_whisper_state(
-    conn: sqlite3.Connection, whisper_id: int, new_state: str
+    conn: sqlite3.Connection, whisper_id: int, new_state: WhisperState
 ) -> None:
     conn.execute(
         "UPDATE whispers SET state = ? WHERE id = ?", (new_state, whisper_id)
@@ -152,7 +152,7 @@ def list_received(
     *,
     guild_id: int,
     target_id: int,
-    state: str,
+    state: WhisperState,
 ) -> list[Whisper]:
     rows = conn.execute(
         """

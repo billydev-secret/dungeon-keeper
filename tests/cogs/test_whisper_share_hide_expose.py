@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.whisper_models import Whisper, WhisperConfig
+from services.whisper_models import Whisper, WhisperConfig, WhisperState
 from tests.fakes import FakeMember, fake_interaction
 
 SENDER, TARGET = 1001, 2001
 FEED, LOG = 8001, 8002
 
 
-def _w(*, state: str = "pending", solved: bool = False) -> Whisper:
+def _w(*, state: WhisperState = "pending", solved: bool = False) -> Whisper:
     return Whisper(
         id=42, guild_id=9001, sender_id=SENDER, target_id=TARGET, message="hi",
         created_at=0.0, state=state, solved=solved, exposed=False,

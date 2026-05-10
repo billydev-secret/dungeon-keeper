@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.whisper_models import Whisper
+from services.whisper_models import Whisper, WhisperState
 from services.whisper_service import (
     ERROR_ALREADY_DECIDED,
     ERROR_EXPOSE_NEEDS_SOLVE,
@@ -19,7 +19,7 @@ TARGET = 2001
 SENDER = 1001
 
 
-def _w(*, state: str = "pending", solved: bool = False) -> Whisper:
+def _w(*, state: WhisperState = "pending", solved: bool = False) -> Whisper:
     return Whisper(
         id=1, guild_id=9001, sender_id=SENDER, target_id=TARGET, message="x",
         created_at=0.0, state=state, solved=solved, exposed=False,
