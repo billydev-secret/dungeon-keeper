@@ -99,6 +99,58 @@ async def test_hide_target_pending_updates_state_no_edit():
 
 
 @pytest.mark.asyncio
+async def test_share_edits_dm_view_to_remove_decide_buttons():
+    """After Share, the DM view should drop Share/Hide so only Guess remains."""
+    button = _make_share_button()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+    interaction.guild = MagicMock()
+
+    feed_channel = MagicMock(spec=discord.TextChannel)
+    feed_msg = MagicMock()
+    feed_msg.edit = AsyncMock()
+    feed_channel.fetch_message = AsyncMock(return_value=feed_msg)
+    interaction.guild.get_channel = MagicMock(return_value=feed_channel)
+
+    dm_msg = MagicMock()
+    dm_msg.edit = AsyncMock()
+    interaction.message = dm_msg
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_update_state"):
+        await button.callback(interaction)
+
+    dm_msg.edit.assert_awaited_once()
+    edited_view = dm_msg.edit.call_args.kwargs["view"]
+    from cogs.whisper_cog import WhisperGuessButton
+    button_types = [type(item) for item in edited_view.children]
+    assert button_types == [WhisperGuessButton]
+
+
+@pytest.mark.asyncio
+async def test_hide_edits_dm_view_to_remove_decide_buttons():
+    """After Hide, the DM view should drop Share/Hide so only Guess remains."""
+    button = _make_hide_button()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+
+    dm_msg = MagicMock()
+    dm_msg.edit = AsyncMock()
+    interaction.message = dm_msg
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("cogs.whisper_cog._do_update_state"):
+        await button.callback(interaction)
+
+    dm_msg.edit.assert_awaited_once()
+    edited_view = dm_msg.edit.call_args.kwargs["view"]
+    from cogs.whisper_cog import WhisperGuessButton
+    button_types = [type(item) for item in edited_view.children]
+    assert button_types == [WhisperGuessButton]
+
+
+@pytest.mark.asyncio
 async def test_expose_solved_target_edits_feed_message():
     button = _make_expose_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))

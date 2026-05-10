@@ -222,6 +222,16 @@ class WhisperShareButton(
                 except discord.HTTPException:
                     log.warning("Failed to edit feed message on share")
 
+        # Drop Share/Hide from the DM view; keep Guess if the target can
+        # still attempt to identify the sender.
+        if interaction.message and whisper.guesses_left > 0 and not whisper.solved:
+            try:
+                await interaction.message.edit(
+                    view=WhisperDmView.without_decide(self.bot, self.whisper_id)
+                )
+            except discord.HTTPException:
+                log.warning("Failed to edit DM view after share")
+
         await interaction.response.send_message(
             "Shared to the whisper feed.", ephemeral=True
         )
@@ -267,6 +277,17 @@ class WhisperHideButton(
         await asyncio.to_thread(
             _do_update_state, self.bot.ctx.db_path, self.whisper_id, "hidden"
         )
+
+        # Drop Share/Hide from the DM view; keep Guess if the target can
+        # still attempt to identify the sender.
+        if interaction.message and whisper.guesses_left > 0 and not whisper.solved:
+            try:
+                await interaction.message.edit(
+                    view=WhisperDmView.without_decide(self.bot, self.whisper_id)
+                )
+            except discord.HTTPException:
+                log.warning("Failed to edit DM view after hide")
+
         await interaction.response.send_message(
             "Whisper hidden. You can find it under Check Hidden Whispers.",
             ephemeral=True,
