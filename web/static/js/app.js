@@ -103,6 +103,7 @@ const SECTIONS = [
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js" },
       { id: "config-ai",          label: "AI Commands",      module: "./panels/config-ai.js" },
       { id: "config-veil",        label: "Veil",             module: "./panels/config-veil.js" },
+      { id: "config-whisper",     label: "Whisper",          module: "./panels/config-whisper.js" },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
       { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js" },
       { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js" },
