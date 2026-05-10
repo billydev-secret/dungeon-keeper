@@ -5,7 +5,9 @@ rules expressed as pure functions, easily unit-tested.
 """
 from __future__ import annotations
 
-from services.whisper_models import WhisperConfig
+from dataclasses import dataclass
+
+from services.whisper_models import Whisper, WhisperConfig
 
 MAX_MESSAGE_LENGTH = 1000
 
@@ -63,3 +65,39 @@ def validate_send(
         raise SendValidationError(ERROR_EMPTY_MESSAGE)
     if len(stripped) > MAX_MESSAGE_LENGTH:
         raise SendValidationError(ERROR_MESSAGE_TOO_LONG)
+
+
+class GuessValidationError(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+@dataclass(frozen=True)
+class GuessOutcome:
+    correct: bool
+    attempts_remaining: int
+    exhausted: bool
+
+
+def evaluate_guess(
+    whisper: Whisper, *, guesser_id: int, guessed_id: int
+) -> GuessOutcome:
+    """Pure-logic guess evaluator. Caller is responsible for persisting the
+    resulting state changes (insert_guess, decrement_guesses_left, mark_solved)."""
+    if guesser_id != whisper.target_id:
+        raise GuessValidationError(ERROR_GUESS_NOT_TARGET)
+    if guessed_id == guesser_id:
+        raise GuessValidationError(ERROR_GUESS_SELF)
+    if whisper.solved:
+        raise GuessValidationError(ERROR_GUESS_ALREADY_SOLVED)
+    if whisper.guesses_left <= 0:
+        raise GuessValidationError(ERROR_GUESS_NO_ATTEMPTS)
+
+    correct = guessed_id == whisper.sender_id
+    remaining = whisper.guesses_left - 1
+    return GuessOutcome(
+        correct=correct,
+        attempts_remaining=remaining,
+        exhausted=(not correct) and remaining == 0,
+    )
