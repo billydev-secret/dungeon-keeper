@@ -16,6 +16,7 @@ class WhisperConfig:
     role_id: int = 0
     channel_id: int = 0
     log_channel_id: int = 0
+    launcher_message_id: int = 0
 
 
 @dataclass

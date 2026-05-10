@@ -47,7 +47,7 @@ def _make_expose_button():
 
 
 @pytest.mark.asyncio
-async def test_share_target_pending_edits_feed_message():
+async def test_share_target_pending_deletes_old_and_posts_new_to_feed():
     button = _make_share_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
@@ -55,18 +55,27 @@ async def test_share_target_pending_edits_feed_message():
     interaction.message = None  # no DM-edit path in this test
 
     feed_channel = MagicMock(spec=discord.TextChannel)
-    feed_msg = MagicMock()
-    feed_msg.edit = AsyncMock()
-    feed_channel.fetch_message = AsyncMock(return_value=feed_msg)
+    old_msg = MagicMock()
+    old_msg.delete = AsyncMock()
+    feed_channel.fetch_message = AsyncMock(return_value=old_msg)
+    feed_channel.send = AsyncMock(return_value=MagicMock(id=77777))
     interaction.guild.get_channel = MagicMock(return_value=feed_channel)
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
          patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_update_state") as upd:
+         patch("cogs.whisper_cog._do_update_state") as upd, \
+         patch("cogs.whisper_cog._do_set_message_ids") as set_ids:
         await button.callback(interaction)
 
     upd.assert_called_once_with(":memory:", 42, "shared")
-    feed_msg.edit.assert_awaited_once()
+    old_msg.delete.assert_awaited_once()
+    feed_channel.send.assert_awaited_once()
+    sent_content = feed_channel.send.call_args.args[0]
+    assert "fresh Whisper was shared" in sent_content
+    assert _w().message in sent_content
+    set_ids.assert_called_once_with(
+        ":memory:", 42, channel_msg_id=77777, dm_msg_id=99999
+    )
 
 
 @pytest.mark.asyncio
@@ -107,9 +116,10 @@ async def test_share_edits_dm_view_to_remove_decide_buttons():
     interaction.guild = MagicMock()
 
     feed_channel = MagicMock(spec=discord.TextChannel)
-    feed_msg = MagicMock()
-    feed_msg.edit = AsyncMock()
-    feed_channel.fetch_message = AsyncMock(return_value=feed_msg)
+    old_feed_msg = MagicMock()
+    old_feed_msg.delete = AsyncMock()
+    feed_channel.fetch_message = AsyncMock(return_value=old_feed_msg)
+    feed_channel.send = AsyncMock(return_value=MagicMock(id=77777))
     interaction.guild.get_channel = MagicMock(return_value=feed_channel)
 
     dm_msg = MagicMock()
@@ -118,7 +128,8 @@ async def test_share_edits_dm_view_to_remove_decide_buttons():
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
          patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_update_state"):
+         patch("cogs.whisper_cog._do_update_state"), \
+         patch("cogs.whisper_cog._do_set_message_ids"):
         await button.callback(interaction)
 
     dm_msg.edit.assert_awaited_once()
