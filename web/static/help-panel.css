@@ -1,0 +1,237 @@
+/* ═══════════════════════════════════════════════════════════════
+   Help-panel re-skin — renders manual content using the dashboard's
+   own primitives (.card, .section-label, .chip, .w-table aesthetics)
+   so help pages feel native. All selectors scoped under .dk-help.
+   ═══════════════════════════════════════════════════════════════ */
+
+.dk-help {
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 920px;
+}
+
+/* Hide the section h2 — the panel header already shows the title */
+.dk-help > h2:first-child { display: none; }
+
+/* Any other h2 (rare, only inside Quick Reference area) styled as small */
+.dk-help h2 {
+  margin: 22px 0 10px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink-bright);
+}
+.dk-help h2 .section-num { display: none; }
+
+/* h3 → mirror .section-label exactly (uppercase + trailing rule) */
+.dk-help h3 {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
+  margin: 22px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dk-help h3::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--rule-soft);
+}
+.dk-help > h3:first-child,
+.dk-help > p:first-child + h3,
+.dk-help > p:first-of-type + h3 { margin-top: 0; }
+
+/* Body text */
+.dk-help p { margin: 0 0 10px; color: var(--ink); }
+.dk-help p:last-child { margin-bottom: 0; }
+
+.dk-help a { color: var(--blurple); }
+.dk-help a:hover { text-decoration: underline; }
+
+.dk-help strong { color: var(--ink-bright); font-weight: 600; }
+.dk-help em { font-style: italic; color: var(--ink-dim); }
+
+/* Inline code */
+.dk-help code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--bg-rail);
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  color: var(--gold-solid);
+  border: 1px solid var(--rule-soft);
+}
+
+/* ── Command blocks → .card with .stat-style left accent ─────── */
+.dk-help .cmd-block {
+  background: var(--bg-card);
+  border: 1px solid var(--rule-soft);
+  border-left: 3px solid var(--blurple);
+  border-radius: var(--r);
+  padding: 12px 16px;
+  margin: 10px 0;
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.dk-help .cmd-block + .cmd-block { margin-top: 8px; }
+.dk-help .cmd-block .cmd-name {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--ink-bright);
+  display: block;
+  margin-bottom: 6px;
+  word-break: break-word;
+  font-size: 13px;
+}
+.dk-help .cmd-block .cmd-perm {
+  font-size: 11px;
+  color: var(--ink-mute);
+  display: block;
+  margin-bottom: 6px;
+}
+.dk-help .cmd-block .cmd-desc {
+  color: var(--ink);
+  font-size: 13px;
+  display: block;
+  line-height: 1.5;
+}
+.dk-help .cmd-block .cmd-params {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule-soft);
+  font-size: 12px;
+  color: var(--ink-dim);
+  line-height: 1.55;
+}
+.dk-help .cmd-block code {
+  background: var(--bg-rail);
+  border-color: var(--rule);
+  color: var(--ink-bright);
+}
+
+/* ── Permission badges → .chip pill aesthetic ────────────────── */
+.dk-help .perm {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  background: var(--rule-soft);
+  color: var(--ink-dim);
+  vertical-align: middle;
+}
+.dk-help .perm-all   { background: var(--green-soft);            color: var(--green); }
+.dk-help .perm-mod   { background: rgba(88, 101, 242, 0.16);      color: #a8b3ff; }
+.dk-help .perm-admin { background: var(--red-soft);              color: var(--red); }
+.dk-help .perm-owner { background: var(--gold-soft);             color: var(--gold-solid); }
+
+/* ── Callouts → tighter, dashboard-restrained ───────────────── */
+.dk-help .callout {
+  border-radius: var(--r);
+  padding: 12px 14px;
+  margin: 14px 0;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--bg-card);
+  border: 1px solid var(--rule-soft);
+  border-left: 3px solid var(--rule);
+}
+.dk-help .callout-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; opacity: 0.9; }
+.dk-help .callout-body { flex: 1; min-width: 0; }
+.dk-help .callout-body strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-bright);
+}
+.dk-help .callout-body p { margin: 0; font-size: 13px; line-height: 1.5; }
+.dk-help .callout-body p + p { margin-top: 6px; }
+.dk-help .callout-body table { margin: 8px 0 0; }
+.dk-help .callout-tip   { border-left-color: var(--blurple); }
+.dk-help .callout-warn  { border-left-color: var(--gold-solid); }
+.dk-help .callout-info  { border-left-color: var(--green); }
+
+/* ── Tables → mirror .w-table conventions ───────────────────── */
+.dk-help table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 10px 0 16px;
+}
+.dk-help th {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: transparent;
+}
+.dk-help td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule-soft);
+  vertical-align: top;
+  color: var(--ink);
+}
+.dk-help tr:last-child td { border-bottom: none; }
+.dk-help tr:hover td { background: var(--bg-card-hover); }
+.dk-help td code,
+.dk-help td a code { color: var(--gold-solid); }
+.dk-help td:first-child code { font-size: 12px; }
+
+/* ── Lists ─────────────────────────────────────────────────── */
+.dk-help ul, .dk-help ol { padding-left: 22px; margin: 0 0 10px; }
+.dk-help li { margin-bottom: 4px; }
+
+.dk-help .steps { list-style: none; padding: 0; counter-reset: steps; }
+.dk-help .steps li {
+  counter-increment: steps;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 10px;
+}
+.dk-help .steps li::before {
+  content: counter(steps);
+  background: var(--blurple);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ── Quick-Reference table-section dividers ─────────────────── */
+.dk-help .qr-table .qr-section td {
+  background: var(--bg-rail);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  padding: 10px;
+  border-bottom: 1px solid var(--rule);
+}
+.dk-help .qr-table td:nth-child(2) { white-space: nowrap; }
+
+/* Hide print bar (it's a standalone-page concern) */
+.dk-help .print-bar { display: none; }
