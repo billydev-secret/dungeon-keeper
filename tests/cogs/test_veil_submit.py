@@ -46,10 +46,12 @@ def _attachment(
     content_type: str = "image/jpeg",
     size: int = 1_000_000,
     read_return: bytes = b"fake-bytes",
+    filename: str = "submission.jpg",
 ) -> MagicMock:
     a = MagicMock()
     a.content_type = content_type
     a.size = size
+    a.filename = filename
     a.read = AsyncMock(return_value=read_return)
     return a
 

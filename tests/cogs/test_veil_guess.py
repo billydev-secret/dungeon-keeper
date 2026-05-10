@@ -96,6 +96,69 @@ async def test_correct_first_guess_marks_solved_and_edits_message():
 
 
 @pytest.mark.asyncio
+async def test_correct_guess_attaches_full_image_as_spoiler_and_unlinks(tmp_path):
+    """First correct guess swaps the message attachment for a SPOILER_-prefixed
+    full original, then deletes the on-disk file and clears original_path."""
+    orig_file = tmp_path / "1234.png"
+    orig_file.write_bytes(b"fake-original-png-bytes")
+
+    game_msg = MagicMock()
+    game_msg.edit = AsyncMock()
+    game_msg.guild = MagicMock()
+    view = _make_select_view(game_message=game_msg)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.edit_message = AsyncMock()
+
+    round_row = _make_round()
+    round_row.original_path = str(orig_file)
+
+    set_path_calls: list[tuple] = []
+
+    def _capture_set_path(*args, **kwargs):
+        set_path_calls.append((args, kwargs))
+
+    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("cogs.veil_cog._do_insert_guess"), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1)), \
+         patch("cogs.veil_cog._do_set_original_path", side_effect=_capture_set_path), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    edit_kwargs = game_msg.edit.call_args.kwargs
+    attachments = edit_kwargs["attachments"]
+    assert len(attachments) == 1
+    assert attachments[0].filename == "SPOILER_veil_full.png"
+    # Embed body has the answer reveal but no inline image set.
+    assert edit_kwargs["embed"].image.url is None
+    # File is removed and DB path cleared.
+    assert not orig_file.exists()
+    assert set_path_calls and set_path_calls[0][0][2] == ""
+
+
+@pytest.mark.asyncio
+async def test_correct_guess_without_original_path_still_solves():
+    """Old rounds (pre-migration) have original_path == '' — solve should still
+    proceed without trying to attach a missing file."""
+    game_msg = MagicMock()
+    game_msg.edit = AsyncMock()
+    game_msg.guild = MagicMock()
+    view = _make_select_view(game_message=game_msg)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.edit_message = AsyncMock()
+
+    round_row = _make_round()  # original_path defaults to ""
+
+    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("cogs.veil_cog._do_insert_guess"), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1)), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    edit_kwargs = game_msg.edit.call_args.kwargs
+    assert edit_kwargs["attachments"] == []
+
+
+@pytest.mark.asyncio
 async def test_correct_guess_already_solved_does_not_edit_game_message():
     game_msg = MagicMock()
     game_msg.edit = AsyncMock()
@@ -292,6 +355,61 @@ def _make_preview_view(bot, crops):
         submitter_id=1001, answer_id=2001,
         difficulty="medium", candidate_count=len(crops),
     )
+
+
+@pytest.mark.asyncio
+async def test_post_persists_original_bytes_and_stores_path(tmp_path, monkeypatch):
+    """On Post, the submitter's original bytes are written to <orig_dir>/<round_id><ext>
+    and the path is recorded so /correct guess can attach it as a SPOILER."""
+    import cogs.veil_cog as veil_cog
+
+    monkeypatch.setattr(veil_cog, "_VEIL_ORIG_DIR", tmp_path / "orig")
+
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    bot.add_view = MagicMock()
+
+    fake_channel = MagicMock()
+    fake_channel.mention = "#veil"
+    fake_msg = MagicMock()
+    fake_msg.id = 9999
+    attached = MagicMock()
+    attached.url = "https://cdn.example/crop.jpg"
+    fake_msg.attachments = [attached]
+    fake_channel.send = AsyncMock(return_value=fake_msg)
+
+    interaction = fake_interaction()
+    interaction.guild.get_channel = lambda cid: fake_channel
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    # Construct view through the same import as the cog.
+    from cogs.veil_cog import SubmitPreviewView
+    view = SubmitPreviewView(
+        bot, [b"crop-bytes"], GUILD_ID, VEIL_CHANNEL_ID,
+        submitter_id=1001, answer_id=2001,
+        difficulty="medium", candidate_count=1,
+        original_bytes=b"the-original-png-bytes",
+        original_ext=".png",
+    )
+
+    set_path_calls: list[tuple] = []
+
+    def _capture(*args, **kwargs):
+        set_path_calls.append((args, kwargs))
+
+    with patch("cogs.veil_cog._do_insert_round", return_value=77), \
+         patch("cogs.veil_cog._do_update_round_message"), \
+         patch("cogs.veil_cog._do_set_original_path", side_effect=_capture):
+        # We need discord to think the channel is a real text channel.
+        with patch("cogs.veil_cog.isinstance", lambda obj, types: True):
+            await view._on_post(interaction)
+
+    persisted = tmp_path / "orig" / "77.png"
+    assert persisted.exists()
+    assert persisted.read_bytes() == b"the-original-png-bytes"
+    # Stored path matches the file we wrote.
+    assert set_path_calls and set_path_calls[0][0][2] == str(persisted)
 
 
 @pytest.mark.asyncio
