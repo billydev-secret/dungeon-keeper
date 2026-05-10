@@ -222,13 +222,17 @@ class WhisperShareButton(
                 except discord.HTTPException:
                     log.warning("Failed to edit feed message on share")
 
-        # Drop Share/Hide from the DM view; keep Guess if the target can
-        # still attempt to identify the sender.
-        if interaction.message and whisper.guesses_left > 0 and not whisper.solved:
+        # Drop Share/Hide from the DM view. Keep Guess if the target can
+        # still attempt to identify the sender; otherwise strip the view
+        # entirely so the now-useless buttons disappear.
+        if interaction.message:
+            new_view: discord.ui.View | None
+            if whisper.guesses_left > 0 and not whisper.solved:
+                new_view = WhisperDmView.without_decide(self.bot, self.whisper_id)
+            else:
+                new_view = None
             try:
-                await interaction.message.edit(
-                    view=WhisperDmView.without_decide(self.bot, self.whisper_id)
-                )
+                await interaction.message.edit(view=new_view)
             except discord.HTTPException:
                 log.warning("Failed to edit DM view after share")
 
@@ -278,13 +282,17 @@ class WhisperHideButton(
             _do_update_state, self.bot.ctx.db_path, self.whisper_id, "hidden"
         )
 
-        # Drop Share/Hide from the DM view; keep Guess if the target can
-        # still attempt to identify the sender.
-        if interaction.message and whisper.guesses_left > 0 and not whisper.solved:
+        # Drop Share/Hide from the DM view. Keep Guess if the target can
+        # still attempt to identify the sender; otherwise strip the view
+        # entirely so the now-useless buttons disappear.
+        if interaction.message:
+            new_view: discord.ui.View | None
+            if whisper.guesses_left > 0 and not whisper.solved:
+                new_view = WhisperDmView.without_decide(self.bot, self.whisper_id)
+            else:
+                new_view = None
             try:
-                await interaction.message.edit(
-                    view=WhisperDmView.without_decide(self.bot, self.whisper_id)
-                )
+                await interaction.message.edit(view=new_view)
             except discord.HTTPException:
                 log.warning("Failed to edit DM view after hide")
 

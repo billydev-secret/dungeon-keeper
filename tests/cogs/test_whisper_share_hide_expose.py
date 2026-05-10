@@ -151,6 +151,32 @@ async def test_hide_edits_dm_view_to_remove_decide_buttons():
 
 
 @pytest.mark.asyncio
+async def test_hide_after_exhausted_strips_all_buttons():
+    """If the target has already exhausted guesses, Hide should clear the
+    DM view entirely (no Guess button to leave behind)."""
+    button = _make_hide_button()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+
+    dm_msg = MagicMock()
+    dm_msg.edit = AsyncMock()
+    interaction.message = dm_msg
+
+    # Exhausted: guesses_left=0
+    exhausted = Whisper(
+        id=42, guild_id=9001, sender_id=SENDER, target_id=TARGET, message="hi",
+        created_at=0.0, state="pending", solved=False, exposed=False,
+        guesses_left=0, channel_msg_id=88888, dm_msg_id=99999,
+    )
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=exhausted), \
+         patch("cogs.whisper_cog._do_update_state"):
+        await button.callback(interaction)
+
+    dm_msg.edit.assert_awaited_once()
+    assert dm_msg.edit.call_args.kwargs["view"] is None
+
+
+@pytest.mark.asyncio
 async def test_expose_solved_target_edits_feed_message():
     button = _make_expose_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
