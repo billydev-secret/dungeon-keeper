@@ -1,10 +1,12 @@
 """Whisper cog — anonymous-message guessing game (Whisper clone)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import discord
 from discord import app_commands
 from discord.ext import commands
 
@@ -104,6 +106,63 @@ class WhisperCog(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.ctx = bot.ctx
+
+    async def _optin_impl(self, interaction: discord.Interaction) -> None:
+        """Pure shared implementation, easy to test directly."""
+        assert interaction.guild is not None
+        cfg = await asyncio.to_thread(_load_config, self.ctx.db_path, interaction.guild.id)
+        if cfg.role_id == 0:
+            await interaction.response.send_message(
+                "Whisper role hasn't been configured yet.", ephemeral=True
+            )
+            return
+        role = interaction.guild.get_role(cfg.role_id)
+        if role is None:
+            await interaction.response.send_message(
+                "Whisper role no longer exists. Ask an admin to fix the config.",
+                ephemeral=True,
+            )
+            return
+        try:
+            await interaction.user.add_roles(role, reason="Whisper opt-in")  # type: ignore[union-attr]
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I don't have permission to assign that role.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "You've opted in. You can now send and receive whispers.",
+            ephemeral=True,
+        )
+
+    async def _optout_impl(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        cfg = await asyncio.to_thread(_load_config, self.ctx.db_path, interaction.guild.id)
+        if cfg.role_id == 0:
+            await interaction.response.send_message(
+                "Whisper role hasn't been configured yet.", ephemeral=True
+            )
+            return
+        role = interaction.guild.get_role(cfg.role_id)
+        if role is not None:
+            try:
+                await interaction.user.remove_roles(role, reason="Whisper opt-out")  # type: ignore[union-attr]
+            except discord.Forbidden:
+                await interaction.response.send_message(
+                    "I don't have permission to remove that role.", ephemeral=True
+                )
+                return
+        await interaction.response.send_message(
+            "You've opted out. Existing whispers are preserved.", ephemeral=True
+        )
+
+    @whisper_group.command(name="optin", description="Opt in to send and receive whispers.")
+    async def whisper_optin(self, interaction: discord.Interaction) -> None:
+        await self._optin_impl(interaction)
+
+    @whisper_group.command(name="optout", description="Opt out of whispers.")
+    async def whisper_optout(self, interaction: discord.Interaction) -> None:
+        await self._optout_impl(interaction)
 
 
 async def setup(bot: Bot) -> None:
