@@ -28,6 +28,7 @@ from services.whisper_repo import (
     insert_guess,
     insert_whisper,
     list_received,
+    list_received_in_states,
     mark_exposed,
     mark_solved,
     set_whisper_message_ids,
@@ -131,6 +132,19 @@ def _do_list_received(
 ) -> list[Whisper]:
     with open_db(db_path) as conn:
         return list_received(conn, guild_id=guild_id, target_id=target_id, state=state)
+
+
+def _do_list_received_in_states(
+    db_path: Path,
+    *,
+    guild_id: int,
+    target_id: int,
+    states: list[WhisperState],
+) -> list[Whisper]:
+    with open_db(db_path) as conn:
+        return list_received_in_states(
+            conn, guild_id=guild_id, target_id=target_id, states=states
+        )
 
 
 # ── Per-whisper Dynamic buttons (custom_id contains whisper_id) ──────────────
@@ -599,21 +613,13 @@ class WhisperFeedView(discord.ui.View):
 
     async def _on_check_click(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
-        pending = await asyncio.to_thread(
-            _do_list_received,
+        all_whispers = await asyncio.to_thread(
+            _do_list_received_in_states,
             self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             target_id=interaction.user.id,
-            state=STATE_PENDING,
+            states=[STATE_PENDING, STATE_SHARED],
         )
-        shared = await asyncio.to_thread(
-            _do_list_received,
-            self.bot.ctx.db_path,
-            guild_id=interaction.guild.id,
-            target_id=interaction.user.id,
-            state=STATE_SHARED,
-        )
-        all_whispers = pending + shared
         if not all_whispers:
             await interaction.response.send_message("No whispers to show.", ephemeral=True)
             return

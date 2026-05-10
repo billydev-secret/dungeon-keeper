@@ -49,7 +49,7 @@ async def test_check_whispers_lists_pending_and_shared():
     interaction.guild.id = 9001
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_list_received", side_effect=[[_w("pending")], [_w("shared")]]):
+    with patch("cogs.whisper_cog._do_list_received_in_states", return_value=[_w("pending"), _w("shared")]):
         await view._on_check_click(interaction)
 
     args, kwargs = interaction.response.send_message.call_args

@@ -167,3 +167,24 @@ def list_received(
         (guild_id, target_id, state),
     ).fetchall()
     return [_row_to_whisper(r) for r in rows]
+
+
+def list_received_in_states(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    target_id: int,
+    states: list[WhisperState],
+) -> list[Whisper]:
+    if not states:
+        return []
+    placeholders = ",".join("?" * len(states))
+    rows = conn.execute(
+        f"""
+        SELECT * FROM whispers
+        WHERE guild_id = ? AND target_id = ? AND state IN ({placeholders})
+        ORDER BY created_at DESC
+        """,
+        (guild_id, target_id, *states),
+    ).fetchall()
+    return [_row_to_whisper(r) for r in rows]

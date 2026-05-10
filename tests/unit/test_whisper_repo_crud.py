@@ -86,3 +86,17 @@ def test_delete_whisper(sync_db_path: Path):
         assert get_whisper(conn, wid) is not None
         delete_whisper(conn, wid)
         assert get_whisper(conn, wid) is None
+
+
+def test_list_received_in_states_combines_filters(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        from services.whisper_repo import list_received_in_states
+        wp = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="p")
+        ws = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="s")
+        wh = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="h")
+        update_whisper_state(conn, ws, "shared")
+        update_whisper_state(conn, wh, "hidden")
+        rows = list_received_in_states(
+            conn, guild_id=GUILD, target_id=TARGET, states=["pending", "shared"]
+        )
+    assert {r.id for r in rows} == {wp, ws}
