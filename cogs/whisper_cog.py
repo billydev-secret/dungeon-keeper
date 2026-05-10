@@ -31,6 +31,7 @@ from services.whisper_repo import (
     list_received_in_states,
     mark_exposed,
     mark_solved,
+    set_whisper_launcher_message_id,
     set_whisper_message_ids,
     update_whisper_state,
 )
@@ -145,6 +146,11 @@ def _do_list_received_in_states(
         return list_received_in_states(
             conn, guild_id=guild_id, target_id=target_id, states=states
         )
+
+
+def _do_set_launcher_id(db_path: Path, guild_id: int, message_id: int) -> None:
+    with open_db(db_path) as conn:
+        set_whisper_launcher_message_id(conn, guild_id, message_id)
 
 
 # ── Per-whisper Dynamic buttons (custom_id contains whisper_id) ──────────────
@@ -708,6 +714,14 @@ class WhisperCog(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.ctx = bot.ctx
+        self._launcher_locks: dict[int, asyncio.Lock] = {}
+
+    def _get_launcher_lock(self, guild_id: int) -> asyncio.Lock:
+        lock = self._launcher_locks.get(guild_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._launcher_locks[guild_id] = lock
+        return lock
 
     async def cog_load(self) -> None:
         # Register persistent views so static-id buttons survive restart.
@@ -721,6 +735,65 @@ class WhisperCog(commands.Cog):
             WhisperHideButton,
             WhisperExposeButton,
         )
+        # Bootstrap launcher in every configured guild so the button bar is
+        # at the bottom of the channel from boot.
+        for guild in self.bot.guilds:
+            try:
+                await self.refresh_whisper_launcher(guild.id)
+            except Exception:
+                log.exception(
+                    "Failed to bootstrap whisper launcher for guild %s", guild.id
+                )
+
+    async def refresh_whisper_launcher(self, guild_id: int) -> None:
+        """Delete the previous launcher (if any) and post a fresh one at the
+        bottom of the configured whisper channel. Serialized per-guild."""
+        async with self._get_launcher_lock(guild_id):
+            cfg = await asyncio.to_thread(
+                _load_config, self.ctx.db_path, guild_id
+            )
+            if cfg.channel_id == 0:
+                return
+            guild = self.bot.get_guild(guild_id)
+            if guild is None:
+                return
+            channel = guild.get_channel(cfg.channel_id)
+            if not isinstance(channel, discord.TextChannel):
+                return
+            if cfg.launcher_message_id:
+                try:
+                    old = await channel.fetch_message(cfg.launcher_message_id)
+                    await old.delete()
+                except discord.HTTPException:
+                    pass
+            try:
+                sent = await channel.send(
+                    "**Whisper** — anonymous messages with a guessing game.",
+                    view=WhisperFeedView(self.bot),
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                log.warning(
+                    "Failed to post whisper launcher to channel %s", cfg.channel_id
+                )
+                return
+            await asyncio.to_thread(
+                _do_set_launcher_id, self.ctx.db_path, guild_id, sent.id
+            )
+
+    @commands.Cog.listener("on_message")
+    async def _on_message_launcher_bump(self, message: discord.Message) -> None:
+        if not message.guild:
+            return
+        cfg = await asyncio.to_thread(
+            _load_config, self.ctx.db_path, message.guild.id
+        )
+        if cfg.channel_id == 0 or message.channel.id != cfg.channel_id:
+            return
+        # Skip the launcher message itself to avoid an infinite loop.
+        if cfg.launcher_message_id and message.id == cfg.launcher_message_id:
+            return
+        await self.refresh_whisper_launcher(message.guild.id)
 
     async def _optin_impl(self, interaction: discord.Interaction) -> None:
         """Pure shared implementation, easy to test directly."""
@@ -826,7 +899,6 @@ class WhisperCog(commands.Cog):
             try:
                 feed_msg = await feed_channel.send(
                     f"\U0001f4ec Someone sent {target.mention} an anonymous message.",
-                    view=WhisperFeedView(self.bot),
                     allowed_mentions=discord.AllowedMentions(users=[target]),
                 )
             except discord.HTTPException:
