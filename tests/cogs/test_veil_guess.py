@@ -80,18 +80,19 @@ async def test_correct_first_guess_marks_solved_and_edits_message():
     game_msg.guild = MagicMock()
     view = _make_select_view(game_message=game_msg)
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()  # not yet solved
 
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(3, 2)), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 3, 2)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
     game_msg.edit.assert_called_once()
-    call_content = interaction.response.edit_message.call_args.kwargs.get("content", "")
+    call_content = interaction.edit_original_response.call_args.kwargs.get("content", "")
     assert "correct" in call_content.lower()
 
 
@@ -107,7 +108,8 @@ async def test_correct_guess_attaches_full_image_as_spoiler_and_unlinks(tmp_path
     game_msg.guild = MagicMock()
     view = _make_select_view(game_message=game_msg)
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()
     round_row.original_path = str(orig_file)
@@ -119,7 +121,7 @@ async def test_correct_guess_attaches_full_image_as_spoiler_and_unlinks(tmp_path
 
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1)), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
          patch("cogs.veil_cog._do_set_original_path", side_effect=_capture_set_path), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
@@ -144,13 +146,14 @@ async def test_correct_guess_without_original_path_still_solves():
     game_msg.guild = MagicMock()
     view = _make_select_view(game_message=game_msg)
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()  # original_path defaults to ""
 
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1)), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -165,7 +168,8 @@ async def test_correct_guess_already_solved_does_not_edit_game_message():
     game_msg.guild = MagicMock()
     view = _make_select_view(game_message=game_msg)
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round(solved_at=1234.0)
 
@@ -175,7 +179,7 @@ async def test_correct_guess_already_solved_does_not_edit_game_message():
         await view._on_select(interaction)
 
     game_msg.edit.assert_not_called()
-    call_content = interaction.response.edit_message.call_args.kwargs.get("content", "")
+    call_content = interaction.edit_original_response.call_args.kwargs.get("content", "")
     assert "already" in call_content.lower() or "someone" in call_content.lower()
 
 
@@ -186,7 +190,8 @@ async def test_wrong_guess_sends_not_it_message():
     game_msg.guild = MagicMock()
     view = _make_select_view(game_message=game_msg)
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()
 
@@ -196,20 +201,45 @@ async def test_wrong_guess_sends_not_it_message():
         await view._on_select(interaction)
 
     game_msg.edit.assert_not_called()
-    call_content = interaction.response.edit_message.call_args.kwargs.get("content", "")
+    call_content = interaction.edit_original_response.call_args.kwargs.get("content", "")
     assert "not it" in call_content.lower()
+
+
+@pytest.mark.asyncio
+async def test_correct_guess_loses_race_does_not_edit_message():
+    """If _do_mark_solved returns rowcount==0 (someone else won the race),
+    the cog must NOT edit the public game message — only ack the guesser."""
+    game_msg = MagicMock()
+    game_msg.edit = AsyncMock()
+    game_msg.guild = MagicMock()
+    view = _make_select_view(game_message=game_msg)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    round_row = _make_round()  # solved_at None — but mark_solved will say rowcount=0
+    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("cogs.veil_cog._do_insert_guess"), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(0, 5, 3)), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    game_msg.edit.assert_not_called()
+    msg = interaction.edit_original_response.call_args.kwargs.get("content", "")
+    assert "already" in msg.lower() or "someone" in msg.lower()
 
 
 @pytest.mark.asyncio
 async def test_select_is_disabled_after_guess():
     view = _make_select_view()
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1)), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -225,7 +255,8 @@ async def test_on_select_rejects_guess_within_cooldown():
 
     view = _make_select_view(cooldown_seconds=30)
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     recent_guess = VeilGuess(
         id=1, round_id=ROUND_ID, guesser_id=9999,
@@ -239,7 +270,7 @@ async def test_on_select_rejects_guess_within_cooldown():
         await view._on_select(interaction)
 
     insert_mock.assert_not_called()
-    call_content = interaction.response.edit_message.call_args.kwargs.get("content", "")
+    call_content = interaction.edit_original_response.call_args.kwargs.get("content", "")
     assert "cooldown" in call_content.lower() or "try again" in call_content.lower()
 
 
@@ -250,7 +281,8 @@ async def test_on_select_allows_guess_after_cooldown_expires():
 
     view = _make_select_view(cooldown_seconds=30)
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     old_guess = VeilGuess(
         id=1, round_id=ROUND_ID, guesser_id=9999,
@@ -261,7 +293,7 @@ async def test_on_select_allows_guess_after_cooldown_expires():
     with patch("cogs.veil_cog._do_get_last_guess", return_value=old_guess), \
          patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess") as insert_mock, \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(2, 1)), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 2, 1)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -273,14 +305,15 @@ async def test_on_select_cooldown_zero_disables_check():
     """cooldown_seconds=0 means no cooldown enforcement."""
     view = _make_select_view(cooldown_seconds=0)
     interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.edit_message = AsyncMock()
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()
     get_last_mock = MagicMock()
     with patch("cogs.veil_cog._do_get_last_guess", get_last_mock), \
          patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1)), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 

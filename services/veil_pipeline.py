@@ -227,14 +227,11 @@ def run_pipeline(
     detections = nudenet_dets + pose_dets
 
     if not detections:
-        # Neither NudeNet nor pose found anything — fall back to full-image so
-        # the pipeline can still produce jittered crops for non-explicit images.
-        log.info("no detections from nudenet or pose — using full-image fallback")
-        detections = [Detection(
-            label="FULL_IMAGE_FALLBACK",
-            score=0.0,
-            box=BoundingBox(0.0, 0.0, float(img_w), float(img_h)),
-        )]
+        # No detections from any source: refuse rather than crop a random region
+        # of an arbitrary (possibly off-topic) image. The cog turns an empty
+        # PipelineResult into a clear ephemeral rejection.
+        log.info("no detections from nudenet or pose — refusing submission")
+        return PipelineResult(candidates=[], crops=[])
 
     face_boxes = detect_faces(image_bytes)
 

@@ -144,17 +144,19 @@ def _do_get_last_guess(
 
 def _do_mark_solved(
     db_path: Path, round_id: int, *, solver_id: int
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
+    """Returns (rowcount, guess_count, unique_count). rowcount==0 means we lost
+    the race — another correct guess marked solved first."""
     with open_db(db_path) as conn:
         guess_count = count_guesses_for_round(conn, round_id)
         unique_count = count_unique_guessers_for_round(conn, round_id)
-        mark_round_solved(
+        rowcount = mark_round_solved(
             conn, round_id,
             solver_id=solver_id,
             guesses_to_solve=guess_count,
             unique_guessers_to_solve=unique_count,
         )
-    return guess_count, unique_count
+    return rowcount, guess_count, unique_count
 
 
 def _do_set_config(db_path: Path, guild_id: int, key: str, value: str) -> None:
@@ -241,6 +243,9 @@ class GuessSelectView(discord.ui.View):
         self.add_item(self._select)
 
     async def _on_select(self, interaction: discord.Interaction) -> None:
+        # Ack within Discord's 3s budget before any DB / file / Discord-edit work.
+        await interaction.response.defer(ephemeral=True)
+
         guessed_user_id = int(self._select.values[0])
         db_path = self.bot.ctx.db_path
 
@@ -251,7 +256,7 @@ class GuessSelectView(discord.ui.View):
             if last_guess is not None:
                 remaining = self.cooldown_seconds - (time.time() - last_guess.created_at)
                 if remaining > 0:
-                    await interaction.response.edit_message(
+                    await interaction.edit_original_response(
                         content=f"⏳ On cooldown — try again in {int(remaining) + 1}s.",
                         view=self,
                     )
@@ -259,7 +264,7 @@ class GuessSelectView(discord.ui.View):
 
         round_row = await asyncio.to_thread(_do_load_round, db_path, self.round_id)
         if round_row is None:
-            await interaction.response.edit_message(content="Round not found.", view=None)
+            await interaction.edit_original_response(content="Round not found.", view=None)
             return
 
         correct = guessed_user_id == round_row.answer_id
@@ -275,9 +280,16 @@ class GuessSelectView(discord.ui.View):
         self._select.disabled = True
 
         if correct and round_row.solved_at is None:
-            guess_count, unique_count = await asyncio.to_thread(
+            rowcount, guess_count, unique_count = await asyncio.to_thread(
                 _do_mark_solved, db_path, self.round_id, solver_id=interaction.user.id
             )
+            if rowcount == 0:
+                # Lost the race — a concurrent correct guess marked solved first.
+                await interaction.edit_original_response(
+                    content="✅ Correct — but someone already solved this one.",
+                    view=self,
+                )
+                return
             answer_mention = f"<@{round_row.answer_id}>"
             submitter_mention = f"<@{round_row.submitter_id}>"
             solved_emb = _solved_embed(
@@ -309,17 +321,17 @@ class GuessSelectView(discord.ui.View):
             if orig_path is not None:
                 await asyncio.to_thread(orig_path.unlink, missing_ok=True)
                 await asyncio.to_thread(_do_set_original_path, db_path, self.round_id, "")
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content=f"✅ **Correct!** You solved Round #{self.round_id}!",
                 view=self,
             )
         elif correct:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content="✅ Correct — but someone already solved this one.",
                 view=self,
             )
         else:
-            await interaction.response.edit_message(
+            await interaction.edit_original_response(
                 content="❌ Not it. Keep trying!",
                 view=self,
             )

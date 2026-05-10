@@ -124,16 +124,22 @@ def set_round_original_path(
 def mark_round_solved(
     conn: sqlite3.Connection, round_id: int,
     *, solver_id: int, guesses_to_solve: int, unique_guessers_to_solve: int
-) -> None:
-    conn.execute(
+) -> int:
+    """Mark the round solved iff it is currently unsolved. Returns rowcount.
+
+    The ``solved_at IS NULL`` predicate is the race guard for two near-
+    simultaneous correct guesses — only the winner sees rowcount == 1.
+    """
+    cur = conn.execute(
         """
         UPDATE veil_rounds
         SET solved_at = ?, solver_id = ?,
             guesses_to_solve = ?, unique_guessers_to_solve = ?
-        WHERE id = ?
+        WHERE id = ? AND solved_at IS NULL
         """,
         (time.time(), solver_id, guesses_to_solve, unique_guessers_to_solve, round_id),
     )
+    return cur.rowcount or 0
 
 
 def soft_delete_round(conn: sqlite3.Connection, round_id: int) -> None:

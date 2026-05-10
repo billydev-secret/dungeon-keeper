@@ -136,13 +136,13 @@ class TestRunPipeline:
         # crops are generated in order of sorted-score — just verify 3 crops exist
         assert len(result.crops) == 3
 
-    def test_no_detections_uses_full_image_fallback(self):
-        # When both nudenet and pose return nothing, the pipeline falls back to
-        # a FULL_IMAGE_FALLBACK detection so it can still produce crops.
+    def test_no_detections_returns_empty_result(self):
+        # When both nudenet and pose return nothing, refuse to crop — the cog
+        # turns an empty PipelineResult into a clean rejection so we never post
+        # a random crop of an arbitrary image to the Veil channel.
         result = self._run([], face_boxes=[])
-        assert len(result.candidates) == 1
-        assert result.candidates[0].label == "FULL_IMAGE_FALLBACK"
-        assert len(result.crops) > 0
+        assert result.candidates == []
+        assert result.crops == []
 
     def test_face_filtered_detection_excluded(self):
         # Detection overlaps fully with a face; filter_candidates fallback=True
