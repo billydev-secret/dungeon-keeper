@@ -27,8 +27,12 @@ from services.whisper_repo import (
 from services.whisper_service import (
     GuessValidationError,
     SendValidationError,
+    TransitionValidationError,
     evaluate_guess,
+    validate_expose,
+    validate_hide,
     validate_send,
+    validate_share,
 )
 
 if TYPE_CHECKING:
@@ -121,8 +125,45 @@ class WhisperExposeView(discord.ui.View):
         self.add_item(expose_btn)
 
     async def _on_expose_click(self, interaction: discord.Interaction) -> None:
-        # Implementation added in Task 13 alongside share/hide
-        await interaction.response.send_message("Not yet implemented.", ephemeral=True)
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        try:
+            validate_expose(whisper, invoker_id=interaction.user.id)
+        except TransitionValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
+            return
+
+        await asyncio.to_thread(
+            _do_mark_exposed, self.bot.ctx.db_path, self.whisper_id
+        )
+
+        sender_member = (
+            interaction.guild.get_member(whisper.sender_id)
+            if interaction.guild else None
+        )
+        sender_label = (
+            sender_member.mention if sender_member else f"<@{whisper.sender_id}>"
+        )
+
+        if interaction.message:
+            try:
+                new_content = (
+                    (interaction.message.content or "")
+                    + f"\n\n\U0001f4a5 Sender was {sender_label}."
+                )
+                await interaction.message.edit(
+                    content=new_content,
+                    view=None,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException:
+                log.warning("Failed to edit message on expose")
+
+        await interaction.response.send_message("Exposed.", ephemeral=True)
 
 
 # ── Per-whisper DM view (Guess only for now; Share/Hide added in Task 13) ────
@@ -225,6 +266,83 @@ class WhisperDmView(discord.ui.View):
         )
         guess_btn.callback = self._on_guess_click
         self.add_item(guess_btn)
+
+        share_btn = discord.ui.Button(
+            label="Share",
+            style=discord.ButtonStyle.success,
+            custom_id=f"whisper:share:{whisper_id}",
+        )
+        share_btn.callback = self._on_share_click
+        self.add_item(share_btn)
+
+        hide_btn = discord.ui.Button(
+            label="Hide",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"whisper:hide:{whisper_id}",
+        )
+        hide_btn.callback = self._on_hide_click
+        self.add_item(hide_btn)
+
+    async def _on_share_click(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        try:
+            validate_share(whisper, invoker_id=interaction.user.id)
+        except TransitionValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
+            return
+
+        await asyncio.to_thread(
+            _do_update_state, self.bot.ctx.db_path, self.whisper_id, "shared"
+        )
+
+        if interaction.guild:
+            cfg = await asyncio.to_thread(
+                _load_config, self.bot.ctx.db_path, whisper.guild_id
+            )
+            feed_channel = interaction.guild.get_channel(cfg.channel_id)
+            if isinstance(feed_channel, discord.TextChannel) and whisper.channel_msg_id:
+                try:
+                    msg = await feed_channel.fetch_message(whisper.channel_msg_id)
+                    await msg.edit(
+                        content=(
+                            f"\U0001f4ec A fresh Whisper was shared. Someone sent "
+                            f"<@{whisper.target_id}> an anonymous message!\n"
+                            f"```{whisper.message}```"
+                        ),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    log.warning("Failed to edit feed message on share")
+
+        await interaction.response.send_message(
+            "Shared to the whisper feed.", ephemeral=True
+        )
+
+    async def _on_hide_click(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        try:
+            validate_hide(whisper, invoker_id=interaction.user.id)
+        except TransitionValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
+            return
+
+        await asyncio.to_thread(
+            _do_update_state, self.bot.ctx.db_path, self.whisper_id, "hidden"
+        )
+        await interaction.response.send_message(
+            "Whisper hidden. You can find it under Check Hidden Whispers.",
+            ephemeral=True,
+        )
 
     async def _on_guess_click(self, interaction: discord.Interaction) -> None:
         whisper = await asyncio.to_thread(
