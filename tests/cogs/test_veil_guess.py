@@ -192,7 +192,7 @@ async def test_correct_guess_already_solved_does_not_edit_game_message():
 
 
 @pytest.mark.asyncio
-async def test_wrong_guess_sends_not_it_message():
+async def test_wrong_guess_bumps_counter_and_sends_not_it_message():
     game_msg = MagicMock()
     game_msg.edit = AsyncMock()
     game_msg.guild = MagicMock()
@@ -205,12 +205,42 @@ async def test_wrong_guess_sends_not_it_message():
 
     with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
+         patch("cogs.veil_cog._do_count_guesses_for_round", return_value=4), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(3333)])):
+        await view._on_select(interaction)
+
+    # Counter-bump edit: a fresh GameView with the new count is attached.
+    game_msg.edit.assert_called_once()
+    edit_kwargs = game_msg.edit.call_args.kwargs
+    new_view = edit_kwargs["view"]
+    labels = [c.label for c in new_view.children]
+    assert "Guesses: 4" in labels
+
+    call_content = interaction.edit_original_response.call_args.kwargs.get("content", "")
+    assert "not it" in call_content.lower()
+
+
+@pytest.mark.asyncio
+async def test_wrong_guess_on_solved_round_skips_counter_bump():
+    """If the round was already solved when we loaded it, the public message
+    already has the solved view — a chip-bump would overwrite it."""
+    game_msg = MagicMock()
+    game_msg.edit = AsyncMock()
+    game_msg.guild = MagicMock()
+    view = _make_select_view(game_message=game_msg)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    round_row = _make_round(solved_at=1234.0)
+
+    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("cogs.veil_cog._do_insert_guess"), \
+         patch("cogs.veil_cog._do_count_guesses_for_round", return_value=8), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(3333)])):
         await view._on_select(interaction)
 
     game_msg.edit.assert_not_called()
-    call_content = interaction.edit_original_response.call_args.kwargs.get("content", "")
-    assert "not it" in call_content.lower()
 
 
 @pytest.mark.asyncio
@@ -244,6 +274,7 @@ async def test_guess_cap_allows_under_limit():
     with patch("cogs.veil_cog._do_count_user_guesses", return_value=4), \
          patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess") as insert_mock, \
+         patch("cogs.veil_cog._do_count_guesses_for_round", return_value=5), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(3333)])):
         await view._on_select(interaction)
 

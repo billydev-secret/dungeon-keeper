@@ -419,6 +419,19 @@ class GuessSelectView(discord.ui.View):
                 view=self,
             )
         else:
+            if round_row.solved_at is None:
+                new_count = await asyncio.to_thread(
+                    _do_count_guesses_for_round, db_path, self.round_id
+                )
+                new_view = GameView(
+                    self.bot, self.round_id, solved=False, guess_count=new_count
+                )
+                try:
+                    await self.game_message.edit(view=new_view)
+                except discord.HTTPException:
+                    log.exception(
+                        "veil: chip counter bump failed for round %d", self.round_id
+                    )
             await interaction.edit_original_response(
                 content="❌ Not it. Keep trying!",
                 view=self,
