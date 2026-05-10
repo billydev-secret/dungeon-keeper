@@ -110,6 +110,42 @@ async def test_guess_modal_wrong_decrements_only():
 
 
 @pytest.mark.asyncio
+async def test_guess_modal_exhausted_removes_guess_button_from_dm():
+    """When the final guess is wrong, the original DM should be edited to
+    remove the Guess button (Share/Hide remain so the target can still act)."""
+    from cogs.whisper_cog import WhisperGuessModal, WhisperShareButton, WhisperHideButton
+
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperGuessModal(bot, whisper_id=42)
+    modal.guess_input._value = "9999"  # wrong guess  # type: ignore[attr-defined]
+
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+    interaction.guild = MagicMock()
+
+    dm_msg = MagicMock()
+    dm_msg.edit = AsyncMock()
+    dm_channel = MagicMock()
+    dm_channel.fetch_message = AsyncMock(return_value=dm_msg)
+    interaction.user.create_dm = AsyncMock(return_value=dm_channel)  # type: ignore[attr-defined]
+
+    # Whisper with one guess left → after this wrong guess it's exhausted.
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=1)), \
+         patch("cogs.whisper_cog._do_record_guess"):
+        await modal.on_submit(interaction)
+
+    dm_msg.edit.assert_awaited_once()
+    edited_view = dm_msg.edit.call_args.kwargs["view"]
+    button_types = [type(item) for item in edited_view.children]
+    assert WhisperShareButton in button_types
+    assert WhisperHideButton in button_types
+    # Guess button should NOT be in the new view.
+    from cogs.whisper_cog import WhisperGuessButton
+    assert WhisperGuessButton not in button_types
+
+
+@pytest.mark.asyncio
 async def test_guess_modal_already_solved_rejects():
     from cogs.whisper_cog import WhisperGuessModal
 

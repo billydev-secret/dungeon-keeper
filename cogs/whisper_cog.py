@@ -425,6 +425,17 @@ class WhisperGuessModal(discord.ui.Modal, title="Guess the sender"):
                     except discord.HTTPException:
                         log.warning("Failed to post solved message to feed")
         elif outcome.exhausted:
+            # Remove the Guess button from the original DM message so the
+            # target sees Share/Hide only (no more guesses possible).
+            if whisper.dm_msg_id:
+                try:
+                    dm_channel = await interaction.user.create_dm()
+                    dm_msg = await dm_channel.fetch_message(whisper.dm_msg_id)
+                    await dm_msg.edit(
+                        view=WhisperDmView.without_guess(self.bot, self.whisper_id)
+                    )
+                except discord.HTTPException:
+                    log.warning("Failed to remove Guess button from exhausted whisper DM")
             await interaction.response.send_message(
                 "Wrong! No more guesses. The sender stays anonymous forever.",
                 ephemeral=True,
