@@ -243,19 +243,29 @@ class WhisperShareButton(
                 _load_config, self.bot.ctx.db_path, whisper.guild_id
             )
             feed_channel = interaction.guild.get_channel(cfg.channel_id)
-            if isinstance(feed_channel, discord.TextChannel) and whisper.channel_msg_id:
+            if isinstance(feed_channel, discord.TextChannel):
+                if whisper.channel_msg_id:
+                    try:
+                        old = await feed_channel.fetch_message(whisper.channel_msg_id)
+                        await old.delete()
+                    except discord.HTTPException:
+                        log.warning("Failed to delete original announcement on share")
                 try:
-                    msg = await feed_channel.fetch_message(whisper.channel_msg_id)
-                    await msg.edit(
-                        content=(
-                            f"\U0001f4ec A fresh Whisper was shared. Someone sent "
-                            f"<@{whisper.target_id}> an anonymous message!\n"
-                            f"```{whisper.message}```"
-                        ),
+                    new_msg = await feed_channel.send(
+                        f"\U0001f4ec A fresh Whisper was shared. Someone sent "
+                        f"<@{whisper.target_id}> an anonymous message!\n"
+                        f"```{whisper.message}```",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
+                    await asyncio.to_thread(
+                        _do_set_message_ids,
+                        self.bot.ctx.db_path,
+                        self.whisper_id,
+                        channel_msg_id=new_msg.id,
+                        dm_msg_id=whisper.dm_msg_id or 0,
+                    )
                 except discord.HTTPException:
-                    log.warning("Failed to edit feed message on share")
+                    log.warning("Failed to post share announcement to feed")
 
         if interaction.message:
             new_view: discord.ui.View | None
