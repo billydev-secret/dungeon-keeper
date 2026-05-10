@@ -969,6 +969,61 @@ class VeilCog(commands.Cog):
         )
 
 
+    @veil.command(name="optin", description="Join the Veil pool — add the Veil role to yourself.")
+    async def veil_optin(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        db_path = self.bot.ctx.db_path
+        config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
+
+        if config.veil_role_id == 0:
+            await interaction.followup.send(
+                "Veil role is not configured. Ask an admin to run `/veil setup`.",
+                ephemeral=True,
+            )
+            return
+
+        role = interaction.guild.get_role(config.veil_role_id)
+        if role is None:
+            await interaction.followup.send(
+                "Veil role is configured but no longer exists. "
+                "Ask an admin to re-run `/veil setup`.",
+                ephemeral=True,
+            )
+            return
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if member is None:
+            await interaction.followup.send(
+                "Couldn't find you in this guild.", ephemeral=True
+            )
+            return
+
+        if _has_veil_role(member, config.veil_role_id):
+            await interaction.followup.send(
+                f"You're already in the Veil pool ({role.mention}).",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await member.add_roles(role, reason="Veil opt-in")
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I don't have permission to add that role. "
+                "Ask an admin to check my role permissions and hierarchy.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            f"Welcome to the Veil pool. You can now submit images and be guessed at. "
+            f"To leave, ask a mod to remove the {role.mention} role.",
+            ephemeral=True,
+        )
+
+
     @veil.command(name="setup", description="Configure the Veil game channel and role.")
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
