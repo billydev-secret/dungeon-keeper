@@ -707,7 +707,12 @@ class VeilCog(commands.Cog):
             _do_load_unsolved_round_ids, db_path, limit=_COG_LOAD_VIEW_CAP
         )
         for rid in round_ids:
-            self.bot.add_view(GameView(self.bot, rid, solved=False))
+            count = await asyncio.to_thread(
+                _do_count_guesses_for_round, db_path, rid
+            )
+            self.bot.add_view(
+                GameView(self.bot, rid, solved=False, guess_count=count)
+            )
         log.info("veil: re-registered %d persistent GameViews (cap %d)",
                  len(round_ids), _COG_LOAD_VIEW_CAP)
 
