@@ -1537,6 +1537,52 @@ async def update_birthday(
 
 _VEIL_VALID_DIFFICULTIES = {"easy", "medium", "hard"}
 
+_VEIL_AUDIT_ACTIONS = {"submit", "delete", "solve", "guess_cap_hit"}
+
+
+@router.get("/veil/audit")
+async def list_veil_audit(
+    request: Request,
+    limit: int = 100,
+    action: str | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """List recent Veil audit events for the active guild.
+
+    Query params:
+        limit: max rows (1-500, default 100)
+        action: optional filter — submit | delete | solve | guess_cap_hit
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    capped_limit = max(1, min(500, limit))
+    if action is not None and action not in _VEIL_AUDIT_ACTIONS:
+        raise HTTPException(400, f"action must be one of {sorted(_VEIL_AUDIT_ACTIONS)}")
+
+    def _q():
+        from services.veil_repo import list_audit_events
+        with ctx.open_db() as conn:
+            events = list_audit_events(
+                conn, guild_id, limit=capped_limit, action=action
+            )
+        return {
+            "events": [
+                {
+                    "id": e.id,
+                    "ts": e.ts,
+                    "actor_id": str(e.actor_id),
+                    "action": e.action,
+                    "round_id": e.round_id,
+                    "details": e.details,
+                }
+                for e in events
+            ],
+        }
+
+    return await run_query(_q)
+
 
 class VeilConfigUpdate(BaseModel):
     channel_id: str | None = None

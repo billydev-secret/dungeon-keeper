@@ -21,9 +21,11 @@ from services.veil_pipeline import run_pipeline
 from services.veil_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
+    count_user_guesses_for_round,
     get_last_guess_by_user_for_round,
     get_round,
     get_veil_config,
+    insert_audit_event,
     insert_guess,
     insert_round,
     mark_round_solved,
@@ -33,6 +35,9 @@ from services.veil_repo import (
     soft_delete_round,
     update_round_message,
 )
+
+# Hard cap on per-(user, round) guesses — kills brute-force-by-dropdown.
+MAX_GUESSES_PER_USER_ROUND = 5
 
 if TYPE_CHECKING:
     from app_context import Bot
@@ -175,6 +180,46 @@ def _do_soft_delete_round(db_path: Path, round_id: int) -> None:
         soft_delete_round(conn, round_id)
 
 
+def _do_count_user_guesses(db_path: Path, round_id: int, guesser_id: int) -> int:
+    with open_db(db_path) as conn:
+        return count_user_guesses_for_round(conn, round_id, guesser_id)
+
+
+def _do_count_guesses_for_round(db_path: Path, round_id: int) -> int:
+    with open_db(db_path) as conn:
+        return count_guesses_for_round(conn, round_id)
+
+
+def _do_count_unique_guessers_for_round(db_path: Path, round_id: int) -> int:
+    with open_db(db_path) as conn:
+        return count_unique_guessers_for_round(conn, round_id)
+
+
+def _do_audit(
+    db_path: Path,
+    *,
+    guild_id: int,
+    actor_id: int,
+    action: str,
+    round_id: int | None = None,
+    details: dict | None = None,
+) -> None:
+    """Best-effort audit write. Logs and swallows DB errors so the audit log
+    never blocks user-facing flows."""
+    try:
+        with open_db(db_path) as conn:
+            insert_audit_event(
+                conn,
+                guild_id=guild_id,
+                actor_id=actor_id,
+                action=action,
+                round_id=round_id,
+                details=details,
+            )
+    except Exception:
+        log.exception("veil audit write failed for action=%s round=%s", action, round_id)
+
+
 # ── Embed helpers ─────────────────────────────────────────────────────────────
 
 def _game_embed(round_id: int) -> discord.Embed:
@@ -249,6 +294,27 @@ class GuessSelectView(discord.ui.View):
         guessed_user_id = int(self._select.values[0])
         db_path = self.bot.ctx.db_path
 
+        prior_guesses = await asyncio.to_thread(
+            _do_count_user_guesses, db_path, self.round_id, interaction.user.id
+        )
+        if prior_guesses >= MAX_GUESSES_PER_USER_ROUND:
+            self._select.disabled = True
+            guild_id = interaction.guild.id if interaction.guild else 0
+            await asyncio.to_thread(
+                _do_audit, db_path,
+                guild_id=guild_id, actor_id=interaction.user.id,
+                action="guess_cap_hit", round_id=self.round_id,
+                details={"prior_guesses": prior_guesses},
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"You're out of guesses on this round "
+                    f"(cap: {MAX_GUESSES_PER_USER_ROUND})."
+                ),
+                view=self,
+            )
+            return
+
         if self.cooldown_seconds > 0:
             last_guess = await asyncio.to_thread(
                 _do_get_last_guess, db_path, self.round_id, interaction.user.id
@@ -321,6 +387,16 @@ class GuessSelectView(discord.ui.View):
             if orig_path is not None:
                 await asyncio.to_thread(orig_path.unlink, missing_ok=True)
                 await asyncio.to_thread(_do_set_original_path, db_path, self.round_id, "")
+            guild_id = interaction.guild.id if interaction.guild else round_row.guild_id
+            await asyncio.to_thread(
+                _do_audit, db_path,
+                guild_id=guild_id, actor_id=interaction.user.id,
+                action="solve", round_id=self.round_id,
+                details={
+                    "guesses_to_solve": guess_count,
+                    "unique_guessers": unique_count,
+                },
+            )
             await interaction.edit_original_response(
                 content=f"✅ **Correct!** You solved Round #{self.round_id}!",
                 view=self,
@@ -539,6 +615,13 @@ class SubmitPreviewView(discord.ui.View):
             "",
         )
 
+        await asyncio.to_thread(
+            _do_audit, db_path,
+            guild_id=self.guild_id, actor_id=self._submitter_id,
+            action="submit", round_id=round_id,
+            details={"difficulty": self._difficulty, "rerolls": self.total_rerolls},
+        )
+
         await interaction.edit_original_response(
             content=f"✅ Posted to {veil_channel.mention}!",
             view=self,
@@ -666,6 +749,65 @@ class VeilCog(commands.Cog):
         )
 
 
+    @veil.command(name="round", description="Inspect a Veil round (mods only).")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(round_id="Round ID to inspect")
+    async def veil_round(
+        self,
+        interaction: discord.Interaction,
+        round_id: int,
+    ) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if not (member and member.guild_permissions.manage_guild):
+            await interaction.followup.send(
+                "Only mods (manage_guild permission) can inspect rounds.",
+                ephemeral=True,
+            )
+            return
+
+        db_path = self.bot.ctx.db_path
+        round_row = await asyncio.to_thread(_do_load_round, db_path, round_id)
+        if round_row is None or round_row.guild_id != interaction.guild.id:
+            await interaction.followup.send(
+                f"Round #{round_id} not found.", ephemeral=True
+            )
+            return
+
+        guess_count = await asyncio.to_thread(
+            _do_count_guesses_for_round, db_path, round_id
+        )
+        unique_count = await asyncio.to_thread(
+            _do_count_unique_guessers_for_round, db_path, round_id
+        )
+
+        if round_row.deleted_at is not None:
+            status = "🗑 Deleted"
+        elif round_row.solved_at is not None:
+            status = f"✅ Solved by <@{round_row.solver_id}>"
+        else:
+            status = "⏳ Open"
+
+        embed = discord.Embed(
+            title=f"Round #{round_row.id} — inspector",
+            color=discord.Color.dark_grey(),
+            description=(
+                f"**Status:** {status}\n"
+                f"**Submitter:** <@{round_row.submitter_id}>\n"
+                f"**Answer:** <@{round_row.answer_id}>\n"
+                f"**Difficulty:** {round_row.difficulty}\n"
+                f"**Guesses:** {guess_count} ({unique_count} unique guessers)\n"
+                f"**Re-rolls:** {round_row.reroll_count}\n"
+                f"**Created:** <t:{int(round_row.created_at)}:R>"
+            ),
+        )
+        if round_row.crop_url:
+            embed.set_image(url=round_row.crop_url)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
     @veil.command(name="delete", description="Delete a Veil round (submitter or mod only).")
     @app_commands.describe(round_id="Round ID to delete")
     async def veil_delete(
@@ -700,6 +842,12 @@ class VeilCog(commands.Cog):
             return
 
         await asyncio.to_thread(_do_soft_delete_round, db_path, round_id)
+        await asyncio.to_thread(
+            _do_audit, db_path,
+            guild_id=interaction.guild.id, actor_id=interaction.user.id,
+            action="delete", round_id=round_id,
+            details={"by_mod": is_mod and not is_submitter},
+        )
 
         if round_row.original_path:
             orig_path = Path(round_row.original_path)

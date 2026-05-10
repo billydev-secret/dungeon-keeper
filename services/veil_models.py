@@ -90,3 +90,14 @@ class VeilOptin:
 class PipelineResult:
     candidates: list[Detection]
     crops: list[bytes] = field(default_factory=list)
+
+
+@dataclass
+class VeilAuditEvent:
+    id: int
+    guild_id: int
+    ts: float
+    actor_id: int
+    action: str
+    round_id: int | None
+    details: str  # JSON-encoded; callers parse on demand

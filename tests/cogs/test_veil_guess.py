@@ -8,6 +8,13 @@ import pytest
 from services.veil_models import VeilRound
 from tests.fakes import FakeMember, fake_interaction
 
+
+@pytest.fixture(autouse=True)
+def _patch_count_user_guesses():
+    """Default per-test guess count to 0; cap tests override via their own patch."""
+    with patch("cogs.veil_cog._do_count_user_guesses", return_value=0) as m:
+        yield m
+
 VEIL_ROLE_ID = 7001
 ROUND_ID = 99
 
@@ -85,7 +92,8 @@ async def test_correct_first_guess_marks_solved_and_edits_message():
 
     round_row = _make_round()  # not yet solved
 
-    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
+    with patch("cogs.veil_cog._do_count_user_guesses", return_value=0), \
+         patch("cogs.veil_cog._do_load_round", return_value=round_row), \
          patch("cogs.veil_cog._do_insert_guess"), \
          patch("cogs.veil_cog._do_mark_solved", return_value=(1, 3, 2)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
@@ -203,6 +211,43 @@ async def test_wrong_guess_sends_not_it_message():
     game_msg.edit.assert_not_called()
     call_content = interaction.edit_original_response.call_args.kwargs.get("content", "")
     assert "not it" in call_content.lower()
+
+
+@pytest.mark.asyncio
+async def test_guess_cap_blocks_after_five_attempts():
+    """Per-(user, round) guess cap: 5th attempt is rejected, no insert/select effect."""
+    view = _make_select_view(cooldown_seconds=0)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    insert_mock = MagicMock()
+    with patch("cogs.veil_cog._do_count_user_guesses", return_value=5), \
+         patch("cogs.veil_cog._do_insert_guess", insert_mock), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    insert_mock.assert_not_called()
+    msg = interaction.edit_original_response.call_args.kwargs.get("content", "")
+    assert "out of guesses" in msg.lower() or "no guesses" in msg.lower() or "cap" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_guess_cap_allows_under_limit():
+    """4 prior guesses → 5th still allowed."""
+    view = _make_select_view(cooldown_seconds=0)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.defer = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    round_row = _make_round()
+    with patch("cogs.veil_cog._do_count_user_guesses", return_value=4), \
+         patch("cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("cogs.veil_cog._do_insert_guess") as insert_mock, \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(3333)])):
+        await view._on_select(interaction)
+
+    insert_mock.assert_called_once()
 
 
 @pytest.mark.asyncio

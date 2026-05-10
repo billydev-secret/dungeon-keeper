@@ -1,11 +1,18 @@
 """Veil cog — DB query layer (sync sqlite3)."""
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 
 from db_utils import get_config_value, set_config_value
-from services.veil_models import VeilConfig, VeilGuess, VeilOptin, VeilRound
+from services.veil_models import (
+    VeilAuditEvent,
+    VeilConfig,
+    VeilGuess,
+    VeilOptin,
+    VeilRound,
+)
 
 _CONFIG_DEFAULTS: dict[str, str] = {
     "veil_role_id": "0",
@@ -288,6 +295,78 @@ def get_all_optins_for_guild(conn: sqlite3.Connection, guild_id: int) -> list[Ve
         "SELECT * FROM veil_optins WHERE guild_id = ? ORDER BY opted_in_at ASC", (guild_id,)
     ).fetchall()
     return [_row_to_optin(r) for r in rows]
+
+
+def count_user_guesses_for_round(
+    conn: sqlite3.Connection, round_id: int, guesser_id: int
+) -> int:
+    return conn.execute(
+        "SELECT COUNT(*) FROM veil_guesses WHERE round_id = ? AND guesser_id = ?",
+        (round_id, guesser_id),
+    ).fetchone()[0]
+
+
+def insert_audit_event(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    actor_id: int,
+    action: str,
+    round_id: int | None = None,
+    details: dict | None = None,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO veil_audit_log (guild_id, ts, actor_id, action, round_id, details)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            guild_id,
+            time.time(),
+            actor_id,
+            action,
+            round_id,
+            json.dumps(details or {}),
+        ),
+    )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def list_audit_events(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    limit: int = 100,
+    action: str | None = None,
+) -> list[VeilAuditEvent]:
+    if action is None:
+        rows = conn.execute(
+            """
+            SELECT * FROM veil_audit_log WHERE guild_id = ?
+            ORDER BY ts DESC, id DESC LIMIT ?
+            """,
+            (guild_id, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT * FROM veil_audit_log WHERE guild_id = ? AND action = ?
+            ORDER BY ts DESC, id DESC LIMIT ?
+            """,
+            (guild_id, action, limit),
+        ).fetchall()
+    return [
+        VeilAuditEvent(
+            id=row["id"],
+            guild_id=row["guild_id"],
+            ts=row["ts"],
+            actor_id=row["actor_id"],
+            action=row["action"],
+            round_id=row["round_id"],
+            details=row["details"],
+        )
+        for row in rows
+    ]
 
 
 def get_all_active_round_ids(conn: sqlite3.Connection) -> list[tuple[int, bool]]:

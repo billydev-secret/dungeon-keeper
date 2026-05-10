@@ -3,6 +3,53 @@
 from __future__ import annotations
 
 from db_utils import open_db
+from services.veil_repo import insert_audit_event
+
+
+# ── GET /api/veil/audit ───────────────────────────────────────────────
+
+
+def test_veil_audit_returns_events_for_active_guild(authed_client, fake_ctx):
+    with open_db(fake_ctx.db_path) as conn:
+        insert_audit_event(
+            conn, guild_id=fake_ctx.guild_id, actor_id=42,
+            action="submit", round_id=1, details={"difficulty": "hard"},
+        )
+        insert_audit_event(
+            conn, guild_id=fake_ctx.guild_id, actor_id=43,
+            action="delete", round_id=1, details={"by_mod": True},
+        )
+
+    resp = authed_client.get("/api/veil/audit")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert len(events) == 2
+    assert events[0]["action"] == "delete"  # newest first
+    assert events[1]["action"] == "submit"
+    assert events[0]["actor_id"] == "43"  # IDs serialized as strings
+
+
+def test_veil_audit_filter_by_action(authed_client, fake_ctx):
+    with open_db(fake_ctx.db_path) as conn:
+        insert_audit_event(
+            conn, guild_id=fake_ctx.guild_id, actor_id=1,
+            action="submit", round_id=1,
+        )
+        insert_audit_event(
+            conn, guild_id=fake_ctx.guild_id, actor_id=1,
+            action="solve", round_id=1,
+        )
+
+    resp = authed_client.get("/api/veil/audit?action=solve")
+    assert resp.status_code == 200
+    events = resp.json()["events"]
+    assert len(events) == 1
+    assert events[0]["action"] == "solve"
+
+
+def test_veil_audit_rejects_invalid_action(authed_client):
+    resp = authed_client.get("/api/veil/audit?action=hax")
+    assert resp.status_code == 400
 
 
 # ── GET /api/config ───────────────────────────────────────────────────
