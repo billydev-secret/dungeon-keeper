@@ -4,7 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from db_utils import open_db
-from services.whisper_repo import get_whisper_config, set_whisper_config_value
+from services.whisper_repo import (
+    get_whisper_config,
+    set_whisper_config_value,
+    set_whisper_launcher_message_id,
+)
 
 GUILD = 9001
 
@@ -16,6 +20,7 @@ def test_get_config_defaults(sync_db_path: Path):
     assert cfg.role_id == 0
     assert cfg.channel_id == 0
     assert cfg.log_channel_id == 0
+    assert cfg.launcher_message_id == 0
 
 
 def test_set_and_get_config_value(sync_db_path: Path):
@@ -27,3 +32,10 @@ def test_set_and_get_config_value(sync_db_path: Path):
     assert cfg.channel_id == 12345
     assert cfg.role_id == 67890
     assert cfg.log_channel_id == 11111
+
+
+def test_set_and_get_launcher_message_id(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        set_whisper_launcher_message_id(conn, GUILD, 555)
+        cfg = get_whisper_config(conn, GUILD)
+    assert cfg.launcher_message_id == 555
