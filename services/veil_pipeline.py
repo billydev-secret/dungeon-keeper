@@ -21,11 +21,29 @@ _GENITAL_LABELS: frozenset[str] = frozenset({
     "ANUS_EXPOSED",
 })
 
+# Labels that produce valid crops but rarely make a fun guess. Their score is
+# halved so they only outrank stronger detections when there's nothing better.
+LOW_INTEREST_LABELS: frozenset[str] = frozenset({
+    "ARMPITS_COVERED",
+    "ARMPITS_EXPOSED",
+})
+LOW_INTEREST_WEIGHT: float = 0.5
+
 DIFFICULTY_PADDING: dict[str, float] = {
     "easy": 0.60,
     "medium": 0.25,
     "hard": 0.05,
 }
+
+
+def apply_label_weights(detections: list[Detection]) -> list[Detection]:
+    """Return new Detections with low-interest labels' scores down-weighted."""
+    return [
+        Detection(label=d.label, score=d.score * LOW_INTEREST_WEIGHT, box=d.box)
+        if d.label in LOW_INTEREST_LABELS
+        else d
+        for d in detections
+    ]
 
 
 def _box_gap(a: BoundingBox, b: BoundingBox) -> float:
@@ -221,6 +239,7 @@ def run_pipeline(
     face_boxes = detect_faces(image_bytes)
 
     filtered_candidates = filter_candidates(detections, face_boxes)
+    filtered_candidates = apply_label_weights(filtered_candidates)
     log.info("filtered candidates: %s", [(d.label, round(d.score, 2)) for d in filtered_candidates])
 
     top_candidates = sorted(filtered_candidates, key=lambda d: d.score, reverse=True)[

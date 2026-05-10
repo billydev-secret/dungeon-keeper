@@ -42,7 +42,6 @@ def test_get_veil_config_defaults(sync_db_path: Path):
     assert cfg.guild_id == GUILD
     assert cfg.crop_difficulty == "medium"
     assert cfg.guess_cooldown_seconds == 30
-    assert cfg.reuse_enabled is True
 
 
 def test_set_and_get_veil_config_value(sync_db_path: Path):

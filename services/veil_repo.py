@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from db_utils import get_config_value, parse_bool, set_config_value
+from db_utils import get_config_value, set_config_value
 from services.veil_models import VeilConfig, VeilGuess, VeilOptin, VeilRound
 
 _CONFIG_DEFAULTS: dict[str, str] = {
@@ -14,10 +14,6 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "veil_crop_difficulty": "medium",
     "veil_min_image_dimension_px": "400",
     "veil_max_image_size_mb": "10",
-    "veil_reuse_enabled": "1",
-    "veil_reuse_quiet_hours": "24",
-    "veil_reuse_min_age_days": "30",
-    "veil_reuse_min_post_interval_hours": "48",
 }
 
 
@@ -33,10 +29,6 @@ def get_veil_config(conn: sqlite3.Connection, guild_id: int) -> VeilConfig:
         crop_difficulty=_get("veil_crop_difficulty"),
         min_image_dimension_px=int(_get("veil_min_image_dimension_px") or 400),
         max_image_size_mb=int(_get("veil_max_image_size_mb") or 10),
-        reuse_enabled=parse_bool(_get("veil_reuse_enabled")),
-        reuse_quiet_hours=int(_get("veil_reuse_quiet_hours") or 24),
-        reuse_min_age_days=int(_get("veil_reuse_min_age_days") or 30),
-        reuse_min_post_interval_hours=int(_get("veil_reuse_min_post_interval_hours") or 48),
     )
 
 
@@ -57,6 +49,7 @@ def _row_to_round(row: sqlite3.Row) -> VeilRound:
         message_id=row["message_id"],
         crop_path=row["crop_path"],
         crop_url=row["crop_url"],
+        original_path=row["original_path"],
         difficulty=row["difficulty"],
         candidate_count=row["candidate_count"],
         reroll_count=row["reroll_count"],
@@ -116,6 +109,15 @@ def update_round_message(
     conn.execute(
         "UPDATE veil_rounds SET message_id = ?, crop_url = ?, crop_path = ? WHERE id = ?",
         (message_id, crop_url, crop_path, round_id),
+    )
+
+
+def set_round_original_path(
+    conn: sqlite3.Connection, round_id: int, original_path: str
+) -> None:
+    conn.execute(
+        "UPDATE veil_rounds SET original_path = ? WHERE id = ?",
+        (original_path, round_id),
     )
 
 

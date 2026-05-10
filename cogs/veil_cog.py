@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
@@ -15,16 +16,18 @@ from discord import app_commands
 from discord.ext import commands
 
 from db_utils import open_db
-from services.veil_models import VeilConfig, VeilRound
+from services.veil_models import VeilConfig, VeilGuess, VeilRound
 from services.veil_pipeline import run_pipeline
 from services.veil_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
+    get_last_guess_by_user_for_round,
     get_round,
     get_veil_config,
     insert_guess,
     insert_round,
     mark_round_solved,
+    set_round_original_path,
     set_round_reroll_count,
     set_veil_config_value,
     update_round_message,
@@ -34,6 +37,11 @@ if TYPE_CHECKING:
     from app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.veil")
+
+# Originals are persisted here per-round and deleted after the first correct
+# guess reveals them. Submitters are warned at submit time that the file is
+# kept until the round is solved.
+_VEIL_ORIG_DIR = Path("veil_cache") / "orig"
 
 
 # ── Pure validation helpers (module-level so they're patchable in tests) ─────
@@ -102,6 +110,11 @@ def _do_set_reroll_count(db_path: Path, round_id: int, count: int) -> None:
         set_round_reroll_count(conn, round_id, count)
 
 
+def _do_set_original_path(db_path: Path, round_id: int, original_path: str) -> None:
+    with open_db(db_path) as conn:
+        set_round_original_path(conn, round_id, original_path)
+
+
 def _do_load_round(db_path: Path, round_id: int) -> VeilRound | None:
     with open_db(db_path) as conn:
         return get_round(conn, round_id)
@@ -118,6 +131,13 @@ def _do_insert_guess(
     with open_db(db_path) as conn:
         insert_guess(conn, round_id=round_id, guesser_id=guesser_id,
                      guessed_user_id=guessed_user_id, correct=correct)
+
+
+def _do_get_last_guess(
+    db_path: Path, round_id: int, guesser_id: int
+) -> VeilGuess | None:
+    with open_db(db_path) as conn:
+        return get_last_guess_by_user_for_round(conn, round_id, guesser_id)
 
 
 def _do_mark_solved(
@@ -163,12 +183,10 @@ def _solved_embed(
     solver_mention: str,
     guess_count: int,
     unique_count: int,
-    *,
-    crop_url: str = "",
 ) -> discord.Embed:
     guesses_txt = f"{guess_count} guess{'es' if guess_count != 1 else ''}"
     guessers_txt = f"{unique_count} guesser{'s' if unique_count != 1 else ''}"
-    emb = discord.Embed(
+    return discord.Embed(
         title=f"✅ Round #{round_id} — Solved!",
         color=discord.Color.green(),
         description=(
@@ -177,12 +195,12 @@ def _solved_embed(
             f"**Solved by:** {solver_mention} in {guesses_txt} (across {guessers_txt})"
         ),
     )
-    if crop_url:
-        emb.set_image(url=crop_url)
-    return emb
 
 
 # ── Views ─────────────────────────────────────────────────────────────────────
+
+SELECT_TIMEOUT_SECONDS = 60
+
 
 class GuessSelectView(discord.ui.View):
     """Ephemeral view shown when a user clicks the Guess button."""
@@ -193,11 +211,14 @@ class GuessSelectView(discord.ui.View):
         round_id: int,
         veil_members: Sequence[discord.Member],
         game_message: discord.Message,
+        *,
+        cooldown_seconds: int = 0,
     ) -> None:
-        super().__init__(timeout=60)
+        super().__init__(timeout=SELECT_TIMEOUT_SECONDS)
         self.bot = bot
         self.round_id = round_id
         self.game_message = game_message
+        self.cooldown_seconds = cooldown_seconds
 
         options = [
             discord.SelectOption(label=m.display_name[:100], value=str(m.id))
@@ -215,6 +236,19 @@ class GuessSelectView(discord.ui.View):
     async def _on_select(self, interaction: discord.Interaction) -> None:
         guessed_user_id = int(self._select.values[0])
         db_path = self.bot.ctx.db_path
+
+        if self.cooldown_seconds > 0:
+            last_guess = await asyncio.to_thread(
+                _do_get_last_guess, db_path, self.round_id, interaction.user.id
+            )
+            if last_guess is not None:
+                remaining = self.cooldown_seconds - (time.time() - last_guess.created_at)
+                if remaining > 0:
+                    await interaction.response.edit_message(
+                        content=f"⏳ On cooldown — try again in {int(remaining) + 1}s.",
+                        view=self,
+                    )
+                    return
 
         round_row = await asyncio.to_thread(_do_load_round, db_path, self.round_id)
         if round_row is None:
@@ -242,10 +276,32 @@ class GuessSelectView(discord.ui.View):
             solved_emb = _solved_embed(
                 self.round_id, answer_mention, submitter_mention,
                 interaction.user.mention, guess_count, unique_count,
-                crop_url=round_row.crop_url,
             )
             new_game_view = GameView(self.bot, self.round_id, solved=True)
-            await self.game_message.edit(embed=solved_emb, view=new_game_view)
+
+            full_attachments: list[discord.File] = []
+            orig_path: Path | None = None
+            if round_row.original_path:
+                orig_path = Path(round_row.original_path)
+                if orig_path.exists():
+                    suffix = orig_path.suffix or ".jpg"
+                    full_bytes = await asyncio.to_thread(orig_path.read_bytes)
+                    full_attachments.append(
+                        discord.File(
+                            io.BytesIO(full_bytes),
+                            filename=f"SPOILER_veil_full{suffix}",
+                        )
+                    )
+
+            await self.game_message.edit(
+                embed=solved_emb,
+                view=new_game_view,
+                attachments=full_attachments,
+            )
+
+            if orig_path is not None:
+                await asyncio.to_thread(orig_path.unlink, missing_ok=True)
+                await asyncio.to_thread(_do_set_original_path, db_path, self.round_id, "")
             await interaction.response.edit_message(
                 content=f"✅ **Correct!** You solved Round #{self.round_id}!",
                 view=self,
@@ -305,8 +361,11 @@ class GameView(discord.ui.View):
             return
 
         await interaction.response.send_message(
-            "Who do you think this is?",
-            view=GuessSelectView(self.bot, self.round_id, veil_members, interaction.message),
+            f"Who do you think this is? *(prompt expires in {SELECT_TIMEOUT_SECONDS}s)*",
+            view=GuessSelectView(
+                self.bot, self.round_id, veil_members, interaction.message,
+                cooldown_seconds=config.guess_cooldown_seconds,
+            ),
             ephemeral=True,
         )
 
@@ -328,9 +387,10 @@ class SubmitPreviewView(discord.ui.View):
         submitter_id: int,
         answer_id: int,
         difficulty: str,
-        allow_reuse: bool,
         candidate_count: int,
         veil_role_id: int = 0,
+        original_bytes: bytes = b"",
+        original_ext: str = ".jpg",
     ) -> None:
         super().__init__(timeout=300)
         self.bot = bot
@@ -342,9 +402,10 @@ class SubmitPreviewView(discord.ui.View):
         self._submitter_id = submitter_id
         self._answer_id = answer_id
         self._difficulty = difficulty
-        self._allow_reuse = allow_reuse
         self._candidate_count = candidate_count
         self._veil_role_id = veil_role_id
+        self._original_bytes = original_bytes
+        self._original_ext = original_ext
 
         self.reroll_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label=f"Re-roll (1/{len(crops)})",
@@ -400,12 +461,22 @@ class SubmitPreviewView(discord.ui.View):
             answer_id=self._answer_id,
             channel_id=self.veil_channel_id,
             difficulty=self._difficulty,
-            allow_reuse=self._allow_reuse,
+            allow_reuse=False,
             candidate_count=self._candidate_count,
         )
 
         if self.total_rerolls:
             await asyncio.to_thread(_do_set_reroll_count, db_path, round_id, self.total_rerolls)
+
+        if self._original_bytes:
+            orig_path = _VEIL_ORIG_DIR / f"{round_id}{self._original_ext}"
+
+            def _write_original() -> None:
+                _VEIL_ORIG_DIR.mkdir(parents=True, exist_ok=True)
+                orig_path.write_bytes(self._original_bytes)
+
+            await asyncio.to_thread(_write_original)
+            await asyncio.to_thread(_do_set_original_path, db_path, round_id, str(orig_path))
 
         crop = self.crops[self.crop_index]
         crop_file = discord.File(io.BytesIO(crop), filename="SPOILER_veil_crop.jpg")
@@ -457,13 +528,11 @@ class VeilCog(commands.Cog):
     @veil.command(name="submit", description="Submit an image to start a Veil round.")
     @app_commands.describe(
         image="The NSFW image to submit",
-        allow_reuse="Let the bot recycle this crop in future quiet stretches (default: false)",
     )
     async def veil_submit(
         self,
         interaction: discord.Interaction,
         image: discord.Attachment,
-        allow_reuse: bool = False,
     ) -> None:
         assert interaction.guild
         await interaction.response.defer(ephemeral=True)
@@ -532,6 +601,7 @@ class VeilCog(commands.Cog):
             title="Your crop preview",
             description=f"Crop 1 of {len(pipeline_result.crops)} — click Post when happy",
         ).set_image(url="attachment://preview.jpg")
+        original_ext = (Path(image.filename).suffix or ".jpg").lower()
         await interaction.followup.send(
             embed=preview_embed,
             file=preview_file,
@@ -543,9 +613,10 @@ class VeilCog(commands.Cog):
                 submitter_id=interaction.user.id,
                 answer_id=interaction.user.id,
                 difficulty=config.crop_difficulty,
-                allow_reuse=allow_reuse,
                 candidate_count=len(pipeline_result.candidates),
                 veil_role_id=config.veil_role_id,
+                original_bytes=image_bytes,
+                original_ext=original_ext,
             ),
             ephemeral=True,
         )

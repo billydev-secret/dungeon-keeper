@@ -40,10 +40,6 @@ class VeilConfig:
     crop_difficulty: str = "medium"
     min_image_dimension_px: int = 400
     max_image_size_mb: int = 25
-    reuse_enabled: bool = True
-    reuse_quiet_hours: int = 24
-    reuse_min_age_days: int = 30
-    reuse_min_post_interval_hours: int = 48
 
 
 @dataclass
@@ -56,6 +52,7 @@ class VeilRound:
     message_id: int
     crop_path: str
     crop_url: str
+    original_path: str
     difficulty: str
     candidate_count: int
     reroll_count: int

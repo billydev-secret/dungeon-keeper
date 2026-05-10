@@ -10,6 +10,8 @@ import pytest
 
 from services.veil_models import BoundingBox, Detection
 from services.veil_pipeline import (
+    LOW_INTEREST_WEIGHT,
+    apply_label_weights,
     compute_padded_crop,
     enforce_min_size,
     filter_candidates,
@@ -150,6 +152,23 @@ def test_filter_fallback_false_empty_when_all_dropped():
     face = _bb(0, 0, 200, 200)
     det = _det("BREAST", 0.9, 0, 0, 100, 100)
     assert filter_candidates([det], face_boxes=[face], fallback=False) == []
+
+
+# ── apply_label_weights ───────────────────────────────────────────────────────
+
+def test_apply_label_weights_penalises_armpits():
+    armpit = _det("ARMPITS_EXPOSED", 0.8, 0, 0, 50, 50)
+    breast = _det("FEMALE_BREAST_EXPOSED", 0.6, 60, 60, 110, 110)
+    result = apply_label_weights([armpit, breast])
+    assert result[0].score == pytest.approx(0.8 * LOW_INTEREST_WEIGHT)
+    assert result[1].score == pytest.approx(0.6)
+    # boxes preserved
+    assert result[0].box == armpit.box
+
+
+def test_apply_label_weights_passes_through_other_labels():
+    dets = [_det("MALE_GENITALIA_EXPOSED", 0.7, 0, 0, 50, 50)]
+    assert apply_label_weights(dets) == dets
 
 
 # ── enforce_min_size ──────────────────────────────────────────────────────────

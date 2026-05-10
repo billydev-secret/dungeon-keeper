@@ -105,30 +105,6 @@ export function mount(container) {
     form.appendChild(mkField("Min Image Dimension (px)", mkNum("min_image_dimension_px", 1, v.min_image_dimension_px)));
     form.appendChild(mkField("Max Image Size (MB)", mkNum("max_image_size_mb", 1, v.max_image_size_mb)));
 
-    const reuseLbl = document.createElement("div");
-    reuseLbl.className = "section-label";
-    reuseLbl.textContent = "Reuse Settings";
-    form.appendChild(reuseLbl);
-
-    const reuseSel = mkSel("reuse_enabled");
-    reuseSel.append(mkOpt("true", "Yes", v.reuse_enabled), mkOpt("false", "No", !v.reuse_enabled));
-    form.appendChild(mkField("Reuse Enabled", reuseSel, "Allow the bot to recycle old crops during quiet stretches."));
-    form.appendChild(mkField(
-      "Reuse Quiet Hours",
-      mkNum("reuse_quiet_hours", 0, v.reuse_quiet_hours),
-      "Hours of inactivity before a reuse round can be posted.",
-    ));
-    form.appendChild(mkField(
-      "Reuse Min Age (days)",
-      mkNum("reuse_min_age_days", 0, v.reuse_min_age_days),
-      "Original round must be at least this many days old to be reused.",
-    ));
-    form.appendChild(mkField(
-      "Reuse Min Post Interval (hours)",
-      mkNum("reuse_min_post_interval_hours", 0, v.reuse_min_post_interval_hours),
-      "Minimum hours between consecutive reuse posts.",
-    ));
-
     const row = document.createElement("div");
     const saveBtn = document.createElement("button");
     saveBtn.type = "submit";
@@ -149,10 +125,6 @@ export function mount(container) {
           guess_cooldown_seconds: parseInt(fd.get("guess_cooldown_seconds")) || 0,
           min_image_dimension_px: parseInt(fd.get("min_image_dimension_px")) || 1,
           max_image_size_mb: parseInt(fd.get("max_image_size_mb")) || 1,
-          reuse_enabled: fd.get("reuse_enabled") === "true",
-          reuse_quiet_hours: parseInt(fd.get("reuse_quiet_hours")) || 0,
-          reuse_min_age_days: parseInt(fd.get("reuse_min_age_days")) || 0,
-          reuse_min_post_interval_hours: parseInt(fd.get("reuse_min_post_interval_hours")) || 0,
         });
         showStatus(statusEl, true);
       } catch (err) {

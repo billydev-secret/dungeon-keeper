@@ -28,6 +28,7 @@ def _make_round(
         message_id=12345,
         crop_path="/tmp/fake.jpg",
         crop_url="https://cdn.discord.com/fake.jpg",
+        original_path="",
         difficulty="medium",
         candidate_count=1,
         reroll_count=0,
@@ -50,6 +51,7 @@ def _make_select_view(
     veil_members=None,
     game_message=None,
     round_id: int = ROUND_ID,
+    cooldown_seconds: int = 0,
 ):
     from cogs.veil_cog import GuessSelectView
 
@@ -63,7 +65,10 @@ def _make_select_view(
         game_message.edit = AsyncMock()
         game_message.guild = MagicMock()
 
-    return GuessSelectView(bot, round_id, veil_members, game_message)  # type: ignore[arg-type]
+    return GuessSelectView(
+        bot, round_id, veil_members, game_message,  # type: ignore[arg-type]
+        cooldown_seconds=cooldown_seconds,
+    )
 
 
 # ── GuessSelectView tests ─────────────────────────────────────────────────────
@@ -148,7 +153,107 @@ async def test_select_is_disabled_after_guess():
     assert view._select.disabled is True
 
 
+# ── Cooldown tests ────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_on_select_rejects_guess_within_cooldown():
+    import time as _time
+    from services.veil_models import VeilGuess
+
+    view = _make_select_view(cooldown_seconds=30)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.edit_message = AsyncMock()
+
+    recent_guess = VeilGuess(
+        id=1, round_id=ROUND_ID, guesser_id=9999,
+        guessed_user_id=2001, correct=False,
+        created_at=_time.time() - 5,  # 5s ago, within 30s cooldown
+    )
+    insert_mock = MagicMock()
+    with patch("cogs.veil_cog._do_get_last_guess", return_value=recent_guess), \
+         patch("cogs.veil_cog._do_insert_guess", insert_mock), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    insert_mock.assert_not_called()
+    call_content = interaction.response.edit_message.call_args.kwargs.get("content", "")
+    assert "cooldown" in call_content.lower() or "try again" in call_content.lower()
+
+
+@pytest.mark.asyncio
+async def test_on_select_allows_guess_after_cooldown_expires():
+    import time as _time
+    from services.veil_models import VeilGuess
+
+    view = _make_select_view(cooldown_seconds=30)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.edit_message = AsyncMock()
+
+    old_guess = VeilGuess(
+        id=1, round_id=ROUND_ID, guesser_id=9999,
+        guessed_user_id=2001, correct=False,
+        created_at=_time.time() - 60,  # 60s ago, past 30s cooldown
+    )
+    round_row = _make_round()
+    with patch("cogs.veil_cog._do_get_last_guess", return_value=old_guess), \
+         patch("cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("cogs.veil_cog._do_insert_guess") as insert_mock, \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(2, 1)), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    insert_mock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_on_select_cooldown_zero_disables_check():
+    """cooldown_seconds=0 means no cooldown enforcement."""
+    view = _make_select_view(cooldown_seconds=0)
+    interaction = fake_interaction(user=FakeMember(id=9999))
+    interaction.response.edit_message = AsyncMock()
+
+    round_row = _make_round()
+    get_last_mock = MagicMock()
+    with patch("cogs.veil_cog._do_get_last_guess", get_last_mock), \
+         patch("cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("cogs.veil_cog._do_insert_guess"), \
+         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1)), \
+         patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
+        await view._on_select(interaction)
+
+    get_last_mock.assert_not_called()
+
+
 # ── GameView tests ────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_guess_callback_message_mentions_timer():
+    """The ephemeral 'Who do you think this is?' message must surface the
+    countdown so users know the prompt is time-limited."""
+    from cogs.veil_cog import GameView
+    from services.veil_models import VeilConfig
+
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    view = GameView(bot, ROUND_ID)
+
+    guesser = FakeMember(id=9999)
+    interaction = fake_interaction(user=guesser)
+    interaction.response.send_message = AsyncMock()
+    veil_role = MagicMock()
+    veil_role.members = [FakeMember(id=2001, display_name="Alice")]
+    interaction.guild.get_role = MagicMock(return_value=veil_role)
+
+    round_row = _make_round(submitter_id=1001)
+    config = VeilConfig(guild_id=9001, veil_role_id=VEIL_ROLE_ID, guess_cooldown_seconds=30)
+
+    with patch("cogs.veil_cog._load_config", return_value=config), \
+         patch("cogs.veil_cog._do_load_round", return_value=round_row):
+        await view._guess_callback(interaction)
+
+    msg = interaction.response.send_message.call_args.args[0]
+    assert "60" in msg or "second" in msg.lower(), f"expected timer hint in: {msg!r}"
+
 
 @pytest.mark.asyncio
 async def test_game_view_rejects_submitter_guessing_own_round():
@@ -185,7 +290,7 @@ def _make_preview_view(bot, crops):
     return SubmitPreviewView(
         bot, crops, GUILD_ID, VEIL_CHANNEL_ID,
         submitter_id=1001, answer_id=2001,
-        difficulty="medium", allow_reuse=False, candidate_count=len(crops),
+        difficulty="medium", candidate_count=len(crops),
     )
 
 

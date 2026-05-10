@@ -25,10 +25,6 @@ def _cfg(**overrides: Any) -> VeilConfig:
         crop_difficulty="medium",
         min_image_dimension_px=400,
         max_image_size_mb=10,
-        reuse_enabled=True,
-        reuse_quiet_hours=24,
-        reuse_min_age_days=30,
-        reuse_min_post_interval_hours=48,
     )
     defaults.update(overrides)
     return VeilConfig(**defaults)  # type: ignore[arg-type]
@@ -66,9 +62,9 @@ def _make_cog(db_path: str = ":memory:"):
     return VeilCog(bot)
 
 
-async def _submit(cog: Any, interaction: Any, image: Any, allow_reuse: bool = False) -> None:
+async def _submit(cog: Any, interaction: Any, image: Any) -> None:
     """Invoke veil_submit's underlying coroutine, bypassing the app_commands.Command wrapper."""
-    await cog.veil_submit.callback(cog, interaction, image, allow_reuse)
+    await cog.veil_submit.callback(cog, interaction, image)
 
 
 # ── Validation rejection tests ────────────────────────────────────────────────

@@ -256,10 +256,6 @@ def test_get_config_includes_veil_section(authed_client):
     assert v["guess_cooldown_seconds"] == 30
     assert v["min_image_dimension_px"] == 400
     assert v["max_image_size_mb"] == 10
-    assert v["reuse_enabled"] is True
-    assert v["reuse_quiet_hours"] == 24
-    assert v["reuse_min_age_days"] == 30
-    assert v["reuse_min_post_interval_hours"] == 48
 
 
 def test_get_config_exposes_booster_panel_channel(authed_client, fake_ctx):
@@ -337,11 +333,3 @@ def test_update_veil_invalid_difficulty_returns_error(authed_client):
     assert "crop_difficulty" in data["detail"]
 
 
-def test_update_veil_reuse_disabled(authed_client, fake_ctx):
-    resp = authed_client.put("/api/config/veil", json={"reuse_enabled": False})
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
-    with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
-        val = get_config_value(conn, "veil_reuse_enabled", "1", fake_ctx.guild_id)
-    assert val == "0"

@@ -40,7 +40,6 @@ def test_veil_config_defaults():
     cfg = VeilConfig(guild_id=9001)
     assert cfg.crop_difficulty == "medium"
     assert cfg.guess_cooldown_seconds == 30
-    assert cfg.reuse_enabled is True
 
 
 def test_pipeline_result_empty_crops_by_default():
@@ -52,6 +51,7 @@ def test_veil_round_optional_fields_are_none():
     r = VeilRound(
         id=1, guild_id=9001, submitter_id=111, answer_id=222,
         channel_id=333, message_id=444, crop_path="", crop_url="",
+        original_path="",
         difficulty="medium", candidate_count=1, reroll_count=0,
         allow_reuse=False, is_reuse=False, original_round_id=None,
         reuse_blocked=False, created_at=time.time(), solved_at=None,

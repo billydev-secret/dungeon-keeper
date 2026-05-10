@@ -245,10 +245,6 @@ def _veil_section(conn, guild_id: int) -> dict:
         "guess_cooldown_seconds": vc.guess_cooldown_seconds,
         "min_image_dimension_px": vc.min_image_dimension_px,
         "max_image_size_mb": vc.max_image_size_mb,
-        "reuse_enabled": vc.reuse_enabled,
-        "reuse_quiet_hours": vc.reuse_quiet_hours,
-        "reuse_min_age_days": vc.reuse_min_age_days,
-        "reuse_min_post_interval_hours": vc.reuse_min_post_interval_hours,
     }
 
 
@@ -1549,10 +1545,6 @@ class VeilConfigUpdate(BaseModel):
     guess_cooldown_seconds: int | None = None
     min_image_dimension_px: int | None = None
     max_image_size_mb: int | None = None
-    reuse_enabled: bool | None = None
-    reuse_quiet_hours: int | None = None
-    reuse_min_age_days: int | None = None
-    reuse_min_post_interval_hours: int | None = None
 
 
 @router.put("/config/veil")
@@ -1582,14 +1574,6 @@ async def update_veil_config(
                 set_veil_config_value(conn, guild_id, "veil_min_image_dimension_px", str(body.min_image_dimension_px))
             if body.max_image_size_mb is not None:
                 set_veil_config_value(conn, guild_id, "veil_max_image_size_mb", str(body.max_image_size_mb))
-            if body.reuse_enabled is not None:
-                set_veil_config_value(conn, guild_id, "veil_reuse_enabled", "1" if body.reuse_enabled else "0")
-            if body.reuse_quiet_hours is not None:
-                set_veil_config_value(conn, guild_id, "veil_reuse_quiet_hours", str(body.reuse_quiet_hours))
-            if body.reuse_min_age_days is not None:
-                set_veil_config_value(conn, guild_id, "veil_reuse_min_age_days", str(body.reuse_min_age_days))
-            if body.reuse_min_post_interval_hours is not None:
-                set_veil_config_value(conn, guild_id, "veil_reuse_min_post_interval_hours", str(body.reuse_min_post_interval_hours))
         return {"ok": True}
 
     return await run_query(_q)
