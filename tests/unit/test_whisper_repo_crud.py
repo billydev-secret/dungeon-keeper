@@ -77,3 +77,12 @@ def test_list_received_excludes_other_guilds(sync_db_path: Path):
         insert_whisper(conn, guild_id=8888, sender_id=SENDER, target_id=TARGET, message="other")
         results = list_received(conn, guild_id=GUILD, target_id=TARGET, state="pending")
     assert len(results) == 1
+
+
+def test_delete_whisper(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        from services.whisper_repo import delete_whisper
+        wid = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="x")
+        assert get_whisper(conn, wid) is not None
+        delete_whisper(conn, wid)
+        assert get_whisper(conn, wid) is None

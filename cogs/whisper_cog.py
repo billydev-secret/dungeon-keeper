@@ -22,6 +22,7 @@ from services.whisper_models import (
 )
 from services.whisper_repo import (
     decrement_guesses_left,
+    delete_whisper,
     get_whisper,
     get_whisper_config,
     insert_guess,
@@ -94,6 +95,11 @@ def _do_set_message_ids(
 def _do_load_whisper(db_path: Path, whisper_id: int) -> Whisper | None:
     with open_db(db_path) as conn:
         return get_whisper(conn, whisper_id)
+
+
+def _do_delete_whisper(db_path: Path, whisper_id: int) -> None:
+    with open_db(db_path) as conn:
+        delete_whisper(conn, whisper_id)
 
 
 def _do_record_guess(
@@ -794,8 +800,7 @@ class WhisperCog(commands.Cog):
             )
         except (discord.Forbidden, discord.HTTPException):
             # rollback inserted row if DM fails
-            with open_db(self.ctx.db_path) as conn:
-                conn.execute("DELETE FROM whispers WHERE id = ?", (whisper_id,))
+            await asyncio.to_thread(_do_delete_whisper, self.ctx.db_path, whisper_id)
             await interaction.response.send_message(ERROR_BOT_DM_FAILED, ephemeral=True)
             return
 

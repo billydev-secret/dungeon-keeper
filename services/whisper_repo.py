@@ -76,6 +76,10 @@ def get_whisper(conn: sqlite3.Connection, whisper_id: int) -> Whisper | None:
     return _row_to_whisper(row) if row else None
 
 
+def delete_whisper(conn: sqlite3.Connection, whisper_id: int) -> None:
+    conn.execute("DELETE FROM whispers WHERE id = ?", (whisper_id,))
+
+
 def set_whisper_message_ids(
     conn: sqlite3.Connection,
     whisper_id: int,

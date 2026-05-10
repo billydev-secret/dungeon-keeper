@@ -191,11 +191,9 @@ async def test_send_dm_forbidden_does_not_persist():
 
     with patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
          patch("cogs.whisper_cog._do_insert_whisper", return_value=42), \
-         patch("cogs.whisper_cog.open_db") as mocked_open_db:
-        # Mock the rollback DELETE
-        mocked_conn = MagicMock()
-        mocked_open_db.return_value.__enter__.return_value = mocked_conn
+         patch("cogs.whisper_cog._do_delete_whisper") as mocked_delete:
         await cog._send_impl(interaction, target=target, message="hi")  # type: ignore[arg-type]
+        mocked_delete.assert_called_once()
 
     feed_channel.send.assert_not_called()
     args, kwargs = interaction.response.send_message.call_args
