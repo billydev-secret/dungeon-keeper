@@ -33,6 +33,10 @@ from services.whisper_repo import (
     update_whisper_state,
 )
 from services.whisper_service import (
+    ERROR_BOT_DM_FAILED,
+    ERROR_GUESS_ALREADY_SOLVED,
+    ERROR_GUESS_NO_ATTEMPTS,
+    ERROR_GUESS_NOT_TARGET,
     GuessValidationError,
     SendValidationError,
     TransitionValidationError,
@@ -162,15 +166,12 @@ class WhisperGuessButton(
             await interaction.response.send_message("Whisper not found.", ephemeral=True)
             return
         if interaction.user.id != whisper.target_id:
-            from services.whisper_service import ERROR_GUESS_NOT_TARGET  # noqa: PLC0415
             await interaction.response.send_message(ERROR_GUESS_NOT_TARGET, ephemeral=True)
             return
         if whisper.solved:
-            from services.whisper_service import ERROR_GUESS_ALREADY_SOLVED  # noqa: PLC0415
             await interaction.response.send_message(ERROR_GUESS_ALREADY_SOLVED, ephemeral=True)
             return
         if whisper.guesses_left <= 0:
-            from services.whisper_service import ERROR_GUESS_NO_ATTEMPTS  # noqa: PLC0415
             await interaction.response.send_message(ERROR_GUESS_NO_ATTEMPTS, ephemeral=True)
             return
         await interaction.response.send_modal(WhisperGuessModal(self.bot, self.whisper_id))
@@ -802,7 +803,6 @@ class WhisperCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             with open_db(self.ctx.db_path) as conn:
                 conn.execute("DELETE FROM whispers WHERE id = ?", (whisper_id,))
-            from services.whisper_service import ERROR_BOT_DM_FAILED  # noqa: PLC0415
             await interaction.response.send_message(ERROR_BOT_DM_FAILED, ephemeral=True)
             return
 
