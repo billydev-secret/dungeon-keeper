@@ -78,6 +78,7 @@ const SECTIONS = [
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js" },
       { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/mod-policy-tickets.js" },
       { id: "mod-audit",      label: "Audit Log",      module: "./panels/mod-audit.js" },
+      { id: "veil-audit",     label: "Veil Audit",     module: "./panels/veil-audit.js" },
       { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js" },
       { id: "message-search", label: "Message Review",  module: "./panels/message-search.js" },
     ],
@@ -119,6 +120,12 @@ const SECTIONS = [
       { id: "wellness-away",      label: "Away",       module: "./panels/wellness-away.js" },
       { id: "wellness-partners",  label: "Partners",   module: "./panels/wellness-partners.js" },
       { id: "wellness-history",   label: "History",    module: "./panels/wellness-history.js" },
+    ],
+  },
+  {
+    id: "help", label: "Help", perms: [],
+    items: [
+      { id: "help", label: "Reference Guide", module: "./panels/help.js" },
     ],
   },
 ];
