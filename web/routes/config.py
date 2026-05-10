@@ -61,6 +61,7 @@ from services.starboard_service import (
     upsert_starboard_config as _upsert_starboard_config,
 )
 from services.veil_repo import get_veil_config as _get_veil_config
+from services.whisper_repo import get_whisper_config as _get_whisper_config
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂"
@@ -245,6 +246,15 @@ def _veil_section(conn, guild_id: int) -> dict:
         "guess_cooldown_seconds": vc.guess_cooldown_seconds,
         "min_image_dimension_px": vc.min_image_dimension_px,
         "max_image_size_mb": vc.max_image_size_mb,
+    }
+
+
+def _whisper_section(conn, guild_id: int) -> dict:
+    wc = _get_whisper_config(conn, guild_id)
+    return {
+        "channel_id": str(wc.channel_id),
+        "role_id": str(wc.role_id),
+        "log_channel_id": str(wc.log_channel_id),
     }
 
 
@@ -488,6 +498,7 @@ async def get_config(
                 "birthday": _birthday_section(conn, guild_id),
                 "bot_identity": _bot_identity_section(prune_guild),
                 "veil": _veil_section(conn, guild_id),
+                "whisper": _whisper_section(conn, guild_id),
             }
 
     return await run_query(_q)
@@ -1574,6 +1585,36 @@ async def update_veil_config(
                 set_veil_config_value(conn, guild_id, "veil_min_image_dimension_px", str(body.min_image_dimension_px))
             if body.max_image_size_mb is not None:
                 set_veil_config_value(conn, guild_id, "veil_max_image_size_mb", str(body.max_image_size_mb))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class WhisperConfigUpdate(BaseModel):
+    channel_id: str | None = None
+    role_id: str | None = None
+    log_channel_id: str | None = None
+
+
+@router.put("/config/whisper")
+async def update_whisper_config(
+    request: Request,
+    body: WhisperConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    def _q():
+        from services.whisper_repo import set_whisper_config_value
+        with ctx.open_db() as conn:
+            if body.channel_id is not None:
+                set_whisper_config_value(conn, guild_id, "whisper_channel_id", body.channel_id)
+            if body.role_id is not None:
+                set_whisper_config_value(conn, guild_id, "whisper_role_id", body.role_id)
+            if body.log_channel_id is not None:
+                set_whisper_config_value(conn, guild_id, "whisper_log_channel_id", body.log_channel_id)
         return {"ok": True}
 
     return await run_query(_q)
