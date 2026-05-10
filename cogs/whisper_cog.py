@@ -623,6 +623,47 @@ class WhisperFeedView(discord.ui.View):
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
+# ── Opt-in confirmation view ─────────────────────────────────────────────────
+
+
+class WhisperOptinConfirmView(discord.ui.View):
+    """Ephemeral consent view shown by /whisper optin. The role is only
+    granted once the user explicitly clicks Confirm."""
+
+    def __init__(self, bot: Bot, role: discord.Role) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.role = role
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
+    async def confirm(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        try:
+            await interaction.user.add_roles(self.role, reason="Whisper opt-in")  # type: ignore[union-attr]
+        except discord.Forbidden:
+            await interaction.response.edit_message(
+                content="I don't have permission to assign that role.", view=None
+            )
+            return
+        await interaction.response.edit_message(
+            content="You've opted in. You can now send and receive whispers.",
+            view=None,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        await interaction.response.edit_message(
+            content="Opt-in cancelled.", view=None
+        )
+
+
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class WhisperCog(commands.Cog):
@@ -661,15 +702,10 @@ class WhisperCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        try:
-            await interaction.user.add_roles(role, reason="Whisper opt-in")  # type: ignore[union-attr]
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "I don't have permission to assign that role.", ephemeral=True
-            )
-            return
         await interaction.response.send_message(
-            "You've opted in. You can now send and receive whispers.",
+            "By opting in, you'll be able to send whispers and receive them "
+            "from other opted-in members. You can opt out anytime.",
+            view=WhisperOptinConfirmView(self.bot, role),
             ephemeral=True,
         )
 
