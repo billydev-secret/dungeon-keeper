@@ -42,6 +42,13 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.whisper")
 
 
+def _parse_member_id(raw: str) -> int | None:
+    """Parse a member ID from raw input that may be a <@123> mention or a bare ID.
+    Returns None if no digits are present."""
+    digits = "".join(ch for ch in raw.strip() if ch.isdigit())
+    return int(digits) if digits else None
+
+
 # ── DB shims (sync, called via asyncio.to_thread) ────────────────────────────
 
 def _load_config(db_path: Path, guild_id: int) -> WhisperConfig:
@@ -401,15 +408,13 @@ class WhisperGuessModal(discord.ui.Modal, title="Guess the sender"):
             await interaction.response.send_message("Whisper not found.", ephemeral=True)
             return
 
-        raw = str(self.guess_input.value).strip()
-        digits = "".join(ch for ch in raw if ch.isdigit())
-        if not digits:
+        guessed_id = _parse_member_id(str(self.guess_input.value))
+        if guessed_id is None:
             await interaction.response.send_message(
                 "Couldn't parse that. Paste a member ID or @mention.",
                 ephemeral=True,
             )
             return
-        guessed_id = int(digits)
 
         try:
             outcome = evaluate_guess(
@@ -531,14 +536,13 @@ class WhisperSendModal(discord.ui.Modal, title="Send a Whisper"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
-        raw = str(self.target_input.value).strip()
-        digits = "".join(ch for ch in raw if ch.isdigit())
-        if not digits:
+        member_id = _parse_member_id(str(self.target_input.value))
+        if member_id is None:
             await interaction.response.send_message(
                 "Couldn't parse a member from that input.", ephemeral=True
             )
             return
-        target = interaction.guild.get_member(int(digits))
+        target = interaction.guild.get_member(member_id)
         if target is None:
             await interaction.response.send_message(
                 "That member isn't in this server.", ephemeral=True
