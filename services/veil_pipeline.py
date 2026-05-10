@@ -242,19 +242,6 @@ def run_pipeline(
         )
         crop_bytes_list.append(jpeg_bytes)
 
-    # Pad to candidate_count with jittered variants, cycling across all detections
-    # so re-rolls spread across body part matches rather than repeating the top one.
-    if top_candidates and len(crop_bytes_list) < candidate_count:
-        pad_i = 0
-        while len(crop_bytes_list) < candidate_count:
-            pad_det = top_candidates[pad_i % len(top_candidates)]
-            pad_i += 1
-            crop_box = _clamp_to_image(
-                enforce_min_size(compute_padded_crop(pad_det.box, difficulty, img_w, img_h, rng=rng)),
-                img_w, img_h,
-            )
-            crop_bytes_list.append(render_crop(image_bytes, crop_box, jpeg_quality=jpeg_quality))
-
     return PipelineResult(candidates=filtered_candidates, crops=crop_bytes_list)
 
 

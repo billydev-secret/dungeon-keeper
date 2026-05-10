@@ -113,6 +113,7 @@ def detect_pose(image_bytes: bytes) -> list[Detection]:
         result = detector.detect(mp_image)
 
     if not result.pose_landmarks:
+        log.info("pose: no landmarks detected")
         return []
 
     raw_lms = result.pose_landmarks[0]
@@ -120,13 +121,26 @@ def detect_pose(image_bytes: bytes) -> list[Detection]:
 
     detections: list[Detection] = []
 
-    torso = landmarks_to_torso_box(lms, img_w, img_h)
+    # Lower visibility threshold (0.3) so partial-body shots — common for NSFW
+    # close-ups — still produce torso/lower-body boxes.
+    torso = landmarks_to_torso_box(lms, img_w, img_h, vis_threshold=0.3)
     if torso is not None:
-        detections.append(Detection(label="POSE_TORSO", score=0.5, box=torso))
+        detections.append(Detection(label="POSE_TORSO", score=0.7, box=torso))
 
-    lower = landmarks_to_lower_body_box(lms, img_w, img_h)
+    lower = landmarks_to_lower_body_box(lms, img_w, img_h, vis_threshold=0.3)
     if lower is not None:
-        detections.append(Detection(label="POSE_LOWER_BODY", score=0.5, box=lower))
+        detections.append(Detection(label="POSE_LOWER_BODY", score=0.7, box=lower))
 
-    log.info("pose detections: %s", [(d.label, round(d.score, 2)) for d in detections])
+    if not detections:
+        vis_summary = {
+            "L_SHOULDER": round(lms[_L_SHOULDER].visibility, 2),
+            "R_SHOULDER": round(lms[_R_SHOULDER].visibility, 2),
+            "L_HIP": round(lms[_L_HIP].visibility, 2),
+            "R_HIP": round(lms[_R_HIP].visibility, 2),
+            "L_KNEE": round(lms[_L_KNEE].visibility, 2),
+            "R_KNEE": round(lms[_R_KNEE].visibility, 2),
+        }
+        log.info("pose: landmarks present but no torso/lower-body box (vis<0.3): %s", vis_summary)
+    else:
+        log.info("pose detections: %s", [(d.label, round(d.score, 2)) for d in detections])
     return detections

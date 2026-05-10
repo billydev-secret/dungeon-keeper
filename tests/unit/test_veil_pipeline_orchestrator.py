@@ -181,7 +181,6 @@ class TestRunPipeline:
 
             run_pipeline(image_path, b"bytes", "medium", cache_dir=cache_dir)
 
-        # First call is for the actual detection (has cache_path); padding calls don't.
         first_call = mock_crop_ren.render_crop.call_args_list[0]
         cache_path_used = first_call.kwargs.get("cache_path") or first_call[1].get("cache_path")
         assert cache_path_used is not None
