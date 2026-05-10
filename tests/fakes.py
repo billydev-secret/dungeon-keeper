@@ -25,6 +25,10 @@ class FakeRole:
     def __hash__(self) -> int:
         return hash(self.id)
 
+    @property
+    def mention(self) -> str:
+        return f"<@&{self.id}>"
+
 
 @dataclass
 class FakeUser:

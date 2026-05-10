@@ -29,10 +29,13 @@ class TestHasVeilRole:
         m = FakeMember(roles=[])
         assert _has_veil_role(m, 777) is False
 
-    def test_role_id_zero_always_returns_true(self):
+    def test_role_id_zero_fails_closed(self):
+        """An unconfigured Veil role (id 0) must deny everyone — never fall open."""
         from cogs.veil_cog import _has_veil_role
         m = FakeMember(roles=[])
-        assert _has_veil_role(m, 0) is True
+        assert _has_veil_role(m, 0) is False
+        m_with_roles = FakeMember(roles=[FakeRole(id=42)])
+        assert _has_veil_role(m_with_roles, 0) is False
 
 
 class TestValidateMime:

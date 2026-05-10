@@ -30,6 +30,7 @@ from services.veil_repo import (
     set_round_original_path,
     set_round_reroll_count,
     set_veil_config_value,
+    soft_delete_round,
     update_round_message,
 )
 
@@ -47,8 +48,9 @@ _VEIL_ORIG_DIR = Path("veil_cache") / "orig"
 # ── Pure validation helpers (module-level so they're patchable in tests) ─────
 
 def _has_veil_role(member: Any, veil_role_id: int) -> bool:
+    """Fail closed: an unconfigured role (id 0) must never grant access."""
     if veil_role_id == 0:
-        return True
+        return False
     return any(r.id == veil_role_id for r in member.roles)
 
 
@@ -164,6 +166,11 @@ def _do_load_active_rounds(db_path: Path) -> list[tuple[int, bool]]:
     from services.veil_repo import get_all_active_round_ids  # noqa: PLC0415  # type: ignore[attr-defined]
     with open_db(db_path) as conn:
         return get_all_active_round_ids(conn)
+
+
+def _do_soft_delete_round(db_path: Path, round_id: int) -> None:
+    with open_db(db_path) as conn:
+        soft_delete_round(conn, round_id)
 
 
 # ── Embed helpers ─────────────────────────────────────────────────────────────
@@ -406,6 +413,8 @@ class SubmitPreviewView(discord.ui.View):
         self._veil_role_id = veil_role_id
         self._original_bytes = original_bytes
         self._original_ext = original_ext
+        self._post_lock = asyncio.Lock()
+        self._posted = False
 
         self.reroll_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label=f"Re-roll (1/{len(crops)})",
@@ -441,6 +450,16 @@ class SubmitPreviewView(discord.ui.View):
 
     async def _on_post(self, interaction: discord.Interaction) -> None:
         assert interaction.guild
+        async with self._post_lock:
+            if self._posted:
+                await interaction.response.send_message(
+                    "Already posted.", ephemeral=True
+                )
+                return
+            self._posted = True
+            self.reroll_btn.disabled = True
+            self.post_btn.disabled = True
+
         await interaction.response.defer(ephemeral=True)
 
         veil_channel = interaction.guild.get_channel(self.veil_channel_id)
@@ -449,6 +468,14 @@ class SubmitPreviewView(discord.ui.View):
         ):
             await interaction.followup.send(
                 "Veil channel not found — ask an admin to check the config.", ephemeral=True
+            )
+            return
+
+        if hasattr(veil_channel, "is_nsfw") and not veil_channel.is_nsfw():
+            await interaction.followup.send(
+                f"{veil_channel.mention} is no longer NSFW-flagged. "
+                "Veil refuses to post explicit content in non-age-gated channels.",
+                ephemeral=True,
             )
             return
 
@@ -500,8 +527,6 @@ class SubmitPreviewView(discord.ui.View):
             "",
         )
 
-        self.reroll_btn.disabled = True
-        self.post_btn.disabled = True
         await interaction.edit_original_response(
             content=f"✅ Posted to {veil_channel.mention}!",
             view=self,
@@ -540,16 +565,23 @@ class VeilCog(commands.Cog):
         db_path = self.bot.ctx.db_path
         config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
 
-        member = interaction.guild.get_member(interaction.user.id)
-        if not member or not _has_veil_role(member, config.veil_role_id):
+        if config.veil_role_id == 0:
             await interaction.followup.send(
-                "You need the Veil role to submit.", ephemeral=True
+                "Veil role is not configured. Ask an admin to run `/veil setup`.",
+                ephemeral=True,
             )
             return
 
         if config.veil_channel_id == 0:
             await interaction.followup.send(
                 "Veil channel is not configured. Ask an admin to run `/veil setup`.", ephemeral=True
+            )
+            return
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if not member or not _has_veil_role(member, config.veil_role_id):
+            await interaction.followup.send(
+                "You need the Veil role to submit.", ephemeral=True
             )
             return
 
@@ -622,31 +654,93 @@ class VeilCog(commands.Cog):
         )
 
 
-    @veil.command(name="setup", description="Configure the Veil game channel and role.")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(
-        channel="The NSFW channel where game posts appear",
-        role="Role required to submit images (leave blank to allow everyone)",
-    )
-    async def veil_setup(
+    @veil.command(name="delete", description="Delete a Veil round (submitter or mod only).")
+    @app_commands.describe(round_id="Round ID to delete")
+    async def veil_delete(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        role: discord.Role | None = None,
+        round_id: int,
     ) -> None:
         assert interaction.guild
         await interaction.response.defer(ephemeral=True)
 
         db_path = self.bot.ctx.db_path
+        round_row = await asyncio.to_thread(_do_load_round, db_path, round_id)
+        if round_row is None or round_row.guild_id != interaction.guild.id:
+            await interaction.followup.send(
+                f"Round #{round_id} not found.", ephemeral=True
+            )
+            return
+
+        if round_row.deleted_at is not None:
+            await interaction.followup.send(
+                f"Round #{round_id} is already deleted.", ephemeral=True
+            )
+            return
+
+        is_submitter = interaction.user.id == round_row.submitter_id
+        member = interaction.guild.get_member(interaction.user.id)
+        is_mod = bool(member and member.guild_permissions.manage_guild)
+        if not (is_submitter or is_mod):
+            await interaction.followup.send(
+                "Only the submitter or a mod can delete this round.", ephemeral=True
+            )
+            return
+
+        await asyncio.to_thread(_do_soft_delete_round, db_path, round_id)
+
+        if round_row.original_path:
+            orig_path = Path(round_row.original_path)
+            if orig_path.exists():
+                await asyncio.to_thread(orig_path.unlink, missing_ok=True)
+
+        if round_row.channel_id and round_row.message_id:
+            channel = interaction.guild.get_channel(round_row.channel_id)
+            if isinstance(
+                channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
+            ):
+                try:
+                    msg = await channel.fetch_message(round_row.message_id)
+                    await msg.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+
+        await interaction.followup.send(
+            f"Round #{round_id} deleted.", ephemeral=True
+        )
+
+
+    @veil.command(name="setup", description="Configure the Veil game channel and role.")
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        channel="The NSFW channel where game posts appear",
+        role="Role required to submit images and act as guess answers",
+    )
+    async def veil_setup(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel,
+        role: discord.Role,
+    ) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        if not channel.is_nsfw():
+            await interaction.followup.send(
+                f"{channel.mention} is not age-gated. Veil only posts in NSFW channels — "
+                "enable the channel's NSFW flag and try again.",
+                ephemeral=True,
+            )
+            return
+
+        db_path = self.bot.ctx.db_path
         guild_id = interaction.guild.id
 
         await asyncio.to_thread(_do_set_config, db_path, guild_id, "veil_channel_id", str(channel.id))
-        if role is not None:
-            await asyncio.to_thread(_do_set_config, db_path, guild_id, "veil_role_id", str(role.id))
+        await asyncio.to_thread(_do_set_config, db_path, guild_id, "veil_role_id", str(role.id))
 
-        role_line = f"\n- Veil role: {role.mention}" if role else ""
         await interaction.followup.send(
-            f"Veil configured.\n- Game channel: {channel.mention}{role_line}",
+            f"Veil configured.\n- Game channel: {channel.mention}\n- Veil role: {role.mention}",
             ephemeral=True,
         )
 

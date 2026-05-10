@@ -253,3 +253,27 @@ async def test_cog_load_registers_game_views_from_db(sync_db_path: Path):
     await cog.cog_load()
 
     assert add_view_mock.call_count == 2
+
+
+# ── Safety patch: fail-closed when Veil role is unconfigured ─────────────────
+
+@pytest.mark.asyncio
+async def test_submit_rejects_when_veil_role_not_configured():
+    """If veil_role_id is 0 (unconfigured), submit must reject — not fall open.
+
+    Previously _has_veil_role returned True for role_id=0 which let any guild
+    member submit on a freshly-installed bot.
+    """
+    member = _veil_member(has_role=False)  # no veil role at all
+    guild = _guild(member)
+    interaction = fake_interaction(user=member, guild=guild)
+    interaction.guild_id = GUILD_ID
+    interaction.guild.get_member = lambda uid: guild.members.get(uid)
+
+    cog = _make_cog()
+    with patch("cogs.veil_cog._load_config", return_value=_cfg(veil_role_id=0)):
+        await _submit(cog, interaction, _attachment())
+
+    interaction.followup.send.assert_called_once()
+    msg = interaction.followup.send.call_args.args[0]
+    assert "role" in msg.lower() and ("not configured" in msg.lower() or "ask an admin" in msg.lower())
