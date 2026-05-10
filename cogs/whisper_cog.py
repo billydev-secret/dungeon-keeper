@@ -366,6 +366,128 @@ class WhisperDmView(discord.ui.View):
         await interaction.response.send_modal(WhisperGuessModal(self.bot, self.whisper_id))
 
 
+# ── Persistent feed-channel view (Send / Check / Check Hidden) ───────────────
+
+class WhisperSendModal(discord.ui.Modal, title="Send a Whisper"):
+    target_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="Recipient (member ID or @mention)",
+        placeholder="Right-click a member → Copy ID, or paste a mention",
+        required=True,
+        max_length=80,
+    )
+    message_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="Your anonymous message",
+        style=discord.TextStyle.long,
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(self, bot: Bot) -> None:
+        super().__init__()
+        self.bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        raw = str(self.target_input.value).strip()
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        if not digits:
+            await interaction.response.send_message(
+                "Couldn't parse a member from that input.", ephemeral=True
+            )
+            return
+        target = interaction.guild.get_member(int(digits))
+        if target is None:
+            await interaction.response.send_message(
+                "That member isn't in this server.", ephemeral=True
+            )
+            return
+        cog = self.bot.get_cog("WhisperCog")
+        if not isinstance(cog, WhisperCog):
+            await interaction.response.send_message(
+                "Whisper cog isn't loaded.", ephemeral=True
+            )
+            return
+        await cog._send_impl(interaction, target=target, message=str(self.message_input.value))
+
+
+class WhisperFeedView(discord.ui.View):
+    def __init__(self, bot: Bot) -> None:
+        super().__init__(timeout=None)
+        self.bot = bot
+
+        send_btn = discord.ui.Button(
+            label="Send Whisper",
+            style=discord.ButtonStyle.primary,
+            custom_id="whisper:send",
+        )
+        send_btn.callback = self._on_send_click
+        self.add_item(send_btn)
+
+        check_btn = discord.ui.Button(
+            label="Check Whispers",
+            style=discord.ButtonStyle.secondary,
+            custom_id="whisper:check",
+        )
+        check_btn.callback = self._on_check_click
+        self.add_item(check_btn)
+
+        hidden_btn = discord.ui.Button(
+            label="Check Hidden Whispers",
+            style=discord.ButtonStyle.secondary,
+            custom_id="whisper:check_hidden",
+        )
+        hidden_btn.callback = self._on_check_hidden_click
+        self.add_item(hidden_btn)
+
+    async def _on_send_click(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(WhisperSendModal(self.bot))
+
+    async def _on_check_click(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        pending = await asyncio.to_thread(
+            _do_list_received,
+            self.bot.ctx.db_path,
+            guild_id=interaction.guild.id,
+            target_id=interaction.user.id,
+            state="pending",
+        )
+        shared = await asyncio.to_thread(
+            _do_list_received,
+            self.bot.ctx.db_path,
+            guild_id=interaction.guild.id,
+            target_id=interaction.user.id,
+            state="shared",
+        )
+        all_whispers = pending + shared
+        if not all_whispers:
+            await interaction.response.send_message("No whispers to show.", ephemeral=True)
+            return
+        lines = [f"You have {len(all_whispers)} whisper(s):"]
+        for w in all_whispers[:25]:
+            preview = (w.message[:60] + "…") if len(w.message) > 60 else w.message
+            tag = "[shared]" if w.state == "shared" else "[pending]"
+            lines.append(f"• {tag} `{w.id}` — {preview}")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    async def _on_check_hidden_click(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        hidden = await asyncio.to_thread(
+            _do_list_received,
+            self.bot.ctx.db_path,
+            guild_id=interaction.guild.id,
+            target_id=interaction.user.id,
+            state="hidden",
+        )
+        if not hidden:
+            await interaction.response.send_message("No hidden whispers.", ephemeral=True)
+            return
+        lines = [f"You have {len(hidden)} hidden whisper(s):"]
+        for w in hidden[:25]:
+            preview = (w.message[:60] + "…") if len(w.message) > 60 else w.message
+            lines.append(f"• `{w.id}` — {preview}")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class WhisperCog(commands.Cog):
@@ -374,6 +496,10 @@ class WhisperCog(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self.ctx = bot.ctx
+
+    async def cog_load(self) -> None:
+        # Register persistent views so buttons survive restart
+        self.bot.add_view(WhisperFeedView(self.bot))
 
     async def _optin_impl(self, interaction: discord.Interaction) -> None:
         """Pure shared implementation, easy to test directly."""
@@ -488,8 +614,8 @@ class WhisperCog(commands.Cog):
             try:
                 feed_msg = await feed_channel.send(
                     f"\U0001f4ec Someone sent {target.mention} an anonymous message.",
+                    view=WhisperFeedView(self.bot),
                     allowed_mentions=discord.AllowedMentions(users=[target]),
-                    # WhisperFeedView is added in Task 14; for Task 11 the feed post has no view yet.
                 )
             except discord.HTTPException:
                 log.warning("Failed to post whisper announcement to feed channel")
