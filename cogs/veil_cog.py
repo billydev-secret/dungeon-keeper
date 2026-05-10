@@ -458,6 +458,7 @@ class GameView(discord.ui.View):
                 disabled=True,
                 row=1,
             )
+            # ▒ is U+2592 MEDIUM SHADE × 7 — a redaction bar, not a font glitch.
             submitter_chip: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
                 label="Submitted by ▒▒▒▒▒▒▒",
                 style=discord.ButtonStyle.secondary,
