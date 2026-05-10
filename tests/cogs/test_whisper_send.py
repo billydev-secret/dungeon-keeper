@@ -103,6 +103,74 @@ async def test_send_rejects_self_target():
 
 
 @pytest.mark.asyncio
+async def test_target_autocomplete_only_returns_role_members():
+    """Autocomplete restricts target choices to members holding the whisper role."""
+    cog = _make_cog()
+    interaction = fake_interaction(user=FakeMember(id=SENDER_ID))
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    role = MagicMock()
+    role.members = [
+        FakeMember(id=2001, display_name="Alice", name="alice"),
+        FakeMember(id=2002, display_name="Bob", name="bob"),
+    ]
+    interaction.guild.get_role = MagicMock(return_value=role)
+    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+        results = await cog._target_autocomplete(interaction, "")
+    assert {r.value for r in results} == {"2001", "2002"}
+
+
+@pytest.mark.asyncio
+async def test_target_autocomplete_filters_by_prefix():
+    """Autocomplete filters by typed prefix against display_name and name."""
+    cog = _make_cog()
+    interaction = fake_interaction(user=FakeMember(id=SENDER_ID))
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    role = MagicMock()
+    role.members = [
+        FakeMember(id=2001, display_name="Alice", name="alice"),
+        FakeMember(id=2002, display_name="Bob", name="bob"),
+        FakeMember(id=2003, display_name="Charlie", name="charlie"),
+    ]
+    interaction.guild.get_role = MagicMock(return_value=role)
+    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+        results = await cog._target_autocomplete(interaction, "ali")
+    assert {r.value for r in results} == {"2001"}
+
+
+@pytest.mark.asyncio
+async def test_target_autocomplete_excludes_self():
+    """Autocomplete must not offer the calling user as a target."""
+    cog = _make_cog()
+    interaction = fake_interaction(user=FakeMember(id=SENDER_ID))
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    role = MagicMock()
+    role.members = [
+        FakeMember(id=SENDER_ID, display_name="Me", name="me"),
+        FakeMember(id=2002, display_name="Bob", name="bob"),
+    ]
+    interaction.guild.get_role = MagicMock(return_value=role)
+    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+        results = await cog._target_autocomplete(interaction, "")
+    assert {r.value for r in results} == {"2002"}
+
+
+@pytest.mark.asyncio
+async def test_target_autocomplete_returns_empty_when_role_unset():
+    """Autocomplete returns empty list when whisper role isn't configured."""
+    cog = _make_cog()
+    interaction = fake_interaction(user=FakeMember(id=SENDER_ID))
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    cfg_no_role = WhisperConfig(guild_id=9001, role_id=0, channel_id=FEED, log_channel_id=LOG)
+    with patch("cogs.whisper_cog._load_config", return_value=cfg_no_role):
+        results = await cog._target_autocomplete(interaction, "")
+    assert results == []
+
+
+@pytest.mark.asyncio
 async def test_send_dm_forbidden_does_not_persist():
     cog = _make_cog()
     sender = FakeMember(id=SENDER_ID, roles=[FakeRole(id=ROLE)])

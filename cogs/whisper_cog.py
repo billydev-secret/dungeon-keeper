@@ -802,6 +802,38 @@ class WhisperCog(commands.Cog):
         # 6) Confirm to sender
         await interaction.response.send_message("Whisper delivered.", ephemeral=True)
 
+    async def _target_autocomplete(
+        self,
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Autocomplete callback restricting /whisper send target to opted-in
+        members (those holding the configured whisper role)."""
+        if interaction.guild is None:
+            return []
+        cfg = await asyncio.to_thread(
+            _load_config, self.ctx.db_path, interaction.guild.id
+        )
+        if cfg.role_id == 0:
+            return []
+        role = interaction.guild.get_role(cfg.role_id)
+        if role is None:
+            return []
+        needle = current.lower()
+        matches: list[app_commands.Choice[str]] = []
+        for m in role.members:
+            if m.id == interaction.user.id:
+                continue
+            display = (getattr(m, "display_name", None) or m.name).lower()
+            handle = m.name.lower()
+            if needle and needle not in display and needle not in handle:
+                continue
+            label = getattr(m, "display_name", None) or m.name
+            matches.append(app_commands.Choice(name=label, value=str(m.id)))
+            if len(matches) >= 25:
+                break
+        return matches
+
     @whisper_group.command(
         name="send",
         description="Send an anonymous whisper to another opted-in member.",
@@ -810,13 +842,31 @@ class WhisperCog(commands.Cog):
         target="Recipient (must be opted in)",
         message="Your anonymous message",
     )
+    @app_commands.autocomplete(target=_target_autocomplete)
     async def whisper_send(
         self,
         interaction: discord.Interaction,
-        target: discord.Member,
+        target: str,
         message: str,
     ) -> None:
-        await self._send_impl(interaction, target=target, message=message)
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Whisper can only be used in a server.", ephemeral=True
+            )
+            return
+        if not target.isdigit():
+            await interaction.response.send_message(
+                "Pick a recipient from the autocomplete suggestions.",
+                ephemeral=True,
+            )
+            return
+        member = interaction.guild.get_member(int(target))
+        if member is None:
+            await interaction.response.send_message(
+                "That member isn't in this server.", ephemeral=True
+            )
+            return
+        await self._send_impl(interaction, target=member, message=message)
 
 
 async def setup(bot: Bot) -> None:
