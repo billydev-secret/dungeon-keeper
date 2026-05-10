@@ -238,7 +238,6 @@ def _do_audit(
 def _game_embed(round_id: int) -> discord.Embed:
     return discord.Embed(
         title=f"Round #{round_id}",
-        description="Submitted by an anonymous member",
         color=discord.Color.from_rgb(80, 20, 100),
     )
 
@@ -429,18 +428,45 @@ class GuessSelectView(discord.ui.View):
 class GameView(discord.ui.View):
     """Persistent public view attached to a game message."""
 
-    def __init__(self, bot: "Bot", round_id: int, *, solved: bool = False) -> None:
+    def __init__(
+        self,
+        bot: "Bot",
+        round_id: int,
+        *,
+        solved: bool = False,
+        guess_count: int = 0,
+    ) -> None:
         super().__init__(timeout=None)
         self.bot = bot
         self.round_id = round_id
+        self.guess_count = guess_count
 
         btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label="Guess late" if solved else "Guess",
             style=discord.ButtonStyle.primary,
             custom_id=f"veil_guess:{round_id}",
+            row=0,
         )
         btn.callback = self._guess_callback
         self.add_item(btn)
+
+        if not solved:
+            count_chip: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label=f"Guesses: {guess_count}",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"veil_chip_count:{round_id}",
+                disabled=True,
+                row=1,
+            )
+            submitter_chip: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="Submitted by ▒▒▒▒▒▒▒",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"veil_chip_submitter:{round_id}",
+                disabled=True,
+                row=1,
+            )
+            self.add_item(count_chip)
+            self.add_item(submitter_chip)
 
     async def _guess_callback(self, interaction: discord.Interaction) -> None:
         assert interaction.guild and interaction.message
