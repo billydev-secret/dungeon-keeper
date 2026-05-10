@@ -709,7 +709,7 @@
       <span class="callout-icon">💡</span>
       <div class="callout-body">
         <strong>Pro Tip: Catch problems before they escalate</strong>
-        <p>The analytics commands let you identify who's going quiet, who's stirring conflict, and who's at-risk of churning — before it becomes a problem. Run <code>/dropoff</code> weekly and <code>/chilling_effect</code> monthly to get ahead of server dynamics instead of reacting to them.</p>
+        <p>The analytics tools let you identify who's going quiet, who's stirring conflict, and who's at-risk of churning — before it becomes a problem. The full report set lives in the web dashboard (<a href="/">open it here</a>); check the Drop-off and Chilling-effect reports weekly to get ahead of server dynamics instead of reacting to them.</p>
       </div>
     </div>
 
@@ -745,30 +745,12 @@
       <div class="cmd-params"><strong>resolution</strong> — hour / day / week / month / hour_of_day / day_of_week &nbsp;|&nbsp; <strong>mode</strong> — messages / xp.</div>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/dropoff period:week limit:10</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Lists the members whose engagement dropped the most between consecutive periods. Use this to find members drifting away before they leave.</span>
-      <div class="cmd-params"><strong>period</strong> — day / week / month &nbsp;|&nbsp; <strong>limit</strong> — 1–25.</div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/session_burst member:@user</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Chart showing how active a member is in the minutes after they return from a break. Useful for understanding participation patterns.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/burst_ranking limit:10</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Ranks members by whether their presence drives conversations (burst starters) vs. posting without sparking replies.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/chilling_effect lookback_days:30 top:10</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Identifies members whose arrival correlates with others going quiet — useful for detecting subtle intimidation or social friction.</span>
-      <div class="cmd-params">All parameters optional. <strong>channel</strong> scopes to a single channel.</div>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Drop-off, Session Burst, Burst Ranking, Chilling Effect</strong>
+        <p>These engagement reports moved to the <a href="/">web dashboard</a>. <code>/activity</code> stays in Discord for quick spot-checks; everything else is interactive on the dashboard with filters, sorting, and exports.</p>
+      </div>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
@@ -1345,7 +1327,6 @@
         <tr><td><code>/ai review</code></td><td><span class="perm perm-admin">Admin</span></td><td>Claude flags violations in a member's recent history</td></tr>
         <tr><td><code>/ai scan</code></td><td><span class="perm perm-admin">Admin</span></td><td>Reach for this when a channel just got heated</td></tr>
         <tr><td><code>/watch add</code></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
-        <tr><td><code>/dropoff</code></td><td><span class="perm perm-mod">Mod</span></td><td>Members whose engagement is falling — run weekly</td></tr>
         <tr><td><code>/activity</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bar chart of message volume over time</td></tr>
         <tr><td><code>/voice lock</code> / <code>rename</code> / <code>limit</code></td><td>Channel owner</td><td>Personal voice channel controls</td></tr>
         <tr><td><code>/play</code></td><td><span class="perm perm-all">Everyone</span></td><td>Music — YouTube / Spotify / search</td></tr>
@@ -1384,10 +1365,7 @@
         <tr><td colspan="3" class="qr-section">Analytics &amp; Watch ✦</td></tr>
         <tr><td><code>/watch add</code> / <code>remove</code> / <code>list</code></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
         <tr><td><code>/activity</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bar chart of message volume over time</td></tr>
-        <tr><td><code>/dropoff</code></td><td><span class="perm perm-mod">Mod</span></td><td>Members whose engagement dropped most</td></tr>
-        <tr><td><code>/session_burst</code></td><td><span class="perm perm-mod">Mod</span></td><td>Member's activity pattern after returning</td></tr>
-        <tr><td><code>/burst_ranking</code></td><td><span class="perm perm-mod">Mod</span></td><td>Who drives conversations when they arrive</td></tr>
-        <tr><td><code>/chilling_effect</code></td><td><span class="perm perm-mod">Mod</span></td><td>Who makes others go quiet when they arrive</td></tr>
+        <tr><td colspan="3" style="opacity: 0.7;"><em>Drop-off, session burst, burst ranking, chilling effect, network/heatmap analytics live in the <a href="/">web dashboard</a>.</em></td></tr>
 
         <tr><td colspan="3" class="qr-section">Network Analytics</td></tr>
         <tr><td><code>/connection_web</code></td><td><span class="perm perm-mod">Mod</span></td><td>Reply / mention force-directed graph</td></tr>
