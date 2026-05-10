@@ -237,9 +237,6 @@ class WhisperShareButton(
                 except discord.HTTPException:
                     log.warning("Failed to edit feed message on share")
 
-        # Drop Share/Hide from the DM view. Keep Guess if the target can
-        # still attempt to identify the sender; otherwise strip the view
-        # entirely so the now-useless buttons disappear.
         if interaction.message:
             new_view: discord.ui.View | None
             if whisper.guesses_left > 0 and not whisper.solved:
@@ -297,9 +294,6 @@ class WhisperHideButton(
             _do_update_state, self.bot.ctx.db_path, self.whisper_id, STATE_HIDDEN
         )
 
-        # Drop Share/Hide from the DM view. Keep Guess if the target can
-        # still attempt to identify the sender; otherwise strip the view
-        # entirely so the now-useless buttons disappear.
         if interaction.message:
             new_view: discord.ui.View | None
             if whisper.guesses_left > 0 and not whisper.solved:
@@ -783,7 +777,6 @@ class WhisperCog(commands.Cog):
             await interaction.response.send_message(e.message, ephemeral=True)
             return
 
-        # 1) Insert row first so we can attach a per-whisper view to the DM
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
             self.ctx.db_path,
@@ -793,7 +786,6 @@ class WhisperCog(commands.Cog):
             message=message.strip(),
         )
 
-        # 2) DM target — rollback row if undeliverable
         try:
             dm_msg = await target.send(
                 f"Someone in **{interaction.guild.name}** sent you a secret message:\n"
@@ -801,12 +793,12 @@ class WhisperCog(commands.Cog):
                 view=WhisperDmView(self.bot, whisper_id),
             )
         except (discord.Forbidden, discord.HTTPException):
+            # rollback inserted row if DM fails
             with open_db(self.ctx.db_path) as conn:
                 conn.execute("DELETE FROM whispers WHERE id = ?", (whisper_id,))
             await interaction.response.send_message(ERROR_BOT_DM_FAILED, ephemeral=True)
             return
 
-        # 3) Public announcement in feed channel
         feed_channel = interaction.guild.get_channel(cfg.channel_id)
         feed_msg = None
         if isinstance(feed_channel, discord.TextChannel):
@@ -819,7 +811,6 @@ class WhisperCog(commands.Cog):
             except discord.HTTPException:
                 log.warning("Failed to post whisper announcement to feed channel")
 
-        # 4) Save message IDs for later edits
         await asyncio.to_thread(
             _do_set_message_ids,
             self.ctx.db_path,
@@ -828,7 +819,6 @@ class WhisperCog(commands.Cog):
             dm_msg_id=dm_msg.id,
         )
 
-        # 5) Mod log
         log_channel = interaction.guild.get_channel(cfg.log_channel_id)
         if isinstance(log_channel, discord.TextChannel):
             try:
@@ -854,7 +844,6 @@ class WhisperCog(commands.Cog):
             except discord.HTTPException:
                 log.warning("Failed to write whisper mod log")
 
-        # 6) Confirm to sender
         await interaction.response.send_message("Whisper delivered.", ephemeral=True)
 
     async def _target_autocomplete(
