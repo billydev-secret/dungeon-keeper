@@ -28,6 +28,7 @@ ERROR_GUESS_NO_ATTEMPTS = "No more guesses left."
 
 ERROR_ALREADY_DECIDED = "Already decided."
 ERROR_EXPOSE_NOT_TARGET = "Only the recipient can expose this."
+ERROR_EXPOSE_NEEDS_SOLVE = "Can only expose a solved whisper."
 
 
 class SendValidationError(Exception):
@@ -101,3 +102,32 @@ def evaluate_guess(
         attempts_remaining=remaining,
         exhausted=(not correct) and remaining == 0,
     )
+
+
+class TransitionValidationError(Exception):
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def _check_target(whisper: Whisper, invoker_id: int, msg: str) -> None:
+    if invoker_id != whisper.target_id:
+        raise TransitionValidationError(msg)
+
+
+def validate_share(whisper: Whisper, *, invoker_id: int) -> None:
+    _check_target(whisper, invoker_id, ERROR_GUESS_NOT_TARGET)
+    if whisper.state != "pending":
+        raise TransitionValidationError(ERROR_ALREADY_DECIDED)
+
+
+def validate_hide(whisper: Whisper, *, invoker_id: int) -> None:
+    _check_target(whisper, invoker_id, ERROR_GUESS_NOT_TARGET)
+    if whisper.state != "pending":
+        raise TransitionValidationError(ERROR_ALREADY_DECIDED)
+
+
+def validate_expose(whisper: Whisper, *, invoker_id: int) -> None:
+    _check_target(whisper, invoker_id, ERROR_EXPOSE_NOT_TARGET)
+    if not whisper.solved:
+        raise TransitionValidationError(ERROR_EXPOSE_NEEDS_SOLVE)
