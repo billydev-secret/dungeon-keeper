@@ -5,7 +5,7 @@ import sqlite3
 import time
 
 from db_utils import get_config_value, set_config_value
-from services.whisper_models import Whisper, WhisperConfig
+from services.whisper_models import Whisper, WhisperConfig, WhisperGuess
 
 _CONFIG_DEFAULTS: dict[str, str] = {
     "whisper_role_id": "0",
@@ -95,6 +95,56 @@ def update_whisper_state(
     conn.execute(
         "UPDATE whispers SET state = ? WHERE id = ?", (new_state, whisper_id)
     )
+
+
+def _row_to_guess(row: sqlite3.Row) -> WhisperGuess:
+    return WhisperGuess(
+        id=row["id"],
+        whisper_id=row["whisper_id"],
+        guessed_id=row["guessed_id"],
+        correct=bool(row["correct"]),
+        created_at=row["created_at"],
+    )
+
+
+def insert_guess(
+    conn: sqlite3.Connection,
+    *,
+    whisper_id: int,
+    guessed_id: int,
+    correct: bool,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO whisper_guesses (whisper_id, guessed_id, correct, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (whisper_id, guessed_id, int(correct), time.time()),
+    )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def list_guesses(conn: sqlite3.Connection, *, whisper_id: int) -> list[WhisperGuess]:
+    rows = conn.execute(
+        "SELECT * FROM whisper_guesses WHERE whisper_id = ? ORDER BY created_at",
+        (whisper_id,),
+    ).fetchall()
+    return [_row_to_guess(r) for r in rows]
+
+
+def decrement_guesses_left(conn: sqlite3.Connection, whisper_id: int) -> None:
+    conn.execute(
+        "UPDATE whispers SET guesses_left = guesses_left - 1 WHERE id = ?",
+        (whisper_id,),
+    )
+
+
+def mark_solved(conn: sqlite3.Connection, whisper_id: int) -> None:
+    conn.execute("UPDATE whispers SET solved = 1 WHERE id = ?", (whisper_id,))
+
+
+def mark_exposed(conn: sqlite3.Connection, whisper_id: int) -> None:
+    conn.execute("UPDATE whispers SET exposed = 1 WHERE id = ?", (whisper_id,))
 
 
 def list_received(
