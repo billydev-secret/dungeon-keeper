@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -108,23 +109,195 @@ def _do_list_received(
         return list_received(conn, guild_id=guild_id, target_id=target_id, state=state)
 
 
-# ── Expose view: posted in feed channel after correct guess ──────────────────
+# ── Per-whisper Dynamic buttons (custom_id contains whisper_id) ──────────────
+#
+# These use discord.ui.DynamicItem so that after a bot restart the button
+# clicks on existing DMs / feed messages still route correctly via regex
+# matching of the persisted custom_id.
 
-class WhisperExposeView(discord.ui.View):
+
+class WhisperGuessButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:guess:(?P<id>\d+)"),
+):
     def __init__(self, bot: Bot, whisper_id: int) -> None:
-        super().__init__(timeout=None)
+        super().__init__(
+            discord.ui.Button(
+                label="Guess",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"whisper:guess:{whisper_id}",
+            )
+        )
         self.bot = bot
         self.whisper_id = whisper_id
 
-        expose_btn = discord.ui.Button(
-            label="Expose",
-            style=discord.ButtonStyle.danger,
-            custom_id=f"whisper:expose:{whisper_id}",
-        )
-        expose_btn.callback = self._on_expose_click
-        self.add_item(expose_btn)
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperGuessButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
 
-    async def _on_expose_click(self, interaction: discord.Interaction) -> None:
+    async def callback(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        if interaction.user.id != whisper.target_id:
+            from services.whisper_service import ERROR_GUESS_NOT_TARGET  # noqa: PLC0415
+            await interaction.response.send_message(ERROR_GUESS_NOT_TARGET, ephemeral=True)
+            return
+        if whisper.solved:
+            from services.whisper_service import ERROR_GUESS_ALREADY_SOLVED  # noqa: PLC0415
+            await interaction.response.send_message(ERROR_GUESS_ALREADY_SOLVED, ephemeral=True)
+            return
+        if whisper.guesses_left <= 0:
+            from services.whisper_service import ERROR_GUESS_NO_ATTEMPTS  # noqa: PLC0415
+            await interaction.response.send_message(ERROR_GUESS_NO_ATTEMPTS, ephemeral=True)
+            return
+        await interaction.response.send_modal(WhisperGuessModal(self.bot, self.whisper_id))
+
+
+class WhisperShareButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:share:(?P<id>\d+)"),
+):
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Share",
+                style=discord.ButtonStyle.success,
+                custom_id=f"whisper:share:{whisper_id}",
+            )
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperShareButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        try:
+            validate_share(whisper, invoker_id=interaction.user.id)
+        except TransitionValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
+            return
+
+        await asyncio.to_thread(
+            _do_update_state, self.bot.ctx.db_path, self.whisper_id, "shared"
+        )
+
+        if interaction.guild:
+            cfg = await asyncio.to_thread(
+                _load_config, self.bot.ctx.db_path, whisper.guild_id
+            )
+            feed_channel = interaction.guild.get_channel(cfg.channel_id)
+            if isinstance(feed_channel, discord.TextChannel) and whisper.channel_msg_id:
+                try:
+                    msg = await feed_channel.fetch_message(whisper.channel_msg_id)
+                    await msg.edit(
+                        content=(
+                            f"\U0001f4ec A fresh Whisper was shared. Someone sent "
+                            f"<@{whisper.target_id}> an anonymous message!\n"
+                            f"```{whisper.message}```"
+                        ),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    log.warning("Failed to edit feed message on share")
+
+        await interaction.response.send_message(
+            "Shared to the whisper feed.", ephemeral=True
+        )
+
+
+class WhisperHideButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:hide:(?P<id>\d+)"),
+):
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Hide",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"whisper:hide:{whisper_id}",
+            )
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperHideButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        try:
+            validate_hide(whisper, invoker_id=interaction.user.id)
+        except TransitionValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
+            return
+
+        await asyncio.to_thread(
+            _do_update_state, self.bot.ctx.db_path, self.whisper_id, "hidden"
+        )
+        await interaction.response.send_message(
+            "Whisper hidden. You can find it under Check Hidden Whispers.",
+            ephemeral=True,
+        )
+
+
+class WhisperExposeButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:expose:(?P<id>\d+)"),
+):
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Expose",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"whisper:expose:{whisper_id}",
+            )
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperExposeButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
         whisper = await asyncio.to_thread(
             _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
         )
@@ -166,7 +339,17 @@ class WhisperExposeView(discord.ui.View):
         await interaction.response.send_message("Exposed.", ephemeral=True)
 
 
-# ── Per-whisper DM view (Guess only for now; Share/Hide added in Task 13) ────
+# ── Expose view: posted in feed channel after correct guess ──────────────────
+
+class WhisperExposeView(discord.ui.View):
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.whisper_id = whisper_id
+        self.add_item(WhisperExposeButton(bot, whisper_id))
+
+
+# ── Per-whisper DM view (Guess + Share + Hide) ───────────────────────────────
 
 class WhisperGuessModal(discord.ui.Modal, title="Guess the sender"):
     guess_input: discord.ui.TextInput = discord.ui.TextInput(
@@ -258,112 +441,32 @@ class WhisperDmView(discord.ui.View):
         super().__init__(timeout=None)
         self.bot = bot
         self.whisper_id = whisper_id
+        self.add_item(WhisperGuessButton(bot, whisper_id))
+        self.add_item(WhisperShareButton(bot, whisper_id))
+        self.add_item(WhisperHideButton(bot, whisper_id))
 
-        guess_btn = discord.ui.Button(
-            label="Guess",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"whisper:guess:{whisper_id}",
-        )
-        guess_btn.callback = self._on_guess_click
-        self.add_item(guess_btn)
+    @classmethod
+    def without_guess(cls, bot: Bot, whisper_id: int) -> WhisperDmView:
+        """Build a DM view that omits the Guess button (used after the
+        target exhausts their guesses or the whisper is solved)."""
+        v: WhisperDmView = cls.__new__(cls)
+        discord.ui.View.__init__(v, timeout=None)
+        v.bot = bot
+        v.whisper_id = whisper_id
+        v.add_item(WhisperShareButton(bot, whisper_id))
+        v.add_item(WhisperHideButton(bot, whisper_id))
+        return v
 
-        share_btn = discord.ui.Button(
-            label="Share",
-            style=discord.ButtonStyle.success,
-            custom_id=f"whisper:share:{whisper_id}",
-        )
-        share_btn.callback = self._on_share_click
-        self.add_item(share_btn)
-
-        hide_btn = discord.ui.Button(
-            label="Hide",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"whisper:hide:{whisper_id}",
-        )
-        hide_btn.callback = self._on_hide_click
-        self.add_item(hide_btn)
-
-    async def _on_share_click(self, interaction: discord.Interaction) -> None:
-        whisper = await asyncio.to_thread(
-            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
-        )
-        if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
-            return
-        try:
-            validate_share(whisper, invoker_id=interaction.user.id)
-        except TransitionValidationError as e:
-            await interaction.response.send_message(e.message, ephemeral=True)
-            return
-
-        await asyncio.to_thread(
-            _do_update_state, self.bot.ctx.db_path, self.whisper_id, "shared"
-        )
-
-        if interaction.guild:
-            cfg = await asyncio.to_thread(
-                _load_config, self.bot.ctx.db_path, whisper.guild_id
-            )
-            feed_channel = interaction.guild.get_channel(cfg.channel_id)
-            if isinstance(feed_channel, discord.TextChannel) and whisper.channel_msg_id:
-                try:
-                    msg = await feed_channel.fetch_message(whisper.channel_msg_id)
-                    await msg.edit(
-                        content=(
-                            f"\U0001f4ec A fresh Whisper was shared. Someone sent "
-                            f"<@{whisper.target_id}> an anonymous message!\n"
-                            f"```{whisper.message}```"
-                        ),
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                except discord.HTTPException:
-                    log.warning("Failed to edit feed message on share")
-
-        await interaction.response.send_message(
-            "Shared to the whisper feed.", ephemeral=True
-        )
-
-    async def _on_hide_click(self, interaction: discord.Interaction) -> None:
-        whisper = await asyncio.to_thread(
-            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
-        )
-        if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
-            return
-        try:
-            validate_hide(whisper, invoker_id=interaction.user.id)
-        except TransitionValidationError as e:
-            await interaction.response.send_message(e.message, ephemeral=True)
-            return
-
-        await asyncio.to_thread(
-            _do_update_state, self.bot.ctx.db_path, self.whisper_id, "hidden"
-        )
-        await interaction.response.send_message(
-            "Whisper hidden. You can find it under Check Hidden Whispers.",
-            ephemeral=True,
-        )
-
-    async def _on_guess_click(self, interaction: discord.Interaction) -> None:
-        whisper = await asyncio.to_thread(
-            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
-        )
-        if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
-            return
-        if interaction.user.id != whisper.target_id:
-            from services.whisper_service import ERROR_GUESS_NOT_TARGET  # noqa: PLC0415
-            await interaction.response.send_message(ERROR_GUESS_NOT_TARGET, ephemeral=True)
-            return
-        if whisper.solved:
-            from services.whisper_service import ERROR_GUESS_ALREADY_SOLVED  # noqa: PLC0415
-            await interaction.response.send_message(ERROR_GUESS_ALREADY_SOLVED, ephemeral=True)
-            return
-        if whisper.guesses_left <= 0:
-            from services.whisper_service import ERROR_GUESS_NO_ATTEMPTS  # noqa: PLC0415
-            await interaction.response.send_message(ERROR_GUESS_NO_ATTEMPTS, ephemeral=True)
-            return
-        await interaction.response.send_modal(WhisperGuessModal(self.bot, self.whisper_id))
+    @classmethod
+    def without_decide(cls, bot: Bot, whisper_id: int) -> WhisperDmView:
+        """Build a DM view that omits Share/Hide (used after the target has
+        already shared or hidden the whisper)."""
+        v: WhisperDmView = cls.__new__(cls)
+        discord.ui.View.__init__(v, timeout=None)
+        v.bot = bot
+        v.whisper_id = whisper_id
+        v.add_item(WhisperGuessButton(bot, whisper_id))
+        return v
 
 
 # ── Persistent feed-channel view (Send / Check / Check Hidden) ───────────────
@@ -498,8 +601,17 @@ class WhisperCog(commands.Cog):
         self.ctx = bot.ctx
 
     async def cog_load(self) -> None:
-        # Register persistent views so buttons survive restart
+        # Register persistent views so static-id buttons survive restart.
         self.bot.add_view(WhisperFeedView(self.bot))
+        # Register dynamic-id buttons so per-whisper Guess/Share/Hide/Expose
+        # button clicks on existing DMs and feed messages still route after
+        # a bot restart (custom_ids embed the whisper_id).
+        self.bot.add_dynamic_items(
+            WhisperGuessButton,
+            WhisperShareButton,
+            WhisperHideButton,
+            WhisperExposeButton,
+        )
 
     async def _optin_impl(self, interaction: discord.Interaction) -> None:
         """Pure shared implementation, easy to test directly."""

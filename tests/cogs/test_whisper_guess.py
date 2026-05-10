@@ -20,22 +20,22 @@ def _w(*, solved: bool = False, guesses_left: int = 3) -> Whisper:
     )
 
 
-def _make_view(whisper_id: int = 42):
-    from cogs.whisper_cog import WhisperDmView
+def _make_guess_button(whisper_id: int = 42):
+    from cogs.whisper_cog import WhisperGuessButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
-    return WhisperDmView(bot, whisper_id)
+    return WhisperGuessButton(bot, whisper_id)
 
 
 @pytest.mark.asyncio
 async def test_guess_button_non_target_rejected():
-    view = _make_view()
+    button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=9999))
     interaction.response.send_modal = AsyncMock()
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()):
-        await view._on_guess_click(interaction)
+        await button.callback(interaction)
 
     interaction.response.send_modal.assert_not_called()
     args, kwargs = interaction.response.send_message.call_args
@@ -45,13 +45,13 @@ async def test_guess_button_non_target_rejected():
 
 @pytest.mark.asyncio
 async def test_guess_button_target_opens_modal():
-    view = _make_view()
+    button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_modal = AsyncMock()
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()):
-        await view._on_guess_click(interaction)
+        await button.callback(interaction)
 
     interaction.response.send_modal.assert_called_once()
 

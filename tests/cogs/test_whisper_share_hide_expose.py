@@ -25,26 +25,34 @@ def _cfg() -> WhisperConfig:
     return WhisperConfig(guild_id=9001, role_id=7001, channel_id=FEED, log_channel_id=LOG)
 
 
-def _make_dm_view():
-    from cogs.whisper_cog import WhisperDmView
+def _make_share_button():
+    from cogs.whisper_cog import WhisperShareButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
-    return WhisperDmView(bot, 42)
+    return WhisperShareButton(bot, 42)
 
 
-def _make_expose_view():
-    from cogs.whisper_cog import WhisperExposeView
+def _make_hide_button():
+    from cogs.whisper_cog import WhisperHideButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
-    return WhisperExposeView(bot, 42)
+    return WhisperHideButton(bot, 42)
+
+
+def _make_expose_button():
+    from cogs.whisper_cog import WhisperExposeButton
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    return WhisperExposeButton(bot, 42)
 
 
 @pytest.mark.asyncio
 async def test_share_target_pending_edits_feed_message():
-    view = _make_dm_view()
+    button = _make_share_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
     interaction.guild = MagicMock()
+    interaction.message = None  # no DM-edit path in this test
 
     feed_channel = MagicMock(spec=discord.TextChannel)
     feed_msg = MagicMock()
@@ -55,7 +63,7 @@ async def test_share_target_pending_edits_feed_message():
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
          patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
          patch("cogs.whisper_cog._do_update_state") as upd:
-        await view._on_share_click(interaction)
+        await button.callback(interaction)
 
     upd.assert_called_once_with(":memory:", 42, "shared")
     feed_msg.edit.assert_awaited_once()
@@ -63,13 +71,13 @@ async def test_share_target_pending_edits_feed_message():
 
 @pytest.mark.asyncio
 async def test_share_non_pending_rejected():
-    view = _make_dm_view()
+    button = _make_share_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
          patch("cogs.whisper_cog._do_update_state") as upd:
-        await view._on_share_click(interaction)
+        await button.callback(interaction)
 
     upd.assert_not_called()
     args, kwargs = interaction.response.send_message.call_args
@@ -78,20 +86,21 @@ async def test_share_non_pending_rejected():
 
 @pytest.mark.asyncio
 async def test_hide_target_pending_updates_state_no_edit():
-    view = _make_dm_view()
+    button = _make_hide_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
+    interaction.message = None  # no DM-edit path in this test
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
          patch("cogs.whisper_cog._do_update_state") as upd:
-        await view._on_hide_click(interaction)
+        await button.callback(interaction)
 
     upd.assert_called_once_with(":memory:", 42, "hidden")
 
 
 @pytest.mark.asyncio
 async def test_expose_solved_target_edits_feed_message():
-    view = _make_expose_view()
+    button = _make_expose_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
     interaction.message = MagicMock()
@@ -102,7 +111,7 @@ async def test_expose_solved_target_edits_feed_message():
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)), \
          patch("cogs.whisper_cog._do_mark_exposed") as mexp:
-        await view._on_expose_click(interaction)
+        await button.callback(interaction)
 
     mexp.assert_called_once()
     interaction.message.edit.assert_awaited_once()
@@ -110,25 +119,25 @@ async def test_expose_solved_target_edits_feed_message():
 
 @pytest.mark.asyncio
 async def test_expose_unsolved_rejected():
-    view = _make_expose_view()
+    button = _make_expose_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(solved=False)), \
          patch("cogs.whisper_cog._do_mark_exposed") as mexp:
-        await view._on_expose_click(interaction)
+        await button.callback(interaction)
 
     mexp.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_expose_non_target_rejected():
-    view = _make_expose_view()
+    button = _make_expose_button()
     interaction = fake_interaction(user=FakeMember(id=9999))
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)), \
          patch("cogs.whisper_cog._do_mark_exposed") as mexp:
-        await view._on_expose_click(interaction)
+        await button.callback(interaction)
 
     mexp.assert_not_called()

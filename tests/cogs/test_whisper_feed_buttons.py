@@ -78,6 +78,31 @@ async def test_view_registered_on_cog_load():
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     bot.add_view = MagicMock()
+    bot.add_dynamic_items = MagicMock()
     cog = WhisperCog(bot)
     await cog.cog_load()
     bot.add_view.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_buttons_registered_on_cog_load():
+    """Per-whisper Guess/Share/Hide/Expose buttons must register as dynamic items so they survive bot restart."""
+    from cogs.whisper_cog import (
+        WhisperCog,
+        WhisperExposeButton,
+        WhisperGuessButton,
+        WhisperHideButton,
+        WhisperShareButton,
+    )
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    bot.add_view = MagicMock()
+    bot.add_dynamic_items = MagicMock()
+    cog = WhisperCog(bot)
+    await cog.cog_load()
+    bot.add_dynamic_items.assert_called_once()
+    args = bot.add_dynamic_items.call_args.args
+    assert WhisperGuessButton in args
+    assert WhisperShareButton in args
+    assert WhisperHideButton in args
+    assert WhisperExposeButton in args
