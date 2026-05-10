@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 
 from db_utils import get_config_value, set_config_value
-from services.whisper_models import WhisperConfig
+from services.whisper_models import Whisper, WhisperConfig
 
 _CONFIG_DEFAULTS: dict[str, str] = {
     "whisper_role_id": "0",
@@ -30,3 +31,85 @@ def set_whisper_config_value(
 ) -> None:
     """key is the full config key, e.g. 'whisper_channel_id'."""
     set_config_value(conn, key, value, guild_id)
+
+
+def _row_to_whisper(row: sqlite3.Row) -> Whisper:
+    return Whisper(
+        id=row["id"],
+        guild_id=row["guild_id"],
+        sender_id=row["sender_id"],
+        target_id=row["target_id"],
+        message=row["message"],
+        created_at=row["created_at"],
+        state=row["state"],
+        solved=bool(row["solved"]),
+        exposed=bool(row["exposed"]),
+        guesses_left=row["guesses_left"],
+        channel_msg_id=row["channel_msg_id"],
+        dm_msg_id=row["dm_msg_id"],
+    )
+
+
+def insert_whisper(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    sender_id: int,
+    target_id: int,
+    message: str,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO whispers
+            (guild_id, sender_id, target_id, message, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (guild_id, sender_id, target_id, message, time.time()),
+    )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def get_whisper(conn: sqlite3.Connection, whisper_id: int) -> Whisper | None:
+    row = conn.execute(
+        "SELECT * FROM whispers WHERE id = ?", (whisper_id,)
+    ).fetchone()
+    return _row_to_whisper(row) if row else None
+
+
+def set_whisper_message_ids(
+    conn: sqlite3.Connection,
+    whisper_id: int,
+    *,
+    channel_msg_id: int,
+    dm_msg_id: int,
+) -> None:
+    conn.execute(
+        "UPDATE whispers SET channel_msg_id = ?, dm_msg_id = ? WHERE id = ?",
+        (channel_msg_id, dm_msg_id, whisper_id),
+    )
+
+
+def update_whisper_state(
+    conn: sqlite3.Connection, whisper_id: int, new_state: str
+) -> None:
+    conn.execute(
+        "UPDATE whispers SET state = ? WHERE id = ?", (new_state, whisper_id)
+    )
+
+
+def list_received(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    target_id: int,
+    state: str,
+) -> list[Whisper]:
+    rows = conn.execute(
+        """
+        SELECT * FROM whispers
+        WHERE guild_id = ? AND target_id = ? AND state = ?
+        ORDER BY created_at DESC
+        """,
+        (guild_id, target_id, state),
+    ).fetchall()
+    return [_row_to_whisper(r) for r in rows]
