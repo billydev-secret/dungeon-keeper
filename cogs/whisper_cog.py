@@ -1180,6 +1180,10 @@ class WhisperOptinConfirmView(discord.ui.View):
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
+SEND_COOLDOWN_SECONDS = 30
+SEND_PER_TARGET_HOURLY_CAP = 5
+
+
 class WhisperCog(commands.Cog):
     whisper_group = app_commands.Group(name="whisper", description="Send anonymous whispers.")
 
@@ -1188,6 +1192,8 @@ class WhisperCog(commands.Cog):
         self.ctx = bot.ctx
         self._launcher_locks: dict[int, asyncio.Lock] = {}
         self._pending_refresh: set[int] = set()
+        self._last_send_at: dict[int, float] = {}  # sender_id -> ts
+        self._target_sends: dict[tuple[int, int, int], list[float]] = {}  # (guild_id, sender_id, target_id) -> [ts...]
 
     def _get_launcher_lock(self, guild_id: int) -> asyncio.Lock:
         lock = self._launcher_locks.get(guild_id)
@@ -1358,6 +1364,28 @@ class WhisperCog(commands.Cog):
         except SendValidationError as e:
             await interaction.response.send_message(e.message, ephemeral=True)
             return
+
+        import time as _t  # noqa: PLC0415
+        now = _t.time()
+        last = self._last_send_at.get(interaction.user.id, 0)
+        if now - last < SEND_COOLDOWN_SECONDS:
+            remaining = int(SEND_COOLDOWN_SECONDS - (now - last))
+            await interaction.response.send_message(
+                f"Slow down — wait {remaining}s before sending another whisper.",
+                ephemeral=True,
+            )
+            return
+
+        rate_key = (interaction.guild.id, interaction.user.id, target.id)
+        recent = [t for t in self._target_sends.get(rate_key, []) if now - t < 3600]
+        if len(recent) >= SEND_PER_TARGET_HOURLY_CAP:
+            await interaction.response.send_message(
+                f"You've sent {SEND_PER_TARGET_HOURLY_CAP} whispers to that user in the last hour. Try again later.",
+                ephemeral=True,
+            )
+            return
+        self._last_send_at[interaction.user.id] = now
+        self._target_sends[rate_key] = recent + [now]
 
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
