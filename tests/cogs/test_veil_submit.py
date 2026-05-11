@@ -214,10 +214,8 @@ async def test_submit_success_sends_ephemeral_preview(sync_db_path: Path):
     cog = _make_cog(str(sync_db_path))
     with patch("cogs.veil_cog._load_config", return_value=_cfg()):
         with patch("cogs.veil_cog.run_pipeline", return_value=fake_result):
-            with patch("cogs.veil_cog._do_insert_round", return_value=42):
-                with patch("cogs.veil_cog._do_update_round_message"):
-                    with patch("cogs.veil_cog._do_set_reroll_count"):
-                        await _submit(cog, interaction, _attachment(read_return=img_bytes))
+            with patch("cogs.veil_cog.render_crop_editor", return_value=b"\xff\xd8fake"):
+                await _submit(cog, interaction, _attachment(read_return=img_bytes))
 
     # Channel post deferred until the user clicks Post — not called here.
     fake_channel.send.assert_not_called()
@@ -281,3 +279,48 @@ async def test_submit_rejects_when_veil_role_not_configured():
     interaction.followup.send.assert_called_once()
     msg = interaction.followup.send.call_args.args[0]
     assert "role" in msg.lower() and ("not configured" in msg.lower() or "ask an admin" in msg.lower())
+
+
+@pytest.mark.asyncio
+async def test_on_post_reposts_prompt_after_game_message():
+    """After posting a game round, _repost_prompt is called to move the
+    sticky status bar below the new round."""
+    from cogs.veil_cog import CropEditorView
+    from services.veil_models import BoundingBox
+
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    bot.add_view = MagicMock()
+
+    fake_channel = MagicMock(spec=discord.TextChannel)
+    fake_channel.is_nsfw = MagicMock(return_value=True)
+    fake_channel.send = AsyncMock(return_value=_fake_game_message())
+
+    guild = FakeGuild(id=GUILD_ID)
+    guild.channels[VEIL_CHANNEL_ID] = fake_channel
+
+    interaction = fake_interaction(guild=guild)
+    interaction.guild.get_channel = lambda cid: guild.channels.get(cid)
+
+    view = CropEditorView(
+        bot,
+        image_bytes=b"",
+        img_w=500,
+        img_h=500,
+        crop_box=BoundingBox(0.0, 0.0, 500.0, 500.0),
+        guild_id=GUILD_ID,
+        veil_channel_id=VEIL_CHANNEL_ID,
+        submitter_id=1001,
+        answer_id=1001,
+        difficulty="medium",
+        candidate_count=1,
+    )
+
+    with patch("cogs.veil_cog._do_insert_round", return_value=42), \
+         patch("cogs.veil_cog._do_update_round_message"), \
+         patch("cogs.veil_cog._do_audit"), \
+         patch("cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
+         patch("cogs.veil_cog._repost_prompt", new_callable=AsyncMock) as mock_repost:
+        await view._on_post(interaction)
+
+    mock_repost.assert_awaited_once_with(bot, fake_channel, GUILD_ID)

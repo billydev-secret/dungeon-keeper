@@ -16,8 +16,15 @@ from discord import app_commands
 from discord.ext import commands
 
 from db_utils import open_db
-from services.veil_models import VeilConfig, VeilGuess, VeilRound
-from services.veil_pipeline import run_pipeline
+from services.veil_models import BoundingBox, VeilConfig, VeilGuess, VeilRound
+from services.veil_pipeline import (
+    compute_padded_crop,
+    enforce_min_size,
+    move_crop_box,
+    run_pipeline,
+    zoom_crop_box,
+)
+from services.veil_crop_renderer import render_crop, render_crop_editor
 from services.veil_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
@@ -524,17 +531,28 @@ class GameView(discord.ui.View):
         )
 
 
-class SubmitPreviewView(discord.ui.View):
-    """Ephemeral preview shown to the submitter; Post publishes to the game channel.
+CROP_EDITOR_ZOOM_IN: float = 0.8
+CROP_EDITOR_ZOOM_OUT: float = 1.25
 
-    The round row is only inserted to the DB when Post is clicked, so a timeout
-    or dismissal before posting leaves no orphan record.
+
+class CropEditorView(discord.ui.View):
+    """3×3 button grid for interactive crop framing.
+
+    Row 0:  [🔍+]  [↑]       [🔍−]
+    Row 1:  [← ]  [✓ Post]  [→  ]
+    Row 2:  [·  ]  [↓]       [✗  ]
+
+    Step size is 1/5 of the image dimension so 5 presses cross the full image.
+    The round is only inserted to DB when ✓ Post is clicked.
     """
 
     def __init__(
         self,
         bot: "Bot",
-        crops: list[bytes],
+        image_bytes: bytes,
+        img_w: int,
+        img_h: int,
+        crop_box: BoundingBox,
         guild_id: int,
         veil_channel_id: int,
         *,
@@ -548,9 +566,10 @@ class SubmitPreviewView(discord.ui.View):
     ) -> None:
         super().__init__(timeout=300)
         self.bot = bot
-        self.crops = crops
-        self.crop_index = 0
-        self.total_rerolls = 0
+        self.image_bytes = image_bytes
+        self.img_w = img_w
+        self.img_h = img_h
+        self.crop_box = crop_box
         self.guild_id = guild_id
         self.veil_channel_id = veil_channel_id
         self._submitter_id = submitter_id
@@ -562,50 +581,94 @@ class SubmitPreviewView(discord.ui.View):
         self._original_ext = original_ext
         self._post_lock = asyncio.Lock()
         self._posted = False
+        self._step_x = img_w / 5.0
+        self._step_y = img_h / 5.0
 
-        self.reroll_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-            label=f"Re-roll (1/{len(crops)})",
-            style=discord.ButtonStyle.secondary,
-            disabled=len(crops) <= 1,
+        B = discord.ui.Button  # type: ignore[type-arg]
+
+        # Row 0
+        z_in: discord.ui.Button = B(label="🔍+", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
+        z_in.callback = self._on_zoom_in
+        self.add_item(z_in)
+        up: discord.ui.Button = B(label="↑", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
+        up.callback = self._on_up
+        self.add_item(up)
+        z_out: discord.ui.Button = B(label="🔍−", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
+        z_out.callback = self._on_zoom_out
+        self.add_item(z_out)
+
+        # Row 1
+        left: discord.ui.Button = B(label="←", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
+        left.callback = self._on_left
+        self.add_item(left)
+        post: discord.ui.Button = B(label="✓ Post", style=discord.ButtonStyle.success, row=1)  # type: ignore[type-arg]
+        post.callback = self._on_post
+        self.add_item(post)
+        right: discord.ui.Button = B(label="→", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
+        right.callback = self._on_right
+        self.add_item(right)
+
+        # Row 2
+        spacer: discord.ui.Button = B(label="·", style=discord.ButtonStyle.secondary, disabled=True, row=2)  # type: ignore[type-arg]
+        self.add_item(spacer)
+        down: discord.ui.Button = B(label="↓", style=discord.ButtonStyle.secondary, row=2)  # type: ignore[type-arg]
+        down.callback = self._on_down
+        self.add_item(down)
+        cancel: discord.ui.Button = B(label="✗", style=discord.ButtonStyle.danger, row=2)  # type: ignore[type-arg]
+        cancel.callback = self._on_cancel
+        self.add_item(cancel)
+
+    async def _rerender(self, interaction: discord.Interaction) -> None:
+        editor_bytes = await asyncio.to_thread(
+            render_crop_editor, self.image_bytes, self.crop_box
         )
-        self.reroll_btn.callback = self._on_reroll
-        self.add_item(self.reroll_btn)
-
-        self.post_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-            label="Post",
-            style=discord.ButtonStyle.success,
-        )
-        self.post_btn.callback = self._on_post
-        self.add_item(self.post_btn)
-
-    async def _on_reroll(self, interaction: discord.Interaction) -> None:
-        self.crop_index = (self.crop_index + 1) % len(self.crops)
-        self.total_rerolls += 1
-        self.reroll_btn.label = f"Re-roll ({self.crop_index + 1}/{len(self.crops)})"
-
-        new_crop = self.crops[self.crop_index]
-        preview_file = discord.File(io.BytesIO(new_crop), filename="preview.jpg")
-        preview_embed = discord.Embed(
-            title="Your crop preview",
-            description=f"Crop {self.crop_index + 1} of {len(self.crops)} — click Post when happy",
-        ).set_image(url="attachment://preview.jpg")
+        preview_file = discord.File(io.BytesIO(editor_bytes), filename="preview.jpg")
         await interaction.response.edit_message(
-            embed=preview_embed,
+            embed=discord.Embed(
+                title="Crop editor",
+                description="Move/zoom the red box, then click ✓ Post",
+            ).set_image(url="attachment://preview.jpg"),
             attachments=[preview_file],
             view=self,
+        )
+
+    async def _on_up(self, interaction: discord.Interaction) -> None:
+        self.crop_box = move_crop_box(self.crop_box, 0, -self._step_y, self.img_w, self.img_h)
+        await self._rerender(interaction)
+
+    async def _on_down(self, interaction: discord.Interaction) -> None:
+        self.crop_box = move_crop_box(self.crop_box, 0, self._step_y, self.img_w, self.img_h)
+        await self._rerender(interaction)
+
+    async def _on_left(self, interaction: discord.Interaction) -> None:
+        self.crop_box = move_crop_box(self.crop_box, -self._step_x, 0, self.img_w, self.img_h)
+        await self._rerender(interaction)
+
+    async def _on_right(self, interaction: discord.Interaction) -> None:
+        self.crop_box = move_crop_box(self.crop_box, self._step_x, 0, self.img_w, self.img_h)
+        await self._rerender(interaction)
+
+    async def _on_zoom_in(self, interaction: discord.Interaction) -> None:
+        self.crop_box = zoom_crop_box(self.crop_box, CROP_EDITOR_ZOOM_IN, self.img_w, self.img_h)
+        await self._rerender(interaction)
+
+    async def _on_zoom_out(self, interaction: discord.Interaction) -> None:
+        self.crop_box = zoom_crop_box(self.crop_box, CROP_EDITOR_ZOOM_OUT, self.img_w, self.img_h)
+        await self._rerender(interaction)
+
+    async def _on_cancel(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(
+            content="Submission cancelled.", embed=None, attachments=[], view=None
         )
 
     async def _on_post(self, interaction: discord.Interaction) -> None:
         assert interaction.guild
         async with self._post_lock:
             if self._posted:
-                await interaction.response.send_message(
-                    "Already posted.", ephemeral=True
-                )
+                await interaction.response.send_message("Already posted.", ephemeral=True)
                 return
             self._posted = True
-            self.reroll_btn.disabled = True
-            self.post_btn.disabled = True
 
         await interaction.response.defer(ephemeral=True)
 
@@ -626,6 +689,8 @@ class SubmitPreviewView(discord.ui.View):
             )
             return
 
+        crop_bytes = await asyncio.to_thread(render_crop, self.image_bytes, self.crop_box)
+
         db_path = self.bot.ctx.db_path
         round_id = await asyncio.to_thread(
             _do_insert_round,
@@ -639,9 +704,6 @@ class SubmitPreviewView(discord.ui.View):
             candidate_count=self._candidate_count,
         )
 
-        if self.total_rerolls:
-            await asyncio.to_thread(_do_set_reroll_count, db_path, round_id, self.total_rerolls)
-
         if self._original_bytes:
             orig_path = _VEIL_ORIG_DIR / f"{round_id}{self._original_ext}"
 
@@ -652,8 +714,7 @@ class SubmitPreviewView(discord.ui.View):
             await asyncio.to_thread(_write_original)
             await asyncio.to_thread(_do_set_original_path, db_path, round_id, str(orig_path))
 
-        crop = self.crops[self.crop_index]
-        crop_file = discord.File(io.BytesIO(crop), filename="SPOILER_veil_crop.jpg")
+        crop_file = discord.File(io.BytesIO(crop_bytes), filename="SPOILER_veil_crop.jpg")
         game_view = GameView(self.bot, round_id)
         self.bot.add_view(game_view)
         role_ping = f"<@&{self._veil_role_id}>" if self._veil_role_id else None
@@ -666,24 +727,23 @@ class SubmitPreviewView(discord.ui.View):
 
         crop_url = game_msg.attachments[0].url if game_msg.attachments else ""
         await asyncio.to_thread(
-            _do_update_round_message,
-            db_path,
-            round_id,
-            game_msg.id,
-            crop_url,
-            "",
+            _do_update_round_message, db_path, round_id, game_msg.id, crop_url, ""
         )
 
         await asyncio.to_thread(
             _do_audit, db_path,
             guild_id=self.guild_id, actor_id=self._submitter_id,
             action="submit", round_id=round_id,
-            details={"difficulty": self._difficulty, "rerolls": self.total_rerolls},
+            details={"difficulty": self._difficulty},
         )
+
+        await _repost_prompt(self.bot, veil_channel, self.guild_id)
 
         await interaction.edit_original_response(
             content=f"✅ Posted to {veil_channel.mention}!",
-            view=self,
+            embed=None,
+            attachments=[],
+            view=None,
         )
 
 
@@ -944,7 +1004,7 @@ class VeilCog(commands.Cog):
 
         image_bytes = await image.read()
 
-        dim_ok, *_ = await asyncio.to_thread(
+        dim_ok, img_w, img_h = await asyncio.to_thread(
             _validate_dimensions, image_bytes, config.min_image_dimension_px
         )
         if not dim_ok:
@@ -969,26 +1029,37 @@ class VeilCog(commands.Cog):
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        if not pipeline_result.crops:
+        if not pipeline_result.candidates:
             await interaction.followup.send(
                 "Couldn't find a viable crop region — try a different image.", ephemeral=True
             )
             return
 
-        preview_file = discord.File(io.BytesIO(pipeline_result.crops[0]), filename="preview.jpg")
-        preview_embed = discord.Embed(
-            title="Your crop preview",
-            description=f"Crop 1 of {len(pipeline_result.crops)} — click Post when happy",
-        ).set_image(url="attachment://preview.jpg")
+        top_det = max(pipeline_result.candidates, key=lambda d: d.score)
+        _expanded = enforce_min_size(compute_padded_crop(top_det.box, config.crop_difficulty, img_w, img_h))
+        initial_crop = BoundingBox(
+            max(0.0, _expanded.x1),
+            max(0.0, _expanded.y1),
+            min(float(img_w), _expanded.x2),
+            min(float(img_h), _expanded.y2),
+        )
+
+        editor_bytes = await asyncio.to_thread(render_crop_editor, image_bytes, initial_crop)
         original_ext = (Path(image.filename).suffix or ".jpg").lower()
         await interaction.followup.send(
-            embed=preview_embed,
-            file=preview_file,
-            view=SubmitPreviewView(
+            embed=discord.Embed(
+                title="Crop editor",
+                description="Move/zoom the red box to frame your crop, then click ✓ Post",
+            ).set_image(url="attachment://preview.jpg"),
+            file=discord.File(io.BytesIO(editor_bytes), filename="preview.jpg"),
+            view=CropEditorView(
                 self.bot,
-                pipeline_result.crops,
-                interaction.guild.id,
-                config.veil_channel_id,
+                image_bytes=image_bytes,
+                img_w=img_w,
+                img_h=img_h,
+                crop_box=initial_crop,
+                guild_id=interaction.guild.id,
+                veil_channel_id=config.veil_channel_id,
                 submitter_id=interaction.user.id,
                 answer_id=interaction.user.id,
                 difficulty=config.crop_difficulty,
