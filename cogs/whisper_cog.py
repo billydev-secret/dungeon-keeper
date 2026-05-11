@@ -1,9 +1,10 @@
-"""Whisper cog — anonymous-message guessing game (Whisper clone)."""
+﻿"""Whisper cog — anonymous-message guessing game (Whisper clone)."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -290,7 +291,40 @@ class WhisperGuessButton(
         if whisper.guesses_left <= 0:
             await interaction.response.send_message(ERROR_GUESS_NO_ATTEMPTS, ephemeral=True)
             return
-        await interaction.response.send_modal(WhisperGuessModal(self.bot, self.whisper_id))
+
+        guild = interaction.guild or self.bot.get_guild(whisper.guild_id)
+        if guild is None:
+            await interaction.response.send_message(
+                "Couldn't find the server — try again.", ephemeral=True
+            )
+            return
+        cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, whisper.guild_id)
+        if cfg.role_id == 0:
+            await interaction.response.send_message(
+                "Whisper role isn't configured.", ephemeral=True
+            )
+            return
+        role = guild.get_role(cfg.role_id)
+        if role is None:
+            await interaction.response.send_message(
+                "Whisper role no longer exists.", ephemeral=True
+            )
+            return
+
+        members = sorted(
+            [m for m in role.members if m.id != whisper.target_id],
+            key=lambda m: m.display_name.lower(),
+        )
+        if not members:
+            await interaction.response.send_message(
+                "No other opted-in members to guess from.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            ephemeral=True,
+            view=WhisperGuessSelectView(self.bot, self.whisper_id, members),
+        )
 
 
 class WhisperShareButton(
@@ -343,11 +377,12 @@ class WhisperShareButton(
             _do_update_state, self.bot.ctx.db_path, self.whisper_id, STATE_SHARED
         )
 
-        if interaction.guild:
+        guild = interaction.guild or self.bot.get_guild(whisper.guild_id)
+        if guild:
             cfg = await asyncio.to_thread(
                 _load_config, self.bot.ctx.db_path, whisper.guild_id
             )
-            feed_channel = interaction.guild.get_channel(cfg.channel_id)
+            feed_channel = guild.get_channel(cfg.channel_id)
             if isinstance(feed_channel, discord.TextChannel):
                 if whisper.channel_msg_id:
                     try:
@@ -800,101 +835,6 @@ class WhisperExposeView(discord.ui.View):
 
 
 # ── Per-whisper DM view (Guess + Share + Hide) ───────────────────────────────
-
-class WhisperGuessModal(discord.ui.Modal, title="Guess the sender"):
-    guess_input: discord.ui.TextInput = discord.ui.TextInput(
-        label="Member ID or @mention",
-        placeholder="Right-click a member → Copy ID, or paste a mention",
-        required=True,
-        max_length=80,
-    )
-
-    def __init__(self, bot: Bot, whisper_id: int) -> None:
-        super().__init__()
-        self.bot = bot
-        self.whisper_id = whisper_id
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        whisper = await asyncio.to_thread(
-            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
-        )
-        if whisper is None:
-            await interaction.response.send_message("Whisper not found.", ephemeral=True)
-            return
-
-        guessed_id = _parse_member_id(str(self.guess_input.value))
-        if guessed_id is None:
-            await interaction.response.send_message(
-                "Couldn't parse that. Paste a member ID or @mention.",
-                ephemeral=True,
-            )
-            return
-
-        try:
-            outcome = evaluate_guess(
-                whisper, guesser_id=interaction.user.id, guessed_id=guessed_id
-            )
-        except GuessValidationError as e:
-            await interaction.response.send_message(e.message, ephemeral=True)
-            return
-
-        await asyncio.to_thread(
-            _do_record_guess,
-            self.bot.ctx.db_path,
-            whisper_id=self.whisper_id,
-            guessed_id=guessed_id,
-            correct=outcome.correct,
-        )
-
-        if outcome.correct:
-            sender_member = (
-                interaction.guild.get_member(whisper.sender_id)
-                if interaction.guild else None
-            )
-            sender_label = (
-                sender_member.mention if sender_member else f"<@{whisper.sender_id}>"
-            )
-            await interaction.response.send_message(
-                f"You're right! It was {sender_label}.", ephemeral=True
-            )
-            cfg = await asyncio.to_thread(
-                _load_config, self.bot.ctx.db_path, whisper.guild_id
-            )
-            if interaction.guild:
-                feed_channel = interaction.guild.get_channel(cfg.channel_id)
-                if isinstance(feed_channel, discord.TextChannel):
-                    try:
-                        await feed_channel.send(
-                            f"✅ You're Right! <@{whisper.target_id}> figured out who sent the whisper:\n"
-                            f"```{whisper.message}```",
-                            view=WhisperExposeView(self.bot, self.whisper_id),
-                            allowed_mentions=discord.AllowedMentions.none(),
-                        )
-                    except discord.HTTPException:
-                        log.warning("Failed to post solved message to feed")
-        elif outcome.exhausted:
-            # Remove the Guess button from the original DM message so the
-            # target sees Share/Hide only (no more guesses possible).
-            if whisper.dm_msg_id:
-                try:
-                    dm_channel = await interaction.user.create_dm()
-                    dm_msg = await dm_channel.fetch_message(whisper.dm_msg_id)
-                    await dm_msg.edit(
-                        view=WhisperDmView.without_guess(self.bot, self.whisper_id)
-                    )
-                except discord.HTTPException:
-                    log.warning("Failed to remove Guess button from exhausted whisper DM")
-            await interaction.response.send_message(
-                "Wrong! No more guesses. The sender stays anonymous forever.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                f"Wrong! {outcome.attempts_remaining} guesses left.",
-                ephemeral=True,
-            )
-
-
 class WhisperDmView(discord.ui.View):
     def __init__(self, bot: Bot, whisper_id: int) -> None:
         super().__init__(timeout=None)
@@ -926,6 +866,166 @@ class WhisperDmView(discord.ui.View):
         v.whisper_id = whisper_id
         v.add_item(WhisperGuessButton(bot, whisper_id))
         return v
+
+
+# ── Guess outcome helper + select view ──────────────────────────────────────
+
+async def _handle_guess_outcome(
+    interaction: discord.Interaction,
+    bot: Bot,
+    whisper: Whisper,
+    guessed_id: int,
+) -> None:
+    try:
+        outcome = evaluate_guess(
+            whisper, guesser_id=interaction.user.id, guessed_id=guessed_id
+        )
+    except GuessValidationError as e:
+        await interaction.response.edit_message(content=e.message, view=None)
+        return
+
+    await asyncio.to_thread(
+        _do_record_guess,
+        bot.ctx.db_path,
+        whisper_id=whisper.id,
+        guessed_id=guessed_id,
+        correct=outcome.correct,
+    )
+
+    if outcome.correct:
+        guild = interaction.guild or bot.get_guild(whisper.guild_id)
+        sender_label = f"<@{whisper.sender_id}>"
+        if guild:
+            sender_member = guild.get_member(whisper.sender_id)
+            if sender_member:
+                sender_label = sender_member.mention
+        await interaction.response.edit_message(
+            content=f"You're right! It was {sender_label}.", view=None
+        )
+        cfg = await asyncio.to_thread(_load_config, bot.ctx.db_path, whisper.guild_id)
+        if guild:
+            feed_channel = guild.get_channel(cfg.channel_id)
+            if isinstance(feed_channel, discord.TextChannel):
+                try:
+                    await feed_channel.send(
+                        f"✅ You're Right! <@{whisper.target_id}> figured out who sent the whisper:\n"
+                        f"```{whisper.message}```",
+                        view=WhisperExposeView(bot, whisper.id),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    log.warning("Failed to post solved message to feed")
+    elif outcome.exhausted:
+        if whisper.dm_msg_id:
+            try:
+                dm_channel = await interaction.user.create_dm()
+                dm_msg = await dm_channel.fetch_message(whisper.dm_msg_id)
+                await dm_msg.edit(view=WhisperDmView.without_guess(bot, whisper.id))
+            except discord.HTTPException:
+                log.warning("Failed to remove Guess button from exhausted whisper DM")
+        await interaction.response.edit_message(
+            content="Wrong! No more guesses. The sender stays anonymous forever.",
+            view=None,
+        )
+    else:
+        await interaction.response.edit_message(
+            content=f"Wrong! {outcome.attempts_remaining} guesses left.",
+            view=None,
+        )
+
+
+_GUESS_PAGE_SIZE = 25
+
+
+class WhisperGuessMemberSelect(discord.ui.Select):
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        members: Sequence[discord.Member],
+        page: int,
+    ) -> None:
+        page_members = members[page * _GUESS_PAGE_SIZE:(page + 1) * _GUESS_PAGE_SIZE]
+        options = [
+            discord.SelectOption(label=m.display_name[:100], value=str(m.id))
+            for m in page_members
+        ]
+        super().__init__(
+            placeholder="Pick the sender…",
+            options=options,
+            min_values=1,
+            max_values=1,
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guessed_id = int(self.values[0])
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.edit_message(content="Whisper not found.", view=None)
+            return
+        if whisper.solved:
+            await interaction.response.edit_message(
+                content=ERROR_GUESS_ALREADY_SOLVED, view=None
+            )
+            return
+        if whisper.guesses_left <= 0:
+            await interaction.response.edit_message(
+                content=ERROR_GUESS_NO_ATTEMPTS, view=None
+            )
+            return
+        await _handle_guess_outcome(interaction, self.bot, whisper, guessed_id)
+
+
+class WhisperGuessSelectView(discord.ui.View):
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        members: Sequence[discord.Member],
+        page: int = 0,
+    ) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.whisper_id = whisper_id
+        self.members = members
+        self.page = page
+        total_pages = (len(members) + _GUESS_PAGE_SIZE - 1) // _GUESS_PAGE_SIZE
+
+        self.add_item(WhisperGuessMemberSelect(bot, whisper_id, members, page))
+
+        if len(members) > _GUESS_PAGE_SIZE:
+            prev_btn = discord.ui.Button(
+                label="Prev",
+                style=discord.ButtonStyle.secondary,
+                disabled=(page == 0),
+                row=1,
+            )
+            next_btn = discord.ui.Button(
+                label="Next",
+                style=discord.ButtonStyle.secondary,
+                disabled=(page >= total_pages - 1),
+                row=1,
+            )
+            prev_btn.callback = self._on_prev
+            next_btn.callback = self._on_next
+            self.add_item(prev_btn)
+            self.add_item(next_btn)
+
+    async def _on_prev(self, interaction: discord.Interaction) -> None:
+        new_view = WhisperGuessSelectView(
+            self.bot, self.whisper_id, self.members, self.page - 1
+        )
+        await interaction.response.edit_message(view=new_view)
+
+    async def _on_next(self, interaction: discord.Interaction) -> None:
+        new_view = WhisperGuessSelectView(
+            self.bot, self.whisper_id, self.members, self.page + 1
+        )
+        await interaction.response.edit_message(view=new_view)
 
 
 # ── Persistent feed-channel view (Send / Check / Check Hidden) ───────────────
