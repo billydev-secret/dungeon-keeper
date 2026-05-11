@@ -42,3 +42,13 @@ class WhisperGuess:
     guessed_id: int
     correct: bool
     created_at: float
+
+
+@dataclass
+class WhisperReply:
+    id: int
+    whisper_id: int
+    from_user_id: int
+    to_user_id: int
+    content: str
+    created_at: float
