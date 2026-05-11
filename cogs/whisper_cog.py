@@ -122,7 +122,10 @@ def _build_inbox(
     for idx, w in enumerate(visible, start=1):
         row = idx - 1
         view.add_item(WhisperShareButton(bot, w.id, index=idx, row=row))
-        view.add_item(WhisperHideButton(bot, w.id, index=idx, row=row))
+        if hidden_view:
+            view.add_item(WhisperUnhideButton(bot, w.id, index=idx, row=row))
+        else:
+            view.add_item(WhisperHideButton(bot, w.id, index=idx, row=row))
         view.add_item(WhisperGuessButton(bot, w.id, index=idx, row=row))
         view.add_item(WhisperReplyButton(bot, w.id, index=idx, row=row))
         view.add_item(WhisperReportButton(bot, w.id, index=idx, row=row))
@@ -509,6 +512,65 @@ class WhisperHideButton(
         await interaction.response.send_message(
             "Whisper hidden. You can find it under Check Hidden Whispers.",
             ephemeral=True,
+        )
+
+
+class WhisperUnhideButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:unhide:(?P<id>\d+)"),
+):
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        *,
+        index: int | None = None,
+        row: int | None = None,
+    ) -> None:
+        label = f"Unhide #{index}" if index else "Unhide"
+        super().__init__(
+            discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"whisper:unhide:{whisper_id}",
+                row=row,
+            )
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperUnhideButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        if interaction.user.id != whisper.target_id:
+            await interaction.response.send_message(
+                "Only the recipient can unhide a whisper.", ephemeral=True
+            )
+            return
+        if whisper.state != STATE_HIDDEN:
+            await interaction.response.send_message(
+                "This whisper isn't hidden.", ephemeral=True
+            )
+            return
+
+        await asyncio.to_thread(
+            _do_update_state, self.bot.ctx.db_path, self.whisper_id, STATE_PENDING
+        )
+        await interaction.response.send_message(
+            "Whisper restored to your inbox.", ephemeral=True
         )
 
 
@@ -1290,6 +1352,7 @@ class WhisperCog(commands.Cog):
             WhisperGuessButton,
             WhisperShareButton,
             WhisperHideButton,
+            WhisperUnhideButton,
             WhisperExposeButton,
             WhisperReplyButton,
             WhisperReportButton,

@@ -421,6 +421,60 @@ async def test_report_modal_first_report_succeeds():
 # ── S6: Reply mod log ─────────────────────────────────────────────────────────
 
 
+# ── S2: Unhide button ────────────────────────────────────────────────────────
+
+
+def test_build_inbox_hidden_view_uses_unhide_button():
+    """hidden_view=True should yield WhisperUnhideButton instead of WhisperHideButton."""
+    from cogs.whisper_cog import (
+        WhisperHideButton,
+        WhisperUnhideButton,
+        _build_inbox,
+    )
+    bot = MagicMock()
+    whispers = [_w(wid=10 + i) for i in range(2)]
+    _embed, view = _build_inbox(bot, whispers, title="Hidden Whispers", hidden_view=True)
+    button_types = {type(c) for c in view.children}
+    assert WhisperUnhideButton in button_types
+    assert WhisperHideButton not in button_types
+
+
+@pytest.mark.asyncio
+async def test_unhide_button_transitions_state_to_pending():
+    """Unhide callback should update state from hidden -> pending."""
+    from cogs.whisper_cog import WhisperUnhideButton
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    button = WhisperUnhideButton(bot, 42)
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
+         patch("cogs.whisper_cog._do_update_state") as update_state:
+        await button.callback(interaction)
+
+    update_state.assert_called_once_with(":memory:", 42, "pending")
+    interaction.response.send_message.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unhide_button_rejects_non_target():
+    """Unhide callback rejects users who aren't the recipient."""
+    from cogs.whisper_cog import WhisperUnhideButton
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    button = WhisperUnhideButton(bot, 42)
+    interaction = fake_interaction(user=FakeMember(id=OTHER))
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
+         patch("cogs.whisper_cog._do_update_state") as update_state:
+        await button.callback(interaction)
+
+    update_state.assert_not_called()
+    interaction.response.send_message.assert_awaited()
+
+
 @pytest.mark.asyncio
 async def test_reply_modal_posts_to_mod_log():
     """After a successful reply, a mod log embed should be posted."""
