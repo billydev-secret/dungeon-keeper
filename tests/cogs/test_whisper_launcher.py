@@ -30,6 +30,7 @@ def _make_cog():
     cog.bot = bot
     cog.ctx = bot.ctx
     cog._launcher_locks = {}
+    cog._pending_refresh = set()
     return cog
 
 
@@ -114,6 +115,8 @@ async def test_on_message_listener_triggers_refresh_in_whisper_channel():
     cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
 
     msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = False
     msg.guild = MagicMock()
     msg.guild.id = GUILD_ID
     msg.channel = MagicMock()
@@ -132,6 +135,8 @@ async def test_on_message_listener_skips_other_channels():
     cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
 
     msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = False
     msg.guild = MagicMock()
     msg.guild.id = GUILD_ID
     msg.channel = MagicMock()
@@ -150,11 +155,34 @@ async def test_on_message_listener_skips_launcher_message_itself():
     cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
 
     msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = False
     msg.guild = MagicMock()
     msg.guild.id = GUILD_ID
     msg.channel = MagicMock()
     msg.channel.id = FEED_CHANNEL_ID
     msg.id = 11111  # IS the launcher
+
+    with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
+        await cog._on_message_launcher_bump(msg)
+
+    cog.refresh_whisper_launcher.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_on_message_listener_skips_bot_authors():
+    """Bot messages (own announcements etc.) must not trigger launcher refresh."""
+    cog = _make_cog()
+    cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
+
+    msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = True
+    msg.guild = MagicMock()
+    msg.guild.id = GUILD_ID
+    msg.channel = MagicMock()
+    msg.channel.id = FEED_CHANNEL_ID
+    msg.id = 99999
 
     with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
         await cog._on_message_launcher_bump(msg)

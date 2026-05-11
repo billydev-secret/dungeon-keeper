@@ -1187,6 +1187,7 @@ class WhisperCog(commands.Cog):
         self.bot = bot
         self.ctx = bot.ctx
         self._launcher_locks: dict[int, asyncio.Lock] = {}
+        self._pending_refresh: set[int] = set()
 
     def _get_launcher_lock(self, guild_id: int) -> asyncio.Lock:
         lock = self._launcher_locks.get(guild_id)
@@ -1221,8 +1222,18 @@ class WhisperCog(commands.Cog):
 
     async def refresh_whisper_launcher(self, guild_id: int) -> None:
         """Delete the previous launcher (if any) and post a fresh one at the
-        bottom of the configured whisper channel. Serialized per-guild."""
+        bottom of the configured whisper channel. Serialized per-guild.
+
+        Multiple concurrent calls for the same guild are coalesced: only one
+        actual delete+post cycle runs at a time, and a second cycle fires only
+        if at least one more call arrived while the first held the lock.
+        """
+        self._pending_refresh.add(guild_id)
         async with self._get_launcher_lock(guild_id):
+            if guild_id not in self._pending_refresh:
+                return  # another invocation already did the work for us
+            self._pending_refresh.discard(guild_id)
+
             cfg = await asyncio.to_thread(
                 _load_config, self.ctx.db_path, guild_id
             )
@@ -1257,6 +1268,8 @@ class WhisperCog(commands.Cog):
 
     @commands.Cog.listener("on_message")
     async def _on_message_launcher_bump(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
         if not message.guild:
             return
         cfg = await asyncio.to_thread(
