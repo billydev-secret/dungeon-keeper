@@ -26,6 +26,7 @@ from services.whisper_repo import (
     get_whisper,
     get_whisper_config,
     insert_guess,
+    insert_reply,
     insert_whisper,
     list_received,
     list_received_in_states,
@@ -61,6 +62,68 @@ def _parse_member_id(raw: str) -> int | None:
     Returns None if no digits are present."""
     digits = "".join(ch for ch in raw.strip() if ch.isdigit())
     return int(digits) if digits else None
+
+
+def _format_time_ago(created_at: float, now: float | None = None) -> str:
+    import time as _t  # noqa: PLC0415
+    current = now if now is not None else _t.time()
+    delta = max(0, int(current - created_at))
+    if delta < 60:
+        return f"{delta}s ago"
+    if delta < 3600:
+        return f"{delta // 60}m ago"
+    if delta < 86400:
+        return f"{delta // 3600}h ago"
+    days = delta // 86400
+    return f"{days} day{'s' if days != 1 else ''} ago"
+
+
+_INBOX_PAGE_SIZE = 5  # Discord ActionRow limit per message
+
+
+def _build_inbox(
+    bot: Bot,
+    whispers: list[Whisper],
+    *,
+    title: str,
+    hidden_view: bool,
+) -> tuple[discord.Embed, discord.ui.View]:
+    visible = whispers[:_INBOX_PAGE_SIZE]
+    embed = discord.Embed(
+        title=f"{title} ({len(whispers)})",
+        color=discord.Color.blurple(),
+    )
+    if not visible:
+        embed.description = "*No whispers.*"
+    else:
+        lines: list[str] = []
+        for idx, w in enumerate(visible, start=1):
+            lines.append(
+                f"**Message #{idx}:**\n```{w.message}```"
+                f" *({_format_time_ago(w.created_at)})*"
+            )
+        embed.description = "\n".join(lines)
+
+    if len(whispers) > _INBOX_PAGE_SIZE:
+        hint = "Hide old messages to see more." if not hidden_view else ""
+        suffix = f" {hint}" if hint else ""
+        embed.set_footer(
+            text=f"Last {_INBOX_PAGE_SIZE} messages displayed.{suffix} "
+            f"{len(whispers)} messages total."
+        )
+    elif visible:
+        plural = "messages" if len(whispers) != 1 else "message"
+        embed.set_footer(text=f"{len(whispers)} {plural} total.")
+
+    view = discord.ui.View(timeout=None)
+    for idx, w in enumerate(visible, start=1):
+        row = idx - 1
+        view.add_item(WhisperShareButton(bot, w.id, index=idx, row=row))
+        view.add_item(WhisperHideButton(bot, w.id, index=idx, row=row))
+        view.add_item(WhisperGuessButton(bot, w.id, index=idx, row=row))
+        view.add_item(WhisperReplyButton(bot, w.id, index=idx, row=row))
+        view.add_item(WhisperReportButton(bot, w.id, index=idx, row=row))
+    return embed, view
 
 
 # ── DB shims (sync, called via asyncio.to_thread) ────────────────────────────
@@ -153,6 +216,24 @@ def _do_set_launcher_id(db_path: Path, guild_id: int, message_id: int) -> None:
         set_whisper_launcher_message_id(conn, guild_id, message_id)
 
 
+def _do_insert_reply(
+    db_path: Path,
+    *,
+    whisper_id: int,
+    from_user_id: int,
+    to_user_id: int,
+    content: str,
+) -> int:
+    with open_db(db_path) as conn:
+        return insert_reply(
+            conn,
+            whisper_id=whisper_id,
+            from_user_id=from_user_id,
+            to_user_id=to_user_id,
+            content=content,
+        )
+
+
 # ── Per-whisper Dynamic buttons (custom_id contains whisper_id) ──────────────
 #
 # These use discord.ui.DynamicItem so that after a bot restart the button
@@ -164,12 +245,21 @@ class WhisperGuessButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=re.compile(r"whisper:guess:(?P<id>\d+)"),
 ):
-    def __init__(self, bot: Bot, whisper_id: int) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        *,
+        index: int | None = None,
+        row: int | None = None,
+    ) -> None:
+        label = f"Guess #{index}" if index else "Guess"
         super().__init__(
             discord.ui.Button(
-                label="Guess",
+                label=label,
                 style=discord.ButtonStyle.primary,
                 custom_id=f"whisper:guess:{whisper_id}",
+                row=row,
             )
         )
         self.bot = bot
@@ -207,12 +297,21 @@ class WhisperShareButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=re.compile(r"whisper:share:(?P<id>\d+)"),
 ):
-    def __init__(self, bot: Bot, whisper_id: int) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        *,
+        index: int | None = None,
+        row: int | None = None,
+    ) -> None:
+        label = f"Share #{index}" if index else "Share"
         super().__init__(
             discord.ui.Button(
-                label="Share",
+                label=label,
                 style=discord.ButtonStyle.success,
                 custom_id=f"whisper:share:{whisper_id}",
+                row=row,
             )
         )
         self.bot = bot
@@ -293,12 +392,21 @@ class WhisperHideButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=re.compile(r"whisper:hide:(?P<id>\d+)"),
 ):
-    def __init__(self, bot: Bot, whisper_id: int) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        *,
+        index: int | None = None,
+        row: int | None = None,
+    ) -> None:
+        label = f"Hide #{index}" if index else "Hide"
         super().__init__(
             discord.ui.Button(
-                label="Hide",
+                label=label,
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"whisper:hide:{whisper_id}",
+                row=row,
             )
         )
         self.bot = bot
@@ -351,12 +459,21 @@ class WhisperExposeButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=re.compile(r"whisper:expose:(?P<id>\d+)"),
 ):
-    def __init__(self, bot: Bot, whisper_id: int) -> None:
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        *,
+        index: int | None = None,
+        row: int | None = None,
+    ) -> None:
+        label = f"Expose #{index}" if index else "Expose"
         super().__init__(
             discord.ui.Button(
-                label="Expose",
+                label=label,
                 style=discord.ButtonStyle.danger,
                 custom_id=f"whisper:expose:{whisper_id}",
+                row=row,
             )
         )
         self.bot = bot
@@ -411,6 +528,265 @@ class WhisperExposeButton(
                 log.warning("Failed to edit message on expose")
 
         await interaction.response.send_message("Exposed.", ephemeral=True)
+
+
+class WhisperReplyButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:reply:(?P<id>\d+)"),
+):
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        *,
+        index: int | None = None,
+        row: int | None = None,
+    ) -> None:
+        label = f"Reply #{index}" if index else "Reply"
+        super().__init__(
+            discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.success,
+                custom_id=f"whisper:reply:{whisper_id}",
+                row=row,
+            )
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperReplyButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        if interaction.user.id not in (whisper.sender_id, whisper.target_id):
+            await interaction.response.send_message(
+                "Only the sender or recipient can reply.", ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(
+            WhisperReplyModal(self.bot, self.whisper_id)
+        )
+
+
+class WhisperReportButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:report:(?P<id>\d+)"),
+):
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        *,
+        index: int | None = None,
+        row: int | None = None,
+    ) -> None:
+        label = f"Report #{index}" if index else "Report"
+        super().__init__(
+            discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.danger,
+                custom_id=f"whisper:report:{whisper_id}",
+                row=row,
+            )
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperReportButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        if interaction.user.id != whisper.target_id:
+            await interaction.response.send_message(
+                "Only the recipient can report a whisper.", ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(
+            WhisperReportModal(self.bot, self.whisper_id)
+        )
+
+
+# ── Reply / Report modals ────────────────────────────────────────────────────
+
+
+class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
+    reply_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="Your reply",
+        style=discord.TextStyle.long,
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__()
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message(
+                "Whisper not found.", ephemeral=True
+            )
+            return
+        if interaction.user.id == whisper.target_id:
+            to_user_id = whisper.sender_id
+        elif interaction.user.id == whisper.sender_id:
+            to_user_id = whisper.target_id
+        else:
+            await interaction.response.send_message(
+                "Only the sender or recipient can reply.", ephemeral=True
+            )
+            return
+
+        content = str(self.reply_input.value).strip()
+        if not content:
+            await interaction.response.send_message(
+                "Reply can't be empty.", ephemeral=True
+            )
+            return
+
+        # Try to DM the other party first so we don't persist if undeliverable.
+        recipient = interaction.client.get_user(to_user_id) or await interaction.client.fetch_user(to_user_id)  # type: ignore[attr-defined]
+        try:
+            preview = whisper.message
+            if len(preview) > 200:
+                preview = preview[:197] + "…"
+            await recipient.send(
+                f"\U0001f4ec Anonymous reply on whisper *(\"{preview}\")*:\n"
+                f"```{content}```",
+                view=WhisperReplyDmView(self.bot, self.whisper_id),
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message(
+                "Couldn't deliver — they have DMs disabled.", ephemeral=True
+            )
+            return
+
+        await asyncio.to_thread(
+            _do_insert_reply,
+            self.bot.ctx.db_path,
+            whisper_id=self.whisper_id,
+            from_user_id=interaction.user.id,
+            to_user_id=to_user_id,
+            content=content,
+        )
+        await interaction.response.send_message(
+            "Reply delivered anonymously.", ephemeral=True
+        )
+
+
+class WhisperReplyDmView(discord.ui.View):
+    """View attached to incoming reply DMs so the recipient can reply back."""
+
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__(timeout=None)
+        self.add_item(WhisperReplyButton(bot, whisper_id))
+
+
+class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
+    reason_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="Reason (optional)",
+        style=discord.TextStyle.long,
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__()
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message(
+                "Whisper not found.", ephemeral=True
+            )
+            return
+        if interaction.user.id != whisper.target_id:
+            await interaction.response.send_message(
+                "Only the recipient can report a whisper.", ephemeral=True
+            )
+            return
+
+        cfg = await asyncio.to_thread(
+            _load_config, self.bot.ctx.db_path, whisper.guild_id
+        )
+        if interaction.guild is None or cfg.log_channel_id == 0:
+            await interaction.response.send_message(
+                "Mod log channel isn't configured. Report not delivered.",
+                ephemeral=True,
+            )
+            return
+        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+        if not isinstance(log_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Mod log channel is misconfigured. Report not delivered.",
+                ephemeral=True,
+            )
+            return
+
+        reason = str(self.reason_input.value).strip() or "(no reason provided)"
+        emb = discord.Embed(
+            title="Whisper Reported",
+            description=whisper.message,
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        emb.add_field(
+            name="Sender",
+            value=f"<@{whisper.sender_id}> (`{whisper.sender_id}`)",
+            inline=False,
+        )
+        emb.add_field(
+            name="Reporter (Target)",
+            value=f"<@{whisper.target_id}> (`{whisper.target_id}`)",
+            inline=False,
+        )
+        emb.add_field(name="Reason", value=reason, inline=False)
+        emb.add_field(name="Whisper ID", value=str(whisper.id), inline=False)
+        try:
+            await log_channel.send(
+                embed=emb, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Failed to deliver report (bot can't post to mod log).",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "Report submitted to moderators.", ephemeral=True
+        )
 
 
 # ── Expose view: posted in feed channel after correct guess ──────────────────
@@ -629,40 +1005,35 @@ class WhisperFeedView(discord.ui.View):
 
     async def _on_check_click(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
-        all_whispers = await asyncio.to_thread(
+        whispers = await asyncio.to_thread(
             _do_list_received_in_states,
             self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             target_id=interaction.user.id,
             states=[STATE_PENDING, STATE_SHARED],
         )
-        if not all_whispers:
-            await interaction.response.send_message("No whispers to show.", ephemeral=True)
-            return
-        lines = [f"You have {len(all_whispers)} whisper(s):"]
-        for w in all_whispers[:25]:
-            preview = (w.message[:60] + "…") if len(w.message) > 60 else w.message
-            tag = "[shared]" if w.state == STATE_SHARED else "[pending]"
-            lines.append(f"• {tag} `{w.id}` — {preview}")
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+        embed, view = _build_inbox(
+            self.bot, whispers, title="Your Inbox", hidden_view=False
+        )
+        await interaction.response.send_message(
+            embed=embed, view=view, ephemeral=True
+        )
 
     async def _on_check_hidden_click(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
-        hidden = await asyncio.to_thread(
+        whispers = await asyncio.to_thread(
             _do_list_received,
             self.bot.ctx.db_path,
             guild_id=interaction.guild.id,
             target_id=interaction.user.id,
             state=STATE_HIDDEN,
         )
-        if not hidden:
-            await interaction.response.send_message("No hidden whispers.", ephemeral=True)
-            return
-        lines = [f"You have {len(hidden)} hidden whisper(s):"]
-        for w in hidden[:25]:
-            preview = (w.message[:60] + "…") if len(w.message) > 60 else w.message
-            lines.append(f"• `{w.id}` — {preview}")
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+        embed, view = _build_inbox(
+            self.bot, whispers, title="Hidden Whispers", hidden_view=True
+        )
+        await interaction.response.send_message(
+            embed=embed, view=view, ephemeral=True
+        )
 
 
 # ── Opt-in confirmation view ─────────────────────────────────────────────────
@@ -734,6 +1105,8 @@ class WhisperCog(commands.Cog):
             WhisperShareButton,
             WhisperHideButton,
             WhisperExposeButton,
+            WhisperReplyButton,
+            WhisperReportButton,
         )
         # Bootstrap launcher in every configured guild so the button bar is
         # at the bottom of the channel from boot.
