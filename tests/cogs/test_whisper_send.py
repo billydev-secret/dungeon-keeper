@@ -303,3 +303,39 @@ async def test_send_allowed_after_cooldown_elapses():
 
     target.send.assert_awaited_once()  # type: ignore[attr-defined]
     interaction.response.send_message.assert_awaited()
+
+
+# ── S3: block whispers to timed-out members ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_send_blocked_when_target_is_timed_out():
+    """Whisper to a timed-out member should be rejected before insert."""
+    from unittest.mock import patch as _patch
+    import time as _t
+
+    cog = _make_cog()
+    sender = FakeMember(id=SENDER_ID, roles=[FakeRole(id=ROLE)])
+
+    timed_out_target = FakeMember(id=TARGET_ID, roles=[FakeRole(id=ROLE)])
+    timed_out_target.is_timed_out = lambda: True  # type: ignore[attr-defined]
+    timed_out_target.send = AsyncMock()  # type: ignore[attr-defined]
+
+    interaction = fake_interaction(user=sender)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    interaction.guild.name = "Test"
+    interaction.guild.get_channel = MagicMock(return_value=None)
+    interaction.response.send_message = AsyncMock()
+
+    # Ensure no cooldown
+    cog._last_send_at[SENDER_ID] = _t.time() - 60
+
+    with _patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         _patch("cogs.whisper_cog._do_insert_whisper") as ins:
+        await cog._send_impl(interaction, target=timed_out_target, message="hi")  # type: ignore[arg-type]
+
+    ins.assert_not_called()
+    args, kwargs = interaction.response.send_message.call_args
+    assert kwargs.get("ephemeral") is True
+    assert "timed out" in args[0].lower()

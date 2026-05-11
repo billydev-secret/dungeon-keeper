@@ -1465,6 +1465,12 @@ class WhisperCog(commands.Cog):
         self._last_send_at[interaction.user.id] = now
         self._target_sends[rate_key] = recent + [now]
 
+        if getattr(target, "is_timed_out", lambda: False)():
+            await interaction.response.send_message(
+                "Can't whisper a member who's currently timed out.", ephemeral=True
+            )
+            return
+
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
             self.ctx.db_path,
