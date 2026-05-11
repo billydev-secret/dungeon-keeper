@@ -1419,6 +1419,21 @@ class WhisperCog(commands.Cog):
                 _do_set_launcher_id, self.ctx.db_path, guild_id, sent.id
             )
 
+    @commands.Cog.listener("on_guild_remove")
+    async def _on_guild_remove(self, guild: discord.Guild) -> None:
+        await asyncio.to_thread(self._clear_guild_config, guild.id)
+
+    def _clear_guild_config(self, guild_id: int) -> None:
+        from db_utils import delete_config_value  # noqa: PLC0415
+        with open_db(self.ctx.db_path) as conn:
+            for key in (
+                "whisper_role_id",
+                "whisper_channel_id",
+                "whisper_log_channel_id",
+                "whisper_launcher_message_id",
+            ):
+                delete_config_value(conn, key, guild_id)
+
     @commands.Cog.listener("on_message")
     async def _on_message_launcher_bump(self, message: discord.Message) -> None:
         if message.author.bot:
