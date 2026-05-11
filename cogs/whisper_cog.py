@@ -60,12 +60,6 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.whisper")
 
 
-def _parse_member_id(raw: str) -> int | None:
-    """Parse a member ID from raw input that may be a <@123> mention or a bare ID.
-    Returns None if no digits are present."""
-    digits = "".join(ch for ch in raw.strip() if ch.isdigit())
-    return int(digits) if digits else None
-
 
 def _format_time_ago(created_at: float, now: float | None = None) -> str:
     import time as _t  # noqa: PLC0415
@@ -1171,45 +1165,10 @@ class WhisperGuessSelectView(discord.ui.View):
 
 # ── Persistent feed-channel view (Send / Check / Check Hidden) ───────────────
 
-class WhisperSendModal(discord.ui.Modal, title="Send a Whisper"):
-    target_input: discord.ui.TextInput = discord.ui.TextInput(
-        label="Recipient (member ID or @mention)",
-        placeholder="Right-click a member → Copy ID, or paste a mention",
-        required=True,
-        max_length=80,
-    )
-    message_input: discord.ui.TextInput = discord.ui.TextInput(
-        label="Your anonymous message",
-        style=discord.TextStyle.long,
-        required=True,
-        max_length=1000,
-    )
-
-    def __init__(self, bot: Bot) -> None:
-        super().__init__()
-        self.bot = bot
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild is not None
-        member_id = _parse_member_id(str(self.target_input.value))
-        if member_id is None:
-            await interaction.response.send_message(
-                "Couldn't parse a member from that input.", ephemeral=True
-            )
-            return
-        target = interaction.guild.get_member(member_id)
-        if target is None:
-            await interaction.response.send_message(
-                "That member isn't in this server.", ephemeral=True
-            )
-            return
-        cog = self.bot.get_cog("WhisperCog")
-        if not isinstance(cog, WhisperCog):
-            await interaction.response.send_message(
-                "Whisper cog isn't loaded.", ephemeral=True
-            )
-            return
-        await cog._send_impl(interaction, target=target, message=str(self.message_input.value))
+_SEND_INSTRUCTIONS = (
+    "Use `/whisper send` to send an anonymous message. "
+    "Pick the recipient from autocomplete — only opted-in members appear."
+)
 
 
 class WhisperFeedView(discord.ui.View):
@@ -1242,7 +1201,7 @@ class WhisperFeedView(discord.ui.View):
         self.add_item(hidden_btn)
 
     async def _on_send_click(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(WhisperSendModal(self.bot))
+        await interaction.response.send_message(_SEND_INSTRUCTIONS, ephemeral=True)
 
     async def _on_check_click(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
