@@ -94,3 +94,52 @@ def test_render_crop_respects_box():
     cropped_img = Image.open(io.BytesIO(result))
     assert cropped_img.width == expected_w, f"Expected width {expected_w}, got {cropped_img.width}"
     assert cropped_img.height == expected_h, f"Expected height {expected_h}, got {cropped_img.height}"
+
+
+# ---------------------------------------------------------------------------
+# render_crop_editor tests
+# ---------------------------------------------------------------------------
+
+
+def test_render_crop_editor_returns_jpeg_bytes():
+    from services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
+
+    image_bytes = _make_jpeg(400, 400)
+    box = BoundingBox(x1=50, y1=50, x2=200, y2=200)
+    result = render_crop_editor(image_bytes, box)
+
+    assert isinstance(result, bytes)
+    assert result[:2] == b"\xff\xd8"
+
+
+def test_render_crop_editor_scales_down_large_image():
+    from services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
+
+    image_bytes = _make_jpeg(2000, 2000)
+    box = BoundingBox(x1=0, y1=0, x2=2000, y2=2000)
+    result = render_crop_editor(image_bytes, box, max_display_px=1280)
+
+    out = Image.open(io.BytesIO(result))
+    assert max(out.width, out.height) <= 1280
+
+
+def test_render_crop_editor_doesnt_upscale_small_image():
+    from services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
+
+    image_bytes = _make_jpeg(400, 300)
+    box = BoundingBox(x1=0, y1=0, x2=400, y2=300)
+    result = render_crop_editor(image_bytes, box, max_display_px=1280)
+
+    out = Image.open(io.BytesIO(result))
+    assert out.width == 400
+    assert out.height == 300
+
+
+def test_render_crop_editor_full_image_box_doesnt_error():
+    from services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
+
+    image_bytes = _make_jpeg(500, 500)
+    box = BoundingBox(x1=0, y1=0, x2=500, y2=500)
+    result = render_crop_editor(image_bytes, box)
+
+    assert result[:2] == b"\xff\xd8"
