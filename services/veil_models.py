@@ -40,6 +40,7 @@ class VeilConfig:
     crop_difficulty: str = "medium"
     min_image_dimension_px: int = 400
     max_image_size_mb: int = 25
+    prompt_message_id: int = 0
 
 
 @dataclass

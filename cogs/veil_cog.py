@@ -687,6 +687,111 @@ class SubmitPreviewView(discord.ui.View):
         )
 
 
+# ── Sticky channel prompt ────────────────────────────────────────────────────
+
+# Trailing-edge debounce: after the last channel message, wait this long before
+# re-posting. Cancels and reschedules on each new message so the prompt lands
+# under the final message of a burst rather than flickering through each one.
+PROMPT_REPOST_DELAY_SEC = 2.0
+
+_PROMPT_HOW_TO_PLAY = (
+    "**How Veil works**\n"
+    "Members of the Veil pool submit anonymized NSFW images. Everyone else "
+    "guesses who's in the photo.\n"
+    "\n"
+    "• **Submit:** `/veil submit` with an image. The bot crops it and you "
+    "pick a crop, then post it anonymously.\n"
+    "• **Guess:** click *Guess* on a posted round and pick a name. The chip "
+    "below the image counts total guesses on the round.\n"
+    "• **Solve:** the first correct guess wins, reveals the full image as a "
+    "spoiler, and credits the submitter.\n"
+    "• **Join the pool:** `/veil optin` to add yourself. Only pool members "
+    "can be answers and submit images."
+)
+
+_PROMPT_SUBMIT_INSTRUCTIONS = (
+    "Use `/veil submit` and attach an NSFW image. The bot will run an "
+    "auto-crop pipeline and let you pick from a few crops; click **Post** "
+    "when you're happy with one. You'll get a preview before it goes live."
+)
+
+
+def _prompt_embed() -> discord.Embed:
+    return discord.Embed(
+        title="🎭 Veil",
+        description=(
+            "Submit anonymized NSFW images for everyone to guess. "
+            "Click below to play."
+        ),
+        color=discord.Color.from_rgb(80, 20, 100),
+    )
+
+
+class VeilPromptView(discord.ui.View):
+    """Persistent view attached to the channel-bottom prompt message."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+        submit_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="🎭 Submit Veil",
+            style=discord.ButtonStyle.primary,
+            custom_id="veil_prompt_submit",
+        )
+        submit_btn.callback = self._on_submit
+        self.add_item(submit_btn)
+
+        help_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="❓ How to Play",
+            style=discord.ButtonStyle.secondary,
+            custom_id="veil_prompt_help",
+        )
+        help_btn.callback = self._on_help
+        self.add_item(help_btn)
+
+    async def _on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(
+            _PROMPT_SUBMIT_INSTRUCTIONS, ephemeral=True
+        )
+
+    async def _on_help(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(
+            _PROMPT_HOW_TO_PLAY, ephemeral=True
+        )
+
+
+async def _repost_prompt(
+    bot: "Bot",
+    channel: discord.TextChannel | discord.VoiceChannel | discord.Thread,
+    guild_id: int,
+) -> None:
+    """Delete the previous prompt (if any), post a fresh one, persist its ID.
+
+    Best-effort: missing/forbidden prior messages are tolerated. Any failure
+    posting the new prompt logs and falls through — the channel just won't
+    have a prompt until the next attempt.
+    """
+    db_path = bot.ctx.db_path
+    config = await asyncio.to_thread(_load_config, db_path, guild_id)
+
+    if config.prompt_message_id:
+        try:
+            old = await channel.fetch_message(config.prompt_message_id)
+            await old.delete()
+        except (discord.NotFound, discord.Forbidden):
+            pass
+
+    try:
+        new_msg = await channel.send(embed=_prompt_embed(), view=VeilPromptView())
+    except discord.HTTPException:
+        log.exception("veil: failed to post channel prompt in guild %d", guild_id)
+        return
+
+    await asyncio.to_thread(
+        _do_set_config, db_path, guild_id, "veil_prompt_message_id", str(new_msg.id)
+    )
+
+
 # ── VeilCog ──────────────────────────────────────────────────────────────────
 
 class VeilCog(commands.Cog):
@@ -698,10 +803,13 @@ class VeilCog(commands.Cog):
 
     def __init__(self, bot: "Bot") -> None:
         self.bot = bot
+        # Per-guild debounce tasks for the sticky channel prompt re-poster.
+        self._pending_prompt_reposts: dict[int, asyncio.Task[None]] = {}
         super().__init__()
 
     async def cog_load(self) -> None:
-        """Re-register persistent GameViews for unsolved rounds (capped)."""
+        """Re-register persistent GameViews for unsolved rounds (capped) and
+        the channel-prompt view."""
         db_path = self.bot.ctx.db_path
         round_ids = await asyncio.to_thread(
             _do_load_unsolved_round_ids, db_path, limit=_COG_LOAD_VIEW_CAP
@@ -713,8 +821,53 @@ class VeilCog(commands.Cog):
             self.bot.add_view(
                 GameView(self.bot, rid, solved=False, guess_count=count)
             )
+        self.bot.add_view(VeilPromptView())
         log.info("veil: re-registered %d persistent GameViews (cap %d)",
                  len(round_ids), _COG_LOAD_VIEW_CAP)
+
+    async def cog_unload(self) -> None:
+        for task in self._pending_prompt_reposts.values():
+            if not task.done():
+                task.cancel()
+        self._pending_prompt_reposts.clear()
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        """Sticky-prompt re-poster: schedule a debounced repost when activity
+        lands in the configured veil channel. Bot's own messages and DMs are
+        ignored. The prompt itself is a bot message — ignoring those prevents
+        a feedback loop."""
+        if message.author.bot or message.guild is None:
+            return
+        db_path = self.bot.ctx.db_path
+        config = await asyncio.to_thread(_load_config, db_path, message.guild.id)
+        if config.veil_channel_id == 0 or message.channel.id != config.veil_channel_id:
+            return
+        if not isinstance(
+            message.channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
+        ):
+            return
+
+        existing = self._pending_prompt_reposts.get(message.guild.id)
+        if existing and not existing.done():
+            existing.cancel()
+        self._pending_prompt_reposts[message.guild.id] = asyncio.create_task(
+            self._delayed_repost_prompt(message.guild.id, message.channel)
+        )
+
+    async def _delayed_repost_prompt(
+        self,
+        guild_id: int,
+        channel: discord.TextChannel | discord.VoiceChannel | discord.Thread,
+    ) -> None:
+        try:
+            await asyncio.sleep(PROMPT_REPOST_DELAY_SEC)
+        except asyncio.CancelledError:
+            return
+        try:
+            await _repost_prompt(self.bot, channel, guild_id)
+        except Exception:
+            log.exception("veil: sticky prompt repost failed for guild %d", guild_id)
 
     @commands.Cog.listener()
     async def on_member_update(
@@ -1021,6 +1174,39 @@ class VeilCog(commands.Cog):
             f"Welcome to the Veil pool. You can now submit images and be guessed at. "
             f"To leave, ask a mod to remove the {role.mention} role.",
             ephemeral=True,
+        )
+
+
+    @veil.command(name="prompt", description="Post the channel-bottom Submit/Help prompt now.")
+    @app_commands.default_permissions(manage_guild=True)
+    async def veil_prompt(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        db_path = self.bot.ctx.db_path
+        config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
+
+        if config.veil_channel_id == 0:
+            await interaction.followup.send(
+                "Veil channel is not configured. Run `/veil setup` first.",
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.guild.get_channel(config.veil_channel_id)
+        if not isinstance(
+            channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
+        ):
+            await interaction.followup.send(
+                "Configured Veil channel can't be posted to. "
+                "Re-run `/veil setup`.",
+                ephemeral=True,
+            )
+            return
+
+        await _repost_prompt(self.bot, channel, interaction.guild.id)
+        await interaction.followup.send(
+            f"Prompt posted in {channel.mention}.", ephemeral=True
         )
 
 

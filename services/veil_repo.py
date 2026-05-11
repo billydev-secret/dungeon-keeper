@@ -21,6 +21,7 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "veil_crop_difficulty": "medium",
     "veil_min_image_dimension_px": "400",
     "veil_max_image_size_mb": "10",
+    "veil_prompt_message_id": "0",
 }
 
 
@@ -36,6 +37,7 @@ def get_veil_config(conn: sqlite3.Connection, guild_id: int) -> VeilConfig:
         crop_difficulty=_get("veil_crop_difficulty"),
         min_image_dimension_px=int(_get("veil_min_image_dimension_px") or 400),
         max_image_size_mb=int(_get("veil_max_image_size_mb") or 10),
+        prompt_message_id=int(_get("veil_prompt_message_id") or 0),
     )
 
 

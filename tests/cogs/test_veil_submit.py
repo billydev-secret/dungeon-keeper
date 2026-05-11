@@ -241,6 +241,7 @@ def _fake_game_message() -> MagicMock:
 @pytest.mark.asyncio
 async def test_cog_load_registers_game_views_from_db(sync_db_path: Path):
     """cog_load queries active rounds and calls bot.add_view for each."""
+    from cogs.veil_cog import GameView
     from services.veil_repo import insert_round
     from db_utils import open_db
 
@@ -252,7 +253,10 @@ async def test_cog_load_registers_game_views_from_db(sync_db_path: Path):
     add_view_mock: MagicMock = cog.bot.add_view  # type: ignore[assignment]
     await cog.cog_load()
 
-    assert add_view_mock.call_count == 2
+    gameview_calls = [
+        c for c in add_view_mock.call_args_list if isinstance(c.args[0], GameView)
+    ]
+    assert len(gameview_calls) == 2
 
 
 # ── Safety patch: fail-closed when Veil role is unconfigured ─────────────────

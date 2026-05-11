@@ -21,6 +21,11 @@ def _make_cog(db_path: Path) -> tuple[object, MagicMock]:
     return VeilCog(bot), add_view
 
 
+def _gameview_calls(add_view: MagicMock) -> list:
+    from cogs.veil_cog import GameView
+    return [c for c in add_view.call_args_list if isinstance(c.args[0], GameView)]
+
+
 @pytest.mark.asyncio
 async def test_cog_load_skips_solved_rounds(sync_db_path: Path):
     with open_db(sync_db_path) as conn:
@@ -31,8 +36,9 @@ async def test_cog_load_skips_solved_rounds(sync_db_path: Path):
     cog, add_view = _make_cog(sync_db_path)
     await cog.cog_load()  # type: ignore[attr-defined]
 
-    assert add_view.call_count == 1
-    registered_ids = [c.args[0].round_id for c in add_view.call_args_list]
+    gameview_calls = _gameview_calls(add_view)
+    assert len(gameview_calls) == 1
+    registered_ids = [c.args[0].round_id for c in gameview_calls]
     assert unsolved in registered_ids
     assert solved not in registered_ids
 
@@ -49,7 +55,7 @@ async def test_cog_load_caps_total_views(sync_db_path: Path, monkeypatch):
     cog, add_view = _make_cog(sync_db_path)
     await cog.cog_load()  # type: ignore[attr-defined]
 
-    assert add_view.call_count == 3
+    assert len(_gameview_calls(add_view)) == 3
 
 
 @pytest.mark.asyncio
@@ -67,7 +73,19 @@ async def test_cog_load_passes_current_guess_count_to_view(sync_db_path: Path):
     cog, add_view = _make_cog(sync_db_path)
     await cog.cog_load()  # type: ignore[attr-defined]
 
-    assert add_view.call_count == 1
-    reconstructed_view = add_view.call_args_list[0].args[0]
+    gameview_calls = _gameview_calls(add_view)
+    assert len(gameview_calls) == 1
+    reconstructed_view = gameview_calls[0].args[0]
     labels = [c.label for c in reconstructed_view.children]
     assert "Guesses: 3" in labels
+
+
+@pytest.mark.asyncio
+async def test_cog_load_registers_prompt_view(sync_db_path: Path):
+    from cogs.veil_cog import VeilPromptView
+
+    cog, add_view = _make_cog(sync_db_path)
+    await cog.cog_load()  # type: ignore[attr-defined]
+
+    prompt_calls = [c for c in add_view.call_args_list if isinstance(c.args[0], VeilPromptView)]
+    assert len(prompt_calls) == 1
