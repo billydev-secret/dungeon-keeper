@@ -157,6 +157,15 @@ def decrement_guesses_left(conn: sqlite3.Connection, whisper_id: int) -> None:
     )
 
 
+def try_consume_guess(conn: sqlite3.Connection, whisper_id: int) -> bool:
+    """Atomically decrement guesses_left; returns True if succeeded (>0 attempts remained and not yet solved)."""
+    cur = conn.execute(
+        "UPDATE whispers SET guesses_left = guesses_left - 1 WHERE id = ? AND guesses_left > 0 AND solved = 0",
+        (whisper_id,),
+    )
+    return cur.rowcount == 1
+
+
 def mark_solved(conn: sqlite3.Connection, whisper_id: int) -> None:
     conn.execute("UPDATE whispers SET solved = 1 WHERE id = ?", (whisper_id,))
 
@@ -232,6 +241,24 @@ def insert_reply(
         (whisper_id, from_user_id, to_user_id, content, time.time()),
     )
     return cur.lastrowid  # type: ignore[return-value]
+
+
+def insert_report(
+    conn: sqlite3.Connection,
+    *,
+    whisper_id: int,
+    reporter_id: int,
+    reason: str,
+) -> bool:
+    """Insert a report; returns True if inserted, False if duplicate (same reporter)."""
+    try:
+        conn.execute(
+            "INSERT INTO whisper_reports (whisper_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?)",
+            (whisper_id, reporter_id, reason, time.time()),
+        )
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 
 def list_replies_for_whisper(

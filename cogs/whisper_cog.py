@@ -22,12 +22,12 @@ from services.whisper_models import (
     WhisperState,
 )
 from services.whisper_repo import (
-    decrement_guesses_left,
     delete_whisper,
     get_whisper,
     get_whisper_config,
     insert_guess,
     insert_reply,
+    insert_report,
     insert_whisper,
     list_received,
     list_received_in_states,
@@ -35,6 +35,7 @@ from services.whisper_repo import (
     mark_solved,
     set_whisper_launcher_message_id,
     set_whisper_message_ids,
+    try_consume_guess,
     update_whisper_state,
 )
 from services.whisper_service import (
@@ -46,6 +47,7 @@ from services.whisper_service import (
     SendValidationError,
     TransitionValidationError,
     evaluate_guess,
+    safe_codefence_content,
     validate_expose,
     validate_hide,
     validate_send,
@@ -120,7 +122,10 @@ def _build_inbox(
     for idx, w in enumerate(visible, start=1):
         row = idx - 1
         view.add_item(WhisperShareButton(bot, w.id, index=idx, row=row))
-        view.add_item(WhisperHideButton(bot, w.id, index=idx, row=row))
+        if hidden_view:
+            view.add_item(WhisperUnhideButton(bot, w.id, index=idx, row=row))
+        else:
+            view.add_item(WhisperHideButton(bot, w.id, index=idx, row=row))
         view.add_item(WhisperGuessButton(bot, w.id, index=idx, row=row))
         view.add_item(WhisperReplyButton(bot, w.id, index=idx, row=row))
         view.add_item(WhisperReportButton(bot, w.id, index=idx, row=row))
@@ -174,12 +179,15 @@ def _do_record_guess(
     whisper_id: int,
     guessed_id: int,
     correct: bool,
-) -> None:
+) -> bool:
+    """Returns True if the guess was consumed. False means race-lost (someone else solved it first)."""
     with open_db(db_path) as conn:
+        if not try_consume_guess(conn, whisper_id):
+            return False
         insert_guess(conn, whisper_id=whisper_id, guessed_id=guessed_id, correct=correct)
-        decrement_guesses_left(conn, whisper_id)
         if correct:
             mark_solved(conn, whisper_id)
+        return True
 
 
 def _do_update_state(db_path: Path, whisper_id: int, new_state: WhisperState) -> None:
@@ -232,6 +240,23 @@ def _do_insert_reply(
             from_user_id=from_user_id,
             to_user_id=to_user_id,
             content=content,
+        )
+
+
+def _do_insert_report(
+    db_path: Path,
+    *,
+    whisper_id: int,
+    reporter_id: int,
+    reason: str,
+) -> bool:
+    """Returns True if inserted, False if this reporter already reported this whisper."""
+    with open_db(db_path) as conn:
+        return insert_report(
+            conn,
+            whisper_id=whisper_id,
+            reporter_id=reporter_id,
+            reason=reason,
         )
 
 
@@ -394,7 +419,7 @@ class WhisperShareButton(
                     new_msg = await feed_channel.send(
                         f"\U0001f4ec A fresh Whisper was shared. Someone sent "
                         f"<@{whisper.target_id}> an anonymous message!\n"
-                        f"```{whisper.message}```",
+                        f"```{safe_codefence_content(whisper.message)}```",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     await asyncio.to_thread(
@@ -487,6 +512,65 @@ class WhisperHideButton(
         await interaction.response.send_message(
             "Whisper hidden. You can find it under Check Hidden Whispers.",
             ephemeral=True,
+        )
+
+
+class WhisperUnhideButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:unhide:(?P<id>\d+)"),
+):
+    def __init__(
+        self,
+        bot: Bot,
+        whisper_id: int,
+        *,
+        index: int | None = None,
+        row: int | None = None,
+    ) -> None:
+        label = f"Unhide #{index}" if index else "Unhide"
+        super().__init__(
+            discord.ui.Button(
+                label=label,
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"whisper:unhide:{whisper_id}",
+                row=row,
+            )
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperUnhideButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+        if interaction.user.id != whisper.target_id:
+            await interaction.response.send_message(
+                "Only the recipient can unhide a whisper.", ephemeral=True
+            )
+            return
+        if whisper.state != STATE_HIDDEN:
+            await interaction.response.send_message(
+                "This whisper isn't hidden.", ephemeral=True
+            )
+            return
+
+        await asyncio.to_thread(
+            _do_update_state, self.bot.ctx.db_path, self.whisper_id, STATE_PENDING
+        )
+        await interaction.response.send_message(
+            "Whisper restored to your inbox.", ephemeral=True
         )
 
 
@@ -714,8 +798,8 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
             if len(preview) > 200:
                 preview = preview[:197] + "…"
             await recipient.send(
-                f"\U0001f4ec Anonymous reply on whisper *(\"{preview}\")*:\n"
-                f"```{content}```",
+                f"\U0001f4ec Anonymous reply on Whisper #{self.whisper_id} *(\"{safe_codefence_content(preview)}\")*:\n"
+                f"```{safe_codefence_content(content)}```",
                 view=WhisperReplyDmView(self.bot, self.whisper_id),
             )
         except (discord.Forbidden, discord.HTTPException):
@@ -732,6 +816,44 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
             to_user_id=to_user_id,
             content=content,
         )
+
+        # Post reply to mod log (best-effort — don't fail the reply if this fails)
+        try:
+            cfg = await asyncio.to_thread(
+                _load_config, self.bot.ctx.db_path, whisper.guild_id
+            )
+            if cfg.log_channel_id:
+                guild = self.bot.get_guild(whisper.guild_id)
+                if guild:
+                    log_channel = guild.get_channel(cfg.log_channel_id)
+                    if isinstance(log_channel, discord.TextChannel):
+                        emb = discord.Embed(
+                            title="Whisper Reply",
+                            description=safe_codefence_content(content),
+                            timestamp=discord.utils.utcnow(),
+                        )
+                        emb.add_field(
+                            name="From",
+                            value=f"<@{interaction.user.id}> (`{interaction.user.id}`)",
+                            inline=False,
+                        )
+                        emb.add_field(
+                            name="To",
+                            value=f"<@{to_user_id}> (`{to_user_id}`)",
+                            inline=False,
+                        )
+                        emb.add_field(
+                            name="Whisper ID",
+                            value=str(self.whisper_id),
+                            inline=False,
+                        )
+                        await log_channel.send(
+                            embed=emb,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+        except Exception:
+            log.warning("Failed to post whisper reply to mod log")
+
         await interaction.response.send_message(
             "Reply delivered anonymously.", ephemeral=True
         )
@@ -791,9 +913,23 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
             return
 
         reason = str(self.reason_input.value).strip() or "(no reason provided)"
+
+        inserted = await asyncio.to_thread(
+            _do_insert_report,
+            self.bot.ctx.db_path,
+            whisper_id=whisper.id,
+            reporter_id=interaction.user.id,
+            reason=reason,
+        )
+        if not inserted:
+            await interaction.response.send_message(
+                "You've already reported this whisper.", ephemeral=True
+            )
+            return
+
         emb = discord.Embed(
             title="Whisper Reported",
-            description=whisper.message,
+            description=safe_codefence_content(whisper.message),
             color=discord.Color.red(),
             timestamp=discord.utils.utcnow(),
         )
@@ -884,13 +1020,18 @@ async def _handle_guess_outcome(
         await interaction.response.edit_message(content=e.message, view=None)
         return
 
-    await asyncio.to_thread(
+    consumed = await asyncio.to_thread(
         _do_record_guess,
         bot.ctx.db_path,
         whisper_id=whisper.id,
         guessed_id=guessed_id,
         correct=outcome.correct,
     )
+    if not consumed:
+        await interaction.response.edit_message(
+            content="This whisper was solved by another tab.", view=None
+        )
+        return
 
     if outcome.correct:
         guild = interaction.guild or bot.get_guild(whisper.guild_id)
@@ -909,7 +1050,7 @@ async def _handle_guess_outcome(
                 try:
                     await feed_channel.send(
                         f"✅ You're Right! <@{whisper.target_id}> figured out who sent the whisper:\n"
-                        f"```{whisper.message}```",
+                        f"```{safe_codefence_content(whisper.message)}```",
                         view=WhisperExposeView(bot, whisper.id),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
@@ -1136,6 +1277,70 @@ class WhisperFeedView(discord.ui.View):
         )
 
 
+# ── Forget-me ────────────────────────────────────────────────────────────────
+
+
+def _do_forget_user(db_path: Path, *, guild_id: int, user_id: int) -> None:
+    """Delete all whisper data for user_id in guild_id (both sent and received)."""
+    with open_db(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Whispers user sent — cascade deletes replies/guesses/reports
+        conn.execute(
+            "DELETE FROM whispers WHERE guild_id = ? AND sender_id = ?",
+            (guild_id, user_id),
+        )
+        # Whispers user received
+        conn.execute(
+            "DELETE FROM whispers WHERE guild_id = ? AND target_id = ?",
+            (guild_id, user_id),
+        )
+        # Orphaned replies they sent/received (parent whisper may already be gone)
+        conn.execute(
+            "DELETE FROM whisper_replies WHERE from_user_id = ?",
+            (user_id,),
+        )
+        conn.execute(
+            "DELETE FROM whisper_replies WHERE to_user_id = ?",
+            (user_id,),
+        )
+
+
+class WhisperForgetMeConfirmView(discord.ui.View):
+    """Ephemeral confirmation view for /whisper forget-me."""
+
+    def __init__(self, bot: Bot, guild_id: int, user_id: int) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="Yes, delete my data", style=discord.ButtonStyle.danger)
+    async def confirm(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # noqa: ARG002
+    ) -> None:
+        await asyncio.to_thread(
+            _do_forget_user,
+            self.bot.ctx.db_path,
+            guild_id=self.guild_id,
+            user_id=self.user_id,
+        )
+        await interaction.response.edit_message(
+            content="Your whisper data for this server has been deleted.", view=None
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # noqa: ARG002
+    ) -> None:
+        await interaction.response.edit_message(
+            content="Deletion cancelled.", view=None
+        )
+
+
 # ── Opt-in confirmation view ─────────────────────────────────────────────────
 
 
@@ -1179,6 +1384,10 @@ class WhisperOptinConfirmView(discord.ui.View):
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
+SEND_COOLDOWN_SECONDS = 30
+SEND_PER_TARGET_HOURLY_CAP = 5
+
+
 class WhisperCog(commands.Cog):
     whisper_group = app_commands.Group(name="whisper", description="Send anonymous whispers.")
 
@@ -1186,6 +1395,9 @@ class WhisperCog(commands.Cog):
         self.bot = bot
         self.ctx = bot.ctx
         self._launcher_locks: dict[int, asyncio.Lock] = {}
+        self._pending_refresh: set[int] = set()
+        self._last_send_at: dict[int, float] = {}  # sender_id -> ts
+        self._target_sends: dict[tuple[int, int, int], list[float]] = {}  # (guild_id, sender_id, target_id) -> [ts...]
 
     def _get_launcher_lock(self, guild_id: int) -> asyncio.Lock:
         lock = self._launcher_locks.get(guild_id)
@@ -1204,24 +1416,41 @@ class WhisperCog(commands.Cog):
             WhisperGuessButton,
             WhisperShareButton,
             WhisperHideButton,
+            WhisperUnhideButton,
             WhisperExposeButton,
             WhisperReplyButton,
             WhisperReportButton,
         )
         # Bootstrap launcher in every configured guild so the button bar is
-        # at the bottom of the channel from boot.
-        for guild in self.bot.guilds:
-            try:
-                await self.refresh_whisper_launcher(guild.id)
-            except Exception:
-                log.exception(
-                    "Failed to bootstrap whisper launcher for guild %s", guild.id
-                )
+        # at the bottom of the channel from boot. Run in parallel with a
+        # semaphore to avoid a thundering-herd against Discord on large bots.
+        sem = asyncio.Semaphore(5)
+
+        async def _bootstrap_one(guild: discord.Guild) -> None:
+            async with sem:
+                try:
+                    await self.refresh_whisper_launcher(guild.id)
+                except Exception:
+                    log.exception(
+                        "Failed to bootstrap whisper launcher for guild %s", guild.id
+                    )
+
+        await asyncio.gather(*[_bootstrap_one(g) for g in self.bot.guilds])
 
     async def refresh_whisper_launcher(self, guild_id: int) -> None:
         """Delete the previous launcher (if any) and post a fresh one at the
-        bottom of the configured whisper channel. Serialized per-guild."""
+        bottom of the configured whisper channel. Serialized per-guild.
+
+        Multiple concurrent calls for the same guild are coalesced: only one
+        actual delete+post cycle runs at a time, and a second cycle fires only
+        if at least one more call arrived while the first held the lock.
+        """
+        self._pending_refresh.add(guild_id)
         async with self._get_launcher_lock(guild_id):
+            if guild_id not in self._pending_refresh:
+                return  # another invocation already did the work for us
+            self._pending_refresh.discard(guild_id)
+
             cfg = await asyncio.to_thread(
                 _load_config, self.ctx.db_path, guild_id
             )
@@ -1254,8 +1483,25 @@ class WhisperCog(commands.Cog):
                 _do_set_launcher_id, self.ctx.db_path, guild_id, sent.id
             )
 
+    @commands.Cog.listener("on_guild_remove")
+    async def _on_guild_remove(self, guild: discord.Guild) -> None:
+        await asyncio.to_thread(self._clear_guild_config, guild.id)
+
+    def _clear_guild_config(self, guild_id: int) -> None:
+        from db_utils import delete_config_value  # noqa: PLC0415
+        with open_db(self.ctx.db_path) as conn:
+            for key in (
+                "whisper_role_id",
+                "whisper_channel_id",
+                "whisper_log_channel_id",
+                "whisper_launcher_message_id",
+            ):
+                delete_config_value(conn, key, guild_id)
+
     @commands.Cog.listener("on_message")
     async def _on_message_launcher_bump(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
         if not message.guild:
             return
         cfg = await asyncio.to_thread(
@@ -1312,6 +1558,23 @@ class WhisperCog(commands.Cog):
             "You've opted out. Existing whispers are preserved.", ephemeral=True
         )
 
+    @whisper_group.command(
+        name="forget-me",
+        description="Delete all your whisper data from this server.",
+    )
+    async def whisper_forget_me(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This command can only be used in a server.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "This will permanently delete all whispers you sent or received in this server. "
+            "This cannot be undone.",
+            view=WhisperForgetMeConfirmView(self.bot, interaction.guild.id, interaction.user.id),
+            ephemeral=True,
+        )
+
     @whisper_group.command(name="optin", description="Opt in to send and receive whispers.")
     async def whisper_optin(self, interaction: discord.Interaction) -> None:
         await self._optin_impl(interaction)
@@ -1345,6 +1608,49 @@ class WhisperCog(commands.Cog):
             await interaction.response.send_message(e.message, ephemeral=True)
             return
 
+        import time as _t  # noqa: PLC0415
+        now = _t.time()
+        last = self._last_send_at.get(interaction.user.id, 0)
+        if now - last < SEND_COOLDOWN_SECONDS:
+            remaining = int(SEND_COOLDOWN_SECONDS - (now - last))
+            await interaction.response.send_message(
+                f"Slow down — wait {remaining}s before sending another whisper.",
+                ephemeral=True,
+            )
+            return
+
+        rate_key = (interaction.guild.id, interaction.user.id, target.id)
+        recent = [t for t in self._target_sends.get(rate_key, []) if now - t < 3600]
+        if len(recent) >= SEND_PER_TARGET_HOURLY_CAP:
+            await interaction.response.send_message(
+                f"You've sent {SEND_PER_TARGET_HOURLY_CAP} whispers to that user in the last hour. Try again later.",
+                ephemeral=True,
+            )
+            return
+        self._last_send_at[interaction.user.id] = now
+        self._target_sends[rate_key] = recent + [now]
+
+        if getattr(target, "is_timed_out", lambda: False)():
+            await interaction.response.send_message(
+                "Can't whisper a member who's currently timed out.", ephemeral=True
+            )
+            return
+
+        feed_channel = interaction.guild.get_channel(cfg.channel_id)
+        if not isinstance(feed_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Whisper feed channel is missing or invalid. Tell an admin to fix the config.",
+                ephemeral=True,
+            )
+            return
+        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+        if not isinstance(log_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Whisper mod log channel is missing or invalid. Tell an admin to fix the config.",
+                ephemeral=True,
+            )
+            return
+
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
             self.ctx.db_path,
@@ -1357,7 +1663,7 @@ class WhisperCog(commands.Cog):
         try:
             dm_msg = await target.send(
                 f"Someone in **{interaction.guild.name}** sent you a secret message:\n"
-                f"```{message.strip()}```",
+                f"```{safe_codefence_content(message.strip())}```",
                 view=WhisperDmView(self.bot, whisper_id),
             )
         except (discord.Forbidden, discord.HTTPException):
@@ -1366,16 +1672,14 @@ class WhisperCog(commands.Cog):
             await interaction.response.send_message(ERROR_BOT_DM_FAILED, ephemeral=True)
             return
 
-        feed_channel = interaction.guild.get_channel(cfg.channel_id)
         feed_msg = None
-        if isinstance(feed_channel, discord.TextChannel):
-            try:
-                feed_msg = await feed_channel.send(
-                    f"\U0001f4ec Someone sent {target.mention} an anonymous message.",
-                    allowed_mentions=discord.AllowedMentions(users=[target]),
-                )
-            except discord.HTTPException:
-                log.warning("Failed to post whisper announcement to feed channel")
+        try:
+            feed_msg = await feed_channel.send(
+                f"\U0001f4ec Someone sent {target.mention} an anonymous message.",
+                allowed_mentions=discord.AllowedMentions(users=[target]),
+            )
+        except discord.HTTPException:
+            log.warning("Failed to post whisper announcement to feed channel")
 
         await asyncio.to_thread(
             _do_set_message_ids,
@@ -1385,30 +1689,28 @@ class WhisperCog(commands.Cog):
             dm_msg_id=dm_msg.id,
         )
 
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if isinstance(log_channel, discord.TextChannel):
-            try:
-                emb = discord.Embed(
-                    title="Whisper sent",
-                    description=message.strip(),
-                    timestamp=discord.utils.utcnow(),
-                )
-                emb.add_field(
-                    name="Sender",
-                    value=f"{interaction.user.mention} (`{interaction.user.id}`)",
-                    inline=False,
-                )
-                emb.add_field(
-                    name="Target",
-                    value=f"{target.mention} (`{target.id}`)",
-                    inline=False,
-                )
-                emb.add_field(name="Whisper ID", value=str(whisper_id), inline=False)
-                await log_channel.send(
-                    embed=emb, allowed_mentions=discord.AllowedMentions.none()
-                )
-            except discord.HTTPException:
-                log.warning("Failed to write whisper mod log")
+        try:
+            emb = discord.Embed(
+                title="Whisper sent",
+                description=safe_codefence_content(message.strip()),
+                timestamp=discord.utils.utcnow(),
+            )
+            emb.add_field(
+                name="Sender",
+                value=f"{interaction.user.mention} (`{interaction.user.id}`)",
+                inline=False,
+            )
+            emb.add_field(
+                name="Target",
+                value=f"{target.mention} (`{target.id}`)",
+                inline=False,
+            )
+            emb.add_field(name="Whisper ID", value=str(whisper_id), inline=False)
+            await log_channel.send(
+                embed=emb, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except discord.HTTPException:
+            log.warning("Failed to write whisper mod log")
 
         await interaction.response.send_message("Whisper delivered.", ephemeral=True)
 

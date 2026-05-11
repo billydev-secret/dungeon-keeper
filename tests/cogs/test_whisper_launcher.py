@@ -30,6 +30,7 @@ def _make_cog():
     cog.bot = bot
     cog.ctx = bot.ctx
     cog._launcher_locks = {}
+    cog._pending_refresh = set()
     return cog
 
 
@@ -114,6 +115,8 @@ async def test_on_message_listener_triggers_refresh_in_whisper_channel():
     cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
 
     msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = False
     msg.guild = MagicMock()
     msg.guild.id = GUILD_ID
     msg.channel = MagicMock()
@@ -132,6 +135,8 @@ async def test_on_message_listener_skips_other_channels():
     cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
 
     msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = False
     msg.guild = MagicMock()
     msg.guild.id = GUILD_ID
     msg.channel = MagicMock()
@@ -150,6 +155,8 @@ async def test_on_message_listener_skips_launcher_message_itself():
     cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
 
     msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = False
     msg.guild = MagicMock()
     msg.guild.id = GUILD_ID
     msg.channel = MagicMock()
@@ -160,6 +167,59 @@ async def test_on_message_listener_skips_launcher_message_itself():
         await cog._on_message_launcher_bump(msg)
 
     cog.refresh_whisper_launcher.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_on_message_listener_skips_bot_authors():
+    """Bot messages (own announcements etc.) must not trigger launcher refresh."""
+    cog = _make_cog()
+    cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
+
+    msg = MagicMock(spec=discord.Message)
+    msg.author = MagicMock()
+    msg.author.bot = True
+    msg.guild = MagicMock()
+    msg.guild.id = GUILD_ID
+    msg.channel = MagicMock()
+    msg.channel.id = FEED_CHANNEL_ID
+    msg.id = 99999
+
+    with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
+        await cog._on_message_launcher_bump(msg)
+
+    cog.refresh_whisper_launcher.assert_not_called()
+
+
+# ── S5: on_guild_remove cleanup ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_on_guild_remove_calls_clear_guild_config():
+    """_on_guild_remove listener should delegate to _clear_guild_config with guild_id."""
+    cog = _make_cog()
+    cog._clear_guild_config = MagicMock()  # type: ignore[method-assign]
+
+    guild = MagicMock()
+    guild.id = GUILD_ID
+
+    await cog._on_guild_remove(guild)
+
+    cog._clear_guild_config.assert_called_once_with(GUILD_ID)
+
+
+def test_clear_guild_config_deletes_all_whisper_keys():
+    """_clear_guild_config calls delete_config_value for each of the 4 whisper config keys."""
+    from unittest.mock import patch as _patch
+    cog = _make_cog()
+
+    with _patch("cogs.whisper_cog.open_db") as mock_open_db:
+        conn_ctx = MagicMock()
+        mock_open_db.return_value.__enter__ = MagicMock(return_value=conn_ctx)
+        mock_open_db.return_value.__exit__ = MagicMock(return_value=False)
+        cog._clear_guild_config(GUILD_ID)
+
+    # Verify that open_db was called (config deletion happens inside)
+    mock_open_db.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -302,7 +302,8 @@ async def test_report_modal_posts_to_mod_log():
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_insert_report", return_value=True):
         await modal.on_submit(interaction)
 
     log_channel.send.assert_awaited_once()
@@ -354,9 +355,187 @@ async def test_report_modal_empty_reason_uses_placeholder():
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_insert_report", return_value=True):
         await modal.on_submit(interaction)
 
     emb: discord.Embed = log_channel.send.call_args.kwargs["embed"]
     reason_field = next(f for f in emb.fields if f.name == "Reason")
     assert "no reason" in (reason_field.value or "").lower()
+
+
+# ── B4: Report dedupe ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_report_modal_duplicate_rejected():
+    """A second report from same reporter should be rejected without posting to mod log."""
+    from cogs.whisper_cog import WhisperReportModal
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperReportModal(bot, whisper_id=42)
+    modal.reason_input._value = "again"  # type: ignore[attr-defined]
+
+    log_channel = MagicMock(spec=discord.TextChannel)
+    log_channel.send = AsyncMock()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.guild = MagicMock()
+    interaction.guild.get_channel = MagicMock(return_value=log_channel)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_insert_report", return_value=False):
+        await modal.on_submit(interaction)
+
+    log_channel.send.assert_not_called()
+    args, kwargs = interaction.response.send_message.call_args
+    assert kwargs.get("ephemeral") is True
+    assert "already" in args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_report_modal_first_report_succeeds():
+    """First report from a reporter should succeed and post to mod log."""
+    from cogs.whisper_cog import WhisperReportModal
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperReportModal(bot, whisper_id=42)
+    modal.reason_input._value = "bad"  # type: ignore[attr-defined]
+
+    log_channel = MagicMock(spec=discord.TextChannel)
+    log_channel.send = AsyncMock()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.guild = MagicMock()
+    interaction.guild.get_channel = MagicMock(return_value=log_channel)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_insert_report", return_value=True):
+        await modal.on_submit(interaction)
+
+    log_channel.send.assert_awaited_once()
+
+
+# ── S6: Reply mod log ─────────────────────────────────────────────────────────
+
+
+# ── S9: Reply DM identifies whisper id ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reply_modal_dm_includes_whisper_id():
+    """The reply DM body must include 'Whisper #<id>' so recipient can map it."""
+    from cogs.whisper_cog import WhisperReplyModal
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperReplyModal(bot, whisper_id=42)
+    modal.reply_input._value = "great question"  # type: ignore[attr-defined]
+
+    sender_user = MagicMock()
+    sender_user.send = AsyncMock()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.client = MagicMock()
+    interaction.client.get_user = MagicMock(return_value=sender_user)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(wid=42)), \
+         patch("cogs.whisper_cog._do_insert_reply"), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+        await modal.on_submit(interaction)
+
+    sender_user.send.assert_awaited_once()
+    sent_content = sender_user.send.call_args.args[0]
+    assert "Whisper #42" in sent_content
+
+
+# ── S2: Unhide button ────────────────────────────────────────────────────────
+
+
+def test_build_inbox_hidden_view_uses_unhide_button():
+    """hidden_view=True should yield WhisperUnhideButton instead of WhisperHideButton."""
+    from cogs.whisper_cog import (
+        WhisperHideButton,
+        WhisperUnhideButton,
+        _build_inbox,
+    )
+    bot = MagicMock()
+    whispers = [_w(wid=10 + i) for i in range(2)]
+    _embed, view = _build_inbox(bot, whispers, title="Hidden Whispers", hidden_view=True)
+    button_types = {type(c) for c in view.children}
+    assert WhisperUnhideButton in button_types
+    assert WhisperHideButton not in button_types
+
+
+@pytest.mark.asyncio
+async def test_unhide_button_transitions_state_to_pending():
+    """Unhide callback should update state from hidden -> pending."""
+    from cogs.whisper_cog import WhisperUnhideButton
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    button = WhisperUnhideButton(bot, 42)
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
+         patch("cogs.whisper_cog._do_update_state") as update_state:
+        await button.callback(interaction)
+
+    update_state.assert_called_once_with(":memory:", 42, "pending")
+    interaction.response.send_message.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_unhide_button_rejects_non_target():
+    """Unhide callback rejects users who aren't the recipient."""
+    from cogs.whisper_cog import WhisperUnhideButton
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    button = WhisperUnhideButton(bot, 42)
+    interaction = fake_interaction(user=FakeMember(id=OTHER))
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
+         patch("cogs.whisper_cog._do_update_state") as update_state:
+        await button.callback(interaction)
+
+    update_state.assert_not_called()
+    interaction.response.send_message.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reply_modal_posts_to_mod_log():
+    """After a successful reply, a mod log embed should be posted."""
+    from cogs.whisper_cog import WhisperReplyModal
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperReplyModal(bot, whisper_id=42)
+    modal.reply_input._value = "anonymous reply text"  # type: ignore[attr-defined]
+
+    sender_user = MagicMock()
+    sender_user.send = AsyncMock()
+    log_channel = MagicMock(spec=discord.TextChannel)
+    log_channel.send = AsyncMock()
+
+    guild = MagicMock()
+    guild.get_channel = MagicMock(return_value=log_channel)
+    bot.get_guild = MagicMock(return_value=guild)
+
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.client = MagicMock()
+    interaction.client.get_user = MagicMock(return_value=sender_user)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("cogs.whisper_cog._do_insert_reply"), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+        await modal.on_submit(interaction)
+
+    log_channel.send.assert_awaited_once()
+    emb: discord.Embed = log_channel.send.call_args.kwargs["embed"]
+    assert emb.title == "Whisper Reply"
+    field_names = [f.name for f in emb.fields]
+    assert "From" in field_names
+    assert "To" in field_names
+    assert "Whisper ID" in field_names

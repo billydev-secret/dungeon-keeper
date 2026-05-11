@@ -12,6 +12,7 @@ from services.whisper_repo import (
     list_guesses,
     mark_solved,
     mark_exposed,
+    try_consume_guess,
 )
 
 GUILD, SENDER, TARGET = 9001, 1001, 2001
@@ -64,3 +65,35 @@ def test_guesses_cascade_delete(sync_db_path: Path):
         conn.execute("DELETE FROM whispers WHERE id = ?", (wid,))
         guesses = list_guesses(conn, whisper_id=wid)
     assert guesses == []
+
+
+# ── B5: try_consume_guess ────────────────────────────────────────────────────
+
+
+def test_try_consume_guess_first_two_succeed_third_fails(sync_db_path: Path):
+    """With guesses_left=2: first two calls return True, third returns False."""
+    with open_db(sync_db_path) as conn:
+        wid = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="x")
+        # Default guesses_left is 3; set to 2 for this test
+        conn.execute("UPDATE whispers SET guesses_left = 2 WHERE id = ?", (wid,))
+
+    with open_db(sync_db_path) as conn:
+        r1 = try_consume_guess(conn, wid)
+    with open_db(sync_db_path) as conn:
+        r2 = try_consume_guess(conn, wid)
+    with open_db(sync_db_path) as conn:
+        r3 = try_consume_guess(conn, wid)
+
+    assert r1 is True
+    assert r2 is True
+    assert r3 is False
+
+
+def test_try_consume_guess_fails_when_already_solved(sync_db_path: Path):
+    """If whisper is already solved, try_consume_guess returns False."""
+    from services.whisper_repo import mark_solved
+    with open_db(sync_db_path) as conn:
+        wid = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="x")
+        mark_solved(conn, wid)
+        result = try_consume_guess(conn, wid)
+    assert result is False
