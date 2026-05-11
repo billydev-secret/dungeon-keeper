@@ -10,6 +10,7 @@ import pytest
 
 from services.veil_models import BoundingBox, Detection
 from services.veil_pipeline import (
+    HIGH_INTEREST_WEIGHT,
     LOW_INTEREST_WEIGHT,
     apply_label_weights,
     compute_padded_crop,
@@ -158,17 +159,52 @@ def test_filter_fallback_false_empty_when_all_dropped():
 
 def test_apply_label_weights_penalises_armpits():
     armpit = _det("ARMPITS_EXPOSED", 0.8, 0, 0, 50, 50)
-    breast = _det("FEMALE_BREAST_EXPOSED", 0.6, 60, 60, 110, 110)
-    result = apply_label_weights([armpit, breast])
+    pose = _det("POSE_TORSO", 0.6, 60, 60, 110, 110)
+    result = apply_label_weights([armpit, pose])
     assert result[0].score == pytest.approx(0.8 * LOW_INTEREST_WEIGHT)
     assert result[1].score == pytest.approx(0.6)
     # boxes preserved
     assert result[0].box == armpit.box
 
 
-def test_apply_label_weights_passes_through_other_labels():
-    dets = [_det("MALE_GENITALIA_EXPOSED", 0.7, 0, 0, 50, 50)]
-    assert apply_label_weights(dets) == dets
+def test_apply_label_weights_penalises_bellies():
+    belly_e = _det("BELLY_EXPOSED", 0.9, 0, 0, 50, 50)
+    belly_c = _det("BELLY_COVERED", 0.85, 60, 0, 110, 50)
+    result = apply_label_weights([belly_e, belly_c])
+    assert result[0].score == pytest.approx(0.9 * LOW_INTEREST_WEIGHT)
+    assert result[1].score == pytest.approx(0.85 * LOW_INTEREST_WEIGHT)
+
+
+def test_apply_label_weights_boosts_high_interest_labels():
+    genital = _det("MALE_GENITALIA_EXPOSED", 0.4, 0, 0, 50, 50)
+    breast = _det("FEMALE_BREAST_COVERED", 0.5, 60, 0, 110, 50)
+    result = apply_label_weights([genital, breast])
+    assert result[0].score == pytest.approx(0.4 * HIGH_INTEREST_WEIGHT)
+    assert result[1].score == pytest.approx(0.5 * HIGH_INTEREST_WEIGHT)
+
+
+def test_apply_label_weights_caps_high_interest_boost_at_one():
+    """A confident high-interest detection mustn't exceed 1.0."""
+    genital = _det("MALE_GENITALIA_EXPOSED", 0.9, 0, 0, 50, 50)
+    result = apply_label_weights([genital])
+    assert result[0].score == pytest.approx(1.0)
+
+
+def test_apply_label_weights_outranks_belly_with_low_confidence_genital():
+    """A confident belly (0.85 → 0.425) loses to a moderate genital (0.45 → 0.675)."""
+    belly = _det("BELLY_EXPOSED", 0.85, 0, 0, 50, 50)
+    genital = _det("MALE_GENITALIA_EXPOSED", 0.45, 60, 0, 110, 50)
+    result = apply_label_weights([belly, genital])
+    assert result[1].score > result[0].score
+
+
+def test_apply_label_weights_passes_through_neutral_labels():
+    """Labels that are neither low- nor high-interest pass through unchanged
+    (e.g. pose-derived regions that already carry a sensible fixed score)."""
+    pose = _det("POSE_TORSO", 0.7, 0, 0, 50, 50)
+    feet = _det("FEET_EXPOSED", 0.55, 60, 0, 110, 50)
+    result = apply_label_weights([pose, feet])
+    assert result == [pose, feet]
 
 
 # ── enforce_min_size ──────────────────────────────────────────────────────────

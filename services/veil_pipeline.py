@@ -26,8 +26,27 @@ _GENITAL_LABELS: frozenset[str] = frozenset({
 LOW_INTEREST_LABELS: frozenset[str] = frozenset({
     "ARMPITS_COVERED",
     "ARMPITS_EXPOSED",
+    "BELLY_COVERED",
+    "BELLY_EXPOSED",
 })
 LOW_INTEREST_WEIGHT: float = 0.5
+
+# Labels we want to feature when present — the game gets more interesting when
+# crops focus on these. Boosted so a moderate-confidence interesting region
+# outranks a confident belly or generic torso pose.
+HIGH_INTEREST_LABELS: frozenset[str] = frozenset({
+    "MALE_GENITALIA_EXPOSED",
+    "MALE_GENITALIA_COVERED",
+    "FEMALE_GENITALIA_EXPOSED",
+    "FEMALE_GENITALIA_COVERED",
+    "ANUS_EXPOSED",
+    "FEMALE_BREAST_EXPOSED",
+    "FEMALE_BREAST_COVERED",
+    "BUTTOCKS_EXPOSED",
+    "BUTTOCKS_COVERED",
+    "SEX_ACT",
+})
+HIGH_INTEREST_WEIGHT: float = 1.5
 
 DIFFICULTY_PADDING: dict[str, float] = {
     "easy": 0.60,
@@ -37,13 +56,25 @@ DIFFICULTY_PADDING: dict[str, float] = {
 
 
 def apply_label_weights(detections: list[Detection]) -> list[Detection]:
-    """Return new Detections with low-interest labels' scores down-weighted."""
-    return [
-        Detection(label=d.label, score=d.score * LOW_INTEREST_WEIGHT, box=d.box)
-        if d.label in LOW_INTEREST_LABELS
-        else d
-        for d in detections
-    ]
+    """Reweight detections by interest class.
+
+    LOW_INTEREST_LABELS get scored at LOW_INTEREST_WEIGHT× so they only outrank
+    stronger detections when there's nothing better. HIGH_INTEREST_LABELS get
+    a HIGH_INTEREST_WEIGHT× boost (capped at 1.0) so a moderate-confidence
+    interesting region beats a confident belly or pose-derived torso. Other
+    labels pass through unchanged.
+    """
+    def _weight(d: Detection) -> Detection:
+        if d.label in LOW_INTEREST_LABELS:
+            return Detection(label=d.label, score=d.score * LOW_INTEREST_WEIGHT, box=d.box)
+        if d.label in HIGH_INTEREST_LABELS:
+            return Detection(
+                label=d.label,
+                score=min(1.0, d.score * HIGH_INTEREST_WEIGHT),
+                box=d.box,
+            )
+        return d
+    return [_weight(d) for d in detections]
 
 
 def _box_gap(a: BoundingBox, b: BoundingBox) -> float:
