@@ -421,6 +421,35 @@ async def test_report_modal_first_report_succeeds():
 # ── S6: Reply mod log ─────────────────────────────────────────────────────────
 
 
+# ── S9: Reply DM identifies whisper id ───────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reply_modal_dm_includes_whisper_id():
+    """The reply DM body must include 'Whisper #<id>' so recipient can map it."""
+    from cogs.whisper_cog import WhisperReplyModal
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperReplyModal(bot, whisper_id=42)
+    modal.reply_input._value = "great question"  # type: ignore[attr-defined]
+
+    sender_user = MagicMock()
+    sender_user.send = AsyncMock()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.client = MagicMock()
+    interaction.client.get_user = MagicMock(return_value=sender_user)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(wid=42)), \
+         patch("cogs.whisper_cog._do_insert_reply"), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+        await modal.on_submit(interaction)
+
+    sender_user.send.assert_awaited_once()
+    sent_content = sender_user.send.call_args.args[0]
+    assert "Whisper #42" in sent_content
+
+
 # ── S2: Unhide button ────────────────────────────────────────────────────────
 
 

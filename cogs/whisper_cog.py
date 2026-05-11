@@ -798,7 +798,7 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
             if len(preview) > 200:
                 preview = preview[:197] + "…"
             await recipient.send(
-                f"\U0001f4ec Anonymous reply on whisper *(\"{safe_codefence_content(preview)}\")*:\n"
+                f"\U0001f4ec Anonymous reply on Whisper #{self.whisper_id} *(\"{safe_codefence_content(preview)}\")*:\n"
                 f"```{safe_codefence_content(content)}```",
                 view=WhisperReplyDmView(self.bot, self.whisper_id),
             )
