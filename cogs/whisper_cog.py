@@ -929,7 +929,7 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
 
         emb = discord.Embed(
             title="Whisper Reported",
-            description=whisper.message,
+            description=safe_codefence_content(whisper.message),
             color=discord.Color.red(),
             timestamp=discord.utils.utcnow(),
         )
