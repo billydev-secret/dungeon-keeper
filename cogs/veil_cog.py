@@ -363,9 +363,8 @@ class GuessSelectView(discord.ui.View):
             correct=correct,
         )
 
-        self._select.disabled = True
-
         if correct and round_row.solved_at is None:
+            self._select.disabled = True
             rowcount, guess_count, unique_count = await asyncio.to_thread(
                 _do_mark_solved, db_path, self.round_id, solver_id=interaction.user.id
             )
@@ -422,6 +421,7 @@ class GuessSelectView(discord.ui.View):
                 view=self,
             )
         elif correct:
+            self._select.disabled = True
             await interaction.edit_original_response(
                 content="✅ Correct — but someone already solved this one.",
                 view=self,
@@ -440,6 +440,9 @@ class GuessSelectView(discord.ui.View):
                     log.exception(
                         "veil: chip counter bump failed for round %d", self.round_id
                     )
+            # Extend view lifetime so the user can guess again after cooldown expires.
+            if self.cooldown_seconds > 0:
+                self.timeout = self.cooldown_seconds + SELECT_TIMEOUT_SECONDS
             await interaction.edit_original_response(
                 content="❌ Not it. Keep trying!",
                 view=self,
