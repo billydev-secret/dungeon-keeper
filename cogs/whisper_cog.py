@@ -630,7 +630,8 @@ class WhisperExposeButton(
             try:
                 new_content = (
                     (interaction.message.content or "")
-                    + f"\n\n\U0001f4a5 Sender was {sender_label}."
+                    + f"\n\n\U0001f4a5 Sender: {sender_label}\n"
+                    f"```{safe_codefence_content(whisper.message)}```"
                 )
                 await interaction.message.edit(
                     content=new_content,
@@ -640,7 +641,7 @@ class WhisperExposeButton(
             except discord.HTTPException:
                 log.warning("Failed to edit message on expose")
 
-        await interaction.response.send_message("Exposed.", ephemeral=True)
+        await interaction.response.send_message("Revealed.", ephemeral=True)
 
 
 class WhisperReplyButton(
@@ -1029,22 +1030,14 @@ async def _handle_guess_outcome(
 
     if outcome.correct:
         guild = interaction.guild or bot.get_guild(whisper.guild_id)
-        sender_label = f"<@{whisper.sender_id}>"
-        if guild:
-            sender_member = guild.get_member(whisper.sender_id)
-            if sender_member:
-                sender_label = sender_member.mention
-        await interaction.response.edit_message(
-            content=f"You're right! It was {sender_label}.", view=None
-        )
+        await interaction.response.edit_message(content="You solved it!", view=None)
         cfg = await asyncio.to_thread(_load_config, bot.ctx.db_path, whisper.guild_id)
         if guild:
             feed_channel = guild.get_channel(cfg.channel_id)
             if isinstance(feed_channel, discord.TextChannel):
                 try:
                     await feed_channel.send(
-                        f"✅ You're Right! <@{whisper.target_id}> figured out who sent the whisper:\n"
-                        f"```{safe_codefence_content(whisper.message)}```",
+                        f"✅ <@{whisper.target_id}> solved the whisper!",
                         view=WhisperExposeView(bot, whisper.id),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
