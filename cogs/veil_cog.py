@@ -686,6 +686,11 @@ class SubmitPreviewView(discord.ui.View):
             view=self,
         )
 
+        try:
+            await _repost_prompt(self.bot, veil_channel, self.guild_id)
+        except Exception:
+            log.exception("veil: prompt repost after game post failed for guild %d", self.guild_id)
+
 
 # ── Sticky channel prompt ────────────────────────────────────────────────────
 

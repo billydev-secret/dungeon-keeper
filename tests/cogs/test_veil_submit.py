@@ -281,3 +281,43 @@ async def test_submit_rejects_when_veil_role_not_configured():
     interaction.followup.send.assert_called_once()
     msg = interaction.followup.send.call_args.args[0]
     assert "role" in msg.lower() and ("not configured" in msg.lower() or "ask an admin" in msg.lower())
+
+
+@pytest.mark.asyncio
+async def test_on_post_reposts_prompt_after_game_message():
+    """After posting a game round, _repost_prompt is called to move the
+    sticky status bar below the new round."""
+    from cogs.veil_cog import SubmitPreviewView
+
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    bot.add_view = MagicMock()
+
+    fake_channel = MagicMock(spec=discord.TextChannel)
+    fake_channel.is_nsfw = MagicMock(return_value=True)
+    fake_channel.send = AsyncMock(return_value=_fake_game_message())
+
+    guild = FakeGuild(id=GUILD_ID)
+    guild.channels[VEIL_CHANNEL_ID] = fake_channel
+
+    interaction = fake_interaction(guild=guild)
+    interaction.guild.get_channel = lambda cid: guild.channels.get(cid)
+
+    view = SubmitPreviewView(
+        bot,
+        crops=[b"fake-crop"],
+        guild_id=GUILD_ID,
+        veil_channel_id=VEIL_CHANNEL_ID,
+        submitter_id=1001,
+        answer_id=1001,
+        difficulty="medium",
+        candidate_count=1,
+    )
+
+    with patch("cogs.veil_cog._do_insert_round", return_value=42), \
+         patch("cogs.veil_cog._do_update_round_message"), \
+         patch("cogs.veil_cog._do_audit"), \
+         patch("cogs.veil_cog._repost_prompt", new_callable=AsyncMock) as mock_repost:
+        await view._on_post(interaction)
+
+    mock_repost.assert_awaited_once_with(bot, fake_channel, GUILD_ID)
