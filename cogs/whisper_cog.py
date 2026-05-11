@@ -22,7 +22,6 @@ from services.whisper_models import (
     WhisperState,
 )
 from services.whisper_repo import (
-    decrement_guesses_left,
     delete_whisper,
     get_whisper,
     get_whisper_config,
@@ -36,6 +35,7 @@ from services.whisper_repo import (
     mark_solved,
     set_whisper_launcher_message_id,
     set_whisper_message_ids,
+    try_consume_guess,
     update_whisper_state,
 )
 from services.whisper_service import (
@@ -176,12 +176,15 @@ def _do_record_guess(
     whisper_id: int,
     guessed_id: int,
     correct: bool,
-) -> None:
+) -> bool:
+    """Returns True if the guess was consumed. False means race-lost (someone else solved it first)."""
     with open_db(db_path) as conn:
+        if not try_consume_guess(conn, whisper_id):
+            return False
         insert_guess(conn, whisper_id=whisper_id, guessed_id=guessed_id, correct=correct)
-        decrement_guesses_left(conn, whisper_id)
         if correct:
             mark_solved(conn, whisper_id)
+        return True
 
 
 def _do_update_state(db_path: Path, whisper_id: int, new_state: WhisperState) -> None:
@@ -917,13 +920,18 @@ async def _handle_guess_outcome(
         await interaction.response.edit_message(content=e.message, view=None)
         return
 
-    await asyncio.to_thread(
+    consumed = await asyncio.to_thread(
         _do_record_guess,
         bot.ctx.db_path,
         whisper_id=whisper.id,
         guessed_id=guessed_id,
         correct=outcome.correct,
     )
+    if not consumed:
+        await interaction.response.edit_message(
+            content="This whisper was solved by another tab.", view=None
+        )
+        return
 
     if outcome.correct:
         guild = interaction.guild or bot.get_guild(whisper.guild_id)
