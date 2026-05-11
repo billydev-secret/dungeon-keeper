@@ -5,7 +5,13 @@ import sqlite3
 import time
 
 from db_utils import get_config_value, set_config_value
-from services.whisper_models import Whisper, WhisperConfig, WhisperGuess, WhisperState
+from services.whisper_models import (
+    Whisper,
+    WhisperConfig,
+    WhisperGuess,
+    WhisperReply,
+    WhisperState,
+)
 
 _CONFIG_DEFAULTS: dict[str, str] = {
     "whisper_role_id": "0",
@@ -196,3 +202,43 @@ def list_received_in_states(
         (guild_id, target_id, *states),
     ).fetchall()
     return [_row_to_whisper(r) for r in rows]
+
+
+def _row_to_reply(row: sqlite3.Row) -> WhisperReply:
+    return WhisperReply(
+        id=row["id"],
+        whisper_id=row["whisper_id"],
+        from_user_id=row["from_user_id"],
+        to_user_id=row["to_user_id"],
+        content=row["content"],
+        created_at=row["created_at"],
+    )
+
+
+def insert_reply(
+    conn: sqlite3.Connection,
+    *,
+    whisper_id: int,
+    from_user_id: int,
+    to_user_id: int,
+    content: str,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO whisper_replies
+            (whisper_id, from_user_id, to_user_id, content, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (whisper_id, from_user_id, to_user_id, content, time.time()),
+    )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def list_replies_for_whisper(
+    conn: sqlite3.Connection, *, whisper_id: int
+) -> list[WhisperReply]:
+    rows = conn.execute(
+        "SELECT * FROM whisper_replies WHERE whisper_id = ? ORDER BY created_at",
+        (whisper_id,),
+    ).fetchall()
+    return [_row_to_reply(r) for r in rows]
