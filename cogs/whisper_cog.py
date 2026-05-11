@@ -754,6 +754,44 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
             to_user_id=to_user_id,
             content=content,
         )
+
+        # Post reply to mod log (best-effort — don't fail the reply if this fails)
+        try:
+            cfg = await asyncio.to_thread(
+                _load_config, self.bot.ctx.db_path, whisper.guild_id
+            )
+            if cfg.log_channel_id:
+                guild = self.bot.get_guild(whisper.guild_id)
+                if guild:
+                    log_channel = guild.get_channel(cfg.log_channel_id)
+                    if isinstance(log_channel, discord.TextChannel):
+                        emb = discord.Embed(
+                            title="Whisper Reply",
+                            description=safe_codefence_content(content),
+                            timestamp=discord.utils.utcnow(),
+                        )
+                        emb.add_field(
+                            name="From",
+                            value=f"<@{interaction.user.id}> (`{interaction.user.id}`)",
+                            inline=False,
+                        )
+                        emb.add_field(
+                            name="To",
+                            value=f"<@{to_user_id}> (`{to_user_id}`)",
+                            inline=False,
+                        )
+                        emb.add_field(
+                            name="Whisper ID",
+                            value=str(self.whisper_id),
+                            inline=False,
+                        )
+                        await log_channel.send(
+                            embed=emb,
+                            allowed_mentions=discord.AllowedMentions.none(),
+                        )
+        except Exception:
+            log.warning("Failed to post whisper reply to mod log")
+
         await interaction.response.send_message(
             "Reply delivered anonymously.", ephemeral=True
         )

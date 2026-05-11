@@ -416,3 +416,43 @@ async def test_report_modal_first_report_succeeds():
         await modal.on_submit(interaction)
 
     log_channel.send.assert_awaited_once()
+
+
+# ── S6: Reply mod log ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_reply_modal_posts_to_mod_log():
+    """After a successful reply, a mod log embed should be posted."""
+    from cogs.whisper_cog import WhisperReplyModal
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperReplyModal(bot, whisper_id=42)
+    modal.reply_input._value = "anonymous reply text"  # type: ignore[attr-defined]
+
+    sender_user = MagicMock()
+    sender_user.send = AsyncMock()
+    log_channel = MagicMock(spec=discord.TextChannel)
+    log_channel.send = AsyncMock()
+
+    guild = MagicMock()
+    guild.get_channel = MagicMock(return_value=log_channel)
+    bot.get_guild = MagicMock(return_value=guild)
+
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.client = MagicMock()
+    interaction.client.get_user = MagicMock(return_value=sender_user)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("cogs.whisper_cog._do_insert_reply"), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+        await modal.on_submit(interaction)
+
+    log_channel.send.assert_awaited_once()
+    emb: discord.Embed = log_channel.send.call_args.kwargs["embed"]
+    assert emb.title == "Whisper Reply"
+    field_names = [f.name for f in emb.fields]
+    assert "From" in field_names
+    assert "To" in field_names
+    assert "Whisper ID" in field_names
