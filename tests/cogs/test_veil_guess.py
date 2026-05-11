@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.veil_models import VeilRound
+from services.veil_models import BoundingBox, VeilRound
 from tests.fakes import FakeMember, fake_interaction
 
 
@@ -451,19 +451,10 @@ async def test_game_view_rejects_submitter_guessing_own_round():
     assert "can't guess" in msg.lower() or "own round" in msg.lower()
 
 
-# ── SubmitPreviewView re-roll tests ───────────────────────────────────────────
+# ── CropEditorView post tests ────────────────────────────────────────────────
 
 GUILD_ID = 9001
 VEIL_CHANNEL_ID = 8001
-
-
-def _make_preview_view(bot, crops):
-    from cogs.veil_cog import SubmitPreviewView
-    return SubmitPreviewView(
-        bot, crops, GUILD_ID, VEIL_CHANNEL_ID,
-        submitter_id=1001, answer_id=2001,
-        difficulty="medium", candidate_count=len(crops),
-    )
 
 
 @pytest.mark.asyncio
@@ -471,6 +462,7 @@ async def test_post_persists_original_bytes_and_stores_path(tmp_path, monkeypatc
     """On Post, the submitter's original bytes are written to <orig_dir>/<round_id><ext>
     and the path is recorded so /correct guess can attach it as a SPOILER."""
     import cogs.veil_cog as veil_cog
+    from cogs.veil_cog import CropEditorView
 
     monkeypatch.setattr(veil_cog, "_VEIL_ORIG_DIR", tmp_path / "orig")
 
@@ -480,6 +472,7 @@ async def test_post_persists_original_bytes_and_stores_path(tmp_path, monkeypatc
 
     fake_channel = MagicMock()
     fake_channel.mention = "#veil"
+    fake_channel.is_nsfw = lambda: True
     fake_msg = MagicMock()
     fake_msg.id = 9999
     attached = MagicMock()
@@ -492,12 +485,18 @@ async def test_post_persists_original_bytes_and_stores_path(tmp_path, monkeypatc
     interaction.response.defer = AsyncMock()
     interaction.edit_original_response = AsyncMock()
 
-    # Construct view through the same import as the cog.
-    from cogs.veil_cog import SubmitPreviewView
-    view = SubmitPreviewView(
-        bot, [b"crop-bytes"], GUILD_ID, VEIL_CHANNEL_ID,
-        submitter_id=1001, answer_id=2001,
-        difficulty="medium", candidate_count=1,
+    view = CropEditorView(
+        bot,
+        image_bytes=b"",
+        img_w=500,
+        img_h=500,
+        crop_box=BoundingBox(0.0, 0.0, 500.0, 500.0),
+        guild_id=GUILD_ID,
+        veil_channel_id=VEIL_CHANNEL_ID,
+        submitter_id=1001,
+        answer_id=2001,
+        difficulty="medium",
+        candidate_count=1,
         original_bytes=b"the-original-png-bytes",
         original_ext=".png",
     )
@@ -509,55 +508,14 @@ async def test_post_persists_original_bytes_and_stores_path(tmp_path, monkeypatc
 
     with patch("cogs.veil_cog._do_insert_round", return_value=77), \
          patch("cogs.veil_cog._do_update_round_message"), \
-         patch("cogs.veil_cog._do_set_original_path", side_effect=_capture):
-        # We need discord to think the channel is a real text channel.
+         patch("cogs.veil_cog._do_set_original_path", side_effect=_capture), \
+         patch("cogs.veil_cog._do_audit"), \
+         patch("cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
+         patch("cogs.veil_cog._repost_prompt", new_callable=AsyncMock):
         with patch("cogs.veil_cog.isinstance", lambda obj, types: True):
             await view._on_post(interaction)
 
     persisted = tmp_path / "orig" / "77.png"
     assert persisted.exists()
     assert persisted.read_bytes() == b"the-original-png-bytes"
-    # Stored path matches the file we wrote.
     assert set_path_calls and set_path_calls[0][0][2] == str(persisted)
-
-
-@pytest.mark.asyncio
-async def test_reroll_cycles_to_next_crop():
-    bot = MagicMock()
-    bot.ctx.db_path = ":memory:"
-
-    view = _make_preview_view(bot, [b"crop0", b"crop1", b"crop2"])
-    interaction = fake_interaction()
-    interaction.response.edit_message = AsyncMock()
-
-    await view._on_reroll(interaction)
-
-    assert view.crop_index == 1
-    interaction.response.edit_message.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_reroll_wraps_around_to_first_crop():
-    bot = MagicMock()
-    bot.ctx.db_path = ":memory:"
-
-    view = _make_preview_view(bot, [b"c0", b"c1", b"c2"])
-    interaction = fake_interaction()
-    interaction.response.edit_message = AsyncMock()
-
-    for _ in range(3):
-        await view._on_reroll(interaction)
-
-    # After 3 rerolls on 3 crops we're back at index 0
-    assert view.crop_index == 0
-    assert view.reroll_btn.disabled is False
-
-
-@pytest.mark.asyncio
-async def test_reroll_button_disabled_when_only_one_crop():
-    bot = MagicMock()
-    bot.ctx.db_path = ":memory:"
-
-    view = _make_preview_view(bot, [b"only-crop"])
-
-    assert view.reroll_btn.disabled is True

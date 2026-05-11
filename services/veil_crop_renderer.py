@@ -11,6 +11,57 @@ from pathlib import Path
 from services.veil_models import BoundingBox
 
 
+def render_crop_editor(
+    image_bytes: bytes,
+    crop_box: BoundingBox,
+    *,
+    max_display_px: int = 1280,
+    jpeg_quality: int = 80,
+) -> bytes:
+    """Return the full image scaled to fit *max_display_px*, with a red crop box drawn on it.
+
+    The image is scaled down (never up) so its longest dimension fits within
+    *max_display_px*.  The *crop_box* coordinates are scaled proportionally before
+    drawing.  Suitable for sending as an ephemeral Discord attachment so the
+    submitter can preview and adjust their crop region.
+
+    Args:
+        image_bytes: Raw source image bytes (any PIL-supported format).
+        crop_box: Crop region in original image pixel coordinates.
+        max_display_px: Maximum pixel dimension for the output image (default 1280).
+        jpeg_quality: JPEG encoding quality (default 80).
+
+    Returns:
+        JPEG bytes of the annotated full image.
+    """
+    from PIL import Image, ImageDraw  # type: ignore[import-untyped]  # noqa: PLC0415
+
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    orig_w, orig_h = img.size
+
+    scale = min(1.0, max_display_px / max(orig_w, orig_h))
+    if scale < 1.0:
+        new_w = max(1, int(orig_w * scale))
+        new_h = max(1, int(orig_h * scale))
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    sx = img.width / orig_w
+    sy = img.height / orig_h
+    rect = (
+        int(crop_box.x1 * sx),
+        int(crop_box.y1 * sy),
+        int(crop_box.x2 * sx),
+        int(crop_box.y2 * sy),
+    )
+
+    draw = ImageDraw.Draw(img)
+    draw.rectangle(rect, outline=(255, 0, 0), width=3)
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=jpeg_quality)
+    return buf.getvalue()
+
+
 def render_crop(
     image_bytes: bytes,
     crop_box: BoundingBox,

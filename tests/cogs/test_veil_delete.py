@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.veil_models import VeilRound
+from services.veil_models import BoundingBox, VeilRound
 from tests.fakes import FakeGuild, FakeMember, fake_interaction
 
 GUILD_ID = 9001
@@ -163,7 +163,7 @@ async def test_delete_unlinks_original_file_when_present(tmp_path: Path):
 async def test_post_rejects_non_nsfw_channel():
     """Defense in depth: if the configured channel is no longer NSFW at post
     time (or was never), refuse to post."""
-    from cogs.veil_cog import SubmitPreviewView
+    from cogs.veil_cog import CropEditorView
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -180,10 +180,18 @@ async def test_post_rejects_non_nsfw_channel():
     interaction.followup.send = AsyncMock()
     interaction.edit_original_response = AsyncMock()
 
-    view = SubmitPreviewView(
-        bot, [b"crop"], GUILD_ID, VEIL_CHANNEL_ID,
-        submitter_id=SUBMITTER_ID, answer_id=SUBMITTER_ID,
-        difficulty="medium", candidate_count=1,
+    view = CropEditorView(
+        bot,
+        image_bytes=b"",
+        img_w=500,
+        img_h=500,
+        crop_box=BoundingBox(0.0, 0.0, 500.0, 500.0),
+        guild_id=GUILD_ID,
+        veil_channel_id=VEIL_CHANNEL_ID,
+        submitter_id=SUBMITTER_ID,
+        answer_id=SUBMITTER_ID,
+        difficulty="medium",
+        candidate_count=1,
     )
 
     with patch("cogs.veil_cog._do_insert_round") as insert_mock:
@@ -200,7 +208,7 @@ async def test_post_rejects_non_nsfw_channel():
 async def test_post_double_click_inserts_only_once(tmp_path, monkeypatch):
     """Two near-simultaneous Post clicks must produce only one round / one message."""
     import cogs.veil_cog as veil_cog
-    from cogs.veil_cog import SubmitPreviewView
+    from cogs.veil_cog import CropEditorView
 
     monkeypatch.setattr(veil_cog, "_VEIL_ORIG_DIR", tmp_path / "orig")
 
@@ -224,16 +232,28 @@ async def test_post_double_click_inserts_only_once(tmp_path, monkeypatch):
     interaction.followup.send = AsyncMock()
     interaction.edit_original_response = AsyncMock()
 
-    view = SubmitPreviewView(
-        bot, [b"crop"], GUILD_ID, VEIL_CHANNEL_ID,
-        submitter_id=SUBMITTER_ID, answer_id=SUBMITTER_ID,
-        difficulty="medium", candidate_count=1,
-        original_bytes=b"orig", original_ext=".png",
+    view = CropEditorView(
+        bot,
+        image_bytes=b"",
+        img_w=500,
+        img_h=500,
+        crop_box=BoundingBox(0.0, 0.0, 500.0, 500.0),
+        guild_id=GUILD_ID,
+        veil_channel_id=VEIL_CHANNEL_ID,
+        submitter_id=SUBMITTER_ID,
+        answer_id=SUBMITTER_ID,
+        difficulty="medium",
+        candidate_count=1,
+        original_bytes=b"orig",
+        original_ext=".png",
     )
 
     with patch("cogs.veil_cog._do_insert_round", return_value=77) as insert_mock, \
          patch("cogs.veil_cog._do_update_round_message"), \
-         patch("cogs.veil_cog._do_set_original_path"):
+         patch("cogs.veil_cog._do_set_original_path"), \
+         patch("cogs.veil_cog._do_audit"), \
+         patch("cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
+         patch("cogs.veil_cog._repost_prompt", new_callable=AsyncMock):
         with patch("cogs.veil_cog.isinstance", lambda obj, types: True):
             import asyncio as _aio
             await _aio.gather(view._on_post(interaction), view._on_post(interaction))

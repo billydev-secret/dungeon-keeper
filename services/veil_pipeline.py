@@ -208,6 +208,47 @@ def enforce_min_size(bbox: BoundingBox, min_px: int = 200) -> BoundingBox:
     return BoundingBox(cx - half_w, cy - half_h, cx + half_w, cy + half_h)
 
 
+def move_crop_box(
+    box: BoundingBox,
+    dx: float,
+    dy: float,
+    img_w: int,
+    img_h: int,
+) -> BoundingBox:
+    """Translate *box* by (dx, dy) while keeping it fully inside the image.
+
+    Width and height are preserved exactly; the box is clamped to image bounds.
+    """
+    w, h = box.width, box.height
+    new_x1 = max(0.0, min(box.x1 + dx, float(img_w) - w))
+    new_y1 = max(0.0, min(box.y1 + dy, float(img_h) - h))
+    return BoundingBox(new_x1, new_y1, new_x1 + w, new_y1 + h)
+
+
+def zoom_crop_box(
+    box: BoundingBox,
+    factor: float,
+    img_w: int,
+    img_h: int,
+    *,
+    min_px: int = 200,
+) -> BoundingBox:
+    """Zoom *box* by *factor* around its centre, respecting min_px and image bounds.
+
+    factor < 1 zooms in (smaller box); factor > 1 zooms out (larger box).
+    """
+    cx = (box.x1 + box.x2) / 2.0
+    cy = (box.y1 + box.y2) / 2.0
+    half_w = max(float(min_px) / 2.0, min(box.width * factor / 2.0, float(img_w) / 2.0))
+    half_h = max(float(min_px) / 2.0, min(box.height * factor / 2.0, float(img_h) / 2.0))
+    return BoundingBox(
+        max(0.0, cx - half_w),
+        max(0.0, cy - half_h),
+        min(float(img_w), cx + half_w),
+        min(float(img_h), cy + half_h),
+    )
+
+
 def run_pipeline(
     image_path: Path,
     image_bytes: bytes,

@@ -287,7 +287,8 @@ async def test_submit_rejects_when_veil_role_not_configured():
 async def test_on_post_reposts_prompt_after_game_message():
     """After posting a game round, _repost_prompt is called to move the
     sticky status bar below the new round."""
-    from cogs.veil_cog import SubmitPreviewView
+    from cogs.veil_cog import CropEditorView
+    from services.veil_models import BoundingBox
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -303,18 +304,22 @@ async def test_on_post_reposts_prompt_after_game_message():
     interaction = fake_interaction(guild=guild)
     interaction.guild.get_channel = lambda cid: guild.channels.get(cid)
 
-    view = SubmitPreviewView(
+    view = CropEditorView(
         bot,
-        crops=[b"fake-crop"],
-        guild_id=GUILD_ID,
-        veil_channel_id=VEIL_CHANNEL_ID,
+        b"fake-image",
+        100,
+        100,
+        BoundingBox(0.0, 0.0, 1.0, 1.0),
+        GUILD_ID,
+        VEIL_CHANNEL_ID,
         submitter_id=1001,
         answer_id=1001,
         difficulty="medium",
         candidate_count=1,
     )
 
-    with patch("cogs.veil_cog._do_insert_round", return_value=42), \
+    with patch("cogs.veil_cog.render_crop", return_value=b"fake-crop"), \
+         patch("cogs.veil_cog._do_insert_round", return_value=42), \
          patch("cogs.veil_cog._do_update_round_message"), \
          patch("cogs.veil_cog._do_audit"), \
          patch("cogs.veil_cog._repost_prompt", new_callable=AsyncMock) as mock_repost:
