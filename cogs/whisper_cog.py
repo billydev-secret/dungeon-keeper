@@ -1277,6 +1277,70 @@ class WhisperFeedView(discord.ui.View):
         )
 
 
+# ── Forget-me ────────────────────────────────────────────────────────────────
+
+
+def _do_forget_user(db_path: Path, *, guild_id: int, user_id: int) -> None:
+    """Delete all whisper data for user_id in guild_id (both sent and received)."""
+    with open_db(db_path) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Whispers user sent — cascade deletes replies/guesses/reports
+        conn.execute(
+            "DELETE FROM whispers WHERE guild_id = ? AND sender_id = ?",
+            (guild_id, user_id),
+        )
+        # Whispers user received
+        conn.execute(
+            "DELETE FROM whispers WHERE guild_id = ? AND target_id = ?",
+            (guild_id, user_id),
+        )
+        # Orphaned replies they sent/received (parent whisper may already be gone)
+        conn.execute(
+            "DELETE FROM whisper_replies WHERE from_user_id = ?",
+            (user_id,),
+        )
+        conn.execute(
+            "DELETE FROM whisper_replies WHERE to_user_id = ?",
+            (user_id,),
+        )
+
+
+class WhisperForgetMeConfirmView(discord.ui.View):
+    """Ephemeral confirmation view for /whisper forget-me."""
+
+    def __init__(self, bot: Bot, guild_id: int, user_id: int) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    @discord.ui.button(label="Yes, delete my data", style=discord.ButtonStyle.danger)
+    async def confirm(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # noqa: ARG002
+    ) -> None:
+        await asyncio.to_thread(
+            _do_forget_user,
+            self.bot.ctx.db_path,
+            guild_id=self.guild_id,
+            user_id=self.user_id,
+        )
+        await interaction.response.edit_message(
+            content="Your whisper data for this server has been deleted.", view=None
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def cancel(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,  # noqa: ARG002
+    ) -> None:
+        await interaction.response.edit_message(
+            content="Deletion cancelled.", view=None
+        )
+
+
 # ── Opt-in confirmation view ─────────────────────────────────────────────────
 
 
@@ -1492,6 +1556,23 @@ class WhisperCog(commands.Cog):
                 return
         await interaction.response.send_message(
             "You've opted out. Existing whispers are preserved.", ephemeral=True
+        )
+
+    @whisper_group.command(
+        name="forget-me",
+        description="Delete all your whisper data from this server.",
+    )
+    async def whisper_forget_me(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This command can only be used in a server.", ephemeral=True
+            )
+            return
+        await interaction.response.send_message(
+            "This will permanently delete all whispers you sent or received in this server. "
+            "This cannot be undone.",
+            view=WhisperForgetMeConfirmView(self.bot, interaction.guild.id, interaction.user.id),
+            ephemeral=True,
         )
 
     @whisper_group.command(name="optin", description="Opt in to send and receive whispers.")
