@@ -177,6 +177,8 @@ class Bot(commands.Bot):
         self.extension_names: list[str] = []
 
     async def setup_hook(self) -> None:
+        from services.command_sync import sync_if_changed
+
         for ext in self.extension_names:
             await self.load_extension(ext)
 
@@ -186,17 +188,28 @@ class Bot(commands.Bot):
                     "WARNING: debug=True but guild_id is not configured; skipping guild command sync."
                 )
             else:
+                db_path = self.ctx.db_path
                 guild = discord.Object(id=self.guild_id)
                 try:
                     self.tree.copy_global_to(guild=guild)
-                    synced = await self.tree.sync(guild=guild)
-                    print(
-                        f"Synced {len(synced)} commands to development guild {self.guild_id}."
+                    synced, did = await sync_if_changed(
+                        self.tree, db_path, guild=guild
                     )
+                    if did:
+                        print(
+                            f"Synced {len(synced)} commands to development guild {self.guild_id}."
+                        )
+                    else:
+                        print(
+                            f"Command tree unchanged for guild {self.guild_id} — skipping sync."
+                        )
                     # Clear any stale global commands so they don't appear alongside guild commands.
                     self.tree.clear_commands(guild=None)
-                    await self.tree.sync()
-                    print("Cleared global commands (debug mode).")
+                    _, did_global = await sync_if_changed(
+                        self.tree, db_path, guild=None
+                    )
+                    if did_global:
+                        print("Cleared global commands (debug mode).")
                 except discord.Forbidden as exc:
                     print(
                         "WARNING: missing access while syncing commands to "
@@ -204,15 +217,22 @@ class Bot(commands.Bot):
                         f"scope."
                     )
         else:
-            synced = await self.tree.sync()
-            print(f"Synced {len(synced)} commands globally.")
+            db_path = self.ctx.db_path
+            synced, did = await sync_if_changed(self.tree, db_path, guild=None)
+            if did:
+                print(f"Synced {len(synced)} commands globally.")
+            else:
+                print("Command tree unchanged — skipping global sync.")
             # Clear any stale guild commands left from a previous debug-mode run.
             if self.guild_id > 0:
                 try:
                     guild = discord.Object(id=self.guild_id)
                     self.tree.clear_commands(guild=guild)
-                    await self.tree.sync(guild=guild)
-                    print(f"Cleared stale guild commands for {self.guild_id}.")
+                    _, did_guild = await sync_if_changed(
+                        self.tree, db_path, guild=guild
+                    )
+                    if did_guild:
+                        print(f"Cleared stale guild commands for {self.guild_id}.")
                 except discord.HTTPException as exc:
                     print(
                         f"WARNING: could not clear guild commands for {self.guild_id}: {exc}"
@@ -387,8 +407,8 @@ class AppContext:
         with self.open_db() as conn:
             self.grant_roles = get_grant_roles(conn, self.guild_id)
 
-    def can_grant_denizen(self, interaction: discord.Interaction) -> bool:
-        """Legacy check — returns True if user can grant ANY grant role."""
+    def can_grant_any_role(self, interaction: discord.Interaction) -> bool:
+        """Returns True if user can grant ANY configured grant role."""
         if self.is_mod(interaction):
             return True
         member = self.get_interaction_member(interaction)

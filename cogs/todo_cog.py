@@ -6,7 +6,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from commands.jail_commands import _is_mod
 from services.todo_service import create_todo
 
 if TYPE_CHECKING:
@@ -95,13 +94,12 @@ class TodoCog(commands.Cog):
     async def cog_load(self) -> None:
         ctx = self.ctx
 
+        # The /todo slash command is open to everyone — server todos are
+        # community-curated. The "Add to Todo" message context menu mirrors
+        # that policy: anyone can flag a message into the todo list.
         async def _add_to_todo_ctx(
             interaction: discord.Interaction, message: discord.Message
         ) -> None:
-            member = interaction.user
-            if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
-                await interaction.response.send_message("Mod only.", ephemeral=True)
-                return
             await interaction.response.send_modal(
                 _TodoFromMessageModal(message=message, ctx=ctx)
             )
@@ -109,7 +107,6 @@ class TodoCog(commands.Cog):
         ctx_menu = app_commands.ContextMenu(
             name="Add to Todo", callback=_add_to_todo_ctx
         )
-        ctx_menu.default_permissions = discord.Permissions(manage_messages=True)
         self.bot.tree.add_command(ctx_menu)
         self._add_to_todo_context_menu = ctx_menu
 
@@ -131,7 +128,7 @@ class TodoCog(commands.Cog):
             return
         if len(task) > _TASK_MAX_LEN:
             await interaction.response.send_message(
-                "Task must be 500 characters or fewer.", ephemeral=True
+                f"Task must be {_TASK_MAX_LEN} characters or fewer.", ephemeral=True
             )
             return
         with self.ctx.open_db() as conn:

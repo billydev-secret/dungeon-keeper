@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from commands.denizen_commands import register_denizen_commands
+from commands.role_grant_commands import register_role_grant_commands
 from commands.interaction_commands import register_interaction_commands
 from commands.mod_commands import register_mod_commands
 from commands.xp_commands import register_xp_commands
@@ -60,7 +60,7 @@ def _make_interaction(*, user_id: int = 100, guild: Any = None, channel: Any = N
 def _make_ctx(**kwargs) -> MagicMock:
     ctx = MagicMock()
     ctx.is_mod = MagicMock(return_value=kwargs.get("is_mod", False))
-    ctx.can_grant_denizen = MagicMock(return_value=kwargs.get("can_grant_denizen", False))
+    ctx.can_grant_any_role = MagicMock(return_value=kwargs.get("can_grant_any_role", False))
     ctx.can_use_xp_grant = MagicMock(return_value=kwargs.get("can_use_xp_grant", False))
     actor = MagicMock()
     actor.id = kwargs.get("actor_id", 100)
@@ -72,7 +72,7 @@ def _make_ctx(**kwargs) -> MagicMock:
         "kink": {"label": "Kink", "role_id": 0, "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
         "goldengirl": {"label": "Golden Girl", "role_id": 0, "log_channel_id": 0, "announce_channel_id": 0, "grant_message": ""},
     })
-    ctx.can_use_grant_role = MagicMock(return_value=kwargs.get("can_grant_denizen", False))
+    ctx.can_use_grant_role = MagicMock(return_value=kwargs.get("can_grant_any_role", False))
     ctx.greeter_role_id = kwargs.get("greeter_role_id", 0)
     ctx.spoiler_required_channels = kwargs.get("spoiler_required_channels", set())
     ctx.xp_excluded_channel_ids = kwargs.get("xp_excluded_channel_ids", set())
@@ -204,8 +204,8 @@ def _guild_with_role(role):
 @pytest.fixture
 def grant_setup():
     cap = _CommandCapture()
-    ctx = _make_ctx(can_grant_denizen=True, denizen_role_id=999)
-    register_denizen_commands(cap.bot, ctx)
+    ctx = _make_ctx(can_grant_any_role=True, denizen_role_id=999)
+    register_role_grant_commands(cap.bot, ctx)
     cmd = cap.get("grant")
 
     async def grant(interaction, member):
@@ -470,7 +470,7 @@ async def test_channel_target_requires_read_history(scan_cap):
 
 async def _run_help(*, is_mod: bool, can_grant: bool, can_xp: bool) -> list[str]:
     cap = _CommandCapture()
-    ctx = _make_ctx(is_mod=is_mod, can_grant_denizen=can_grant, can_use_xp_grant=can_xp)
+    ctx = _make_ctx(is_mod=is_mod, can_grant_any_role=can_grant, can_use_xp_grant=can_xp)
     register_mod_commands(cap.bot, ctx)
     ix = _make_interaction()
     await cap.get("help")(ix)

@@ -271,6 +271,81 @@ def update_request_status(
         )
 
 
+def load_request_by_message_id(
+    db_path: Path, message_id: int
+) -> Optional[dict[str, Any]]:
+    """Look up a pending DM request by the DM message that holds its buttons.
+
+    Used by the persistent ``AskConsentView`` to recover state when a button
+    is clicked after a bot restart.
+    """
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT guild_id, requester_id, target_id, request_type, reason, "
+            "message_id, channel_id, created_at, status "
+            "FROM dm_requests WHERE message_id = ? AND status = 'pending'",
+            (message_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "guild_id": int(row["guild_id"]),
+        "requester_id": int(row["requester_id"]),
+        "target_id": int(row["target_id"]),
+        "request_type": normalize_request_type(row["request_type"]),
+        "reason": row["reason"] or "",
+        "message_id": row["message_id"],
+        "channel_id": row["channel_id"],
+        "created_at": row["created_at"],
+        "status": row["status"],
+    }
+
+
+def count_pending_for_requester(
+    db_path: Path, guild_id: int, requester_id: int
+) -> int:
+    """Count outstanding pending requests this user has sent."""
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM dm_requests "
+            "WHERE guild_id = ? AND requester_id = ? AND status = 'pending'",
+            (guild_id, requester_id),
+        ).fetchone()
+    return int(row["c"]) if row else 0
+
+
+def expire_stale_pending_requests(
+    db_path: Path, *, max_age_seconds: int
+) -> list[dict[str, Any]]:
+    """Mark pending requests older than ``max_age_seconds`` as expired.
+
+    Returns the rows that were just expired (for audit-log emission).
+    """
+    cutoff = time.time() - max_age_seconds
+    with open_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT guild_id, requester_id, target_id, request_type, message_id "
+            "FROM dm_requests WHERE status = 'pending' AND created_at < ?",
+            (cutoff,),
+        ).fetchall()
+        if rows:
+            conn.execute(
+                "UPDATE dm_requests SET status = 'expired' "
+                "WHERE status = 'pending' AND created_at < ?",
+                (cutoff,),
+            )
+    return [
+        {
+            "guild_id": int(r["guild_id"]),
+            "requester_id": int(r["requester_id"]),
+            "target_id": int(r["target_id"]),
+            "request_type": normalize_request_type(r["request_type"]),
+            "message_id": r["message_id"],
+        }
+        for r in rows
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Request channels
 # ---------------------------------------------------------------------------
@@ -504,7 +579,9 @@ async def post_audit_event(
     channel = guild.get_channel(audit_channel_id)
     if not isinstance(channel, discord.TextChannel):
         return
-    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
     embed = discord.Embed(
         title="📜 DM Permission Audit",
         description=message,

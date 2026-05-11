@@ -9,7 +9,8 @@ const SECTIONS = [
   {
     id: "home", label: "Dashboard", perms: [],
     items: [
-      { id: "home", label: "Home", module: "./panels/home.js" },
+      { id: "home", label: "Dashboard", module: "./panels/home.js" },
+      { id: "help-quickref", label: "Quick Reference", module: "./panels/help.js" },
     ],
   },
   {
@@ -126,32 +127,51 @@ const SECTIONS = [
   {
     id: "help", label: "Help", perms: [],
     items: [
-      { id: "help-overview",    label: "Overview",                        module: "./panels/help.js" },
-      { id: "help-moderation",  label: "Moderation Core",                 module: "./panels/help.js" },
-      { id: "help-tickets",     label: "Tickets, Policies & Warnings",    module: "./panels/help.js" },
-      { id: "help-ai",          label: "AI Tools",                        module: "./panels/help.js" },
-      { id: "help-analytics",   label: "Analytics & Watch",               module: "./panels/help.js" },
-      { id: "help-community",   label: "Community & XP",                  module: "./panels/help.js" },
-      { id: "help-voice",       label: "Voice Channels",                  module: "./panels/help.js" },
-      { id: "help-music",       label: "Music & TTS",                     module: "./panels/help.js" },
-      { id: "help-confessions", label: "Confessions & DMs",               module: "./panels/help.js" },
-      { id: "help-wellness",    label: "Wellness",                        module: "./panels/help.js" },
-      { id: "help-self",        label: "Member Self-Service",             module: "./panels/help.js" },
-      { id: "help-network",     label: "Network Analytics",               module: "./panels/help.js" },
-      { id: "help-cleanup",     label: "Cleanup & Tagging",               module: "./panels/help.js" },
-      { id: "help-events",      label: "Special Events",                  module: "./panels/help.js" },
-      { id: "help-setup",       label: "Setup & Permissions",             module: "./panels/help.js" },
-      { id: "help-config",      label: "Configuration",                   module: "./panels/help.js" },
-      { id: "help-owner",       label: "Developer / Owner Tools",         module: "./panels/help.js" },
-      { id: "help-quickref",    label: "Quick Reference",                 module: "./panels/help.js" },
+      { id: "help-overview", label: "Overview", module: "./panels/help.js" },
+    ],
+    groups: [
+      { heading: "Moderation", items: [
+        { id: "help-moderation", label: "Moderation Core",              module: "./panels/help.js" },
+        { id: "help-tickets",    label: "Tickets, Policies & Warnings", module: "./panels/help.js" },
+        { id: "help-analytics",  label: "Activity & Watch",             module: "./panels/help.js" },
+        { id: "help-ai",         label: "AI Tools",                     module: "./panels/help.js" },
+      ]},
+      { heading: "Voice", items: [
+        { id: "help-voice",      label: "Voice Channels",               module: "./panels/help.js" },
+        { id: "help-music",      label: "Music & TTS",                  module: "./panels/help.js" },
+      ]},
+      { heading: "Community Tools", items: [
+        { id: "help-community",   label: "Community & XP",              module: "./panels/help.js" },
+        { id: "help-confessions", label: "Confessions & DMs",           module: "./panels/help.js" },
+        { id: "help-wellness",    label: "Wellness",                    module: "./panels/help.js" },
+        { id: "help-events",      label: "Special Events",              module: "./panels/help.js" },
+      ]},
+      { heading: "Activity", items: [
+        { id: "help-network",    label: "Network Analytics",            module: "./panels/help.js" },
+      ]},
+      { heading: "Self-Service", items: [
+        { id: "help-self",       label: "Member Self-Service",          module: "./panels/help.js" },
+      ]},
+      { heading: "Owner", items: [
+        { id: "help-setup",      label: "Setup & Permissions",          module: "./panels/help.js" },
+        { id: "help-config",     label: "Configuration",                module: "./panels/help.js" },
+        { id: "help-cleanup",    label: "Cleanup & Tagging",            module: "./panels/help.js" },
+      ]},
+    ],
+  },
+  {
+    id: "dev", label: "Dev", perms: [],
+    items: [
+      { id: "help-owner", label: "Developer Tools", module: "./panels/help.js" },
     ],
   },
 ];
 
 // Flatten all page items for lookup
 function allPages(section) {
-  if (section.groups) return section.groups.flatMap((g) => g.items);
-  return section.items || [];
+  const items = section.items || [];
+  const grouped = section.groups ? section.groups.flatMap((g) => g.items) : [];
+  return [...items, ...grouped];
 }
 
 let userPerms = new Set();
@@ -328,6 +348,13 @@ function renderNav(activeId) {
   const activeSection = PAGE_TO_SECTION[activeId];
 
   for (const sec of visibleSections) {
+    if (sec.direct) {
+      const el = makeNavItem(sec.items[0], activeId);
+      el.classList.add("nav-direct");
+      sidebarItemsEl.appendChild(el);
+      continue;
+    }
+
     const group = document.createElement("div");
     group.className = "nav-group";
     group.textContent = sec.label;
@@ -346,26 +373,46 @@ function renderNav(activeId) {
     sidebarItemsEl.appendChild(group);
 
     const children = [];
+
+    // Top-level items (rendered before any subgroup)
+    for (const item of sec.items || []) {
+      const el = makeNavItem(item, activeId);
+      sidebarItemsEl.appendChild(el);
+      children.push(el);
+    }
+
+    // Subgroups (each with collapsible heading; default expanded)
     if (sec.groups) {
       for (const g of sec.groups) {
         const subLabel = document.createElement("div");
         subLabel.className = "nav-subgroup";
         subLabel.textContent = g.heading;
+
+        const subgroupActive = g.items.some((item) => item.id === activeId);
+        if (!subgroupActive) subLabel.classList.add("collapsed");
+
+        subLabel.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          subLabel.classList.toggle("collapsed");
+          const hidden = subLabel.classList.contains("collapsed");
+          let n = subLabel.nextElementSibling;
+          while (n && !n.matches(".nav-subgroup, .nav-group")) {
+            n.classList.toggle("subgroup-hidden", hidden);
+            n = n.nextElementSibling;
+          }
+        });
+
         sidebarItemsEl.appendChild(subLabel);
         children.push(subLabel);
         for (const item of g.items) {
           const el = makeNavItem(item, activeId, { isSubitem: true });
+          if (!subgroupActive) el.classList.add("subgroup-hidden");
           sidebarItemsEl.appendChild(el);
           children.push(el);
         }
       }
-    } else {
-      for (const item of sec.items || []) {
-        const el = makeNavItem(item, activeId);
-        sidebarItemsEl.appendChild(el);
-        children.push(el);
-      }
     }
+
     if (startCollapsed) {
       for (const c of children) c.classList.add("group-hidden");
     }

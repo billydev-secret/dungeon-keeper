@@ -16,7 +16,7 @@ Discord moderation, community, voice, and analytics bot.
 ### XP & analytics
 - **XP system** — earn XP from text, voice, replies, and image posts; configurable level milestones grant roles; channel exclusions; history backfill; level-up + level-5 announcements.
 - **Leaderboards** — `/xp_leaderboards` by source and time window with your own rank.
-- **Activity graphs** — `/activity`, `/dropoff`, `/session_burst`, `/burst_ranking`.
+- **Activity graphs** — `/activity` for an inline message/XP-over-time chart. Drop-off, session burst, and burst ranking analytics live in the web dashboard.
 - **Reports** — `/report promotion_review`, `/quality_leave add/remove/list` for tracking members on leave.
 - **Optional web dashboard** — opt-in LAN dashboard (`DASHBOARD_ENABLED=1`) with cached metrics: DAU/MAU, heatmap, channel health, Gini, social graph, sentiment, newcomer funnel, cohort retention, churn risk, mod workload, incidents, NSFW gender distribution, and more. Cache is pre-warmed every hour and refreshed every 15 min.
 
@@ -40,8 +40,7 @@ Discord moderation, community, voice, and analytics bot.
 - **Wellness Guardian** — opt-in via `/wellness setup` (timezone + enforcement mode: gentle / cooldown / slow-mode / gradual). Background tick + active-list + weekly-report loops. Per-user `/away on` and `/away off` auto-reply when mentioned.
 
 ### Setup & utilities
-- **`/init`** — provision all bot channels and categories.
-- **`/setup`** — first-time jail role + channels + mod config.
+- **`/setup`** — first-time bot setup. Phase 1: creates all bot channels and categories. Phase 2: 6-step wizard for mod/admin roles, jail/ticket categories, and log/transcript channels.
 - **`/help`** — contextual command reference, scoped to your permissions.
 - **`/invite`** / **`/support`** — bot invite link and support server link.
 - **`/reload_cog`** / **`/spotify_authorize`** — owner-only dev commands.
@@ -127,7 +126,6 @@ Most settings are configured through slash commands after the bot is running, pr
 - `/support` — Get a link to the support Discord
 - `/xp_leaderboards [timescale]` — Top XP earners by source and your standing
 - `/activity [resolution] [member] [channel]` — Bar chart of message volume over time
-- `/session_burst [member]` — How active a member is after returning from a break
 - `/todo <task>` — Add a task to the shared server todo list
 - `/birthday set` — Record your birthday
 - `/confess` — Post an anonymous confession (modal)
@@ -189,8 +187,8 @@ Most settings are configured through slash commands after the bot is running, pr
 - `/quality_leave add/remove/list` — Manage members on leave of absence
 
 **Activity & Graphs** (mod)
-- `/dropoff [period] [limit] [channel]` — Members with the largest message-rate drop
-- `/burst_ranking [limit]` — Who most reliably drives conversation after a break
+- `/activity [resolution] [member] [channel] [mode]` — Bar chart of messages or XP over time
+- *Drop-off, session burst, burst ranking, and most other engagement reports live in the web dashboard.*
 
 **Watch List** (mod)
 - `/watch add @user` / `/watch remove @user` / `/watch list`
@@ -218,7 +216,7 @@ Most settings are configured through slash commands after the bot is running, pr
 
 **Configuration** (mod)
 - `/config` — Open the unified settings panel for any feature
-- `/init` — Provision all bot channels/categories (creates anything missing)
+- `/setup` — First-time bot setup: provision channels + walk through role/category config
 - `/welcome_preview` / `/leave_preview` — Preview welcome/leave templates
 
 **Utility** (mod)

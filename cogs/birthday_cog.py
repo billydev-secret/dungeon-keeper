@@ -16,6 +16,7 @@ from discord.ext import commands
 from db_utils import get_config_value, open_db
 from services.birthday_service import (
     MAX_DAYS as _MAX_DAYS,
+    delete_birthday as _delete_birthday,
     mark_announced as _mark_announced,
     todays_unannounced as _todays_unannounced,
     upsert_birthday as _upsert_birthday,
@@ -67,35 +68,61 @@ async def _announce_for_guild(
                     everyone=False,
                 ),
             )
-            # Mark after successful send so a failed send retries next tick.
-            with open_db(db_path) as conn:
-                _mark_announced(conn, guild.id, user_id, today_iso)
         except (discord.Forbidden, discord.HTTPException):
             log.warning(
-                "birthday: failed to post in guild %s channel %s", guild.id, channel_id
+                "birthday: failed to post in guild %s channel %s for user %s",
+                guild.id, channel_id, user_id,
             )
+        # Always mark announced — once we've attempted today's send for a user,
+        # we don't want to keep retrying every tick. Send failures show up in
+        # the log; a permanently broken channel is an operator config issue,
+        # not something we should keep hammering.
+        with open_db(db_path) as conn:
+            _mark_announced(conn, guild.id, user_id, today_iso)
+
+
+async def _announce_all_guilds(bot: discord.Client, db_path: Path) -> None:
+    """Run today's announcement pass across every guild the bot is in."""
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    for guild in bot.guilds:
+        try:
+            await _announce_for_guild(guild, db_path, today_iso)
+        except Exception:
+            log.exception("birthday: error for guild %s", guild.id)
 
 
 async def birthday_loop(bot: discord.Client, db_path: Path) -> None:
-    """Every 5 minutes: announce today's birthdays at or after 9am server time."""
+    """Once per day at 00:00 UTC, announce today's birthdays.
+
+    Runs once on startup as a catch-up pass — if the bot was offline at the
+    last 00:00 UTC, today's birthdays still get announced (the persisted
+    ``announced_on`` flag prevents double-announcing).
+    """
     await bot.wait_until_ready()
+
+    # Startup catch-up — handle any unannounced birthdays for the current
+    # UTC day. Idempotent thanks to mark_announced.
+    try:
+        await _announce_all_guilds(bot, db_path)
+    except Exception:
+        log.exception("birthday_loop startup pass failed")
+
     while not bot.is_closed():
+        # Sleep until the next 00:00 UTC tick, then run the daily pass.
+        now = datetime.now(timezone.utc)
+        next_midnight = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        delay = (next_midnight - now).total_seconds()
         try:
-            for guild in bot.guilds:
-                try:
-                    with open_db(db_path) as conn:
-                        tz_raw = get_config_value(conn, "tz_offset_hours", "0", guild.id)
-                    tz_offset = float(tz_raw or "0")
-                    now_local = datetime.now(timezone.utc) + timedelta(hours=tz_offset)
-                    if now_local.hour >= 9:
-                        await _announce_for_guild(
-                            guild, db_path, now_local.date().isoformat()
-                        )
-                except Exception:
-                    log.exception("birthday: error for guild %s", guild.id)
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
+
+        try:
+            await _announce_all_guilds(bot, db_path)
         except Exception:
-            log.exception("birthday_loop top-level error")
-        await asyncio.sleep(300)
+            log.exception("birthday_loop daily pass failed")
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +173,10 @@ class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
 
         guild_id = interaction.guild_id
         if guild_id is None:
+            await interaction.response.send_message(
+                "Set your birthday from inside a server, not a DM.",
+                ephemeral=True,
+            )
             return
 
         with self._ctx.open_db() as conn:
@@ -176,11 +207,40 @@ class BirthdayCog(commands.Cog):
     async def cog_load(self) -> None:
         bot = self.bot
         db_path = self.ctx.db_path
+        # ``startup_task_factories`` is consumed exactly once during the
+        # initial setup_hook (see app_context.Bot). Appending here from a
+        # later hot-reload of the cog has no effect — the original
+        # birthday_loop, scheduled at boot, keeps running because it only
+        # captures ``bot`` and ``db_path``, not this cog instance.
         self.bot.startup_task_factories.append(lambda: birthday_loop(bot, db_path))
 
     @birthday.command(name="set", description="Set your birthday.")
     async def birthday_set(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(_BirthdayModal(self.ctx))
+
+    @birthday.command(
+        name="remove",
+        description="Remove your birthday so the bot stops announcing it.",
+    )
+    async def birthday_remove(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id
+        if guild_id is None:
+            await interaction.response.send_message(
+                "Run this from inside a server, not a DM.", ephemeral=True
+            )
+            return
+
+        with self.ctx.open_db() as conn:
+            removed = _delete_birthday(conn, guild_id, interaction.user.id)
+
+        if removed:
+            await interaction.response.send_message(
+                "Your birthday has been removed.", ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                "You didn't have a birthday on file.", ephemeral=True
+            )
 
 
 async def setup(bot: Bot) -> None:

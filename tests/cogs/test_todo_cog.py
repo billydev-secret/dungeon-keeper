@@ -172,8 +172,13 @@ async def test_modal_submit_blank_notes_only_stores_message(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_context_menu_callback_blocks_non_mods(monkeypatch):
-    """Non-mods invoking the context menu get an ephemeral 'Mod only.' and no modal."""
+async def test_context_menu_callback_opens_modal_for_any_member(monkeypatch):
+    """The context menu is open to everyone — clicking it opens the modal regardless of role.
+
+    Server todos are community-curated; the slash /todo and the context
+    menu now share one permission model (open). This test guards against
+    accidentally re-locking the context menu to mods.
+    """
     from cogs.todo_cog import TodoCog
 
     bot = MagicMock()
@@ -187,21 +192,17 @@ async def test_context_menu_callback_blocks_non_mods(monkeypatch):
     # then pull it out of bot.tree.add_command's call args.
     await cog.cog_load()
     add_command_calls = bot.tree.add_command.call_args_list
-    # The context menu is one of the add_command arguments
     ctx_menu = next(
         c.args[0] for c in add_command_calls
         if getattr(c.args[0], "name", None) == "Add to Todo"
     )
 
-    # Build a non-mod user and interaction
+    # A non-mod user should still be able to open the modal.
     non_mod = FakeUser(id=3001, name="regular", roles=[])
     non_mod.guild_permissions = MagicMock(manage_guild=False, administrator=False)
     interaction = fake_interaction(user=non_mod, guild=FakeGuild(id=9001))
 
     await ctx_menu.callback(interaction, _build_message("hi"))
 
-    interaction.response.send_message.assert_awaited_once()
-    args, kwargs = interaction.response.send_message.call_args
-    assert "Mod only" in args[0]
-    assert kwargs.get("ephemeral") is True
-    interaction.response.send_modal.assert_not_called()
+    interaction.response.send_modal.assert_awaited_once()
+    interaction.response.send_message.assert_not_called()

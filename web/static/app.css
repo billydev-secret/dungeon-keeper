@@ -239,6 +239,9 @@ a { text-decoration: none; }
 .collapsed .nav-scroll,
 #sidebar.collapsed #sidebar-items { padding: 10px 4px 20px; }
 
+.nav-item.nav-direct { margin-bottom: 2px; }
+.nav-item.nav-direct + .nav-group { margin-top: 6px; }
+
 .nav-group {
   font-size: 12px;
   font-weight: 700;
@@ -289,14 +292,39 @@ a { text-decoration: none; }
   letter-spacing: 0.02em;
   text-transform: uppercase;
   color: var(--ink-mute);
-  padding: 8px 8px 3px 20px;
+  padding: 8px 8px 3px 14px;
   user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
 }
+.nav-subgroup::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 3px solid currentcolor;
+  border-top: 2.5px solid transparent;
+  border-bottom: 2.5px solid transparent;
+  transform: rotate(90deg);
+  opacity: 0.55;
+  transition: transform 0.15s;
+}
+.nav-subgroup.collapsed::before { transform: rotate(0deg); }
+.nav-subgroup:hover { color: var(--ink-dim); }
 .collapsed .nav-subgroup { display: none; }
 
 /* Collapsed-group hiding is handled in JS (scoped to the group's range) */
 .nav-item.group-hidden,
 .nav-subgroup.group-hidden { display: none; }
+
+/* Subgroup-level collapsed (only hides items within that subgroup) */
+.nav-item.subgroup-hidden { display: none; }
 
 .nav-item {
   display: flex;

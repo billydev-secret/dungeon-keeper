@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -16,7 +17,6 @@ from commands.jail_commands import (
     CLR_POLICY,
     CLR_SUCCESS,
     CLR_TICKET,
-    CLR_WARNING,
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
     PolicyVoteYesButton,
@@ -27,6 +27,7 @@ from commands.jail_commands import (
     _JailModal,
     _TicketFromMessageModal,
     _collect_and_post_transcript,
+    _dm_user,
     _do_jail,
     _do_unjail,
     _get_admin_role_ids,
@@ -35,8 +36,12 @@ from commands.jail_commands import (
     _is_admin,
     _is_mod,
     _post_audit,
-    _setup_view,
     _ts_str,
+    jail_expiry_loop,
+)
+from services.embeds import MOD_WARNING as CLR_WARNING
+from services.moderation import (
+    add_ticket_participant,
     claim_ticket,
     close_policy_ticket,
     close_ticket,
@@ -55,14 +60,35 @@ from commands.jail_commands import (
     get_ticket_by_channel,
     get_ticket_history,
     get_warnings,
-    jail_expiry_loop,
     remove_ticket_participant,
-    add_ticket_participant,
     reopen_ticket,
+    revoke_warning,
     start_policy_vote,
     write_audit,
 )
 from db_utils import get_config_value
+
+
+# ── Embed / display limits ────────────────────────────────────────────────
+# Discord-imposed maxima (kept here so they're discoverable and consistent).
+_EMBED_TITLE_MAX = 256
+_EMBED_FIELD_VALUE_MAX = 1024
+
+# Internal pagination / preview caps.
+_WARNINGS_PAGE_SIZE = 20
+_POLICIES_PAGE_SIZE = 25
+_POLICY_DESC_PREVIEW = 100
+_POLICY_TITLE_MAX = 200
+_MAX_ELIGIBLE_MENTIONS = 25  # embed-field cap of 1024 chars caps practical mention count
+
+# Channel-name validity: lowercase, digits, underscore, hyphen only.
+_CHANNEL_NAME_INVALID_RE = re.compile(r"[^a-z0-9_-]+")
+
+
+def _sanitize_channel_name(part: str) -> str:
+    """Reduce a freeform string to chars Discord accepts in channel names."""
+    cleaned = _CHANNEL_NAME_INVALID_RE.sub("-", part.lower()).strip("-")
+    return cleaned or "user"
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
@@ -125,11 +151,14 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
         embed.add_field(name="✅ Yes", value="—", inline=False)
         embed.add_field(name="❌ No", value="—", inline=False)
         embed.add_field(name="➖ Abstain", value="—", inline=False)
-        embed.add_field(
-            name="⏳ Awaiting",
-            value=", ".join(f"<@{uid}>" for uid in eligible) or "—",
-            inline=False,
-        )
+        # Cap mentions so the embed-field value stays under Discord's 1024-char
+        # limit. Show "+N more" when the eligible roster exceeds the cap.
+        eligible_list = sorted(eligible)
+        shown = eligible_list[:_MAX_ELIGIBLE_MENTIONS]
+        awaiting_value = ", ".join(f"<@{uid}>" for uid in shown) or "—"
+        if len(eligible_list) > _MAX_ELIGIBLE_MENTIONS:
+            awaiting_value += f" *+{len(eligible_list) - _MAX_ELIGIBLE_MENTIONS} more*"
+        embed.add_field(name="⏳ Awaiting", value=awaiting_value, inline=False)
 
         view = discord.ui.View(timeout=None)
         view.add_item(PolicyVoteYesButton(self.policy_id))
@@ -218,49 +247,9 @@ class JailCog(commands.Cog):
                 "Open Ticket About This Message", type=discord.AppCommandType.message
             )
 
-    # ── /setup ────────────────────────────────────────────────────────────
-
-    @app_commands.command(
-        name="setup",
-        description="First-time setup — creates jail role, channels, and mod config.",
-    )
-    @app_commands.default_permissions(administrator=True)
-    async def setup_cmd(self, interaction: discord.Interaction) -> None:
-        ctx = self.ctx
-        if not interaction.user.guild_permissions.administrator:  # type: ignore[union-attr]
-            await interaction.response.send_message("Admin only.", ephemeral=True)
-            return
-
-        guild = interaction.guild
-        if guild and guild.me:
-            bot_perms = guild.me.guild_permissions
-            required = {
-                "Manage Roles": bot_perms.manage_roles,
-                "Manage Channels": bot_perms.manage_channels,
-                "Send Messages": bot_perms.send_messages,
-                "Read Message History": bot_perms.read_message_history,
-                "Embed Links": bot_perms.embed_links,
-                "Attach Files": bot_perms.attach_files,
-                "Manage Messages": bot_perms.manage_messages,
-            }
-            missing = [name for name, has in required.items() if not has]
-            if missing:
-                embed = discord.Embed(
-                    title="⚠️ Missing Bot Permissions",
-                    description=(
-                        "The bot is missing the following required permissions:\n\n"
-                        + "\n".join(f"• {p}" for p in missing)
-                        + "\n\nGrant these in Server Settings → Integrations, then run `/setup` again."
-                    ),
-                    color=CLR_WARNING,
-                )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-                return
-
-        embed, view = _setup_view(ctx, 1)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
     # ── /jail ─────────────────────────────────────────────────────────────
+    # Note: the /setup command lives in cogs/setup_cog.py, which runs both
+    # the channel-creation phase and this cog's role/category wizard.
 
     @app_commands.command(name="jail", description="Place a member in a private jail channel.")
     @app_commands.default_permissions(moderate_members=True)
@@ -325,10 +314,28 @@ class JailCog(commands.Cog):
         self, interaction: discord.Interaction, channel: discord.TextChannel
     ) -> None:
         ctx = self.ctx
+        guild = interaction.guild
         member = interaction.user
-        if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
+        if (
+            not isinstance(member, discord.Member)
+            or guild is None
+            or not _is_mod(member, ctx)
+        ):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
+
+        # Delete the previous panel (if any) so we don't leave orphan buttons
+        # behind whenever a mod re-posts the panel in a new channel.
+        old_channel_id = _get_config(ctx, "ticket_panel_channel_id")
+        old_message_id = _get_config(ctx, "ticket_panel_message_id")
+        if old_channel_id and old_message_id:
+            old_channel = guild.get_channel(old_channel_id)
+            if isinstance(old_channel, discord.TextChannel):
+                try:
+                    old_msg = await old_channel.fetch_message(old_message_id)
+                    await old_msg.delete()
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    pass
 
         embed = discord.Embed(
             title="📩 Support Tickets",
@@ -373,7 +380,7 @@ class JailCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         desc_text = description or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
-        name = f"ticket-{user.name[:16]}-{ts}"
+        name = f"ticket-{_sanitize_channel_name(user.name)[:16]}-{ts}"
         mod_role_ids = _get_mod_role_ids(ctx)
 
         overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
@@ -431,6 +438,14 @@ class JailCog(commands.Cog):
         )
         embed.add_field(name="Opened by", value=user.mention, inline=True)
         embed.add_field(name="Status", value="🟢 Open", inline=True)
+        # Inform the user up-front that closing this ticket will archive its
+        # contents. Consent matters — they should know before sharing details.
+        embed.set_footer(
+            text=(
+                "When this ticket is closed, the conversation is archived to "
+                "the moderator transcript channel."
+            )
+        )
         view = discord.ui.View(timeout=None)
         view.add_item(TicketCloseButton(ticket_id))
         await channel.send(embed=embed, view=view)
@@ -438,7 +453,6 @@ class JailCog(commands.Cog):
             f"Ticket created → {channel.mention}", ephemeral=True
         )
 
-        from commands.jail_commands import _dm_user
         await _dm_user(
             user,
             embed=discord.Embed(
@@ -516,7 +530,6 @@ class JailCog(commands.Cog):
                     break
 
             if creator:
-                from commands.jail_commands import _dm_user
                 await _dm_user(
                     creator,
                     embed=discord.Embed(
@@ -581,7 +594,6 @@ class JailCog(commands.Cog):
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             if creator:
-                from commands.jail_commands import _dm_user
                 await _dm_user(
                     creator,
                     embed=discord.Embed(
@@ -742,7 +754,7 @@ class JailCog(commands.Cog):
     @policy.command(
         name="open", description="Open a new policy proposal for discussion."
     )
-    @app_commands.default_permissions(moderate_members=True)
+    @app_commands.default_permissions(administrator=True)
     @app_commands.describe(
         title="Short title for the policy",
         description="Detailed description of the proposed policy",
@@ -759,9 +771,9 @@ class JailCog(commands.Cog):
         if guild is None or not isinstance(user, discord.Member):
             await interaction.response.send_message("Server-only.", ephemeral=True)
             return
-        if not (_is_mod(user, ctx) or _is_admin(user, ctx)):
+        if not _is_admin(user, ctx):
             await interaction.response.send_message(
-                "Only mods and admins can open policy proposals.", ephemeral=True
+                "Only admins can open policy proposals.", ephemeral=True
             )
             return
 
@@ -774,11 +786,16 @@ class JailCog(commands.Cog):
             )
             return
 
+        # Cap the title so the resulting embed-title (which prefixes "Policy
+        # Proposal #N: ") stays under Discord's 256-char embed-title limit.
+        if len(title) > _POLICY_TITLE_MAX:
+            title = title[:_POLICY_TITLE_MAX].rstrip() + "…"
+
         await interaction.response.defer(ephemeral=True)
 
         desc_text = description or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
-        safe_title = title[:20].lower().replace(" ", "-")
+        safe_title = _sanitize_channel_name(title[:20])
         name = f"policy-{safe_title}-{ts}"
 
         mod_role_ids = _get_mod_role_ids(ctx)
@@ -958,22 +975,39 @@ class JailCog(commands.Cog):
                 await channel.send(embed=adopted_embed)
 
             creator = guild.get_member(policy["creator_id"]) or member
-            await _collect_and_post_transcript(
-                ctx,
-                channel,
-                record_type="policy_ticket",
-                record_id=policy_id,
-                user=creator,
-                extra_meta={
-                    "resolution": "closed",
-                    "reason": reason_text,
-                    "policy_title": policy["title"],
-                    "adopted_policies": [
-                        {"id": p["id"], "title": p["title"], "description": p["description"]}
-                        for p in adopted_policies
-                    ],
-                },
-            )
+            try:
+                await _collect_and_post_transcript(
+                    ctx,
+                    channel,
+                    record_type="policy_ticket",
+                    record_id=policy_id,
+                    user=creator,
+                    extra_meta={
+                        "resolution": "closed",
+                        "reason": reason_text,
+                        "policy_title": policy["title"],
+                        "adopted_policies": [
+                            {"id": p["id"], "title": p["title"], "description": p["description"]}
+                            for p in adopted_policies
+                        ],
+                    },
+                )
+            except Exception:
+                # Don't delete the channel if we couldn't archive the
+                # discussion — losing both the transcript and the source is
+                # the worst possible outcome here.
+                log.exception(
+                    "Policy transcript save failed for policy %s; "
+                    "leaving channel %s intact.",
+                    policy_id, channel.id,
+                )
+                await channel.send(
+                    "⚠️ Failed to archive this policy's transcript. "
+                    "The channel has been **kept** so the discussion isn't lost. "
+                    "An admin can retry by running `/policy close` again, "
+                    "or delete the channel manually once a transcript is saved."
+                )
+                return
             await channel.delete(reason=f"Policy #{policy_id} closed by {member}")
 
         audit_embed = discord.Embed(
@@ -1009,15 +1043,19 @@ class JailCog(commands.Cog):
             return
 
         embed = discord.Embed(title="📋 Passed Policies", color=CLR_POLICY)
-        for p in policies_list[:25]:
+        for p in policies_list[:_POLICIES_PAGE_SIZE]:
             passed_ts = f"<t:{int(p['passed_at'])}:d>"
+            preview = p["description"][:_POLICY_DESC_PREVIEW]
+            ellipsis = "…" if len(p["description"]) > _POLICY_DESC_PREVIEW else ""
             embed.add_field(
                 name=f"#{p['id']} — {p['title']}",
-                value=f"{p['description'][:100]}{'…' if len(p['description']) > 100 else ''}\nPassed: {passed_ts}",
+                value=f"{preview}{ellipsis}\nPassed: {passed_ts}",
                 inline=False,
             )
-        if len(policies_list) > 25:
-            embed.set_footer(text=f"Showing 25 of {len(policies_list)} policies.")
+        if len(policies_list) > _POLICIES_PAGE_SIZE:
+            embed.set_footer(
+                text=f"Showing {_POLICIES_PAGE_SIZE} of {len(policies_list)} policies."
+            )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -1210,7 +1248,10 @@ class JailCog(commands.Cog):
 
         with ctx.open_db() as conn:
             threshold = int(get_config_value(conn, "warning_threshold", "3"))
-        if count == threshold:
+        # Fire the threshold alert when this warning is the one that crosses
+        # the line — i.e. count was below threshold before, and is at or
+        # above it now. Equality-only comparison would miss bulk additions.
+        if count >= threshold and (count - 1) < threshold:
             admin_ids = _get_admin_role_ids(ctx)
             pings = " ".join(f"<@&{rid}>" for rid in admin_ids) if admin_ids else ""
             alert = discord.Embed(
@@ -1260,14 +1301,110 @@ class JailCog(commands.Cog):
                 line += f"\n  Revoke reason: {w['revoke_reason']}"
             lines.append(line)
 
+        shown_lines = lines[:_WARNINGS_PAGE_SIZE]
+        description = "\n\n".join(shown_lines)
+        if len(lines) > _WARNINGS_PAGE_SIZE:
+            description += (
+                f"\n\n*…and {len(lines) - _WARNINGS_PAGE_SIZE} more (older). "
+                "Inspect via the dashboard for the full list.*"
+            )
         embed = discord.Embed(
             title=f"Warnings for {user}",
-            description="\n\n".join(lines[:20]),
+            description=description,
             color=CLR_WARNING,
         )
         active = sum(1 for w in warns if not w["revoked"])
         embed.set_footer(text=f"{active} active / {len(warns)} total")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── /revokewarn ───────────────────────────────────────────────────────
+
+    @app_commands.command(
+        name="revokewarn",
+        description="Revoke a warning by ID. Stays in history but stops counting.",
+    )
+    @app_commands.default_permissions(moderate_members=True)
+    @app_commands.describe(
+        user="Member the warning belongs to",
+        warning_id="The warning's numeric ID (see /warnings).",
+        reason="Why this warning is being revoked.",
+    )
+    async def revokewarn_cmd(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        warning_id: int,
+        reason: str | None = None,
+    ) -> None:
+        ctx = self.ctx
+        member = interaction.user
+        guild = interaction.guild
+        if (
+            not isinstance(member, discord.Member)
+            or guild is None
+            or not _is_mod(member, ctx)
+        ):
+            await interaction.response.send_message("Mod only.", ephemeral=True)
+            return
+
+        reason_text = reason or ""
+        with ctx.open_db() as conn:
+            # Verify the warning belongs to this user in this guild before
+            # touching the row — services.revoke_warning looks up by id only.
+            warns = get_warnings(conn, guild.id, user.id)
+            match = next((w for w in warns if w["id"] == warning_id), None)
+            if match is None:
+                await interaction.response.send_message(
+                    f"Warning #{warning_id} doesn't belong to {user.mention} "
+                    f"in this server.",
+                    ephemeral=True,
+                )
+                return
+            if match["revoked"]:
+                await interaction.response.send_message(
+                    f"Warning #{warning_id} is already revoked.", ephemeral=True
+                )
+                return
+            revoked = revoke_warning(
+                conn, warning_id, revoked_by=member.id, reason=reason_text
+            )
+            if not revoked:
+                await interaction.response.send_message(
+                    "Couldn't revoke that warning — it may have just been "
+                    "revoked by someone else.",
+                    ephemeral=True,
+                )
+                return
+            count = get_active_warning_count(conn, guild.id, user.id)
+            write_audit(
+                conn,
+                guild_id=guild.id,
+                action="warning_revoke",
+                actor_id=member.id,
+                target_id=user.id,
+                extra={
+                    "warning_id": warning_id,
+                    "reason": reason_text,
+                    "count": count,
+                },
+            )
+
+        await interaction.response.send_message(
+            f"✅ Warning #{warning_id} revoked. {user.mention} now has "
+            f"**{count}** active warning(s).",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+        audit_embed = discord.Embed(
+            title="✅ Warning Revoked",
+            description=(
+                f"#{warning_id} for {user.mention} revoked by {member.mention}\n"
+                + (f"**Reason:** {reason_text}\n" if reason_text else "")
+                + f"**Active warnings:** {count}"
+            ),
+            color=CLR_SUCCESS,
+        )
+        await _post_audit(ctx, guild, audit_embed)
 
     # ── /modinfo ──────────────────────────────────────────────────────────
 

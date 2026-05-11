@@ -110,6 +110,11 @@ class ConfigCog(commands.Cog):
             embed, view = _build_booster_overview(ctx, guild, interaction)
             await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
+        else:
+            await interaction.response.send_message(
+                f"Unknown config section `{section}`.", ephemeral=True
+            )
+
 
 async def setup(bot: Bot) -> None:
     await bot.add_cog(ConfigCog(bot, bot.ctx))

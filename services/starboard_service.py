@@ -88,6 +88,22 @@ def update_starboard_post_count(
     )
 
 
+def delete_starboard_post(
+    conn: sqlite3.Connection, guild_id: int, original_message_id: int
+) -> bool:
+    """Drop the post row when the starboard message has been hand-deleted.
+
+    Returning the row from get_starboard_post and then finding the message
+    is gone means the row is stale. Removing it lets a future star burst
+    re-create the post fresh.
+    """
+    cur = conn.execute(
+        "DELETE FROM starboard_posts WHERE guild_id = ? AND original_message_id = ?",
+        (guild_id, original_message_id),
+    )
+    return (cur.rowcount or 0) > 0
+
+
 def add_reactor(
     conn: sqlite3.Connection, guild_id: int, message_id: int, user_id: int
 ) -> None:

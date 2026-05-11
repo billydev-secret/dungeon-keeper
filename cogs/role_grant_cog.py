@@ -9,15 +9,15 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from commands.denizen_commands import _execute_grant
+from commands.role_grant_commands import _execute_grant
 
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
-log = logging.getLogger("dungeonkeeper.denizen")
+log = logging.getLogger("dungeonkeeper.role_grant")
 
 
-class DenizenCog(commands.Cog):
+class RoleGrantCog(commands.Cog):
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
         self.ctx = ctx
@@ -75,4 +75,4 @@ class DenizenCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(DenizenCog(bot, bot.ctx))
+    await bot.add_cog(RoleGrantCog(bot, bot.ctx))

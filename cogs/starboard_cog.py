@@ -13,6 +13,7 @@ from db_utils import add_config_id, get_config_id_set, remove_config_id
 from services.embeds import STARBOARD_PRIMARY
 from services.starboard_service import (
     add_reactor,
+    delete_starboard_post,
     get_effective_star_count,
     get_starboard_config,
     get_starboard_post,
@@ -106,6 +107,11 @@ class StarboardCog(commands.Cog):
     # Reaction events
     # ------------------------------------------------------------------
 
+    # Note: this cog is intentionally single-guild — every listener early-
+    # returns unless ``payload.guild_id == self.ctx.guild_id``. Other cogs
+    # in this codebase iterate ``bot.guilds``; the starboard sticks to the
+    # bot's primary guild because it depends on a single configured channel.
+
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         if payload.guild_id is None or payload.guild_id != self.ctx.guild_id:
@@ -145,7 +151,12 @@ class StarboardCog(commands.Cog):
                     embed=_updated_embed(sb_msg.embeds[0], effective_count, emoji),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
-            return
+                return
+            # Starboard message has been hand-deleted (or we lost access).
+            # Drop the stale row so the rest of this handler can re-create
+            # the post fresh below.
+            with self.ctx.open_db() as conn:
+                delete_starboard_post(conn, guild_id, message_id)
 
         # No existing post — fetch original to get author and content.
         orig_channel = self.bot.get_channel(payload.channel_id)
@@ -154,6 +165,18 @@ class StarboardCog(commands.Cog):
             (discord.TextChannel, discord.VoiceChannel, discord.StageChannel, discord.Thread),
         ):
             return
+
+        # NSFW leak guard: never repost an age-restricted source into a
+        # non-age-restricted starboard channel. The starred message could
+        # be visible to members who don't have access to the source.
+        sb_channel = self.bot.get_channel(sb_channel_id)
+        if not isinstance(sb_channel, discord.TextChannel):
+            return
+        source_nsfw = bool(getattr(orig_channel, "nsfw", False))
+        sb_nsfw = bool(getattr(sb_channel, "nsfw", False))
+        if source_nsfw and not sb_nsfw:
+            return
+
         try:
             message = await orig_channel.fetch_message(message_id)
         except (discord.NotFound, discord.HTTPException):
@@ -168,10 +191,6 @@ class StarboardCog(commands.Cog):
             # Guard against a concurrent reaction creating the post between our checks.
             if get_starboard_post(conn, guild_id, message_id) is not None:
                 return
-
-        sb_channel = self.bot.get_channel(sb_channel_id)
-        if not isinstance(sb_channel, discord.TextChannel):
-            return
 
         embed = _build_embed(message, effective_count, emoji)
         try:
@@ -224,6 +243,11 @@ class StarboardCog(commands.Cog):
                 embed=_updated_embed(sb_msg.embeds[0], effective_count, emoji),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+        elif sb_msg is None:
+            # Starboard message gone — clean up the stale row so the next
+            # reaction creates a fresh post instead of trying to edit None.
+            with self.ctx.open_db() as conn:
+                delete_starboard_post(conn, guild_id, message_id)
 
     # ------------------------------------------------------------------
     # Config commands
@@ -237,39 +261,59 @@ class StarboardCog(commands.Cog):
         if not self.ctx.is_mod(interaction):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
-        guild_id = interaction.guild_id
-        if guild_id is None:
+        guild = interaction.guild
+        if guild is None:
             return
+
+        # Preflight: refuse to set a channel where the bot can't post —
+        # otherwise reactions trigger silent log failures forever.
+        if guild.me is not None:
+            perms = channel.permissions_for(guild.me)
+            missing = [
+                name for name, ok in (
+                    ("Send Messages", perms.send_messages),
+                    ("Embed Links", perms.embed_links),
+                ) if not ok
+            ]
+            if missing:
+                await interaction.response.send_message(
+                    f"I'm missing **{', '.join(missing)}** in {channel.mention}. "
+                    "Grant those permissions and try again.",
+                    ephemeral=True,
+                )
+                return
+
         with self.ctx.open_db() as conn:
-            cfg = self._default_cfg(conn, guild_id)
+            cfg = self._default_cfg(conn, guild.id)
             cfg["channel_id"] = channel.id
-            upsert_starboard_config(conn, guild_id, **cfg)
+            upsert_starboard_config(conn, guild.id, **cfg)
         await interaction.response.send_message(
             f"Starboard channel set to {channel.mention}.", ephemeral=True
         )
 
     @starboard.command(name="threshold", description="Set the minimum star count to post.")
-    @app_commands.describe(count="Number of stars required (minimum 1).")
-    async def sb_threshold(self, interaction: discord.Interaction, count: int) -> None:
+    @app_commands.describe(count="Number of stars required to post a message.")
+    async def sb_threshold(
+        self,
+        interaction: discord.Interaction,
+        count: app_commands.Range[int, 1, 100],
+    ) -> None:
         if not self.ctx.is_mod(interaction):
             await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-        if count < 1:
-            await interaction.response.send_message("Threshold must be at least 1.", ephemeral=True)
             return
         guild_id = interaction.guild_id
         if guild_id is None:
             return
         with self.ctx.open_db() as conn:
             cfg = self._default_cfg(conn, guild_id)
-            cfg["threshold"] = count
+            cfg["threshold"] = int(count)
             upsert_starboard_config(conn, guild_id, **cfg)
         await interaction.response.send_message(
             f"Starboard threshold set to **{count}**.", ephemeral=True
         )
 
     @starboard.command(name="emoji", description="Set the reaction emoji that triggers the starboard.")
-    @app_commands.describe(emoji="Emoji to watch for (e.g. ⭐).")
+    @app_commands.describe(emoji="Emoji to watch for (e.g. ⭐ or :custom_name:).")
     async def sb_emoji(self, interaction: discord.Interaction, emoji: str) -> None:
         if not self.ctx.is_mod(interaction):
             await interaction.response.send_message("Mod only.", ephemeral=True)
@@ -278,6 +322,22 @@ class StarboardCog(commands.Cog):
         if not emoji:
             await interaction.response.send_message("Emoji cannot be empty.", ephemeral=True)
             return
+
+        # Validate that this string actually parses as something Discord will
+        # send back as a reaction emoji. discord.py's PartialEmoji rejects
+        # plain text — a user typing "starboard" can't silently break the cog.
+        try:
+            parsed = discord.PartialEmoji.from_str(emoji)
+        except Exception:  # noqa: BLE001 — defensive against any parse error
+            parsed = None
+        if parsed is None or (parsed.id is None and not parsed.name):
+            await interaction.response.send_message(
+                "That doesn't look like a reaction emoji. Use a unicode emoji "
+                "(e.g. ⭐) or a server custom emoji (e.g. <:name:123456>).",
+                ephemeral=True,
+            )
+            return
+
         guild_id = interaction.guild_id
         if guild_id is None:
             return

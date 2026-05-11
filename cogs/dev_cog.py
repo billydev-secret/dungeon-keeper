@@ -1,6 +1,7 @@
 """Developer tools — hot-reload cog extensions."""
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING
 
@@ -8,8 +9,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from services.command_sync import sync_if_changed
+
 if TYPE_CHECKING:
     from app_context import Bot
+
+log = logging.getLogger("dungeonkeeper.dev")
 
 
 class DevCog(commands.Cog):
@@ -39,14 +44,30 @@ class DevCog(commands.Cog):
             )
             return
         await interaction.response.defer(ephemeral=True)
-        await self.bot.reload_extension(extension)
-        if self.bot.debug:
-            guild = discord.Object(id=self.bot.guild_id)
-            self.bot.tree.copy_global_to(guild=guild)
-            await self.bot.tree.sync(guild=guild)
-        else:
-            await self.bot.tree.sync()
-        await interaction.followup.send(f"Reloaded `{extension}`.", ephemeral=True)
+        try:
+            await self.bot.reload_extension(extension)
+            db_path = self.bot.ctx.db_path
+            if self.bot.debug:
+                guild = discord.Object(id=self.bot.guild_id)
+                self.bot.tree.copy_global_to(guild=guild)
+                _, did = await sync_if_changed(
+                    self.bot.tree, db_path, guild=guild
+                )
+            else:
+                _, did = await sync_if_changed(
+                    self.bot.tree, db_path, guild=None
+                )
+        except Exception as exc:
+            log.exception("Reload failed for %s", extension)
+            await interaction.followup.send(
+                f"Reload failed: `{type(exc).__name__}: {exc}`", ephemeral=True
+            )
+            return
+
+        suffix = " (commands resynced)" if did else " (commands unchanged)"
+        await interaction.followup.send(
+            f"Reloaded `{extension}`.{suffix}", ephemeral=True
+        )
 
 
     @app_commands.command(

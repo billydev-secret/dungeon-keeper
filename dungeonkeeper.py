@@ -149,7 +149,7 @@ bot.extension_names = [
     "cogs.activity_cog",
     "cogs.config_cog",
     "cogs.ai_mod_cog",
-    "cogs.denizen_cog",
+    "cogs.role_grant_cog",
     "cogs.invite_cog",
     "cogs.support_cog",
     "cogs.jail_cog",

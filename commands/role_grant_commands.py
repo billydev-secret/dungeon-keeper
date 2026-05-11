@@ -13,7 +13,7 @@ from utils import format_user_for_log, get_bot_member
 if TYPE_CHECKING:
     from app_context import AppContext, Bot
 
-log = logging.getLogger("dungeonkeeper.denizen")
+log = logging.getLogger("dungeonkeeper.role_grant")
 
 
 def _resolve_grant_message(
@@ -154,7 +154,7 @@ async def _execute_grant(
             )
 
 
-def register_denizen_commands(bot: Bot, ctx: AppContext) -> None:
+def register_role_grant_commands(bot: Bot, ctx: AppContext) -> None:
 
     async def _role_autocomplete(
         interaction: discord.Interaction,

@@ -1,4 +1,13 @@
-"""One-shot /setup — creates or verifies all bot channels and categories."""
+"""One-shot /setup — creates bot channels, then walks through role/category config.
+
+This is the single entry point for first-run bot setup. It runs in two phases:
+
+1. **Channel creation (automatic):** ensures the Bot Logs category and all
+   private log/ticket/DM-perms channels exist. Re-running this phase only
+   creates what's missing — existing channels are reused.
+2. **Config wizard (interactive):** a 6-step flow to pick mod/admin roles
+   and the jail/ticket categories. Reuses ``_setup_view`` from jail_commands.
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -7,7 +16,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from commands.jail_commands import CLR_TICKET, TicketPanelButton
+from commands.jail_commands import CLR_TICKET, TicketPanelButton, _setup_view
 from db_utils import get_config_value
 from services.dm_perms_service import set_panel_settings, set_request_channel
 from services.embeds import MOD_SUCCESS
@@ -21,6 +30,9 @@ _SUPPORT_CHANNEL = "support"
 _DM_PANEL_CHANNEL = "dm-requests"
 
 # (config_key, channel_name, ctx_attr_or_None, topic)
+# ctx_attr is None for channels read directly from the DB at use-time
+# (e.g. log_channel_id / transcript_channel_id are looked up on each
+# /jail or /ticket invocation, so there's no in-memory ctx mirror).
 _PRIVATE_CHANNELS: list[tuple[str, str, str | None, str]] = [
     ("mod_channel_id", "mod-log", "mod_channel_id", "Moderator activity log"),
     ("join_leave_log_channel_id", "join-leave-log", "join_leave_log_channel_id", "Member join and leave events"),
@@ -35,8 +47,12 @@ _PRIVATE_CHANNELS: list[tuple[str, str, str | None, str]] = [
 def _private_ow(
     guild: discord.Guild, ctx: AppContext
 ) -> dict[discord.Role | discord.Member, discord.PermissionOverwrite]:
+    # Defensively deny both view_channel AND read_message_history so a
+    # misconfigured parent category can't accidentally leak history.
     ow: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        guild.default_role: discord.PermissionOverwrite(
+            view_channel=False, read_message_history=False
+        ),
     }
     if guild.me:
         ow[guild.me] = discord.PermissionOverwrite(
@@ -85,8 +101,8 @@ class SetupCog(commands.Cog):
         super().__init__()
 
     @app_commands.command(
-        name="init",
-        description="Initialize all bot channels and categories, creating any that are missing.",
+        name="setup",
+        description="First-time setup — creates bot channels, then walks through role/category config.",
     )
     @app_commands.default_permissions(administrator=True)
     @app_commands.guild_only()
@@ -101,15 +117,26 @@ class SetupCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
-        # Preflight: bot needs Manage Channels + Manage Roles to create
-        # channels with permission overwrites.
+        # Preflight: full set of perms the bot needs across both phases —
+        # channel creation, role management, and posting embeds in panels.
         if guild.me:
             bp = guild.me.guild_permissions
-            missing = [p for p, ok in [("manage_channels", bp.manage_channels), ("manage_roles", bp.manage_roles)] if not ok]
+            required = {
+                "Manage Channels": bp.manage_channels,
+                "Manage Roles": bp.manage_roles,
+                "Send Messages": bp.send_messages,
+                "Read Message History": bp.read_message_history,
+                "Embed Links": bp.embed_links,
+                "Attach Files": bp.attach_files,
+                "Manage Messages": bp.manage_messages,
+            }
+            missing = [name for name, ok in required.items() if not ok]
             if missing:
                 await interaction.followup.send(
-                    f"Bot is missing required permissions: **{', '.join(missing)}**.\n"
-                    "Grant them in Server Settings → Integrations and try again.",
+                    "Bot is missing required permissions:\n"
+                    + "\n".join(f"• **{p}**" for p in missing)
+                    + "\n\nGrant them in Server Settings → Integrations and run "
+                    "`/setup` again.",
                     ephemeral=True,
                 )
                 return
@@ -130,6 +157,10 @@ class SetupCog(commands.Cog):
             existing_id = _stored_id(ctx, config_key)
             ch = guild.get_channel(existing_id) if existing_id else None
             if isinstance(ch, discord.TextChannel):
+                # Resync the in-memory ctx mirror in case it drifted from DB
+                # (e.g. after a partial reload).
+                if ctx_attr:
+                    setattr(ctx, ctx_attr, ch.id)
                 lines.append(f"✅ {ch.mention} already set")
             else:
                 ch = await guild.create_text_channel(
@@ -196,11 +227,21 @@ class SetupCog(commands.Cog):
             lines.append("⚠️ DmPermsCog not loaded — DM panel skipped")
 
         embed = discord.Embed(
-            title="Setup Complete",
-            description="\n".join(lines),
+            title="Phase 1 of 2 — Channels Ready",
+            description="\n".join(lines)
+            + "\n\nNext: pick roles and categories below.",
             color=MOD_SUCCESS,
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+        # Phase 2 — interactive wizard (mod roles, admin roles, jail/ticket
+        # categories, log/transcript channels). The wizard returns its own
+        # embed + view; we send it as a follow-up so the user can step through
+        # without losing the channel-creation summary above.
+        wizard_embed, wizard_view = _setup_view(ctx, 1)
+        await interaction.followup.send(
+            embed=wizard_embed, view=wizard_view, ephemeral=True
+        )
 
 
 async def setup(bot: Bot) -> None:

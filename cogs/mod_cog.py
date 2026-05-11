@@ -80,7 +80,7 @@ def _build_help_pages(
         )
     )
 
-    if ctx.can_grant_denizen(interaction):
+    if ctx.can_grant_any_role(interaction):
         grant_cmds: list[tuple[str, str]] = []
         for gname, gcfg in ctx.grant_roles.items():
             grant_cmds.append(
@@ -136,6 +136,10 @@ def _build_help_pages(
                         (
                             "/warnings user:@user",
                             "List all warnings for a member (active + revoked).",
+                        ),
+                        (
+                            "/revokewarn user:@user warning_id:42 reason:...",
+                            "Revoke a warning by ID. Stays in history but stops counting.",
                         ),
                         (
                             "/modinfo user:@user",
@@ -220,7 +224,7 @@ def _build_help_pages(
                 "Server Tools",
                 _fmt(
                     [
-                        ("/setup", "First-time bot setup — jail role, categories, log channels."),
+                        ("/setup", "First-time bot setup — creates log channels, then walks through role/category config."),
                         ("/starboard channel|threshold|emoji|toggle|status", "Configure the starboard."),
                         ("/todo", "Add a task to the server todo list."),
                         ("/policy open|vote|close|list", "Policy proposals and voting."),

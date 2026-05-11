@@ -75,7 +75,7 @@ def _build_help_pages(
     )
 
     # ── Role Grants (per-role permissions or mod) ───────────────────────────
-    if ctx.can_grant_denizen(interaction):
+    if ctx.can_grant_any_role(interaction):
         grant_cmds: list[tuple[str, str]] = []
         for gname, gcfg in ctx.grant_roles.items():
             grant_cmds.append(
@@ -587,9 +587,9 @@ def register_mod_commands(bot: Bot, ctx: AppContext) -> None:
                 return
 
         channel = interaction.channel
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+        if not isinstance(channel, (discord.TextChannel, discord.Thread, discord.VoiceChannel)):
             await interaction.response.send_message(
-                "This command only works in text channels and threads.", ephemeral=True
+                "This command only works in text channels, threads, and VC sidechats.", ephemeral=True
             )
             return
 
