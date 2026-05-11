@@ -543,8 +543,8 @@ class CropEditorView(discord.ui.View):
     """3×3 button grid for interactive crop framing.
 
     Row 0:  [🔍+]  [↑]     [🔍−]
-    Row 1:  [← ]  [Auto]   [→  ]
-    Row 2:  [Post]  [↓]    [✗  ]
+    Row 1:  [← ]  [↓]     [→  ]
+    Row 2:  [Post] [Auto]  [✗  ]
 
     Auto cycles through pipeline detections (first press → top candidate,
     subsequent presses cycle, wraps around). Disabled when no candidates.
@@ -594,37 +594,37 @@ class CropEditorView(discord.ui.View):
         B = discord.ui.Button  # type: ignore[type-arg]
 
         # Row 0: zoom-in | up | zoom-out
-        z_in: discord.ui.Button = B(label="🔍+", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
+        z_in: discord.ui.Button = B(label="  🔍+  ", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
         z_in.callback = self._on_zoom_in
         self.add_item(z_in)
-        up: discord.ui.Button = B(label="↑", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
+        up: discord.ui.Button = B(label="    ↑    ", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
         up.callback = self._on_up
         self.add_item(up)
-        z_out: discord.ui.Button = B(label="🔍−", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
+        z_out: discord.ui.Button = B(label="  🔍−  ", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
         z_out.callback = self._on_zoom_out
         self.add_item(z_out)
 
-        # Row 1: left | auto | right
-        left: discord.ui.Button = B(label="←", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
+        # Row 1: left | down | right
+        left: discord.ui.Button = B(label="    ←    ", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
         left.callback = self._on_left
         self.add_item(left)
-        n = len(self._candidate_boxes)
-        auto: discord.ui.Button = B(label="Auto", style=discord.ButtonStyle.primary, disabled=n == 0, row=1)  # type: ignore[type-arg]
-        auto.callback = self._on_auto
-        self._auto_btn = auto
-        self.add_item(auto)
-        right: discord.ui.Button = B(label="→", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
+        down: discord.ui.Button = B(label="    ↓    ", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
+        down.callback = self._on_down
+        self.add_item(down)
+        right: discord.ui.Button = B(label="    →    ", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
         right.callback = self._on_right
         self.add_item(right)
 
-        # Row 2: post | down | cancel
-        post: discord.ui.Button = B(label="✓ Post", style=discord.ButtonStyle.success, row=2)  # type: ignore[type-arg]
+        # Row 2: post | auto | cancel
+        post: discord.ui.Button = B(label=" ✓ Post ", style=discord.ButtonStyle.success, row=2)  # type: ignore[type-arg]
         post.callback = self._on_post
         self.add_item(post)
-        down: discord.ui.Button = B(label="↓", style=discord.ButtonStyle.secondary, row=2)  # type: ignore[type-arg]
-        down.callback = self._on_down
-        self.add_item(down)
-        cancel: discord.ui.Button = B(label="✗", style=discord.ButtonStyle.danger, row=2)  # type: ignore[type-arg]
+        n = len(self._candidate_boxes)
+        auto: discord.ui.Button = B(label="  Auto  ", style=discord.ButtonStyle.primary, disabled=n == 0, row=2)  # type: ignore[type-arg]
+        auto.callback = self._on_auto
+        self._auto_btn = auto
+        self.add_item(auto)
+        cancel: discord.ui.Button = B(label="    ✗    ", style=discord.ButtonStyle.danger, row=2)  # type: ignore[type-arg]
         cancel.callback = self._on_cancel
         self.add_item(cancel)
 
