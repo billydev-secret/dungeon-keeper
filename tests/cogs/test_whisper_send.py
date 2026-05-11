@@ -339,3 +339,40 @@ async def test_send_blocked_when_target_is_timed_out():
     args, kwargs = interaction.response.send_message.call_args
     assert kwargs.get("ephemeral") is True
     assert "timed out" in args[0].lower()
+
+
+# ── S8: hard-fail when feed/log channel missing ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_send_fails_when_feed_channel_missing():
+    """When feed channel is None/invalid, send should error before DB insert."""
+    from unittest.mock import patch as _patch
+    import time as _t
+
+    cog = _make_cog()
+    sender = FakeMember(id=SENDER_ID, roles=[FakeRole(id=ROLE)])
+    target = _make_target_dmable()
+
+    interaction = fake_interaction(user=sender)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    interaction.guild.name = "Test"
+    # Feed channel returns None; log channel returns a valid TextChannel
+    log_channel = MagicMock(spec=discord.TextChannel)
+    interaction.guild.get_channel = MagicMock(
+        side_effect=lambda cid: None if cid == FEED else log_channel
+    )
+    interaction.response.send_message = AsyncMock()
+
+    cog._last_send_at[SENDER_ID] = _t.time() - 60  # cooldown elapsed
+
+    with _patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         _patch("cogs.whisper_cog._do_insert_whisper") as ins:
+        await cog._send_impl(interaction, target=target, message="hi")  # type: ignore[arg-type]
+
+    ins.assert_not_called()
+    target.send.assert_not_called()  # type: ignore[attr-defined]
+    args, kwargs = interaction.response.send_message.call_args
+    assert kwargs.get("ephemeral") is True
+    assert "feed" in args[0].lower() or "channel" in args[0].lower()

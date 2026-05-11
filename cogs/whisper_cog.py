@@ -1636,6 +1636,21 @@ class WhisperCog(commands.Cog):
             )
             return
 
+        feed_channel = interaction.guild.get_channel(cfg.channel_id)
+        if not isinstance(feed_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Whisper feed channel is missing or invalid. Tell an admin to fix the config.",
+                ephemeral=True,
+            )
+            return
+        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+        if not isinstance(log_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Whisper mod log channel is missing or invalid. Tell an admin to fix the config.",
+                ephemeral=True,
+            )
+            return
+
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
             self.ctx.db_path,
@@ -1657,16 +1672,14 @@ class WhisperCog(commands.Cog):
             await interaction.response.send_message(ERROR_BOT_DM_FAILED, ephemeral=True)
             return
 
-        feed_channel = interaction.guild.get_channel(cfg.channel_id)
         feed_msg = None
-        if isinstance(feed_channel, discord.TextChannel):
-            try:
-                feed_msg = await feed_channel.send(
-                    f"\U0001f4ec Someone sent {target.mention} an anonymous message.",
-                    allowed_mentions=discord.AllowedMentions(users=[target]),
-                )
-            except discord.HTTPException:
-                log.warning("Failed to post whisper announcement to feed channel")
+        try:
+            feed_msg = await feed_channel.send(
+                f"\U0001f4ec Someone sent {target.mention} an anonymous message.",
+                allowed_mentions=discord.AllowedMentions(users=[target]),
+            )
+        except discord.HTTPException:
+            log.warning("Failed to post whisper announcement to feed channel")
 
         await asyncio.to_thread(
             _do_set_message_ids,
@@ -1676,30 +1689,28 @@ class WhisperCog(commands.Cog):
             dm_msg_id=dm_msg.id,
         )
 
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if isinstance(log_channel, discord.TextChannel):
-            try:
-                emb = discord.Embed(
-                    title="Whisper sent",
-                    description=safe_codefence_content(message.strip()),
-                    timestamp=discord.utils.utcnow(),
-                )
-                emb.add_field(
-                    name="Sender",
-                    value=f"{interaction.user.mention} (`{interaction.user.id}`)",
-                    inline=False,
-                )
-                emb.add_field(
-                    name="Target",
-                    value=f"{target.mention} (`{target.id}`)",
-                    inline=False,
-                )
-                emb.add_field(name="Whisper ID", value=str(whisper_id), inline=False)
-                await log_channel.send(
-                    embed=emb, allowed_mentions=discord.AllowedMentions.none()
-                )
-            except discord.HTTPException:
-                log.warning("Failed to write whisper mod log")
+        try:
+            emb = discord.Embed(
+                title="Whisper sent",
+                description=safe_codefence_content(message.strip()),
+                timestamp=discord.utils.utcnow(),
+            )
+            emb.add_field(
+                name="Sender",
+                value=f"{interaction.user.mention} (`{interaction.user.id}`)",
+                inline=False,
+            )
+            emb.add_field(
+                name="Target",
+                value=f"{target.mention} (`{target.id}`)",
+                inline=False,
+            )
+            emb.add_field(name="Whisper ID", value=str(whisper_id), inline=False)
+            await log_channel.send(
+                embed=emb, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except discord.HTTPException:
+            log.warning("Failed to write whisper mod log")
 
         await interaction.response.send_message("Whisper delivered.", ephemeral=True)
 
