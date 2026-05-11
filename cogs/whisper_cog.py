@@ -1358,14 +1358,20 @@ class WhisperCog(commands.Cog):
             WhisperReportButton,
         )
         # Bootstrap launcher in every configured guild so the button bar is
-        # at the bottom of the channel from boot.
-        for guild in self.bot.guilds:
-            try:
-                await self.refresh_whisper_launcher(guild.id)
-            except Exception:
-                log.exception(
-                    "Failed to bootstrap whisper launcher for guild %s", guild.id
-                )
+        # at the bottom of the channel from boot. Run in parallel with a
+        # semaphore to avoid a thundering-herd against Discord on large bots.
+        sem = asyncio.Semaphore(5)
+
+        async def _bootstrap_one(guild: discord.Guild) -> None:
+            async with sem:
+                try:
+                    await self.refresh_whisper_launcher(guild.id)
+                except Exception:
+                    log.exception(
+                        "Failed to bootstrap whisper launcher for guild %s", guild.id
+                    )
+
+        await asyncio.gather(*[_bootstrap_one(g) for g in self.bot.guilds])
 
     async def refresh_whisper_launcher(self, guild_id: int) -> None:
         """Delete the previous launcher (if any) and post a fresh one at the
