@@ -17,6 +17,8 @@ from services.veil_pipeline import (
     enforce_min_size,
     filter_candidates,
     iou,
+    move_crop_box,
+    zoom_crop_box,
 )
 
 
@@ -254,3 +256,113 @@ def test_full_image_fallback_produces_valid_padded_crop():
     assert r.y2 <= 500.0
     assert r.x1 < r.x2
     assert r.y1 < r.y2
+
+
+# ── move_crop_box ─────────────────────────────────────────────────────────────
+
+def test_move_crop_box_right_shifts_x():
+    box = _bb(100, 100, 300, 300)
+    result = move_crop_box(box, dx=50, dy=0, img_w=500, img_h=500)
+    assert result.x1 == pytest.approx(150.0)
+    assert result.x2 == pytest.approx(350.0)
+    assert result.y1 == pytest.approx(100.0)
+
+
+def test_move_crop_box_down_shifts_y():
+    box = _bb(100, 100, 300, 300)
+    result = move_crop_box(box, dx=0, dy=50, img_w=500, img_h=500)
+    assert result.y1 == pytest.approx(150.0)
+    assert result.y2 == pytest.approx(350.0)
+    assert result.x1 == pytest.approx(100.0)
+
+
+def test_move_crop_box_left_shifts_x():
+    box = _bb(100, 100, 300, 300)
+    result = move_crop_box(box, dx=-50, dy=0, img_w=500, img_h=500)
+    assert result.x1 == pytest.approx(50.0)
+    assert result.x2 == pytest.approx(250.0)
+
+
+def test_move_crop_box_up_shifts_y():
+    box = _bb(100, 100, 300, 300)
+    result = move_crop_box(box, dx=0, dy=-50, img_w=500, img_h=500)
+    assert result.y1 == pytest.approx(50.0)
+    assert result.y2 == pytest.approx(250.0)
+
+
+def test_move_crop_box_clamps_left_edge():
+    box = _bb(10, 100, 200, 300)
+    result = move_crop_box(box, dx=-50, dy=0, img_w=500, img_h=500)
+    assert result.x1 == pytest.approx(0.0)
+    assert result.width == pytest.approx(box.width)
+
+
+def test_move_crop_box_clamps_top_edge():
+    box = _bb(100, 10, 300, 200)
+    result = move_crop_box(box, dx=0, dy=-50, img_w=500, img_h=500)
+    assert result.y1 == pytest.approx(0.0)
+    assert result.height == pytest.approx(box.height)
+
+
+def test_move_crop_box_clamps_right_edge():
+    # box 200px wide, x1=400 → x2=600 would exceed 500; should clamp x2=500
+    box = _bb(400, 100, 600, 300)
+    # Artificially construct: width=200, starts at 400
+    box = _bb(350, 100, 450, 300)  # 100px wide
+    result = move_crop_box(box, dx=200, dy=0, img_w=500, img_h=500)
+    assert result.x2 == pytest.approx(500.0)
+    assert result.width == pytest.approx(100.0)
+
+
+def test_move_crop_box_clamps_bottom_edge():
+    box = _bb(100, 350, 300, 450)  # 100px tall
+    result = move_crop_box(box, dx=0, dy=200, img_w=500, img_h=500)
+    assert result.y2 == pytest.approx(500.0)
+    assert result.height == pytest.approx(100.0)
+
+
+def test_move_crop_box_preserves_dimensions():
+    box = _bb(100, 100, 300, 250)
+    result = move_crop_box(box, dx=20, dy=-20, img_w=500, img_h=500)
+    assert result.width == pytest.approx(box.width)
+    assert result.height == pytest.approx(box.height)
+
+
+# ── zoom_crop_box ─────────────────────────────────────────────────────────────
+
+def test_zoom_crop_box_zoom_in_shrinks_box():
+    box = _bb(50, 50, 450, 450)  # 400x400 — above min_px=200 so zoom-in takes effect
+    result = zoom_crop_box(box, factor=0.8, img_w=500, img_h=500)
+    assert result.width < box.width
+    assert result.height < box.height
+
+
+def test_zoom_crop_box_zoom_out_expands_box():
+    box = _bb(100, 100, 300, 300)  # 200x200
+    result = zoom_crop_box(box, factor=1.25, img_w=500, img_h=500)
+    assert result.width > box.width
+    assert result.height > box.height
+
+
+def test_zoom_crop_box_preserves_center():
+    box = _bb(100, 100, 300, 300)
+    cx, cy = 200.0, 200.0
+    result = zoom_crop_box(box, factor=0.8, img_w=500, img_h=500)
+    assert (result.x1 + result.x2) / 2.0 == pytest.approx(cx)
+    assert (result.y1 + result.y2) / 2.0 == pytest.approx(cy)
+
+
+def test_zoom_crop_box_respects_min_px():
+    box = _bb(200, 200, 220, 220)  # 20x20 — well below min_px
+    result = zoom_crop_box(box, factor=0.5, img_w=500, img_h=500, min_px=200)
+    assert result.width >= 200.0
+    assert result.height >= 200.0
+
+
+def test_zoom_crop_box_clamps_to_image_bounds():
+    box = _bb(10, 10, 490, 490)  # already near full image
+    result = zoom_crop_box(box, factor=2.0, img_w=500, img_h=500)
+    assert result.x1 >= 0.0
+    assert result.y1 >= 0.0
+    assert result.x2 <= 500.0
+    assert result.y2 <= 500.0
