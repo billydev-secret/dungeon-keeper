@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=16";
+const _moduleVer = "?v=17";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -78,8 +78,11 @@ const SECTIONS = [
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js" },
       { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/mod-policy-tickets.js" },
-      { id: "mod-audit",      label: "Audit Log",      module: "./panels/mod-audit.js" },
-      { id: "veil-audit",     label: "Veil Audit",     module: "./panels/veil-audit.js" },
+      { id: "mod-audit",            label: "Audit Log",         module: "./panels/mod-audit.js" },
+      { id: "mod-dm-audit",         label: "DM Audit",          module: "./panels/mod-dm-audit.js" },
+      { id: "mod-whisper-audit",    label: "Whisper Audit",     module: "./panels/mod-whisper-audit.js" },
+      { id: "mod-confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js" },
+      { id: "veil-audit",           label: "Veil Audit",        module: "./panels/veil-audit.js" },
       { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js" },
       { id: "message-search", label: "Message Review",  module: "./panels/message-search.js" },
     ],

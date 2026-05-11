@@ -24,6 +24,8 @@ from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from web.schemas import (
     AuditLogResponse,
+    ConfessionsAuditLogResponse,
+    DMAuditLogResponse,
     JailsResponse,
     ModerationStatsResponse,
     PolicyTicketsResponse,
@@ -35,6 +37,7 @@ from web.schemas import (
     TicketsResponse,
     TranscriptResponse,
     WarningsResponse,
+    WhisperAuditLogResponse,
 )
 
 router = APIRouter()
@@ -947,4 +950,173 @@ async def audit_log(
         ("actor_id", "actor_name"),
         ("target_id", "target_name"),
     )
+    return result
+
+
+@router.get("/moderation/dm-audit", response_model=DMAuditLogResponse)
+async def dm_audit_log(
+    request: Request,
+    limit: int = 50,
+    action: str | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    limit = min(limit, 200)
+
+    def _q():
+        with ctx.open_db() as conn:
+            clauses = ["guild_id = ?"]
+            params: list = [guild_id]
+            if action:
+                clauses.append("action = ?")
+                params.append(action)
+            where = " AND ".join(clauses)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM dm_audit_log WHERE {where}", params
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"SELECT * FROM dm_audit_log WHERE {where} ORDER BY timestamp DESC LIMIT ?",
+                params + [limit],
+            ).fetchall()
+            entries = [
+                {
+                    "id": r["id"],
+                    "action": r["action"],
+                    "actor_id": str(r["actor_id"]) if r["actor_id"] else None,
+                    "user_a_id": str(r["user_a_id"]) if r["user_a_id"] else None,
+                    "user_b_id": str(r["user_b_id"]) if r["user_b_id"] else None,
+                    "notes": r["notes"],
+                    "timestamp": r["timestamp"],
+                }
+                for r in rows
+            ]
+            return {"total": total, "entries": entries}
+
+    result = await run_query(_q)
+    await _resolve_names(
+        ctx,
+        guild,
+        result["entries"],
+        ("actor_id", "actor_name"),
+        ("user_a_id", "user_a_name"),
+        ("user_b_id", "user_b_name"),
+    )
+    return result
+
+
+@router.get("/moderation/whisper-audit", response_model=WhisperAuditLogResponse)
+async def whisper_audit_log(
+    request: Request,
+    limit: int = 50,
+    state: str | None = None,
+    reported_only: bool = False,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    limit = min(limit, 200)
+
+    def _q():
+        with ctx.open_db() as conn:
+            clauses = ["w.guild_id = ?"]
+            params: list = [guild_id]
+            if state:
+                clauses.append("w.state = ?")
+                params.append(state)
+            if reported_only:
+                clauses.append(
+                    "EXISTS (SELECT 1 FROM whisper_reports wr WHERE wr.whisper_id = w.id)"
+                )
+            where = " AND ".join(clauses)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM whispers w WHERE {where}", params
+            ).fetchone()[0]
+            rows = conn.execute(
+                f"""
+                SELECT w.id, w.sender_id, w.target_id, w.state,
+                       w.solved, w.exposed, w.created_at,
+                       COUNT(wr.id) AS report_count
+                FROM whispers w
+                LEFT JOIN whisper_reports wr ON wr.whisper_id = w.id
+                WHERE {where}
+                GROUP BY w.id
+                ORDER BY w.created_at DESC
+                LIMIT ?
+                """,
+                params + [limit],
+            ).fetchall()
+            entries = [
+                {
+                    "id": r["id"],
+                    "sender_id": str(r["sender_id"]),
+                    "target_id": str(r["target_id"]),
+                    "state": r["state"],
+                    "solved": bool(r["solved"]),
+                    "exposed": bool(r["exposed"]),
+                    "report_count": r["report_count"],
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ]
+            return {"total": total, "entries": entries}
+
+    result = await run_query(_q)
+    await _resolve_names(
+        ctx,
+        guild,
+        result["entries"],
+        ("sender_id", "sender_name"),
+        ("target_id", "target_name"),
+    )
+    return result
+
+
+@router.get("/moderation/confessions-audit", response_model=ConfessionsAuditLogResponse)
+async def confessions_audit_log(
+    request: Request,
+    limit: int = 50,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    limit = min(limit, 200)
+
+    def _q():
+        with ctx.open_db() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM confession_threads WHERE guild_id = ?",
+                (guild_id,),
+            ).fetchone()[0]
+            rows = conn.execute(
+                """
+                SELECT message_id, channel_id, original_author_id,
+                       discord_thread_id, created_at
+                FROM confession_threads
+                WHERE guild_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (guild_id, limit),
+            ).fetchall()
+            entries = [
+                {
+                    "message_id": str(r["message_id"]),
+                    "author_id": str(r["original_author_id"]),
+                    "channel_id": str(r["channel_id"]),
+                    "thread_id": str(r["discord_thread_id"]) if r["discord_thread_id"] else None,
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ]
+            return {"total": total, "entries": entries}
+
+    result = await run_query(_q)
+    await _resolve_names(ctx, guild, result["entries"], ("author_id", "author_name"))
     return result

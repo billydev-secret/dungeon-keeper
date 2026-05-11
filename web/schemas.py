@@ -605,6 +605,56 @@ class AuditLogResponse(BaseModel):
     entries: list[AuditEntrySchema]
 
 
+class DMAuditEntry(BaseModel):
+    id: int
+    action: str
+    actor_id: str | None = None
+    actor_name: str = ""
+    user_a_id: str | None = None
+    user_a_name: str = ""
+    user_b_id: str | None = None
+    user_b_name: str = ""
+    notes: str | None = None
+    timestamp: float
+
+
+class DMAuditLogResponse(BaseModel):
+    total: int
+    entries: list[DMAuditEntry]
+
+
+class WhisperAuditEntry(BaseModel):
+    id: int
+    sender_id: str
+    sender_name: str = ""
+    target_id: str
+    target_name: str = ""
+    state: str
+    solved: bool
+    exposed: bool
+    report_count: int
+    created_at: float
+
+
+class WhisperAuditLogResponse(BaseModel):
+    total: int
+    entries: list[WhisperAuditEntry]
+
+
+class ConfessionAuditEntry(BaseModel):
+    message_id: str
+    author_id: str
+    author_name: str = ""
+    channel_id: str
+    thread_id: str | None = None
+    created_at: int
+
+
+class ConfessionsAuditLogResponse(BaseModel):
+    total: int
+    entries: list[ConfessionAuditEntry]
+
+
 # ── Moderation: Summary stats ────────────────────────────────────────────
 
 

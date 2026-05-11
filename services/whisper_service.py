@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.whisper_models import STATE_PENDING, Whisper, WhisperConfig
+from services.whisper_models import STATE_HIDDEN, STATE_PENDING, Whisper, WhisperConfig
 
 MAX_MESSAGE_LENGTH = 1000
 
@@ -128,7 +128,7 @@ def validate_share(whisper: Whisper, *, invoker_id: int) -> None:
 
 def validate_hide(whisper: Whisper, *, invoker_id: int) -> None:
     _check_target(whisper, invoker_id, ERROR_GUESS_NOT_TARGET)
-    if whisper.state != STATE_PENDING:
+    if whisper.state == STATE_HIDDEN:
         raise TransitionValidationError(ERROR_ALREADY_DECIDED)
 
 
