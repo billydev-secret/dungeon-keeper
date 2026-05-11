@@ -28,6 +28,7 @@ from services.whisper_repo import (
     get_whisper_config,
     insert_guess,
     insert_reply,
+    insert_report,
     insert_whisper,
     list_received,
     list_received_in_states,
@@ -233,6 +234,23 @@ def _do_insert_reply(
             from_user_id=from_user_id,
             to_user_id=to_user_id,
             content=content,
+        )
+
+
+def _do_insert_report(
+    db_path: Path,
+    *,
+    whisper_id: int,
+    reporter_id: int,
+    reason: str,
+) -> bool:
+    """Returns True if inserted, False if this reporter already reported this whisper."""
+    with open_db(db_path) as conn:
+        return insert_report(
+            conn,
+            whisper_id=whisper_id,
+            reporter_id=reporter_id,
+            reason=reason,
         )
 
 
@@ -792,6 +810,20 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
             return
 
         reason = str(self.reason_input.value).strip() or "(no reason provided)"
+
+        inserted = await asyncio.to_thread(
+            _do_insert_report,
+            self.bot.ctx.db_path,
+            whisper_id=whisper.id,
+            reporter_id=interaction.user.id,
+            reason=reason,
+        )
+        if not inserted:
+            await interaction.response.send_message(
+                "You've already reported this whisper.", ephemeral=True
+            )
+            return
+
         emb = discord.Embed(
             title="Whisper Reported",
             description=whisper.message,

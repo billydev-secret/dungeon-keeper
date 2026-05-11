@@ -234,6 +234,24 @@ def insert_reply(
     return cur.lastrowid  # type: ignore[return-value]
 
 
+def insert_report(
+    conn: sqlite3.Connection,
+    *,
+    whisper_id: int,
+    reporter_id: int,
+    reason: str,
+) -> bool:
+    """Insert a report; returns True if inserted, False if duplicate (same reporter)."""
+    try:
+        conn.execute(
+            "INSERT INTO whisper_reports (whisper_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?)",
+            (whisper_id, reporter_id, reason, time.time()),
+        )
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
 def list_replies_for_whisper(
     conn: sqlite3.Connection, *, whisper_id: int
 ) -> list[WhisperReply]:

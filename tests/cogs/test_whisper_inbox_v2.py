@@ -302,7 +302,8 @@ async def test_report_modal_posts_to_mod_log():
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_insert_report", return_value=True):
         await modal.on_submit(interaction)
 
     log_channel.send.assert_awaited_once()
@@ -354,9 +355,64 @@ async def test_report_modal_empty_reason_uses_placeholder():
     interaction.response.send_message = AsyncMock()
 
     with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_insert_report", return_value=True):
         await modal.on_submit(interaction)
 
     emb: discord.Embed = log_channel.send.call_args.kwargs["embed"]
     reason_field = next(f for f in emb.fields if f.name == "Reason")
     assert "no reason" in (reason_field.value or "").lower()
+
+
+# ── B4: Report dedupe ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_report_modal_duplicate_rejected():
+    """A second report from same reporter should be rejected without posting to mod log."""
+    from cogs.whisper_cog import WhisperReportModal
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperReportModal(bot, whisper_id=42)
+    modal.reason_input._value = "again"  # type: ignore[attr-defined]
+
+    log_channel = MagicMock(spec=discord.TextChannel)
+    log_channel.send = AsyncMock()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.guild = MagicMock()
+    interaction.guild.get_channel = MagicMock(return_value=log_channel)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_insert_report", return_value=False):
+        await modal.on_submit(interaction)
+
+    log_channel.send.assert_not_called()
+    args, kwargs = interaction.response.send_message.call_args
+    assert kwargs.get("ephemeral") is True
+    assert "already" in args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_report_modal_first_report_succeeds():
+    """First report from a reporter should succeed and post to mod log."""
+    from cogs.whisper_cog import WhisperReportModal
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    modal = WhisperReportModal(bot, whisper_id=42)
+    modal.reason_input._value = "bad"  # type: ignore[attr-defined]
+
+    log_channel = MagicMock(spec=discord.TextChannel)
+    log_channel.send = AsyncMock()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.guild = MagicMock()
+    interaction.guild.get_channel = MagicMock(return_value=log_channel)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("cogs.whisper_cog._do_insert_report", return_value=True):
+        await modal.on_submit(interaction)
+
+    log_channel.send.assert_awaited_once()
