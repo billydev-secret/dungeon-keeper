@@ -154,10 +154,12 @@ async def test_submit_rejects_small_dimensions():
 
 
 @pytest.mark.asyncio
-async def test_submit_rejects_no_pipeline_candidates():
+async def test_submit_shows_editor_when_no_pipeline_candidates():
+    """No detections → still show the crop editor (centre-crop default, Auto disabled)."""
     import io as _io
     from PIL import Image
     from services.veil_models import PipelineResult
+    from cogs.veil_cog import CropEditorView
 
     buf = _io.BytesIO()
     Image.new("RGB", (500, 500)).save(buf, format="JPEG")
@@ -174,10 +176,14 @@ async def test_submit_rejects_no_pipeline_candidates():
 
     with patch("cogs.veil_cog._load_config", return_value=_cfg()):
         with patch("cogs.veil_cog.run_pipeline", return_value=empty_result):
-            await _submit(cog, interaction, _attachment(read_return=img_bytes))
+            with patch("cogs.veil_cog.render_crop_editor", return_value=b"\xff\xd8fake"):
+                await _submit(cog, interaction, _attachment(read_return=img_bytes))
 
-    msg = interaction.followup.send.call_args.args[0]
-    assert "crop region" in msg.lower() or "viable" in msg.lower()
+    call_kwargs = interaction.followup.send.call_args
+    assert call_kwargs.kwargs.get("ephemeral") is True
+    assert isinstance(call_kwargs.kwargs.get("view"), CropEditorView)
+    sent_view: CropEditorView = call_kwargs.kwargs["view"]
+    assert sent_view._candidate_boxes == []  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

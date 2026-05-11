@@ -13,7 +13,6 @@ const SECTIONS = [
   { page: "help-confessions", anchor: "confessions",        title: "Confessions & DM Permissions" },
   { page: "help-wellness",    anchor: "wellness",           title: "Wellness System" },
   { page: "help-self",        anchor: "self-service",       title: "Member Self-Service" },
-  { page: "help-network",     anchor: "network-analytics",  title: "Network Analytics" },
   { page: "help-cleanup",     anchor: "server-ops",         title: "Cleanup & Tagging" },
   { page: "help-events",      anchor: "special-events",     title: "Special Events" },
   { page: "help-setup",       anchor: "setup",              title: "Setup & Permissions" },

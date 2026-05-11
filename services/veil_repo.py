@@ -17,7 +17,7 @@ from services.veil_models import (
 _CONFIG_DEFAULTS: dict[str, str] = {
     "veil_role_id": "0",
     "veil_channel_id": "0",
-    "veil_guess_cooldown_seconds": "30",
+    "veil_guess_cooldown_seconds": "60",
     "veil_crop_difficulty": "medium",
     "veil_min_image_dimension_px": "400",
     "veil_max_image_size_mb": "10",
@@ -33,7 +33,7 @@ def get_veil_config(conn: sqlite3.Connection, guild_id: int) -> VeilConfig:
         guild_id=guild_id,
         veil_role_id=int(_get("veil_role_id") or 0),
         veil_channel_id=int(_get("veil_channel_id") or 0),
-        guess_cooldown_seconds=int(_get("veil_guess_cooldown_seconds") or 30),
+        guess_cooldown_seconds=int(_get("veil_guess_cooldown_seconds") or 60),
         crop_difficulty=_get("veil_crop_difficulty"),
         min_image_dimension_px=int(_get("veil_min_image_dimension_px") or 400),
         max_image_size_mb=int(_get("veil_max_image_size_mb") or 10),

@@ -341,8 +341,9 @@ class GuessSelectView(discord.ui.View):
             if last_guess is not None:
                 remaining = self.cooldown_seconds - (time.time() - last_guess.created_at)
                 if remaining > 0:
+                    ready_at = int(last_guess.created_at) + self.cooldown_seconds
                     await interaction.edit_original_response(
-                        content=f"⏳ On cooldown — try again in {int(remaining) + 1}s.",
+                        content=f"⏳ On cooldown — you can guess again <t:{ready_at}:R>.",
                         view=self,
                     )
                     return
@@ -538,12 +539,14 @@ CROP_EDITOR_ZOOM_OUT: float = 1.25
 class CropEditorView(discord.ui.View):
     """3×3 button grid for interactive crop framing.
 
-    Row 0:  [🔍+]  [↑]       [🔍−]
-    Row 1:  [← ]  [✓ Post]  [→  ]
-    Row 2:  [·  ]  [↓]       [✗  ]
+    Row 0:  [🔍+]  [↑]     [🔍−]
+    Row 1:  [← ]  [Auto]   [→  ]
+    Row 2:  [Post]  [↓]    [✗  ]
 
-    Step size is 1/5 of the image dimension so 5 presses cross the full image.
-    The round is only inserted to DB when ✓ Post is clicked.
+    Auto cycles through pipeline detections (first press → top candidate,
+    subsequent presses cycle, wraps around). Disabled when no candidates.
+    Step size is 1/5 of the current crop box so precision scales with zoom level.
+    The round is only inserted to DB when Post is clicked.
     """
 
     def __init__(
@@ -563,6 +566,7 @@ class CropEditorView(discord.ui.View):
         veil_role_id: int = 0,
         original_bytes: bytes = b"",
         original_ext: str = ".jpg",
+        candidate_boxes: list[BoundingBox] | None = None,
     ) -> None:
         super().__init__(timeout=300)
         self.bot = bot
@@ -581,12 +585,12 @@ class CropEditorView(discord.ui.View):
         self._original_ext = original_ext
         self._post_lock = asyncio.Lock()
         self._posted = False
-        self._step_x = img_w / 5.0
-        self._step_y = img_h / 5.0
+        self._candidate_boxes: list[BoundingBox] = candidate_boxes or []
+        self._candidate_idx = -1  # -1 so first Auto press snaps to index 0
 
         B = discord.ui.Button  # type: ignore[type-arg]
 
-        # Row 0
+        # Row 0: zoom-in | up | zoom-out
         z_in: discord.ui.Button = B(label="🔍+", style=discord.ButtonStyle.secondary, row=0)  # type: ignore[type-arg]
         z_in.callback = self._on_zoom_in
         self.add_item(z_in)
@@ -597,20 +601,23 @@ class CropEditorView(discord.ui.View):
         z_out.callback = self._on_zoom_out
         self.add_item(z_out)
 
-        # Row 1
+        # Row 1: left | auto | right
         left: discord.ui.Button = B(label="←", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
         left.callback = self._on_left
         self.add_item(left)
-        post: discord.ui.Button = B(label="✓ Post", style=discord.ButtonStyle.success, row=1)  # type: ignore[type-arg]
-        post.callback = self._on_post
-        self.add_item(post)
+        n = len(self._candidate_boxes)
+        auto: discord.ui.Button = B(label="Auto", style=discord.ButtonStyle.primary, disabled=n == 0, row=1)  # type: ignore[type-arg]
+        auto.callback = self._on_auto
+        self._auto_btn = auto
+        self.add_item(auto)
         right: discord.ui.Button = B(label="→", style=discord.ButtonStyle.secondary, row=1)  # type: ignore[type-arg]
         right.callback = self._on_right
         self.add_item(right)
 
-        # Row 2
-        spacer: discord.ui.Button = B(label="·", style=discord.ButtonStyle.secondary, disabled=True, row=2)  # type: ignore[type-arg]
-        self.add_item(spacer)
+        # Row 2: post | down | cancel
+        post: discord.ui.Button = B(label="✓ Post", style=discord.ButtonStyle.success, row=2)  # type: ignore[type-arg]
+        post.callback = self._on_post
+        self.add_item(post)
         down: discord.ui.Button = B(label="↓", style=discord.ButtonStyle.secondary, row=2)  # type: ignore[type-arg]
         down.callback = self._on_down
         self.add_item(down)
@@ -626,26 +633,26 @@ class CropEditorView(discord.ui.View):
         await interaction.response.edit_message(
             embed=discord.Embed(
                 title="Crop editor",
-                description="Move/zoom the red box, then click ✓ Post",
+                description="Move/zoom the red box or press Auto to snap to a detection, then ✓ Post",
             ).set_image(url="attachment://preview.jpg"),
             attachments=[preview_file],
             view=self,
         )
 
     async def _on_up(self, interaction: discord.Interaction) -> None:
-        self.crop_box = move_crop_box(self.crop_box, 0, -self._step_y, self.img_w, self.img_h)
+        self.crop_box = move_crop_box(self.crop_box, 0, -self.crop_box.height / 5, self.img_w, self.img_h)
         await self._rerender(interaction)
 
     async def _on_down(self, interaction: discord.Interaction) -> None:
-        self.crop_box = move_crop_box(self.crop_box, 0, self._step_y, self.img_w, self.img_h)
+        self.crop_box = move_crop_box(self.crop_box, 0, self.crop_box.height / 5, self.img_w, self.img_h)
         await self._rerender(interaction)
 
     async def _on_left(self, interaction: discord.Interaction) -> None:
-        self.crop_box = move_crop_box(self.crop_box, -self._step_x, 0, self.img_w, self.img_h)
+        self.crop_box = move_crop_box(self.crop_box, -self.crop_box.width / 5, 0, self.img_w, self.img_h)
         await self._rerender(interaction)
 
     async def _on_right(self, interaction: discord.Interaction) -> None:
-        self.crop_box = move_crop_box(self.crop_box, self._step_x, 0, self.img_w, self.img_h)
+        self.crop_box = move_crop_box(self.crop_box, self.crop_box.width / 5, 0, self.img_w, self.img_h)
         await self._rerender(interaction)
 
     async def _on_zoom_in(self, interaction: discord.Interaction) -> None:
@@ -654,6 +661,13 @@ class CropEditorView(discord.ui.View):
 
     async def _on_zoom_out(self, interaction: discord.Interaction) -> None:
         self.crop_box = zoom_crop_box(self.crop_box, CROP_EDITOR_ZOOM_OUT, self.img_w, self.img_h)
+        await self._rerender(interaction)
+
+    async def _on_auto(self, interaction: discord.Interaction) -> None:
+        if not self._candidate_boxes:
+            return
+        self._candidate_idx = (self._candidate_idx + 1) % len(self._candidate_boxes)
+        self.crop_box = self._candidate_boxes[self._candidate_idx]
         await self._rerender(interaction)
 
     async def _on_cancel(self, interaction: discord.Interaction) -> None:
@@ -1032,27 +1046,34 @@ class VeilCog(commands.Cog):
         finally:
             tmp_path.unlink(missing_ok=True)
 
-        if not pipeline_result.candidates:
-            await interaction.followup.send(
-                "Couldn't find a viable crop region — try a different image.", ephemeral=True
-            )
-            return
+        sorted_cands = sorted(pipeline_result.candidates, key=lambda d: d.score, reverse=True)
+        candidate_boxes: list[BoundingBox] = []
+        for det in sorted_cands:
+            _exp = enforce_min_size(compute_padded_crop(det.box, config.crop_difficulty, img_w, img_h))
+            candidate_boxes.append(BoundingBox(
+                max(0.0, _exp.x1), max(0.0, _exp.y1),
+                min(float(img_w), _exp.x2), min(float(img_h), _exp.y2),
+            ))
 
-        top_det = max(pipeline_result.candidates, key=lambda d: d.score)
-        _expanded = enforce_min_size(compute_padded_crop(top_det.box, config.crop_difficulty, img_w, img_h))
-        initial_crop = BoundingBox(
-            max(0.0, _expanded.x1),
-            max(0.0, _expanded.y1),
-            min(float(img_w), _expanded.x2),
-            min(float(img_h), _expanded.y2),
-        )
+        if candidate_boxes:
+            initial_crop = candidate_boxes[0]
+            embed_desc = "Move/zoom the red box or press Auto to snap to a detection, then ✓ Post"
+        else:
+            # No detections — default to centre 60% so the user has something to work with
+            mx, my = img_w * 0.2, img_h * 0.2
+            _exp = enforce_min_size(BoundingBox(mx, my, img_w - mx, img_h - my))
+            initial_crop = BoundingBox(
+                max(0.0, _exp.x1), max(0.0, _exp.y1),
+                min(float(img_w), _exp.x2), min(float(img_h), _exp.y2),
+            )
+            embed_desc = "No detections found — manually frame your crop, then ✓ Post"
 
         editor_bytes = await asyncio.to_thread(render_crop_editor, image_bytes, initial_crop)
         original_ext = (Path(image.filename).suffix or ".jpg").lower()
         await interaction.followup.send(
             embed=discord.Embed(
                 title="Crop editor",
-                description="Move/zoom the red box to frame your crop, then click ✓ Post",
+                description=embed_desc,
             ).set_image(url="attachment://preview.jpg"),
             file=discord.File(io.BytesIO(editor_bytes), filename="preview.jpg"),
             view=CropEditorView(
@@ -1070,6 +1091,7 @@ class VeilCog(commands.Cog):
                 veil_role_id=config.veil_role_id,
                 original_bytes=image_bytes,
                 original_ext=original_ext,
+                candidate_boxes=candidate_boxes,
             ),
             ephemeral=True,
         )

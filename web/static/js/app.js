@@ -146,10 +146,7 @@ const SECTIONS = [
         { id: "help-wellness",    label: "Wellness",                    module: "./panels/help.js" },
         { id: "help-events",      label: "Special Events",              module: "./panels/help.js" },
       ]},
-      { heading: "Activity", items: [
-        { id: "help-network",    label: "Network Analytics",            module: "./panels/help.js" },
-      ]},
-      { heading: "Self-Service", items: [
+{ heading: "Self-Service", items: [
         { id: "help-self",       label: "Member Self-Service",          module: "./panels/help.js" },
       ]},
       { heading: "Owner", items: [

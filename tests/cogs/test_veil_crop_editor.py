@@ -160,3 +160,81 @@ async def test_double_post_sends_already_posted(inter: MagicMock) -> None:
     inter.response.send_message.assert_called_once()
     msg = inter.response.send_message.call_args.args[0]
     assert "already" in msg.lower()
+
+
+# ── Auto button ───────────────────────────────────────────────────────────────
+
+def _make_view_with_candidates(*boxes: BoundingBox):  # type: ignore[return]
+    from cogs.veil_cog import CropEditorView
+
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    bot.add_view = MagicMock()
+    box_list = list(boxes)
+    return CropEditorView(
+        bot,
+        image_bytes=b"fake",
+        img_w=IMG_W,
+        img_h=IMG_H,
+        crop_box=box_list[0] if box_list else _box(),
+        guild_id=GUILD_ID,
+        veil_channel_id=VEIL_CHANNEL_ID,
+        submitter_id=1001,
+        answer_id=1001,
+        difficulty="medium",
+        candidate_count=len(box_list),
+        candidate_boxes=box_list,
+    )
+
+
+@pytest.mark.asyncio
+async def test_auto_first_press_snaps_to_first_candidate(inter: MagicMock) -> None:
+    box0 = _box(10, 10, 100, 100)
+    box1 = _box(200, 200, 400, 400)
+    view = _make_view_with_candidates(box0, box1)
+    view.crop_box = _box(300, 300, 490, 490)  # simulate user having panned away
+    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+        await view._on_auto(inter)
+    assert view.crop_box == box0
+
+
+@pytest.mark.asyncio
+async def test_auto_second_press_snaps_to_second_candidate(inter: MagicMock) -> None:
+    box0 = _box(10, 10, 100, 100)
+    box1 = _box(200, 200, 400, 400)
+    view = _make_view_with_candidates(box0, box1)
+    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+        await view._on_auto(inter)
+        await view._on_auto(inter)
+    assert view.crop_box == box1
+
+
+@pytest.mark.asyncio
+async def test_auto_wraps_from_last_to_first(inter: MagicMock) -> None:
+    box0 = _box(10, 10, 100, 100)
+    box1 = _box(200, 200, 400, 400)
+    view = _make_view_with_candidates(box0, box1)
+    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+        await view._on_auto(inter)  # → box0
+        await view._on_auto(inter)  # → box1
+        await view._on_auto(inter)  # → wraps back to box0
+    assert view.crop_box == box0
+
+
+@pytest.mark.asyncio
+async def test_auto_label_is_always_plain_auto(inter: MagicMock) -> None:
+    boxes = [_box(10, 10, 100, 100), _box(200, 200, 400, 400)]
+    view = _make_view_with_candidates(*boxes)
+    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+        await view._on_auto(inter)
+        await view._on_auto(inter)
+    assert view._auto_btn.label == "Auto"  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_auto_noop_when_no_candidates(inter: MagicMock) -> None:
+    view = _make_view()  # no candidate_boxes
+    original_box = view.crop_box
+    await view._on_auto(inter)
+    assert view.crop_box == original_box
+    inter.response.edit_message.assert_not_called()

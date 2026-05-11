@@ -36,7 +36,7 @@ class VeilConfig:
     guild_id: int
     veil_role_id: int = 0
     veil_channel_id: int = 0
-    guess_cooldown_seconds: int = 30
+    guess_cooldown_seconds: int = 60
     crop_difficulty: str = "medium"
     min_image_dimension_px: int = 400
     max_image_size_mb: int = 25
