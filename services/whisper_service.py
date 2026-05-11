@@ -11,6 +11,11 @@ from services.whisper_models import STATE_PENDING, Whisper, WhisperConfig
 
 MAX_MESSAGE_LENGTH = 1000
 
+
+def safe_codefence_content(s: str) -> str:
+    """Replace triple-backticks with homoglyphs so user content can't break out of a ``` block."""
+    return s.replace("```", "ʼʼʼ")
+
 ERROR_NOT_CONFIGURED = "Whispers aren't set up in this server yet."
 ERROR_SENDER_NEEDS_ROLE = (
     "You need the Whisper role to send whispers. Use `/whisper optin` to join."

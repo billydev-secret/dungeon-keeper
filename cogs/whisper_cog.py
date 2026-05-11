@@ -46,6 +46,7 @@ from services.whisper_service import (
     SendValidationError,
     TransitionValidationError,
     evaluate_guess,
+    safe_codefence_content,
     validate_expose,
     validate_hide,
     validate_send,
@@ -394,7 +395,7 @@ class WhisperShareButton(
                     new_msg = await feed_channel.send(
                         f"\U0001f4ec A fresh Whisper was shared. Someone sent "
                         f"<@{whisper.target_id}> an anonymous message!\n"
-                        f"```{whisper.message}```",
+                        f"```{safe_codefence_content(whisper.message)}```",
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     await asyncio.to_thread(
@@ -714,8 +715,8 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
             if len(preview) > 200:
                 preview = preview[:197] + "…"
             await recipient.send(
-                f"\U0001f4ec Anonymous reply on whisper *(\"{preview}\")*:\n"
-                f"```{content}```",
+                f"\U0001f4ec Anonymous reply on whisper *(\"{safe_codefence_content(preview)}\")*:\n"
+                f"```{safe_codefence_content(content)}```",
                 view=WhisperReplyDmView(self.bot, self.whisper_id),
             )
         except (discord.Forbidden, discord.HTTPException):
@@ -909,7 +910,7 @@ async def _handle_guess_outcome(
                 try:
                     await feed_channel.send(
                         f"✅ You're Right! <@{whisper.target_id}> figured out who sent the whisper:\n"
-                        f"```{whisper.message}```",
+                        f"```{safe_codefence_content(whisper.message)}```",
                         view=WhisperExposeView(bot, whisper.id),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
@@ -1357,7 +1358,7 @@ class WhisperCog(commands.Cog):
         try:
             dm_msg = await target.send(
                 f"Someone in **{interaction.guild.name}** sent you a secret message:\n"
-                f"```{message.strip()}```",
+                f"```{safe_codefence_content(message.strip())}```",
                 view=WhisperDmView(self.bot, whisper_id),
             )
         except (discord.Forbidden, discord.HTTPException):
@@ -1390,7 +1391,7 @@ class WhisperCog(commands.Cog):
             try:
                 emb = discord.Embed(
                     title="Whisper sent",
-                    description=message.strip(),
+                    description=safe_codefence_content(message.strip()),
                     timestamp=discord.utils.utcnow(),
                 )
                 emb.add_field(
