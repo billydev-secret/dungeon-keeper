@@ -753,6 +753,7 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
         style=discord.TextStyle.long,
         required=True,
         max_length=1000,
+        placeholder="Your identity is logged by admins for moderation.",
     )
 
     def __init__(self, bot: Bot, whisper_id: int) -> None:
@@ -1160,7 +1161,8 @@ class WhisperGuessSelectView(discord.ui.View):
 
 _SEND_INSTRUCTIONS = (
     "Use `/whisper send` to send an anonymous message. "
-    "Pick the recipient from autocomplete — only opted-in members appear."
+    "Pick the recipient from autocomplete — only opted-in members appear.\n\n"
+    "-# Your identity is logged by admins for moderation."
 )
 
 
@@ -1595,14 +1597,6 @@ class WhisperCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if not isinstance(log_channel, discord.TextChannel):
-            await interaction.response.send_message(
-                "Whisper mod log channel is missing or invalid. Tell an admin to fix the config.",
-                ephemeral=True,
-            )
-            return
-
         whisper_id = await asyncio.to_thread(
             _do_insert_whisper,
             self.ctx.db_path,
@@ -1641,30 +1635,10 @@ class WhisperCog(commands.Cog):
             dm_msg_id=dm_msg.id,
         )
 
-        try:
-            emb = discord.Embed(
-                title="Whisper sent",
-                description=safe_codefence_content(message.strip()),
-                timestamp=discord.utils.utcnow(),
-            )
-            emb.add_field(
-                name="Sender",
-                value=f"{interaction.user.mention} (`{interaction.user.id}`)",
-                inline=False,
-            )
-            emb.add_field(
-                name="Target",
-                value=f"{target.mention} (`{target.id}`)",
-                inline=False,
-            )
-            emb.add_field(name="Whisper ID", value=str(whisper_id), inline=False)
-            await log_channel.send(
-                embed=emb, allowed_mentions=discord.AllowedMentions.none()
-            )
-        except discord.HTTPException:
-            log.warning("Failed to write whisper mod log")
-
-        await interaction.response.send_message("Whisper delivered.", ephemeral=True)
+        await interaction.response.send_message(
+            "Whisper delivered.\n-# Your identity is logged by admins for moderation.",
+            ephemeral=True,
+        )
 
     async def _target_autocomplete(
         self,

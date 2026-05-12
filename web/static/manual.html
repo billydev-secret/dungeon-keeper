@@ -1324,8 +1324,6 @@
         <tr><td><code>/purge</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
         <tr><td><code>/ticket open</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private support ticket</td></tr>
         <tr><td><code>/ticket claim</code> / <code>close</code></td><td><span class="perm perm-mod">Mod</span></td><td>Daily ticket lifecycle</td></tr>
-        <tr><td><code>/ai review</code></td><td><span class="perm perm-admin">Admin</span></td><td>Claude flags violations in a member's recent history</td></tr>
-        <tr><td><code>/ai scan</code></td><td><span class="perm perm-admin">Admin</span></td><td>Reach for this when a channel just got heated</td></tr>
         <tr><td><code>/watch add</code></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
         <tr><td><code>/activity</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bar chart of message volume over time</td></tr>
         <tr><td><code>/voice lock</code> / <code>rename</code> / <code>limit</code></td><td>Channel owner</td><td>Personal voice channel controls</td></tr>
@@ -1356,12 +1354,6 @@
         <tr><td><code>/policy open</code></td><td><span class="perm perm-mod">Mod</span></td><td>Create a policy proposal with voting</td></tr>
         <tr><td><code>/policy list</code> / <code>vote</code> / <code>close</code></td><td><span class="perm perm-mod">Mod</span></td><td>View, vote on, or finalize a policy proposal</td></tr>
 
-        <tr><td colspan="3" class="qr-section">AI Tools ✦</td></tr>
-        <tr><td><code>/ai review</code></td><td><span class="perm perm-admin">Admin</span></td><td>Claude flags violations in member's messages</td></tr>
-        <tr><td><code>/ai scan</code></td><td><span class="perm perm-admin">Admin</span></td><td>Claude scans current channel for violations</td></tr>
-        <tr><td><code>/ai channel</code></td><td><span class="perm perm-admin">Admin</span></td><td>Ask Claude about recent channel activity</td></tr>
-        <tr><td><code>/ai query</code></td><td><span class="perm perm-admin">Admin</span></td><td>Ask Claude about a specific member's history</td></tr>
-
         <tr><td colspan="3" class="qr-section">Analytics &amp; Watch ✦</td></tr>
         <tr><td><code>/watch add</code> / <code>remove</code> / <code>list</code></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
         <tr><td><code>/activity</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bar chart of message volume over time</td></tr>
@@ -1388,10 +1380,6 @@
         <tr><td><code>/voice invite/kick</code></td><td>Channel owner</td><td>Allow or remove members</td></tr>
         <tr><td><code>/voice trusted</code> / <code>blocked</code></td><td>Channel owner</td><td>Manage trust / block lists</td></tr>
         <tr><td><code>/voice owner</code></td><td>In-VC</td><td>Show who owns the channel you're in</td></tr>
-        <tr><td><code>/voice-admin show</code></td><td><span class="perm perm-admin">Admin</span></td><td>View full voice configuration</td></tr>
-        <tr><td><code>/voice-admin force-*</code></td><td><span class="perm perm-admin">Admin</span></td><td>Override delete / transfer / clear-profile</td></tr>
-        <tr><td><code>/voice-admin set-int</code></td><td><span class="perm perm-admin">Admin</span></td><td>Tune numeric voice settings (timeouts, defaults)</td></tr>
-
         <tr><td colspan="3" class="qr-section">Music &amp; TTS</td></tr>
         <tr><td><code>/play</code></td><td><span class="perm perm-all">Everyone</span></td><td>YouTube / Spotify / search query</td></tr>
         <tr><td><code>/skip</code> / <code>pause</code> / <code>resume</code> / <code>stop</code></td><td><span class="perm perm-all">In VC</span></td><td>Standard playback controls</td></tr>
@@ -1413,14 +1401,6 @@
         <tr><td colspan="3" class="qr-section">Wellness</td></tr>
         <tr><td><code>/wellness setup</code></td><td><span class="perm perm-all">Everyone</span></td><td>Opt in — pick timezone &amp; enforcement style</td></tr>
         <tr><td><code>/wellness away on</code> / <code>off</code></td><td><span class="perm perm-all">Everyone</span></td><td>Toggle the auto-reply for @mentions</td></tr>
-        <tr><td><code>/wellness-admin setup</code></td><td><span class="perm perm-admin">Admin</span></td><td>Create wellness role &amp; channel</td></tr>
-        <tr><td><code>/wellness-admin defaults</code></td><td><span class="perm perm-admin">Admin</span></td><td>Set server-wide enforcement default + crisis URL</td></tr>
-        <tr><td><code>/wellness-admin exempt</code></td><td><span class="perm perm-admin">Admin</span></td><td>add / remove / list exempt channels</td></tr>
-        <tr><td><code>/wellness-admin cap</code></td><td><span class="perm perm-admin">Admin</span></td><td>add / edit / remove a member's caps</td></tr>
-        <tr><td><code>/wellness-admin blackout</code></td><td><span class="perm perm-admin">Admin</span></td><td>add / remove daily blackout windows</td></tr>
-        <tr><td><code>/wellness-admin settings</code></td><td><span class="perm perm-admin">Admin</span></td><td>Override a member's wellness settings</td></tr>
-        <tr><td><code>/wellness-admin dashboard</code></td><td><span class="perm perm-admin">Admin</span></td><td>Server-wide wellness stats embed</td></tr>
-
         <tr><td colspan="3" class="qr-section">Member Self-Service</td></tr>
         <tr><td><code>/help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
         <tr><td><code>/support</code></td><td><span class="perm perm-all">Everyone</span></td><td>Link to the support Discord</td></tr>
@@ -1441,17 +1421,10 @@
         <tr><td><code>/foolsday_exclude</code> / <code>_join</code></td><td><span class="perm perm-all">Self</span> / <span class="perm perm-mod">Mod</span></td><td>Opt out of, or into, an active shuffle</td></tr>
         <tr><td><code>/foolsday_repair</code></td><td><span class="perm perm-mod">Mod</span></td><td>Restore originals via audit-log walk</td></tr>
         <tr><td><code>/veil submit</code></td><td>Veil role</td><td>Submit an NSFW image to the guessing game</td></tr>
-        <tr><td><code>/veil setup</code></td><td><span class="perm perm-admin">Admin</span></td><td>Configure Veil channel + role</td></tr>
-
         <tr><td colspan="3" class="qr-section">Configuration</td></tr>
         <tr><td><code>/config</code></td><td><span class="perm perm-mod">Mod</span></td><td>Open settings panel (global/welcome/roles/xp/…)</td></tr>
         <tr><td><code>/welcome_preview</code> / <code>/leave_preview</code></td><td><span class="perm perm-mod">Mod</span></td><td>Preview welcome/leave embeds before publishing</td></tr>
         <tr><td><code>/starboard status</code></td><td><span class="perm perm-mod">Mod</span></td><td>View current starboard config</td></tr>
-        <tr><td><code>/setup</code></td><td><span class="perm perm-admin">Admin</span></td><td>First-time bot setup: create channels + walk through role/category config</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Developer / Owner</td></tr>
-        <tr><td><code>/reload_cog</code></td><td><span class="perm perm-owner">Bot Owner</span></td><td>Hot-reload one cog by name</td></tr>
-        <tr><td><code>/spotify_authorize</code></td><td><span class="perm perm-owner">Bot Owner</span></td><td>DM a Spotify-OAuth link to the owner</td></tr>
       </tbody>
     </table>
 

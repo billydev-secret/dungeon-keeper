@@ -1096,11 +1096,13 @@ async def confessions_audit_log(
             ).fetchone()[0]
             rows = conn.execute(
                 """
-                SELECT message_id, channel_id, original_author_id,
-                       discord_thread_id, created_at
-                FROM confession_threads
-                WHERE guild_id = ?
-                ORDER BY created_at DESC
+                SELECT ct.message_id, ct.channel_id, ct.original_author_id,
+                       ct.discord_thread_id, ct.created_at,
+                       m.content
+                FROM confession_threads ct
+                LEFT JOIN messages m ON m.message_id = ct.message_id
+                WHERE ct.guild_id = ?
+                ORDER BY ct.created_at DESC
                 LIMIT ?
                 """,
                 (guild_id, limit),
@@ -1111,6 +1113,7 @@ async def confessions_audit_log(
                     "author_id": str(r["original_author_id"]),
                     "channel_id": str(r["channel_id"]),
                     "thread_id": str(r["discord_thread_id"]) if r["discord_thread_id"] else None,
+                    "content": r["content"],
                     "created_at": r["created_at"],
                 }
                 for r in rows

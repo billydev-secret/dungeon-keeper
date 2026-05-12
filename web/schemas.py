@@ -647,6 +647,7 @@ class ConfessionAuditEntry(BaseModel):
     author_name: str = ""
     channel_id: str
     thread_id: str | None = None
+    content: str | None = None
     created_at: int
 
 

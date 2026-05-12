@@ -41,8 +41,11 @@ function buildRow(e) {
         `#${e.thread_id}`,
       )
     : document.createTextNode("—");
+  const text = e.content || "—";
+  const truncated = text.length > 120 ? text.slice(0, 120) + "…" : text;
   return el("tr", null,
     el("td", null, e.author_name || e.author_id),
+    el("td", { className: "reason-cell", title: text }, truncated),
     el("td", null, jumpLink),
     el("td", null, threadCell),
     el("td", null, fmtTs(e.created_at)),
@@ -57,6 +60,7 @@ function buildTable(data) {
   const head = el("thead", null,
     el("tr", null,
       el("th", null, "Author"),
+      el("th", null, "Content"),
       el("th", null, "Message"),
       el("th", null, "Thread"),
       el("th", null, "Time"),

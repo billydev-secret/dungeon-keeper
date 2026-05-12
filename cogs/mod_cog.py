@@ -20,6 +20,41 @@ def _fmt(command_specs: list[tuple[str, str]]) -> str:
     return "\n".join(f"`{name}`\n{desc}" for name, desc in command_specs)
 
 
+def _get_cog_commands(cog: commands.Cog) -> list[tuple[str, str]]:
+    result: list[tuple[str, str]] = []
+    for cmd in cog.get_app_commands():
+        if isinstance(cmd, app_commands.Group):
+            for sub in cmd.commands:
+                if isinstance(sub, app_commands.Group):
+                    for subsub in sub.commands:
+                        result.append((f"/{cmd.name} {sub.name} {subsub.name}", subsub.description))
+                else:
+                    result.append((f"/{cmd.name} {sub.name}", sub.description))
+        else:
+            result.append((f"/{cmd.name}", cmd.description))
+    return sorted(result)
+
+
+def _build_cog_pages(bot: "Bot") -> list[discord.Embed]:
+    pages: list[discord.Embed] = []
+    for cog in sorted(bot.cogs.values(), key=lambda c: c.qualified_name.lower()):
+        cmds = _get_cog_commands(cog)
+        if not cmds:
+            continue
+        display = cog.qualified_name.removesuffix("Cog").replace("_", " ").strip()
+        body = "\n".join(f"`{name}` — {desc}" for name, desc in cmds)
+        if len(body) > 4000:
+            body = body[:3997] + "…"
+        pages.append(
+            discord.Embed(
+                title=f"📦  {display}",
+                description=body,
+                color=discord.Color.greyple(),
+            )
+        )
+    return pages
+
+
 _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "General": ("🌿", discord.Color.from_str("#5865F2")),
     "Role Grants": ("🎭", discord.Color.from_str("#57F287")),
@@ -237,6 +272,51 @@ def _build_help_pages(
     return pages
 
 
+class CogPager(discord.ui.View):
+    def __init__(self, pages: list[discord.Embed], invoker_id: int):
+        super().__init__(timeout=120)
+        self.pages = pages
+        self.invoker_id = invoker_id
+        self._index = 0
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        self.prev_btn.disabled = self._index == 0
+        self.next_btn.disabled = self._index >= len(self.pages) - 1
+        self.counter_btn.label = f"{self._index + 1} / {len(self.pages)}"
+
+    def current_embed(self) -> discord.Embed:
+        embed = self.pages[self._index]
+        embed.set_footer(text="All commands registered on this bot.")
+        return embed
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.defer()
+            return
+        self._index = max(0, self._index - 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    @discord.ui.button(label="1 / ?", style=discord.ButtonStyle.secondary, disabled=True)
+    async def counter_btn(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        await interaction.response.defer()
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.defer()
+            return
+        self._index = min(len(self.pages) - 1, self._index + 1)
+        self._sync_buttons()
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    async def on_timeout(self) -> None:
+        for item in self.children:
+            item.disabled = True  # type: ignore[union-attr]
+
+
 class HelpSelect(discord.ui.Select):
     def __init__(self, pages: list[discord.Embed], invoker_id: int):
         self.pages = pages
@@ -262,8 +342,10 @@ class HelpSelect(discord.ui.Select):
 
 
 class HelpView(discord.ui.View):
-    def __init__(self, pages: list[discord.Embed], invoker_id: int):
+    def __init__(self, pages: list[discord.Embed], invoker_id: int, bot: "Bot"):
         super().__init__(timeout=120)
+        self.bot = bot
+        self.invoker_id = invoker_id
         self.select = HelpSelect(pages, invoker_id)
         self.add_item(self.select)
 
@@ -272,8 +354,21 @@ class HelpView(discord.ui.View):
         embed.set_footer(text="Tip: Discord shows parameter hints while you type.")
         return embed
 
+    @discord.ui.button(label="Browse by Module", style=discord.ButtonStyle.secondary, row=1)
+    async def browse_modules(self, interaction: discord.Interaction, _button: discord.ui.Button) -> None:
+        if interaction.user.id != self.invoker_id:
+            await interaction.response.defer()
+            return
+        cog_pages = _build_cog_pages(self.bot)
+        if not cog_pages:
+            await interaction.response.send_message("No modules found.", ephemeral=True)
+            return
+        pager = CogPager(cog_pages, self.invoker_id)
+        await interaction.response.send_message(embed=pager.current_embed(), view=pager, ephemeral=True)
+
     async def on_timeout(self) -> None:
         self.select.disabled = True
+        self.browse_modules.disabled = True
 
 
 class ModCog(commands.Cog):
@@ -287,7 +382,7 @@ class ModCog(commands.Cog):
     )
     async def help_command(self, interaction: discord.Interaction) -> None:
         pages = _build_help_pages(self.ctx, interaction)
-        view = HelpView(pages, invoker_id=interaction.user.id)
+        view = HelpView(pages, invoker_id=interaction.user.id, bot=self.bot)
         await interaction.response.send_message(
             embed=view.current_embed(), view=view, ephemeral=True
         )

@@ -243,7 +243,7 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         style=discord.TextStyle.long,
         required=True,
         max_length=4000,
-        placeholder="Reply kindly. Keep it about the content, not the person.",
+        placeholder="Logged by admins for moderation.\nReply kindly. Keep it about the content, not the person.",
     )
     notify_pref = discord.ui.TextInput(
         label="Notify me on replies? (yes/no)",
