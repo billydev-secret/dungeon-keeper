@@ -170,7 +170,9 @@ bot.extension_names = [
     "cogs.tts_cog",
     "cogs.voice_master_cog",
     "cogs.veil_cog",
+    "cogs.quote_cog",
     "cogs.whisper_cog",
+    "cogs.emoji_stealer_cog",
 ]
 
 # ==============================

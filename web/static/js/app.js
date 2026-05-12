@@ -139,17 +139,24 @@ const SECTIONS = [
         { id: "help-analytics",  label: "Activity & Watch",             module: "./panels/help.js" },
         { id: "help-ai",         label: "AI Tools",                     module: "./panels/help.js" },
       ]},
+      { heading: "Jail", items: [
+        { id: "help-jail",       label: "Jail & Release",               module: "./panels/help.js" },
+      ]},
       { heading: "Voice", items: [
         { id: "help-voice",      label: "Voice Channels",               module: "./panels/help.js" },
         { id: "help-music",      label: "Music & TTS",                  module: "./panels/help.js" },
       ]},
-      { heading: "Community Tools", items: [
-        { id: "help-community",   label: "Community & XP",              module: "./panels/help.js" },
-        { id: "help-confessions", label: "Confessions & DMs",           module: "./panels/help.js" },
-        { id: "help-wellness",    label: "Wellness",                    module: "./panels/help.js" },
-        { id: "help-events",      label: "Special Events",              module: "./panels/help.js" },
+      { heading: "Community Games", items: [
+        { id: "help-veil",        label: "Veil",                        module: "./panels/help.js" },
+        { id: "help-whisper",     label: "Whisper",                     module: "./panels/help.js" },
+        { id: "help-confessions", label: "Confessions",                 module: "./panels/help.js" },
       ]},
-{ heading: "Self-Service", items: [
+      { heading: "Community Tools", items: [
+        { id: "help-community",  label: "Community & XP",               module: "./panels/help.js" },
+        { id: "help-wellness",   label: "Wellness",                     module: "./panels/help.js" },
+        { id: "help-events",     label: "Special Events",               module: "./panels/help.js" },
+      ]},
+      { heading: "Self-Service", items: [
         { id: "help-self",       label: "Member Self-Service",          module: "./panels/help.js" },
       ]},
       { heading: "Owner", items: [

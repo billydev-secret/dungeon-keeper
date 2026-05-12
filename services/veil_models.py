@@ -68,9 +68,6 @@ class VeilRound:
     unique_guessers_to_solve: int | None
     answer_optout: bool
     deleted_at: float | None
-    round_type: str = "photo"
-    confession_text: str = ""
-    confession_prompt_text: str = ""
 
 
 @dataclass

@@ -1211,6 +1211,41 @@
       <span class="cmd-desc">First-time setup. Set the Veil channel and (optionally) the role required to submit. Without a role, every NSFW-permitted member can submit.</span>
     </div>
 
+    <h3 id="whisper">Whisper Anonymous Messages</h3>
+    <p>Anonymous message-guessing game. Send a secret message to an opted-in member via DM; they can try to guess who sent it, share it to the server feed, hide it for later, or reply anonymously.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/whisper send target:@user message:Your secret message</span>
+      <span class="cmd-perm">Opted-in members (hold the configured Whisper role)</span>
+      <span class="cmd-desc">Delivers an anonymous message to another opted-in member via DM. Only opted-in members appear in autocomplete. Cooldown: 30 seconds between sends; max 5 whispers to the same person per hour.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/whisper optin</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Opt in to send and receive anonymous whispers. Grants the configured Whisper role after a confirmation prompt.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/whisper optout</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Opt out of whispers. You'll no longer appear in others' autocomplete. Existing whispers are preserved.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/whisper forget-me</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Permanently deletes all whispers you sent or received in this server. Cannot be undone.</span>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Inbox actions</strong>
+        <p>When a whisper arrives in your DM you'll see buttons to <strong>Guess</strong> the sender (limited attempts), <strong>Share</strong> it to the public feed, <strong>Hide</strong> it from your main inbox, <strong>Reply</strong> anonymously, or <strong>Report</strong> it to moderators. Identities are always logged for moderators even though senders appear anonymous to recipients.</p>
+      </div>
+    </div>
+
     <!-- ══════════════════════════════════════════════════════════
          15. SETUP & PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->

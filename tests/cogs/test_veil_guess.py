@@ -165,8 +165,11 @@ async def test_correct_guess_without_original_path_still_solves():
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
+    # edit() is called without attachments kwarg — no crash, and the existing
+    # crop image (the embedded spoiler) is preserved rather than wiped.
+    game_msg.edit.assert_called_once()
     edit_kwargs = game_msg.edit.call_args.kwargs
-    assert edit_kwargs["attachments"] == []
+    assert "attachments" not in edit_kwargs
 
 
 @pytest.mark.asyncio

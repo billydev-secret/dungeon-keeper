@@ -7,9 +7,12 @@ const SECTIONS = [
   { page: "help-tickets",     anchor: "tickets",            title: "Tickets, Policies & Warnings" },
   { page: "help-ai",          anchor: "ai-tools",           title: "AI Moderation Tools" },
   { page: "help-analytics",   anchor: "analytics",          title: "Analytics & Watch List" },
+  { page: "help-jail",        anchor: "jail",               title: "Jail & Release" },
   { page: "help-community",   anchor: "community",          title: "Community & XP" },
   { page: "help-voice",       anchor: "voice",              title: "Voice Channels" },
   { page: "help-music",       anchor: "music",              title: "Music & TTS" },
+  { page: "help-veil",        anchor: "veil",               title: "Veil Image Game" },
+  { page: "help-whisper",     anchor: "whisper",            title: "Whisper" },
   { page: "help-confessions", anchor: "confessions",        title: "Confessions & DM Permissions" },
   { page: "help-wellness",    anchor: "wellness",           title: "Wellness System" },
   { page: "help-self",        anchor: "self-service",       title: "Member Self-Service" },
@@ -51,14 +54,21 @@ function currentSection() {
 function extractSectionContent(doc, anchorId) {
   const start = doc.getElementById(anchorId);
   if (!start) return null;
-  const heading = start.tagName === "H2" ? start : start.closest("h2");
+  let heading;
+  if (start.tagName === "H2" || start.tagName === "H3") {
+    heading = start;
+  } else {
+    heading = start.closest("h2");
+  }
   if (!heading) return null;
+  const isH3 = heading.tagName === "H3";
   const frag = document.createDocumentFragment();
   let node = heading;
   while (node) {
     const next = node.nextElementSibling;
     frag.appendChild(node.cloneNode(true));
-    if (next && next.tagName === "H2") break;
+    if (!next) break;
+    if (next.tagName === "H2" || (isH3 && next.tagName === "H3")) break;
     node = next;
   }
   return frag;
