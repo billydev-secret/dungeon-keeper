@@ -7,9 +7,11 @@ import logging
 import os
 import tempfile
 import time
+import urllib.request
 from pathlib import Path
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import discord
 from discord import app_commands
@@ -977,11 +979,168 @@ _PROMPT_HOW_TO_PLAY = (
     "can be answers and submit images."
 )
 
-_PROMPT_SUBMIT_INSTRUCTIONS = (
-    "Use `/veil submit` and attach an NSFW image. The bot will run an "
-    "auto-crop pipeline and let you pick from a few crops; click **Post** "
-    "when you're happy with one. You'll get a preview before it goes live."
-)
+
+def _fetch_url_bytes(url: str, max_bytes: int) -> bytes:
+    """Synchronous URL fetch with a hard byte cap. Raises on error."""
+    req = urllib.request.Request(url, headers={"User-Agent": "DungeonKeeper-Bot/1.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+        data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"response exceeds {max_bytes // (1024 * 1024)} MB limit")
+    return data
+
+
+async def _pipeline_and_open_editor(
+    interaction: discord.Interaction,
+    bot: "Bot",
+    config: VeilConfig,
+    image_bytes: bytes,
+    *,
+    original_ext: str = ".jpg",
+) -> None:
+    """Run the detection pipeline and open the crop-editor view.
+
+    Expects the interaction to already be deferred (ephemeral).
+    Uses ``interaction.followup`` for all responses.
+    """
+    assert interaction.guild
+
+    dim_ok, img_w, img_h = await asyncio.to_thread(
+        _validate_dimensions, image_bytes, config.min_image_dimension_px
+    )
+    if not dim_ok:
+        await interaction.followup.send(
+            f"Image too small. Minimum dimension is {config.min_image_dimension_px}px.",
+            ephemeral=True,
+        )
+        return
+
+    tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=".jpg")
+    tmp_path = Path(tmp_path_str)
+    try:
+        with os.fdopen(tmp_fd, "wb") as f:
+            f.write(image_bytes)
+        pipeline_result = await asyncio.to_thread(
+            run_pipeline, tmp_path, image_bytes, config.crop_difficulty, candidate_count=10
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    sorted_cands = sorted(pipeline_result.candidates, key=lambda d: d.score, reverse=True)
+    candidate_boxes: list[BoundingBox] = []
+    for det in sorted_cands:
+        _exp = enforce_min_size(
+            compute_padded_crop(det.box, config.crop_difficulty, img_w, img_h)
+        )
+        candidate_boxes.append(BoundingBox(
+            max(0.0, _exp.x1), max(0.0, _exp.y1),
+            min(float(img_w), _exp.x2), min(float(img_h), _exp.y2),
+        ))
+
+    if candidate_boxes:
+        initial_crop = candidate_boxes[0]
+        embed_desc = "Move/zoom the red box or press Auto to snap to a detection, then ✓ Post"
+    else:
+        mx, my = img_w * 0.2, img_h * 0.2
+        _exp = enforce_min_size(BoundingBox(mx, my, img_w - mx, img_h - my))
+        initial_crop = BoundingBox(
+            max(0.0, _exp.x1), max(0.0, _exp.y1),
+            min(float(img_w), _exp.x2), min(float(img_h), _exp.y2),
+        )
+        embed_desc = "No detections found — manually frame your crop, then ✓ Post"
+
+    editor_bytes = await asyncio.to_thread(render_crop_editor, image_bytes, initial_crop)
+    await interaction.followup.send(
+        embed=discord.Embed(title="Crop editor", description=embed_desc).set_image(
+            url="attachment://preview.jpg"
+        ),
+        file=discord.File(io.BytesIO(editor_bytes), filename="preview.jpg"),
+        view=CropEditorView(
+            bot,
+            image_bytes=image_bytes,
+            img_w=img_w,
+            img_h=img_h,
+            crop_box=initial_crop,
+            guild_id=interaction.guild.id,
+            veil_channel_id=config.veil_channel_id,
+            submitter_id=interaction.user.id,
+            answer_id=interaction.user.id,
+            difficulty=config.crop_difficulty,
+            candidate_count=len(pipeline_result.candidates),
+            veil_role_id=config.veil_role_id,
+            original_bytes=image_bytes,
+            original_ext=original_ext,
+            candidate_boxes=candidate_boxes,
+        ),
+        ephemeral=True,
+    )
+
+
+_MAX_URL_BYTES = 25 * 1024 * 1024
+
+
+class _VeilSubmitModal(discord.ui.Modal, title="Submit a Veil image"):
+    image_url: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="Image URL",
+        placeholder="Paste a direct link to your image…",
+        required=True,
+        max_length=512,
+    )
+
+    def __init__(self, bot: "Bot") -> None:
+        super().__init__()
+        self._bot = bot
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        url = self.image_url.value.strip()
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            await interaction.followup.send(
+                "Please provide an http or https URL.", ephemeral=True
+            )
+            return
+
+        db_path = self._bot.ctx.db_path
+        config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
+
+        if config.veil_role_id == 0 or config.veil_channel_id == 0:
+            await interaction.followup.send(
+                "Veil is not fully configured. Ask an admin to run `/veil setup`.",
+                ephemeral=True,
+            )
+            return
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if not member or not _has_veil_role(member, config.veil_role_id):
+            await interaction.followup.send(
+                "You need the Veil role to submit.", ephemeral=True
+            )
+            return
+
+        try:
+            image_bytes = await asyncio.to_thread(
+                _fetch_url_bytes, url, _MAX_URL_BYTES
+            )
+        except Exception as exc:
+            await interaction.followup.send(
+                f"Could not download that URL: {exc}", ephemeral=True
+            )
+            return
+
+        if not _validate_size(len(image_bytes), config.max_image_size_mb):
+            await interaction.followup.send(
+                f"Image too large. Maximum is {config.max_image_size_mb} MB.",
+                ephemeral=True,
+            )
+            return
+
+        original_ext = (Path(parsed.path).suffix or ".jpg").lower()
+        await _pipeline_and_open_editor(
+            interaction, self._bot, config, image_bytes, original_ext=original_ext
+        )
 
 
 def _prompt_embed() -> discord.Embed:
@@ -998,8 +1157,9 @@ def _prompt_embed() -> discord.Embed:
 class VeilPromptView(discord.ui.View):
     """Persistent view attached to the channel-bottom prompt message."""
 
-    def __init__(self) -> None:
+    def __init__(self, bot: "Bot") -> None:
         super().__init__(timeout=None)
+        self._bot = bot
 
         submit_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label="🎭 Submit Veil",
@@ -1018,9 +1178,7 @@ class VeilPromptView(discord.ui.View):
         self.add_item(help_btn)
 
     async def _on_submit(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(
-            _PROMPT_SUBMIT_INSTRUCTIONS, ephemeral=True
-        )
+        await interaction.response.send_modal(_VeilSubmitModal(self._bot))
 
     async def _on_help(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(
@@ -1050,7 +1208,7 @@ async def _repost_prompt(
             pass
 
     try:
-        new_msg = await channel.send(embed=_prompt_embed(), view=VeilPromptView())
+        new_msg = await channel.send(embed=_prompt_embed(), view=VeilPromptView(bot))
     except discord.HTTPException:
         log.exception("veil: failed to post channel prompt in guild %d", guild_id)
         return
@@ -1089,7 +1247,7 @@ class VeilCog(commands.Cog):
             self.bot.add_view(
                 GameView(self.bot, rid, solved=False, guess_count=count)
             )
-        self.bot.add_view(VeilPromptView())
+        self.bot.add_view(VeilPromptView(self.bot))
         log.info("veil: re-registered %d persistent GameViews (cap %d)",
                  len(round_ids), _COG_LOAD_VIEW_CAP)
 
@@ -1211,80 +1369,10 @@ class VeilCog(commands.Cog):
             return
 
         image_bytes = await image.read()
-
-        dim_ok, img_w, img_h = await asyncio.to_thread(
-            _validate_dimensions, image_bytes, config.min_image_dimension_px
-        )
-        if not dim_ok:
-            await interaction.followup.send(
-                f"Image too small. Minimum dimension is {config.min_image_dimension_px}px.", ephemeral=True
-            )
-            return
-
-        tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=".jpg")
-        tmp_path = Path(tmp_path_str)
-        try:
-            with os.fdopen(tmp_fd, "wb") as f:
-                f.write(image_bytes)
-
-            pipeline_result = await asyncio.to_thread(
-                run_pipeline,
-                tmp_path,
-                image_bytes,
-                config.crop_difficulty,
-                candidate_count=10,
-            )
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-        sorted_cands = sorted(pipeline_result.candidates, key=lambda d: d.score, reverse=True)
-        candidate_boxes: list[BoundingBox] = []
-        for det in sorted_cands:
-            _exp = enforce_min_size(compute_padded_crop(det.box, config.crop_difficulty, img_w, img_h))
-            candidate_boxes.append(BoundingBox(
-                max(0.0, _exp.x1), max(0.0, _exp.y1),
-                min(float(img_w), _exp.x2), min(float(img_h), _exp.y2),
-            ))
-
-        if candidate_boxes:
-            initial_crop = candidate_boxes[0]
-            embed_desc = "Move/zoom the red box or press Auto to snap to a detection, then ✓ Post"
-        else:
-            # No detections — default to centre 60% so the user has something to work with
-            mx, my = img_w * 0.2, img_h * 0.2
-            _exp = enforce_min_size(BoundingBox(mx, my, img_w - mx, img_h - my))
-            initial_crop = BoundingBox(
-                max(0.0, _exp.x1), max(0.0, _exp.y1),
-                min(float(img_w), _exp.x2), min(float(img_h), _exp.y2),
-            )
-            embed_desc = "No detections found — manually frame your crop, then ✓ Post"
-
-        editor_bytes = await asyncio.to_thread(render_crop_editor, image_bytes, initial_crop)
         original_ext = (Path(image.filename).suffix or ".jpg").lower()
-        await interaction.followup.send(
-            embed=discord.Embed(
-                title="Crop editor",
-                description=embed_desc,
-            ).set_image(url="attachment://preview.jpg"),
-            file=discord.File(io.BytesIO(editor_bytes), filename="preview.jpg"),
-            view=CropEditorView(
-                self.bot,
-                image_bytes=image_bytes,
-                img_w=img_w,
-                img_h=img_h,
-                crop_box=initial_crop,
-                guild_id=interaction.guild.id,
-                veil_channel_id=config.veil_channel_id,
-                submitter_id=interaction.user.id,
-                answer_id=interaction.user.id,
-                difficulty=config.crop_difficulty,
-                candidate_count=len(pipeline_result.candidates),
-                veil_role_id=config.veil_role_id,
-                original_bytes=image_bytes,
-                original_ext=original_ext,
-                candidate_boxes=candidate_boxes,
-            ),
-            ephemeral=True,
+
+        await _pipeline_and_open_editor(
+            interaction, self.bot, config, image_bytes, original_ext=original_ext
         )
 
 

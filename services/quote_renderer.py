@@ -16,6 +16,7 @@ from pathlib import Path
 _ASSETS = Path("assets") / "fonts"
 _INTER = _ASSETS / "Inter-Regular.ttf"
 _LORA = _ASSETS / "Lora-Regular.ttf"
+_BORDER = Path("assests") / "border.png"
 
 QUOTE_MAX_CHARS = 280
 
@@ -129,6 +130,7 @@ def _build_background(
     width: int,
     height: int,
     theme: QuoteTheme,
+    offset_x: int = 0,
 ):
     from PIL import Image, ImageEnhance, ImageFilter  # noqa: PLC0415
 
@@ -138,7 +140,7 @@ def _build_background(
     scale = max(width / aw, height / ah)
     new_w, new_h = int(aw * scale), int(ah * scale)
     avatar = avatar.resize((new_w, new_h), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
-    left = (new_w - width) // 2
+    left = max(0, min((new_w - width) // 2 + offset_x, new_w - width))
     top = (new_h - height) // 2
     avatar = avatar.crop((left, top, left + width, top + height))
 
@@ -188,21 +190,30 @@ def render_quote_card(
     the author name offset at 45 deg (lower-right) from the pfp centre.
     """
     from PIL import Image, ImageDraw  # noqa: PLC0415
-    import math  # noqa: PLC0415
 
     if len(text) > QUOTE_MAX_CHARS:
         text = text[:QUOTE_MAX_CHARS - 1] + "…"
 
-    bg = _build_background(avatar_bytes, width, height, theme)
+    # Shift bg left 20% so the face sits left-of-centre in the blurred backdrop
+    bg = _build_background(avatar_bytes, width, height, theme, offset_x=int(width * 0.20))
     draw = ImageDraw.Draw(bg)
 
-    # Layout constants
-    text_pad_l = int(width * 0.07)
-    text_col_w = int(width * 0.52)
+    # Gold gradient denser toward bottom-right (flower corner)
+    _grad = Image.new("L", (width, height))
+    _grad_px = _grad.load()
+    assert _grad_px is not None
+    for _gy in range(height):
+        for _gx in range(width):
+            _grad_px[_gx, _gy] = int(((_gx / width) * (_gy / height)) ** 0.5 * 90)
+    bg.paste(Image.new("RGB", (width, height), theme.overlay_color), mask=_grad)
 
-    pfp_r = int(min(width, height) * 0.16)   # radius of the circular pfp
-    pfp_cx = int(width * 0.76)
+    # Layout: pfp on LEFT, text on RIGHT (flipped from original)
+    pfp_r = int(min(width, height) * 0.16)
+    pfp_cx = int(width * 0.24)
     pfp_cy = height // 2
+
+    text_pad_l = int(width * 0.40)
+    text_col_w = int(width * 0.45)
 
     # Font sizes scale with width
     body_size = max(26, width // 24)
@@ -215,7 +226,7 @@ def render_quote_card(
     line_h = int(probe[3] - probe[1])
     line_gap = max(6, line_h // 5)
 
-    # Quote text - left-aligned, vertically centred
+    # Quote text - left-aligned within right column, vertically centred
     lines = _wrap_text(f"“{text}”", body_font, text_col_w, draw)
     text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
     text_y = (height - text_block_h) // 2
@@ -241,14 +252,27 @@ def render_quote_card(
         width=3,
     )
 
-    # Author name at 45° diagonal from pfp centre (lower-right)
+    # Author name centred below the pfp
     if author_name:
         attr_text = f"— {author_name}"
-        dist = pfp_r + int(height * 0.05)
-        ax = pfp_cx + int(dist * math.cos(math.radians(45)))
-        ay = pfp_cy + int(dist * math.sin(math.radians(45)))
+        attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
+        attr_w = attr_bbox[2] - attr_bbox[0]
+        ax = pfp_cx - attr_w // 2
+        ay = pfp_cy + pfp_r + int(height * 0.04)
         draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
         draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
+
+    # Border overlay — flip horizontally so poppies land in bottom-right (away from pfp)
+    if _BORDER.exists():
+        border = Image.open(_BORDER).convert("RGBA")
+        border = border.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        border = border.resize((width, height), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
+        # Use luminance as alpha so solid-black background becomes fully transparent
+        lum = border.convert("RGB").convert("L")
+        border.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))
+        bg_rgba = bg.convert("RGBA")
+        bg_rgba.alpha_composite(border)
+        bg = bg_rgba.convert("RGB")
 
     buf = io.BytesIO()
     bg.save(buf, format="JPEG", quality=jpeg_quality)

@@ -51,7 +51,7 @@ def _make_text_channel(channel_id: int = VEIL_CHANNEL_ID, *, send_returns_id: in
 def test_prompt_view_has_two_buttons_with_stable_custom_ids():
     from cogs.veil_cog import VeilPromptView
 
-    view = VeilPromptView()
+    view = VeilPromptView(MagicMock())
     children = cast(list[discord.ui.Button], view.children)
     custom_ids = {c.custom_id for c in children if c.custom_id}
     assert "veil_prompt_submit" in custom_ids
@@ -62,7 +62,7 @@ def test_prompt_view_has_two_buttons_with_stable_custom_ids():
 def test_prompt_view_is_persistent():
     from cogs.veil_cog import VeilPromptView
 
-    view = VeilPromptView()
+    view = VeilPromptView(MagicMock())
     assert view.timeout is None
 
 
@@ -70,7 +70,7 @@ def test_prompt_view_is_persistent():
 async def test_prompt_submit_button_sends_ephemeral_instructions():
     from cogs.veil_cog import VeilPromptView
 
-    view = VeilPromptView()
+    view = VeilPromptView(MagicMock())
     children = cast(list[discord.ui.Button], view.children)
     submit_btn = next(c for c in children if c.custom_id == "veil_prompt_submit")
     interaction = fake_interaction()
@@ -88,7 +88,7 @@ async def test_prompt_submit_button_sends_ephemeral_instructions():
 async def test_prompt_help_button_sends_ephemeral_rules():
     from cogs.veil_cog import VeilPromptView
 
-    view = VeilPromptView()
+    view = VeilPromptView(MagicMock())
     children = cast(list[discord.ui.Button], view.children)
     help_btn = next(c for c in children if c.custom_id == "veil_prompt_help")
     interaction = fake_interaction()

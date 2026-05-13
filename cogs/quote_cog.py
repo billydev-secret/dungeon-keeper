@@ -21,6 +21,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from services.quote_renderer import FONT_STYLES, THEMES, render_quote_card
+from services.starboard_service import get_starboard_config
 
 if TYPE_CHECKING:
     from app_context import Bot
@@ -196,9 +197,19 @@ class QuotePreviewView(discord.ui.View):
         await interaction.response.edit_message(content="Posted!", embed=None, attachments=[], view=None)
         try:
             file = discord.File(io.BytesIO(self.card_bytes), filename="quote.jpg")
-            await self.channel.send(file=file)
+            posted_msg = await self.channel.send(file=file)
         except discord.HTTPException:
             log.exception("quote: failed to post card to channel")
+            return
+
+        if self.channel.guild:
+            try:
+                with self.bot.ctx.open_db() as conn:
+                    cfg = get_starboard_config(conn, self.channel.guild.id)
+                emoji = cfg["emoji"] if cfg else "⭐"
+                await posted_msg.add_reaction(emoji)
+            except Exception:
+                log.warning("quote: could not add starboard reaction", exc_info=True)
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────
