@@ -174,6 +174,12 @@ class _StealView(discord.ui.View):
         steal.callback = self._on_steal
         self.add_item(steal)
 
+        # Only show "Steal All" when there are multiple emojis to grab
+        if len(emojis) > 1:
+            steal_all: discord.ui.Button = discord.ui.Button(label="Steal All", style=discord.ButtonStyle.success, row=row)  # type: ignore[type-arg]
+            steal_all.callback = self._on_steal_all
+            self.add_item(steal_all)
+
         cancel: discord.ui.Button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=row)  # type: ignore[type-arg]
         cancel.callback = self._on_cancel
         self.add_item(cancel)
@@ -220,6 +226,42 @@ class _StealView(discord.ui.View):
         await interaction.edit_original_response(
             content=f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!"
         )
+
+    async def _on_steal_all(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        guild = self._sel_guild
+        all_emojis = list(self._emoji_map.values())
+        await interaction.response.edit_message(
+            content=f"Stealing {len(all_emojis)} emojis...", view=None
+        )
+        added: list[discord.Emoji] = []
+        failed: list[tuple[str, str]] = []
+        for animated, name, emoji_id in all_emojis:
+            try:
+                data = await _fetch_bytes(_emoji_url(emoji_id, animated))
+                new_emoji = await _upload(guild, name, data)
+                added.append(new_emoji)
+            except discord.Forbidden:
+                await interaction.edit_original_response(
+                    content=f"I don't have **Manage Expressions** in **{guild.name}**."
+                )
+                return
+            except discord.HTTPException as exc:
+                failed.append((name, exc.text or str(exc)))
+            except httpx.HTTPError as exc:
+                failed.append((name, str(exc)))
+
+        lines: list[str] = []
+        if added:
+            emoji_str = " ".join(str(e) for e in added)
+            lines.append(
+                f"Added **{len(added)}** emoji{'s' if len(added) != 1 else ''} "
+                f"to **{guild.name}**: {emoji_str}"
+            )
+        if failed:
+            fail_str = ", ".join(f"`:{n}:` ({r})" for n, r in failed)
+            lines.append(f"Failed **{len(failed)}**: {fail_str}")
+        await interaction.edit_original_response(content="\n".join(lines))
 
 
 # ---------------------------------------------------------------------------

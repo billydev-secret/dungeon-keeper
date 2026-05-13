@@ -1066,6 +1066,46 @@ async def _handle_guess_outcome(
 _GUESS_PAGE_SIZE = 25
 
 
+class _WhisperFilterModal(discord.ui.Modal, title="Filter names"):
+    query: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="Search",
+        placeholder="Type a name…",
+        required=True,
+        max_length=50,
+    )
+
+    def __init__(self, parent: WhisperGuessSelectView) -> None:
+        super().__init__()
+        self._parent = parent
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        q = self.query.value.strip()
+        q_lower = q.lower()
+
+        def _score(m: discord.Member) -> int:
+            name = m.display_name.lower()
+            if name == q_lower:
+                return 4
+            if name.startswith(q_lower):
+                return 3
+            if q_lower in name:
+                return 2
+            it = iter(name)
+            if all(c in it for c in q_lower):
+                return 1
+            return 0
+
+        scored = sorted(
+            ((m, _score(m)) for m in self._parent._all_members),
+            key=lambda x: -x[1],
+        )
+        self._parent._display_members = [m for m, s in scored if s > 0]
+        self._parent._filter_query = q
+        self._parent._page = 0
+        self._parent._rebuild()
+        await interaction.response.edit_message(view=self._parent)
+
+
 class WhisperGuessMemberSelect(discord.ui.Select):
     def __init__(
         self,
@@ -1073,6 +1113,8 @@ class WhisperGuessMemberSelect(discord.ui.Select):
         whisper_id: int,
         members: Sequence[discord.Member],
         page: int,
+        *,
+        placeholder: str = "Pick the sender…",
     ) -> None:
         page_members = members[page * _GUESS_PAGE_SIZE:(page + 1) * _GUESS_PAGE_SIZE]
         options = [
@@ -1080,7 +1122,7 @@ class WhisperGuessMemberSelect(discord.ui.Select):
             for m in page_members
         ]
         super().__init__(
-            placeholder="Pick the sender…",
+            placeholder=placeholder[:150],
             options=options,
             min_values=1,
             max_values=1,
@@ -1115,46 +1157,102 @@ class WhisperGuessSelectView(discord.ui.View):
         bot: Bot,
         whisper_id: int,
         members: Sequence[discord.Member],
-        page: int = 0,
     ) -> None:
         super().__init__(timeout=120)
         self.bot = bot
         self.whisper_id = whisper_id
-        self.members = members
-        self.page = page
-        total_pages = (len(members) + _GUESS_PAGE_SIZE - 1) // _GUESS_PAGE_SIZE
+        self._all_members = list(members)
+        self._display_members = self._all_members
+        self._filter_query = ""
+        self._page = 0
+        self._rebuild()
 
-        self.add_item(WhisperGuessMemberSelect(bot, whisper_id, members, page))
+    def _page_count(self) -> int:
+        return max(1, (len(self._display_members) + _GUESS_PAGE_SIZE - 1) // _GUESS_PAGE_SIZE)
 
-        if len(members) > _GUESS_PAGE_SIZE:
-            prev_btn = discord.ui.Button(
-                label="Prev",
-                style=discord.ButtonStyle.secondary,
-                disabled=(page == 0),
-                row=1,
+    def _rebuild(self) -> None:
+        self.clear_items()
+        page_count = self._page_count()
+
+        if self._filter_query:
+            n = len(self._display_members)
+            placeholder = f'🔍 "{self._filter_query}" — {n} match{"es" if n != 1 else ""}'
+            if page_count > 1:
+                placeholder += f" ({self._page + 1}/{page_count})"
+        elif page_count > 1:
+            placeholder = f"Pick the sender… ({self._page + 1}/{page_count})"
+        else:
+            placeholder = "Pick the sender…"
+
+        if self._display_members:
+            self.add_item(WhisperGuessMemberSelect(
+                self.bot, self.whisper_id, self._display_members, self._page,
+                placeholder=placeholder,
+            ))
+        else:
+            empty: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
+                placeholder="No members match that search.",
+                options=[discord.SelectOption(label="No results", value="__none__")],
+                disabled=True,
+                row=0,
             )
-            next_btn = discord.ui.Button(
-                label="Next",
+            self.add_item(empty)
+
+        if page_count > 1:
+            prev_btn = discord.ui.Button(
+                label="◀",
                 style=discord.ButtonStyle.secondary,
-                disabled=(page >= total_pages - 1),
+                disabled=(self._page == 0),
                 row=1,
             )
             prev_btn.callback = self._on_prev
-            next_btn.callback = self._on_next
             self.add_item(prev_btn)
+
+            next_btn = discord.ui.Button(
+                label="▶",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self._page >= page_count - 1),
+                row=1,
+            )
+            next_btn.callback = self._on_next
             self.add_item(next_btn)
 
-    async def _on_prev(self, interaction: discord.Interaction) -> None:
-        new_view = WhisperGuessSelectView(
-            self.bot, self.whisper_id, self.members, self.page - 1
+        filter_btn = discord.ui.Button(
+            label="🔍 Filter",
+            style=discord.ButtonStyle.secondary,
+            row=1,
         )
-        await interaction.response.edit_message(view=new_view)
+        filter_btn.callback = self._on_filter
+        self.add_item(filter_btn)
+
+        if self._filter_query:
+            clear_btn = discord.ui.Button(
+                label="✕ Clear",
+                style=discord.ButtonStyle.danger,
+                row=1,
+            )
+            clear_btn.callback = self._on_clear_filter
+            self.add_item(clear_btn)
+
+    async def _on_prev(self, interaction: discord.Interaction) -> None:
+        self._page = max(0, self._page - 1)
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
 
     async def _on_next(self, interaction: discord.Interaction) -> None:
-        new_view = WhisperGuessSelectView(
-            self.bot, self.whisper_id, self.members, self.page + 1
-        )
-        await interaction.response.edit_message(view=new_view)
+        self._page = min(self._page_count() - 1, self._page + 1)
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_filter(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(_WhisperFilterModal(self))
+
+    async def _on_clear_filter(self, interaction: discord.Interaction) -> None:
+        self._display_members = self._all_members
+        self._filter_query = ""
+        self._page = 0
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
 
 
 # ── Persistent feed-channel view (Send / Check / Check Hidden) ───────────────

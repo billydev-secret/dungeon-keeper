@@ -218,7 +218,7 @@ async def test_guess_select_next_advances_page():
     _, kwargs = interaction.response.edit_message.call_args
     new_view = kwargs["view"]
     assert isinstance(new_view, WhisperGuessSelectView)
-    assert new_view.page == 1
+    assert new_view._page == 1
 
 
 @pytest.mark.asyncio
