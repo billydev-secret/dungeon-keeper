@@ -196,10 +196,13 @@ def render_quote_card(
     # Blurred background, face offset left 20%
     bg = _build_background(avatar_bytes, width, height, theme, offset_x=int(width * 0.20))
 
-    # Rounded rectangle clip matching border frame corner radius
+    # Clip to just inside the frame inner edges with a uniform 3px gap.
+    # Frame inner edges at 900x500: top/bottom ~28px, left/right ~59px.
+    _ix = max(4, int(width * 0.068))   # ~62px at 900
+    _iy = max(4, int(height * 0.062))  # ~31px at 500
     rr_mask = Image.new("L", (width, height), 0)
     ImageDraw.Draw(rr_mask).rounded_rectangle(
-        (10, 10, width - 10, height - 10), radius=32, fill=255,
+        (_ix, _iy, width - _ix, height - _iy), radius=50, fill=255,
     )
     bg = Image.composite(bg, Image.new("RGB", (width, height), (0, 0, 0)), rr_mask)
 

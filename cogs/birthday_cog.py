@@ -17,6 +17,7 @@ from db_utils import get_config_value, open_db
 from services.birthday_service import (
     MAX_DAYS as _MAX_DAYS,
     delete_birthday as _delete_birthday,
+    get_birthday_preference as _get_birthday_preference,
     mark_announced as _mark_announced,
     todays_unannounced as _todays_unannounced,
     upsert_birthday as _upsert_birthday,
@@ -59,6 +60,10 @@ async def _announce_for_guild(
         member = guild.get_member(user_id)
         mention = member.mention if member else f"<@{user_id}>"
         text = template.replace("{mention}", mention)
+        with open_db(db_path) as conn:
+            preference = _get_birthday_preference(conn, guild.id, user_id)
+        if preference:
+            text += f"\n*Birthday request: {preference}*"
         try:
             await channel.send(
                 text,
@@ -143,6 +148,12 @@ class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
         min_length=1,
         max_length=2,
     )
+    preference: discord.ui.TextInput = discord.ui.TextInput(
+        label="Birthday request (optional)",
+        placeholder="e.g. Ping me with cake reactions!",
+        required=False,
+        max_length=100,
+    )
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -179,8 +190,9 @@ class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
             )
             return
 
+        pref = self.preference.value.strip() or None
         with self._ctx.open_db() as conn:
-            _upsert_birthday(conn, guild_id, interaction.user.id, m, d, interaction.user.id)
+            _upsert_birthday(conn, guild_id, interaction.user.id, m, d, interaction.user.id, pref)
 
         await interaction.response.send_message(
             f"Your birthday has been set to **{calendar.month_name[m]} {d}**.",

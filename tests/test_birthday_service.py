@@ -49,7 +49,7 @@ def test_upsert_inserts_new_birthday(db):
     with open_db(db) as conn:
         upsert_birthday(conn, GUILD, USER_A, 7, 15, MOD)
         rows = list_all_birthdays(conn, GUILD)
-    assert rows == [(USER_A, 7, 15)]
+    assert rows == [(USER_A, 7, 15, None)]
 
 
 def test_upsert_overwrites_existing(db):
@@ -57,7 +57,7 @@ def test_upsert_overwrites_existing(db):
         upsert_birthday(conn, GUILD, USER_A, 7, 15, MOD)
         upsert_birthday(conn, GUILD, USER_A, 3, 1, MOD)
         rows = list_all_birthdays(conn, GUILD)
-    assert rows == [(USER_A, 3, 1)]
+    assert rows == [(USER_A, 3, 1, None)]
 
 
 def test_upsert_multiple_users(db):
@@ -66,7 +66,22 @@ def test_upsert_multiple_users(db):
         upsert_birthday(conn, GUILD, USER_B, 6, 5, MOD)
         rows = list_all_birthdays(conn, GUILD)
     # Ordered by month then day
-    assert rows == [(USER_B, 6, 5), (USER_A, 6, 10)]
+    assert rows == [(USER_B, 6, 5, None), (USER_A, 6, 10, None)]
+
+
+def test_upsert_stores_preference(db):
+    with open_db(db) as conn:
+        upsert_birthday(conn, GUILD, USER_A, 7, 15, MOD, preference="Cake and chaos!")
+        rows = list_all_birthdays(conn, GUILD)
+    assert rows == [(USER_A, 7, 15, "Cake and chaos!")]
+
+
+def test_upsert_clears_preference_when_omitted(db):
+    with open_db(db) as conn:
+        upsert_birthday(conn, GUILD, USER_A, 7, 15, MOD, preference="old request")
+        upsert_birthday(conn, GUILD, USER_A, 7, 15, MOD)
+        rows = list_all_birthdays(conn, GUILD)
+    assert rows == [(USER_A, 7, 15, None)]
 
 
 # ── delete_birthday ───────────────────────────────────────────────────
@@ -77,7 +92,7 @@ def test_delete_existing_birthday(db):
         upsert_birthday(conn, GUILD, USER_A, 7, 15, MOD)
         removed = delete_birthday(conn, GUILD, USER_A)
         assert removed is True
-        assert list_all_birthdays(conn, GUILD) == []
+        assert list_all_birthdays(conn, GUILD) == []  # type: ignore[comparison-overlap]
 
 
 def test_delete_nonexistent_birthday(db):
@@ -92,7 +107,7 @@ def test_delete_only_affects_target_user(db):
         upsert_birthday(conn, GUILD, USER_B, 8, 20, MOD)
         delete_birthday(conn, GUILD, USER_A)
         rows = list_all_birthdays(conn, GUILD)
-    assert rows == [(USER_B, 8, 20)]
+    assert rows == [(USER_B, 8, 20, None)]
 
 
 # ── list_all_birthdays ────────────────────────────────────────────────
@@ -109,7 +124,7 @@ def test_list_ordered_by_month_then_day(db):
         upsert_birthday(conn, GUILD, 1002, 1, 1, MOD)
         upsert_birthday(conn, GUILD, 1003, 1, 15, MOD)
         rows = list_all_birthdays(conn, GUILD)
-    assert [(m, d) for _, m, d in rows] == [(1, 1), (1, 15), (12, 25)]
+    assert [(m, d) for _, m, d, _ in rows] == [(1, 1), (1, 15), (12, 25)]
 
 
 def test_list_isolated_by_guild(db):

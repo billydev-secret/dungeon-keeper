@@ -16,18 +16,20 @@ def upsert_birthday(
     month: int,
     day: int,
     set_by: int,
+    preference: str | None = None,
 ) -> None:
     conn.execute(
         """
-        INSERT INTO member_birthdays (guild_id, user_id, birth_month, birth_day, set_by, set_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO member_birthdays (guild_id, user_id, birth_month, birth_day, set_by, set_at, preference)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
             birth_month = excluded.birth_month,
             birth_day   = excluded.birth_day,
             set_by      = excluded.set_by,
-            set_at      = excluded.set_at
+            set_at      = excluded.set_at,
+            preference  = excluded.preference
         """,
-        (guild_id, user_id, month, day, set_by, time.time()),
+        (guild_id, user_id, month, day, set_by, time.time(), preference),
     )
 
 
@@ -43,13 +45,26 @@ def delete_birthday(
 
 def list_all_birthdays(
     conn: sqlite3.Connection, guild_id: int
-) -> list[tuple[int, int, int]]:
+) -> list[tuple[int, int, int, str | None]]:
     rows = conn.execute(
-        "SELECT user_id, birth_month, birth_day FROM member_birthdays "
+        "SELECT user_id, birth_month, birth_day, preference FROM member_birthdays "
         "WHERE guild_id = ? ORDER BY birth_month, birth_day",
         (guild_id,),
     ).fetchall()
-    return [(row["user_id"], row["birth_month"], row["birth_day"]) for row in rows]
+    return [
+        (row["user_id"], row["birth_month"], row["birth_day"], row["preference"])
+        for row in rows
+    ]
+
+
+def get_birthday_preference(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> str | None:
+    row = conn.execute(
+        "SELECT preference FROM member_birthdays WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    ).fetchone()
+    return row["preference"] if row else None
 
 
 def todays_unannounced(

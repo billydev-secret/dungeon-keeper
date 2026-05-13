@@ -105,6 +105,7 @@ const SECTIONS = [
       { id: "voice-master-channels", label: "Voice Master · Channels", module: "./panels/voice-master-channels.js" },
       { id: "voice-master-profiles", label: "Voice Master · Profiles", module: "./panels/voice-master-profiles.js" },
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js" },
+      { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js" },
       { id: "config-ai",          label: "AI Commands",      module: "./panels/config-ai.js" },
       { id: "config-veil",        label: "Veil",             module: "./panels/config-veil.js" },

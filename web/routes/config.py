@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
@@ -1542,6 +1543,58 @@ async def update_birthday(
                     raise HTTPException(400, "Message cannot be empty")
                 set_config_value(conn, "birthday_message", msg, guild_id)
         return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.get("/birthday/calendar")
+async def birthday_calendar(
+    request: Request,
+    days: int = 90,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+
+    def _q():
+        today = date.today()
+        with ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT user_id, birth_month, birth_day, preference FROM member_birthdays"
+                " WHERE guild_id = ? ORDER BY birth_month, birth_day",
+                (guild_id,),
+            ).fetchall()
+            result = []
+            for row in rows:
+                uid = row["user_id"]
+                m, d = row["birth_month"], row["birth_day"]
+                pref = row["preference"]
+                try:
+                    bday_this_year = date(today.year, m, d)
+                except ValueError:
+                    bday_this_year = date(today.year, m, 28)
+                next_bday = bday_this_year if bday_this_year >= today else (
+                    date(today.year + 1, m, d)
+                    if m != 2 or d <= 28
+                    else date(today.year + 1, m, 28)
+                )
+                days_until = (next_bday - today).days
+                if days_until > days:
+                    continue
+                name = _lookup_member_name(uid, guild, conn, guild_id)
+                result.append({
+                    "user_id": str(uid),
+                    "name": name,
+                    "birth_month": m,
+                    "birth_day": d,
+                    "next_date": next_bday.isoformat(),
+                    "days_until": days_until,
+                    "preference": pref,
+                })
+        result.sort(key=lambda x: x["days_until"])
+        return result
 
     return await run_query(_q)
 
