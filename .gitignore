@@ -15,3 +15,9 @@ models/
 lavalink/Lavalink.jar
 lavalink/plugins/
 lavalink/logs/
+*.db
+log.txt
+log_beta_tools.txt
+veil_cache/
+test_*.jpg
+test_*.png

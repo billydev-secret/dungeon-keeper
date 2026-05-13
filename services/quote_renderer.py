@@ -16,7 +16,7 @@ from pathlib import Path
 _ASSETS = Path("assets") / "fonts"
 _INTER = _ASSETS / "Inter-Regular.ttf"
 _LORA = _ASSETS / "Lora-Regular.ttf"
-_BORDER = Path("assests") / "border.png"
+_BORDER = Path("assets") / "border.png"
 
 QUOTE_MAX_CHARS = 280
 
