@@ -11,7 +11,6 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from services.confessions_service import (
-    ERROR_CONFIG_INVALID,
     ERROR_NOT_CONFIGURED,
     ERROR_PANIC_MODE,
     ERROR_REPLIES_DISABLED,
@@ -72,25 +71,23 @@ class DMRequestModal(discord.ui.Modal, title="New DM Request"):
             await self.cog._safe_ephemeral(interaction, ERROR_NOT_CONFIGURED)
             return
         log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if not isinstance(log_channel, discord.TextChannel):
-            await self.cog._safe_ephemeral(interaction, ERROR_CONFIG_INVALID)
-            return
         request_text = str(self.request.value).strip()
         if not request_text:
             await self.cog._safe_ephemeral(interaction, "DM request can't be empty.")
             return
-        emb = discord.Embed(
-            title="New DM Request",
-            description=defang_everyone_here(request_text),
-            timestamp=discord.utils.utcnow(),
-        )
-        emb.add_field(name="Requester", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
-        emb.add_field(name="Guild", value=f"{interaction.guild.name} (`{interaction.guild.id}`)", inline=False)
-        try:
-            await log_channel.send(embed=emb, allowed_mentions=discord.AllowedMentions.none())
-        except discord.HTTPException:
-            await self.cog._safe_ephemeral(interaction, "Failed to submit DM request (missing perms?).")
-            return
+        if isinstance(log_channel, discord.TextChannel):
+            emb = discord.Embed(
+                title="New DM Request",
+                description=defang_everyone_here(request_text),
+                timestamp=discord.utils.utcnow(),
+            )
+            emb.add_field(name="Requester", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
+            emb.add_field(name="Guild", value=f"{interaction.guild.name} (`{interaction.guild.id}`)", inline=False)
+            try:
+                await log_channel.send(embed=emb, allowed_mentions=discord.AllowedMentions.none())
+            except discord.HTTPException:
+                await self.cog._safe_ephemeral(interaction, "Failed to submit DM request (missing perms?).")
+                return
         await self.cog._safe_ephemeral(interaction, "Your DM request was sent to moderators.")
 
 
@@ -160,8 +157,8 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
 
         dest_channel = interaction.guild.get_channel(cfg.dest_channel_id)
         log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if not isinstance(dest_channel, (discord.TextChannel, discord.ForumChannel)) or not isinstance(log_channel, discord.TextChannel):
-            await self.cog._safe_ephemeral(interaction, "Bot config is invalid (missing destination or log channel).")
+        if not isinstance(dest_channel, (discord.TextChannel, discord.ForumChannel)):
+            await self.cog._safe_ephemeral(interaction, "Bot config is invalid (missing destination channel).")
             return
 
         try:
@@ -186,10 +183,11 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
                 return
             forum_thread = forum_result.thread
             root_message_id = forum_thread.id
-            await log_confession(
-                log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
-                dest_channel_id=forum_thread.id, dest_message_id=forum_thread.id, content=content,
-            )
+            if isinstance(log_channel, discord.TextChannel):
+                await log_confession(
+                    log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
+                    dest_channel_id=forum_thread.id, dest_message_id=forum_thread.id, content=content,
+                )
             upsert_thread_post(
                 db_path, guild_id=interaction.guild.id, message_id=root_message_id,
                 channel_id=dest_channel.id, root_message_id=root_message_id,
@@ -214,10 +212,11 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             await self.cog._safe_ephemeral(interaction, "Failed to post confession (missing perms?).")
             return
 
-        await log_confession(
-            log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
-            dest_channel_id=dest_channel.id, dest_message_id=sent.id, content=content,
-        )
+        if isinstance(log_channel, discord.TextChannel):
+            await log_confession(
+                log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
+                dest_channel_id=dest_channel.id, dest_message_id=sent.id, content=content,
+            )
         upsert_thread_post(
             db_path, guild_id=interaction.guild.id, message_id=sent.id,
             channel_id=dest_channel.id, root_message_id=sent.id,
@@ -318,9 +317,6 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             return
 
         log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if not isinstance(log_channel, discord.TextChannel):
-            await self.cog._safe_ephemeral(interaction, "Bot config is invalid.")
-            return
 
         try:
             await interaction.response.defer(ephemeral=True, thinking=True)
@@ -386,11 +382,12 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                     confession_channel_id=reply_channel.parent_id or cfg.dest_channel_id,
                 )
             parent_channel_id = reply_channel.parent_id or cfg.dest_channel_id
-            await log_reply(
-                log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
-                parent_channel_id=parent_channel_id, parent_message_id=self.parent_message_id,
-                reply_channel_id=reply_channel.id, reply_message_id=reply_msg.id, content=content,
-            )
+            if isinstance(log_channel, discord.TextChannel):
+                await log_reply(
+                    log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
+                    parent_channel_id=parent_channel_id, parent_message_id=self.parent_message_id,
+                    reply_channel_id=reply_channel.id, reply_message_id=reply_msg.id, content=content,
+                )
             await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=parent_channel_id)
             await self.cog._safe_complete(interaction)
             return
@@ -428,11 +425,12 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                 reply_channel_id=dest_channel.id, reply_message_id=reply_msg.id,
                 root_message_id=root_message_id,
             )
-        await log_reply(
-            log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
-            parent_channel_id=dest_channel.id, parent_message_id=parent_msg.id,
-            reply_channel_id=dest_channel.id, reply_message_id=reply_msg.id, content=content,
-        )
+        if isinstance(log_channel, discord.TextChannel):
+            await log_reply(
+                log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
+                parent_channel_id=dest_channel.id, parent_message_id=parent_msg.id,
+                reply_channel_id=dest_channel.id, reply_message_id=reply_msg.id, content=content,
+            )
         await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
         await self.cog._safe_complete(interaction)
 

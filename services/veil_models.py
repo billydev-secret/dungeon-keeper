@@ -72,6 +72,9 @@ class VeilRound:
     crop_box_y1: float | None = None
     crop_box_x2: float | None = None
     crop_box_y2: float | None = None
+    round_type: str = "photo"
+    confession_text: str = ""
+    confession_prompt_text: str = ""
 
 
 @dataclass

@@ -186,17 +186,22 @@ def render_quote_card(
 ) -> bytes:
     """Render a quote card with the avatar as a blurred, color-graded background.
 
-    Layout: quote text left-aligned on the left; circular pfp on the right with
-    the author name offset at 45 deg (lower-right) from the pfp centre.
+    Layout: pfp on LEFT, text on RIGHT.
     """
-    from PIL import Image, ImageDraw  # noqa: PLC0415
+    from PIL import Image, ImageDraw, ImageFilter  # noqa: PLC0415
 
     if len(text) > QUOTE_MAX_CHARS:
         text = text[:QUOTE_MAX_CHARS - 1] + "…"
 
-    # Shift bg left 20% so the face sits left-of-centre in the blurred backdrop
+    # Blurred background, face offset left 20%
     bg = _build_background(avatar_bytes, width, height, theme, offset_x=int(width * 0.20))
-    draw = ImageDraw.Draw(bg)
+
+    # Rounded rectangle clip matching border frame corner radius
+    rr_mask = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(rr_mask).rounded_rectangle(
+        (10, 10, width - 10, height - 10), radius=32, fill=255,
+    )
+    bg = Image.composite(bg, Image.new("RGB", (width, height), (0, 0, 0)), rr_mask)
 
     # Gold gradient denser toward bottom-right (flower corner)
     _grad = Image.new("L", (width, height))
@@ -207,52 +212,84 @@ def render_quote_card(
             _grad_px[_gx, _gy] = int(((_gx / width) * (_gy / height)) ** 0.5 * 90)
     bg.paste(Image.new("RGB", (width, height), theme.overlay_color), mask=_grad)
 
-    # Layout: pfp on LEFT, text on RIGHT (flipped from original)
+    # Layout constants
     pfp_r = int(min(width, height) * 0.16)
     pfp_cx = int(width * 0.24)
     pfp_cy = height // 2
+    pfp_d = pfp_r * 2
+    px, py = pfp_cx - pfp_r, pfp_cy - pfp_r
 
     text_pad_l = int(width * 0.40)
     text_col_w = int(width * 0.45)
 
-    # Font sizes scale with width
     body_size = max(26, width // 24)
     attr_size = max(16, width // 40)
     body_font = _load_font(body_size, font_style)
     attr_font = _load_font(attr_size, font_style)
 
-    # Line height
+    draw = ImageDraw.Draw(bg)
     probe = draw.textbbox((0, 0), "Ag", font=body_font)
     line_h = int(probe[3] - probe[1])
     line_gap = max(6, line_h // 5)
 
-    # Quote text - left-aligned within right column, vertically centred
     lines = _wrap_text(f"“{text}”", body_font, text_col_w, draw)
     text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
-    text_y = (height - text_block_h) // 2
+    text_y_start = (height - text_block_h) // 2
 
+    # Soft gaussian text shadow
+    _shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    _sdraw = ImageDraw.Draw(_shadow)
+    _sy = text_y_start
     for line in lines:
-        draw.text((text_pad_l + 2, text_y + 2), line, font=body_font, fill=(0, 0, 0))
+        _sdraw.text((text_pad_l + 4, _sy + 4), line, font=body_font, fill=(0, 0, 0, 170))
+        _sy += line_h + line_gap
+    _shadow = _shadow.filter(ImageFilter.GaussianBlur(radius=5))
+    _bg_rgba = bg.convert("RGBA")
+    _bg_rgba.alpha_composite(_shadow)
+    bg = _bg_rgba.convert("RGB")
+    draw = ImageDraw.Draw(bg)
+
+    # Draw text
+    text_y = text_y_start
+    for line in lines:
         draw.text((text_pad_l, text_y), line, font=body_font, fill=theme.text_color)
         text_y += line_h + line_gap
 
+    # Pfp drop shadow
+    _pfp_sh = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    _soff = pfp_r // 5
+    ImageDraw.Draw(_pfp_sh).ellipse(
+        (px + _soff - 6, py + _soff - 6, px + pfp_d + _soff + 6, py + pfp_d + _soff + 6),
+        fill=(0, 0, 0, 150),
+    )
+    _pfp_sh = _pfp_sh.filter(ImageFilter.GaussianBlur(radius=pfp_r // 3))
+    _bg_rgba = bg.convert("RGBA")
+    _bg_rgba.alpha_composite(_pfp_sh)
+    bg = _bg_rgba.convert("RGB")
+    draw = ImageDraw.Draw(bg)
+
     # Circular pfp — unblurred avatar cropped into a circle
-    pfp_d = pfp_r * 2
     avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
     avatar_img = avatar_img.resize((pfp_d, pfp_d), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
     circle_mask = Image.new("L", (pfp_d, pfp_d), 0)
     ImageDraw.Draw(circle_mask).ellipse((0, 0, pfp_d - 1, pfp_d - 1), fill=255)
-    px, py = pfp_cx - pfp_r, pfp_cy - pfp_r
     bg.paste(avatar_img, (px, py), mask=circle_mask)
+    draw = ImageDraw.Draw(bg)
 
-    # Thin ring around the circle
+    # Double ring: outer cream + inner gold
+    _rg, _rt = 4, 3
+    draw.ellipse(
+        (px - _rg - _rt, py - _rg - _rt, px + pfp_d + _rg + _rt - 1, py + pfp_d + _rg + _rt - 1),
+        outline=(255, 248, 220),
+        width=_rt,
+    )
     draw.ellipse(
         (px - 3, py - 3, px + pfp_d + 2, py + pfp_d + 2),
         outline=theme.attribution_color,
         width=3,
     )
 
-    # Author name centred below the pfp
+    # Author name centred below pfp
     if author_name:
         attr_text = f"— {author_name}"
         attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
@@ -262,17 +299,16 @@ def render_quote_card(
         draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
         draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
 
-    # Border overlay — flip horizontally so poppies land in bottom-right (away from pfp)
+    # Border overlay — flipped so poppies land bottom-right
     if _BORDER.exists():
         border = Image.open(_BORDER).convert("RGBA")
         border = border.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         border = border.resize((width, height), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
-        # Use luminance as alpha so solid-black background becomes fully transparent
         lum = border.convert("RGB").convert("L")
-        border.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))
-        bg_rgba = bg.convert("RGBA")
-        bg_rgba.alpha_composite(border)
-        bg = bg_rgba.convert("RGB")
+        border.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))  # type: ignore[arg-type]
+        _bg_rgba = bg.convert("RGBA")
+        _bg_rgba.alpha_composite(border)
+        bg = _bg_rgba.convert("RGB")
 
     buf = io.BytesIO()
     bg.save(buf, format="JPEG", quality=jpeg_quality)

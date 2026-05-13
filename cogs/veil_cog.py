@@ -27,6 +27,7 @@ from services.veil_pipeline import (
     zoom_crop_box,
 )
 from services.veil_crop_renderer import render_crop, render_crop_editor, render_reveal
+from services.quote_renderer import render_quote
 from services.veil_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
@@ -110,6 +111,9 @@ def _do_insert_round(
     difficulty: str,
     allow_reuse: bool,
     candidate_count: int,
+    round_type: str = "photo",
+    confession_text: str = "",
+    confession_prompt_text: str = "",
 ) -> int:
     with open_db(db_path) as conn:
         return insert_round(
@@ -121,6 +125,9 @@ def _do_insert_round(
             difficulty=difficulty,
             allow_reuse=allow_reuse,
             candidate_count=candidate_count,
+            round_type=round_type,
+            confession_text=confession_text,
+            confession_prompt_text=confession_prompt_text,
         )
 
 
@@ -709,7 +716,11 @@ class GameView(discord.ui.View):
             )
             return
 
-        placeholder = "Who is in this photo?"
+        placeholder = (
+            "Who wrote this?"
+            if round_row and round_row.round_type == "confession"
+            else "Who is in this photo?"
+        )
         await interaction.response.send_message(
             f"Who do you think this is? *(prompt expires in {SELECT_TIMEOUT_SECONDS}s)*",
             view=GuessSelectView(
@@ -1218,6 +1229,119 @@ async def _repost_prompt(
     )
 
 
+class ConfessionPreviewView(discord.ui.View):
+    """Ephemeral preview shown before a confession is posted."""
+
+    def __init__(
+        self,
+        bot: "Bot",
+        text: str,
+        guild_id: int,
+        veil_channel_id: int,
+        *,
+        submitter_id: int,
+    ) -> None:
+        super().__init__(timeout=120)
+        self._bot = bot
+        self._text = text
+        self._guild_id = guild_id
+        self._veil_channel_id = veil_channel_id
+        self._submitter_id = submitter_id
+        self._post_lock = asyncio.Lock()
+        self._posted = False
+
+        post_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="✓ Post",
+            style=discord.ButtonStyle.success,
+        )
+        post_btn.callback = self._on_post
+        self.add_item(post_btn)
+
+        cancel_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="✗ Cancel",
+            style=discord.ButtonStyle.danger,
+        )
+        cancel_btn.callback = self._on_cancel
+        self.add_item(cancel_btn)
+
+    async def _on_cancel(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(
+            content="Confession cancelled.", embed=None, attachments=[], view=None
+        )
+
+    async def _on_post(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild
+        async with self._post_lock:
+            if self._posted:
+                await interaction.response.send_message("Already posted.", ephemeral=True)
+                return
+            self._posted = True
+
+        await interaction.response.defer(ephemeral=True)
+
+        veil_channel = interaction.guild.get_channel(self._veil_channel_id)
+        if veil_channel is None or not isinstance(
+            veil_channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
+        ):
+            await interaction.followup.send(
+                "Veil channel not found — ask an admin to check the config.", ephemeral=True
+            )
+            return
+
+        db_path = self._bot.ctx.db_path
+        round_id = await asyncio.to_thread(
+            _do_insert_round,
+            db_path,
+            guild_id=self._guild_id,
+            submitter_id=self._submitter_id,
+            answer_id=self._submitter_id,
+            channel_id=self._veil_channel_id,
+            difficulty="confession",
+            allow_reuse=False,
+            candidate_count=0,
+            round_type="confession",
+            confession_text=self._text,
+        )
+
+        card_bytes = await asyncio.to_thread(
+            render_quote, self._text, footer=f"Veil #{round_id}"
+        )
+        card_file = discord.File(io.BytesIO(card_bytes), filename="SPOILER_veil_confession.jpg")
+        game_view = GameView(self._bot, round_id)
+        self._bot.add_view(game_view)
+        game_msg = await veil_channel.send(
+            content=None,
+            embed=_game_embed(round_id),
+            file=card_file,
+            view=game_view,
+        )
+
+        crop_url = game_msg.attachments[0].url if game_msg.attachments else ""
+        await asyncio.to_thread(
+            _do_update_round_message, db_path, round_id, game_msg.id, crop_url, ""
+        )
+
+        await asyncio.to_thread(
+            _do_audit, db_path,
+            guild_id=self._guild_id, actor_id=self._submitter_id,
+            action="confess", round_id=round_id,
+            details={},
+        )
+
+        await interaction.edit_original_response(
+            content=f"✅ Posted to {veil_channel.mention}!",
+            embed=None,
+            attachments=[],
+            view=None,
+        )
+
+        try:
+            await _repost_prompt(self._bot, veil_channel, self._guild_id)
+        except Exception:
+            log.exception("veil: prompt repost after confession failed for guild %d", self._guild_id)
+
+
 # ── VeilCog ──────────────────────────────────────────────────────────────────
 
 class VeilCog(commands.Cog):
@@ -1548,6 +1672,53 @@ class VeilCog(commands.Cog):
         await interaction.followup.send(
             f"Welcome to the Veil pool. You can now submit images and be guessed at. "
             f"To leave, ask a mod to remove the {role.mention} role.",
+            ephemeral=True,
+        )
+
+
+    @veil.command(name="confess", description="Submit an anonymous text confession.")
+    @app_commands.describe(text="Your anonymous confession.")
+    async def veil_confess(
+        self,
+        interaction: discord.Interaction,
+        text: str,
+    ) -> None:
+        assert interaction.guild
+        await interaction.response.defer(ephemeral=True)
+
+        db_path = self.bot.ctx.db_path
+        config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
+
+        if config.veil_role_id == 0 or config.veil_channel_id == 0:
+            await interaction.followup.send(
+                "Veil is not fully configured. Ask an admin to run `/veil setup`.",
+                ephemeral=True,
+            )
+            return
+
+        member = interaction.guild.get_member(interaction.user.id)
+        if not member or not _has_veil_role(member, config.veil_role_id):
+            await interaction.followup.send(
+                "You need the Veil role to submit a confession.", ephemeral=True
+            )
+            return
+
+        text = text.strip()
+        if not text:
+            await interaction.followup.send("Confession text cannot be empty.", ephemeral=True)
+            return
+
+        card_bytes = await asyncio.to_thread(render_quote, text)
+        await interaction.followup.send(
+            "Here's your confession card — post it?",
+            file=discord.File(io.BytesIO(card_bytes), filename="confession_preview.jpg"),
+            view=ConfessionPreviewView(
+                self.bot,
+                text,
+                interaction.guild.id,
+                config.veil_channel_id,
+                submitter_id=interaction.user.id,
+            ),
             ephemeral=True,
         )
 

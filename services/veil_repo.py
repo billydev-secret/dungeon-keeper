@@ -77,6 +77,9 @@ def _row_to_round(row: sqlite3.Row) -> VeilRound:
         crop_box_y1=row["crop_box_y1"],
         crop_box_x2=row["crop_box_x2"],
         crop_box_y2=row["crop_box_y2"],
+        round_type=row["round_type"],
+        confession_text=row["confession_text"],
+        confession_prompt_text=row["confession_prompt_text"],
     )
 
 
@@ -95,18 +98,23 @@ def insert_round(
     allow_reuse: bool = False,
     is_reuse: bool = False,
     original_round_id: int | None = None,
+    round_type: str = "photo",
+    confession_text: str = "",
+    confession_prompt_text: str = "",
 ) -> int:
     cur = conn.execute(
         """
         INSERT INTO veil_rounds
             (guild_id, submitter_id, answer_id, channel_id, message_id,
              crop_path, crop_url, difficulty, candidate_count,
-             allow_reuse, is_reuse, original_round_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             allow_reuse, is_reuse, original_round_id, created_at,
+             round_type, confession_text, confession_prompt_text)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (guild_id, submitter_id, answer_id, channel_id, message_id,
          crop_path, crop_url, difficulty, candidate_count,
-         int(allow_reuse), int(is_reuse), original_round_id, time.time()),
+         int(allow_reuse), int(is_reuse), original_round_id, time.time(),
+         round_type, confession_text, confession_prompt_text),
     )
     return cur.lastrowid  # type: ignore[return-value]
 
