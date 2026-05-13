@@ -20,7 +20,7 @@ if "edge_tts" not in sys.modules:
     edge_tts_stub = MagicMock()
     sys.modules["edge_tts"] = edge_tts_stub
 
-from services.tts_service import (  # noqa: E402
+from bot_modules.services.tts_service import (  # noqa: E402
     DEFAULT_VOICE,
     MAX_TEXT_LEN,
     TTSGenerationError,
@@ -85,7 +85,7 @@ async def test_generate_success(cache_dir, monkeypatch):
 
     fake_communicate.save = AsyncMock(side_effect=fake_save)
 
-    import services.tts_service as svc_mod
+    import bot_modules.services.tts_service as svc_mod
 
     monkeypatch.setattr(
         svc_mod.edge_tts, "Communicate", MagicMock(return_value=fake_communicate)
@@ -108,7 +108,7 @@ async def test_generate_treats_empty_output_as_failure(cache_dir, monkeypatch):
 
     fake_communicate.save = AsyncMock(side_effect=fake_save)
 
-    import services.tts_service as svc_mod
+    import bot_modules.services.tts_service as svc_mod
 
     monkeypatch.setattr(
         svc_mod.edge_tts, "Communicate", MagicMock(return_value=fake_communicate)

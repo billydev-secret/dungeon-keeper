@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from services.veil_models import BoundingBox
+from bot_modules.services.veil_models import BoundingBox
 
 
 # ---------------------------------------------------------------------------
@@ -88,8 +88,8 @@ def test_detect_faces_one_face_returns_one_bounding_box():
     patches = _make_mocks([det])
 
     with patch.dict("sys.modules", patches), \
-         patch("services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
-        from services.veil_face_detector import detect_faces  # noqa: PLC0415
+         patch("bot_modules.services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
+        from bot_modules.services.veil_face_detector import detect_faces  # noqa: PLC0415
         result = detect_faces(b"fake")
 
     assert len(result) == 1
@@ -102,8 +102,8 @@ def test_detect_faces_pixel_coords_used_directly():
     patches = _make_mocks([det])
 
     with patch.dict("sys.modules", patches), \
-         patch("services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
-        from services.veil_face_detector import detect_faces  # noqa: PLC0415
+         patch("bot_modules.services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
+        from bot_modules.services.veil_face_detector import detect_faces  # noqa: PLC0415
         result = detect_faces(b"fake")
 
     box = result[0]
@@ -117,8 +117,8 @@ def test_detect_faces_none_detections_returns_empty():
     patches = _make_mocks(None)
 
     with patch.dict("sys.modules", patches), \
-         patch("services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
-        from services.veil_face_detector import detect_faces  # noqa: PLC0415
+         patch("bot_modules.services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
+        from bot_modules.services.veil_face_detector import detect_faces  # noqa: PLC0415
         result = detect_faces(b"fake")
 
     assert result == []
@@ -128,8 +128,8 @@ def test_detect_faces_empty_detections_returns_empty():
     patches = _make_mocks([])
 
     with patch.dict("sys.modules", patches), \
-         patch("services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
-        from services.veil_face_detector import detect_faces  # noqa: PLC0415
+         patch("bot_modules.services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
+        from bot_modules.services.veil_face_detector import detect_faces  # noqa: PLC0415
         result = detect_faces(b"fake")
 
     assert result == []
@@ -141,8 +141,8 @@ def test_detect_faces_multiple_faces():
     patches = _make_mocks([det1, det2])
 
     with patch.dict("sys.modules", patches), \
-         patch("services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
-        from services.veil_face_detector import detect_faces  # noqa: PLC0415
+         patch("bot_modules.services.veil_face_detector._ensure_face_model", return_value=Path("/fake/model.tflite")):
+        from bot_modules.services.veil_face_detector import detect_faces  # noqa: PLC0415
         result = detect_faces(b"fake")
 
     assert len(result) == 2

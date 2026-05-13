@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.db_utils import open_db
-from services.whisper_repo import (
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.whisper_repo import (
     get_whisper_config,
     set_whisper_config_value,
     set_whisper_launcher_message_id,

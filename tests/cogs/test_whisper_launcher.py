@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.whisper_models import WhisperConfig
+from bot_modules.services.whisper_models import WhisperConfig
 
 GUILD_ID = 9001
 FEED_CHANNEL_ID = 8001
@@ -23,7 +23,7 @@ def _cfg(*, channel_id: int = FEED_CHANNEL_ID, launcher_message_id: int = 0) -> 
 
 
 def _make_cog():
-    from cogs.whisper_cog import WhisperCog
+    from bot_modules.cogs.whisper_cog import WhisperCog
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     cog = WhisperCog.__new__(WhisperCog)
@@ -48,8 +48,8 @@ async def test_refresh_creates_launcher_when_none_exists():
     guild.get_channel = MagicMock(return_value=channel)
     cog.bot.get_guild = MagicMock(return_value=guild)
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=0)), \
-         patch("cogs.whisper_cog._do_set_launcher_id") as set_id:
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=0)), \
+         patch("bot_modules.cogs.whisper_cog._do_set_launcher_id") as set_id:
         await cog.refresh_whisper_launcher(GUILD_ID)
 
     channel.send.assert_awaited_once()
@@ -69,8 +69,8 @@ async def test_refresh_deletes_old_launcher_before_posting_new():
     guild.get_channel = MagicMock(return_value=channel)
     cog.bot.get_guild = MagicMock(return_value=guild)
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)), \
-         patch("cogs.whisper_cog._do_set_launcher_id") as set_id:
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)), \
+         patch("bot_modules.cogs.whisper_cog._do_set_launcher_id") as set_id:
         await cog.refresh_whisper_launcher(GUILD_ID)
 
     channel.fetch_message.assert_awaited_once_with(11111)
@@ -84,8 +84,8 @@ async def test_refresh_skips_when_channel_unset():
     cog = _make_cog()
     cog.bot.get_guild = MagicMock(return_value=MagicMock())
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg(channel_id=0)), \
-         patch("cogs.whisper_cog._do_set_launcher_id") as set_id:
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(channel_id=0)), \
+         patch("bot_modules.cogs.whisper_cog._do_set_launcher_id") as set_id:
         await cog.refresh_whisper_launcher(GUILD_ID)
 
     set_id.assert_not_called()
@@ -101,8 +101,8 @@ async def test_refresh_swallows_old_message_fetch_failure():
     guild.get_channel = MagicMock(return_value=channel)
     cog.bot.get_guild = MagicMock(return_value=guild)
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)), \
-         patch("cogs.whisper_cog._do_set_launcher_id") as set_id:
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)), \
+         patch("bot_modules.cogs.whisper_cog._do_set_launcher_id") as set_id:
         await cog.refresh_whisper_launcher(GUILD_ID)
 
     channel.send.assert_awaited_once()
@@ -123,7 +123,7 @@ async def test_on_message_listener_triggers_refresh_in_whisper_channel():
     msg.channel.id = FEED_CHANNEL_ID
     msg.id = 99999  # not the launcher
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
         await cog._on_message_launcher_bump(msg)
 
     cog.refresh_whisper_launcher.assert_awaited_once_with(GUILD_ID)
@@ -143,7 +143,7 @@ async def test_on_message_listener_skips_other_channels():
     msg.channel.id = 7777  # different channel
     msg.id = 99999
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await cog._on_message_launcher_bump(msg)
 
     cog.refresh_whisper_launcher.assert_not_called()
@@ -163,7 +163,7 @@ async def test_on_message_listener_skips_launcher_message_itself():
     msg.channel.id = FEED_CHANNEL_ID
     msg.id = 11111  # IS the launcher
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
         await cog._on_message_launcher_bump(msg)
 
     cog.refresh_whisper_launcher.assert_not_called()
@@ -184,7 +184,7 @@ async def test_on_message_listener_skips_bot_authors():
     msg.channel.id = FEED_CHANNEL_ID
     msg.id = 99999
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(launcher_message_id=11111)):
         await cog._on_message_launcher_bump(msg)
 
     cog.refresh_whisper_launcher.assert_not_called()
@@ -212,7 +212,7 @@ def test_clear_guild_config_deletes_all_whisper_keys():
     from unittest.mock import patch as _patch
     cog = _make_cog()
 
-    with _patch("cogs.whisper_cog.open_db") as mock_open_db:
+    with _patch("bot_modules.cogs.whisper_cog.open_db") as mock_open_db:
         conn_ctx = MagicMock()
         mock_open_db.return_value.__enter__ = MagicMock(return_value=conn_ctx)
         mock_open_db.return_value.__exit__ = MagicMock(return_value=False)
@@ -224,7 +224,7 @@ def test_clear_guild_config_deletes_all_whisper_keys():
 
 @pytest.mark.asyncio
 async def test_cog_load_bootstraps_launcher_in_each_guild():
-    from cogs.whisper_cog import WhisperCog
+    from bot_modules.cogs.whisper_cog import WhisperCog
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"

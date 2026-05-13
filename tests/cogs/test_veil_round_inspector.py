@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from services.veil_models import VeilRound
+from bot_modules.services.veil_models import VeilRound
 from tests.fakes import FakeGuild, FakeMember, fake_interaction
 
 GUILD_ID = 9001
@@ -28,7 +28,7 @@ def _make_round() -> VeilRound:
 
 
 def _make_cog():
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return VeilCog(bot)
@@ -49,7 +49,7 @@ async def test_round_inspector_rejects_non_mod():
     interaction.guild_id = GUILD_ID
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._do_load_round", return_value=_make_round()):
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=_make_round()):
         await _round(cog, interaction, ROUND_ID)
 
     msg = interaction.followup.send.call_args.args[0]
@@ -67,9 +67,9 @@ async def test_round_inspector_returns_embed_for_mod():
     interaction.guild_id = GUILD_ID
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._do_load_round", return_value=_make_round()), \
-         patch("cogs.veil_cog._do_count_guesses_for_round", return_value=12), \
-         patch("cogs.veil_cog._do_count_unique_guessers_for_round", return_value=4):
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=_make_round()), \
+         patch("bot_modules.cogs.veil_cog._do_count_guesses_for_round", return_value=12), \
+         patch("bot_modules.cogs.veil_cog._do_count_unique_guessers_for_round", return_value=4):
         await _round(cog, interaction, ROUND_ID)
 
     call = interaction.followup.send.call_args
@@ -91,7 +91,7 @@ async def test_round_inspector_handles_unknown_round():
     interaction.guild_id = GUILD_ID
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._do_load_round", return_value=None):
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=None):
         await _round(cog, interaction, ROUND_ID)
 
     msg = interaction.followup.send.call_args.args[0]

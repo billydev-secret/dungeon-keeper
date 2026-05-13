@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.db_utils import open_db
-from services.whisper_repo import insert_report, insert_whisper
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.whisper_repo import insert_report, insert_whisper
 
 GUILD, SENDER, TARGET, REPORTER = 9001, 1001, 2001, 3001
 

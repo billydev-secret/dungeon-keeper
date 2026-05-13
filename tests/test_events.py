@@ -9,7 +9,7 @@ import discord
 import pytest
 from discord import app_commands
 
-from cogs.events_cog import EventsCog, _collect_backfill_channels, _on_tree_error
+from bot_modules.cogs.events_cog import EventsCog, _collect_backfill_channels, _on_tree_error
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -83,9 +83,9 @@ def cog():
     return EventsCog(_make_bot(), _make_ctx())
 
 
-@patch("cogs.events_cog.record_member_activity")
-@patch("cogs.events_cog.award_message_xp", new_callable=AsyncMock)
-@patch("cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_bot_message_ignored(mock_spoiler, mock_award, mock_activity, cog):
     mock_spoiler.return_value = False
     await cog.on_message(_make_message(is_bot=True))
@@ -93,9 +93,9 @@ async def test_bot_message_ignored(mock_spoiler, mock_award, mock_activity, cog)
     mock_award.assert_not_called()
 
 
-@patch("cogs.events_cog.record_member_activity")
-@patch("cogs.events_cog.award_message_xp", new_callable=AsyncMock)
-@patch("cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_dm_message_ignored(mock_spoiler, mock_award, mock_activity, cog):
     mock_spoiler.return_value = False
     await cog.on_message(_make_message(guild=None))
@@ -103,11 +103,11 @@ async def test_dm_message_ignored(mock_spoiler, mock_award, mock_activity, cog):
     mock_award.assert_not_called()
 
 
-@patch("cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
-@patch("cogs.events_cog.record_member_activity")
-@patch("cogs.events_cog.auto_delete_rule_exists", return_value=False)
-@patch("cogs.events_cog.award_message_xp", new_callable=AsyncMock)
-@patch("cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_spoiler_violation_stops_processing(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level, cog):
     mock_spoiler.return_value = True
     await cog.on_message(_make_message())
@@ -115,11 +115,11 @@ async def test_spoiler_violation_stops_processing(mock_spoiler, mock_award, mock
     mock_award.assert_not_called()
 
 
-@patch("cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
-@patch("cogs.events_cog.record_member_activity")
-@patch("cogs.events_cog.auto_delete_rule_exists", return_value=False)
-@patch("cogs.events_cog.award_message_xp", new_callable=AsyncMock)
-@patch("cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_normal_message_records_activity(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level, cog):
     mock_spoiler.return_value = False
     mock_award.return_value = None
@@ -127,12 +127,12 @@ async def test_normal_message_records_activity(mock_spoiler, mock_award, mock_ru
     mock_activity.assert_called_once()
 
 
-@patch("cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
-@patch("cogs.events_cog.track_auto_delete_message")
-@patch("cogs.events_cog.record_member_activity")
-@patch("cogs.events_cog.auto_delete_rule_exists", return_value=True)
-@patch("cogs.events_cog.award_message_xp", new_callable=AsyncMock)
-@patch("cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.track_auto_delete_message")
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=True)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_message_tracked_when_rule_exists(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_track, mock_level, cog):
     mock_spoiler.return_value = False
     mock_award.return_value = None
@@ -143,11 +143,11 @@ async def test_message_tracked_when_rule_exists(mock_spoiler, mock_award, mock_r
     assert args[3] == 999
 
 
-@patch("cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
-@patch("cogs.events_cog.record_member_activity")
-@patch("cogs.events_cog.auto_delete_rule_exists", return_value=False)
-@patch("cogs.events_cog.award_message_xp", new_callable=AsyncMock)
-@patch("cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_xp_award_triggers_level_progress(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_level, cog):
     mock_spoiler.return_value = False
     award_result = MagicMock()
@@ -160,11 +160,11 @@ async def test_xp_award_triggers_level_progress(mock_spoiler, mock_award, mock_r
     mock_level.assert_awaited_once()
 
 
-@patch("cogs.events_cog.store_message")
-@patch("cogs.events_cog.record_member_activity")
-@patch("cogs.events_cog.auto_delete_rule_exists", return_value=False)
-@patch("cogs.events_cog.award_message_xp", new_callable=AsyncMock)
-@patch("cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.store_message")
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.auto_delete_rule_exists", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
 async def test_system_message_archives_system_content_without_activity_or_xp(mock_spoiler, mock_award, mock_rule_exists, mock_activity, mock_store, cog):
     msg = _make_message()
     msg.content = ""
@@ -179,7 +179,7 @@ async def test_system_message_archives_system_content_without_activity_or_xp(moc
 
 # ── on_ready ──────────────────────────────────────────────────────────
 
-@patch("cogs.events_cog.asyncio.create_task")
+@patch("bot_modules.cogs.events_cog.asyncio.create_task")
 async def test_on_ready_does_not_spawn_duplicate_backfill_task(mock_create_task):
     ctx = _make_ctx()
     bot = _make_bot()
@@ -200,7 +200,7 @@ async def test_on_ready_does_not_spawn_duplicate_backfill_task(mock_create_task)
 
 # ── on_raw_message_delete ─────────────────────────────────────────────
 
-@patch("services.auto_delete_service.remove_tracked_auto_delete_message")
+@patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_message")
 async def test_no_guild_id_ignored_on_delete(mock_remove):
     ctx = _make_ctx()
     cog = EventsCog(_make_bot(), ctx)
@@ -210,7 +210,7 @@ async def test_no_guild_id_ignored_on_delete(mock_remove):
     mock_remove.assert_not_called()
 
 
-@patch("services.auto_delete_service.remove_tracked_auto_delete_message")
+@patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_message")
 async def test_with_guild_id_clears_auto_delete_tracking(mock_remove):
     """Auto-delete tracking is per-message bookkeeping and is cleared, but the
     messages table itself is a permanent archive — see _archive_only test."""
@@ -233,7 +233,7 @@ async def test_message_archive_is_permanent_on_delete():
     payload.guild_id = 1
     payload.channel_id = 10
     payload.message_id = 999
-    with patch("services.auto_delete_service.remove_tracked_auto_delete_message"):
+    with patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_message"):
         await cog.on_raw_message_delete(payload)
     # No DB connection should be opened to mutate the messages table.
     ctx.open_db.assert_not_called()
@@ -241,7 +241,7 @@ async def test_message_archive_is_permanent_on_delete():
 
 # ── on_raw_bulk_message_delete ────────────────────────────────────────
 
-@patch("services.auto_delete_service.remove_tracked_auto_delete_messages")
+@patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_messages")
 async def test_no_guild_id_ignored_on_bulk_delete(mock_remove):
     ctx = _make_ctx()
     cog = EventsCog(_make_bot(), ctx)
@@ -251,7 +251,7 @@ async def test_no_guild_id_ignored_on_bulk_delete(mock_remove):
     mock_remove.assert_not_called()
 
 
-@patch("services.auto_delete_service.remove_tracked_auto_delete_messages")
+@patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_messages")
 async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove):
     """Same as the single-delete case: clear tracking, but never touch the
     messages table itself (the archive is permanent)."""
@@ -268,8 +268,8 @@ async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove):
 
 # ── on_raw_reaction_add ───────────────────────────────────────────────
 
-@patch("cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
-@patch("cogs.events_cog.award_image_reaction_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.award_image_reaction_xp", new_callable=AsyncMock)
 async def test_no_award_no_level_progress(mock_award, mock_level):
     ctx = _make_ctx()
     cog = EventsCog(_make_bot(), ctx)
@@ -279,8 +279,8 @@ async def test_no_award_no_level_progress(mock_award, mock_level):
     mock_level.assert_not_awaited()
 
 
-@patch("cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
-@patch("cogs.events_cog.award_image_reaction_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.award_image_reaction_xp", new_callable=AsyncMock)
 async def test_award_triggers_level_progress(mock_award, mock_level):
     ctx = _make_ctx()
     cog = EventsCog(_make_bot(), ctx)

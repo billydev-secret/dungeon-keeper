@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.db_utils import open_db
-from services.whisper_repo import (
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.whisper_repo import (
     get_whisper,
     insert_whisper,
     list_received,
@@ -81,7 +81,7 @@ def test_list_received_excludes_other_guilds(sync_db_path: Path):
 
 def test_delete_whisper(sync_db_path: Path):
     with open_db(sync_db_path) as conn:
-        from services.whisper_repo import delete_whisper
+        from bot_modules.services.whisper_repo import delete_whisper
         wid = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="x")
         assert get_whisper(conn, wid) is not None
         delete_whisper(conn, wid)
@@ -90,7 +90,7 @@ def test_delete_whisper(sync_db_path: Path):
 
 def test_list_received_in_states_combines_filters(sync_db_path: Path):
     with open_db(sync_db_path) as conn:
-        from services.whisper_repo import list_received_in_states
+        from bot_modules.services.whisper_repo import list_received_in_states
         wp = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="p")
         ws = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="s")
         wh = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="h")

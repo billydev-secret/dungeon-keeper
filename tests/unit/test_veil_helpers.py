@@ -15,23 +15,23 @@ def _make_jpeg(width: int, height: int) -> bytes:
 
 class TestHasVeilRole:
     def test_member_with_role_returns_true(self):
-        from cogs.veil_cog import _has_veil_role
+        from bot_modules.cogs.veil_cog import _has_veil_role
         m = FakeMember(roles=[FakeRole(id=777)])
         assert _has_veil_role(m, 777) is True
 
     def test_member_without_role_returns_false(self):
-        from cogs.veil_cog import _has_veil_role
+        from bot_modules.cogs.veil_cog import _has_veil_role
         m = FakeMember(roles=[FakeRole(id=999)])
         assert _has_veil_role(m, 777) is False
 
     def test_member_with_no_roles_returns_false(self):
-        from cogs.veil_cog import _has_veil_role
+        from bot_modules.cogs.veil_cog import _has_veil_role
         m = FakeMember(roles=[])
         assert _has_veil_role(m, 777) is False
 
     def test_role_id_zero_fails_closed(self):
         """An unconfigured Veil role (id 0) must deny everyone — never fall open."""
-        from cogs.veil_cog import _has_veil_role
+        from bot_modules.cogs.veil_cog import _has_veil_role
         m = FakeMember(roles=[])
         assert _has_veil_role(m, 0) is False
         m_with_roles = FakeMember(roles=[FakeRole(id=42)])
@@ -40,55 +40,55 @@ class TestHasVeilRole:
 
 class TestValidateMime:
     def test_jpeg_accepted(self):
-        from cogs.veil_cog import _validate_mime
+        from bot_modules.cogs.veil_cog import _validate_mime
         assert _validate_mime("image/jpeg") is True
 
     def test_png_accepted(self):
-        from cogs.veil_cog import _validate_mime
+        from bot_modules.cogs.veil_cog import _validate_mime
         assert _validate_mime("image/png") is True
 
     def test_video_rejected(self):
-        from cogs.veil_cog import _validate_mime
+        from bot_modules.cogs.veil_cog import _validate_mime
         assert _validate_mime("video/mp4") is False
 
     def test_none_rejected(self):
-        from cogs.veil_cog import _validate_mime
+        from bot_modules.cogs.veil_cog import _validate_mime
         assert _validate_mime(None) is False
 
 
 class TestValidateSize:
     def test_within_limit(self):
-        from cogs.veil_cog import _validate_size
+        from bot_modules.cogs.veil_cog import _validate_size
         assert _validate_size(5 * 1024 * 1024, max_mb=10) is True
 
     def test_at_limit(self):
-        from cogs.veil_cog import _validate_size
+        from bot_modules.cogs.veil_cog import _validate_size
         assert _validate_size(10 * 1024 * 1024, max_mb=10) is True
 
     def test_over_limit(self):
-        from cogs.veil_cog import _validate_size
+        from bot_modules.cogs.veil_cog import _validate_size
         assert _validate_size(10 * 1024 * 1024 + 1, max_mb=10) is False
 
 
 class TestValidateDimensions:
     def test_large_enough_image(self):
-        from cogs.veil_cog import _validate_dimensions
+        from bot_modules.cogs.veil_cog import _validate_dimensions
         ok, w, h = _validate_dimensions(_make_jpeg(500, 500), min_px=400)
         assert ok is True
         assert w == 500
         assert h == 500
 
     def test_too_narrow(self):
-        from cogs.veil_cog import _validate_dimensions
+        from bot_modules.cogs.veil_cog import _validate_dimensions
         ok, w, h = _validate_dimensions(_make_jpeg(300, 600), min_px=400)
         assert ok is False
 
     def test_too_short(self):
-        from cogs.veil_cog import _validate_dimensions
+        from bot_modules.cogs.veil_cog import _validate_dimensions
         ok, w, h = _validate_dimensions(_make_jpeg(600, 300), min_px=400)
         assert ok is False
 
     def test_exactly_at_limit(self):
-        from cogs.veil_cog import _validate_dimensions
+        from bot_modules.cogs.veil_cog import _validate_dimensions
         ok, _, _ = _validate_dimensions(_make_jpeg(400, 400), min_px=400)
         assert ok is True

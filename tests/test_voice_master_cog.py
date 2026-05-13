@@ -13,9 +13,9 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
-from services.voice_master_service import (
+from bot_modules.services.voice_master_service import (
     add_name_blocklist,
     insert_active_channel,
     load_profile,
@@ -98,7 +98,7 @@ def _wire_interaction(ctx, *, user_id: int = OWNER) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_resolve_owned_channel_no_channel_replies_friendly(ctx):
-    from commands.voice_master_commands import _resolve_owned_channel
+    from bot_modules.commands.voice_master_commands import _resolve_owned_channel
 
     inter = _wire_interaction(ctx)
     result = await _resolve_owned_channel(inter)
@@ -110,7 +110,7 @@ async def test_resolve_owned_channel_no_channel_replies_friendly(ctx):
 
 @pytest.mark.asyncio
 async def test_resolve_owned_channel_returns_channel_and_row(ctx, voice_channel):
-    from commands.voice_master_commands import _resolve_owned_channel
+    from bot_modules.commands.voice_master_commands import _resolve_owned_channel
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
@@ -127,7 +127,7 @@ async def test_resolve_owned_channel_returns_channel_and_row(ctx, voice_channel)
 
 @pytest.mark.asyncio
 async def test_resolve_owned_channel_handles_missing_discord_channel(ctx):
-    from commands.voice_master_commands import _resolve_owned_channel
+    from bot_modules.commands.voice_master_commands import _resolve_owned_channel
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
@@ -145,8 +145,8 @@ async def test_resolve_owned_channel_handles_missing_discord_channel(ctx):
 
 @pytest.mark.asyncio
 async def test_gate_and_record_edit_allows_first_edit(ctx):
-    from commands.voice_master_commands import _gate_and_record_edit
-    from services.voice_master_service import get_active_channel
+    from bot_modules.commands.voice_master_commands import _gate_and_record_edit
+    from bot_modules.services.voice_master_service import get_active_channel
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
@@ -167,8 +167,8 @@ async def test_gate_and_record_edit_allows_first_edit(ctx):
 @pytest.mark.asyncio
 async def test_gate_and_record_edit_blocks_when_budget_exhausted(ctx):
     """Two recent edits → third is rejected with the friendly retry message."""
-    from commands.voice_master_commands import _gate_and_record_edit
-    from services.voice_master_service import get_active_channel
+    from bot_modules.commands.voice_master_commands import _gate_and_record_edit
+    from bot_modules.services.voice_master_service import get_active_channel
 
     import time as time_module
     now = time_module.time()
@@ -194,8 +194,8 @@ async def test_gate_and_record_edit_blocks_when_budget_exhausted(ctx):
 
 @pytest.mark.asyncio
 async def test_apply_lock_sets_overwrite_and_saves_profile(ctx, voice_channel):
-    from commands.voice_master_commands import _apply_lock
-    from services.voice_master_service import get_active_channel
+    from bot_modules.commands.voice_master_commands import _apply_lock
+    from bot_modules.services.voice_master_service import get_active_channel
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
@@ -222,8 +222,8 @@ async def test_apply_lock_sets_overwrite_and_saves_profile(ctx, voice_channel):
 @pytest.mark.asyncio
 async def test_apply_lock_defers_before_slow_call(ctx, voice_channel):
     """If the response wasn't already done, _apply_lock must defer first."""
-    from commands.voice_master_commands import _apply_lock
-    from services.voice_master_service import get_active_channel
+    from bot_modules.commands.voice_master_commands import _apply_lock
+    from bot_modules.services.voice_master_service import get_active_channel
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
@@ -242,8 +242,8 @@ async def test_apply_lock_defers_before_slow_call(ctx, voice_channel):
 
 @pytest.mark.asyncio
 async def test_apply_rename_rejects_blocklisted_name(ctx, voice_channel):
-    from commands.voice_master_commands import _apply_rename
-    from services.voice_master_service import get_active_channel
+    from bot_modules.commands.voice_master_commands import _apply_rename
+    from bot_modules.services.voice_master_service import get_active_channel
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
@@ -264,8 +264,8 @@ async def test_apply_rename_rejects_blocklisted_name(ctx, voice_channel):
 
 @pytest.mark.asyncio
 async def test_apply_rename_succeeds_and_saves_name(ctx, voice_channel):
-    from commands.voice_master_commands import _apply_rename
-    from services.voice_master_service import get_active_channel
+    from bot_modules.commands.voice_master_commands import _apply_rename
+    from bot_modules.services.voice_master_service import get_active_channel
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
@@ -291,8 +291,8 @@ async def test_apply_rename_succeeds_and_saves_name(ctx, voice_channel):
 
 @pytest.mark.asyncio
 async def test_apply_invite_rejects_bot_target(ctx, voice_channel):
-    from commands.voice_master_commands import _apply_invite
-    from services.voice_master_service import get_active_channel
+    from bot_modules.commands.voice_master_commands import _apply_invite
+    from bot_modules.services.voice_master_service import get_active_channel
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(
@@ -317,7 +317,7 @@ async def test_apply_invite_rejects_bot_target(ctx, voice_channel):
 @pytest.mark.asyncio
 async def test_post_inline_panel_sends_panel_to_voice_chat(voice_channel, owner_member):
     """Posts an embed + view via channel.send."""
-    from commands.voice_master_commands import post_inline_panel
+    from bot_modules.commands.voice_master_commands import post_inline_panel
     from unittest.mock import AsyncMock as _AM
 
     voice_channel.send = _AM(return_value=MagicMock())
@@ -335,7 +335,7 @@ async def test_post_inline_panel_sends_panel_to_voice_chat(voice_channel, owner_
 @pytest.mark.asyncio
 async def test_post_inline_panel_swallows_forbidden(voice_channel, owner_member):
     """A locked-down voice chat shouldn't crash the Hub-join flow."""
-    from commands.voice_master_commands import post_inline_panel
+    from bot_modules.commands.voice_master_commands import post_inline_panel
     from unittest.mock import AsyncMock as _AM
 
     voice_channel.send = _AM(side_effect=discord.Forbidden(MagicMock(), "no perms"))
@@ -345,8 +345,8 @@ async def test_post_inline_panel_swallows_forbidden(voice_channel, owner_member)
 
 @pytest.mark.asyncio
 async def test_apply_invite_with_remember_writes_to_trust_list(ctx, voice_channel):
-    from commands.voice_master_commands import _apply_invite
-    from services.voice_master_service import get_active_channel, list_trusted
+    from bot_modules.commands.voice_master_commands import _apply_invite
+    from bot_modules.services.voice_master_service import get_active_channel, list_trusted
 
     with open_db(ctx.db_path) as conn:
         insert_active_channel(

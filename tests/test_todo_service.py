@@ -6,9 +6,9 @@ import time
 
 import pytest
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
-from services.todo_service import complete_todo, create_todo, delete_todo, list_todos
+from bot_modules.services.todo_service import complete_todo, create_todo, delete_todo, list_todos
 
 GUILD = 123
 USER = 9001

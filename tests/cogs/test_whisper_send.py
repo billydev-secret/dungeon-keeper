@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.whisper_models import WhisperConfig
+from bot_modules.services.whisper_models import WhisperConfig
 from tests.fakes import FakeMember, FakeRole, fake_interaction
 
 ROLE = 7001
@@ -21,7 +21,7 @@ def _cfg() -> WhisperConfig:
 
 
 def _make_cog():
-    from cogs.whisper_cog import WhisperCog
+    from bot_modules.cogs.whisper_cog import WhisperCog
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     cog = WhisperCog.__new__(WhisperCog)
@@ -56,9 +56,9 @@ async def test_send_happy_path():
     interaction.guild.get_channel = MagicMock(side_effect=lambda cid: {FEED: feed_channel, LOG: log_channel}.get(cid))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_insert_whisper", return_value=42), \
-         patch("cogs.whisper_cog._do_set_message_ids") as set_ids:
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_whisper", return_value=42), \
+         patch("bot_modules.cogs.whisper_cog._do_set_message_ids") as set_ids:
         await cog._send_impl(interaction, target=target, message="hello world")  # type: ignore[arg-type]
 
     target.send.assert_awaited_once()  # type: ignore[attr-defined]
@@ -79,7 +79,7 @@ async def test_send_rejects_when_sender_lacks_role():
     interaction.guild.id = 9001
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await cog._send_impl(interaction, target=target, message="hi")  # type: ignore[arg-type]
 
     args, kwargs = interaction.response.send_message.call_args
@@ -97,7 +97,7 @@ async def test_send_rejects_self_target():
     interaction.guild.id = 9001
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await cog._send_impl(interaction, target=sender, message="hi")  # type: ignore[arg-type]
 
     args, kwargs = interaction.response.send_message.call_args
@@ -117,7 +117,7 @@ async def test_target_autocomplete_only_returns_role_members():
         FakeMember(id=2002, display_name="Bob", name="bob"),
     ]
     interaction.guild.get_role = MagicMock(return_value=role)
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         results = await cog._target_autocomplete(interaction, "")
     assert {r.value for r in results} == {"2001", "2002"}
 
@@ -136,7 +136,7 @@ async def test_target_autocomplete_filters_by_prefix():
         FakeMember(id=2003, display_name="Charlie", name="charlie"),
     ]
     interaction.guild.get_role = MagicMock(return_value=role)
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         results = await cog._target_autocomplete(interaction, "ali")
     assert {r.value for r in results} == {"2001"}
 
@@ -154,7 +154,7 @@ async def test_target_autocomplete_excludes_self():
         FakeMember(id=2002, display_name="Bob", name="bob"),
     ]
     interaction.guild.get_role = MagicMock(return_value=role)
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         results = await cog._target_autocomplete(interaction, "")
     assert {r.value for r in results} == {"2002"}
 
@@ -167,7 +167,7 @@ async def test_target_autocomplete_returns_empty_when_role_unset():
     interaction.guild = MagicMock()
     interaction.guild.id = 9001
     cfg_no_role = WhisperConfig(guild_id=9001, role_id=0, channel_id=FEED, log_channel_id=LOG)
-    with patch("cogs.whisper_cog._load_config", return_value=cfg_no_role):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg_no_role):
         results = await cog._target_autocomplete(interaction, "")
     assert results == []
 
@@ -191,9 +191,9 @@ async def test_send_dm_forbidden_does_not_persist():
     interaction.guild.get_channel = MagicMock(side_effect=lambda cid: {FEED: feed_channel, LOG: log_channel}.get(cid))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_insert_whisper", return_value=42), \
-         patch("cogs.whisper_cog._do_delete_whisper") as mocked_delete:
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_whisper", return_value=42), \
+         patch("bot_modules.cogs.whisper_cog._do_delete_whisper") as mocked_delete:
         await cog._send_impl(interaction, target=target, message="hi")  # type: ignore[arg-type]
         mocked_delete.assert_called_once()
 
@@ -224,8 +224,8 @@ async def test_send_blocked_by_global_cooldown():
     import time as _t
     cog._last_send_at[SENDER_ID] = _t.time() - 5
 
-    with _patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         _patch("cogs.whisper_cog._do_insert_whisper") as ins:
+    with _patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         _patch("bot_modules.cogs.whisper_cog._do_insert_whisper") as ins:
         await cog._send_impl(interaction, target=target, message="spam")  # type: ignore[arg-type]
 
     ins.assert_not_called()
@@ -237,7 +237,7 @@ async def test_send_blocked_by_global_cooldown():
 @pytest.mark.asyncio
 async def test_send_blocked_by_per_target_hourly_cap():
     """Exceeding SEND_PER_TARGET_HOURLY_CAP whispers to same target in 1h is rejected."""
-    from cogs.whisper_cog import SEND_PER_TARGET_HOURLY_CAP
+    from bot_modules.cogs.whisper_cog import SEND_PER_TARGET_HOURLY_CAP
     from unittest.mock import patch as _patch
     import time as _t
 
@@ -259,8 +259,8 @@ async def test_send_blocked_by_per_target_hourly_cap():
     # And reset global cooldown so it doesn't block first
     cog._last_send_at[SENDER_ID] = 0
 
-    with _patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         _patch("cogs.whisper_cog._do_insert_whisper") as ins:
+    with _patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         _patch("bot_modules.cogs.whisper_cog._do_insert_whisper") as ins:
         await cog._send_impl(interaction, target=target, message="spam")  # type: ignore[arg-type]
 
     ins.assert_not_called()
@@ -296,9 +296,9 @@ async def test_send_allowed_after_cooldown_elapses():
     # Cooldown already elapsed (> 30s ago)
     cog._last_send_at[SENDER_ID] = _t.time() - 60
 
-    with _patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         _patch("cogs.whisper_cog._do_insert_whisper", return_value=42), \
-         _patch("cogs.whisper_cog._do_set_message_ids"):
+    with _patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         _patch("bot_modules.cogs.whisper_cog._do_insert_whisper", return_value=42), \
+         _patch("bot_modules.cogs.whisper_cog._do_set_message_ids"):
         await cog._send_impl(interaction, target=target, message="hello again")  # type: ignore[arg-type]
 
     target.send.assert_awaited_once()  # type: ignore[attr-defined]
@@ -331,8 +331,8 @@ async def test_send_blocked_when_target_is_timed_out():
     # Ensure no cooldown
     cog._last_send_at[SENDER_ID] = _t.time() - 60
 
-    with _patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         _patch("cogs.whisper_cog._do_insert_whisper") as ins:
+    with _patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         _patch("bot_modules.cogs.whisper_cog._do_insert_whisper") as ins:
         await cog._send_impl(interaction, target=timed_out_target, message="hi")  # type: ignore[arg-type]
 
     ins.assert_not_called()
@@ -367,8 +367,8 @@ async def test_send_fails_when_feed_channel_missing():
 
     cog._last_send_at[SENDER_ID] = _t.time() - 60  # cooldown elapsed
 
-    with _patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         _patch("cogs.whisper_cog._do_insert_whisper") as ins:
+    with _patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         _patch("bot_modules.cogs.whisper_cog._do_insert_whisper") as ins:
         await cog._send_impl(interaction, target=target, message="hi")  # type: ignore[arg-type]
 
     ins.assert_not_called()

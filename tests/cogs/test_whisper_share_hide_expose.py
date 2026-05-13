@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.whisper_models import Whisper, WhisperConfig, WhisperState
+from bot_modules.services.whisper_models import Whisper, WhisperConfig, WhisperState
 from tests.fakes import FakeMember, fake_interaction
 
 SENDER, TARGET = 1001, 2001
@@ -26,21 +26,21 @@ def _cfg() -> WhisperConfig:
 
 
 def _make_share_button():
-    from cogs.whisper_cog import WhisperShareButton
+    from bot_modules.cogs.whisper_cog import WhisperShareButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return WhisperShareButton(bot, 42)
 
 
 def _make_hide_button():
-    from cogs.whisper_cog import WhisperHideButton
+    from bot_modules.cogs.whisper_cog import WhisperHideButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return WhisperHideButton(bot, 42)
 
 
 def _make_expose_button():
-    from cogs.whisper_cog import WhisperExposeButton
+    from bot_modules.cogs.whisper_cog import WhisperExposeButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return WhisperExposeButton(bot, 42)
@@ -61,10 +61,10 @@ async def test_share_target_pending_deletes_old_and_posts_new_to_feed():
     feed_channel.send = AsyncMock(return_value=MagicMock(id=77777))
     interaction.guild.get_channel = MagicMock(return_value=feed_channel)
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_update_state") as upd, \
-         patch("cogs.whisper_cog._do_set_message_ids") as set_ids:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state") as upd, \
+         patch("bot_modules.cogs.whisper_cog._do_set_message_ids") as set_ids:
         await button.callback(interaction)
 
     upd.assert_called_once_with(":memory:", 42, "shared")
@@ -84,8 +84,8 @@ async def test_share_non_pending_rejected():
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
-         patch("cogs.whisper_cog._do_update_state") as upd:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state") as upd:
         await button.callback(interaction)
 
     upd.assert_not_called()
@@ -100,8 +100,8 @@ async def test_hide_target_pending_updates_state_no_edit():
     interaction.response.send_message = AsyncMock()
     interaction.message = None  # no DM-edit path in this test
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._do_update_state") as upd:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state") as upd:
         await button.callback(interaction)
 
     upd.assert_called_once_with(":memory:", 42, "hidden")
@@ -126,15 +126,15 @@ async def test_share_edits_dm_view_to_remove_decide_buttons():
     dm_msg.edit = AsyncMock()
     interaction.message = dm_msg
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_update_state"), \
-         patch("cogs.whisper_cog._do_set_message_ids"):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state"), \
+         patch("bot_modules.cogs.whisper_cog._do_set_message_ids"):
         await button.callback(interaction)
 
     dm_msg.edit.assert_awaited_once()
     edited_view = dm_msg.edit.call_args.kwargs["view"]
-    from cogs.whisper_cog import WhisperGuessButton
+    from bot_modules.cogs.whisper_cog import WhisperGuessButton
     button_types = [type(item) for item in edited_view.children]
     assert button_types == [WhisperGuessButton]
 
@@ -150,13 +150,13 @@ async def test_hide_edits_dm_view_to_remove_decide_buttons():
     dm_msg.edit = AsyncMock()
     interaction.message = dm_msg
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._do_update_state"):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state"):
         await button.callback(interaction)
 
     dm_msg.edit.assert_awaited_once()
     edited_view = dm_msg.edit.call_args.kwargs["view"]
-    from cogs.whisper_cog import WhisperGuessButton
+    from bot_modules.cogs.whisper_cog import WhisperGuessButton
     button_types = [type(item) for item in edited_view.children]
     assert button_types == [WhisperGuessButton]
 
@@ -179,8 +179,8 @@ async def test_hide_after_exhausted_strips_all_buttons():
         created_at=0.0, state="pending", solved=False, exposed=False,
         guesses_left=0, channel_msg_id=88888, dm_msg_id=99999,
     )
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=exhausted), \
-         patch("cogs.whisper_cog._do_update_state"):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=exhausted), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state"):
         await button.callback(interaction)
 
     dm_msg.edit.assert_awaited_once()
@@ -198,8 +198,8 @@ async def test_expose_solved_target_edits_feed_message():
     interaction.guild = MagicMock()
     interaction.guild.get_member = MagicMock(return_value=FakeMember(id=SENDER, display_name="Sender"))
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)), \
-         patch("cogs.whisper_cog._do_mark_exposed") as mexp:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)), \
+         patch("bot_modules.cogs.whisper_cog._do_mark_exposed") as mexp:
         await button.callback(interaction)
 
     mexp.assert_called_once()
@@ -212,8 +212,8 @@ async def test_expose_unsolved_rejected():
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(solved=False)), \
-         patch("cogs.whisper_cog._do_mark_exposed") as mexp:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(solved=False)), \
+         patch("bot_modules.cogs.whisper_cog._do_mark_exposed") as mexp:
         await button.callback(interaction)
 
     mexp.assert_not_called()
@@ -225,8 +225,8 @@ async def test_expose_non_target_rejected():
     interaction = fake_interaction(user=FakeMember(id=9999))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)), \
-         patch("cogs.whisper_cog._do_mark_exposed") as mexp:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)), \
+         patch("bot_modules.cogs.whisper_cog._do_mark_exposed") as mexp:
         await button.callback(interaction)
 
     mexp.assert_not_called()

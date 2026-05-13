@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.whisper_models import Whisper, WhisperConfig
+from bot_modules.services.whisper_models import Whisper, WhisperConfig
 from tests.fakes import FakeMember, fake_interaction
 
 SENDER, TARGET = 1001, 2001
@@ -26,7 +26,7 @@ def _cfg(role_id: int = 7001) -> WhisperConfig:
 
 
 def _make_guess_button(whisper_id: int = 42):
-    from cogs.whisper_cog import WhisperGuessButton
+    from bot_modules.cogs.whisper_cog import WhisperGuessButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return WhisperGuessButton(bot, whisper_id)
@@ -48,7 +48,7 @@ async def test_guess_button_non_target_rejected():
     interaction = fake_interaction(user=FakeMember(id=9999))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()):
         await button.callback(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -62,7 +62,7 @@ async def test_guess_button_already_solved_rejected():
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)):
         await button.callback(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -75,7 +75,7 @@ async def test_guess_button_no_guesses_left_rejected():
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=0)):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=0)):
         await button.callback(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -90,7 +90,7 @@ async def test_guess_button_no_guild_rejected():
     interaction.response.send_message = AsyncMock()
     button.bot.get_guild = MagicMock(return_value=None)
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()):
         await button.callback(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -105,8 +105,8 @@ async def test_guess_button_role_not_configured_rejected():
     interaction.guild = MagicMock()
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg(role_id=0)):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(role_id=0)):
         await button.callback(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -122,8 +122,8 @@ async def test_guess_button_role_missing_rejected():
     interaction.guild.get_role = MagicMock(return_value=None)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await button.callback(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -141,8 +141,8 @@ async def test_guess_button_empty_member_list_rejected():
     interaction.guild.get_role = MagicMock(return_value=role)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await button.callback(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -154,7 +154,7 @@ async def test_guess_button_empty_member_list_rejected():
 
 @pytest.mark.asyncio
 async def test_guess_button_small_list_sends_select_no_pagination():
-    from cogs.whisper_cog import WhisperGuessSelectView, WhisperGuessMemberSelect
+    from bot_modules.cogs.whisper_cog import WhisperGuessSelectView, WhisperGuessMemberSelect
     button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.guild = MagicMock()
@@ -163,8 +163,8 @@ async def test_guess_button_small_list_sends_select_no_pagination():
     interaction.guild.get_role = MagicMock(return_value=role)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await button.callback(interaction)
 
     _, kwargs = interaction.response.send_message.call_args
@@ -179,7 +179,7 @@ async def test_guess_button_small_list_sends_select_no_pagination():
 
 @pytest.mark.asyncio
 async def test_guess_button_large_list_sends_select_with_pagination():
-    from cogs.whisper_cog import WhisperGuessSelectView
+    from bot_modules.cogs.whisper_cog import WhisperGuessSelectView
     button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.guild = MagicMock()
@@ -188,8 +188,8 @@ async def test_guess_button_large_list_sends_select_with_pagination():
     interaction.guild.get_role = MagicMock(return_value=role)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await button.callback(interaction)
 
     _, kwargs = interaction.response.send_message.call_args
@@ -203,7 +203,7 @@ async def test_guess_button_large_list_sends_select_with_pagination():
 
 @pytest.mark.asyncio
 async def test_guess_select_next_advances_page():
-    from cogs.whisper_cog import WhisperGuessSelectView
+    from bot_modules.cogs.whisper_cog import WhisperGuessSelectView
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     members = _make_members(30)
@@ -223,7 +223,7 @@ async def test_guess_select_next_advances_page():
 
 @pytest.mark.asyncio
 async def test_guess_select_prev_retreats_page():
-    from cogs.whisper_cog import WhisperGuessSelectView
+    from bot_modules.cogs.whisper_cog import WhisperGuessSelectView
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     members = _make_members(30)
@@ -243,7 +243,7 @@ async def test_guess_select_prev_retreats_page():
 # ── Select callback: outcomes ─────────────────────────────────────────────────
 
 def _make_select(whisper_id: int = 42, members=None):
-    from cogs.whisper_cog import WhisperGuessMemberSelect
+    from bot_modules.cogs.whisper_cog import WhisperGuessMemberSelect
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     if members is None:
@@ -267,9 +267,9 @@ async def test_guess_select_correct_posts_to_feed_and_edits_message():
     interaction.response.edit_message = AsyncMock()
 
     cfg_mock = MagicMock(channel_id=FEED)
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=cfg_mock), \
-         patch("cogs.whisper_cog._do_record_guess") as rec:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg_mock), \
+         patch("bot_modules.cogs.whisper_cog._do_record_guess") as rec:
         await sel.callback(interaction)
 
     rec.assert_called_once_with(":memory:", whisper_id=42, guessed_id=SENDER, correct=True)
@@ -287,8 +287,8 @@ async def test_guess_select_wrong_shows_remaining_count():
     interaction.guild = MagicMock()
     interaction.response.edit_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=3)), \
-         patch("cogs.whisper_cog._do_record_guess"):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=3)), \
+         patch("bot_modules.cogs.whisper_cog._do_record_guess"):
         await sel.callback(interaction)
 
     edit_kwargs = interaction.response.edit_message.call_args.kwargs
@@ -298,7 +298,7 @@ async def test_guess_select_wrong_shows_remaining_count():
 
 @pytest.mark.asyncio
 async def test_guess_select_exhausted_removes_guess_button_from_dm():
-    from cogs.whisper_cog import WhisperShareButton, WhisperHideButton, WhisperGuessButton
+    from bot_modules.cogs.whisper_cog import WhisperShareButton, WhisperHideButton, WhisperGuessButton
     sel = _make_select()
     sel._values = ["9999"]  # wrong, final guess
     interaction = fake_interaction(user=FakeMember(id=TARGET))
@@ -311,8 +311,8 @@ async def test_guess_select_exhausted_removes_guess_button_from_dm():
     dm_channel.fetch_message = AsyncMock(return_value=dm_msg)
     interaction.user.create_dm = AsyncMock(return_value=dm_channel)
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=1)), \
-         patch("cogs.whisper_cog._do_record_guess"):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=1)), \
+         patch("bot_modules.cogs.whisper_cog._do_record_guess"):
         await sel.callback(interaction)
 
     dm_msg.edit.assert_awaited_once()

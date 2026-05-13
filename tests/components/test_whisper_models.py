@@ -1,7 +1,7 @@
 """Whisper dataclass shape tests."""
 from __future__ import annotations
 
-from services.whisper_models import Whisper, WhisperConfig, WhisperGuess
+from bot_modules.services.whisper_models import Whisper, WhisperConfig, WhisperGuess
 
 
 def test_whisper_config_defaults():

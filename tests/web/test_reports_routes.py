@@ -11,8 +11,8 @@ import time
 
 import pytest
 
-from core.db_utils import open_db
-from web.deps import invalidate_report_cache
+from bot_modules.core.db_utils import open_db
+from web_server.deps import invalidate_report_cache
 
 
 def _seed_messages(db_path, guild_id=123, count=5):
@@ -143,8 +143,8 @@ def test_heavy_report_returns_200(open_client, path):
 
 
 def test_reports_require_auth(fake_ctx):
-    from web.auth import DiscordOAuthAuth
-    from web.server import create_app
+    from web_server.auth import DiscordOAuthAuth
+    from web_server.server import create_app
     from fastapi.testclient import TestClient
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
     app = create_app(fake_ctx, auth=auth)

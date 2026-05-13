@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 
-from core.utils import (
+from bot_modules.core.utils import (
     format_guild_for_log,
     format_user_for_log,
     resolve_guild_for_log,

@@ -5,7 +5,7 @@ import time
 import pytest
 from freezegun import freeze_time
 
-from jail.logic import (
+from bot_modules.jail.logic import (
     eligible_voters,
     is_jail_expired,
     jail_duration_seconds,
@@ -14,7 +14,7 @@ from jail.logic import (
     snapshot_roles,
     tally_votes,
 )
-from services.moderation import fmt_duration, parse_duration
+from bot_modules.services.moderation import fmt_duration, parse_duration
 
 
 # ── parse_duration ────────────────────────────────────────────────────

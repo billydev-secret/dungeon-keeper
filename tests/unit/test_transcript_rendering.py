@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from services.moderation import render_transcript_markdown
+from bot_modules.services.moderation import render_transcript_markdown
 
 
 def _make_transcript(**kwargs):

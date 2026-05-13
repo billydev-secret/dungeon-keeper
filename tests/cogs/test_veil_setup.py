@@ -14,7 +14,7 @@ GUILD_ID = 9001
 
 
 def _make_cog(db_path: str = ":memory:"):
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
     bot = MagicMock()
     bot.ctx.db_path = db_path
     return VeilCog(bot)
@@ -43,7 +43,7 @@ async def test_setup_rejects_non_nsfw_channel():
     role = FakeRole(id=VEIL_ROLE_ID)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._do_set_config") as set_cfg:
+    with patch("bot_modules.cogs.veil_cog._do_set_config") as set_cfg:
         await _setup(cog, interaction, _channel(nsfw=False), role)
 
     set_cfg.assert_not_called()
@@ -62,7 +62,7 @@ async def test_setup_writes_both_channel_and_role():
     role = FakeRole(id=VEIL_ROLE_ID)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._do_set_config") as set_cfg:
+    with patch("bot_modules.cogs.veil_cog._do_set_config") as set_cfg:
         await _setup(cog, interaction, _channel(nsfw=True), role)
 
     keys_written = {call.args[2] for call in set_cfg.call_args_list}

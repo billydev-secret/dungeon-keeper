@@ -5,7 +5,7 @@ import time
 import pytest
 from freezegun import freeze_time
 
-from tickets.logic import (
+from bot_modules.tickets.logic import (
     TICKET_CLOSED,
     TICKET_DELETED,
     TICKET_OPEN,

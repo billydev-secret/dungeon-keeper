@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 
 
 def test_whispers_table_exists(sync_db_path: Path):

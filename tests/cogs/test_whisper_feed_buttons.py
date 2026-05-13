@@ -5,14 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.whisper_models import Whisper, WhisperConfig, WhisperState
+from bot_modules.services.whisper_models import Whisper, WhisperConfig, WhisperState
 from tests.fakes import FakeMember, fake_interaction
 
 ROLE = 7001
 
 
 def _make_view():
-    from cogs.whisper_cog import WhisperFeedView
+    from bot_modules.cogs.whisper_cog import WhisperFeedView
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return WhisperFeedView(bot)
@@ -49,7 +49,7 @@ async def test_check_whispers_lists_pending_and_shared():
     interaction.guild.id = 9001
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_list_received_in_states", return_value=[_w("pending"), _w("shared")]):
+    with patch("bot_modules.cogs.whisper_cog._do_list_received_in_states", return_value=[_w("pending"), _w("shared")]):
         await view._on_check_click(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -64,7 +64,7 @@ async def test_check_hidden_lists_only_hidden():
     interaction.guild.id = 9001
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_list_received", return_value=[_w("hidden"), _w("hidden")]):
+    with patch("bot_modules.cogs.whisper_cog._do_list_received", return_value=[_w("hidden"), _w("hidden")]):
         await view._on_check_hidden_click(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -74,7 +74,7 @@ async def test_check_hidden_lists_only_hidden():
 @pytest.mark.asyncio
 async def test_view_registered_on_cog_load():
     """Persistent view must be added via bot.add_view at cog load so buttons survive restart."""
-    from cogs.whisper_cog import WhisperCog
+    from bot_modules.cogs.whisper_cog import WhisperCog
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     bot.add_view = MagicMock()
@@ -87,7 +87,7 @@ async def test_view_registered_on_cog_load():
 @pytest.mark.asyncio
 async def test_dynamic_buttons_registered_on_cog_load():
     """Per-whisper Guess/Share/Hide/Expose buttons must register as dynamic items so they survive bot restart."""
-    from cogs.whisper_cog import (
+    from bot_modules.cogs.whisper_cog import (
         WhisperCog,
         WhisperExposeButton,
         WhisperGuessButton,

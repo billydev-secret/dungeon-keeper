@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.veil_models import BoundingBox
+from bot_modules.services.veil_models import BoundingBox
 
 GUILD_ID = 9001
 VEIL_CHANNEL_ID = 8001
@@ -20,7 +20,7 @@ def _box(x1: float = 100, y1: float = 100, x2: float = 300, y2: float = 300) -> 
 
 
 def _make_view(crop_box: BoundingBox | None = None):  # type: ignore[return]
-    from cogs.veil_cog import CropEditorView
+    from bot_modules.cogs.veil_cog import CropEditorView
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -59,7 +59,7 @@ def inter() -> MagicMock:
 async def test_up_moves_box_up(inter: MagicMock) -> None:
     view = _make_view(_box(100, 200, 300, 400))
     original_y1 = view.crop_box.y1
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_up(inter)
     assert view.crop_box.y1 < original_y1
 
@@ -68,7 +68,7 @@ async def test_up_moves_box_up(inter: MagicMock) -> None:
 async def test_down_moves_box_down(inter: MagicMock) -> None:
     view = _make_view(_box(100, 100, 300, 300))
     original_y1 = view.crop_box.y1
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_down(inter)
     assert view.crop_box.y1 > original_y1
 
@@ -77,7 +77,7 @@ async def test_down_moves_box_down(inter: MagicMock) -> None:
 async def test_left_moves_box_left(inter: MagicMock) -> None:
     view = _make_view(_box(200, 100, 400, 300))
     original_x1 = view.crop_box.x1
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_left(inter)
     assert view.crop_box.x1 < original_x1
 
@@ -86,7 +86,7 @@ async def test_left_moves_box_left(inter: MagicMock) -> None:
 async def test_right_moves_box_right(inter: MagicMock) -> None:
     view = _make_view(_box(100, 100, 300, 300))
     original_x1 = view.crop_box.x1
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_right(inter)
     assert view.crop_box.x1 > original_x1
 
@@ -97,7 +97,7 @@ async def test_right_moves_box_right(inter: MagicMock) -> None:
 async def test_zoom_in_shrinks_box(inter: MagicMock) -> None:
     view = _make_view(_box(50, 50, 450, 450))  # 400×400, well above min_px=200
     original_w = view.crop_box.width
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_zoom_in(inter)
     assert view.crop_box.width < original_w
 
@@ -106,7 +106,7 @@ async def test_zoom_in_shrinks_box(inter: MagicMock) -> None:
 async def test_zoom_out_expands_box(inter: MagicMock) -> None:
     view = _make_view(_box(100, 100, 300, 300))  # 200×200
     original_w = view.crop_box.width
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_zoom_out(inter)
     assert view.crop_box.width > original_w
 
@@ -116,7 +116,7 @@ async def test_zoom_out_expands_box(inter: MagicMock) -> None:
 @pytest.mark.asyncio
 async def test_up_clamps_at_top_edge(inter: MagicMock) -> None:
     view = _make_view(_box(0, 0, 200, 200))  # already at top
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_up(inter)
     assert view.crop_box.y1 == pytest.approx(0.0)
 
@@ -124,7 +124,7 @@ async def test_up_clamps_at_top_edge(inter: MagicMock) -> None:
 @pytest.mark.asyncio
 async def test_down_clamps_at_bottom_edge(inter: MagicMock) -> None:
     view = _make_view(_box(300, 300, 500, 500))  # already at bottom
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_down(inter)
     assert view.crop_box.y2 == pytest.approx(float(IMG_H))
 
@@ -145,7 +145,7 @@ async def test_cancel_edits_message_with_no_view(inter: MagicMock) -> None:
 @pytest.mark.asyncio
 async def test_rerender_calls_edit_message(inter: MagicMock) -> None:
     view = _make_view()
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._rerender(inter)
     inter.response.edit_message.assert_called_once()
 
@@ -165,7 +165,7 @@ async def test_double_post_sends_already_posted(inter: MagicMock) -> None:
 # ── Auto button ───────────────────────────────────────────────────────────────
 
 def _make_view_with_candidates(*boxes: BoundingBox):  # type: ignore[return]
-    from cogs.veil_cog import CropEditorView
+    from bot_modules.cogs.veil_cog import CropEditorView
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -193,7 +193,7 @@ async def test_auto_first_press_snaps_to_first_candidate(inter: MagicMock) -> No
     box1 = _box(200, 200, 400, 400)
     view = _make_view_with_candidates(box0, box1)
     view.crop_box = _box(300, 300, 490, 490)  # simulate user having panned away
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_auto(inter)
     assert view.crop_box == box0
 
@@ -203,7 +203,7 @@ async def test_auto_second_press_snaps_to_second_candidate(inter: MagicMock) -> 
     box0 = _box(10, 10, 100, 100)
     box1 = _box(200, 200, 400, 400)
     view = _make_view_with_candidates(box0, box1)
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_auto(inter)
         await view._on_auto(inter)
     assert view.crop_box == box1
@@ -214,7 +214,7 @@ async def test_auto_wraps_from_last_to_first(inter: MagicMock) -> None:
     box0 = _box(10, 10, 100, 100)
     box1 = _box(200, 200, 400, 400)
     view = _make_view_with_candidates(box0, box1)
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_auto(inter)  # → box0
         await view._on_auto(inter)  # → box1
         await view._on_auto(inter)  # → wraps back to box0
@@ -225,7 +225,7 @@ async def test_auto_wraps_from_last_to_first(inter: MagicMock) -> None:
 async def test_auto_label_is_always_plain_auto(inter: MagicMock) -> None:
     boxes = [_box(10, 10, 100, 100), _box(200, 200, 400, 400)]
     view = _make_view_with_candidates(*boxes)
-    with patch("cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
+    with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_auto(inter)
         await view._on_auto(inter)
     assert view._auto_btn.label == "Auto"  # type: ignore[attr-defined]

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from core.config import Config
+from bot_modules.core.config import Config
 
 
 @pytest.fixture

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from core.db_utils import open_db
-from services.auto_delete_service import (
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.auto_delete_service import (
     auto_delete_rule_exists,
     format_duration_seconds,
     init_auto_delete_tables,

@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from core.db_utils import open_db
-from services.veil_repo import (
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.veil_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
     delete_optin,

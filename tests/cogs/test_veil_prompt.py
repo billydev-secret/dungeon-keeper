@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.veil_models import VeilConfig
+from bot_modules.services.veil_models import VeilConfig
 from tests.fakes import FakeGuild, FakeMember, fake_interaction
 
 VEIL_CHANNEL_ID = 8001
@@ -18,7 +18,7 @@ GUILD_ID = 9001
 
 
 def _make_cog(db_path: str = ":memory:"):
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
     bot = MagicMock()
     bot.ctx.db_path = db_path
     bot.add_view = MagicMock()
@@ -49,7 +49,7 @@ def _make_text_channel(channel_id: int = VEIL_CHANNEL_ID, *, send_returns_id: in
 # ── VeilPromptView ───────────────────────────────────────────────────────────
 
 def test_prompt_view_has_two_buttons_with_stable_custom_ids():
-    from cogs.veil_cog import VeilPromptView
+    from bot_modules.cogs.veil_cog import VeilPromptView
 
     view = VeilPromptView(MagicMock())
     children = cast(list[discord.ui.Button], view.children)
@@ -60,7 +60,7 @@ def test_prompt_view_has_two_buttons_with_stable_custom_ids():
 
 
 def test_prompt_view_is_persistent():
-    from cogs.veil_cog import VeilPromptView
+    from bot_modules.cogs.veil_cog import VeilPromptView
 
     view = VeilPromptView(MagicMock())
     assert view.timeout is None
@@ -68,7 +68,7 @@ def test_prompt_view_is_persistent():
 
 @pytest.mark.asyncio
 async def test_prompt_submit_button_sends_ephemeral_instructions():
-    from cogs.veil_cog import VeilPromptView
+    from bot_modules.cogs.veil_cog import VeilPromptView
 
     view = VeilPromptView(MagicMock())
     children = cast(list[discord.ui.Button], view.children)
@@ -86,7 +86,7 @@ async def test_prompt_submit_button_sends_ephemeral_instructions():
 
 @pytest.mark.asyncio
 async def test_prompt_help_button_sends_ephemeral_rules():
-    from cogs.veil_cog import VeilPromptView
+    from bot_modules.cogs.veil_cog import VeilPromptView
 
     view = VeilPromptView(MagicMock())
     children = cast(list[discord.ui.Button], view.children)
@@ -106,14 +106,14 @@ async def test_prompt_help_button_sends_ephemeral_rules():
 
 @pytest.mark.asyncio
 async def test_repost_prompt_posts_when_no_prior():
-    from cogs.veil_cog import _repost_prompt
+    from bot_modules.cogs.veil_cog import _repost_prompt
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     channel = _make_text_channel(send_returns_id=12345)
 
-    with patch("cogs.veil_cog._load_config", return_value=_config(prompt_id=0)), \
-         patch("cogs.veil_cog._do_set_config") as set_cfg:
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config(prompt_id=0)), \
+         patch("bot_modules.cogs.veil_cog._do_set_config") as set_cfg:
         await _repost_prompt(bot, channel, GUILD_ID)
 
     channel.fetch_message.assert_not_awaited()
@@ -125,7 +125,7 @@ async def test_repost_prompt_posts_when_no_prior():
 
 @pytest.mark.asyncio
 async def test_repost_prompt_deletes_prior_then_posts():
-    from cogs.veil_cog import _repost_prompt
+    from bot_modules.cogs.veil_cog import _repost_prompt
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -134,8 +134,8 @@ async def test_repost_prompt_deletes_prior_then_posts():
     old_msg.delete = AsyncMock()
     channel.fetch_message = AsyncMock(return_value=old_msg)
 
-    with patch("cogs.veil_cog._load_config", return_value=_config(prompt_id=10000)), \
-         patch("cogs.veil_cog._do_set_config"):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config(prompt_id=10000)), \
+         patch("bot_modules.cogs.veil_cog._do_set_config"):
         await _repost_prompt(bot, channel, GUILD_ID)
 
     channel.fetch_message.assert_awaited_once_with(10000)
@@ -145,15 +145,15 @@ async def test_repost_prompt_deletes_prior_then_posts():
 
 @pytest.mark.asyncio
 async def test_repost_prompt_tolerates_missing_prior():
-    from cogs.veil_cog import _repost_prompt
+    from bot_modules.cogs.veil_cog import _repost_prompt
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     channel = _make_text_channel()
     channel.fetch_message = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404), "gone"))
 
-    with patch("cogs.veil_cog._load_config", return_value=_config(prompt_id=10000)), \
-         patch("cogs.veil_cog._do_set_config"):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config(prompt_id=10000)), \
+         patch("bot_modules.cogs.veil_cog._do_set_config"):
         await _repost_prompt(bot, channel, GUILD_ID)
 
     channel.send.assert_awaited_once()
@@ -177,7 +177,7 @@ async def test_on_message_ignores_bot_authors():
     cog = _make_cog()
     msg = _make_message(channel_id=VEIL_CHANNEL_ID, author_bot=True)
 
-    with patch("cogs.veil_cog._load_config") as load_cfg:
+    with patch("bot_modules.cogs.veil_cog._load_config") as load_cfg:
         await cog.on_message(msg)
 
     load_cfg.assert_not_called()
@@ -191,7 +191,7 @@ async def test_on_message_ignores_dms():
     msg.author.bot = False
     msg.guild = None
 
-    with patch("cogs.veil_cog._load_config") as load_cfg:
+    with patch("bot_modules.cogs.veil_cog._load_config") as load_cfg:
         await cog.on_message(msg)
 
     load_cfg.assert_not_called()
@@ -202,7 +202,7 @@ async def test_on_message_ignores_non_veil_channels():
     cog = _make_cog()
     msg = _make_message(channel_id=99999)  # not the veil channel
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()):
         await cog.on_message(msg)
 
     assert not cog._pending_prompt_reposts
@@ -213,7 +213,7 @@ async def test_on_message_schedules_repost_for_veil_channel():
     cog = _make_cog()
     msg = _make_message(channel_id=VEIL_CHANNEL_ID)
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()):
         await cog.on_message(msg)
 
     task = cog._pending_prompt_reposts.get(GUILD_ID)
@@ -227,7 +227,7 @@ async def test_on_message_debounce_cancels_prior_pending_task():
     cog = _make_cog()
     msg = _make_message(channel_id=VEIL_CHANNEL_ID)
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()):
         await cog.on_message(msg)
         first_task = cog._pending_prompt_reposts[GUILD_ID]
         await cog.on_message(msg)
@@ -247,7 +247,7 @@ async def test_cog_unload_cancels_pending_repost_tasks():
     cog = _make_cog()
     msg = _make_message(channel_id=VEIL_CHANNEL_ID)
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()):
         await cog.on_message(msg)
 
     task = cog._pending_prompt_reposts[GUILD_ID]
@@ -273,7 +273,7 @@ async def test_veil_prompt_rejects_when_channel_unset():
     interaction = fake_interaction(user=member, guild=guild)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._load_config", return_value=_config(channel_id=0)):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config(channel_id=0)):
         await _veil_prompt(cog, interaction)
 
     msg = interaction.followup.send.call_args.args[0]
@@ -288,8 +288,8 @@ async def test_veil_prompt_posts_to_configured_channel():
     interaction = fake_interaction(user=member, guild=guild)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()), \
-         patch("cogs.veil_cog._do_set_config"):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()), \
+         patch("bot_modules.cogs.veil_cog._do_set_config"):
         await _veil_prompt(cog, interaction)
 
     channel.send.assert_awaited_once()

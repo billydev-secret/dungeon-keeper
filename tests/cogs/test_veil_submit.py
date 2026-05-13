@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.veil_models import VeilConfig
+from bot_modules.services.veil_models import VeilConfig
 from tests.fakes import FakeGuild, FakeMember, FakeRole, fake_interaction
 
 VEIL_ROLE_ID = 7001
@@ -57,7 +57,7 @@ def _attachment(
 
 
 def _make_cog(db_path: str = ":memory:"):
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
     bot = MagicMock()
     bot.ctx.db_path = db_path
     bot.add_view = MagicMock()
@@ -80,7 +80,7 @@ async def test_submit_rejects_no_veil_role():
     interaction.guild.get_member = lambda uid: guild.members.get(uid)
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_cfg()):
         await _submit(cog, interaction, _attachment())
 
     interaction.followup.send.assert_called_once()
@@ -97,7 +97,7 @@ async def test_submit_rejects_unconfigured_channel():
     interaction.guild.get_member = lambda uid: guild.members.get(uid)
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._load_config", return_value=_cfg(veil_channel_id=0)):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_cfg(veil_channel_id=0)):
         await _submit(cog, interaction, _attachment())
 
     msg = interaction.followup.send.call_args.args[0]
@@ -113,7 +113,7 @@ async def test_submit_rejects_non_image_mime():
     interaction.guild.get_member = lambda uid: guild.members.get(uid)
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_cfg()):
         await _submit(cog, interaction, _attachment(content_type="video/mp4"))
 
     msg = interaction.followup.send.call_args.args[0]
@@ -129,7 +129,7 @@ async def test_submit_rejects_oversized_file():
     interaction.guild.get_member = lambda uid: guild.members.get(uid)
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._load_config", return_value=_cfg(max_image_size_mb=5)):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_cfg(max_image_size_mb=5)):
         await _submit(cog, interaction, _attachment(size=6 * 1024 * 1024))
 
     msg = interaction.followup.send.call_args.args[0]
@@ -145,8 +145,8 @@ async def test_submit_rejects_small_dimensions():
     interaction.guild.get_member = lambda uid: guild.members.get(uid)
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._load_config", return_value=_cfg()):
-        with patch("cogs.veil_cog._validate_dimensions", return_value=(False, 200, 200)):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_cfg()):
+        with patch("bot_modules.cogs.veil_cog._validate_dimensions", return_value=(False, 200, 200)):
             await _submit(cog, interaction, _attachment())
 
     msg = interaction.followup.send.call_args.args[0]
@@ -158,8 +158,8 @@ async def test_submit_shows_editor_when_no_pipeline_candidates():
     """No detections → still show the crop editor (centre-crop default, Auto disabled)."""
     import io as _io
     from PIL import Image
-    from services.veil_models import PipelineResult
-    from cogs.veil_cog import CropEditorView
+    from bot_modules.services.veil_models import PipelineResult
+    from bot_modules.cogs.veil_cog import CropEditorView
 
     buf = _io.BytesIO()
     Image.new("RGB", (500, 500)).save(buf, format="JPEG")
@@ -174,9 +174,9 @@ async def test_submit_shows_editor_when_no_pipeline_candidates():
     cog = _make_cog()
     empty_result = PipelineResult(candidates=[], crops=[])
 
-    with patch("cogs.veil_cog._load_config", return_value=_cfg()):
-        with patch("cogs.veil_cog.run_pipeline", return_value=empty_result):
-            with patch("cogs.veil_cog.render_crop_editor", return_value=b"\xff\xd8fake"):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_cfg()):
+        with patch("bot_modules.cogs.veil_cog.run_pipeline", return_value=empty_result):
+            with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=b"\xff\xd8fake"):
                 await _submit(cog, interaction, _attachment(read_return=img_bytes))
 
     call_kwargs = interaction.followup.send.call_args
@@ -195,7 +195,7 @@ async def test_submit_success_sends_ephemeral_preview(sync_db_path: Path):
     """
     import io as _io
     from PIL import Image
-    from services.veil_models import Detection, BoundingBox, PipelineResult
+    from bot_modules.services.veil_models import Detection, BoundingBox, PipelineResult
 
     buf = _io.BytesIO()
     Image.new("RGB", (500, 500)).save(buf, format="JPEG")
@@ -218,11 +218,11 @@ async def test_submit_success_sends_ephemeral_preview(sync_db_path: Path):
     interaction.user.id = member.id
 
     cog = _make_cog(str(sync_db_path))
-    with patch("cogs.veil_cog._load_config", return_value=_cfg()):
-        with patch("cogs.veil_cog.run_pipeline", return_value=fake_result):
-            with patch("cogs.veil_cog._do_insert_round", return_value=42):
-                with patch("cogs.veil_cog._do_update_round_message"):
-                    with patch("cogs.veil_cog._do_set_reroll_count"):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_cfg()):
+        with patch("bot_modules.cogs.veil_cog.run_pipeline", return_value=fake_result):
+            with patch("bot_modules.cogs.veil_cog._do_insert_round", return_value=42):
+                with patch("bot_modules.cogs.veil_cog._do_update_round_message"):
+                    with patch("bot_modules.cogs.veil_cog._do_set_reroll_count"):
                         await _submit(cog, interaction, _attachment(read_return=img_bytes))
 
     # Channel post deferred until the user clicks Post — not called here.
@@ -247,9 +247,9 @@ def _fake_game_message() -> MagicMock:
 @pytest.mark.asyncio
 async def test_cog_load_registers_game_views_from_db(sync_db_path: Path):
     """cog_load queries active rounds and calls bot.add_view for each."""
-    from cogs.veil_cog import GameView
-    from services.veil_repo import insert_round
-    from core.db_utils import open_db
+    from bot_modules.cogs.veil_cog import GameView
+    from bot_modules.services.veil_repo import insert_round
+    from bot_modules.core.db_utils import open_db
 
     with open_db(sync_db_path) as conn:
         insert_round(conn, guild_id=GUILD_ID, submitter_id=1001, answer_id=1001)
@@ -281,7 +281,7 @@ async def test_submit_rejects_when_veil_role_not_configured():
     interaction.guild.get_member = lambda uid: guild.members.get(uid)
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._load_config", return_value=_cfg(veil_role_id=0)):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_cfg(veil_role_id=0)):
         await _submit(cog, interaction, _attachment())
 
     interaction.followup.send.assert_called_once()
@@ -293,8 +293,8 @@ async def test_submit_rejects_when_veil_role_not_configured():
 async def test_on_post_reposts_prompt_after_game_message():
     """After posting a game round, _repost_prompt is called to move the
     sticky status bar below the new round."""
-    from cogs.veil_cog import CropEditorView
-    from services.veil_models import BoundingBox
+    from bot_modules.cogs.veil_cog import CropEditorView
+    from bot_modules.services.veil_models import BoundingBox
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -324,11 +324,11 @@ async def test_on_post_reposts_prompt_after_game_message():
         candidate_count=1,
     )
 
-    with patch("cogs.veil_cog.render_crop", return_value=b"fake-crop"), \
-         patch("cogs.veil_cog._do_insert_round", return_value=42), \
-         patch("cogs.veil_cog._do_update_round_message"), \
-         patch("cogs.veil_cog._do_audit"), \
-         patch("cogs.veil_cog._repost_prompt", new_callable=AsyncMock) as mock_repost:
+    with patch("bot_modules.cogs.veil_cog.render_crop", return_value=b"fake-crop"), \
+         patch("bot_modules.cogs.veil_cog._do_insert_round", return_value=42), \
+         patch("bot_modules.cogs.veil_cog._do_update_round_message"), \
+         patch("bot_modules.cogs.veil_cog._do_audit"), \
+         patch("bot_modules.cogs.veil_cog._repost_prompt", new_callable=AsyncMock) as mock_repost:
         await view._on_post(interaction)
 
     mock_repost.assert_awaited_once_with(bot, fake_channel, GUILD_ID)

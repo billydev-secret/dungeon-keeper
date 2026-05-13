@@ -6,9 +6,9 @@ import time
 
 import pytest
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
-from services.foolsday_service import (
+from bot_modules.services.foolsday_service import (
     DAY_SECONDS,
     active_user_ids,
     add_exclusion,

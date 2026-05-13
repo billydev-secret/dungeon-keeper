@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from core.app_context import Bot
+from bot_modules.core.app_context import Bot
 
 
 async def test_setup_hook_skips_sync_for_non_positive_guild_id():
@@ -38,7 +38,7 @@ async def test_setup_hook_handles_forbidden_during_debug_guild_sync(tmp_path):
         return [], True
 
     with patch(
-        "services.command_sync.sync_if_changed",
+        "bot_modules.services.command_sync.sync_if_changed",
         side_effect=fake_sync_if_changed,
     ), patch("builtins.print") as print_mock:
         await bot.setup_hook()

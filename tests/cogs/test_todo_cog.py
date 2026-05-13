@@ -9,7 +9,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from cogs.todo_cog import _format_description, _format_task_label, _MAX_CONTENT_LEN  # noqa: E402
+from bot_modules.cogs.todo_cog import _format_description, _format_task_label, _MAX_CONTENT_LEN  # noqa: E402
 
 
 # ── _format_task_label ────────────────────────────────────────────────
@@ -108,7 +108,7 @@ def _build_mod_user():
 
 @pytest.mark.asyncio
 async def test_modal_submit_calls_create_todo_with_formatted_args(monkeypatch):
-    from cogs.todo_cog import _TodoFromMessageModal
+    from bot_modules.cogs.todo_cog import _TodoFromMessageModal
 
     captured = {}
 
@@ -119,7 +119,7 @@ async def test_modal_submit_calls_create_todo_with_formatted_args(monkeypatch):
         captured.update(kwargs)
         return 42
 
-    monkeypatch.setattr("cogs.todo_cog.create_todo", fake_create_todo)
+    monkeypatch.setattr("bot_modules.cogs.todo_cog.create_todo", fake_create_todo)
 
     ctx = _build_mod_ctx()
     ctx.open_db.return_value.__enter__ = lambda s: MagicMock()
@@ -148,7 +148,7 @@ async def test_modal_submit_calls_create_todo_with_formatted_args(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_modal_submit_blank_notes_only_stores_message(monkeypatch):
-    from cogs.todo_cog import _TodoFromMessageModal
+    from bot_modules.cogs.todo_cog import _TodoFromMessageModal
 
     captured = {}
 
@@ -156,7 +156,7 @@ async def test_modal_submit_blank_notes_only_stores_message(monkeypatch):
         captured.update(kwargs)
         return 1
 
-    monkeypatch.setattr("cogs.todo_cog.create_todo", fake_create_todo)
+    monkeypatch.setattr("bot_modules.cogs.todo_cog.create_todo", fake_create_todo)
 
     ctx = _build_mod_ctx()
     ctx.open_db.return_value.__enter__ = lambda s: MagicMock()
@@ -179,7 +179,7 @@ async def test_context_menu_callback_opens_modal_for_any_member(monkeypatch):
     menu now share one permission model (open). This test guards against
     accidentally re-locking the context menu to mods.
     """
-    from cogs.todo_cog import TodoCog
+    from bot_modules.cogs.todo_cog import TodoCog
 
     bot = MagicMock()
     bot.tree = MagicMock()

@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from core.db_utils import open_db
-from services.whisper_repo import get_whisper, insert_whisper
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.whisper_repo import get_whisper, insert_whisper
 from tests.fakes import FakeMember, fake_interaction
 
 
@@ -38,7 +38,7 @@ def test_forget_user_deletes_sent_and_received(sync_db_path: Path):
         # Whisper unrelated (B→C)
         wid_b_to_c = insert_whisper(conn, guild_id=GUILD_ID, sender_id=USER_B, target_id=USER_C, message="unrelated")
 
-    from cogs.whisper_cog import _do_forget_user
+    from bot_modules.cogs.whisper_cog import _do_forget_user
     _do_forget_user(sync_db_path, guild_id=GUILD_ID, user_id=USER_A)
 
     with open_db(sync_db_path) as conn:
@@ -55,7 +55,7 @@ def test_forget_user_does_not_touch_other_guilds(sync_db_path: Path):
         wid_mine = insert_whisper(conn, guild_id=GUILD_ID, sender_id=USER_A, target_id=USER_B, message="mine")
         wid_other = insert_whisper(conn, guild_id=other_guild, sender_id=USER_A, target_id=USER_B, message="other guild")
 
-    from cogs.whisper_cog import _do_forget_user
+    from bot_modules.cogs.whisper_cog import _do_forget_user
     _do_forget_user(sync_db_path, guild_id=GUILD_ID, user_id=USER_A)
 
     with open_db(sync_db_path) as conn:
@@ -69,7 +69,7 @@ def test_forget_user_does_not_touch_other_guilds(sync_db_path: Path):
 @pytest.mark.asyncio
 async def test_forget_me_shows_confirmation_view():
     """The command should respond with a confirmation view."""
-    from cogs.whisper_cog import WhisperCog, WhisperForgetMeConfirmView
+    from bot_modules.cogs.whisper_cog import WhisperCog, WhisperForgetMeConfirmView
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -95,7 +95,7 @@ async def test_forget_me_shows_confirmation_view():
 @pytest.mark.asyncio
 async def test_forget_me_confirm_deletes_data():
     """Confirming the forget-me view calls _do_forget_user and edits the message."""
-    from cogs.whisper_cog import WhisperForgetMeConfirmView
+    from bot_modules.cogs.whisper_cog import WhisperForgetMeConfirmView
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -105,7 +105,7 @@ async def test_forget_me_confirm_deletes_data():
     interaction = fake_interaction(user=FakeMember(id=USER_A))
     interaction.response.edit_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_forget_user") as forget:
+    with patch("bot_modules.cogs.whisper_cog._do_forget_user") as forget:
         await confirm_button.callback(interaction)
 
     forget.assert_called_once_with(":memory:", guild_id=GUILD_ID, user_id=USER_A)

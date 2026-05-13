@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
-from services.voice_master_service import (
+from bot_modules.services.voice_master_service import (
     DEFAULT_NAME_TEMPLATE,
     EDIT_WINDOW_S,
     ReconciliationPlan,
@@ -721,7 +721,7 @@ def test_load_config_per_guild_scoped(db):
 
 def test_load_config_handles_garbage_int_values(db):
     """Garbage in DB → falls back to default rather than crashing."""
-    from core.db_utils import set_config_value
+    from bot_modules.core.db_utils import set_config_value
 
     with open_db(db) as conn:
         set_config_value(conn, "voice_master_create_cooldown_s", "not-a-number", GUILD)

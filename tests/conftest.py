@@ -15,7 +15,7 @@ if str(_ROOT) not in sys.path:
 
 import aiosqlite
 
-from core.config import Config
+from bot_modules.core.config import Config
 from migrations import apply_migrations, apply_migrations_sync
 from tests.fakes import FakeGuild, FakeRole, FakeUser, fake_interaction as _fake_interaction
 

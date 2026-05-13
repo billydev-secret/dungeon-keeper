@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 
 _PROMPT_KEY = "ai_prompt_review"
 
@@ -32,7 +32,7 @@ def test_update_mod_model(authed_client, fake_ctx):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     with open_db(fake_ctx.db_path) as conn:
-        from services.ai_config import get_mod_model
+        from bot_modules.services.ai_config import get_mod_model
         assert get_mod_model(conn) == "claude-haiku-4-5-20251001"
 
 
@@ -40,7 +40,7 @@ def test_update_wellness_model(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/ai/models", json={"wellness_model": "claude-haiku-4-5-20251001"})
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from services.ai_config import get_wellness_model
+        from bot_modules.services.ai_config import get_wellness_model
         assert get_wellness_model(conn) == "claude-haiku-4-5-20251001"
 
 
@@ -55,7 +55,7 @@ def test_update_prompt_stores_override(authed_client, fake_ctx):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     with open_db(fake_ctx.db_path) as conn:
-        from services.ai_config import get_prompt_with_source
+        from bot_modules.services.ai_config import get_prompt_with_source
         text, is_override = get_prompt_with_source(conn, _PROMPT_KEY)
     assert text == "Custom review prompt text."
     assert is_override is True
@@ -82,6 +82,6 @@ def test_reset_prompt_removes_override(authed_client, fake_ctx):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     with open_db(fake_ctx.db_path) as conn:
-        from services.ai_config import get_prompt_with_source
+        from bot_modules.services.ai_config import get_prompt_with_source
         _, is_override = get_prompt_with_source(conn, _PROMPT_KEY)
     assert is_override is False

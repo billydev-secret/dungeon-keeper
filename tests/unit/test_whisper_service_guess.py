@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from services.whisper_models import Whisper
-from services.whisper_service import (
+from bot_modules.services.whisper_models import Whisper
+from bot_modules.services.whisper_service import (
     ERROR_GUESS_ALREADY_SOLVED,
     ERROR_GUESS_NO_ATTEMPTS,
     ERROR_GUESS_NOT_TARGET,

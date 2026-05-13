@@ -1,6 +1,6 @@
 {
   "pythonVersion": "3.10",
-  "extraPaths": ["."],
+  "extraPaths": ["src"],
   "venvPath": ".",
   "venv": ".venv",
   "reportMissingModuleSource": "none"

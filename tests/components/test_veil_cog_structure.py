@@ -12,23 +12,23 @@ from unittest.mock import MagicMock
 
 import discord
 
-from cogs.veil_cog import GameView, _game_embed
+from bot_modules.cogs.veil_cog import GameView, _game_embed
 
 
 def test_veil_cog_module_imports_cleanly():
     """Importing cogs.veil_cog must not raise ImportError."""
-    importlib.import_module("cogs.veil_cog")
+    importlib.import_module("bot_modules.cogs.veil_cog")
 
 
 def test_veil_cog_class_exists():
     """VeilCog class must be defined in cogs.veil_cog."""
-    mod = importlib.import_module("cogs.veil_cog")
+    mod = importlib.import_module("bot_modules.cogs.veil_cog")
     assert hasattr(mod, "VeilCog"), "VeilCog not found in cogs.veil_cog"
 
 
 def test_setup_function_exists():
     """Module-level setup must be an async (coroutine) function."""
-    mod = importlib.import_module("cogs.veil_cog")
+    mod = importlib.import_module("bot_modules.cogs.veil_cog")
     assert hasattr(mod, "setup"), "setup() not found in cogs.veil_cog"
     assert asyncio.iscoroutinefunction(mod.setup), "setup() must be a coroutine function"
 
@@ -37,7 +37,7 @@ def test_veil_group_and_submit_registered():
     """`veil` app_commands.Group and `submit` subcommand must be on VeilCog."""
     from discord import app_commands
 
-    mod = importlib.import_module("cogs.veil_cog")
+    mod = importlib.import_module("bot_modules.cogs.veil_cog")
     cog_cls = mod.VeilCog
 
     # There should be a Group named "veil" registered on the cog

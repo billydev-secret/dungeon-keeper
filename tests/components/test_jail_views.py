@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from commands.jail_commands import (
+from bot_modules.commands.jail_commands import (
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
     PolicyVoteYesButton,

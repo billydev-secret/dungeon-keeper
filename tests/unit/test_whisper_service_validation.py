@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from services.whisper_models import WhisperConfig
-from services.whisper_service import (
+from bot_modules.services.whisper_models import WhisperConfig
+from bot_modules.services.whisper_service import (
     ERROR_BOT_DM_FAILED,
     ERROR_NOT_CONFIGURED,
     ERROR_SELF_TARGET,

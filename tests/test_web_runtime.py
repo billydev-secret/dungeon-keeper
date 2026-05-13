@@ -7,10 +7,10 @@ from unittest.mock import patch
 import pytest
 from starlette.requests import Request
 
-from web.auth import OpenAuth
-from web.deps import invalidate_report_cache, store_report_result
-from web.routes import oauth as oauth_routes
-from web.wellness_routes.deps import get_current_user
+from web_server.auth import OpenAuth
+from web_server.deps import invalidate_report_cache, store_report_result
+from web_server.routes import oauth as oauth_routes
+from web_server.wellness_routes.deps import get_current_user
 
 
 def _make_request(auth):

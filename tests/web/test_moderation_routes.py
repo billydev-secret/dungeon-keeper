@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from core.db_utils import open_db
-from services.moderation import create_jail, create_ticket, create_warning
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.moderation import create_jail, create_ticket, create_warning
 
 
 def _seed_jail(db_path, guild_id=123, user_id=1001, moderator_id=2001):
@@ -108,8 +108,8 @@ def test_warnings_returns_seeded_warning(open_client, fake_ctx):
 
 def test_moderation_requires_auth(fake_ctx):
     """With Discord auth mode, moderation endpoints require a session."""
-    from web.auth import DiscordOAuthAuth
-    from web.server import create_app
+    from web_server.auth import DiscordOAuthAuth
+    from web_server.server import create_app
     from fastapi.testclient import TestClient
 
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)

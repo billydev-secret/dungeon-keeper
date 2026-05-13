@@ -16,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from core.db_utils import open_db
-from services import auto_delete_service
-from services.auto_delete_service import (
+from bot_modules.core.db_utils import open_db
+from bot_modules.services import auto_delete_service
+from bot_modules.services.auto_delete_service import (
     _scan_and_delete_channel_history,
     init_auto_delete_tables,
     pop_due_auto_delete_message_ids,

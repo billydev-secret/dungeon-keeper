@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from core.db_utils import open_db
-from services.veil_models import VeilConfig, VeilRound
-from services.veil_repo import (
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.veil_models import VeilConfig, VeilRound
+from bot_modules.services.veil_repo import (
     flag_user_open_rounds_optout,
     get_round,
     insert_round,
@@ -64,7 +64,7 @@ def test_flag_user_open_rounds_scoped_per_guild(sync_db_path: Path) -> None:
 # ── on_member_update listener ────────────────────────────────────────────────
 
 def _make_cog():
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return VeilCog(bot)
@@ -73,7 +73,7 @@ def _make_cog():
 @pytest.mark.asyncio
 async def test_member_update_flags_orphaned_rounds_when_role_removed():
     """Removing the Veil role should flag the user's open rounds as answer_optout."""
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
 
     cog = _make_cog()
     veil_role = FakeRole(id=VEIL_ROLE_ID)
@@ -85,8 +85,8 @@ async def test_member_update_flags_orphaned_rounds_when_role_removed():
     after.guild = MagicMock(id=GUILD_ID)
 
     cfg = VeilConfig(guild_id=GUILD_ID, veil_role_id=VEIL_ROLE_ID)
-    with patch("cogs.veil_cog._load_config", return_value=cfg), \
-         patch("cogs.veil_cog._do_flag_user_open_rounds_optout", return_value=2) as flag_mock:
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=cfg), \
+         patch("bot_modules.cogs.veil_cog._do_flag_user_open_rounds_optout", return_value=2) as flag_mock:
         await VeilCog.on_member_update(cog, before, after)  # type: ignore[arg-type]
 
     flag_mock.assert_called_once()
@@ -97,7 +97,7 @@ async def test_member_update_flags_orphaned_rounds_when_role_removed():
 @pytest.mark.asyncio
 async def test_member_update_noop_when_role_still_held():
     """No-op when the user still has the Veil role after the update."""
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
 
     cog = _make_cog()
     veil_role = FakeRole(id=VEIL_ROLE_ID)
@@ -107,8 +107,8 @@ async def test_member_update_noop_when_role_still_held():
     after.guild = MagicMock(id=GUILD_ID)
 
     cfg = VeilConfig(guild_id=GUILD_ID, veil_role_id=VEIL_ROLE_ID)
-    with patch("cogs.veil_cog._load_config", return_value=cfg), \
-         patch("cogs.veil_cog._do_flag_user_open_rounds_optout") as flag_mock:
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=cfg), \
+         patch("bot_modules.cogs.veil_cog._do_flag_user_open_rounds_optout") as flag_mock:
         await VeilCog.on_member_update(cog, before, after)  # type: ignore[arg-type]
 
     flag_mock.assert_not_called()
@@ -133,7 +133,7 @@ def _make_round(*, answer_optout: bool = False) -> VeilRound:
 async def test_guess_callback_blocks_when_answer_opted_out():
     """If round.answer_optout is True, the guess flow must surface that fact
     and not open the dropdown — the round is unsolvable."""
-    from cogs.veil_cog import GameView
+    from bot_modules.cogs.veil_cog import GameView
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -144,8 +144,8 @@ async def test_guess_callback_blocks_when_answer_opted_out():
     interaction.response.send_message = AsyncMock()
 
     cfg = VeilConfig(guild_id=GUILD_ID, veil_role_id=VEIL_ROLE_ID)
-    with patch("cogs.veil_cog._load_config", return_value=cfg), \
-         patch("cogs.veil_cog._do_load_round", return_value=_make_round(answer_optout=True)):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=cfg), \
+         patch("bot_modules.cogs.veil_cog._do_load_round", return_value=_make_round(answer_optout=True)):
         await view._guess_callback(interaction)
 
     args = interaction.response.send_message.call_args

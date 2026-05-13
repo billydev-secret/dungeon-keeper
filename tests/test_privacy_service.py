@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
-from services.privacy_service import purge_user_data
+from bot_modules.services.privacy_service import purge_user_data
 
 GUILD = 123
 USER = 1001

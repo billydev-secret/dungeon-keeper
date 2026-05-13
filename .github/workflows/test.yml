@@ -1,0 +1,38 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Run tests
+        env:
+          BOT_ENV: dev
+          DISCORD_TOKEN_DEV: fake-token
+          GUILD_ID_DEV: "9001"
+          DB_PATH_DEV: dk_dev.db
+          AUDIT_CHANNEL_DEV: "0"
+        run: |
+          python -m pytest --tb=short -q

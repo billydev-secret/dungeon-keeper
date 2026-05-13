@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from services.veil_models import BoundingBox, Detection
+from bot_modules.services.veil_models import BoundingBox, Detection
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ def test_detect_returns_detection_objects():
     """detect() should return a list of Detection instances."""
     raw = [_make_nudenet_result("BREAST_EXPOSED", 0.87, 120, 80, 60, 90)]
     with _mock_nudenet(raw):
-        from services.veil_nudenet import detect  # noqa: PLC0415
+        from bot_modules.services.veil_nudenet import detect  # noqa: PLC0415
         result = detect("/fake/image.jpg")
 
     assert len(result) == 1
@@ -50,7 +50,7 @@ def test_detect_converts_box_coords():
     x, y, w, h = 120, 80, 60, 90
     raw = [_make_nudenet_result("BREAST_EXPOSED", 0.87, x, y, w, h)]
     with _mock_nudenet(raw):
-        from services.veil_nudenet import detect  # noqa: PLC0415
+        from bot_modules.services.veil_nudenet import detect  # noqa: PLC0415
         result = detect("/fake/image.jpg")
 
     box = result[0].box
@@ -65,7 +65,7 @@ def test_detect_passes_label_and_score_through():
     """label and score must be passed through unchanged."""
     raw = [_make_nudenet_result("BUTTOCKS_EXPOSED", 0.55, 0, 0, 10, 10)]
     with _mock_nudenet(raw):
-        from services.veil_nudenet import detect  # noqa: PLC0415
+        from bot_modules.services.veil_nudenet import detect  # noqa: PLC0415
         result = detect("/fake/image.jpg")
 
     assert result[0].label == "BUTTOCKS_EXPOSED"
@@ -75,7 +75,7 @@ def test_detect_passes_label_and_score_through():
 def test_detect_empty_results_returns_empty_list():
     """When NudeNet returns no detections, detect() returns []."""
     with _mock_nudenet([]):
-        from services.veil_nudenet import detect  # noqa: PLC0415
+        from bot_modules.services.veil_nudenet import detect  # noqa: PLC0415
         result = detect("/fake/image.jpg")
 
     assert result == []
@@ -85,7 +85,7 @@ def test_detect_accepts_path_object():
     """detect() should accept a pathlib.Path, not just str."""
     raw = [_make_nudenet_result("FACE_FEMALE", 0.99, 10, 20, 30, 40)]
     with _mock_nudenet(raw):
-        from services.veil_nudenet import detect  # noqa: PLC0415
+        from bot_modules.services.veil_nudenet import detect  # noqa: PLC0415
         result = detect(Path("/fake/image.jpg"))
 
     assert len(result) == 1
@@ -98,7 +98,7 @@ def test_detect_multiple_detections():
         _make_nudenet_result("BELLY_EXPOSED", 0.70, 100, 200, 80, 40),
     ]
     with _mock_nudenet(raw):
-        from services.veil_nudenet import detect  # noqa: PLC0415
+        from bot_modules.services.veil_nudenet import detect  # noqa: PLC0415
         result = detect("/fake/image.jpg")
 
     assert len(result) == 2

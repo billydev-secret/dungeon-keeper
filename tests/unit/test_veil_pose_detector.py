@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.veil_pose_detector import (
+from bot_modules.services.veil_pose_detector import (
     _Lm,
     landmarks_to_lower_body_box,
     landmarks_to_torso_box,

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from services.whisper_models import Whisper, WhisperState
-from services.whisper_service import (
+from bot_modules.services.whisper_models import Whisper, WhisperState
+from bot_modules.services.whisper_service import (
     ERROR_ALREADY_DECIDED,
     ERROR_EXPOSE_NEEDS_SOLVE,
     ERROR_EXPOSE_NOT_TARGET,

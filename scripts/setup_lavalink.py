@@ -19,7 +19,7 @@ from pathlib import Path
 # Make the services/ package importable when run from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.lavalink_manager import find_java  # noqa: E402
+from bot_modules.services.lavalink_manager import find_java  # noqa: E402
 
 # Pin versions in lockstep with lavalink/application.yml.
 # Lavalink 4.2.0+ is REQUIRED -- earlier versions don't speak the DAVE

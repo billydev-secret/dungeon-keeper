@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from core.xp_system import (
+from bot_modules.core.xp_system import (
     DEFAULT_XP_SETTINGS,
     XP_SOURCE_TEXT,
     XP_SOURCE_VOICE,

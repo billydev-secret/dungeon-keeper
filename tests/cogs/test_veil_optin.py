@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.veil_models import VeilConfig
+from bot_modules.services.veil_models import VeilConfig
 from tests.fakes import FakeGuild, FakeMember, FakeRole, fake_interaction
 
 VEIL_ROLE_ID = 7001
@@ -14,7 +14,7 @@ GUILD_ID = 9001
 
 
 def _make_cog(db_path: str = ":memory:"):
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
     bot = MagicMock()
     bot.ctx.db_path = db_path
     return VeilCog(bot)
@@ -36,7 +36,7 @@ async def test_optin_adds_role_when_not_present():
     interaction = fake_interaction(user=member, guild=guild)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()):
         await _optin(cog, interaction)
 
     member.add_roles.assert_awaited_once()
@@ -52,7 +52,7 @@ async def test_optin_skips_when_already_in_pool():
     interaction = fake_interaction(user=member, guild=guild)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()):
         await _optin(cog, interaction)
 
     member.add_roles.assert_not_awaited()
@@ -67,7 +67,7 @@ async def test_optin_rejects_when_role_not_configured():
     interaction = fake_interaction(user=member, guild=guild)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._load_config", return_value=_config(veil_role_id=0)):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config(veil_role_id=0)):
         await _optin(cog, interaction)
 
     member.add_roles.assert_not_awaited()
@@ -82,7 +82,7 @@ async def test_optin_handles_role_deleted_from_guild():
     interaction = fake_interaction(user=member, guild=guild)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()):
         await _optin(cog, interaction)
 
     member.add_roles.assert_not_awaited()
@@ -101,7 +101,7 @@ async def test_optin_handles_forbidden():
     interaction = fake_interaction(user=member, guild=guild)
     cog = _make_cog()
 
-    with patch("cogs.veil_cog._load_config", return_value=_config()):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=_config()):
         await _optin(cog, interaction)
 
     member.add_roles.assert_awaited_once()

@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.db_utils import open_db
-from services.whisper_repo import (
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.whisper_repo import (
     insert_reply,
     insert_whisper,
     list_replies_for_whisper,

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
-from services.watch_service import add_watched_user, load_watched_users, remove_watched_user
+from bot_modules.services.watch_service import add_watched_user, load_watched_users, remove_watched_user
 
 GUILD = 123
 WATCHER = 9001

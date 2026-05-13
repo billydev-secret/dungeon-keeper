@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from services.veil_models import BoundingBox
+from bot_modules.services.veil_models import BoundingBox
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ def _make_jpeg(w: int = 200, h: int = 200, color: tuple = (255, 0, 0)) -> bytes:
 
 def test_render_crop_returns_jpeg_bytes():
     """render_crop should return bytes that start with JPEG magic bytes."""
-    from services.veil_crop_renderer import render_crop  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop  # noqa: PLC0415
 
     image_bytes = _make_jpeg(200, 200)
     box = BoundingBox(x1=10, y1=10, x2=60, y2=60)
@@ -40,7 +40,7 @@ def test_render_crop_returns_jpeg_bytes():
 
 def test_render_crop_writes_cache_file(tmp_path: Path):
     """render_crop should write JPEG bytes to cache_path when given."""
-    from services.veil_crop_renderer import render_crop  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop  # noqa: PLC0415
 
     image_bytes = _make_jpeg(200, 200)
     box = BoundingBox(x1=0, y1=0, x2=100, y2=100)
@@ -54,7 +54,7 @@ def test_render_crop_writes_cache_file(tmp_path: Path):
 
 def test_render_crop_no_cache_path_no_file_written(tmp_path: Path):
     """render_crop should not create any file when cache_path is None."""
-    from services.veil_crop_renderer import render_crop  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop  # noqa: PLC0415
 
     image_bytes = _make_jpeg(200, 200)
     box = BoundingBox(x1=0, y1=0, x2=50, y2=50)
@@ -68,7 +68,7 @@ def test_render_crop_no_cache_path_no_file_written(tmp_path: Path):
 
 def test_render_crop_creates_parent_dirs(tmp_path: Path):
     """render_crop should create intermediate parent directories as needed."""
-    from services.veil_crop_renderer import render_crop  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop  # noqa: PLC0415
 
     image_bytes = _make_jpeg(200, 200)
     box = BoundingBox(x1=0, y1=0, x2=50, y2=50)
@@ -81,7 +81,7 @@ def test_render_crop_creates_parent_dirs(tmp_path: Path):
 
 def test_render_crop_respects_box():
     """Cropped JPEG dimensions should exactly match the crop box dimensions."""
-    from services.veil_crop_renderer import render_crop  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop  # noqa: PLC0415
 
     image_bytes = _make_jpeg(200, 200)
     box = BoundingBox(x1=10, y1=20, x2=60, y2=70)  # 50x50 region
@@ -102,7 +102,7 @@ def test_render_crop_respects_box():
 
 
 def test_render_crop_editor_returns_jpeg_bytes():
-    from services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
 
     image_bytes = _make_jpeg(400, 400)
     box = BoundingBox(x1=50, y1=50, x2=200, y2=200)
@@ -113,7 +113,7 @@ def test_render_crop_editor_returns_jpeg_bytes():
 
 
 def test_render_crop_editor_scales_down_large_image():
-    from services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
 
     image_bytes = _make_jpeg(2000, 2000)
     box = BoundingBox(x1=0, y1=0, x2=2000, y2=2000)
@@ -124,7 +124,7 @@ def test_render_crop_editor_scales_down_large_image():
 
 
 def test_render_crop_editor_doesnt_upscale_small_image():
-    from services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
 
     image_bytes = _make_jpeg(400, 300)
     box = BoundingBox(x1=0, y1=0, x2=400, y2=300)
@@ -136,7 +136,7 @@ def test_render_crop_editor_doesnt_upscale_small_image():
 
 
 def test_render_crop_editor_full_image_box_doesnt_error():
-    from services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
+    from bot_modules.services.veil_crop_renderer import render_crop_editor  # noqa: PLC0415
 
     image_bytes = _make_jpeg(500, 500)
     box = BoundingBox(x1=0, y1=0, x2=500, y2=500)

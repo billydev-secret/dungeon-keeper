@@ -29,10 +29,10 @@ def cog(tmp_path, monkeypatch):
     the bot here; we just instantiate the cog and call its callbacks.
     """
     monkeypatch.setattr(
-        "services.tts_service._CACHE_DIR", tmp_path / "tts_cache"
+        "bot_modules.services.tts_service._CACHE_DIR", tmp_path / "tts_cache"
     )
-    from cogs.tts_cog import TTSCog
-    from services.tts_service import TTSService
+    from bot_modules.cogs.tts_cog import TTSCog
+    from bot_modules.services.tts_service import TTSService
 
     bot = MagicMock()
     ctx = MagicMock()
@@ -40,7 +40,7 @@ def cog(tmp_path, monkeypatch):
     instance.bot = bot
     instance.ctx = ctx
     instance._service = TTSService(cache_dir=tmp_path / "tts_cache")
-    from services.tts_playback import TTSPlaybackService
+    from bot_modules.services.tts_playback import TTSPlaybackService
 
     instance._playback = TTSPlaybackService(instance._service)
     bot.tts_playback = instance._playback

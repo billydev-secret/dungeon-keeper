@@ -31,11 +31,11 @@ def _make_failing_dl():
 
 def test_face_model_download_uses_tmp_then_renames(tmp_path: Path, monkeypatch):
     """Successful download lands at the final path with the right contents."""
-    import services.veil_face_detector as fd
+    import bot_modules.services.veil_face_detector as fd
     monkeypatch.setattr(fd, "_MODELS_DIR", tmp_path)
 
     target = tmp_path / "blaze_face_short_range.tflite"
-    with patch("services.veil_face_detector.urllib.request.urlretrieve",
+    with patch("bot_modules.services.veil_face_detector.urllib.request.urlretrieve",
                side_effect=_make_dl(target, b"x" * 1024)):
         result = fd._ensure_face_model()
 
@@ -49,11 +49,11 @@ def test_face_model_download_uses_tmp_then_renames(tmp_path: Path, monkeypatch):
 def test_face_model_download_failure_leaves_no_partial_file(tmp_path: Path, monkeypatch):
     """An interrupted download must not poison the final path or the tmp slot
     — next run must be free to retry cleanly."""
-    import services.veil_face_detector as fd
+    import bot_modules.services.veil_face_detector as fd
     monkeypatch.setattr(fd, "_MODELS_DIR", tmp_path)
 
     target = tmp_path / "blaze_face_short_range.tflite"
-    with patch("services.veil_face_detector.urllib.request.urlretrieve",
+    with patch("bot_modules.services.veil_face_detector.urllib.request.urlretrieve",
                side_effect=_make_failing_dl()):
         with pytest.raises(OSError):
             fd._ensure_face_model()
@@ -63,11 +63,11 @@ def test_face_model_download_failure_leaves_no_partial_file(tmp_path: Path, monk
 
 
 def test_pose_model_download_uses_tmp_then_renames(tmp_path: Path, monkeypatch):
-    import services.veil_pose_detector as pd
+    import bot_modules.services.veil_pose_detector as pd
     monkeypatch.setattr(pd, "_MODELS_DIR", tmp_path)
 
     target = tmp_path / "pose_landmarker_full.task"
-    with patch("services.veil_pose_detector.urllib.request.urlretrieve",
+    with patch("bot_modules.services.veil_pose_detector.urllib.request.urlretrieve",
                side_effect=_make_dl(target, b"y" * 2048)):
         result = pd._ensure_pose_model()
 
@@ -78,11 +78,11 @@ def test_pose_model_download_uses_tmp_then_renames(tmp_path: Path, monkeypatch):
 
 
 def test_pose_model_download_failure_leaves_no_partial_file(tmp_path: Path, monkeypatch):
-    import services.veil_pose_detector as pd
+    import bot_modules.services.veil_pose_detector as pd
     monkeypatch.setattr(pd, "_MODELS_DIR", tmp_path)
 
     target = tmp_path / "pose_landmarker_full.task"
-    with patch("services.veil_pose_detector.urllib.request.urlretrieve",
+    with patch("bot_modules.services.veil_pose_detector.urllib.request.urlretrieve",
                side_effect=_make_failing_dl()):
         with pytest.raises(OSError):
             pd._ensure_pose_model()

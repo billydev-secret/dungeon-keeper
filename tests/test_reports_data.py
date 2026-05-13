@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-from services.message_store import init_member_events_table, init_message_tables, record_member_event, store_message
-from services.reports_data import get_greeter_log_sessions, get_greeter_response_data
+from bot_modules.services.message_store import init_member_events_table, init_message_tables, record_member_event, store_message
+from bot_modules.services.reports_data import get_greeter_log_sessions, get_greeter_response_data
 
 
 @pytest.fixture

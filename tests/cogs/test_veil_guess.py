@@ -5,14 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.veil_models import BoundingBox, VeilRound
+from bot_modules.services.veil_models import BoundingBox, VeilRound
 from tests.fakes import FakeMember, fake_interaction
 
 
 @pytest.fixture(autouse=True)
 def _patch_count_user_guesses():
     """Default per-test guess count to 0; cap tests override via their own patch."""
-    with patch("cogs.veil_cog._do_count_user_guesses", return_value=0) as m:
+    with patch("bot_modules.cogs.veil_cog._do_count_user_guesses", return_value=0) as m:
         yield m
 
 VEIL_ROLE_ID = 7001
@@ -60,7 +60,7 @@ def _make_select_view(
     round_id: int = ROUND_ID,
     cooldown_seconds: int = 0,
 ):
-    from cogs.veil_cog import GuessSelectView
+    from bot_modules.cogs.veil_cog import GuessSelectView
 
     if bot is None:
         bot = MagicMock()
@@ -92,10 +92,10 @@ async def test_correct_first_guess_marks_solved_and_edits_message():
 
     round_row = _make_round()  # not yet solved
 
-    with patch("cogs.veil_cog._do_count_user_guesses", return_value=0), \
-         patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 3, 2)), \
+    with patch("bot_modules.cogs.veil_cog._do_count_user_guesses", return_value=0), \
+         patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
+         patch("bot_modules.cogs.veil_cog._do_mark_solved", return_value=(1, 3, 2)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -127,10 +127,10 @@ async def test_correct_guess_attaches_full_image_as_spoiler_and_unlinks(tmp_path
     def _capture_set_path(*args, **kwargs):
         set_path_calls.append((args, kwargs))
 
-    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
-         patch("cogs.veil_cog._do_set_original_path", side_effect=_capture_set_path), \
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
+         patch("bot_modules.cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
+         patch("bot_modules.cogs.veil_cog._do_set_original_path", side_effect=_capture_set_path), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -159,9 +159,9 @@ async def test_correct_guess_without_original_path_still_solves():
 
     round_row = _make_round()  # original_path defaults to ""
 
-    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
+         patch("bot_modules.cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -184,8 +184,8 @@ async def test_correct_guess_already_solved_does_not_edit_game_message():
 
     round_row = _make_round(solved_at=1234.0)
 
-    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -206,9 +206,9 @@ async def test_wrong_guess_bumps_counter_and_sends_not_it_message():
 
     round_row = _make_round()
 
-    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_count_guesses_for_round", return_value=4), \
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
+         patch("bot_modules.cogs.veil_cog._do_count_guesses_for_round", return_value=4), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(3333)])):
         await view._on_select(interaction)
 
@@ -237,9 +237,9 @@ async def test_wrong_guess_on_solved_round_skips_counter_bump():
 
     round_row = _make_round(solved_at=1234.0)
 
-    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_count_guesses_for_round", return_value=8), \
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
+         patch("bot_modules.cogs.veil_cog._do_count_guesses_for_round", return_value=8), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(3333)])):
         await view._on_select(interaction)
 
@@ -255,8 +255,8 @@ async def test_guess_cap_blocks_after_five_attempts():
     interaction.edit_original_response = AsyncMock()
 
     insert_mock = MagicMock()
-    with patch("cogs.veil_cog._do_count_user_guesses", return_value=5), \
-         patch("cogs.veil_cog._do_insert_guess", insert_mock), \
+    with patch("bot_modules.cogs.veil_cog._do_count_user_guesses", return_value=5), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess", insert_mock), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -274,10 +274,10 @@ async def test_guess_cap_allows_under_limit():
     interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()
-    with patch("cogs.veil_cog._do_count_user_guesses", return_value=4), \
-         patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess") as insert_mock, \
-         patch("cogs.veil_cog._do_count_guesses_for_round", return_value=5), \
+    with patch("bot_modules.cogs.veil_cog._do_count_user_guesses", return_value=4), \
+         patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess") as insert_mock, \
+         patch("bot_modules.cogs.veil_cog._do_count_guesses_for_round", return_value=5), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(3333)])):
         await view._on_select(interaction)
 
@@ -297,9 +297,9 @@ async def test_correct_guess_loses_race_does_not_edit_message():
     interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()  # solved_at None — but mark_solved will say rowcount=0
-    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(0, 5, 3)), \
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
+         patch("bot_modules.cogs.veil_cog._do_mark_solved", return_value=(0, 5, 3)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -316,9 +316,9 @@ async def test_select_is_disabled_after_guess():
     interaction.edit_original_response = AsyncMock()
 
     round_row = _make_round()
-    with patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
+         patch("bot_modules.cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -330,7 +330,7 @@ async def test_select_is_disabled_after_guess():
 @pytest.mark.asyncio
 async def test_on_select_rejects_guess_within_cooldown():
     import time as _time
-    from services.veil_models import VeilGuess
+    from bot_modules.services.veil_models import VeilGuess
 
     view = _make_select_view(cooldown_seconds=30)
     interaction = fake_interaction(user=FakeMember(id=9999))
@@ -343,8 +343,8 @@ async def test_on_select_rejects_guess_within_cooldown():
         created_at=_time.time() - 5,  # 5s ago, within 30s cooldown
     )
     insert_mock = MagicMock()
-    with patch("cogs.veil_cog._do_get_last_guess", return_value=recent_guess), \
-         patch("cogs.veil_cog._do_insert_guess", insert_mock), \
+    with patch("bot_modules.cogs.veil_cog._do_get_last_guess", return_value=recent_guess), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess", insert_mock), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -356,7 +356,7 @@ async def test_on_select_rejects_guess_within_cooldown():
 @pytest.mark.asyncio
 async def test_on_select_allows_guess_after_cooldown_expires():
     import time as _time
-    from services.veil_models import VeilGuess
+    from bot_modules.services.veil_models import VeilGuess
 
     view = _make_select_view(cooldown_seconds=30)
     interaction = fake_interaction(user=FakeMember(id=9999))
@@ -369,10 +369,10 @@ async def test_on_select_allows_guess_after_cooldown_expires():
         created_at=_time.time() - 60,  # 60s ago, past 30s cooldown
     )
     round_row = _make_round()
-    with patch("cogs.veil_cog._do_get_last_guess", return_value=old_guess), \
-         patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess") as insert_mock, \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 2, 1)), \
+    with patch("bot_modules.cogs.veil_cog._do_get_last_guess", return_value=old_guess), \
+         patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess") as insert_mock, \
+         patch("bot_modules.cogs.veil_cog._do_mark_solved", return_value=(1, 2, 1)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -389,10 +389,10 @@ async def test_on_select_cooldown_zero_disables_check():
 
     round_row = _make_round()
     get_last_mock = MagicMock()
-    with patch("cogs.veil_cog._do_get_last_guess", get_last_mock), \
-         patch("cogs.veil_cog._do_load_round", return_value=round_row), \
-         patch("cogs.veil_cog._do_insert_guess"), \
-         patch("cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
+    with patch("bot_modules.cogs.veil_cog._do_get_last_guess", get_last_mock), \
+         patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row), \
+         patch("bot_modules.cogs.veil_cog._do_insert_guess"), \
+         patch("bot_modules.cogs.veil_cog._do_mark_solved", return_value=(1, 1, 1)), \
          patch.object(type(view._select), "values", new=property(lambda _: [str(2001)])):
         await view._on_select(interaction)
 
@@ -405,8 +405,8 @@ async def test_on_select_cooldown_zero_disables_check():
 async def test_guess_callback_message_mentions_timer():
     """The ephemeral 'Who do you think this is?' message must surface the
     countdown so users know the prompt is time-limited."""
-    from cogs.veil_cog import GameView
-    from services.veil_models import VeilConfig
+    from bot_modules.cogs.veil_cog import GameView
+    from bot_modules.services.veil_models import VeilConfig
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -422,8 +422,8 @@ async def test_guess_callback_message_mentions_timer():
     round_row = _make_round(submitter_id=1001)
     config = VeilConfig(guild_id=9001, veil_role_id=VEIL_ROLE_ID, guess_cooldown_seconds=30)
 
-    with patch("cogs.veil_cog._load_config", return_value=config), \
-         patch("cogs.veil_cog._do_load_round", return_value=round_row):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=config), \
+         patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row):
         await view._guess_callback(interaction)
 
     msg = interaction.response.send_message.call_args.args[0]
@@ -432,8 +432,8 @@ async def test_guess_callback_message_mentions_timer():
 
 @pytest.mark.asyncio
 async def test_game_view_rejects_submitter_guessing_own_round():
-    from cogs.veil_cog import GameView
-    from services.veil_models import VeilConfig
+    from bot_modules.cogs.veil_cog import GameView
+    from bot_modules.services.veil_models import VeilConfig
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -446,8 +446,8 @@ async def test_game_view_rejects_submitter_guessing_own_round():
     round_row = _make_round(submitter_id=1001)
     config = VeilConfig(guild_id=9001, veil_role_id=VEIL_ROLE_ID)
 
-    with patch("cogs.veil_cog._load_config", return_value=config), \
-         patch("cogs.veil_cog._do_load_round", return_value=round_row):
+    with patch("bot_modules.cogs.veil_cog._load_config", return_value=config), \
+         patch("bot_modules.cogs.veil_cog._do_load_round", return_value=round_row):
         await view._guess_callback(interaction)
 
     msg = interaction.response.send_message.call_args.args[0]
@@ -464,8 +464,8 @@ VEIL_CHANNEL_ID = 8001
 async def test_post_persists_original_bytes_and_stores_path(tmp_path, monkeypatch):
     """On Post, the submitter's original bytes are written to <orig_dir>/<round_id><ext>
     and the path is recorded so /correct guess can attach it as a SPOILER."""
-    import cogs.veil_cog as veil_cog
-    from cogs.veil_cog import CropEditorView
+    import bot_modules.cogs.veil_cog as veil_cog
+    from bot_modules.cogs.veil_cog import CropEditorView
 
     monkeypatch.setattr(veil_cog, "_VEIL_ORIG_DIR", tmp_path / "orig")
 
@@ -509,13 +509,13 @@ async def test_post_persists_original_bytes_and_stores_path(tmp_path, monkeypatc
     def _capture(*args, **kwargs):
         set_path_calls.append((args, kwargs))
 
-    with patch("cogs.veil_cog._do_insert_round", return_value=77), \
-         patch("cogs.veil_cog._do_update_round_message"), \
-         patch("cogs.veil_cog._do_set_original_path", side_effect=_capture), \
-         patch("cogs.veil_cog._do_audit"), \
-         patch("cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
-         patch("cogs.veil_cog._repost_prompt", new_callable=AsyncMock):
-        with patch("cogs.veil_cog.isinstance", lambda obj, types: True):
+    with patch("bot_modules.cogs.veil_cog._do_insert_round", return_value=77), \
+         patch("bot_modules.cogs.veil_cog._do_update_round_message"), \
+         patch("bot_modules.cogs.veil_cog._do_set_original_path", side_effect=_capture), \
+         patch("bot_modules.cogs.veil_cog._do_audit"), \
+         patch("bot_modules.cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
+         patch("bot_modules.cogs.veil_cog._repost_prompt", new_callable=AsyncMock):
+        with patch("bot_modules.cogs.veil_cog.isinstance", lambda obj, types: True):
             await view._on_post(interaction)
 
     persisted = tmp_path / "orig" / "77.png"

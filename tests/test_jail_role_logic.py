@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from services.moderation import compute_roles_to_restore, compute_roles_to_snapshot
+from bot_modules.services.moderation import compute_roles_to_restore, compute_roles_to_snapshot
 
 EVERYONE = 100
 JAILED = 200

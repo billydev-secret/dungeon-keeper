@@ -3,8 +3,8 @@
 
 import pytest
 
-from core.config import Config, load_config
-from core.safety import check_db_path
+from bot_modules.core.config import Config, load_config
+from bot_modules.core.safety import check_db_path
 
 
 # ── Config properties ─────────────────────────────────────────────────

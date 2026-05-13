@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from services.veil_models import (
+from bot_modules.services.veil_models import (
     BoundingBox,
     Detection,
     PipelineResult,

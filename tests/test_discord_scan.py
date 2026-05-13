@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import discord
 
-from services.discord_scan import (
+from bot_modules.services.discord_scan import (
     collect_messageable_channels,
     find_user_messages,
 )

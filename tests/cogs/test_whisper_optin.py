@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.whisper_models import WhisperConfig
+from bot_modules.services.whisper_models import WhisperConfig
 from tests.fakes import FakeMember, FakeRole, fake_interaction
 
 ROLE_ID = 7001
 
 
 def _cog_with_role():
-    from cogs.whisper_cog import WhisperCog
+    from bot_modules.cogs.whisper_cog import WhisperCog
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     cog = WhisperCog.__new__(WhisperCog)
@@ -26,7 +26,7 @@ def _cog_with_role():
 async def test_optin_sends_confirmation_view():
     """/whisper optin shows a consent message + confirm/cancel View
     rather than granting the role immediately."""
-    from cogs.whisper_cog import WhisperOptinConfirmView
+    from bot_modules.cogs.whisper_cog import WhisperOptinConfirmView
 
     cog = _cog_with_role()
     role = FakeRole(id=ROLE_ID, name="Whisper")
@@ -38,7 +38,7 @@ async def test_optin_sends_confirmation_view():
     interaction.guild.get_role = MagicMock(return_value=role)
 
     cfg = WhisperConfig(guild_id=9001, role_id=ROLE_ID, channel_id=8001, log_channel_id=8002)
-    with patch("cogs.whisper_cog._load_config", return_value=cfg):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg):
         await cog._optin_impl(interaction)
 
     # Role is NOT granted yet — only after confirm.
@@ -63,7 +63,7 @@ def _find_button_by_label(view: discord.ui.View, label: str) -> discord.ui.Butto
 @pytest.mark.asyncio
 async def test_optin_confirm_button_grants_role():
     """The Confirm button on the consent view actually grants the role."""
-    from cogs.whisper_cog import WhisperOptinConfirmView
+    from bot_modules.cogs.whisper_cog import WhisperOptinConfirmView
 
     role = FakeRole(id=ROLE_ID, name="Whisper")
     member = FakeMember(id=1001, roles=[])
@@ -83,7 +83,7 @@ async def test_optin_confirm_button_grants_role():
 @pytest.mark.asyncio
 async def test_optin_cancel_button_does_not_grant_role():
     """The Cancel button on the consent view does not grant the role."""
-    from cogs.whisper_cog import WhisperOptinConfirmView
+    from bot_modules.cogs.whisper_cog import WhisperOptinConfirmView
 
     role = FakeRole(id=ROLE_ID, name="Whisper")
     member = FakeMember(id=1001, roles=[])
@@ -109,7 +109,7 @@ async def test_optin_not_configured():
     interaction.guild.id = 9001
 
     cfg = WhisperConfig(guild_id=9001)  # no role configured
-    with patch("cogs.whisper_cog._load_config", return_value=cfg):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg):
         await cog._optin_impl(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -128,7 +128,7 @@ async def test_optout_removes_role():
     interaction.guild.get_role = MagicMock(return_value=role)
 
     cfg = WhisperConfig(guild_id=9001, role_id=ROLE_ID, channel_id=8001, log_channel_id=8002)
-    with patch("cogs.whisper_cog._load_config", return_value=cfg):
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg):
         await cog._optout_impl(interaction)
 
     member.remove_roles.assert_awaited_once()

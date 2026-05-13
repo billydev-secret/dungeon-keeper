@@ -23,8 +23,8 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 
-from core.db_utils import get_config_value, open_db
-from services.message_store import init_known_channels_table, init_known_users_table
+from bot_modules.core.db_utils import get_config_value, open_db
+from bot_modules.services.message_store import init_known_channels_table, init_known_users_table
 
 logging.basicConfig(
     level=logging.INFO,
@@ -122,7 +122,7 @@ def main() -> None:
     )
 
     # Import after env is loaded so matplotlib etc. can honour any configuration.
-    from web.server import create_app
+    from web_server.server import create_app
 
     host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
     port = int(os.getenv("DASHBOARD_PORT", "8080"))

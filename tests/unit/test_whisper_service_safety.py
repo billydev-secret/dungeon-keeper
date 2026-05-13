@@ -1,7 +1,7 @@
 """Unit tests for safe_codefence_content helper (B1)."""
 from __future__ import annotations
 
-from services.whisper_service import safe_codefence_content
+from bot_modules.services.whisper_service import safe_codefence_content
 
 
 def test_plain_string_unchanged():

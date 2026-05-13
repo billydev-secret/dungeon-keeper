@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from core.db_utils import (
+from bot_modules.core.db_utils import (
     add_config_id,
     add_grant_permission,
     get_config_id_set,
@@ -21,19 +21,19 @@ from core.db_utils import (
     set_config_value,
     upsert_grant_role,
 )
-from services.auto_delete_service import init_auto_delete_tables, upsert_auto_delete_rule
-from services.booster_roles import init_booster_role_tables, upsert_booster_role
-from services.confessions_service import init_db as init_confessions_db
-from services.inactivity_prune_service import init_inactivity_prune_tables
-from services.message_store import (
+from bot_modules.services.auto_delete_service import init_auto_delete_tables, upsert_auto_delete_rule
+from bot_modules.services.booster_roles import init_booster_role_tables, upsert_booster_role
+from bot_modules.services.confessions_service import init_db as init_confessions_db
+from bot_modules.services.inactivity_prune_service import init_inactivity_prune_tables
+from bot_modules.services.message_store import (
     init_known_channels_table,
     init_known_users_table,
     upsert_known_channel,
     upsert_known_user,
 )
-from web.auth import DiscordOAuthAuth, OpenAuth, SESSION_COOKIE
-from web.deps import invalidate_report_cache, store_report_result
-from web.server import create_app
+from web_server.auth import DiscordOAuthAuth, OpenAuth, SESSION_COOKIE
+from web_server.deps import invalidate_report_cache, store_report_result
+from web_server.server import create_app
 
 
 class _TestCtx:
@@ -379,7 +379,7 @@ def test_role_growth_endpoint_caches_results_and_parses_roles(ctx, make_client):
     }
 
     with patch(
-        "web.routes.reports.reports_data.get_role_growth_data",
+        "web_server.routes.reports.reports_data.get_role_growth_data",
         return_value=payload,
     ) as mock_role_growth:
         first = client.get("/api/reports/role-growth?resolution=month&roles=alpha, beta,,")
@@ -407,7 +407,7 @@ def test_message_rate_clamps_days_before_query(ctx, make_client):
     }
 
     with patch(
-        "web.routes.reports.reports_data.get_message_rate_data",
+        "web_server.routes.reports.reports_data.get_message_rate_data",
         return_value=payload,
     ) as mock_message_rate:
         response = client.get("/api/reports/message-rate?days=9999")
@@ -468,7 +468,7 @@ def test_channel_comparison_resolves_names_from_guild_and_db(ctx, make_client):
     }
 
     with patch(
-        "web.routes.reports.reports_data.get_channel_comparison_data",
+        "web_server.routes.reports.reports_data.get_channel_comparison_data",
         return_value=payload,
     ):
         response = client.get("/api/reports/channel-comparison?days=7")
@@ -617,7 +617,7 @@ def test_post_bot_identity_fetches_avatar_url(ctx, make_client):
         status_code=200, content=fake_image, raise_for_status=lambda: None,
     )
     async def mock_get(*_a, **_kw): return mock_response
-    with patch("web.routes.config.httpx.AsyncClient") as MockClient:
+    with patch("web_server.routes.config.httpx.AsyncClient") as MockClient:
         instance = AsyncMock()
         instance.get = mock_get
         instance.__aenter__ = AsyncMock(return_value=instance)
@@ -644,7 +644,7 @@ def test_post_bot_identity_file_takes_priority_over_url(ctx, make_client):
     ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
     client = make_client()
     file_bytes = b"\x89PNG\r\n\x1a\nFILE"
-    with patch("web.routes.config.httpx.AsyncClient") as MockClient:
+    with patch("web_server.routes.config.httpx.AsyncClient") as MockClient:
         MockClient.return_value.__aenter__ = AsyncMock()
         MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
         resp = client.post(
@@ -683,7 +683,7 @@ def test_post_bot_identity_400_on_bad_avatar_url(ctx, make_client):
     )
     ctx.bot = SimpleNamespace(get_guild=lambda gid: guild if gid == ctx.guild_id else None)
     client = make_client()
-    with patch("web.routes.config.httpx.AsyncClient") as MockClient:
+    with patch("web_server.routes.config.httpx.AsyncClient") as MockClient:
         instance = AsyncMock()
         instance.get = AsyncMock(side_effect=_httpx.RequestError("connection failed"))
         instance.__aenter__ = AsyncMock(return_value=instance)

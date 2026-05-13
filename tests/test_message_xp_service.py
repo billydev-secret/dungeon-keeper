@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.message_xp_service import split_award_into_text_and_reply
+from bot_modules.services.message_xp_service import split_award_into_text_and_reply
 
 
 # ── no reply bonus ────────────────────────────────────────────────────

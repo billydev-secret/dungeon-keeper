@@ -8,8 +8,8 @@ import random
 
 import pytest
 
-from services.veil_models import BoundingBox, Detection
-from services.veil_pipeline import (
+from bot_modules.services.veil_models import BoundingBox, Detection
+from bot_modules.services.veil_pipeline import (
     HIGH_INTEREST_WEIGHT,
     LOW_INTEREST_WEIGHT,
     apply_label_weights,

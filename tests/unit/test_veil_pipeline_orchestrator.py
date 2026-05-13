@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
-from services.veil_models import BoundingBox, Detection, PipelineResult
+from bot_modules.services.veil_models import BoundingBox, Detection, PipelineResult
 
 
 # ---------------------------------------------------------------------------
@@ -72,13 +72,13 @@ class TestRunPipeline:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_nudenet": mock_nudenet,
-                "services.veil_face_detector": mock_face_det,
-                "services.veil_pose_detector": mock_pose_det,
-                "services.veil_crop_renderer": mock_crop_ren,
+                "bot_modules.services.veil_nudenet": mock_nudenet,
+                "bot_modules.services.veil_face_detector": mock_face_det,
+                "bot_modules.services.veil_pose_detector": mock_pose_det,
+                "bot_modules.services.veil_crop_renderer": mock_crop_ren,
             },
         ):
-            from services.veil_pipeline import run_pipeline  # noqa: PLC0415
+            from bot_modules.services.veil_pipeline import run_pipeline  # noqa: PLC0415
 
             result = run_pipeline(
                 image_path,
@@ -171,13 +171,13 @@ class TestRunPipeline:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_nudenet": mock_nudenet,
-                "services.veil_face_detector": mock_face_det,
-                "services.veil_pose_detector": mock_pose_det,
-                "services.veil_crop_renderer": mock_crop_ren,
+                "bot_modules.services.veil_nudenet": mock_nudenet,
+                "bot_modules.services.veil_face_detector": mock_face_det,
+                "bot_modules.services.veil_pose_detector": mock_pose_det,
+                "bot_modules.services.veil_crop_renderer": mock_crop_ren,
             },
         ):
-            from services.veil_pipeline import run_pipeline  # noqa: PLC0415
+            from bot_modules.services.veil_pipeline import run_pipeline  # noqa: PLC0415
 
             run_pipeline(image_path, b"bytes", "medium", cache_dir=cache_dir)
 
@@ -201,13 +201,13 @@ class TestRunPipeline:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_nudenet": mock_nudenet,
-                "services.veil_face_detector": mock_face_det,
-                "services.veil_pose_detector": mock_pose_det,
-                "services.veil_crop_renderer": mock_crop_ren,
+                "bot_modules.services.veil_nudenet": mock_nudenet,
+                "bot_modules.services.veil_face_detector": mock_face_det,
+                "bot_modules.services.veil_pose_detector": mock_pose_det,
+                "bot_modules.services.veil_crop_renderer": mock_crop_ren,
             },
         ):
-            from services.veil_pipeline import run_pipeline  # noqa: PLC0415
+            from bot_modules.services.veil_pipeline import run_pipeline  # noqa: PLC0415
 
             run_pipeline(Path("/fake/img.jpg"), b"bytes", "medium")
 
@@ -239,10 +239,10 @@ class TestRunReroll:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_crop_renderer": mock_crop_ren,
+                "bot_modules.services.veil_crop_renderer": mock_crop_ren,
             },
         ):
-            from services.veil_pipeline import run_reroll  # noqa: PLC0415
+            from bot_modules.services.veil_pipeline import run_reroll  # noqa: PLC0415
 
             return run_reroll(b"fake-image-bytes", existing_crops)
 
@@ -270,10 +270,10 @@ class TestRunReroll:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_crop_renderer": mock_crop_ren,
+                "bot_modules.services.veil_crop_renderer": mock_crop_ren,
             },
         ):
-            from services.veil_pipeline import run_reroll  # noqa: PLC0415
+            from bot_modules.services.veil_pipeline import run_reroll  # noqa: PLC0415
 
             run_reroll(b"fake-bytes", [])
 
@@ -288,10 +288,10 @@ class TestRunReroll:
             sys.modules,
             {
                 "PIL": mock_pil,
-                "services.veil_crop_renderer": mock_crop_ren,
+                "bot_modules.services.veil_crop_renderer": mock_crop_ren,
             },
         ):
-            from services.veil_pipeline import run_reroll  # noqa: PLC0415
+            from bot_modules.services.veil_pipeline import run_reroll  # noqa: PLC0415
 
             run_reroll(b"fake-bytes", [])
 

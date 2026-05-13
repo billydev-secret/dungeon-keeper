@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 
 
-from services.confessions_service import (
+from bot_modules.services.confessions_service import (
     MAX_DISCORD_MESSAGE_LENGTH,
     _ANON_ADJECTIVES,
     _ANON_ANIMALS,

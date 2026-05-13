@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.db_utils import open_db
-from services.veil_repo import insert_round, mark_round_solved
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.veil_repo import insert_round, mark_round_solved
 
 
 def test_mark_solved_returns_one_on_first_call(sync_db_path: Path) -> None:

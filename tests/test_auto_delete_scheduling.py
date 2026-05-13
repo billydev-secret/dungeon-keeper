@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import timezone
 
-from services.auto_delete_service import (
+from bot_modules.services.auto_delete_service import (
     _BULK_DELETE_MAX_AGE,
     compute_startup_scan_after,
     is_rule_due,

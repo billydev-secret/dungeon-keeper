@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from services.whisper_models import Whisper, WhisperConfig, WhisperState
+from bot_modules.services.whisper_models import Whisper, WhisperConfig, WhisperState
 from tests.fakes import FakeMember, fake_interaction
 
 SENDER, TARGET, OTHER = 1001, 2001, 9999
@@ -48,22 +48,22 @@ def _cfg(*, log_channel_id: int = LOG) -> WhisperConfig:
 
 
 def test_format_time_ago_seconds():
-    from cogs.whisper_cog import _format_time_ago
+    from bot_modules.cogs.whisper_cog import _format_time_ago
     assert _format_time_ago(0, now=30) == "30s ago"
 
 
 def test_format_time_ago_minutes():
-    from cogs.whisper_cog import _format_time_ago
+    from bot_modules.cogs.whisper_cog import _format_time_ago
     assert _format_time_ago(0, now=125) == "2m ago"
 
 
 def test_format_time_ago_hours():
-    from cogs.whisper_cog import _format_time_ago
+    from bot_modules.cogs.whisper_cog import _format_time_ago
     assert _format_time_ago(0, now=3600 * 4) == "4h ago"
 
 
 def test_format_time_ago_days_plural_singular():
-    from cogs.whisper_cog import _format_time_ago
+    from bot_modules.cogs.whisper_cog import _format_time_ago
     assert _format_time_ago(0, now=86400) == "1 day ago"
     assert _format_time_ago(0, now=86400 * 7) == "7 days ago"
 
@@ -72,7 +72,7 @@ def test_format_time_ago_days_plural_singular():
 
 
 def test_build_inbox_empty():
-    from cogs.whisper_cog import _build_inbox
+    from bot_modules.cogs.whisper_cog import _build_inbox
     bot = MagicMock()
     embed, view = _build_inbox(bot, [], title="Your Inbox", hidden_view=False)
     assert "(0)" in embed.title  # type: ignore[operator]
@@ -81,7 +81,7 @@ def test_build_inbox_empty():
 
 
 def test_build_inbox_shows_numbered_messages_and_buttons():
-    from cogs.whisper_cog import (
+    from bot_modules.cogs.whisper_cog import (
         WhisperGuessButton,
         WhisperHideButton,
         WhisperReplyButton,
@@ -107,7 +107,7 @@ def test_build_inbox_shows_numbered_messages_and_buttons():
 
 
 def test_build_inbox_caps_at_five_visible_and_shows_hint_footer():
-    from cogs.whisper_cog import _build_inbox
+    from bot_modules.cogs.whisper_cog import _build_inbox
     bot = MagicMock()
     whispers = [_w(wid=10 + i) for i in range(7)]
     embed, view = _build_inbox(bot, whispers, title="Your Inbox", hidden_view=False)
@@ -120,7 +120,7 @@ def test_build_inbox_caps_at_five_visible_and_shows_hint_footer():
 
 
 def test_build_inbox_hidden_view_omits_hide_old_hint():
-    from cogs.whisper_cog import _build_inbox
+    from bot_modules.cogs.whisper_cog import _build_inbox
     bot = MagicMock()
     whispers = [_w(wid=10 + i) for i in range(7)]
     embed, view = _build_inbox(
@@ -132,7 +132,7 @@ def test_build_inbox_hidden_view_omits_hide_old_hint():
 
 
 def test_build_inbox_assigns_unique_row_per_message():
-    from cogs.whisper_cog import _build_inbox
+    from bot_modules.cogs.whisper_cog import _build_inbox
     bot = MagicMock()
     whispers = [_w(wid=10 + i) for i in range(3)]
     _embed, view = _build_inbox(
@@ -150,7 +150,7 @@ def test_build_inbox_assigns_unique_row_per_message():
 
 @pytest.mark.asyncio
 async def test_reply_button_third_party_rejected():
-    from cogs.whisper_cog import WhisperReplyButton
+    from bot_modules.cogs.whisper_cog import WhisperReplyButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     button = WhisperReplyButton(bot, 42)
@@ -158,7 +158,7 @@ async def test_reply_button_third_party_rejected():
     interaction.response.send_modal = AsyncMock()
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()):
         await button.callback(interaction)
 
     interaction.response.send_modal.assert_not_called()
@@ -167,14 +167,14 @@ async def test_reply_button_third_party_rejected():
 
 @pytest.mark.asyncio
 async def test_reply_button_target_opens_modal():
-    from cogs.whisper_cog import WhisperReplyButton
+    from bot_modules.cogs.whisper_cog import WhisperReplyButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     button = WhisperReplyButton(bot, 42)
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_modal = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()):
         await button.callback(interaction)
 
     interaction.response.send_modal.assert_called_once()
@@ -182,7 +182,7 @@ async def test_reply_button_target_opens_modal():
 
 @pytest.mark.asyncio
 async def test_reply_modal_target_dms_sender():
-    from cogs.whisper_cog import WhisperReplyModal
+    from bot_modules.cogs.whisper_cog import WhisperReplyModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReplyModal(bot, whisper_id=42)
@@ -195,8 +195,8 @@ async def test_reply_modal_target_dms_sender():
     interaction.client.get_user = MagicMock(return_value=sender_user)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._do_insert_reply") as ins:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_reply") as ins:
         await modal.on_submit(interaction)
 
     sender_user.send.assert_awaited_once()
@@ -212,7 +212,7 @@ async def test_reply_modal_target_dms_sender():
 
 @pytest.mark.asyncio
 async def test_reply_modal_sender_dms_target():
-    from cogs.whisper_cog import WhisperReplyModal
+    from bot_modules.cogs.whisper_cog import WhisperReplyModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReplyModal(bot, whisper_id=42)
@@ -225,8 +225,8 @@ async def test_reply_modal_sender_dms_target():
     interaction.client.get_user = MagicMock(return_value=target_user)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._do_insert_reply") as ins:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_reply") as ins:
         await modal.on_submit(interaction)
 
     target_user.send.assert_awaited_once()
@@ -241,7 +241,7 @@ async def test_reply_modal_sender_dms_target():
 
 @pytest.mark.asyncio
 async def test_reply_modal_dm_forbidden_does_not_persist():
-    from cogs.whisper_cog import WhisperReplyModal
+    from bot_modules.cogs.whisper_cog import WhisperReplyModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReplyModal(bot, whisper_id=42)
@@ -256,8 +256,8 @@ async def test_reply_modal_dm_forbidden_does_not_persist():
     interaction.client.get_user = MagicMock(return_value=sender_user)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._do_insert_reply") as ins:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_reply") as ins:
         await modal.on_submit(interaction)
 
     ins.assert_not_called()
@@ -271,7 +271,7 @@ async def test_reply_modal_dm_forbidden_does_not_persist():
 
 @pytest.mark.asyncio
 async def test_report_button_non_target_rejected():
-    from cogs.whisper_cog import WhisperReportButton
+    from bot_modules.cogs.whisper_cog import WhisperReportButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     button = WhisperReportButton(bot, 42)
@@ -279,7 +279,7 @@ async def test_report_button_non_target_rejected():
     interaction.response.send_modal = AsyncMock()
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()):
         await button.callback(interaction)
 
     interaction.response.send_modal.assert_not_called()
@@ -288,7 +288,7 @@ async def test_report_button_non_target_rejected():
 
 @pytest.mark.asyncio
 async def test_report_modal_posts_to_mod_log():
-    from cogs.whisper_cog import WhisperReportModal
+    from bot_modules.cogs.whisper_cog import WhisperReportModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReportModal(bot, whisper_id=42)
@@ -301,9 +301,9 @@ async def test_report_modal_posts_to_mod_log():
     interaction.guild.get_channel = MagicMock(return_value=log_channel)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_insert_report", return_value=True):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_report", return_value=True):
         await modal.on_submit(interaction)
 
     log_channel.send.assert_awaited_once()
@@ -320,7 +320,7 @@ async def test_report_modal_posts_to_mod_log():
 
 @pytest.mark.asyncio
 async def test_report_modal_no_log_channel_rejected():
-    from cogs.whisper_cog import WhisperReportModal
+    from bot_modules.cogs.whisper_cog import WhisperReportModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReportModal(bot, whisper_id=42)
@@ -330,8 +330,8 @@ async def test_report_modal_no_log_channel_rejected():
     interaction.guild = MagicMock()
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg(log_channel_id=0)):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(log_channel_id=0)):
         await modal.on_submit(interaction)
 
     args, kwargs = interaction.response.send_message.call_args
@@ -341,7 +341,7 @@ async def test_report_modal_no_log_channel_rejected():
 
 @pytest.mark.asyncio
 async def test_report_modal_empty_reason_uses_placeholder():
-    from cogs.whisper_cog import WhisperReportModal
+    from bot_modules.cogs.whisper_cog import WhisperReportModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReportModal(bot, whisper_id=42)
@@ -354,9 +354,9 @@ async def test_report_modal_empty_reason_uses_placeholder():
     interaction.guild.get_channel = MagicMock(return_value=log_channel)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_insert_report", return_value=True):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_report", return_value=True):
         await modal.on_submit(interaction)
 
     emb: discord.Embed = log_channel.send.call_args.kwargs["embed"]
@@ -370,7 +370,7 @@ async def test_report_modal_empty_reason_uses_placeholder():
 @pytest.mark.asyncio
 async def test_report_modal_duplicate_rejected():
     """A second report from same reporter should be rejected without posting to mod log."""
-    from cogs.whisper_cog import WhisperReportModal
+    from bot_modules.cogs.whisper_cog import WhisperReportModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReportModal(bot, whisper_id=42)
@@ -383,9 +383,9 @@ async def test_report_modal_duplicate_rejected():
     interaction.guild.get_channel = MagicMock(return_value=log_channel)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_insert_report", return_value=False):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_report", return_value=False):
         await modal.on_submit(interaction)
 
     log_channel.send.assert_not_called()
@@ -397,7 +397,7 @@ async def test_report_modal_duplicate_rejected():
 @pytest.mark.asyncio
 async def test_report_modal_first_report_succeeds():
     """First report from a reporter should succeed and post to mod log."""
-    from cogs.whisper_cog import WhisperReportModal
+    from bot_modules.cogs.whisper_cog import WhisperReportModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReportModal(bot, whisper_id=42)
@@ -410,9 +410,9 @@ async def test_report_modal_first_report_succeeds():
     interaction.guild.get_channel = MagicMock(return_value=log_channel)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()), \
-         patch("cogs.whisper_cog._do_insert_report", return_value=True):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_report", return_value=True):
         await modal.on_submit(interaction)
 
     log_channel.send.assert_awaited_once()
@@ -427,7 +427,7 @@ async def test_report_modal_first_report_succeeds():
 @pytest.mark.asyncio
 async def test_reply_modal_dm_includes_whisper_id():
     """The reply DM body must include 'Whisper #<id>' so recipient can map it."""
-    from cogs.whisper_cog import WhisperReplyModal
+    from bot_modules.cogs.whisper_cog import WhisperReplyModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReplyModal(bot, whisper_id=42)
@@ -440,9 +440,9 @@ async def test_reply_modal_dm_includes_whisper_id():
     interaction.client.get_user = MagicMock(return_value=sender_user)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(wid=42)), \
-         patch("cogs.whisper_cog._do_insert_reply"), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(wid=42)), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_reply"), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await modal.on_submit(interaction)
 
     sender_user.send.assert_awaited_once()
@@ -455,7 +455,7 @@ async def test_reply_modal_dm_includes_whisper_id():
 
 def test_build_inbox_hidden_view_uses_unhide_button():
     """hidden_view=True should yield WhisperUnhideButton instead of WhisperHideButton."""
-    from cogs.whisper_cog import (
+    from bot_modules.cogs.whisper_cog import (
         WhisperHideButton,
         WhisperUnhideButton,
         _build_inbox,
@@ -471,15 +471,15 @@ def test_build_inbox_hidden_view_uses_unhide_button():
 @pytest.mark.asyncio
 async def test_unhide_button_transitions_state_to_pending():
     """Unhide callback should update state from hidden -> pending."""
-    from cogs.whisper_cog import WhisperUnhideButton
+    from bot_modules.cogs.whisper_cog import WhisperUnhideButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     button = WhisperUnhideButton(bot, 42)
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
-         patch("cogs.whisper_cog._do_update_state") as update_state:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state") as update_state:
         await button.callback(interaction)
 
     update_state.assert_called_once_with(":memory:", 42, "pending")
@@ -489,15 +489,15 @@ async def test_unhide_button_transitions_state_to_pending():
 @pytest.mark.asyncio
 async def test_unhide_button_rejects_non_target():
     """Unhide callback rejects users who aren't the recipient."""
-    from cogs.whisper_cog import WhisperUnhideButton
+    from bot_modules.cogs.whisper_cog import WhisperUnhideButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     button = WhisperUnhideButton(bot, 42)
     interaction = fake_interaction(user=FakeMember(id=OTHER))
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
-         patch("cogs.whisper_cog._do_update_state") as update_state:
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state") as update_state:
         await button.callback(interaction)
 
     update_state.assert_not_called()
@@ -507,7 +507,7 @@ async def test_unhide_button_rejects_non_target():
 @pytest.mark.asyncio
 async def test_reply_modal_posts_to_mod_log():
     """After a successful reply, a mod log embed should be posted."""
-    from cogs.whisper_cog import WhisperReplyModal
+    from bot_modules.cogs.whisper_cog import WhisperReplyModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     modal = WhisperReplyModal(bot, whisper_id=42)
@@ -527,9 +527,9 @@ async def test_reply_modal_posts_to_mod_log():
     interaction.client.get_user = MagicMock(return_value=sender_user)
     interaction.response.send_message = AsyncMock()
 
-    with patch("cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("cogs.whisper_cog._do_insert_reply"), \
-         patch("cogs.whisper_cog._load_config", return_value=_cfg()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_reply"), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await modal.on_submit(interaction)
 
     log_channel.send.assert_awaited_once()

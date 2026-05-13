@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from services.inactivity_prune_service import compute_prune_targets
+from bot_modules.services.inactivity_prune_service import compute_prune_targets
 
 
 @dataclass

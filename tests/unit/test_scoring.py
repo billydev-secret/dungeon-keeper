@@ -2,8 +2,8 @@
 
 from hypothesis import given, settings, strategies as st
 
-from core.scoring import clamp_score, compute_score_from_components
-from core.xp_system import (
+from bot_modules.core.scoring import clamp_score, compute_score_from_components
+from bot_modules.core.xp_system import (
     cooldown_multiplier,
     level_for_xp,
     xp_required_for_level,
@@ -81,7 +81,7 @@ def test_level_for_xp_round_trip():
 
 
 def test_cooldown_multiplier_returns_float():
-    from core.xp_system import DEFAULT_XP_SETTINGS
+    from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS
 
     result = cooldown_multiplier(seconds_since_last_message=0, settings=DEFAULT_XP_SETTINGS)
     assert isinstance(result, float)

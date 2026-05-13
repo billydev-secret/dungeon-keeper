@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from core.db_utils import open_db
+from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
-from services.birthday_service import (
+from bot_modules.services.birthday_service import (
     MAX_DAYS,
     delete_birthday,
     list_all_birthdays,

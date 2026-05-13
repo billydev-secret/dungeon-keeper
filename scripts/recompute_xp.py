@@ -42,7 +42,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from core.xp_system import XpSettings, level_for_xp, load_xp_settings  # noqa: E402
+from bot_modules.core.xp_system import XpSettings, level_for_xp, load_xp_settings  # noqa: E402
 
 PT = dt.timezone(dt.timedelta(hours=-7))  # PDT during the relevant window
 MAR20_CUTOVER = dt.datetime(2026, 3, 20, 14, 4, 37, tzinfo=PT).timestamp()

@@ -1,0 +1,783 @@
+"""Interaction graph slash commands.
+
+Commands:
+  /connection_web       — render the server's reply/mention interaction network
+  /interaction_heatmap  — adjacency-matrix heatmap of interactions
+  /interaction_scan     — backfill interaction history from message history
+"""
+
+from __future__ import annotations
+
+import asyncio
+import functools
+import io
+import logging
+import time as _time
+from typing import TYPE_CHECKING
+
+import discord
+from discord import app_commands
+
+from bot_modules.services.interaction_graph import (
+    clear_interaction_data,
+    query_connection_web,
+    record_interactions,
+    render_connection_web,
+    render_interaction_heatmap,
+)
+from bot_modules.services.invite_tracker import query_invite_web
+from bot_modules.services.message_store import record_member_event, set_reaction_count, store_message
+from bot_modules.services.name_resolver import resolve_display_names
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import AppContext, Bot
+
+log = logging.getLogger("dungeonkeeper.interaction_commands")
+
+
+def _discord_embed_to_dict(e: discord.Embed) -> dict:
+    return {
+        "title": e.title,
+        "description": e.description,
+        "url": e.url,
+        "author": e.author.name if e.author else None,
+        "footer": e.footer.text if e.footer else None,
+        "fields": [
+            {"name": f.name, "value": f.value, "inline": f.inline}
+            for f in e.fields
+        ],
+    }
+
+
+def _archived_message_content(message: discord.Message) -> str | None:
+    if message.content:
+        return message.content
+    system_content = (getattr(message, "system_content", "") or "").strip()
+    return system_content or None
+
+
+def _counts_as_member_activity(message: discord.Message) -> bool:
+    return message.type in {
+        discord.MessageType.default,
+        discord.MessageType.reply,
+    }
+
+
+async def _collect_scan_targets(
+    guild: discord.Guild,
+    me: discord.Member | None,
+    selected_channel: discord.TextChannel | discord.Thread | None = None,
+) -> list[discord.TextChannel | discord.Thread]:
+    channels: list[discord.TextChannel | discord.Thread] = []
+    seen_ids: set[int] = set()
+
+    def _can_read_history(channel: discord.TextChannel | discord.Thread) -> bool:
+        return not me or channel.permissions_for(me).read_message_history
+
+    async def _add_channel(
+        channel: discord.TextChannel | discord.Thread,
+    ) -> None:
+        if channel.id in seen_ids or not _can_read_history(channel):
+            return
+        channels.append(channel)
+        seen_ids.add(channel.id)
+
+    async def _add_channel_with_threads(
+        channel: discord.TextChannel | discord.Thread,
+    ) -> None:
+        await _add_channel(channel)
+
+        archived_threads = getattr(channel, "archived_threads", None)
+        if callable(archived_threads):
+            try:
+                async for thread in archived_threads(limit=None):  # type: ignore[misc]
+                    await _add_channel(thread)
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        for thread in getattr(channel, "threads", []):
+            await _add_channel(thread)
+
+    if selected_channel is not None:
+        await _add_channel_with_threads(selected_channel)
+        return channels
+
+    for channel in guild.text_channels:
+        await _add_channel_with_threads(channel)
+    return channels
+
+
+def register_interaction_commands(bot: Bot, ctx: AppContext) -> None:
+
+    @bot.tree.command(
+        name="connection_web",
+        description="Network graph of who replies to and mentions whom.",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        member="Focus on one person's connections. Omit for server-wide.",
+        timescale="How far back to look: hour, day, week, month, or all time.",
+        min_pct="Hide weak links below this % of a user's total interactions.",
+        layers="Hops to expand from the focused member (1-5).",
+        limit="Max members in the server-wide view.",
+        spread="Visual spacing between nodes. Higher = more spread out.",
+        max_per_node="Keep only the top N strongest connections per person. 0 = no limit.",
+    )
+    @app_commands.choices(
+        timescale=[
+            app_commands.Choice(name="hour", value="hour"),
+            app_commands.Choice(name="day", value="day"),
+            app_commands.Choice(name="week", value="week"),
+            app_commands.Choice(name="month", value="month"),
+            app_commands.Choice(name="all time", value="all"),
+        ]
+    )
+    async def connection_web(
+        interaction: discord.Interaction,
+        member: discord.User | None = None,
+        timescale: str = "all",
+        min_pct: app_commands.Range[int, 1, 100] = 5,
+        layers: app_commands.Range[int, 1, 5] = 2,
+        limit: app_commands.Range[int, 5, 60] = 40,
+        spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
+        max_per_node: app_commands.Range[int, 0, 20] = 3,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        _TIMESCALE_SECONDS = {
+            "hour": 3600,
+            "day": 86400,
+            "week": 604800,
+            "month": 2592000,
+        }
+        after_ts = (
+            int(_time.time()) - _TIMESCALE_SECONDS[timescale]
+            if timescale in _TIMESCALE_SECONDS
+            else None
+        )
+
+        def _query_web():
+            with ctx.open_db() as conn:
+                return query_connection_web(
+                    conn,
+                    guild.id,
+                    min_weight=1,
+                    limit_users=limit,
+                    after_ts=after_ts,
+                )
+
+        all_edges = await asyncio.to_thread(_query_web)
+
+        # Total interaction weight per node — used for percentage filtering
+        node_total: dict[int, int] = {}
+        for u, v, w in all_edges:
+            node_total[u] = node_total.get(u, 0) + w
+            node_total[v] = node_total.get(v, 0) + w
+
+        threshold = min_pct / 100.0
+
+        def _pct_passes(u: int, v: int, w: int) -> bool:
+            """Keep edge if it is >= min_pct% of the less-active endpoint's total."""
+            denom = min(node_total.get(u, 1), node_total.get(v, 1))
+            return w >= threshold * denom
+
+        second_level_ids: set[int] | None = None
+
+        if member is not None:
+            # Expand outward layer by layer. Layer 1 = direct connections (blurple),
+            # layers 2+ go into second_level_ids (green).
+            included_ids: set[int] = {member.id}
+            frontier: set[int] = {member.id}
+            second_level_ids = set()
+
+            for layer_idx in range(layers):
+                new_nodes: set[int] = set()
+                for u, v, w in all_edges:
+                    if not _pct_passes(u, v, w):
+                        continue
+                    if u in frontier and v not in included_ids:
+                        new_nodes.add(v)
+                    elif v in frontier and u not in included_ids:
+                        new_nodes.add(u)
+                if not new_nodes:
+                    break
+                if layer_idx > 0:
+                    second_level_ids |= new_nodes
+                included_ids |= new_nodes
+                frontier = new_nodes
+
+            # Collect every edge whose both endpoints are included and pass the threshold
+            edges = [
+                (u, v, w)
+                for u, v, w in all_edges
+                if u in included_ids and v in included_ids and _pct_passes(u, v, w)
+            ]
+            no_data_msg = (
+                f"{member.mention} has no connections that meet the **{min_pct}%** threshold. "
+                "Try lowering `min_pct` or running `/interaction_scan`."
+            )
+        else:
+            edges = [(u, v, w) for u, v, w in all_edges if _pct_passes(u, v, w)]
+            no_data_msg = (
+                f"No edges found where a connection accounts for ≥**{min_pct}%** "
+                "of either user's total interactions. "
+                "Try lowering `min_pct` or running `/interaction_scan`."
+            )
+
+        if max_per_node > 0:
+            # Build per-node top-N neighbour sets.  An edge is kept only when
+            # it ranks in the top N for *both* endpoints — this guarantees no
+            # node ends up with more than max_per_node edges.
+            node_top: dict[int, set[int]] = {}
+            adj: dict[int, list[tuple[int, int, int]]] = {}
+            for u, v, w in edges:
+                adj.setdefault(u, []).append((u, v, w))
+                adj.setdefault(v, []).append((u, v, w))
+            for node, ne in adj.items():
+                ne.sort(key=lambda e: e[2], reverse=True)
+                node_top[node] = {
+                    (ev if eu == node else eu) for eu, ev, _ in ne[:max_per_node]
+                }
+            edges = [
+                (u, v, w)
+                for u, v, w in edges
+                if v in node_top.get(u, set()) and u in node_top.get(v, set())
+            ]
+
+            # After trimming, some pairs may no longer have a path back to the
+            # focus user.  Prune them by keeping only the connected component
+            # that contains the focus user.
+            if member is not None and edges:
+                _adj: dict[int, set[int]] = {}
+                for u, v, _ in edges:
+                    _adj.setdefault(u, set()).add(v)
+                    _adj.setdefault(v, set()).add(u)
+                reachable: set[int] = set()
+                stack = [member.id]
+                while stack:
+                    cur = stack.pop()
+                    if cur in reachable:
+                        continue
+                    reachable.add(cur)
+                    stack.extend(_adj.get(cur, set()) - reachable)
+                edges = [
+                    (u, v, w) for u, v, w in edges if u in reachable and v in reachable
+                ]
+
+        if not edges:
+            await interaction.followup.send(no_data_msg, ephemeral=True)
+            return
+
+        # Resolve display names via an authoritative gateway fetch so we don't
+        # rely on the member cache, which can be stale (left members still
+        # cached, current members not yet cached).
+        candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
+        name_map = await resolve_display_names(
+            bot=bot, guild=guild, db_path=ctx.db_path, user_ids=candidate_ids,
+        )
+        edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
+
+        loop = asyncio.get_running_loop()
+        chart_bytes = await loop.run_in_executor(
+            None,
+            functools.partial(
+                render_connection_web,
+                edges,
+                name_map,
+                guild_name=guild.name,
+                focus_user_id=member.id if member else None,
+                second_level_ids=second_level_ids,
+                spread=spread,
+            ),
+        )
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(chart_bytes), filename="connection_web.png"),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="interaction_scan",
+        description="Backfill the interaction graph from message history. Run once after setup.",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        days="Days of history to scan. 0 = everything available.",
+        reset="Wipe existing data first (use if counts look inflated from repeat scans).",
+        channel="Only scan this channel. Text channels include their threads.",
+    )
+    async def interaction_scan(
+        interaction: discord.Interaction,
+        days: app_commands.Range[int, 0, 3650] = 0,
+        reset: bool = False,
+        channel: discord.TextChannel | discord.Thread | None = None,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        from datetime import datetime, timedelta, timezone
+
+        now_dt = datetime.now(timezone.utc)
+        after_dt = None if days == 0 else now_dt - timedelta(days=days)
+
+        me = guild.get_member(bot.user.id) if bot.user else None
+
+        if channel is not None and channel.guild != guild:
+            await interaction.followup.send(
+                "That channel is not in this server.",
+                ephemeral=True,
+            )
+            return
+
+        channels = await _collect_scan_targets(guild, me, selected_channel=channel)
+        if channel is not None and not channels:
+            await interaction.followup.send(
+                "I can't read message history in that channel.",
+                ephemeral=True,
+            )
+            return
+
+        stats = {"channels": 0, "messages": 0, "interactions": 0}
+
+        with ctx.open_db() as conn:
+            if reset:
+                clear_interaction_data(conn, guild.id)
+
+            for ch in channels:
+                if me and not ch.permissions_for(me).read_message_history:
+                    continue
+                stats["channels"] += 1
+                try:
+                    async for message in ch.history(
+                        limit=None, after=after_dt, oldest_first=True
+                    ):
+                        if message.author.bot or not message.guild:
+                            continue
+
+                        stats["messages"] += 1
+                        msg_ts = int(message.created_at.timestamp())
+
+                        # Reply and mention targets
+                        reply_to_id: int | None = (
+                            message.reference.message_id
+                            if message.reference and message.reference.message_id
+                            else None
+                        )
+                        mention_ids = [
+                            u.id
+                            for u in message.mentions
+                            if not u.bot and u.id != message.author.id
+                        ]
+
+                        store_message(
+                            conn,
+                            message_id=message.id,
+                            guild_id=guild.id,
+                            channel_id=ch.id,
+                            author_id=message.author.id,
+                            content=_archived_message_content(message),
+                            reply_to_id=reply_to_id,
+                            ts=msg_ts,
+                            attachment_urls=[a.url for a in message.attachments],
+                            mention_ids=mention_ids,
+                            embeds=[_discord_embed_to_dict(e) for e in message.embeds],
+                        )
+
+                        for reaction in message.reactions:
+                            set_reaction_count(
+                                conn, message.id, str(reaction.emoji), reaction.count
+                            )
+
+                        # Interaction graph targets
+                        targets: list[int] = list(mention_ids)
+                        if message.reference and isinstance(
+                            message.reference.resolved, discord.Message
+                        ):
+                            ref = message.reference.resolved
+                            if (
+                                not ref.author.bot
+                                and ref.author.id != message.author.id
+                                and ref.author.id not in targets
+                            ):
+                                targets.insert(0, ref.author.id)
+
+                        if targets and _counts_as_member_activity(message):
+                            record_interactions(
+                                conn,
+                                guild.id,
+                                message.author.id,
+                                targets,
+                                ts=msg_ts,
+                                message_id=message.id,
+                            )
+                            stats["interactions"] += len(targets)
+
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    log.warning("Could not scan channel #%s: %s", ch.name, exc)
+
+        window_label = (
+            "all available history"
+            if days == 0
+            else f"last {days} day{'s' if days != 1 else ''}"
+        )
+        scope_label = channel.mention if channel is not None else "all readable channels"
+        reset_note = " (existing data was cleared first)" if reset else ""
+        await interaction.followup.send(
+            f"Interaction scan complete for {scope_label} over {window_label}{reset_note}.\n"
+            f"Channels scanned: **{stats['channels']}**\n"
+            f"Messages read: **{stats['messages']}**\n"
+            f"Interactions recorded: **{stats['interactions']}**",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="interaction_heatmap",
+        description="Matrix heatmap of who interacts with whom via replies and mentions.",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        timescale="How far back to look: hour, day, week, month, or all time.",
+        min_pct="Hide weak links below this % of a user's total interactions.",
+        limit="Max members to include.",
+    )
+    @app_commands.choices(
+        timescale=[
+            app_commands.Choice(name="hour", value="hour"),
+            app_commands.Choice(name="day", value="day"),
+            app_commands.Choice(name="week", value="week"),
+            app_commands.Choice(name="month", value="month"),
+            app_commands.Choice(name="all time", value="all"),
+        ]
+    )
+    async def interaction_heatmap(
+        interaction: discord.Interaction,
+        timescale: str = "all",
+        min_pct: app_commands.Range[int, 1, 100] = 5,
+        limit: app_commands.Range[int, 5, 60] = 30,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        _TIMESCALE_SECONDS = {
+            "hour": 3600,
+            "day": 86400,
+            "week": 604800,
+            "month": 2592000,
+        }
+        after_ts = (
+            int(_time.time()) - _TIMESCALE_SECONDS[timescale]
+            if timescale in _TIMESCALE_SECONDS
+            else None
+        )
+
+        def _query_heatmap():
+            with ctx.open_db() as conn:
+                return query_connection_web(
+                    conn,
+                    guild.id,
+                    min_weight=1,
+                    limit_users=limit,
+                    after_ts=after_ts,
+                )
+
+        all_edges = await asyncio.to_thread(_query_heatmap)
+
+        # Percentage filtering (same logic as connection_web)
+        node_total: dict[int, int] = {}
+        for u, v, w in all_edges:
+            node_total[u] = node_total.get(u, 0) + w
+            node_total[v] = node_total.get(v, 0) + w
+
+        threshold = min_pct / 100.0
+        edges = [
+            (u, v, w)
+            for u, v, w in all_edges
+            if w >= threshold * min(node_total.get(u, 1), node_total.get(v, 1))
+        ]
+
+        if not edges:
+            await interaction.followup.send(
+                f"No edges found where a connection accounts for \u2265**{min_pct}%** "
+                "of either user's total interactions. "
+                "Try lowering `min_pct` or running `/interaction_scan`.",
+                ephemeral=True,
+            )
+            return
+
+        # Resolve display names
+        candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
+        name_map = await resolve_display_names(
+            bot=bot, guild=guild, db_path=ctx.db_path, user_ids=candidate_ids,
+        )
+
+        edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
+
+        if not edges:
+            await interaction.followup.send(
+                "Could not resolve any member names for the interaction data.",
+                ephemeral=True,
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+        chart_bytes = await loop.run_in_executor(
+            None,
+            functools.partial(
+                render_interaction_heatmap,
+                edges,
+                name_map,
+                guild_name=guild.name,
+            ),
+        )
+        await interaction.followup.send(
+            file=discord.File(
+                io.BytesIO(chart_bytes), filename="interaction_heatmap.png"
+            ),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="invite_web",
+        description="Network graph of who invited whom.",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        member="Focus on one person's invite tree. Omit for everyone.",
+        spread="Visual spacing between nodes. Higher = more spread out.",
+    )
+    async def invite_web(
+        interaction: discord.Interaction,
+        member: discord.User | None = None,
+        spread: app_commands.Range[float, 0.5, 5.0] = 1.0,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.",
+                ephemeral=True,
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        def _query_invites():
+            with ctx.open_db() as conn:
+                return query_invite_web(conn, guild.id)
+
+        all_edges = await asyncio.to_thread(_query_invites)
+
+        if member is not None:
+            # Keep only edges reachable from the focused member (invite tree)
+            included: set[int] = {member.id}
+            changed = True
+            while changed:
+                changed = False
+                for u, v, _w in all_edges:
+                    if u in included and v not in included:
+                        included.add(v)
+                        changed = True
+                    elif v in included and u not in included:
+                        included.add(u)
+                        changed = True
+            edges = [
+                (u, v, w) for u, v, w in all_edges if u in included and v in included
+            ]
+        else:
+            edges = all_edges
+
+        if not edges:
+            await interaction.followup.send(
+                "No invite data recorded yet. Invites are tracked as new members join.",
+                ephemeral=True,
+            )
+            return
+
+        # Resolve display names
+        candidate_ids = list({uid for u, v, _ in edges for uid in (u, v)})
+        name_map = await resolve_display_names(
+            bot=bot, guild=guild, db_path=ctx.db_path, user_ids=candidate_ids,
+        )
+
+        edges = [(u, v, w) for u, v, w in edges if u in name_map and v in name_map]
+        if not edges:
+            await interaction.followup.send(
+                "No invite edges with resolvable users found.",
+                ephemeral=True,
+            )
+            return
+
+        loop = asyncio.get_running_loop()
+        chart_bytes = await loop.run_in_executor(
+            None,
+            functools.partial(
+                render_connection_web,
+                edges,
+                name_map,
+                guild_name=f"{guild.name} — Invite Tree",
+                focus_user_id=member.id if member else None,
+                spread=spread,
+            ),
+        )
+        await interaction.followup.send(
+            file=discord.File(io.BytesIO(chart_bytes), filename="invite_web.png"),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="member_events_scan",
+        description="Backfill join/leave history into member_events from the join-leave log channel.",
+    )
+    @app_commands.default_permissions(manage_guild=True)
+    @app_commands.describe(
+        days="Days of history to scan. 0 = everything available.",
+    )
+    async def member_events_scan(
+        interaction: discord.Interaction,
+        days: app_commands.Range[int, 0, 3650] = 0,
+    ) -> None:
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        log_channel_id = ctx.leave_channel_id
+        if log_channel_id <= 0:
+            await interaction.response.send_message(
+                "No join-leave log channel is configured (`leave_channel_id`).",
+                ephemeral=True,
+            )
+            return
+
+        log_channel = guild.get_channel(log_channel_id)
+        if not isinstance(log_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                f"Configured channel <#{log_channel_id}> is not a text channel.",
+                ephemeral=True,
+            )
+            return
+
+        me = guild.get_member(bot.user.id) if bot.user else None
+        if me and not log_channel.permissions_for(me).read_message_history:
+            await interaction.response.send_message(
+                f"I don't have permission to read history in <#{log_channel_id}>.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        from datetime import datetime, timedelta, timezone
+        after_dt = None if days == 0 else datetime.now(timezone.utc) - timedelta(days=days)
+
+        _LEAVE_SUFFIX = " has left the server."
+        _BOOST_MARKERS = ("boosted the server", "just boosted")
+
+        joins = 0
+        leaves = 0
+        skipped = 0
+
+        # Collect events without holding the DB connection open across async I/O
+        pending: list[tuple[int, str, float]] = []  # (user_id, event_type, ts)
+        leave_name_lookups: list[tuple[str, float]] = []  # (display_name, ts)
+
+        async for message in log_channel.history(
+            limit=None, after=after_dt, oldest_first=True
+        ):
+            ts = message.created_at.timestamp()
+
+            # Discord system guild_member_join messages — author IS the member
+            if message.type == discord.MessageType.new_member:
+                pending.append((message.author.id, "join", ts))
+                joins += 1
+                continue
+
+            # Non-system content messages (randomised Discord join text, other bots)
+            if message.content and not message.author.bot:
+                if not any(m in message.content for m in _BOOST_MARKERS):
+                    pending.append((message.author.id, "join", ts))
+                    joins += 1
+                continue
+
+            # Bot leave embeds — description is "{display_name} has left the server."
+            if (
+                bot.user
+                and message.author.id == bot.user.id
+                and message.embeds
+            ):
+                desc = message.embeds[0].description or ""
+                if desc.endswith(_LEAVE_SUFFIX):
+                    leave_name_lookups.append((desc[: -len(_LEAVE_SUFFIX)], ts))
+
+        with ctx.open_db() as conn:
+            for user_id, event_type, ts in pending:
+                record_member_event(conn, guild.id, user_id, event_type, ts)
+
+            for display_name, ts in leave_name_lookups:
+                matches = conn.execute(
+                    "SELECT user_id FROM known_users WHERE guild_id = ? AND display_name = ?",
+                    (guild.id, display_name),
+                ).fetchall()
+                if len(matches) == 1:
+                    record_member_event(conn, guild.id, int(matches[0]["user_id"]), "leave", ts)
+                    leaves += 1
+                else:
+                    skipped += 1
+
+        window_label = (
+            "all available history" if days == 0
+            else f"last {days} day{'s' if days != 1 else ''}"
+        )
+        skip_note = f"\nLeaves skipped (ambiguous name): **{skipped}**" if skipped else ""
+        await interaction.followup.send(
+            f"Member events scan complete over {window_label}.\n"
+            f"Joins recorded: **{joins}**\n"
+            f"Leaves recorded: **{leaves}**"
+            + skip_note,
+            ephemeral=True,
+        )

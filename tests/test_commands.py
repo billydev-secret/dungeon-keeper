@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from commands.role_grant_commands import register_role_grant_commands
-from commands.interaction_commands import register_interaction_commands
-from commands.mod_commands import register_mod_commands
-from commands.xp_commands import register_xp_commands
+from bot_modules.commands.role_grant_commands import register_role_grant_commands
+from bot_modules.commands.interaction_commands import register_interaction_commands
+from bot_modules.commands.mod_commands import register_mod_commands
+from bot_modules.commands.xp_commands import register_xp_commands
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -430,10 +430,10 @@ async def test_channel_target_only_scans_selected_channel_and_threads(scan_cap):
 
     ix = _make_interaction(guild=guild)
     with (
-        patch("commands.interaction_commands.clear_interaction_data") as clear_data,
-        patch("commands.interaction_commands.store_message") as store_message,
-        patch("commands.interaction_commands.set_reaction_count"),
-        patch("commands.interaction_commands.record_interactions"),
+        patch("bot_modules.commands.interaction_commands.clear_interaction_data") as clear_data,
+        patch("bot_modules.commands.interaction_commands.store_message") as store_message,
+        patch("bot_modules.commands.interaction_commands.set_reaction_count"),
+        patch("bot_modules.commands.interaction_commands.record_interactions"),
     ):
         await cap.get("interaction_scan")(ix, days=0, reset=True, channel=target)
 
@@ -458,7 +458,7 @@ async def test_channel_target_requires_read_history(scan_cap):
     guild.text_channels = [unreadable]
     ix = _make_interaction(guild=guild)
 
-    with patch("commands.interaction_commands.store_message") as store_message:
+    with patch("bot_modules.commands.interaction_commands.store_message") as store_message:
         await cap.get("interaction_scan")(ix, channel=unreadable)
 
     store_message.assert_not_called()

@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from services.xp_service import LevelRoleDecision, should_grant_level_role
+from bot_modules.services.xp_service import LevelRoleDecision, should_grant_level_role
 
 THRESHOLD = 5
 ROLE_ID = 777

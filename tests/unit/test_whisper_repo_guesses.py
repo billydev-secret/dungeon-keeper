@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.db_utils import open_db
-from services.whisper_repo import (
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.whisper_repo import (
     decrement_guesses_left,
     get_whisper,
     insert_guess,
@@ -91,7 +91,7 @@ def test_try_consume_guess_first_two_succeed_third_fails(sync_db_path: Path):
 
 def test_try_consume_guess_fails_when_already_solved(sync_db_path: Path):
     """If whisper is already solved, try_consume_guess returns False."""
-    from services.whisper_repo import mark_solved
+    from bot_modules.services.whisper_repo import mark_solved
     with open_db(sync_db_path) as conn:
         wid = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="x")
         mark_solved(conn, wid)

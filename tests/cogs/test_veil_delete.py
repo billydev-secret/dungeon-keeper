@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from services.veil_models import BoundingBox, VeilRound
+from bot_modules.services.veil_models import BoundingBox, VeilRound
 from tests.fakes import FakeGuild, FakeMember, fake_interaction
 
 GUILD_ID = 9001
@@ -33,7 +33,7 @@ def _make_round(*, submitter_id: int = SUBMITTER_ID, original_path: str = "") ->
 
 
 def _make_cog(db_path: str = ":memory:"):
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
     bot = MagicMock()
     bot.ctx.db_path = db_path
     return VeilCog(bot)
@@ -61,8 +61,8 @@ async def test_delete_allowed_for_submitter():
     interaction.guild_id = GUILD_ID
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._do_load_round", return_value=_make_round()), \
-         patch("cogs.veil_cog._do_soft_delete_round") as soft_del:
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=_make_round()), \
+         patch("bot_modules.cogs.veil_cog._do_soft_delete_round") as soft_del:
         await _delete(cog, interaction, ROUND_ID)
 
     soft_del.assert_called_once()
@@ -87,8 +87,8 @@ async def test_delete_allowed_for_mod():
     interaction.guild_id = GUILD_ID
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._do_load_round", return_value=_make_round()), \
-         patch("cogs.veil_cog._do_soft_delete_round") as soft_del:
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=_make_round()), \
+         patch("bot_modules.cogs.veil_cog._do_soft_delete_round") as soft_del:
         await _delete(cog, interaction, ROUND_ID)
 
     soft_del.assert_called_once()
@@ -106,8 +106,8 @@ async def test_delete_rejects_unrelated_user():
     interaction.guild_id = GUILD_ID
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._do_load_round", return_value=_make_round()), \
-         patch("cogs.veil_cog._do_soft_delete_round") as soft_del:
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=_make_round()), \
+         patch("bot_modules.cogs.veil_cog._do_soft_delete_round") as soft_del:
         await _delete(cog, interaction, ROUND_ID)
 
     soft_del.assert_not_called()
@@ -123,8 +123,8 @@ async def test_delete_rejects_unknown_round():
     interaction.guild_id = GUILD_ID
 
     cog = _make_cog()
-    with patch("cogs.veil_cog._do_load_round", return_value=None), \
-         patch("cogs.veil_cog._do_soft_delete_round") as soft_del:
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=None), \
+         patch("bot_modules.cogs.veil_cog._do_soft_delete_round") as soft_del:
         await _delete(cog, interaction, ROUND_ID)
 
     soft_del.assert_not_called()
@@ -150,8 +150,8 @@ async def test_delete_unlinks_original_file_when_present(tmp_path: Path):
 
     cog = _make_cog()
     rnd = _make_round(original_path=str(orig_file))
-    with patch("cogs.veil_cog._do_load_round", return_value=rnd), \
-         patch("cogs.veil_cog._do_soft_delete_round"):
+    with patch("bot_modules.cogs.veil_cog._do_load_round", return_value=rnd), \
+         patch("bot_modules.cogs.veil_cog._do_soft_delete_round"):
         await _delete(cog, interaction, ROUND_ID)
 
     assert not orig_file.exists()
@@ -163,7 +163,7 @@ async def test_delete_unlinks_original_file_when_present(tmp_path: Path):
 async def test_post_rejects_non_nsfw_channel():
     """Defense in depth: if the configured channel is no longer NSFW at post
     time (or was never), refuse to post."""
-    from cogs.veil_cog import CropEditorView
+    from bot_modules.cogs.veil_cog import CropEditorView
 
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -194,8 +194,8 @@ async def test_post_rejects_non_nsfw_channel():
         candidate_count=1,
     )
 
-    with patch("cogs.veil_cog._do_insert_round") as insert_mock:
-        with patch("cogs.veil_cog.isinstance", lambda obj, types: True):
+    with patch("bot_modules.cogs.veil_cog._do_insert_round") as insert_mock:
+        with patch("bot_modules.cogs.veil_cog.isinstance", lambda obj, types: True):
             await view._on_post(interaction)
 
     insert_mock.assert_not_called()
@@ -207,8 +207,8 @@ async def test_post_rejects_non_nsfw_channel():
 @pytest.mark.asyncio
 async def test_post_double_click_inserts_only_once(tmp_path, monkeypatch):
     """Two near-simultaneous Post clicks must produce only one round / one message."""
-    import cogs.veil_cog as veil_cog
-    from cogs.veil_cog import CropEditorView
+    import bot_modules.cogs.veil_cog as veil_cog
+    from bot_modules.cogs.veil_cog import CropEditorView
 
     monkeypatch.setattr(veil_cog, "_VEIL_ORIG_DIR", tmp_path / "orig")
 
@@ -248,13 +248,13 @@ async def test_post_double_click_inserts_only_once(tmp_path, monkeypatch):
         original_ext=".png",
     )
 
-    with patch("cogs.veil_cog._do_insert_round", return_value=77) as insert_mock, \
-         patch("cogs.veil_cog._do_update_round_message"), \
-         patch("cogs.veil_cog._do_set_original_path"), \
-         patch("cogs.veil_cog._do_audit"), \
-         patch("cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
-         patch("cogs.veil_cog._repost_prompt", new_callable=AsyncMock):
-        with patch("cogs.veil_cog.isinstance", lambda obj, types: True):
+    with patch("bot_modules.cogs.veil_cog._do_insert_round", return_value=77) as insert_mock, \
+         patch("bot_modules.cogs.veil_cog._do_update_round_message"), \
+         patch("bot_modules.cogs.veil_cog._do_set_original_path"), \
+         patch("bot_modules.cogs.veil_cog._do_audit"), \
+         patch("bot_modules.cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
+         patch("bot_modules.cogs.veil_cog._repost_prompt", new_callable=AsyncMock):
+        with patch("bot_modules.cogs.veil_cog.isinstance", lambda obj, types: True):
             import asyncio as _aio
             await _aio.gather(view._on_post(interaction), view._on_post(interaction))
 

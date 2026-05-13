@@ -6,14 +6,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.db_utils import open_db
-from services.veil_repo import insert_round, mark_round_solved
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.veil_repo import insert_round, mark_round_solved
 
 
 def _make_cog(db_path: Path) -> tuple[object, MagicMock]:
     """Return (cog, add_view_mock). Hand the mock back so tests don't have to
     re-derive it from cog.bot — keeps pyright off our backs about MethodType."""
-    from cogs.veil_cog import VeilCog
+    from bot_modules.cogs.veil_cog import VeilCog
     bot = MagicMock()
     bot.ctx.db_path = str(db_path)
     add_view = MagicMock()
@@ -22,7 +22,7 @@ def _make_cog(db_path: Path) -> tuple[object, MagicMock]:
 
 
 def _gameview_calls(add_view: MagicMock) -> list:
-    from cogs.veil_cog import GameView
+    from bot_modules.cogs.veil_cog import GameView
     return [c for c in add_view.call_args_list if isinstance(c.args[0], GameView)]
 
 
@@ -45,7 +45,7 @@ async def test_cog_load_skips_solved_rounds(sync_db_path: Path):
 
 @pytest.mark.asyncio
 async def test_cog_load_caps_total_views(sync_db_path: Path, monkeypatch):
-    import cogs.veil_cog as veil_cog
+    import bot_modules.cogs.veil_cog as veil_cog
     monkeypatch.setattr(veil_cog, "_COG_LOAD_VIEW_CAP", 3)
 
     with open_db(sync_db_path) as conn:
@@ -62,7 +62,7 @@ async def test_cog_load_caps_total_views(sync_db_path: Path, monkeypatch):
 async def test_cog_load_passes_current_guess_count_to_view(sync_db_path: Path):
     """Reconstructed GameViews must carry the round's current guess count,
     so the chip label reflects reality after a restart."""
-    from services.veil_repo import insert_guess
+    from bot_modules.services.veil_repo import insert_guess
 
     with open_db(sync_db_path) as conn:
         rid = insert_round(conn, guild_id=1, submitter_id=10, answer_id=10)
@@ -82,7 +82,7 @@ async def test_cog_load_passes_current_guess_count_to_view(sync_db_path: Path):
 
 @pytest.mark.asyncio
 async def test_cog_load_registers_prompt_view(sync_db_path: Path):
-    from cogs.veil_cog import VeilPromptView
+    from bot_modules.cogs.veil_cog import VeilPromptView
 
     cog, add_view = _make_cog(sync_db_path)
     await cog.cog_load()  # type: ignore[attr-defined]
