@@ -62,6 +62,47 @@ def render_crop_editor(
     return buf.getvalue()
 
 
+def render_reveal(
+    image_bytes: bytes,
+    crop_box: BoundingBox,
+    *,
+    max_display_px: int = 1920,
+    jpeg_quality: int = 85,
+) -> bytes:
+    """Return the full image with a semi-transparent crop box drawn on it for the reveal.
+
+    Same as render_crop_editor but uses 50% opacity so the box is visible
+    without obscuring the underlying image detail.
+    """
+    from PIL import Image, ImageDraw  # type: ignore[import-untyped]  # noqa: PLC0415
+
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    orig_w, orig_h = img.size
+
+    scale = min(1.0, max_display_px / max(orig_w, orig_h))
+    if scale < 1.0:
+        new_w = max(1, int(orig_w * scale))
+        new_h = max(1, int(orig_h * scale))
+        img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+
+    sx = img.width / orig_w
+    sy = img.height / orig_h
+    rect = (
+        int(crop_box.x1 * sx),
+        int(crop_box.y1 * sy),
+        int(crop_box.x2 * sx),
+        int(crop_box.y2 * sy),
+    )
+
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    ImageDraw.Draw(overlay).rectangle(rect, outline=(255, 0, 0, 128), width=3)
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=jpeg_quality)
+    return buf.getvalue()
+
+
 def render_crop(
     image_bytes: bytes,
     crop_box: BoundingBox,

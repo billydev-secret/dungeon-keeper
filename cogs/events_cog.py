@@ -905,6 +905,19 @@ class EventsCog(commands.Cog):
                 guild_name,
             )
 
+    @commands.Cog.listener()
+    async def on_app_command_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ) -> None:
+        cmd = interaction.command.qualified_name if interaction.command else "?"
+        log.exception(
+            "Command /%s failed for %s (%s)",
+            cmd,
+            interaction.user,
+            interaction.user.id,
+            exc_info=error,
+        )
+
 
 async def setup(bot: Bot) -> None:
     await bot.add_cog(EventsCog(bot, bot.ctx))

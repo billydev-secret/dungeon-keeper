@@ -1,11 +1,10 @@
-"""Emoji stealer cog — right-click any message (user-installed app) to copy custom
-emojis into any server DungeonKeeper is in.
+"""Emoji stealer cog.
 
-Flow:
-  1. Right-click a message → Apps → "Steal Emoji"
-  2. If multiple emojis in message: emoji picker select
-  3. If DungeonKeeper is in multiple guilds with emoji perms: guild picker select
-  4. Click Steal → emoji downloaded and added to the chosen guild
+Two entry points:
+  - Right-click message → Apps → "Steal Emoji"  (picks from custom emojis in the message)
+  - /steal_emoji url:<url> name:<name>           (any direct image URL)
+
+Both show a guild picker when DungeonKeeper is in multiple emoji-capable servers.
 """
 from __future__ import annotations
 
@@ -24,6 +23,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.emoji_stealer")
 
 _EMOJI_RE = re.compile(r"<(a?):(\w+):(\d+)>")
+_HTTPS_RE = re.compile(r"^https://", re.IGNORECASE)
 
 
 def _emoji_url(emoji_id: int, animated: bool) -> str:
@@ -46,12 +46,90 @@ def _eligible_guilds(bot: Bot) -> list[discord.Guild]:
     return [g for g in bot.guilds if g.me and g.me.guild_permissions.manage_expressions]
 
 
+async def _upload(
+    guild: discord.Guild, name: str, data: bytes
+) -> discord.Emoji:
+    return await guild.create_custom_emoji(name=_sanitize_name(name), image=data)
+
+
 # ---------------------------------------------------------------------------
-# Combined picker + steal view
+# Guild picker view (used by both entry points after emoji/URL is resolved)
+# ---------------------------------------------------------------------------
+
+class _GuildPickView(discord.ui.View):
+    """Pick which DungeonKeeper server to add a pre-fetched emoji to."""
+
+    def __init__(
+        self,
+        url: str,
+        name: str,
+        guilds: list[discord.Guild],
+        invoker_id: int,
+    ) -> None:
+        super().__init__(timeout=120)
+        self._url = url
+        self._name = name
+        self._invoker_id = invoker_id
+        self._guild_map: dict[str, discord.Guild] = {str(g.id): g for g in guilds}
+        self._sel_guild = guilds[0]
+
+        opts = [discord.SelectOption(label=g.name[:100], value=str(g.id)) for g in guilds[:25]]
+        sel: discord.ui.Select = discord.ui.Select(placeholder="Which server?", options=opts)  # type: ignore[type-arg]
+        sel.callback = self._on_guild
+        self.add_item(sel)
+
+        steal: discord.ui.Button = discord.ui.Button(label="Steal!", style=discord.ButtonStyle.primary)  # type: ignore[type-arg]
+        steal.callback = self._on_steal
+        self.add_item(steal)
+
+        cancel: discord.ui.Button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)  # type: ignore[type-arg]
+        cancel.callback = self._on_cancel
+        self.add_item(cancel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.send_message("This menu isn't for you.", ephemeral=True)
+            return False
+        return True
+
+    async def _on_guild(self, interaction: discord.Interaction) -> None:
+        key = interaction.data["values"][0]  # type: ignore[index]
+        self._sel_guild = self._guild_map[key]
+        await interaction.response.defer()
+
+    async def _on_cancel(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(content="Cancelled.", view=None)
+
+    async def _on_steal(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        guild = self._sel_guild
+        await interaction.response.edit_message(content="Downloading emoji...", view=None)
+        try:
+            data = await _fetch_bytes(self._url)
+            new_emoji = await _upload(guild, self._name, data)
+        except discord.Forbidden:
+            await interaction.edit_original_response(
+                content=f"I don't have **Manage Expressions** in **{guild.name}**."
+            )
+            return
+        except discord.HTTPException as exc:
+            await interaction.edit_original_response(content=f"Discord rejected it: {exc.text}")
+            return
+        except httpx.HTTPError as exc:
+            await interaction.edit_original_response(content=f"Couldn't download the image: {exc}")
+            return
+        await interaction.edit_original_response(
+            content=f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Context-menu picker view (emoji from message → guild)
 # ---------------------------------------------------------------------------
 
 class _StealView(discord.ui.View):
-    """Emoji picker + guild picker + Steal button."""
+    """Emoji picker + guild picker for the message context menu."""
 
     def __init__(
         self,
@@ -122,12 +200,12 @@ class _StealView(discord.ui.View):
 
     async def _on_steal(self, interaction: discord.Interaction) -> None:
         self.stop()
-        await interaction.response.edit_message(content="Downloading emoji...", view=None)
         animated, name, emoji_id = self._sel_emoji
         guild = self._sel_guild
+        await interaction.response.edit_message(content="Downloading emoji...", view=None)
         try:
             data = await _fetch_bytes(_emoji_url(emoji_id, animated))
-            new_emoji = await guild.create_custom_emoji(name=_sanitize_name(name), image=data)
+            new_emoji = await _upload(guild, name, data)
         except discord.Forbidden:
             await interaction.edit_original_response(
                 content=f"I don't have **Manage Expressions** in **{guild.name}**."
@@ -154,20 +232,24 @@ class EmojiStealerCog(commands.Cog):
         self.ctx = ctx
         self.ctx_menu = app_commands.ContextMenu(
             name="Steal Emoji",
-            callback=self.steal_emoji,
+            callback=self._steal_from_message,
         )
         self.bot.tree.add_command(self.ctx_menu)
 
     async def cog_unload(self) -> None:
         self.bot.tree.remove_command(self.ctx_menu.name, type=self.ctx_menu.type)
 
-    async def steal_emoji(
+    # ------------------------------------------------------------------
+    # Context menu: right-click a message
+    # ------------------------------------------------------------------
+
+    async def _steal_from_message(
         self, interaction: discord.Interaction, message: discord.Message
     ) -> None:
         guilds = _eligible_guilds(self.bot)
         if not guilds:
             await interaction.response.send_message(
-                "I don't have **Manage Expressions** permission in any server.", ephemeral=True
+                "I don't have **Manage Expressions** in any server.", ephemeral=True
             )
             return
 
@@ -185,14 +267,14 @@ class EmojiStealerCog(commands.Cog):
             )
             return
 
-        # Fast path: single emoji, single guild — no UI needed
+        # Fast path: one emoji, one guild
         if len(emojis) == 1 and len(guilds) == 1:
             animated, name, emoji_id = emojis[0]
             guild = guilds[0]
             await interaction.response.defer(ephemeral=True, thinking=True)
             try:
                 data = await _fetch_bytes(_emoji_url(emoji_id, animated))
-                new_emoji = await guild.create_custom_emoji(name=_sanitize_name(name), image=data)
+                new_emoji = await _upload(guild, name, data)
             except discord.Forbidden:
                 await interaction.followup.send(
                     f"I don't have **Manage Expressions** in **{guild.name}**.", ephemeral=True
@@ -202,16 +284,13 @@ class EmojiStealerCog(commands.Cog):
                 await interaction.followup.send(f"Discord rejected it: {exc.text}", ephemeral=True)
                 return
             except httpx.HTTPError as exc:
-                await interaction.followup.send(
-                    f"Couldn't download the emoji: {exc}", ephemeral=True
-                )
+                await interaction.followup.send(f"Couldn't download the emoji: {exc}", ephemeral=True)
                 return
             await interaction.followup.send(
                 f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!", ephemeral=True
             )
             return
 
-        # Multi-emoji or multi-guild: show picker
         n_emoji = len(emojis)
         n_guild = len(guilds)
         if n_emoji > 1 and n_guild > 1:
@@ -221,8 +300,74 @@ class EmojiStealerCog(commands.Cog):
         else:
             prompt = f"Add `:{emojis[0][1]}:` — which server?"
 
-        view = _StealView(emojis, guilds, interaction.user.id)
-        await interaction.response.send_message(prompt, view=view, ephemeral=True)
+        await interaction.response.send_message(
+            prompt, view=_StealView(emojis, guilds, interaction.user.id), ephemeral=True
+        )
+
+    # ------------------------------------------------------------------
+    # Slash command: /steal_emoji url:<url> name:<name>
+    # ------------------------------------------------------------------
+
+    @app_commands.command(name="steal_emoji", description="Add an emoji from any image URL.")
+    @app_commands.describe(
+        url="Direct image URL (PNG, GIF, WEBP, JPG)",
+        name="Name for the new emoji (letters, numbers, underscores)",
+    )
+    async def steal_emoji_url(
+        self,
+        interaction: discord.Interaction,
+        url: str,
+        name: str,
+    ) -> None:
+        if not _HTTPS_RE.match(url):
+            await interaction.response.send_message(
+                "URL must start with `https://`.", ephemeral=True
+            )
+            return
+
+        clean_name = _sanitize_name(name)
+        if len(clean_name) < 2:
+            await interaction.response.send_message(
+                "Emoji name must be at least 2 characters (letters, numbers, underscores).",
+                ephemeral=True,
+            )
+            return
+
+        guilds = _eligible_guilds(self.bot)
+        if not guilds:
+            await interaction.response.send_message(
+                "I don't have **Manage Expressions** in any server.", ephemeral=True
+            )
+            return
+
+        # Fast path: one guild
+        if len(guilds) == 1:
+            guild = guilds[0]
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            try:
+                data = await _fetch_bytes(url)
+                new_emoji = await _upload(guild, clean_name, data)
+            except discord.Forbidden:
+                await interaction.followup.send(
+                    f"I don't have **Manage Expressions** in **{guild.name}**.", ephemeral=True
+                )
+                return
+            except discord.HTTPException as exc:
+                await interaction.followup.send(f"Discord rejected it: {exc.text}", ephemeral=True)
+                return
+            except httpx.HTTPError as exc:
+                await interaction.followup.send(f"Couldn't download the image: {exc}", ephemeral=True)
+                return
+            await interaction.followup.send(
+                f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"Add `:{clean_name}:` — which server?",
+            view=_GuildPickView(url, clean_name, guilds, interaction.user.id),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: Bot) -> None:

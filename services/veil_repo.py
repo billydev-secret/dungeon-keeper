@@ -73,6 +73,10 @@ def _row_to_round(row: sqlite3.Row) -> VeilRound:
         unique_guessers_to_solve=row["unique_guessers_to_solve"],
         answer_optout=bool(row["answer_optout"]),
         deleted_at=row["deleted_at"],
+        crop_box_x1=row["crop_box_x1"],
+        crop_box_y1=row["crop_box_y1"],
+        crop_box_x2=row["crop_box_x2"],
+        crop_box_y2=row["crop_box_y2"],
     )
 
 
@@ -118,6 +122,15 @@ def update_round_message(
     conn.execute(
         "UPDATE veil_rounds SET message_id = ?, crop_url = ?, crop_path = ? WHERE id = ?",
         (message_id, crop_url, crop_path, round_id),
+    )
+
+
+def set_round_crop_box(
+    conn: sqlite3.Connection, round_id: int, x1: float, y1: float, x2: float, y2: float
+) -> None:
+    conn.execute(
+        "UPDATE veil_rounds SET crop_box_x1=?, crop_box_y1=?, crop_box_x2=?, crop_box_y2=? WHERE id=?",
+        (x1, y1, x2, y2, round_id),
     )
 
 
@@ -396,6 +409,45 @@ def get_unsolved_round_ids(
         (limit,),
     ).fetchall()
     return [row["id"] for row in rows]
+
+
+def get_top_posters(
+    conn: sqlite3.Connection, guild_id: int, *, limit: int = 5
+) -> list[tuple[int, int, int]]:
+    """Return (submitter_id, rounds_posted, rounds_solved) ordered by rounds_posted desc."""
+    rows = conn.execute(
+        """
+        SELECT submitter_id,
+               COUNT(*) AS rounds_posted,
+               SUM(CASE WHEN solved_at IS NOT NULL THEN 1 ELSE 0 END) AS rounds_solved
+        FROM veil_rounds
+        WHERE guild_id = ? AND deleted_at IS NULL
+        GROUP BY submitter_id
+        ORDER BY rounds_posted DESC, rounds_solved DESC
+        LIMIT ?
+        """,
+        (guild_id, limit),
+    ).fetchall()
+    return [(row["submitter_id"], row["rounds_posted"], row["rounds_solved"]) for row in rows]
+
+
+def get_top_guessers(
+    conn: sqlite3.Connection, guild_id: int, *, limit: int = 5
+) -> list[tuple[int, int]]:
+    """Return (solver_id, rounds_solved) ordered by rounds_solved desc."""
+    rows = conn.execute(
+        """
+        SELECT solver_id,
+               COUNT(*) AS rounds_solved
+        FROM veil_rounds
+        WHERE guild_id = ? AND deleted_at IS NULL AND solver_id IS NOT NULL
+        GROUP BY solver_id
+        ORDER BY rounds_solved DESC
+        LIMIT ?
+        """,
+        (guild_id, limit),
+    ).fetchall()
+    return [(row["solver_id"], row["rounds_solved"]) for row in rows]
 
 
 def flag_user_open_rounds_optout(

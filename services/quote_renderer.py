@@ -184,16 +184,11 @@ def render_quote_card(
 ) -> bytes:
     """Render a quote card with the avatar as a blurred, color-graded background.
 
-    Args:
-        text: Quote body. Truncated to QUOTE_MAX_CHARS with ellipsis if needed.
-        author_name: Attribution line (display name). Empty = no attribution.
-        avatar_bytes: Raw bytes of the author's avatar image.
-        theme: A QuoteTheme from THEMES.
-        font_style: Key into FONT_STYLES — "inter" or "lora".
-        width/height: Output dimensions.
-        jpeg_quality: JPEG encoding quality.
+    Layout: quote text left-aligned on the left; circular pfp on the right with
+    the author name offset at 45 deg (lower-right) from the pfp centre.
     """
-    from PIL import ImageDraw  # noqa: PLC0415
+    from PIL import Image, ImageDraw  # noqa: PLC0415
+    import math  # noqa: PLC0415
 
     if len(text) > QUOTE_MAX_CHARS:
         text = text[:QUOTE_MAX_CHARS - 1] + "…"
@@ -201,48 +196,58 @@ def render_quote_card(
     bg = _build_background(avatar_bytes, width, height, theme)
     draw = ImageDraw.Draw(bg)
 
-    padding = int(width * 0.10)
-    inner_w = width - 2 * padding
+    # Layout constants
+    text_pad_l = int(width * 0.07)
+    text_col_w = int(width * 0.52)
+
+    pfp_r = int(min(width, height) * 0.16)   # radius of the circular pfp
+    pfp_cx = int(width * 0.76)
+    pfp_cy = height // 2
 
     # Font sizes scale with width
-    body_size = max(28, width // 22)
-    attr_size = max(18, width // 38)
-
+    body_size = max(26, width // 24)
+    attr_size = max(16, width // 40)
     body_font = _load_font(body_size, font_style)
     attr_font = _load_font(attr_size, font_style)
 
-    # Measure line height
+    # Line height
     probe = draw.textbbox((0, 0), "Ag", font=body_font)
     line_h = int(probe[3] - probe[1])
     line_gap = max(6, line_h // 5)
 
-    lines = _wrap_text(f"“{text}”", body_font, inner_w, draw)
+    # Quote text - left-aligned, vertically centred
+    lines = _wrap_text(f"“{text}”", body_font, text_col_w, draw)
     text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
+    text_y = (height - text_block_h) // 2
 
-    attr_h = 0
-    if author_name:
-        ap = draw.textbbox((0, 0), f"— {author_name}", font=attr_font)
-        attr_h = int(ap[3] - ap[1])
-
-    total_h = text_block_h + (int(height * 0.06) + attr_h if author_name else 0)
-    text_y = (height - total_h) // 2
-
-    # Draw shadow then main text
     for line in lines:
-        lb = draw.textbbox((0, 0), line, font=body_font)
-        lw = int(lb[2] - lb[0])
-        x = (width - lw) // 2
-        draw.text((x + 2, text_y + 2), line, font=body_font, fill=(0, 0, 0, 120))
-        draw.text((x, text_y), line, font=body_font, fill=theme.text_color)
+        draw.text((text_pad_l + 2, text_y + 2), line, font=body_font, fill=(0, 0, 0))
+        draw.text((text_pad_l, text_y), line, font=body_font, fill=theme.text_color)
         text_y += line_h + line_gap
 
+    # Circular pfp — unblurred avatar cropped into a circle
+    pfp_d = pfp_r * 2
+    avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
+    avatar_img = avatar_img.resize((pfp_d, pfp_d), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
+    circle_mask = Image.new("L", (pfp_d, pfp_d), 0)
+    ImageDraw.Draw(circle_mask).ellipse((0, 0, pfp_d - 1, pfp_d - 1), fill=255)
+    px, py = pfp_cx - pfp_r, pfp_cy - pfp_r
+    bg.paste(avatar_img, (px, py), mask=circle_mask)
+
+    # Thin ring around the circle
+    draw.ellipse(
+        (px - 3, py - 3, px + pfp_d + 2, py + pfp_d + 2),
+        outline=theme.attribution_color,
+        width=3,
+    )
+
+    # Author name at 45° diagonal from pfp centre (lower-right)
     if author_name:
         attr_text = f"— {author_name}"
-        ap = draw.textbbox((0, 0), attr_text, font=attr_font)
-        aw = int(ap[2] - ap[0])
-        ax = (width - aw) // 2
-        ay = text_y + int(height * 0.04)
-        draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0, 100))
+        dist = pfp_r + int(height * 0.05)
+        ax = pfp_cx + int(dist * math.cos(math.radians(45)))
+        ay = pfp_cy + int(dist * math.sin(math.radians(45)))
+        draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
         draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
 
     buf = io.BytesIO()

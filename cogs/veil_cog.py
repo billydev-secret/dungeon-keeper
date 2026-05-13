@@ -24,7 +24,7 @@ from services.veil_pipeline import (
     run_pipeline,
     zoom_crop_box,
 )
-from services.veil_crop_renderer import render_crop, render_crop_editor
+from services.veil_crop_renderer import render_crop, render_crop_editor, render_reveal
 from services.veil_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
@@ -32,12 +32,15 @@ from services.veil_repo import (
     flag_user_open_rounds_optout,
     get_last_guess_by_user_for_round,
     get_round,
+    get_top_guessers,
+    get_top_posters,
     get_unsolved_round_ids,
     get_veil_config,
     insert_audit_event,
     insert_guess,
     insert_round,
     mark_round_solved,
+    set_round_crop_box,
     set_round_original_path,
     set_round_reroll_count,
     set_veil_config_value,
@@ -134,6 +137,27 @@ def _do_set_reroll_count(db_path: Path, round_id: int, count: int) -> None:
 def _do_set_original_path(db_path: Path, round_id: int, original_path: str) -> None:
     with open_db(db_path) as conn:
         set_round_original_path(conn, round_id, original_path)
+
+
+def _do_set_crop_box(
+    db_path: Path, round_id: int, x1: float, y1: float, x2: float, y2: float
+) -> None:
+    with open_db(db_path) as conn:
+        set_round_crop_box(conn, round_id, x1, y1, x2, y2)
+
+
+def _do_get_top_posters(
+    db_path: Path, guild_id: int
+) -> list[tuple[int, int, int]]:
+    with open_db(db_path) as conn:
+        return get_top_posters(conn, guild_id)
+
+
+def _do_get_top_guessers(
+    db_path: Path, guild_id: int
+) -> list[tuple[int, int]]:
+    with open_db(db_path) as conn:
+        return get_top_guessers(conn, guild_id)
 
 
 def _do_load_round(db_path: Path, round_id: int) -> VeilRound | None:
@@ -275,6 +299,51 @@ def _solved_embed(
 SELECT_TIMEOUT_SECONDS = 60
 
 
+_PAGE_SIZE = 25
+
+
+class _FilterModal(discord.ui.Modal, title="Filter names"):
+    """Modal that accepts a search query and narrows the guess select."""
+
+    query: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="Search",
+        placeholder="Type a name…",
+        required=True,
+        max_length=50,
+    )
+
+    def __init__(self, parent: GuessSelectView) -> None:
+        super().__init__()
+        self._parent = parent
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        q = self.query.value.strip()
+        q_lower = q.lower()
+
+        def _score(m: discord.Member) -> int:
+            name = m.display_name.lower()
+            if name == q_lower:
+                return 4
+            if name.startswith(q_lower):
+                return 3
+            if q_lower in name:
+                return 2
+            it = iter(name)
+            if all(c in it for c in q_lower):
+                return 1
+            return 0
+
+        scored = sorted(
+            ((m, _score(m)) for m in self._parent._all_members),
+            key=lambda x: -x[1],
+        )
+        self._parent._display_members = [m for m, s in scored if s > 0]
+        self._parent._filter_query = q
+        self._parent._page = 0
+        self._parent._rebuild()
+        await interaction.response.edit_message(view=self._parent)
+
+
 class GuessSelectView(discord.ui.View):
     """Ephemeral view shown when a user clicks the Guess button."""
 
@@ -293,19 +362,115 @@ class GuessSelectView(discord.ui.View):
         self.round_id = round_id
         self.game_message = game_message
         self.cooldown_seconds = cooldown_seconds
+        self._all_members = list(veil_members)
+        self._display_members = self._all_members
+        self._filter_query = ""
+        self._base_placeholder = guess_placeholder
+        self._page = 0
+        self._select: discord.ui.Select  # type: ignore[type-arg]
+        self._rebuild()
 
-        options = [
-            discord.SelectOption(label=m.display_name[:100], value=str(m.id))
-            for m in veil_members[:25]
-        ]
-        self._select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
-            placeholder=guess_placeholder,
-            options=options,
-            min_values=1,
-            max_values=1,
+    def _page_count(self) -> int:
+        return max(1, (len(self._display_members) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+
+    def _rebuild(self) -> None:
+        self.clear_items()
+        start = self._page * _PAGE_SIZE
+        page_members = self._display_members[start : start + _PAGE_SIZE]
+        page_count = self._page_count()
+
+        if self._filter_query:
+            n = len(self._display_members)
+            placeholder = f'🔍 "{self._filter_query}" — {n} match{"es" if n != 1 else ""}'
+            if page_count > 1:
+                placeholder += f" ({self._page + 1}/{page_count})"
+        elif page_count > 1:
+            placeholder = f"{self._base_placeholder} ({self._page + 1}/{page_count})"
+        else:
+            placeholder = self._base_placeholder
+
+        if page_members:
+            select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
+                placeholder=placeholder[:150],
+                options=[
+                    discord.SelectOption(label=m.display_name[:100], value=str(m.id))
+                    for m in page_members
+                ],
+                min_values=1,
+                max_values=1,
+                row=0,
+            )
+        else:
+            select = discord.ui.Select(  # type: ignore[type-arg]
+                placeholder="No members match that search.",
+                options=[discord.SelectOption(label="No results", value="__none__")],
+                disabled=True,
+                row=0,
+            )
+        select.callback = self._on_select
+        self.add_item(select)
+        self._select = select
+
+        # Row 1: prev/next (when paginated) + filter + clear (when active)
+        if page_count > 1:
+            prev_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="◀",
+                style=discord.ButtonStyle.secondary,
+                disabled=self._page == 0,
+                row=1,
+            )
+            prev_btn.callback = self._on_prev
+            self.add_item(prev_btn)
+
+            next_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="▶",
+                style=discord.ButtonStyle.secondary,
+                disabled=self._page >= page_count - 1,
+                row=1,
+            )
+            next_btn.callback = self._on_next
+            self.add_item(next_btn)
+
+        filter_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="🔍 Filter",
+            style=discord.ButtonStyle.secondary,
+            row=1,
         )
-        self._select.callback = self._on_select
-        self.add_item(self._select)
+        filter_btn.callback = self._on_filter
+        self.add_item(filter_btn)
+
+        if self._filter_query:
+            clear_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="✕ Clear",
+                style=discord.ButtonStyle.danger,
+                row=1,
+            )
+            clear_btn.callback = self._on_clear_filter
+            self.add_item(clear_btn)
+
+    def _disable_all(self) -> None:
+        for item in self.children:
+            item.disabled = True  # type: ignore[union-attr]
+
+    async def _on_prev(self, interaction: discord.Interaction) -> None:
+        self._page = max(0, self._page - 1)
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_next(self, interaction: discord.Interaction) -> None:
+        self._page = min(self._page_count() - 1, self._page + 1)
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_filter(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(_FilterModal(self))
+
+    async def _on_clear_filter(self, interaction: discord.Interaction) -> None:
+        self._display_members = self._all_members
+        self._filter_query = ""
+        self._page = 0
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
 
     async def _on_select(self, interaction: discord.Interaction) -> None:
         # Ack within Discord's 3s budget before any DB / file / Discord-edit work.
@@ -318,7 +483,7 @@ class GuessSelectView(discord.ui.View):
             _do_count_user_guesses, db_path, self.round_id, interaction.user.id
         )
         if prior_guesses >= MAX_GUESSES_PER_USER_ROUND:
-            self._select.disabled = True
+            self._disable_all()
             guild_id = interaction.guild.id if interaction.guild else 0
             await asyncio.to_thread(
                 _do_audit, db_path,
@@ -365,7 +530,7 @@ class GuessSelectView(discord.ui.View):
         )
 
         if correct and round_row.solved_at is None:
-            self._select.disabled = True
+            self._disable_all()
             rowcount, guess_count, unique_count = await asyncio.to_thread(
                 _do_mark_solved, db_path, self.round_id, solver_id=interaction.user.id
             )
@@ -389,12 +554,25 @@ class GuessSelectView(discord.ui.View):
             if round_row.original_path:
                 orig_path = Path(round_row.original_path)
                 if orig_path.exists():
-                    suffix = orig_path.suffix or ".jpg"
                     full_bytes = await asyncio.to_thread(orig_path.read_bytes)
+                    has_box = all(
+                        v is not None for v in (
+                            round_row.crop_box_x1, round_row.crop_box_y1,
+                            round_row.crop_box_x2, round_row.crop_box_y2,
+                        )
+                    )
+                    if has_box:
+                        box = BoundingBox(
+                            round_row.crop_box_x1,  # type: ignore[arg-type]
+                            round_row.crop_box_y1,  # type: ignore[arg-type]
+                            round_row.crop_box_x2,  # type: ignore[arg-type]
+                            round_row.crop_box_y2,  # type: ignore[arg-type]
+                        )
+                        full_bytes = await asyncio.to_thread(render_reveal, full_bytes, box)
                     full_attachments.append(
                         discord.File(
                             io.BytesIO(full_bytes),
-                            filename=f"SPOILER_veil_full{suffix}",
+                            filename="SPOILER_veil_full.jpg",
                         )
                     )
 
@@ -425,7 +603,7 @@ class GuessSelectView(discord.ui.View):
                 view=self,
             )
         elif correct:
-            self._select.disabled = True
+            self._disable_all()
             await interaction.edit_original_response(
                 content="✅ Correct — but someone already solved this one.",
                 view=self,
@@ -737,12 +915,16 @@ class CropEditorView(discord.ui.View):
             await asyncio.to_thread(_write_original)
             await asyncio.to_thread(_do_set_original_path, db_path, round_id, str(orig_path))
 
+        await asyncio.to_thread(
+            _do_set_crop_box, db_path, round_id,
+            self.crop_box.x1, self.crop_box.y1, self.crop_box.x2, self.crop_box.y2,
+        )
+
         crop_file = discord.File(io.BytesIO(crop_bytes), filename="SPOILER_veil_crop.jpg")
         game_view = GameView(self.bot, round_id)
         self.bot.add_view(game_view)
-        role_ping = f"<@&{self._veil_role_id}>" if self._veil_role_id else None
         game_msg = await veil_channel.send(
-            content=role_ping,
+            content=None,
             embed=_game_embed(round_id),
             file=crop_file,
             view=game_view,
@@ -1280,6 +1462,44 @@ class VeilCog(commands.Cog):
             f"To leave, ask a mod to remove the {role.mention} role.",
             ephemeral=True,
         )
+
+
+    @veil.command(name="leaderboard", description="Show the top Veil posters and guessers.")
+    async def veil_leaderboard(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild
+        await interaction.response.defer()
+
+        db_path = self.bot.ctx.db_path
+        posters, guessers = await asyncio.gather(
+            asyncio.to_thread(_do_get_top_posters, db_path, interaction.guild.id),
+            asyncio.to_thread(_do_get_top_guessers, db_path, interaction.guild.id),
+        )
+
+        medals = ["🥇", "🥈", "🥉", "4.", "5."]
+
+        def _poster_line(i: int, row: tuple[int, int, int]) -> str:
+            user_id, posted, solved = row
+            pct = f"{solved / posted * 100:.0f}%" if posted else "—"
+            return f"{medals[i]} <@{user_id}> — **{posted}** posted, {solved} solved ({pct})"
+
+        def _guesser_line(i: int, row: tuple[int, int]) -> str:
+            user_id, solved = row
+            return f"{medals[i]} <@{user_id}> — **{solved}** solved"
+
+        poster_text = (
+            "\n".join(_poster_line(i, r) for i, r in enumerate(posters))
+            if posters else "_No rounds posted yet._"
+        )
+        guesser_text = (
+            "\n".join(_guesser_line(i, r) for i, r in enumerate(guessers))
+            if guessers else "_No rounds solved yet._"
+        )
+
+        embed = discord.Embed(title="Veil Leaderboard", color=discord.Color.purple())
+        embed.add_field(name="Top Posters", value=poster_text, inline=False)
+        embed.add_field(name="Top Guessers", value=guesser_text, inline=False)
+
+        await interaction.followup.send(embed=embed)
 
 
     @veil.command(name="prompt", description="Post the channel-bottom Submit/Help prompt now.")

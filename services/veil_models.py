@@ -68,6 +68,10 @@ class VeilRound:
     unique_guessers_to_solve: int | None
     answer_optout: bool
     deleted_at: float | None
+    crop_box_x1: float | None = None
+    crop_box_y1: float | None = None
+    crop_box_x2: float | None = None
+    crop_box_y2: float | None = None
 
 
 @dataclass
