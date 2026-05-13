@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from db_utils import (
+from core.db_utils import (
     add_config_id,
     add_grant_permission,
     clear_config_id_bucket,
@@ -32,11 +32,11 @@ from services.inactivity_prune_service import (
     run_prune_for_guild,
     upsert_prune_rule,
 )
-from utils import get_guild_channel_or_thread
-from xp_system import DEFAULT_XP_SETTINGS
+from core.utils import get_guild_channel_or_thread
+from core.xp_system import DEFAULT_XP_SETTINGS
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 # ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ class _GlobalModal(discord.ui.Modal, title="Global Settings"):
             clear_config_id_bucket(conn, "bypass_role_ids", self._ctx.guild_id)
             for rid in bypass_ids:
                 add_config_id(conn, "bypass_role_ids", rid, self._ctx.guild_id)
-            from db_utils import get_config_id_set
+            from core.db_utils import get_config_id_set
 
             self._ctx.bypass_role_ids = get_config_id_set(
                 conn, "bypass_role_ids", self._ctx.guild_id

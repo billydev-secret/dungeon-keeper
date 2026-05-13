@@ -18,11 +18,11 @@ from services.auto_delete_service import (
     remove_auto_delete_rule,
     upsert_auto_delete_rule,
 )
-from settings import AUTO_DELETE_KEYWORDS, AUTO_DELETE_SETTINGS
-from utils import format_user_for_log, get_bot_member, get_guild_channel_or_thread
+from core.settings import AUTO_DELETE_KEYWORDS, AUTO_DELETE_SETTINGS
+from core.utils import format_user_for_log, get_bot_member, get_guild_channel_or_thread
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 async def _delete_messages_older_than(

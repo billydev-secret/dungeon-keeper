@@ -12,7 +12,7 @@ from discord.ext import commands
 from commands.role_grant_commands import _execute_grant
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.role_grant")
 

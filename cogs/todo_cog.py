@@ -9,7 +9,7 @@ from discord.ext import commands
 from services.todo_service import create_todo
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 _MAX_CONTENT_LEN = 1500

@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services import auto_delete_service
 from services.auto_delete_service import (
     _scan_and_delete_channel_history,

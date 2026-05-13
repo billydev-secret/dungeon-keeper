@@ -19,7 +19,7 @@ from discord import app_commands
 from services.watch_service import add_watched_user, remove_watched_user
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 def register_watch_commands(bot: Bot, ctx: AppContext) -> None:

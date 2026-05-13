@@ -17,7 +17,7 @@ from discord.ext import commands
 from beta_tools.config import BetaConfig
 from beta_tools.puppet_manager import PuppetManager
 from beta_tools.webhook_fleet import WebhookFleet
-from config import Config
+from core.config import Config
 
 log = logging.getLogger("beta_tools.bot")
 

@@ -12,7 +12,7 @@ from discord.ext import commands
 from services.command_sync import sync_if_changed
 
 if TYPE_CHECKING:
-    from app_context import Bot
+    from core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.dev")
 

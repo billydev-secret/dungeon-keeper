@@ -65,7 +65,7 @@ def load_xp_settings(conn: sqlite3.Connection, guild_id: int = 0) -> XpSettings:
     When ``guild_id`` is non-zero, guild-scoped rows take precedence and the
     loader falls back to ``guild_id=0`` legacy rows via ``get_config_value``.
     """
-    from db_utils import get_config_value
+    from core.db_utils import get_config_value
 
     defaults = DEFAULT_XP_SETTINGS
     kwargs: dict[str, object] = {}

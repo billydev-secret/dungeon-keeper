@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.veil_models import VeilConfig, VeilRound
 from services.veil_repo import (
     flag_user_open_rounds_optout,

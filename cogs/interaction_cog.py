@@ -22,7 +22,7 @@ from services.invite_tracker import query_invite_web
 from services.name_resolver import resolve_display_names
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.interaction_commands")
 

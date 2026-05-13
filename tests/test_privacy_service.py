@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_utils import open_db
+from core.db_utils import open_db
 from migrations import apply_migrations_sync
 from services.privacy_service import purge_user_data
 

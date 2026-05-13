@@ -16,7 +16,7 @@ import sys
 import discord
 
 from beta_tools.config import BetaConfig, load_beta_config
-from config import load_config
+from core.config import load_config
 
 log = logging.getLogger("beta_tools.safety")
 

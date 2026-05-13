@@ -23,7 +23,7 @@ from services.inactivity_prune_service import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 def register_inactivity_prune_commands(bot: Bot, ctx: AppContext) -> None:

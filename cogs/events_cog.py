@@ -14,7 +14,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from commands.jail_commands import check_jail_rejoin
-from post_monitoring import enforce_spoiler_requirement
+from core.post_monitoring import enforce_spoiler_requirement
 from services.ai_moderation_service import ai_check_watched_message
 from services.auto_delete_service import (
     auto_delete_rule_exists,
@@ -39,11 +39,11 @@ from services.sentiment_service import score_text
 from services.welcome_service import build_leave_embed, build_welcome_embed
 from services.wellness_enforcement import wellness_on_message
 from services.xp_service import handle_level_progress
-from utils import format_guild_for_log
-from xp_system import count_xp_events, log_role_event, record_member_activity
+from core.utils import format_guild_for_log
+from core.xp_system import count_xp_events, log_role_event, record_member_activity
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.events")
 

@@ -4,7 +4,7 @@ import logging
 
 import discord
 
-from utils import format_user_for_log
+from core.utils import format_user_for_log
 
 
 def attachment_is_image(attachment: discord.Attachment) -> bool:

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from collections.abc import Callable
 
-from db_utils import (
+from core.db_utils import (
     delete_config_value,
     get_config_value,
     open_db,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.veil_repo import insert_audit_event
 
 
@@ -83,7 +83,7 @@ def test_update_global_tz_offset(authed_client, fake_ctx):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
+        from core.db_utils import get_config_value
         val = get_config_value(conn, "tz_offset_hours", "0", fake_ctx.guild_id)
     assert float(val) == -5.0
 
@@ -92,7 +92,7 @@ def test_update_global_mod_channel(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/global", json={"mod_channel_id": "9999"})
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
+        from core.db_utils import get_config_value
         val = get_config_value(conn, "mod_channel_id", "0", fake_ctx.guild_id)
     assert val == "9999"
 
@@ -101,7 +101,7 @@ def test_update_global_bypass_roles(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/global", json={"bypass_role_ids": ["111", "222"]})
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_id_set
+        from core.db_utils import get_config_id_set
         ids = get_config_id_set(conn, "bypass_role_ids", fake_ctx.guild_id)
     assert ids == {111, 222}
 
@@ -125,7 +125,7 @@ def test_update_welcome_message(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/welcome", json={"welcome_message": "Hello {name}!"})
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
+        from core.db_utils import get_config_value
         val = get_config_value(conn, "welcome_message", "", fake_ctx.guild_id)
     assert val == "Hello {name}!"
 
@@ -134,7 +134,7 @@ def test_update_welcome_channel(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/welcome", json={"welcome_channel_id": "5001"})
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
+        from core.db_utils import get_config_value
         val = get_config_value(conn, "welcome_channel_id", "0", fake_ctx.guild_id)
     assert val == "5001"
 
@@ -149,7 +149,7 @@ def test_update_xp_role_ids(authed_client, fake_ctx):
     })
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
+        from core.db_utils import get_config_value
         assert get_config_value(conn, "xp_level_5_role_id", "0", fake_ctx.guild_id) == "3001"
         assert get_config_value(conn, "xp_level_up_log_channel_id", "0", fake_ctx.guild_id) == "4001"
 
@@ -158,7 +158,7 @@ def test_update_xp_excluded_channels(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/xp", json={"xp_excluded_channel_ids": ["7001", "7002"]})
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_id_set
+        from core.db_utils import get_config_id_set
         ids = get_config_id_set(conn, "xp_excluded_channel_ids", fake_ctx.guild_id)
     assert ids == {7001, 7002}
 
@@ -167,8 +167,8 @@ def test_update_xp_coefficient(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/xp", json={"message_word_xp": 0.75})
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
-        from xp_system import _XP_COEFF_PREFIX
+        from core.db_utils import get_config_value
+        from core.xp_system import _XP_COEFF_PREFIX
         val = get_config_value(conn, f"{_XP_COEFF_PREFIX}message_word_xp", "0", fake_ctx.guild_id)
     assert float(val) == 0.75
 
@@ -222,7 +222,7 @@ def test_update_moderation_fields(authed_client, fake_ctx):
     })
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
+        from core.db_utils import get_config_value
         assert get_config_value(conn, "jailed_role_id", "0", fake_ctx.guild_id) == "6001"
         assert get_config_value(conn, "log_channel_id", "0", fake_ctx.guild_id) == "6002"
         assert get_config_value(conn, "warning_threshold", "3", fake_ctx.guild_id) == "5"
@@ -242,7 +242,7 @@ def test_create_and_delete_role_grant(authed_client, fake_ctx):
     assert resp.status_code == 200
 
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_grant_roles
+        from core.db_utils import get_grant_roles
         roles = get_grant_roles(conn, fake_ctx.guild_id)
     assert "vip" in roles
     assert roles["vip"]["role_id"] == 5555
@@ -251,7 +251,7 @@ def test_create_and_delete_role_grant(authed_client, fake_ctx):
     assert resp.status_code == 200
 
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_grant_roles
+        from core.db_utils import get_grant_roles
         roles = get_grant_roles(conn, fake_ctx.guild_id)
     assert "vip" not in roles
 
@@ -263,7 +263,7 @@ def test_update_spoiler_channels(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/spoiler", json={"spoiler_required_channels": ["1001", "1002"]})
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_id_set
+        from core.db_utils import get_config_id_set
         ids = get_config_id_set(conn, "spoiler_required_channels", fake_ctx.guild_id)
     assert ids == {1001, 1002}
 
@@ -357,7 +357,7 @@ def test_update_veil_channel(authed_client, fake_ctx):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
+        from core.db_utils import get_config_value
         val = get_config_value(conn, "veil_channel_id", "0", fake_ctx.guild_id)
     assert val == "555"
 
@@ -367,7 +367,7 @@ def test_update_veil_crop_difficulty_hard(authed_client, fake_ctx):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     with open_db(fake_ctx.db_path) as conn:
-        from db_utils import get_config_value
+        from core.db_utils import get_config_value
         val = get_config_value(conn, "veil_crop_difficulty", "medium", fake_ctx.guild_id)
     assert val == "hard"
 

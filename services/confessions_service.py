@@ -13,7 +13,7 @@ from typing import Optional
 
 import discord
 
-from db_utils import open_db
+from core.db_utils import open_db
 
 DEFAULT_COOLDOWN_SECONDS = 120
 DEFAULT_MAX_CHARS = 2000

@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from db_utils import open_db
+from core.db_utils import open_db
 from web.deps import invalidate_report_cache
 
 

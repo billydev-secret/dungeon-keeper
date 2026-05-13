@@ -1381,7 +1381,7 @@ def compute_mod_workload(
         mod_params = ()
 
     # Collect mod-related channel IDs: mod chat + ticket/jail/policy channels
-    from db_utils import get_config_value
+    from core.db_utils import get_config_value
 
     mod_channel_ids: set[int] = set()
     mc_raw = get_config_value(conn, "mod_channel_id", "0", guild_id)

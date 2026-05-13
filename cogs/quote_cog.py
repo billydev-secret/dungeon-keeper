@@ -24,7 +24,7 @@ from services.quote_renderer import FONT_STYLES, THEMES, render_quote_card
 from services.starboard_service import get_starboard_config
 
 if TYPE_CHECKING:
-    from app_context import Bot
+    from core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.quote")
 

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from db_utils import get_config_value
+from core.db_utils import get_config_value
 from services.embeds import (
     MOD_INFO as CLR_INFO,
     MOD_JAIL as CLR_JAIL,
@@ -51,7 +51,7 @@ from services.moderation import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext
+    from core.app_context import AppContext
 
 log = logging.getLogger("dungeonkeeper.jail_commands")
 

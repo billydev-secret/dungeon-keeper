@@ -21,7 +21,7 @@ from services.message_store import (
     store_message,
 )
 from services.xp_service import maybe_grant_level_role
-from xp_system import (
+from core.xp_system import (
     DEFAULT_XP_SETTINGS,
     PairState,
     MessageXpContext,

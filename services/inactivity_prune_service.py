@@ -11,9 +11,9 @@ from pathlib import Path
 
 import discord
 
-from db_utils import open_db
-from settings import AUTO_DELETE_SETTINGS
-from utils import resolve_guild_for_log
+from core.db_utils import open_db
+from core.settings import AUTO_DELETE_SETTINGS
+from core.utils import resolve_guild_for_log
 
 log = logging.getLogger("dungeonkeeper.inactivity_prune")
 
@@ -171,7 +171,7 @@ async def run_prune_for_guild(
     role_id: int,
     inactivity_days: int,
 ) -> None:
-    from xp_system import get_member_last_activity_map
+    from core.xp_system import get_member_last_activity_map
 
     guild = bot.get_guild(guild_id)
     if guild is None:

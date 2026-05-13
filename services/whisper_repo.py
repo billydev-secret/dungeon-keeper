@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from db_utils import get_config_value, set_config_value
+from core.db_utils import get_config_value, set_config_value
 from services.whisper_models import (
     Whisper,
     WhisperConfig,

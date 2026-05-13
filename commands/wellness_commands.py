@@ -14,7 +14,7 @@ import discord
 from discord import app_commands
 
 from services.wellness_partners import make_partner_request_view
-from utils import format_user_for_log
+from core.utils import format_user_for_log
 from services.wellness_service import (
     ALL_DAYS_MASK,
     BLACKOUT_TEMPLATES,
@@ -53,7 +53,7 @@ from services.wellness_service import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.wellness")
 

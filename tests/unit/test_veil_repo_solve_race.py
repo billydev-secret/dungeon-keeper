@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.veil_repo import insert_round, mark_round_solved
 
 

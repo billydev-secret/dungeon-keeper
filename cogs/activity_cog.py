@@ -29,7 +29,7 @@ from services.health_metrics import compute_user_churn_score
 from services.member_quality_score import compute_quality_scores
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 class ActivityCog(commands.Cog):

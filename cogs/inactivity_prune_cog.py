@@ -17,7 +17,7 @@ from services.inactivity_prune_service import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 class InactivityPruneCog(commands.Cog):

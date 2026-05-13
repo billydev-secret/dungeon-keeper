@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from db_utils import add_config_id, get_config_id_set, remove_config_id
+from core.db_utils import add_config_id, get_config_id_set, remove_config_id
 from services.embeds import STARBOARD_PRIMARY
 from services.starboard_service import (
     add_reactor,
@@ -24,7 +24,7 @@ from services.starboard_service import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.starboard")
 

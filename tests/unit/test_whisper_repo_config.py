@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.whisper_repo import (
     get_whisper_config,
     set_whisper_config_value,

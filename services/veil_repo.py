@@ -5,7 +5,7 @@ import json
 import sqlite3
 import time
 
-from db_utils import get_config_value, set_config_value
+from core.db_utils import get_config_value, set_config_value
 from services.veil_models import (
     VeilAuditEvent,
     VeilConfig,

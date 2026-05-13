@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from db_utils import open_db
-from post_monitoring import message_has_qualifying_image
-from utils import format_user_for_log, get_guild_channel_or_thread, resolve_reply_target
-from xp_system import (
+from core.db_utils import open_db
+from core.post_monitoring import message_has_qualifying_image
+from core.utils import format_user_for_log, get_guild_channel_or_thread, resolve_reply_target
+from core.xp_system import (
     DEFAULT_XP_SETTINGS,
     XP_SOURCE_IMAGE_REACT,
     XP_SOURCE_REPLY,
@@ -32,7 +32,7 @@ from xp_system import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from xp_system import PairState
+    from core.xp_system import PairState
 
     GuildTextLike = discord.TextChannel | discord.Thread
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.moderation import create_jail, create_ticket, create_warning
 
 

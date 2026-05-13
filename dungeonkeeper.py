@@ -9,13 +9,13 @@ from pathlib import Path
 import discord
 from dotenv import load_dotenv
 
-from app_context import AppContext, Bot, load_runtime_config
-from config import load_config
-from id_remap import build_remap
+from core.app_context import AppContext, Bot, load_runtime_config
+from core.config import load_config
+from core.id_remap import build_remap
 from migrations import apply_migrations_sync
-from safety import check_bot_identity, check_db_path, check_guild_membership, print_startup_banner
+from core.safety import check_bot_identity, check_db_path, check_guild_membership, print_startup_banner
 from services.watch_service import load_watched_users
-from db_utils import migrate_grant_roles, open_db
+from core.db_utils import migrate_grant_roles, open_db
 from services.auto_delete_service import auto_delete_loop
 from services.booster_roles import BoosterRoleDynamicButton
 from services.inactivity_prune_service import inactivity_prune_loop
@@ -26,7 +26,7 @@ from services.wellness_partners import (
 )
 from services.db_backup import db_backup_loop
 from services.xp_service import handle_level_progress
-from utils import format_guild_for_log
+from core.utils import format_guild_for_log
 
 # ==============================
 # Bootstrap

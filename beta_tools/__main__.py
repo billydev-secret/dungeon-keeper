@@ -17,7 +17,7 @@ from pathlib import Path
 
 from beta_tools.bot import DkToolsBot
 from beta_tools.safety import assert_safe_to_start
-from config import load_config
+from core.config import load_config
 
 
 def _setup_logging() -> None:

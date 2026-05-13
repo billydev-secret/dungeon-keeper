@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from db_utils import open_db
+from core.db_utils import open_db
 from migrations import apply_migrations_sync
 from services.voice_master_service import (
     add_name_blocklist,

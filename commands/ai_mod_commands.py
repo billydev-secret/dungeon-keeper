@@ -18,7 +18,7 @@ import discord
 from anthropic import AsyncAnthropic
 from discord import app_commands
 
-from reports import send_ephemeral_text
+from core.reports import send_ephemeral_text
 from services.ai_moderation_service import (
     ai_query_channel,
     ai_query_user,
@@ -27,7 +27,7 @@ from services.ai_moderation_service import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 def _anthropic_client() -> AsyncAnthropic | None:

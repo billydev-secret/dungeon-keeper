@@ -3,7 +3,7 @@
 import logging
 
 
-from id_remap import match_channel, match_role
+from core.id_remap import match_channel, match_role
 
 
 # ── match_channel ─────────────────────────────────────────────────────

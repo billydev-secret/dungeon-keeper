@@ -19,10 +19,10 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from reports import send_ephemeral_text
+from core.reports import send_ephemeral_text
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.drama")
 

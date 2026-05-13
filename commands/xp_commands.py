@@ -25,8 +25,8 @@ from discord import app_commands
 
 from services.activity_graphs import render_level_histogram
 from services.xp_service import handle_level_progress, maybe_grant_level_role
-from utils import get_bot_member
-from xp_system import (
+from core.utils import get_bot_member
+from core.xp_system import (
     DEFAULT_XP_SETTINGS,
     XP_SOURCE_GRANT,
     XP_SOURCE_IMAGE_REACT,
@@ -53,8 +53,8 @@ from xp_system import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
-    from xp_system import PairState
+    from core.app_context import AppContext, Bot
+    from core.xp_system import PairState
 
 
 async def _collect_backfill_channels(

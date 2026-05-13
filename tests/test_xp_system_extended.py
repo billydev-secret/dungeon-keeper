@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from xp_system import (
+from core.xp_system import (
     DEFAULT_XP_SETTINGS,
     XP_SOURCE_TEXT,
     XP_SOURCE_VOICE,

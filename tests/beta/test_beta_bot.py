@@ -9,7 +9,7 @@ import pytest
 
 @pytest.fixture
 def mock_main_cfg(tmp_path):
-    from config import Config
+    from core.config import Config
     return Config(
         env="dev", token="t", guild_id=9001, db_path=str(tmp_path / "dk_dev.db"),
         audit_channel_id=0, reset_dev_db=False, seed_dev_fixtures=False,

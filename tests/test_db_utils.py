@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_utils import (
+from core.db_utils import (
     get_config_id_set,
     get_config_value,
     init_config_db,

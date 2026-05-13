@@ -125,7 +125,7 @@ class SpotifyResolver:
         return self._user_client
 
     def _read_refresh_token(self) -> str:
-        from db_utils import get_config_value, open_db
+        from core.db_utils import get_config_value, open_db
 
         assert self._db_path is not None
         with open_db(self._db_path) as conn:

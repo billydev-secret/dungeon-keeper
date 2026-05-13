@@ -11,7 +11,7 @@ from discord.ext import commands
 from services.watch_service import add_watched_user, remove_watched_user
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 class WatchCog(commands.Cog):

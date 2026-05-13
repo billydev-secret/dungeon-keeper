@@ -12,7 +12,7 @@ from discord.ext import commands
 
 from services.embeds import XP_PRIMARY
 from services.xp_service import handle_level_progress
-from xp_system import (
+from core.xp_system import (
     XP_SOURCE_GRANT,
     XP_SOURCE_IMAGE_REACT,
     XP_SOURCE_REPLY,
@@ -27,7 +27,7 @@ from xp_system import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 async def _collect_backfill_channels(

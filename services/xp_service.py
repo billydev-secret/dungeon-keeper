@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from utils import format_user_for_log, get_guild_channel_or_thread
-from xp_system import (
+from core.utils import format_user_for_log, get_guild_channel_or_thread
+from core.xp_system import (
     DEFAULT_XP_SETTINGS,
     AwardResult,
     XpSettings,
@@ -137,8 +137,8 @@ async def maybe_grant_level_role(
             format_user_for_log(member),
         )
         if db_path is not None:
-            from db_utils import open_db
-            from xp_system import log_role_event
+            from core.db_utils import open_db
+            from core.xp_system import log_role_event
 
             with open_db(db_path) as conn:
                 log_role_event(conn, member.guild.id, member.id, role.name, "grant")

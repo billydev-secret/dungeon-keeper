@@ -13,7 +13,7 @@ from collections.abc import Callable, Coroutine
 import discord
 from discord.ext import commands
 
-from db_utils import (
+from core.db_utils import (
     GrantRoleConfig,
     add_config_id,
     can_use_grant,
@@ -26,7 +26,7 @@ from db_utils import (
     remove_config_id,
     set_config_value as _db_set_config_value,
 )
-from xp_system import DEFAULT_XP_SETTINGS, XpSettings, load_xp_settings
+from core.xp_system import DEFAULT_XP_SETTINGS, XpSettings, load_xp_settings
 
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
@@ -363,7 +363,7 @@ class AppContext:
     def get_interaction_member(
         self, interaction: discord.Interaction
     ) -> discord.Member | None:
-        from utils import get_interaction_member as _impl
+        from core.utils import get_interaction_member as _impl
 
         return _impl(interaction)
 
@@ -373,7 +373,7 @@ class AppContext:
     def get_guild_channel_or_thread(
         self, guild: discord.Guild, channel_id: int
     ) -> GuildTextLike | None:
-        from utils import get_guild_channel_or_thread as _impl
+        from core.utils import get_guild_channel_or_thread as _impl
 
         return _impl(guild, channel_id)
 
@@ -439,6 +439,6 @@ class AppContext:
         return interaction.user.id in self.xp_grant_allowed_user_ids
 
     def get_member_last_activity_map(self, conn, guild_id: int, user_ids: list[int]):
-        from xp_system import get_member_last_activity_map
+        from core.xp_system import get_member_last_activity_map
 
         return get_member_last_activity_map(conn, guild_id, user_ids)

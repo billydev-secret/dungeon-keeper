@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from db_utils import (
+from core.db_utils import (
     add_config_id,
     add_grant_permission,
     get_config_id_set,

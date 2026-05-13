@@ -11,7 +11,7 @@ from typing import Any, Sequence
 
 from aiosqlite import Connection
 
-from config import Config
+from core.config import Config
 
 log = logging.getLogger("beta_tools.db_gate")
 

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 from discord import app_commands
 
-from db_utils import get_config_value, open_db, set_config_value
+from core.db_utils import get_config_value, open_db, set_config_value
 
 if TYPE_CHECKING:
     pass

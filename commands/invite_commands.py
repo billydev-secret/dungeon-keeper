@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import discord
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 def register_invite_commands(bot: Bot, ctx: AppContext) -> None:

@@ -12,7 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.whisper_models import (
     STATE_HIDDEN,
     STATE_PENDING,
@@ -55,7 +55,7 @@ from services.whisper_service import (
 )
 
 if TYPE_CHECKING:
-    from app_context import Bot
+    from core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.whisper")
 
@@ -1540,7 +1540,7 @@ class WhisperCog(commands.Cog):
         await asyncio.to_thread(self._clear_guild_config, guild.id)
 
     def _clear_guild_config(self, guild_id: int) -> None:
-        from db_utils import delete_config_value  # noqa: PLC0415
+        from core.db_utils import delete_config_value  # noqa: PLC0415
         with open_db(self.ctx.db_path) as conn:
             for key in (
                 "whisper_role_id",

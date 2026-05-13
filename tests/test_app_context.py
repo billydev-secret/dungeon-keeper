@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 
-from app_context import Bot
+from core.app_context import Bot
 
 
 async def test_setup_hook_skips_sync_for_non_positive_guild_id():

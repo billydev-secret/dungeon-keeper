@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from settings import AUTO_DELETE_SETTINGS
+from core.settings import AUTO_DELETE_SETTINGS
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 def _fmt(command_specs: list[tuple[str, str]]) -> str:

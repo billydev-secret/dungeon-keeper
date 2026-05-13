@@ -39,7 +39,7 @@ from services.confessions_service import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
     from services.confessions_service import GuildConfig
 
 log = logging.getLogger(__name__)

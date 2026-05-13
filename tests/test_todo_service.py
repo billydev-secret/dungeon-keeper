@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from db_utils import open_db
+from core.db_utils import open_db
 from migrations import apply_migrations_sync
 from services.todo_service import complete_todo, create_todo, delete_todo, list_todos
 

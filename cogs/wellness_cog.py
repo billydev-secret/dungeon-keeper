@@ -22,10 +22,10 @@ from services.wellness_service import (
     update_away_message,
     update_user_settings,
 )
-from utils import format_user_for_log
+from core.utils import format_user_for_log
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.wellness")
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.auto_delete_service import (
     auto_delete_rule_exists,
     format_duration_seconds,

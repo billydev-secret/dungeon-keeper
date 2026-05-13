@@ -13,7 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from db_utils import get_config_value, open_db
+from core.db_utils import get_config_value, open_db
 from services.birthday_service import (
     MAX_DAYS as _MAX_DAYS,
     delete_birthday as _delete_birthday,
@@ -24,7 +24,7 @@ from services.birthday_service import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.birthday")
 

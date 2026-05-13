@@ -13,7 +13,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from db_utils import open_db
+from core.db_utils import open_db
 from migrations import apply_migrations_sync
 from web.auth import DiscordOAuthAuth, OpenAuth, SESSION_COOKIE
 from web.deps import invalidate_report_cache

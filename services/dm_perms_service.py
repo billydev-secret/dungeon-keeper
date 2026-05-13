@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 import discord
 
-from db_utils import open_db
+from core.db_utils import open_db
 
 ROLE_DM_OPEN = "DMs: Open"
 ROLE_DM_ASK = "DMs: Ask"

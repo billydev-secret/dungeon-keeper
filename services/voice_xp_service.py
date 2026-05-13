@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from db_utils import open_db
-from utils import format_user_for_log
-from xp_system import (
+from core.db_utils import open_db
+from core.utils import format_user_for_log
+from core.xp_system import (
     DEFAULT_XP_SETTINGS,
     XP_SOURCE_VOICE,
     XpSettings,
@@ -27,7 +27,7 @@ from xp_system import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from xp_system import AwardResult
+    from core.xp_system import AwardResult
 
 log = logging.getLogger("dungeonkeeper.voice_xp")
 

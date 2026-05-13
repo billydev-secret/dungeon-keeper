@@ -10,7 +10,7 @@ canonical in xp_system.py and are re-exported here for a single import point.
 from __future__ import annotations
 
 # Re-export XP math from xp_system so tests can import from one place
-from xp_system import (  # noqa: F401
+from core.xp_system import (  # noqa: F401
     calculate_message_xp,
     cooldown_multiplier,
     level_for_xp,

@@ -66,7 +66,7 @@ from services.moderation import (
     start_policy_vote,
     write_audit,
 )
-from db_utils import get_config_value
+from core.db_utils import get_config_value
 
 
 # ── Embed / display limits ────────────────────────────────────────────────
@@ -91,7 +91,7 @@ def _sanitize_channel_name(part: str) -> str:
     return cleaned or "user"
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.jail_commands")
 

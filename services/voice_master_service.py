@@ -101,7 +101,7 @@ def load_voice_master_config(
     conn: sqlite3.Connection, guild_id: int
 ) -> VoiceMasterConfig:
     """Load the full per-guild Voice Master config in one shot."""
-    from db_utils import get_config_value as _get  # avoid cycle at module import
+    from core.db_utils import get_config_value as _get  # avoid cycle at module import
 
     raw: dict[str, str] = {
         key: _get(conn, key, default, guild_id)
@@ -139,7 +139,7 @@ def set_voice_master_config_value(
     """Upsert a single voice_master_* config key for the given guild."""
     if key not in _CONFIG_DEFAULTS:
         raise ValueError(f"unknown voice master config key: {key}")
-    from db_utils import set_config_value as _set
+    from core.db_utils import set_config_value as _set
 
     _set(conn, key, value, guild_id)
 
@@ -789,8 +789,8 @@ async def trusted_prune_loop(
     Activity is sourced from xp_system's member_activity table.
     """
     import asyncio
-    from db_utils import open_db
-    from xp_system import get_member_last_activity_map
+    from core.db_utils import open_db
+    from core.xp_system import get_member_last_activity_map
 
     await bot.wait_until_ready()
     log.info("voice_master: trusted_prune_loop started")

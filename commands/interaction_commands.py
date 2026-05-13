@@ -30,7 +30,7 @@ from services.message_store import record_member_event, set_reaction_count, stor
 from services.name_resolver import resolve_display_names
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.interaction_commands")
 

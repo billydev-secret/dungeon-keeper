@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from db_utils import get_config_value
+from core.db_utils import get_config_value
 from services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query

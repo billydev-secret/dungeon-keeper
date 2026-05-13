@@ -18,7 +18,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from db_utils import open_db, set_config_value
+from core.db_utils import open_db, set_config_value
 from web.auth import AuthenticatedUser
 from web.deps import require_perms
 

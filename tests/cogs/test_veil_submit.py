@@ -249,7 +249,7 @@ async def test_cog_load_registers_game_views_from_db(sync_db_path: Path):
     """cog_load queries active rounds and calls bot.add_view for each."""
     from cogs.veil_cog import GameView
     from services.veil_repo import insert_round
-    from db_utils import open_db
+    from core.db_utils import open_db
 
     with open_db(sync_db_path) as conn:
         insert_round(conn, guild_id=GUILD_ID, submitter_id=1001, answer_id=1001)

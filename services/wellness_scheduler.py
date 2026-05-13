@@ -26,9 +26,9 @@ from pathlib import Path
 
 import discord
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.wellness_ai import generate_weekly_encouragement
-from utils import format_guild_for_log, format_user_for_log
+from core.utils import format_guild_for_log, format_user_for_log
 from services.wellness_service import (
     MILESTONES,
     SETTINGS_RETENTION_SECONDS,

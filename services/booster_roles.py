@@ -12,7 +12,7 @@ from typing import TypedDict
 
 import discord
 
-from db_utils import get_config_value, open_db
+from core.db_utils import get_config_value, open_db
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 

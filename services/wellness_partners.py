@@ -13,7 +13,7 @@ from pathlib import Path
 
 import discord
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.wellness_service import (
     accept_partner_request,
     dissolve_partnership,

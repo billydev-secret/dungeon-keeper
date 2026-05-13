@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.veil_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,

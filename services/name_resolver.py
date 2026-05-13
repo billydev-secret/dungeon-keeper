@@ -17,7 +17,7 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.message_store import get_known_users_bulk
 
 if TYPE_CHECKING:

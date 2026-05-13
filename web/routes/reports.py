@@ -952,7 +952,7 @@ async def time_to_level_5(
     from collections import Counter
     from datetime import datetime, timedelta, timezone
 
-    from xp_system import get_time_to_level_details, xp_required_for_level
+    from core.xp_system import get_time_to_level_details, xp_required_for_level
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1233,7 +1233,7 @@ async def xp_level_review(
     from collections import Counter
     from datetime import datetime, timedelta, timezone
 
-    from xp_system import get_time_to_level_details, xp_required_for_level
+    from core.xp_system import get_time_to_level_details, xp_required_for_level
 
     if not (2 <= level <= 100):
         raise HTTPException(400, "level must be between 2 and 100")
@@ -1558,7 +1558,7 @@ async def inactive(
     ch_id_int: int | None = int(channel_id) if channel_id else None
 
     def _q():
-        from xp_system import MemberActivity
+        from core.xp_system import MemberActivity
 
         with ctx.open_db() as conn:
             if ch_id_int is not None:

@@ -18,7 +18,7 @@ from discord import app_commands
 from discord.ext import commands
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.emoji_stealer")
 

@@ -23,7 +23,7 @@ from commands.config_commands import (
 )
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 
 class ConfigCog(commands.Cog):

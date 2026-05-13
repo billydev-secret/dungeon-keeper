@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import discord
 
 if TYPE_CHECKING:
-    from config import Config
+    from core.config import Config
 
 log = logging.getLogger("dungeonkeeper.id_remap")
 

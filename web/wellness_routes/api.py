@@ -52,7 +52,7 @@ from services.wellness_service import (
     update_user_settings,
     user_now,
 )
-from utils import format_user_for_log
+from core.utils import format_user_for_log
 from web.auth import AuthenticatedUser
 from web.wellness_routes.deps import get_ctx, get_guild_id, require_user
 

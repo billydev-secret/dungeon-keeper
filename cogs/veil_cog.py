@@ -17,7 +17,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.veil_models import BoundingBox, VeilConfig, VeilGuess, VeilRound
 from services.veil_pipeline import (
     compute_padded_crop,
@@ -60,7 +60,7 @@ MAX_GUESSES_PER_USER_ROUND = 5
 _COG_LOAD_VIEW_CAP = 1000
 
 if TYPE_CHECKING:
-    from app_context import Bot
+    from core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.veil")
 

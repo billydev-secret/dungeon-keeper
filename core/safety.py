@@ -12,7 +12,7 @@ import sys
 
 import discord
 
-from config import Config
+from core.config import Config
 
 log = logging.getLogger("dungeonkeeper.safety")
 

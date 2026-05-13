@@ -529,7 +529,7 @@ def query_last_substantive_activity(
 
     Returns dict[int, MemberActivity].
     """
-    from xp_system import MemberActivity
+    from core.xp_system import MemberActivity
 
     if not user_ids:
         return {}

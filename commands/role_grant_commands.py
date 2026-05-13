@@ -8,10 +8,10 @@ from typing import TYPE_CHECKING
 import discord
 from discord import app_commands
 
-from utils import format_user_for_log, get_bot_member
+from core.utils import format_user_for_log, get_bot_member
 
 if TYPE_CHECKING:
-    from app_context import AppContext, Bot
+    from core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.role_grant")
 
@@ -116,7 +116,7 @@ async def _execute_grant(
         )
         return
 
-    from xp_system import log_role_event
+    from core.xp_system import log_role_event
 
     with ctx.open_db() as db_conn:
         log_role_event(db_conn, guild.id, member.id, role.name, "grant")

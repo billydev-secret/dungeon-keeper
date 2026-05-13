@@ -12,9 +12,9 @@ from typing import Any, cast
 
 import discord
 
-from db_utils import open_db
-from settings import AUTO_DELETE_KEYWORDS, AUTO_DELETE_SETTINGS
-from utils import format_guild_for_log
+from core.db_utils import open_db
+from core.settings import AUTO_DELETE_KEYWORDS, AUTO_DELETE_SETTINGS
+from core.utils import format_guild_for_log
 
 GuildTextLike = discord.TextChannel | discord.Thread
 
@@ -532,7 +532,7 @@ async def process_auto_delete_tick(
         if guild is None:
             continue
 
-        from utils import get_guild_channel_or_thread
+        from core.utils import get_guild_channel_or_thread
 
         channel = get_guild_channel_or_thread(guild, channel_id)
         if channel is None:
@@ -760,7 +760,7 @@ async def _run_startup_for_rule(
     """Run startup catch-up for a single auto-delete rule (held inside a semaphore)."""
     from datetime import timedelta
 
-    from utils import get_guild_channel_or_thread
+    from core.utils import get_guild_channel_or_thread
 
     guild_id = int(rule["guild_id"])
     channel_id = int(rule["channel_id"])

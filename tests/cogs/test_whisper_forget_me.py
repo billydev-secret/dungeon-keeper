@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from db_utils import open_db
+from core.db_utils import open_db
 from services.whisper_repo import get_whisper, insert_whisper
 from tests.fakes import FakeMember, fake_interaction
 

@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
-from db_utils import (
+from core.db_utils import (
     add_config_id,
     add_grant_permission,
     clear_config_id_bucket,
@@ -50,7 +50,7 @@ from services.dm_perms_service import (
 )
 from web.auth import AuthenticatedUser
 from web.deps import get_active_guild_id, get_ctx, require_perms, run_query
-from xp_system import _XP_COEFF_PREFIX, DEFAULT_XP_SETTINGS
+from core.xp_system import _XP_COEFF_PREFIX, DEFAULT_XP_SETTINGS
 from services.confessions_service import (
     GuildConfig as _ConfessionsGuildConfig,
     get_config as _confessions_get_config,
@@ -110,7 +110,7 @@ def _xp_coefficients(conn, guild_id: int = 0) -> dict:
     Guild-scoped rows take precedence; falls back to ``guild_id=0`` legacy rows
     via ``get_config_value``.
     """
-    from db_utils import get_config_value
+    from core.db_utils import get_config_value
 
     d = DEFAULT_XP_SETTINGS
     p = _XP_COEFF_PREFIX
@@ -867,7 +867,7 @@ async def preview_prune(
     """
     import time as _time
 
-    from xp_system import get_member_last_activity_map
+    from core.xp_system import get_member_last_activity_map
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

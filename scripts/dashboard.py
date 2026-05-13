@@ -23,7 +23,7 @@ from pathlib import Path
 import uvicorn
 from dotenv import load_dotenv
 
-from db_utils import get_config_value, open_db
+from core.db_utils import get_config_value, open_db
 from services.message_store import init_known_channels_table, init_known_users_table
 
 logging.basicConfig(
