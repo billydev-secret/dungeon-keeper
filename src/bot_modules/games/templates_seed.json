@@ -1,0 +1,98 @@
+[
+  {
+    "template_id": "seed-t1-001",
+    "title": "The First Date",
+    "tier": 1,
+    "tags": ["dating", "romantic"],
+    "status": "published",
+    "player_min": 2,
+    "player_max": 99,
+    "notes": "",
+    "blanks": [
+      {"id": "b1", "pos": "noun", "domain": "person",    "position": 1},
+      {"id": "b2", "pos": "noun", "domain": "place",     "position": 2},
+      {"id": "b3", "pos": "adjective",                   "position": 3},
+      {"id": "b4", "pos": "verb", "form": "ing",         "position": 4},
+      {"id": "b5", "pos": "exclamation",                 "position": 5}
+    ],
+    "body": "{b1} finally asked me out. We met at {b2}, which was unexpectedly {b3}. Halfway through the evening they caught me {b4} and just stared. I said \"{b5}\" and honestly that's when I knew we were meant for each other."
+  },
+  {
+    "template_id": "seed-t2-001",
+    "title": "The Gym Encounter",
+    "tier": 2,
+    "tags": ["gym", "flirty"],
+    "status": "published",
+    "player_min": 2,
+    "player_max": 99,
+    "notes": "",
+    "blanks": [
+      {"id": "b1", "pos": "adjective",                 "position": 1},
+      {"id": "b2", "pos": "noun", "domain": "body",    "position": 2},
+      {"id": "b3", "pos": "verb", "form": "ing",       "position": 3},
+      {"id": "b4", "pos": "noun", "position": 4, "example": "dumbbell"},
+      {"id": "b5", "pos": "exclamation",               "position": 5},
+      {"id": "b6", "pos": "adverb",                    "position": 6}
+    ],
+    "body": "I was at the gym minding my own business when this {b1} stranger walked in. Our eyes met over the {b2} machine. They started {b3} a {b4} and I completely forgot what I was doing. I said \"{b5}\" out loud and they just smiled at me {b6}. I have never felt more alive or more embarrassed."
+  },
+  {
+    "template_id": "seed-t2-002",
+    "title": "The Terrible Apology",
+    "tier": 2,
+    "tags": ["drama", "relationships"],
+    "status": "published",
+    "player_min": 2,
+    "player_max": 99,
+    "notes": "",
+    "blanks": [
+      {"id": "b1", "pos": "noun", "domain": "person",  "position": 1},
+      {"id": "b2", "pos": "verb", "form": "ing",       "position": 2},
+      {"id": "b3", "pos": "adjective",                 "position": 3},
+      {"id": "b4", "pos": "noun", "position": 4, "example": "teddy bear"},
+      {"id": "b5", "pos": "noun", "domain": "place",   "position": 5},
+      {"id": "b6", "pos": "adverb",                    "position": 6},
+      {"id": "b7", "pos": "exclamation",               "position": 7}
+    ],
+    "body": "{b1} showed up at my door at 2am, {b2} intensely. They looked {b3} and were holding a {b4}. \"I'm sorry about what happened at {b5},\" they said, {b6} gazing into my eyes. I wanted to be mad. I really did. \"{b7}\" was literally all I could say."
+  },
+  {
+    "template_id": "seed-t3-001",
+    "title": "The Hotel Hallway",
+    "tier": 3,
+    "tags": ["spicy", "hotel"],
+    "status": "published",
+    "player_min": 2,
+    "player_max": 99,
+    "notes": "",
+    "blanks": [
+      {"id": "b1", "pos": "adjective",                         "position": 1},
+      {"id": "b2", "pos": "noun", "domain": "body", "position": 2, "example": "chest"},
+      {"id": "b3", "pos": "verb", "domain": "intimate",        "position": 3},
+      {"id": "b4", "pos": "adverb",                            "position": 4},
+      {"id": "b5", "pos": "noun", "position": 5, "example": "suitcase"},
+      {"id": "b6", "pos": "exclamation",                       "position": 6}
+    ],
+    "body": "Room 412. The hallway was empty, the lighting was {b1}, and my entire {b2} was pounding. They looked back at me and said we should {b3} right here. {b4}, I agreed. Someone had left a {b5} on the luggage cart. I kicked it aside. \"{b6}\" I whispered, and the elevator dinged like it was judging us."
+  },
+  {
+    "template_id": "seed-t3-002",
+    "title": "The Group Chat",
+    "tier": 3,
+    "tags": ["drama", "social"],
+    "status": "published",
+    "player_min": 2,
+    "player_max": 99,
+    "notes": "",
+    "blanks": [
+      {"id": "b1", "pos": "noun", "domain": "person",            "position": 1},
+      {"id": "b2", "pos": "verb", "domain": "intimate",          "position": 2},
+      {"id": "b3", "pos": "noun", "domain": "body", "position": 3, "example": "neck"},
+      {"id": "b4", "pos": "adjective",                           "position": 4},
+      {"id": "b5", "pos": "exclamation",                         "position": 5},
+      {"id": "b6", "pos": "verb", "form": "infinitive", "position": 6, "example": "throw"},
+      {"id": "b7", "pos": "adverb",                              "position": 7}
+    ],
+    "body": "{b1} accidentally sent the message to the group chat. Just three words: \"want to {b2}?\" Everyone saw it. Then a photo came through. It was a close-up of someone's {b3}. The vibes were {b4}. Someone typed \"{b5}.\" I watched those three dots appear and disappear for eleven minutes before finally deciding to {b6} my phone {b7} and pretend I'd never seen any of it."
+  }
+]

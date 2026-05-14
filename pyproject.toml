@@ -29,3 +29,8 @@ extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
 reportMissingModuleSource = "none"
+exclude = [
+  "src/bot_modules/cogs/games_*",
+  "src/bot_modules/cogs/games_legitlibs",
+  "src/bot_modules/games",
+]

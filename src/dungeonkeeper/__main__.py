@@ -27,6 +27,7 @@ from bot_modules.services.wellness_partners import (
 from bot_modules.services.db_backup import db_backup_loop
 from bot_modules.services.xp_service import handle_level_progress
 from bot_modules.core.utils import format_guild_for_log
+from bot_modules.services.games_db import GamesDb
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -144,6 +145,8 @@ def main() -> None:
     # Cog extensions
     # ==============================
     bot.ctx = ctx
+    bot.games_db = GamesDb(db_path)  # type: ignore[attr-defined]
+    bot.active_views: dict = {}  # type: ignore[attr-defined]
     bot.extension_names = [
         "bot_modules.cogs.events_cog",
         "bot_modules.cogs.activity_cog",
@@ -172,6 +175,27 @@ def main() -> None:
         "bot_modules.cogs.whisper_cog",
         "bot_modules.cogs.emoji_stealer_cog",
         "bot_modules.cogs.risky_roll_cog",
+        # ── Party Games (PoppyBot) ────────────────────────────────
+        "bot_modules.cogs.games_session_cog",
+        "bot_modules.cogs.games_consent_cog",
+        "bot_modules.cogs.games_config_cog",
+        "bot_modules.cogs.games_help_cog",
+        "bot_modules.cogs.games_ffa_cog",
+        "bot_modules.cogs.games_traditional_cog",
+        "bot_modules.cogs.games_compliment_cog",
+        "bot_modules.cogs.games_mfk_cog",
+        "bot_modules.cogs.games_wyr_cog",
+        "bot_modules.cogs.games_nhie_cog",
+        "bot_modules.cogs.games_mlt_cog",
+        "bot_modules.cogs.games_ttl_cog",
+        "bot_modules.cogs.games_hottakes_cog",
+        "bot_modules.cogs.games_story_cog",
+        "bot_modules.cogs.games_ama_cog",
+        "bot_modules.cogs.games_fantasies_cog",
+        "bot_modules.cogs.games_price_cog",
+        "bot_modules.cogs.games_rushmore_cog",
+        "bot_modules.cogs.games_clapback_cog",
+        "bot_modules.cogs.games_legitlibs",
     ]
 
     # ==============================
@@ -224,6 +248,35 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: db_backup_loop(bot, db_path))
+
+    # ==============================
+    # Games — 24-hour cleanup sweep
+    # ==============================
+    async def _game_cleanup_loop() -> None:
+        """Hourly sweep — end any party game older than 24 hours."""
+        from bot_modules.games.utils.game_manager import end_game  # type: ignore[import-untyped]
+
+        await bot.wait_until_ready()
+        while not bot.is_closed():
+            await asyncio.sleep(3600)
+            try:
+                rows = await bot.games_db.fetchall(  # type: ignore[attr-defined]
+                    "SELECT game_id, channel_id, game_type FROM games_active_games "
+                    "WHERE created_at <= datetime('now', '-24 hours')"
+                )
+                for row in rows:
+                    game_id = row["game_id"]
+                    await end_game(bot.games_db, game_id)  # type: ignore[attr-defined]
+                    if row["game_type"] == "ama":
+                        ama_cog = bot.get_cog("AMACog")
+                        if ama_cog and hasattr(ama_cog, "cleanup_ended_game"):
+                            await ama_cog.cleanup_ended_game(row["channel_id"], game_id)  # type: ignore[attr-defined]
+                    bot.active_views.pop(game_id, None)  # type: ignore[attr-defined]
+                    log.info("Auto-expired game %s (24 h limit)", game_id)
+            except Exception:
+                log.exception("Game cleanup error")
+
+    bot.startup_task_factories.append(lambda: _game_cleanup_loop())
 
     # ==============================
     # Startup backfill — score messages missing calculated fields

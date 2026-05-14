@@ -127,6 +127,17 @@ const SECTIONS = [
     ],
   },
   {
+    id: "games", label: "Games", perms: ["admin"],
+    items: [
+      { id: "games-logs",      label: "Overview & Logs",    module: "./panels/games-logs.js" },
+      { id: "games-bank",      label: "Question Bank",      module: "./panels/games-bank.js" },
+      { id: "games-prompts",   label: "AI Prompts",         module: "./panels/games-prompts.js" },
+      { id: "games-tester",    label: "AI Tester",          module: "./panels/games-tester.js" },
+      { id: "games-legitlibs", label: "LegitLibs",          module: "./panels/games-legitlibs.js" },
+      { id: "games-config",    label: "Config",             module: "./panels/games-config.js" },
+    ],
+  },
+  {
     id: "help", label: "Help", perms: [],
     items: [
       { id: "help-overview", label: "Overview", module: "./panels/help.js" },

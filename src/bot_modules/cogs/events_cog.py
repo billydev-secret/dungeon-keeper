@@ -593,6 +593,22 @@ class EventsCog(commands.Cog):
         if message.author.id in self.ctx.watched_users:
             await self._dm_watchers(message)
 
+        if hasattr(self.bot, "games_db"):
+            from bot_modules.games.utils.consent_check import scan_mentions_for_consent
+            active_channel_ids: set[int] = {
+                v._channel_id
+                for v in self.bot.active_views.values()  # type: ignore[attr-defined]
+                if hasattr(v, "_channel_id")
+            }
+            if not active_channel_ids:
+                rows = await self.bot.games_db.fetchall(  # type: ignore[attr-defined]
+                    "SELECT channel_id FROM games_active_games"
+                )
+                active_channel_ids = {row["channel_id"] for row in rows}
+            await scan_mentions_for_consent(
+                self.bot.games_db, message, active_channel_ids  # type: ignore[attr-defined]
+            )
+
     async def _dm_watchers(self, message: discord.Message) -> None:
         watchers = list(self.ctx.watched_users.get(message.author.id, set()))
         if not watchers:

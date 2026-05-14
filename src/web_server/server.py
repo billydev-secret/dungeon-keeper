@@ -241,6 +241,11 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(voice_master_routes.router, prefix="/api", tags=["voice-master"])
 
+    # ── Party Games (PoppyBot) ──────────────────────────────────────
+    from web_server.routes import games as games_routes
+
+    app.include_router(games_routes.router, prefix="/api/games", tags=["games"])
+
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()
 
