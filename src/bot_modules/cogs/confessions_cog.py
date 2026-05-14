@@ -51,45 +51,6 @@ CONFESSION_HEADER_LENGTH = 2
 # Modals
 # ---------------------------------------------------------------------------
 
-class DMRequestModal(discord.ui.Modal, title="New DM Request"):
-    request = discord.ui.TextInput(
-        label="What do you need help with?",
-        style=discord.TextStyle.long,
-        required=True,
-        max_length=2000,
-        placeholder="Describe what you'd like to discuss in DMs.",
-    )
-
-    def __init__(self, cog: ConfessionsCog) -> None:
-        super().__init__()
-        self.cog = cog
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild and interaction.user
-        cfg = get_config(self.cog.ctx.db_path, interaction.guild.id)
-        if not cfg:
-            await self.cog._safe_ephemeral(interaction, ERROR_NOT_CONFIGURED)
-            return
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        request_text = str(self.request.value).strip()
-        if not request_text:
-            await self.cog._safe_ephemeral(interaction, "DM request can't be empty.")
-            return
-        if isinstance(log_channel, discord.TextChannel):
-            emb = discord.Embed(
-                title="New DM Request",
-                description=defang_everyone_here(request_text),
-                timestamp=discord.utils.utcnow(),
-            )
-            emb.add_field(name="Requester", value=f"{interaction.user.mention} (`{interaction.user.id}`)", inline=False)
-            emb.add_field(name="Guild", value=f"{interaction.guild.name} (`{interaction.guild.id}`)", inline=False)
-            try:
-                await log_channel.send(embed=emb, allowed_mentions=discord.AllowedMentions.none())
-            except discord.HTTPException:
-                await self.cog._safe_ephemeral(interaction, "Failed to submit DM request (missing perms?).")
-                return
-        await self.cog._safe_ephemeral(interaction, "Your DM request was sent to moderators.")
-
 
 class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
     confession = discord.ui.TextInput(
@@ -147,18 +108,18 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             )
             return
 
+        dest_channel = interaction.guild.get_channel(cfg.dest_channel_id)
+        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+        if not isinstance(dest_channel, (discord.TextChannel, discord.ForumChannel)):
+            await self.cog._safe_ephemeral(interaction, "Bot config is invalid (missing destination channel).")
+            return
+
         ok, msg = check_and_bump_limits(
             db_path, interaction.guild.id, interaction.user.id,
             is_reply=False, cooldown_seconds=cfg.cooldown_seconds, per_day_limit=cfg.per_day_limit,
         )
         if not ok:
             await self.cog._safe_ephemeral(interaction, msg)
-            return
-
-        dest_channel = interaction.guild.get_channel(cfg.dest_channel_id)
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if not isinstance(dest_channel, (discord.TextChannel, discord.ForumChannel)):
-            await self.cog._safe_ephemeral(interaction, "Bot config is invalid (missing destination channel).")
             return
 
         try:
@@ -307,6 +268,13 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             )
             return
 
+        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+
+        try:
+            await interaction.response.defer(ephemeral=True, thinking=True)
+        except discord.HTTPException:
+            return
+
         reply_cooldown = max(MIN_REPLY_COOLDOWN_SECONDS, cfg.cooldown_seconds // 2)
         ok, msg = check_and_bump_limits(
             db_path, interaction.guild.id, interaction.user.id,
@@ -314,13 +282,6 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         )
         if not ok:
             await self.cog._safe_ephemeral(interaction, msg)
-            return
-
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-
-        try:
-            await interaction.response.defer(ephemeral=True, thinking=True)
-        except discord.HTTPException:
             return
 
         root_message_id = self.parent_message_id
@@ -525,6 +486,12 @@ class ConfessionsCog(commands.Cog):
             if not isinstance(channel, discord.TextChannel):
                 return
             if cfg.launcher_message_id:
+                try:
+                    last = [m async for m in channel.history(limit=1)]
+                    if last and last[0].id == cfg.launcher_message_id:
+                        return  # already the most recent message, nothing to do
+                except discord.HTTPException:
+                    pass
                 try:
                     old = await channel.fetch_message(cfg.launcher_message_id)
                     await old.delete()
@@ -813,11 +780,6 @@ class ConfessionsCog(commands.Cog):
     @app_commands.guild_only()
     async def confess(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(ConfessModal(self))
-
-    @app_commands.command(name="dmrequest", description="Send moderators a private DM request.")
-    @app_commands.guild_only()
-    async def dmrequest(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(DMRequestModal(self))
 
     async def cog_app_command_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError

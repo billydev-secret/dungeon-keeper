@@ -29,7 +29,7 @@ class LavalinkStartupError(RuntimeError):
     pass
 
 
-_BOT_ROOT = Path(__file__).resolve().parents[1]
+_BOT_ROOT = Path(__file__).resolve().parents[3]
 _LAVALINK_DIR = _BOT_ROOT / "lavalink"
 _JAR_PATH = _LAVALINK_DIR / "Lavalink.jar"
 _LOG_DIR = _LAVALINK_DIR / "logs"

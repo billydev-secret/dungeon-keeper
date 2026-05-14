@@ -52,3 +52,12 @@ class WhisperReply:
     to_user_id: int
     content: str
     created_at: float
+
+
+@dataclass
+class WhisperReplyReport:
+    id: int
+    reply_id: int
+    reporter_id: int
+    reason: str
+    created_at: float

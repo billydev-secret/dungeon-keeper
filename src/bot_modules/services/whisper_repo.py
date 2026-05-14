@@ -243,6 +243,17 @@ def insert_reply(
     return cur.lastrowid  # type: ignore[return-value]
 
 
+def get_reply(conn: sqlite3.Connection, reply_id: int) -> WhisperReply | None:
+    row = conn.execute(
+        "SELECT * FROM whisper_replies WHERE id = ?", (reply_id,)
+    ).fetchone()
+    return _row_to_reply(row) if row else None
+
+
+def delete_reply(conn: sqlite3.Connection, reply_id: int) -> None:
+    conn.execute("DELETE FROM whisper_replies WHERE id = ?", (reply_id,))
+
+
 def insert_report(
     conn: sqlite3.Connection,
     *,
@@ -255,6 +266,24 @@ def insert_report(
         conn.execute(
             "INSERT INTO whisper_reports (whisper_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?)",
             (whisper_id, reporter_id, reason, time.time()),
+        )
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def insert_reply_report(
+    conn: sqlite3.Connection,
+    *,
+    reply_id: int,
+    reporter_id: int,
+    reason: str,
+) -> bool:
+    """Insert a reply report; returns True if inserted, False if duplicate."""
+    try:
+        conn.execute(
+            "INSERT INTO whisper_reply_reports (reply_id, reporter_id, reason, created_at) VALUES (?, ?, ?, ?)",
+            (reply_id, reporter_id, reason, time.time()),
         )
         return True
     except sqlite3.IntegrityError:

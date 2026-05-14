@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import time
 from typing import TYPE_CHECKING, Literal
 
@@ -80,7 +81,7 @@ class MusicCog(commands.Cog):
             )
             await wavelink.Pool.connect(client=self.bot, nodes=[node])
         except Exception as exc:
-            log.exception("Lavalink failed to start -- music commands disabled (%s)", exc)
+            log.error("Lavalink failed to start -- music commands disabled (%s)", exc)
             self._disabled = True
             with contextlib.suppress(Exception):
                 await lavalink.stop()
@@ -565,6 +566,8 @@ class MusicCog(commands.Cog):
         with self.ctx.open_db() as conn:
             previous = list_always_on_channels(conn, guild.id)
             cleared = [s for s in previous if s.voice_channel_id != ch_id and s.always_on]
+            for s in cleared:
+                set_always_on(conn, guild.id, s.voice_channel_id, False, interaction.user.id)
             set_always_on(conn, guild.id, ch_id, enabled, interaction.user.id)
             if autoplay_playlist:
                 set_autoplay_playlist(
@@ -621,30 +624,12 @@ class MusicCog(commands.Cog):
     # Wavelink event handlers
     # ------------------------------------------------------------------
 
-    def _tts_is_interrupting(self, guild_id: int) -> bool:
-        """Whether the TTS cog is currently interrupting music in this guild.
-
-        Reads ``bot.tts_playback`` lazily so this cog still works if the TTS
-        cog isn't loaded (or fails to load). Music handlers bail out while
-        a TTS clip is playing so the music queue isn't churned by the
-        replace/start events fired by the TTS track itself.
-        """
-        playback = getattr(self.bot, "tts_playback", None)
-        if playback is None:
-            return False
-        try:
-            return bool(playback.is_interrupting(guild_id))
-        except Exception:
-            return False
-
     @commands.Cog.listener()
     async def on_wavelink_track_start(
         self, payload: wavelink.TrackStartEventPayload
     ) -> None:
         player = payload.player
         if player is None or player.guild is None:
-            return
-        if self._tts_is_interrupting(player.guild.id):
             return
         queue = self._queue(player.guild.id)
         queue.current = payload.track
@@ -656,8 +641,6 @@ class MusicCog(commands.Cog):
     ) -> None:
         player = payload.player
         if player is None or player.guild is None:
-            return
-        if self._tts_is_interrupting(player.guild.id):
             return
         queue = self._queue(player.guild.id)
         next_track = queue.next()
@@ -739,8 +722,6 @@ class MusicCog(commands.Cog):
         if self._spotify is None:
             return 0
         result = await self._spotify.resolve(playlist_url)
-        # Shuffle source list, then resolve up to 50 to YouTube.
-        import random
         candidates = list(result.tracks)
         random.shuffle(candidates)
         added = 0
@@ -881,7 +862,7 @@ class MusicCog(commands.Cog):
         if not self._can_idle_disconnect(guild.id, player.channel.id):
             return
         humans_present = any(not m.bot for m in player.channel.members)
-        if humans_present and (player.playing or not player.paused) and self._queue(guild.id).current is not None:
+        if humans_present and (player.playing or player.paused) and self._queue(guild.id).current is not None:
             return
         log.info(
             "idle disconnect for guild=%s channel=%s", guild.id, player.channel.id

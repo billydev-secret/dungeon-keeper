@@ -371,9 +371,7 @@
         <li><a href="#warnings">Warnings</a></li>
         <li><a href="#ticket-cmds">Ticket Commands</a></li>
         <li><a href="#policies">Policy Voting</a></li>
-        <li class="section-header"><a href="#ai-tools">4. AI Tools ✦</a></li>
-        <li><a href="#ai-cmds">AI Commands</a></li>
-        <li class="section-header"><a href="#analytics">5. Analytics &amp; Watch ✦</a></li>
+        <li class="section-header"><a href="#analytics">4. Analytics &amp; Watch</a></li>
         <li><a href="#watch">Watch List</a></li>
         <li><a href="#activity">Activity Charts</a></li>
         <li class="section-header"><a href="#community">6. Community &amp; XP</a></li>
@@ -383,34 +381,34 @@
         <li class="section-header"><a href="#voice">7. Voice Channels</a></li>
         <li><a href="#voice-user">User Commands</a></li>
         <li><a href="#voice-admin">Admin Commands</a></li>
-        <li class="section-header"><a href="#music">8. Music &amp; TTS</a></li>
+        <li class="section-header"><a href="#music">8. Music</a></li>
         <li><a href="#music-cmds">Music Commands</a></li>
         <li><a href="#music-247">24/7 Mode</a></li>
-        <li><a href="#tts">Text-to-Speech</a></li>
-        <li class="section-header"><a href="#confessions">9. Confessions &amp; DMs</a></li>
+        <li class="section-header"><a href="#confessions">9. Confessions</a></li>
         <li><a href="#confess">Anonymous Confessions</a></li>
-        <li><a href="#dm-perms">DM Permissions</a></li>
-        <li class="section-header"><a href="#wellness">10. Wellness</a></li>
+        <li class="section-header"><a href="#dm-perms">10. DM Permissions</a></li>
+        <li><a href="#dm-perms-cmds">DM Commands</a></li>
+        <li class="section-header"><a href="#wellness">11. Wellness</a></li>
         <li><a href="#wellness-member">Member Commands</a></li>
         <li><a href="#wellness-admin-section">Admin Commands</a></li>
-        <li class="section-header"><a href="#self-service">11. Member Self-Service</a></li>
+        <li class="section-header"><a href="#self-service">12. Member Self-Service</a></li>
         <li><a href="#self-service-cmds">Personal Commands</a></li>
         <li><a href="#privacy">Data Erasure</a></li>
-        <li class="section-header"><a href="#network-analytics">12. Network Analytics</a></li>
+        <li class="section-header"><a href="#network-analytics">13. Network Analytics</a></li>
         <li><a href="#connection-graphs">Connection Graphs</a></li>
         <li><a href="#interaction-scans">Backfill Scans</a></li>
-        <li class="section-header"><a href="#server-ops">13. Cleanup &amp; Tagging</a></li>
+        <li class="section-header"><a href="#server-ops">14. Cleanup &amp; Tagging</a></li>
         <li><a href="#auto-delete">Auto-Delete</a></li>
         <li><a href="#prune">Inactivity Prune</a></li>
         <li><a href="#gender">Gender Tagging</a></li>
-        <li class="section-header"><a href="#special-events">14. Special Events</a></li>
+        <li class="section-header"><a href="#special-events">15. Special Events</a></li>
         <li><a href="#foolsday">April Fools' Shuffle</a></li>
         <li><a href="#veil">Veil Image Game</a></li>
-        <li class="section-header"><a href="#setup">15. Setup &amp; Permissions</a></li>
+        <li class="section-header"><a href="#setup">16. Setup &amp; Permissions</a></li>
         <li><a href="#permissions">Permission Levels</a></li>
         <li><a href="#first-steps">First-Time Setup</a></li>
-        <li class="section-header"><a href="#config">16. Configuration</a></li>
-        <li class="section-header"><a href="#owner-tools">17. Developer / Owner Tools</a></li>
+        <li class="section-header"><a href="#config">17. Configuration</a></li>
+        <li class="section-header"><a href="#owner-tools">18. Developer / Owner Tools</a></li>
         <li class="section-header"><a href="#quickref">Quick Reference</a></li>
       </ul>
     </nav>
@@ -442,30 +440,30 @@
          1. FUNCTIONAL BLOCKS AT A GLANCE
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="functional-blocks"><span class="section-num">1</span> Functional Blocks at a Glance</h2>
-    <p>DungeonKeeper is an all-in-one server management bot. It handles moderation, ticketing, XP tracking, voice channels, AI-assisted content review, analytics, and more — all through Discord slash commands.</p>
-    <p>The bot is split into ~30 cogs (functional blocks). This table is the bird's-eye view — each row links down to the section that documents the commands. New admins should jump straight to <a href="#setup">§15 Setup &amp; Permissions</a> first.</p>
+    <p>DungeonKeeper is an all-in-one server management bot. It handles moderation, ticketing, XP tracking, voice channels, analytics, and more — all through Discord slash commands.</p>
+    <p>The bot is split into ~30 cogs (functional blocks). This table is the bird's-eye view — each row links down to the section that documents the commands. New admins should jump straight to <a href="#setup">§16 Setup &amp; Permissions</a> first.</p>
     <table class="qr-table">
       <thead><tr><th>Block</th><th>Section</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><strong>Moderation</strong></td><td><a href="#moderation">§2</a></td><td>Jail, warnings, purge, mod profile, right-click context menus.</td></tr>
         <tr><td><strong>Tickets, Policies &amp; Warnings</strong></td><td><a href="#tickets">§3</a></td><td>Private member↔mod ticket channels with transcripts; mod-team policy proposals with voting buttons; per-member warnings with revoke history.</td></tr>
-        <tr><td><strong>AI Tools ✦</strong></td><td><a href="#ai-tools">§4</a></td><td>Claude-powered review of a member's history, channel scans, and natural-language Q&amp;A about activity. Requires an Anthropic API key.</td></tr>
-        <tr><td><strong>Activity &amp; Watch ✦</strong></td><td><a href="#analytics">§5</a></td><td>Charts of message volume, drop-off detection, burst rankings, plus the silent watch list (forwards a member's messages to your DMs).</td></tr>
+        <tr><td><strong>Activity &amp; Watch</strong></td><td><a href="#analytics">§4</a></td><td>Charts of message volume, drop-off detection, burst rankings, plus the silent watch list (forwards a member's messages to your DMs).</td></tr>
         <tr><td><strong>Community &amp; XP</strong></td><td><a href="#community">§6</a></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). LOA system. Starboard.</td></tr>
         <tr><td><strong>Voice Channels</strong></td><td><a href="#voice">§7</a></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
-        <tr><td><strong>Music &amp; TTS</strong></td><td><a href="#music">§8</a></td><td>YouTube/Spotify playback through Lavalink, plus per-VC text-to-speech. 24/7 mode with autoplay.</td></tr>
-        <tr><td><strong>Confessions</strong></td><td><a href="#confessions">§9</a></td><td>Anonymous member submissions with mod-only emoji identifiers; per-member DM-permission system.</td></tr>
-        <tr><td><strong>Wellness</strong></td><td><a href="#wellness">§10</a></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides for caps, blackouts, and exempt channels.</td></tr>
-        <tr><td><strong>Self-Service</strong></td><td><a href="#self-service">§11</a></td><td>Help dropdown, support link, bot invite, todo list, birthday registration, GDPR-style self-erasure.</td></tr>
-        <tr><td><strong>Network Analytics</strong></td><td><a href="#network-analytics">§12</a></td><td>Force-directed graphs of who talks to whom, invite trees, interaction heatmaps, history backfill.</td></tr>
-        <tr><td><strong>Cleanup &amp; Tagging</strong></td><td><a href="#server-ops">§13</a></td><td>Auto-delete schedules, inactivity pruning, gender tagging.</td></tr>
-        <tr><td><strong>Special Events</strong></td><td><a href="#special-events">§14</a></td><td>April Fools' nickname shuffle and the Veil NSFW image-guessing game.</td></tr>
-        <tr><td><strong>Setup &amp; Permissions</strong></td><td><a href="#setup">§15</a></td><td>Permission levels and first-time-setup checklist for new admins.</td></tr>
-        <tr><td><strong>Configuration</strong></td><td><a href="#config">§16</a></td><td>Settings panel covering all configurable knobs.</td></tr>
-        <tr><td><strong>Developer / Owner</strong></td><td><a href="#owner-tools">§17</a></td><td>Cog hot-reload, Spotify OAuth bootstrap. Bot-owner only.</td></tr>
+        <tr><td><strong>Music</strong></td><td><a href="#music">§8</a></td><td>YouTube/Spotify playback through Lavalink. 24/7 mode with autoplay.</td></tr>
+        <tr><td><strong>Confessions</strong></td><td><a href="#confessions">§9</a></td><td>Anonymous member submissions with mod-only emoji identifiers.</td></tr>
+        <tr><td><strong>DM Permissions</strong></td><td><a href="#dm-perms">§10</a></td><td>Per-member DM-mode system (Open / Ask / Closed) with anonymous request flow.</td></tr>
+        <tr><td><strong>Wellness</strong></td><td><a href="#wellness">§11</a></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides for caps, blackouts, and exempt channels.</td></tr>
+        <tr><td><strong>Self-Service</strong></td><td><a href="#self-service">§12</a></td><td>Help dropdown, support link, bot invite, todo list, birthday registration, GDPR-style self-erasure.</td></tr>
+        <tr><td><strong>Network Analytics</strong></td><td><a href="#network-analytics">§13</a></td><td>Force-directed graphs of who talks to whom, invite trees, interaction heatmaps, history backfill.</td></tr>
+        <tr><td><strong>Cleanup &amp; Tagging</strong></td><td><a href="#server-ops">§14</a></td><td>Auto-delete schedules, inactivity pruning, gender tagging.</td></tr>
+        <tr><td><strong>Special Events</strong></td><td><a href="#special-events">§15</a></td><td>April Fools' nickname shuffle and the Veil NSFW image-guessing game.</td></tr>
+        <tr><td><strong>Setup &amp; Permissions</strong></td><td><a href="#setup">§16</a></td><td>Permission levels and first-time-setup checklist for new admins.</td></tr>
+        <tr><td><strong>Configuration</strong></td><td><a href="#config">§17</a></td><td>Settings panel covering all configurable knobs.</td></tr>
+        <tr><td><strong>Developer / Owner</strong></td><td><a href="#owner-tools">§18</a></td><td>Cog hot-reload, Spotify OAuth bootstrap. Bot-owner only.</td></tr>
       </tbody>
     </table>
-    <p style="font-size:0.82rem;color:var(--muted);margin-top:0.75rem">✦ marks blocks that depend on optional API keys (Anthropic for AI; sentiment analysis pipeline for some analytics).</p>
+    <p style="font-size:0.82rem;color:var(--muted);margin-top:0.75rem">✦ marks blocks that depend on optional configuration (sentiment analysis pipeline for some analytics).</p>
 
     <!-- ══════════════════════════════════════════════════════════
          2. MODERATION CORE
@@ -541,6 +539,16 @@
               <td>Message</td>
               <td><strong>Add to Todo</strong></td>
               <td>Adds the message to the server todo list with an optional note (mod-only)</td>
+            </tr>
+            <tr>
+              <td>Message</td>
+              <td><strong>Steal Emoji</strong></td>
+              <td>Extracts any custom emojis from the message and lets you add one to a server you manage. Also available as <code>/steal_emoji url:&lt;url&gt; name:&lt;name&gt;</code> for grabbing emojis directly from a URL.</td>
+            </tr>
+            <tr>
+              <td>Message</td>
+              <td><strong>Quote</strong></td>
+              <td>Generates a styled quote-card image from the message and posts it as a reply</td>
             </tr>
           </tbody>
         </table>
@@ -657,53 +665,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         4. AI TOOLS
+         4. ANALYTICS & WATCH
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="ai-tools" class="section-break"><span class="section-num">4</span> AI Moderation Tools</h2>
-
-    <div class="callout callout-tip">
-      <span class="callout-icon">💡</span>
-      <div class="callout-body">
-        <strong>Pro Tip: These commands exist and you should use them</strong>
-        <p>The AI moderation commands use Claude to scan message history for rule violations, detect patterns you'd miss manually, and answer natural-language questions about member behavior. Before jailing someone or handling a complex report, run <code>/ai review @user</code> — it takes 5 seconds and often surfaces context you'd otherwise miss.</p>
-      </div>
-    </div>
-
-    <h3 id="ai-cmds">AI Commands</h3>
-    <p>All AI commands require <span class="perm perm-admin">Admin</span> and an active Anthropic API key.</p>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/ai review user:@user days:7</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Claude reads the member's last N days of messages and flags any rule violations with quoted examples and severity assessments.</span>
-      <div class="cmd-params"><strong>days</strong> — 1–30 (default 7).</div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/ai scan count:100</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Scans the most recent N messages in the current channel for rule violations. Useful after a report or during a heated situation.</span>
-      <div class="cmd-params"><strong>count</strong> — 10–200 (default 50).</div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/ai channel question:"Who has been most disruptive this hour?" minutes:60</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Ask Claude any natural-language question about recent channel activity. Results are scoped to the last N minutes.</span>
-      <div class="cmd-params"><strong>minutes</strong> — 1–1440 (default 60). Optionally specify a different <strong>channel</strong>.</div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/ai query user:@user question:"Has this member ever targeted a specific person?" days:14</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Ask Claude a specific question about a member's message history over a defined window. Great for investigating ban appeals or complex harassment reports.</span>
-      <div class="cmd-params"><strong>days</strong> — 1–30 (default 14).</div>
-    </div>
-
-    <!-- ══════════════════════════════════════════════════════════
-         5. ANALYTICS & WATCH
-    ═══════════════════════════════════════════════════════════ -->
-    <h2 id="analytics" class="section-break"><span class="section-num">5</span> Analytics &amp; Watch List</h2>
+    <h2 id="analytics" class="section-break"><span class="section-num">4</span> Analytics &amp; Watch List</h2>
 
     <div class="callout callout-tip">
       <span class="callout-icon">💡</span>
@@ -714,20 +678,12 @@
     </div>
 
     <h3 id="watch">Watch List</h3>
-    <p>Silently monitor a member's public messages, forwarded to your DMs. If the AI key is active, only flagged messages come through.</p>
-
-    <div class="callout callout-tip">
-      <span class="callout-icon">💡</span>
-      <div class="callout-body">
-        <strong>Pro Tip: Watch vs <code>/ai review</code></strong>
-        <p><strong><code>/watch</code></strong> is forward-looking — start it when you suspect someone <em>about to</em> cause trouble and want eyes on them as it happens. <strong><code>/ai review</code></strong> is backward-looking — run it once over the last week of someone's history when you're investigating a report. Use both together for a flagged user: <code>/ai review</code> for the receipts, <code>/watch add</code> to catch the next thing.</p>
-      </div>
-    </div>
+    <p>Silently monitor a member's public messages, forwarded to your DMs.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/watch add user:@user</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Starts forwarding the member's public messages to your DMs. Completely invisible to the member. With AI enabled, only potentially problematic messages are forwarded.</span>
+      <span class="cmd-desc">Starts forwarding the member's public messages to your DMs. Completely invisible to the member.</span>
     </div>
 
     <div class="cmd-block">
@@ -869,9 +825,9 @@
     </table>
 
     <!-- ══════════════════════════════════════════════════════════
-         8. MUSIC & TTS
+         8. MUSIC
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="music" class="section-break"><span class="section-num">8</span> Music &amp; TTS</h2>
+    <h2 id="music" class="section-break"><span class="section-num">8</span> Music</h2>
     <p>Audio playback and text-to-speech route through Lavalink + wavelink. Most commands require the user to be in the bot's voice channel; <code>/play</code> joins your channel automatically. Spotify URLs require a one-time <code>/spotify_authorize</code> by the bot owner.</p>
 
     <h3 id="music-cmds">Music Commands</h3>
@@ -905,18 +861,10 @@
       <div class="cmd-params">Pair with <code>/247_status</code> (everyone) to list every 24/7 channel and its autoplay URL.</div>
     </div>
 
-    <h3 id="tts">Text-to-Speech</h3>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/tts text:"Hello chat" voice:Aria</span>
-      <span class="cmd-perm"><span class="perm perm-all">In VC</span></span>
-      <span class="cmd-desc">Speak text in your voice channel using <code>edge-tts</code>. Music is paused, the line is spoken, then music resumes. Max 500 characters. <strong>voice</strong> autocompletes from the available list (default Aria, US female).</span>
-    </div>
-
     <!-- ══════════════════════════════════════════════════════════
-         9. CONFESSIONS & DM PERMISSIONS
+         9. CONFESSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="confessions" class="section-break"><span class="section-num">9</span> Confessions &amp; DM Permissions</h2>
+    <h2 id="confessions" class="section-break"><span class="section-num">9</span> Confessions</h2>
 
     <h3 id="confess">Anonymous Confessions</h3>
     <p>The confessions system lets members post anonymously to a configured channel. Each confessor is assigned a colored emoji (e.g. 🔴🟢🔵) so mods can identify repeat posters without exposing identity to other members.</p>
@@ -927,12 +875,6 @@
       <span class="cmd-desc">Opens an anonymous submission modal (up to 4,000 characters). The confession is posted to the confessions channel with a colored emoji identifier visible only to mods.</span>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/dmrequest</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Send an anonymous DM-permission request to another member. The recipient sees only "an anonymous member would like to DM you" with Approve / Deny buttons. If approved, mutual DM permission is granted.</span>
-    </div>
-
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
@@ -941,8 +883,13 @@
       </div>
     </div>
 
-    <h3 id="dm-perms">DM Permissions</h3>
+    <!-- ══════════════════════════════════════════════════════════
+         10. DM PERMISSIONS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="dm-perms" class="section-break"><span class="section-num">10</span> DM Permissions</h2>
     <p>Members declare a DM "mode" via Discord roles (<em>Open</em>, <em>Ask</em>, or <em>Closed</em>). The bot enforces requests through a button panel and modal, automatically deduping conflicting role assignments.</p>
+
+    <h3 id="dm-perms-cmds">DM Commands</h3>
 
     <div class="cmd-block">
       <span class="cmd-name">/dm_help</span>
@@ -975,9 +922,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         10. WELLNESS
+         11. WELLNESS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="wellness" class="section-break"><span class="section-num">10</span> Wellness System</h2>
+    <h2 id="wellness" class="section-break"><span class="section-num">11</span> Wellness System</h2>
     <p>The wellness system helps members maintain healthy Discord habits. Members opt in for themselves; admins can also create caps, blackouts, and exemptions on a member's behalf.</p>
 
     <h3 id="wellness-member">Member Commands</h3>
@@ -1029,9 +976,9 @@
     </table>
 
     <!-- ══════════════════════════════════════════════════════════
-         11. MEMBER SELF-SERVICE
+         12. MEMBER SELF-SERVICE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="self-service" class="section-break"><span class="section-num">11</span> Member Self-Service</h2>
+    <h2 id="self-service" class="section-break"><span class="section-num">12</span> Member Self-Service</h2>
     <p>Commands intended for the average member. Mods may also use them — they aren't restricted.</p>
 
     <h3 id="self-service-cmds">Personal Commands</h3>
@@ -1062,9 +1009,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         12. NETWORK ANALYTICS
+         13. NETWORK ANALYTICS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="network-analytics" class="section-break"><span class="section-num">12</span> Network Analytics</h2>
+    <h2 id="network-analytics" class="section-break"><span class="section-num">13</span> Network Analytics</h2>
     <p>Force-directed graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees. The first time you run these, also run an <code>/interaction_scan</code> backfill to populate history.</p>
 
     <h3 id="connection-graphs">Connection Graphs</h3>
@@ -1102,9 +1049,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         13. CLEANUP & TAGGING
+         14. CLEANUP & TAGGING
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="server-ops" class="section-break"><span class="section-num">13</span> Cleanup &amp; Tagging</h2>
+    <h2 id="server-ops" class="section-break"><span class="section-num">14</span> Cleanup &amp; Tagging</h2>
 
     <h3 id="auto-delete">Auto-Delete</h3>
     <p>Drop-in message cleanup. Schedule a channel to auto-delete posts older than a given age, on a recurring or one-shot basis. Pinned messages are never deleted.</p>
@@ -1159,9 +1106,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         14. SPECIAL EVENTS
+         15. SPECIAL EVENTS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="special-events" class="section-break"><span class="section-num">14</span> Special Events</h2>
+    <h2 id="special-events" class="section-break"><span class="section-num">15</span> Special Events</h2>
 
     <h3 id="foolsday">April Fools' Nickname Shuffle</h3>
     <p>One-day prank: scrambles the nicknames of recently-active members in a 1:1 derangement. Members can opt out, mods can repair if it goes sideways.</p>
@@ -1247,9 +1194,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         15. SETUP & PERMISSIONS
+         16. SETUP & PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="setup" class="section-break"><span class="section-num">15</span> Setup &amp; Permissions</h2>
+    <h2 id="setup" class="section-break"><span class="section-num">16</span> Setup &amp; Permissions</h2>
 
     <h3 id="permissions">Permission Levels</h3>
     <p>Most commands require one of these roles or Discord permissions:</p>
@@ -1269,7 +1216,7 @@
         <tr>
           <td><span class="perm perm-admin">Admin</span></td>
           <td>Has the configured admin role, or Discord <em>Administrator</em> permission</td>
-          <td>AI moderation, user data deletion, voice admin, policy voting finalization</td>
+          <td>User data deletion, voice admin, policy voting finalization</td>
         </tr>
         <tr>
           <td><span class="perm perm-owner">Bot Owner</span></td>
@@ -1291,9 +1238,9 @@
     </ol>
 
     <!-- ══════════════════════════════════════════════════════════
-         16. CONFIGURATION REFERENCE
+         17. CONFIGURATION REFERENCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">16</span> Configuration Reference</h2>
+    <h2 id="config" class="section-break"><span class="section-num">17</span> Configuration Reference</h2>
 
     <div class="cmd-block">
       <span class="cmd-name">/config section:[global|welcome|roles|xp|prune|spoiler|booster]</span>
@@ -1326,9 +1273,9 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         17. DEVELOPER / OWNER TOOLS
+         18. DEVELOPER / OWNER TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">17</span> Developer / Owner Tools</h2>
+    <h2 id="owner-tools" class="section-break"><span class="section-num">18</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">
@@ -1415,7 +1362,7 @@
         <tr><td><code>/voice invite/kick</code></td><td>Channel owner</td><td>Allow or remove members</td></tr>
         <tr><td><code>/voice trusted</code> / <code>blocked</code></td><td>Channel owner</td><td>Manage trust / block lists</td></tr>
         <tr><td><code>/voice owner</code></td><td>In-VC</td><td>Show who owns the channel you're in</td></tr>
-        <tr><td colspan="3" class="qr-section">Music &amp; TTS</td></tr>
+        <tr><td colspan="3" class="qr-section">Music</td></tr>
         <tr><td><code>/play</code></td><td><span class="perm perm-all">Everyone</span></td><td>YouTube / Spotify / search query</td></tr>
         <tr><td><code>/skip</code> / <code>pause</code> / <code>resume</code> / <code>stop</code></td><td><span class="perm perm-all">In VC</span></td><td>Standard playback controls</td></tr>
         <tr><td><code>/queue</code> / <code>nowplaying</code></td><td><span class="perm perm-all">Everyone</span></td><td>View queue or repost the now-playing controls</td></tr>
@@ -1423,11 +1370,9 @@
         <tr><td><code>/disconnect</code></td><td><span class="perm perm-all">In VC</span></td><td>Force-disconnect from voice</td></tr>
         <tr><td><code>/247</code></td><td><span class="perm perm-mod">Mod</span></td><td>Toggle 24/7 mode + Spotify autoplay</td></tr>
         <tr><td><code>/247_status</code></td><td><span class="perm perm-all">Everyone</span></td><td>List 24/7 channels in this server</td></tr>
-        <tr><td><code>/tts</code></td><td><span class="perm perm-all">In VC</span></td><td>Speak text in your VC (auto-pauses music)</td></tr>
 
         <tr><td colspan="3" class="qr-section">Confessions &amp; DM Permissions</td></tr>
         <tr><td><code>/confess</code></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mod-only emoji ID mapping)</td></tr>
-        <tr><td><code>/dmrequest</code></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous DM-permission request</td></tr>
         <tr><td><code>/dm_help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Overview of the DM permission system</td></tr>
         <tr><td><code>/dm_set_mode</code></td><td><span class="perm perm-all">Everyone</span></td><td>Set your DM mode (open / ask / closed)</td></tr>
         <tr><td><code>/dm_revoke</code> / <code>/dm_status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Remove or check a DM connection</td></tr>

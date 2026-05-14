@@ -9,7 +9,6 @@ Discord moderation, community, voice, and analytics bot.
 - **Tickets** — panel-button-driven private support tickets with `/ticket panel`, claim, escalate, close, reopen, and message context-menu opening.
 - **Warnings** — `/warn`, `/warnings`, `/revokewarn`, plus `/modinfo` for a full per-member mod profile (jail history, warnings, tickets).
 - **Policies** — collaborative policy proposals with open/vote/close/list flow.
-- **AI moderation** (optional, requires `ANTHROPIC_API_KEY`) — Claude-powered `/ai review`, `/ai scan`, `/ai channel`, `/ai query`.
 - **Purge** — bulk-delete by count and/or cutoff time.
 - **Privacy** — members can erase all their own data with `/delete_me`; mods can purge a user with `/delete_user`.
 
@@ -23,7 +22,6 @@ Discord moderation, community, voice, and analytics bot.
 ### Voice
 - **Voice Master** — click a hub channel to spawn your own voice channel; lock/unlock, hide/unhide, rename, user-limit, invite, kick, transfer, claim, owner. Persistent per-user profiles with trust list, block list, knock-to-join, and admin hub/category/template/name-blocklist configuration.
 - **Music** — YouTube and Spotify playback via Lavalink: `/play`, `/skip`, `/shuffle`, `/loop`, `/queue`, `/pause`, `/resume`, `/stop`, `/nowplaying`, `/disconnect`. Mod-only `/247` keeps the bot in a voice channel indefinitely.
-- **TTS** — `/tts` speaks text in your voice channel.
 
 ### Onboarding & community
 - **Role grants** — `/grant role:<key> member:<@user>` with per-role permission allowlist (e.g. greeters can grant Denizen, mods can grant NSFW/Veteran).
@@ -56,7 +54,7 @@ python -m venv .venv
 # source .venv/bin/activate     # Linux/macOS
 pip install -e .
 cp .env.example .env            # fill in DISCORD_TOKEN
-.\.venv\Scripts\python.exe .\dungeonkeeper.py
+python -m dungeonkeeper
 ```
 
 For full setup instructions (bot permissions, guild configuration, production deployment) see [DEPLOYMENT.md](DEPLOYMENT.md).
@@ -89,7 +87,6 @@ Required:
 - `DISCORD_TOKEN` — bot token from the [Discord Developer Portal](https://discord.com/developers/applications)
 
 Optional:
-- `ANTHROPIC_API_KEY` — enables `/ai *` moderation commands
 - `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` / `LAVALINK_PASSWORD` — music cog
 - `DASHBOARD_ENABLED=1`, `DASHBOARD_HOST`, `DASHBOARD_PORT` — LAN web dashboard
 
@@ -170,9 +167,6 @@ Most settings are configured through slash commands after the bot is running, pr
 - `/247 <enabled> [channel]` — Toggle 24/7 mode for your voice channel (mod)
 - `/247_status` — Show 24/7-enabled channels in this server
 
-**TTS**
-- `/tts <text>` — Speak text in your voice channel
-
 **Role Grants** (configurable allowlist)
 - `/grant role:<key> member:<@member>` — Give a configured community role
 
@@ -192,12 +186,6 @@ Most settings are configured through slash commands after the bot is running, pr
 
 **Watch List** (mod)
 - `/watch add @user` / `/watch remove @user` / `/watch list`
-
-**AI Moderation** (mod, requires `ANTHROPIC_API_KEY`)
-- `/ai review @user [days]` — AI review of a user's recent messages
-- `/ai scan [count]` — AI scan of recent messages in this channel
-- `/ai channel [question] [minutes] [channel]` — Ask the AI about a channel's recent activity
-- `/ai query @user [question] [days]` — Ask the AI a specific question about a user
 
 **Jail & Tickets** (mod)
 - `/setup` — First-time jail/ticket/mod setup

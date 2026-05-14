@@ -1,7 +1,0 @@
-{
-  "pythonVersion": "3.10",
-  "extraPaths": ["src"],
-  "venvPath": ".",
-  "venv": ".venv",
-  "reportMissingModuleSource": "none"
-}

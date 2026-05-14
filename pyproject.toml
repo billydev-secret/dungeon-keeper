@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dungeonkeeper"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.scripts]
+dungeonkeeper = "dungeonkeeper.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["E402"]
+"tests/conftest.py" = ["E402"]
+"tests/web/conftest.py" = ["E402"]
+
+[tool.pyright]
+pythonVersion = "3.10"
+extraPaths = ["src"]
+venvPath = "."
+venv = ".venv"
+reportMissingModuleSource = "none"

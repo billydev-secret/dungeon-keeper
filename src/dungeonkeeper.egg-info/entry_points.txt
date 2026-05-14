@@ -1,0 +1,2 @@
+[console_scripts]
+dungeonkeeper = dungeonkeeper.__main__:main

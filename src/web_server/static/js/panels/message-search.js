@@ -230,14 +230,6 @@ export function mount(container) {
         <h2>Message Search</h2>
         <div class="subtitle">Search and read back stored messages</div>
       </header>
-      <div class="ai-query-bar">
-        <select data-ai-model class="ai-model-select">
-          <option value="">Loading models…</option>
-        </select>
-        <input type="text" data-ai-query placeholder="Ask AI: e.g. &quot;show me popular messages from today&quot;" class="ai-query-input" />
-        <button data-ai-search class="btn btn-primary">Ask AI</button>
-        <span data-ai-status class="ai-status"></span>
-      </div>
       <div class="controls msg-search-controls">
         <label>Author<span data-slot="author"></span></label>
         <label>Mentions<span data-slot="mentions"></span></label>
@@ -327,12 +319,6 @@ export function mount(container) {
   const searchBtn = container.querySelector("[data-search]");
   const downloadBtn = container.querySelector("[data-download]");
 
-  // AI elements
-  const aiModelSel = container.querySelector("[data-ai-model]");
-  const aiQueryInput = container.querySelector("[data-ai-query]");
-  const aiSearchBtn = container.querySelector("[data-ai-search]");
-  const aiStatusEl = container.querySelector("[data-ai-status]");
-
   // Placeholder filter-selects (replaced once members/channels load)
   let authorFS = multiFilterSelect("Loading…", []);
   let mentionsFS = filterSelect("Loading…", []);
@@ -390,51 +376,6 @@ export function mount(container) {
     } catch (_) {}
   })();
 
-  // Load AI models
-  (async () => {
-    try {
-      const data = await api("/api/messages/ai-models");
-      aiModelSel.innerHTML = "";
-      for (const m of data.models) {
-        const opt = document.createElement("option");
-        opt.value = m;
-        // Show a friendly short name
-        opt.textContent = m.replace("claude-", "").replace(/-\d{8}$/, "");
-        aiModelSel.appendChild(opt);
-      }
-    } catch (_) {
-      aiModelSel.innerHTML = `<option value="">No models available</option>`;
-    }
-  })();
-
-  // --- AI Query ---
-  async function doAiQuery() {
-    const query = aiQueryInput.value.trim();
-    if (!query) return;
-    aiStatusEl.textContent = "Thinking…";
-    aiSearchBtn.disabled = true;
-
-    try {
-      const res = await fetch("/api/messages/ai-query", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, model: aiModelSel.value || null }),
-      });
-      if (res.status === 401) { window.location = "/login"; return; }
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || res.statusText);
-
-      applyFilters(data.filters);
-      aiStatusEl.textContent = data.explanation || "Filters applied";
-      doSearch(1);
-    } catch (err) {
-      aiStatusEl.textContent = `Error: ${esc(err.message)}`;
-    } finally {
-      aiSearchBtn.disabled = false;
-    }
-  }
-
   const toArray = (v) => v == null ? [] : Array.isArray(v) ? v.map(String) : [String(v)];
 
   function applyFilters(f) {
@@ -477,11 +418,6 @@ export function mount(container) {
       beforeDtInput.value = new Date(f.before * 1000).toISOString().slice(0, 16);
     }
   }
-
-  aiSearchBtn.addEventListener("click", doAiQuery);
-  aiQueryInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") doAiQuery();
-  });
 
   function buildFilterParams() {
     const params = new URLSearchParams();

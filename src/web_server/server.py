@@ -190,7 +190,6 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(spotify_oauth_routes.router, tags=["spotify-auth"])
 
     # ── API routes ──────────────────────────────────────────────────
-    from web_server.routes import ai_config as ai_config_routes
     from web_server.routes import config as config_routes
     from web_server.routes import home as home_routes
     from web_server.routes import logs as logs_routes
@@ -203,9 +202,6 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(meta_routes.router, prefix="/api", tags=["meta"])
     app.include_router(reports_routes.router, prefix="/api/reports", tags=["reports"])
     app.include_router(config_routes.router, prefix="/api", tags=["config"])
-    app.include_router(
-        ai_config_routes.router, prefix="/api/config", tags=["ai-config"]
-    )
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])

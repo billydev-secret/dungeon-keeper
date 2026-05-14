@@ -343,10 +343,10 @@ class FoolsdayCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        with self.ctx.open_db() as conn:
-            _init_table(conn)
-
-            if action == "shuffle":
+        if action == "shuffle":
+            rename_pairs: list[tuple[discord.Member, str]] = []
+            with self.ctx.open_db() as conn:
+                _init_table(conn)
                 # Find active members
                 active_ids = _active_user_ids(conn, guild.id)
                 log.info(
@@ -409,89 +409,93 @@ class FoolsdayCog(commands.Cog):
                 # Shuffle names — 1:1 derangement so nobody keeps their own
                 own = [originals[m.id] for m in candidates]
                 names = _derangement(list(own), own)
+                rename_pairs = list(zip(candidates, names))
 
-                # Apply
-                renamed = 0
-                failed = 0
-                for member, new_name in zip(candidates, names):
-                    try:
-                        log.debug(
-                            "Renaming %s (%d): %r -> %r",
-                            member,
-                            member.id,
-                            member.display_name,
-                            new_name,
-                        )
-                        await member.edit(
-                            nick=new_name, reason="April Fools name shuffle"
-                        )
-                        renamed += 1
-                    except (discord.Forbidden, discord.HTTPException) as exc:
-                        log.warning(
-                            "Could not rename %s (%d): %s", member, member.id, exc
-                        )
-                        failed += 1
-
-                log.info(
-                    "Foolsday shuffle complete: %d renamed, %d failed", renamed, failed
-                )
-                msg = f"Shuffled **{renamed}** member nicknames."
-                if failed:
-                    msg += (
-                        f"\nFailed to rename **{failed}** members (permission issues)."
+            renamed = 0
+            failed = 0
+            for member, new_name in rename_pairs:
+                try:
+                    log.debug(
+                        "Renaming %s (%d): %r -> %r",
+                        member,
+                        member.id,
+                        member.display_name,
+                        new_name,
                     )
-                msg += "\nUse `/foolsday action:restore` to undo."
-                await interaction.followup.send(msg, ephemeral=True)
+                    await member.edit(
+                        nick=new_name, reason="April Fools name shuffle"
+                    )
+                    renamed += 1
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    log.warning(
+                        "Could not rename %s (%d): %s", member, member.id, exc
+                    )
+                    failed += 1
 
-            else:
-                # Restore
+            log.info(
+                "Foolsday shuffle complete: %d renamed, %d failed", renamed, failed
+            )
+            msg = f"Shuffled **{renamed}** member nicknames."
+            if failed:
+                msg += (
+                    f"\nFailed to rename **{failed}** members (permission issues)."
+                )
+            msg += "\nUse `/foolsday action:restore` to undo."
+            await interaction.followup.send(msg, ephemeral=True)
+
+        else:
+            saved: dict[int, str] = {}
+            with self.ctx.open_db() as conn:
+                _init_table(conn)
                 saved = _load_names(conn, guild.id)
                 log.info(
                     "Foolsday restore initiated by %s — %d saved name(s)",
                     interaction.user,
                     len(saved),
                 )
-                if not saved:
-                    await interaction.followup.send(
-                        "No saved names found — nothing to restore.",
-                        ephemeral=True,
-                    )
-                    return
 
-                restored = 0
-                failed = 0
-                for uid, original_name in saved.items():
-                    m = guild.get_member(uid)
-                    if m is None:
-                        continue
-                    # Set nick to None if original matches their username
-                    # (i.e. they had no nickname before)
-                    nick = None if original_name == m.name else original_name
-                    try:
-                        log.debug(
-                            "Restoring %s (%d): %r -> %r",
-                            m,
-                            m.id,
-                            m.display_name,
-                            original_name,
-                        )
-                        await m.edit(nick=nick, reason="April Fools restore")
-                        restored += 1
-                    except (discord.Forbidden, discord.HTTPException) as exc:
-                        log.warning("Could not restore %s (%d): %s", m, m.id, exc)
-                        failed += 1
-
-                log.info(
-                    "Foolsday restore complete: %d restored, %d failed",
-                    restored,
-                    failed,
+            if not saved:
+                await interaction.followup.send(
+                    "No saved names found — nothing to restore.",
+                    ephemeral=True,
                 )
+                return
+
+            restored = 0
+            failed = 0
+            for uid, original_name in saved.items():
+                m = guild.get_member(uid)
+                if m is None:
+                    continue
+                # Set nick to None if original matches their username
+                # (i.e. they had no nickname before)
+                nick = None if original_name == m.name else original_name
+                try:
+                    log.debug(
+                        "Restoring %s (%d): %r -> %r",
+                        m,
+                        m.id,
+                        m.display_name,
+                        original_name,
+                    )
+                    await m.edit(nick=nick, reason="April Fools restore")
+                    restored += 1
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    log.warning("Could not restore %s (%d): %s", m, m.id, exc)
+                    failed += 1
+
+            log.info(
+                "Foolsday restore complete: %d restored, %d failed",
+                restored,
+                failed,
+            )
+            with self.ctx.open_db() as conn:
                 _clear_names(conn, guild.id)
 
-                msg = f"Restored **{restored}** member nicknames."
-                if failed:
-                    msg += f"\nFailed to restore **{failed}** members."
-                await interaction.followup.send(msg, ephemeral=True)
+            msg = f"Restored **{restored}** member nicknames."
+            if failed:
+                msg += f"\nFailed to restore **{failed}** members."
+            await interaction.followup.send(msg, ephemeral=True)
 
     @app_commands.command(
         name="foolsday_exclude",
@@ -533,72 +537,30 @@ class FoolsdayCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        details: list[str] = []
+        original_name: str | None = None
+        nick_to_restore: str | None = None
+        swap_member: discord.Member | None = None
+        swap_to_nick: str | None = None
+
         with self.ctx.open_db() as conn:
             _init_table(conn)
             _add_exclusion(conn, guild.id, target.id)
 
             # If a shuffle is active, fix names immediately
-            saved = _load_names(conn, guild.id)
-            original_name = saved.get(target.id)
+            saved_ex = _load_names(conn, guild.id)
+            original_name = saved_ex.get(target.id)
             if original_name is not None:
                 current_nick = target.display_name
-
-                # Restore the excluded user to their original name
-                nick = None if original_name == target.name else original_name
-                try:
-                    log.info(
-                        "Foolsday exclude: restoring %s (%d) to %r",
-                        target,
-                        target.id,
-                        original_name,
-                    )
-                    await target.edit(
-                        nick=nick,
-                        reason="April Fools — excluded, restoring original name",
-                    )
-                    details.append(f"Restored {target.mention} to their original name.")
-                except (discord.Forbidden, discord.HTTPException) as exc:
-                    log.warning(
-                        "Foolsday exclude: could not restore %s (%d): %s",
-                        target,
-                        target.id,
-                        exc,
-                    )
-                    details.append(f"Could not restore {target.mention}'s name: {exc}")
+                nick_to_restore = None if original_name == target.name else original_name
 
                 # Find whoever is currently wearing the excluded user's original name
-                # and give them the name the excluded user was wearing
-                for uid in saved:
+                for uid in saved_ex:
                     if uid == target.id:
                         continue
                     m = guild.get_member(uid)
-                    if m is None:
-                        continue
-                    if m.display_name == original_name:
-                        try:
-                            log.info(
-                                "Foolsday exclude: reassigning %s (%d) from %r to %r",
-                                m,
-                                m.id,
-                                m.display_name,
-                                current_nick,
-                            )
-                            await m.edit(
-                                nick=current_nick,
-                                reason="April Fools — reassigned after exclusion",
-                            )
-                            details.append(
-                                f"Reassigned {m.mention} to a different name."
-                            )
-                        except (discord.Forbidden, discord.HTTPException) as exc:
-                            log.warning(
-                                "Foolsday exclude: could not reassign %s (%d): %s",
-                                m,
-                                m.id,
-                                exc,
-                            )
-                            details.append(f"Could not reassign {m.mention}: {exc}")
+                    if m is not None and m.display_name == original_name:
+                        swap_member = m
+                        swap_to_nick = current_nick
                         break
 
                 # Remove the excluded user from saved names
@@ -606,6 +568,55 @@ class FoolsdayCog(commands.Cog):
                     "DELETE FROM foolsday_names WHERE guild_id = ? AND user_id = ?",
                     (guild.id, target.id),
                 )
+
+        details: list[str] = []
+        if original_name is not None:
+            # Restore the excluded user to their original name
+            try:
+                log.info(
+                    "Foolsday exclude: restoring %s (%d) to %r",
+                    target,
+                    target.id,
+                    original_name,
+                )
+                await target.edit(
+                    nick=nick_to_restore,
+                    reason="April Fools — excluded, restoring original name",
+                )
+                details.append(f"Restored {target.mention} to their original name.")
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning(
+                    "Foolsday exclude: could not restore %s (%d): %s",
+                    target,
+                    target.id,
+                    exc,
+                )
+                details.append(f"Could not restore {target.mention}'s name: {exc}")
+
+            if swap_member is not None:
+                try:
+                    log.info(
+                        "Foolsday exclude: reassigning %s (%d) from %r to %r",
+                        swap_member,
+                        swap_member.id,
+                        swap_member.display_name,
+                        swap_to_nick,
+                    )
+                    await swap_member.edit(
+                        nick=swap_to_nick,
+                        reason="April Fools — reassigned after exclusion",
+                    )
+                    details.append(
+                        f"Reassigned {swap_member.mention} to a different name."
+                    )
+                except (discord.Forbidden, discord.HTTPException) as exc:
+                    log.warning(
+                        "Foolsday exclude: could not reassign %s (%d): %s",
+                        swap_member,
+                        swap_member.id,
+                        exc,
+                    )
+                    details.append(f"Could not reassign {swap_member.mention}: {exc}")
 
         log.info("Foolsday: %s excluded %s (%d)", interaction.user, target, target.id)
         msg = f"{target.mention} excluded from foolsday shuffle."
@@ -651,6 +662,10 @@ class FoolsdayCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
+
+        partner: discord.Member | None = None
+        target_original = ""
+        partner_current = ""
 
         with self.ctx.open_db() as conn:
             _init_table(conn)
@@ -706,59 +721,58 @@ class FoolsdayCog(commands.Cog):
                 (guild.id, target.id, target_original),
             )
 
-            # Swap: target gets partner's current nick, partner gets target's original
-            details: list[str] = []
-            try:
-                log.debug(
-                    "Foolsday join: %s (%d) %r -> %r",
-                    target,
-                    target.id,
-                    target_original,
-                    partner_current,
-                )
-                await target.edit(
-                    nick=partner_current, reason="April Fools — joined shuffle"
-                )
-                details.append(f"{target.mention} joined the shuffle.")
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning(
-                    "Foolsday join: could not rename %s (%d): %s",
-                    target,
-                    target.id,
-                    exc,
-                )
-                details.append(f"Could not rename {target.mention}: {exc}")
-
-            try:
-                log.debug(
-                    "Foolsday join: swapping %s (%d) %r -> %r",
-                    partner,
-                    partner.id,
-                    partner_current,
-                    target_original,
-                )
-                await partner.edit(
-                    nick=target_original, reason="April Fools — swapped after new join"
-                )
-                details.append(f"Swapped {partner.mention} to a new name.")
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning(
-                    "Foolsday join: could not rename %s (%d): %s",
-                    partner,
-                    partner.id,
-                    exc,
-                )
-                details.append(f"Could not rename {partner.mention}: {exc}")
-
-            log.info(
-                "Foolsday: %s added %s (%d) to shuffle, swapped with %s (%d)",
-                interaction.user,
+        assert partner is not None
+        details: list[str] = []
+        try:
+            log.debug(
+                "Foolsday join: %s (%d) %r -> %r",
                 target,
                 target.id,
+                target_original,
+                partner_current,
+            )
+            await target.edit(
+                nick=partner_current, reason="April Fools — joined shuffle"
+            )
+            details.append(f"{target.mention} joined the shuffle.")
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            log.warning(
+                "Foolsday join: could not rename %s (%d): %s",
+                target,
+                target.id,
+                exc,
+            )
+            details.append(f"Could not rename {target.mention}: {exc}")
+
+        try:
+            log.debug(
+                "Foolsday join: swapping %s (%d) %r -> %r",
                 partner,
                 partner.id,
+                partner_current,
+                target_original,
             )
+            await partner.edit(
+                nick=target_original, reason="April Fools — swapped after new join"
+            )
+            details.append(f"Swapped {partner.mention} to a new name.")
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            log.warning(
+                "Foolsday join: could not rename %s (%d): %s",
+                partner,
+                partner.id,
+                exc,
+            )
+            details.append(f"Could not rename {partner.mention}: {exc}")
 
+        log.info(
+            "Foolsday: %s added %s (%d) to shuffle, swapped with %s (%d)",
+            interaction.user,
+            target,
+            target.id,
+            partner,
+            partner.id,
+        )
         await interaction.followup.send("\n".join(details), ephemeral=True)
 
     @app_commands.command(

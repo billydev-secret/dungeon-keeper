@@ -73,8 +73,8 @@ async def _delete_discord_messages(
     """Delete Discord messages for *user_id*. Returns (deleted, failed, replaced).
 
     Forum thread OPs (message_id == channel_id) are kept as threads: the original
-    message is deleted and the bot re-posts the same content so the post survives
-    under the bot's name.
+    message is deleted and the bot posts a [deleted] tombstone so the thread and
+    its replies survive under the bot's name.
 
     on_progress: optional async callable(deleted, failed, replaced) called after each channel.
     """
@@ -152,9 +152,8 @@ async def _delete_discord_messages(
         if _is_forum_thread(channel) and channel_id in message_ids:
             try:
                 op = await channel.fetch_message(channel_id)  # type: ignore[union-attr]
-                content = op.content or "​"
                 await op.delete()
-                await channel.send(content)  # type: ignore[union-attr]
+                await channel.send("[deleted]")  # type: ignore[union-attr]
                 replaced += 1
             except discord.NotFound:
                 replaced += 1
@@ -198,7 +197,7 @@ async def _delete_discord_messages(
                 await channel.get_partial_message(mid).delete()  # type: ignore[union-attr]
                 deleted += 1
             except discord.NotFound:
-                pass
+                deleted += 1
             except (discord.Forbidden, discord.HTTPException) as exc:
                 log.warning("Delete failed for message %d: %s", mid, exc)
                 failed += 1
@@ -219,18 +218,17 @@ async def _edit_or_send(
     interaction: discord.Interaction, content: str
 ) -> None:
     """Update the deletion status. After ~15 minutes the interaction token
-    expires (long scans can hit this); fall back to a regular channel send."""
+    expires (long scans can hit this); fall back to a DM so the result
+    doesn't appear publicly in the channel."""
     try:
         await interaction.edit_original_response(content=content, view=None)
         return
     except (discord.HTTPException, discord.NotFound):
         pass
-    channel = interaction.channel
-    if isinstance(channel, (discord.TextChannel, discord.Thread, discord.VoiceChannel, discord.StageChannel)):
-        try:
-            await channel.send(f"<@{interaction.user.id}> {content}")
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+    try:
+        await interaction.user.send(content)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 
 
 async def _run_deletion(
@@ -238,6 +236,8 @@ async def _run_deletion(
     guild: discord.Guild,
     user_id: int,
     original_interaction: discord.Interaction,
+    *,
+    keep_messages: bool = True,
 ) -> None:
     # Phase 1 — scan Discord directly. Authoritative: doesn't depend on what
     # the local index has captured, so messages from before the bot joined,
@@ -247,7 +247,7 @@ async def _run_deletion(
     async def _scan_progress(done: int, total: int, found: int) -> None:
         nonlocal last_scan_update
         # Throttle edits — Discord rate-limits edit_original_response.
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         if done < total and now - last_scan_update < 2.0:
             return
         last_scan_update = now
@@ -264,12 +264,12 @@ async def _run_deletion(
 
     if total == 0:
         with ctx.open_db() as conn:
-            purge_user_data(conn, guild.id, user_id, keep_messages=True)
+            purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
+        archive_note = " (your message archive is preserved)" if keep_messages else ""
         await _edit_or_send(
             original_interaction,
             "All done. No messages found in any channel I can read. "
-            "Server-side data (XP, activity, profile): **cleared** "
-            "(your message archive is preserved).",
+            f"Server-side data (XP, activity, profile): **cleared**{archive_note}.",
         )
         return
 
@@ -287,7 +287,7 @@ async def _run_deletion(
     async def _delete_progress(deleted: int, failed: int, replaced: int) -> None:
         nonlocal last_delete_update
         done = deleted + failed + replaced
-        now = asyncio.get_event_loop().time()
+        now = asyncio.get_running_loop().time()
         if done < total and now - last_delete_update < 1.5:
             return
         last_delete_update = now
@@ -299,21 +299,17 @@ async def _run_deletion(
         guild, user_id, msg_rows, on_progress=_delete_progress
     )
 
-    # Purge XP, activity, known_users, wellness — but keep the messages table
-    # rows so the user retains a local archive of what they posted.
     with ctx.open_db() as conn:
-        purge_user_data(conn, guild.id, user_id, keep_messages=True)
+        purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
 
+    archive_note = " (your message archive is preserved)" if keep_messages else ""
     lines = [
         "All done. Here's what was removed:",
         f"Discord messages deleted: **{discord_deleted}**",
-        "Server-side data (XP, activity, profile): **cleared** "
-        "(your message archive is preserved)",
+        f"Server-side data (XP, activity, profile): **cleared**{archive_note}",
     ]
     if discord_replaced:
-        lines.append(
-            f"Forum posts re-posted under this bot (content preserved): **{discord_replaced}**"
-        )
+        lines.append(f"Forum posts replaced with tombstone: **{discord_replaced}**")
     if discord_failed:
         lines.append(f"Messages that couldn't be deleted (no access): **{discord_failed}**")
 
@@ -328,6 +324,7 @@ class PrivacyCog(commands.Cog):
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
         self.ctx = ctx
+        self._active_deletions: set[int] = set()
         super().__init__()
 
     @app_commands.command(
@@ -341,6 +338,13 @@ class PrivacyCog(commands.Cog):
             )
             return
 
+        if interaction.user.id in self._active_deletions:
+            await interaction.response.send_message(
+                "A deletion is already running for your account — please wait for it to finish.",
+                ephemeral=True,
+            )
+            return
+
         view = _ConfirmDeleteView(actor_id=interaction.user.id)
         await interaction.response.send_message(
             "⚠️ **This will permanently delete everything you have done in this server** — "
@@ -350,11 +354,14 @@ class PrivacyCog(commands.Cog):
             ephemeral=True,
         )
 
-        await view.wait()
-        if not view.confirmed:
-            return
-
-        await _run_deletion(self.ctx, interaction.guild, interaction.user.id, interaction)
+        self._active_deletions.add(interaction.user.id)
+        try:
+            await view.wait()
+            if not view.confirmed:
+                return
+            await _run_deletion(self.ctx, interaction.guild, interaction.user.id, interaction)
+        finally:
+            self._active_deletions.discard(interaction.user.id)
 
     @app_commands.command(
         name="delete_user",
@@ -379,6 +386,13 @@ class PrivacyCog(commands.Cog):
             )
             return
 
+        if member.id in self._active_deletions:
+            await interaction.response.send_message(
+                f"A deletion is already running for {member.mention} — please wait for it to finish.",
+                ephemeral=True,
+            )
+            return
+
         view = _ConfirmDeleteView(actor_id=interaction.user.id)
         await interaction.response.send_message(
             f"⚠️ **This will permanently delete everything {member.mention} has done in this server** — "
@@ -388,11 +402,14 @@ class PrivacyCog(commands.Cog):
             ephemeral=True,
         )
 
-        await view.wait()
-        if not view.confirmed:
-            return
-
-        await _run_deletion(self.ctx, interaction.guild, member.id, interaction)
+        self._active_deletions.add(member.id)
+        try:
+            await view.wait()
+            if not view.confirmed:
+                return
+            await _run_deletion(self.ctx, interaction.guild, member.id, interaction, keep_messages=False)
+        finally:
+            self._active_deletions.discard(member.id)
 
 
 async def setup(bot: Bot) -> None:

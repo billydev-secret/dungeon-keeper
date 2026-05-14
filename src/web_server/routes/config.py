@@ -65,6 +65,8 @@ from bot_modules.services.veil_repo import get_veil_config as _get_veil_config
 from bot_modules.services.whisper_repo import get_whisper_config as _get_whisper_config
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
+_RISKY_PING_KEY = "risky_ping_role_id"
+_RISKY_MIN_GAME_KEY = "risky_min_game_seconds"
 _BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂"
 
 router = APIRouter()
@@ -256,6 +258,15 @@ def _whisper_section(conn, guild_id: int) -> dict:
         "channel_id": str(wc.channel_id),
         "role_id": str(wc.role_id),
         "log_channel_id": str(wc.log_channel_id),
+    }
+
+
+def _risky_section(conn, guild_id: int) -> dict:
+    ping_role = get_config_value(conn, _RISKY_PING_KEY, "0", guild_id=guild_id)
+    min_secs = get_config_value(conn, _RISKY_MIN_GAME_KEY, "0", guild_id=guild_id)
+    return {
+        "ping_role_id": ping_role,
+        "min_game_seconds": int(min_secs),
     }
 
 
@@ -500,6 +511,7 @@ async def get_config(
                 "bot_identity": _bot_identity_section(prune_guild),
                 "veil": _veil_section(conn, guild_id),
                 "whisper": _whisper_section(conn, guild_id),
+                "risky": _risky_section(conn, guild_id),
             }
 
     return await run_query(_q)
@@ -1545,6 +1557,76 @@ async def update_birthday(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+# ── Risky Rolls config ───────────────────────────────────────────────
+
+
+class RiskyConfigUpdate(BaseModel):
+    ping_role_id: str | None = None
+    min_game_seconds: int | None = None
+
+
+@router.put("/config/risky")
+async def update_risky(
+    request: Request,
+    body: RiskyConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    if body.min_game_seconds is not None and body.min_game_seconds < 0:
+        raise HTTPException(400, "min_game_seconds cannot be negative")
+
+    new_ping_role: int | None = None
+    clear_ping_role = False
+    new_min_secs: int | None = None
+    clear_min_secs = False
+
+    def _q():
+        nonlocal new_ping_role, clear_ping_role, new_min_secs, clear_min_secs
+        with ctx.open_db() as conn:
+            if body.ping_role_id is not None:
+                role_id = int(body.ping_role_id)
+                if role_id == 0:
+                    conn.execute(
+                        "DELETE FROM config WHERE guild_id = ? AND key = ?",
+                        (guild_id, _RISKY_PING_KEY),
+                    )
+                    clear_ping_role = True
+                else:
+                    set_config_value(conn, _RISKY_PING_KEY, str(role_id), guild_id)
+                    new_ping_role = role_id
+            if body.min_game_seconds is not None:
+                secs = body.min_game_seconds
+                if secs == 0:
+                    conn.execute(
+                        "DELETE FROM config WHERE guild_id = ? AND key = ?",
+                        (guild_id, _RISKY_MIN_GAME_KEY),
+                    )
+                    clear_min_secs = True
+                else:
+                    set_config_value(conn, _RISKY_MIN_GAME_KEY, str(secs), guild_id)
+                    new_min_secs = secs
+        return {"ok": True}
+
+    result = await run_query(_q)
+
+    # Update in-memory cache on the event loop, not from the thread.
+    from bot_modules.services.risky_roll import state as rr_state  # noqa: PLC0415
+
+    if clear_ping_role:
+        rr_state.ping_roles.pop(guild_id, None)
+    elif new_ping_role is not None:
+        rr_state.ping_roles[guild_id] = new_ping_role
+    if clear_min_secs:
+        rr_state.min_game_seconds.pop(guild_id, None)
+    elif new_min_secs is not None:
+        rr_state.min_game_seconds[guild_id] = new_min_secs
+
+    return result
 
 
 @router.get("/birthday/calendar")

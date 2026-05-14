@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from typing import TYPE_CHECKING
 
 import discord
-from anthropic import AsyncAnthropic
 from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.commands.jail_commands import check_jail_rejoin
 from bot_modules.core.post_monitoring import enforce_spoiler_requirement
-from bot_modules.services.ai_moderation_service import ai_check_watched_message
 from bot_modules.services.auto_delete_service import (
     auto_delete_rule_exists,
+    remove_tracked_auto_delete_message,
+    remove_tracked_auto_delete_messages,
     track_auto_delete_message,
 )
 from bot_modules.services.discord_scan import collect_messageable_channels
@@ -247,10 +246,6 @@ class EventsCog(commands.Cog):
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
         self.ctx = ctx
-        _anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-        self._anthropic_client: AsyncAnthropic | None = (
-            AsyncAnthropic(api_key=_anthropic_api_key) if _anthropic_api_key else None
-        )
         self._message_backfill_task: asyncio.Task[None] | None = None
         super().__init__()
 
@@ -548,7 +543,7 @@ class EventsCog(commands.Cog):
                 ts=message_ts,
             )
 
-            interaction_targets = [uid for uid in mention_ids]
+            interaction_targets = list(mention_ids)
             if (
                 reply_to_id
                 and message.reference
@@ -603,34 +598,17 @@ class EventsCog(commands.Cog):
         if not watchers:
             return
 
-        reason = ""
-        if self._anthropic_client is not None:
-            try:
-                is_violation, reason = await ai_check_watched_message(
-                    self._anthropic_client, message, db_path=self.ctx.db_path
-                )
-            except Exception as exc:
-                log.warning(
-                    "AI watch check failed for %s: %s — notifying anyway.",
-                    message.author.display_name,
-                    exc,
-                )
-                is_violation = True
-            if not is_violation:
-                return
-
         channel_name = getattr(message.channel, "name", str(message.channel.id))
         guild_name = message.guild.name if message.guild else "Unknown Server"
 
         body = message.content or "*[no text content]*"
         attachment_lines = "\n".join(a.url for a in message.attachments)
-        rule_line = f"\n⚠️ **Rule concern:** {reason}" if reason else ""
         footer = (f"{attachment_lines}\n" if attachment_lines else "") + (
             f"— **{message.author.display_name}** (@{message.author.name}) "
             f"in **{guild_name}** / #{channel_name}\n"
             f"{message.jump_url}"
         )
-        dm_text = f"{body}{rule_line}\n\n{footer}"
+        dm_text = f"{body}\n\n{footer}"
 
         for watcher_id in watchers:
             try:
@@ -658,7 +636,8 @@ class EventsCog(commands.Cog):
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
         delay = 1
-        deadline = asyncio.get_event_loop().time() + 30
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 30
         while True:
             try:
                 result = await award_image_reaction_xp(
@@ -672,7 +651,7 @@ class EventsCog(commands.Cog):
             except discord.HTTPException as exc:
                 if (
                     exc.status < 500
-                    or asyncio.get_event_loop().time() + delay > deadline
+                    or loop.time() + delay > deadline
                 ):
                     raise
                 log.warning(
@@ -725,8 +704,6 @@ class EventsCog(commands.Cog):
     ) -> None:
         if payload.guild_id is None:
             return
-        from bot_modules.services.auto_delete_service import remove_tracked_auto_delete_message
-
         # Auto-delete tracking is per-message bookkeeping; clear it so we
         # don't try to re-delete a Discord message that's already gone.
         remove_tracked_auto_delete_message(
@@ -789,7 +766,11 @@ class EventsCog(commands.Cog):
                 conn, member.guild.id, member.id, member.created_at.timestamp(), now
             )
 
-        inviter_id, invite_code = await detect_inviter(member.guild)
+        try:
+            inviter_id, invite_code = await detect_inviter(member.guild)
+        except Exception:
+            log.exception("detect_inviter failed for %s in guild %s", member, member.guild.id)
+            inviter_id, invite_code = None, None
         if inviter_id is not None:
             with self.ctx.open_db() as conn:
                 record_invite(conn, member.guild.id, inviter_id, member.id, invite_code)
@@ -869,8 +850,6 @@ class EventsCog(commands.Cog):
     ) -> None:
         if payload.guild_id is None:
             return
-        from bot_modules.services.auto_delete_service import remove_tracked_auto_delete_messages
-
         # Auto-delete tracking only — the messages table is a permanent
         # archive (see on_raw_message_delete for the rationale).
         remove_tracked_auto_delete_messages(

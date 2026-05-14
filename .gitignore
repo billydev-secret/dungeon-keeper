@@ -21,3 +21,4 @@ log_beta_tools.txt
 veil_cache/
 test_*.jpg
 test_*.png
+.coverage

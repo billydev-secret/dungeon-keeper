@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import io
+import ipaddress
 import logging
 import os
+import socket
 import tempfile
 import time
 import urllib.request
@@ -882,20 +884,27 @@ class CropEditorView(discord.ui.View):
             if self._posted:
                 await interaction.response.send_message("Already posted.", ephemeral=True)
                 return
-            self._posted = True
 
         await interaction.response.defer(ephemeral=True)
+
+        async with self._post_lock:
+            if self._posted:
+                await interaction.followup.send("Already posted.", ephemeral=True)
+                return
+            self._posted = True
 
         veil_channel = interaction.guild.get_channel(self.veil_channel_id)
         if veil_channel is None or not isinstance(
             veil_channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
         ):
+            self.stop()
             await interaction.followup.send(
                 "Veil channel not found — ask an admin to check the config.", ephemeral=True
             )
             return
 
         if hasattr(veil_channel, "is_nsfw") and not veil_channel.is_nsfw():
+            self.stop()
             await interaction.followup.send(
                 f"{veil_channel.mention} is no longer NSFW-flagged. "
                 "Veil refuses to post explicit content in non-age-gated channels.",
@@ -991,6 +1000,24 @@ _PROMPT_HOW_TO_PLAY = (
 )
 
 
+def _is_safe_url_host(url: str) -> bool:
+    """Return False for loopback/private/link-local targets to guard against SSRF."""
+    host = urlparse(url).hostname or ""
+    if not host:
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+        return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_unspecified)
+    except ValueError:
+        pass
+    # Hostname — resolve to IPv4 and re-check. Catches localhost and internal DNS names.
+    try:
+        addr = ipaddress.ip_address(socket.gethostbyname(host))
+        return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_unspecified)
+    except (socket.gaierror, ValueError):
+        return False
+
+
 def _fetch_url_bytes(url: str, max_bytes: int) -> bytes:
     """Synchronous URL fetch with a hard byte cap. Raises on error."""
     req = urllib.request.Request(url, headers={"User-Agent": "DungeonKeeper-Bot/1.0"})
@@ -1016,9 +1043,13 @@ async def _pipeline_and_open_editor(
     """
     assert interaction.guild
 
-    dim_ok, img_w, img_h = await asyncio.to_thread(
-        _validate_dimensions, image_bytes, config.min_image_dimension_px
-    )
+    try:
+        dim_ok, img_w, img_h = await asyncio.to_thread(
+            _validate_dimensions, image_bytes, config.min_image_dimension_px
+        )
+    except Exception:
+        await interaction.followup.send("That doesn't appear to be a valid image.", ephemeral=True)
+        return
     if not dim_ok:
         await interaction.followup.send(
             f"Image too small. Minimum dimension is {config.min_image_dimension_px}px.",
@@ -1111,6 +1142,12 @@ class _VeilSubmitModal(discord.ui.Modal, title="Submit a Veil image"):
         if parsed.scheme not in ("http", "https"):
             await interaction.followup.send(
                 "Please provide an http or https URL.", ephemeral=True
+            )
+            return
+
+        if not await asyncio.to_thread(_is_safe_url_host, url):
+            await interaction.followup.send(
+                "That URL isn't allowed.", ephemeral=True
             )
             return
 
@@ -1276,14 +1313,20 @@ class ConfessionPreviewView(discord.ui.View):
             if self._posted:
                 await interaction.response.send_message("Already posted.", ephemeral=True)
                 return
-            self._posted = True
 
         await interaction.response.defer(ephemeral=True)
+
+        async with self._post_lock:
+            if self._posted:
+                await interaction.followup.send("Already posted.", ephemeral=True)
+                return
+            self._posted = True
 
         veil_channel = interaction.guild.get_channel(self._veil_channel_id)
         if veil_channel is None or not isinstance(
             veil_channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread)
         ):
+            self.stop()
             await interaction.followup.send(
                 "Veil channel not found — ask an admin to check the config.", ephemeral=True
             )

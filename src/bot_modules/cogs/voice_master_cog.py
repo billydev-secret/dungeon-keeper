@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections import defaultdict
@@ -137,7 +138,7 @@ class VoiceMasterCog(commands.Cog):
         )
         # Reconciliation runs after the bot is connected; defer it onto the loop
         # so cog_load doesn't block bot startup.
-        self.bot.loop.create_task(self._reconcile_state())
+        asyncio.create_task(self._reconcile_state())
 
     async def _reconcile_state(self) -> None:
         """Resume tracked channels on startup; clean up empty/missing ones."""
@@ -214,12 +215,11 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if channel.guild.id != self.ctx.guild_id:
             return
+        row = None
         with self.ctx.open_db() as conn:
             cfg = load_voice_master_config(conn, channel.guild.id)
             row = get_active_channel(conn, channel.id)
-        # Tracked channel deleted out from under us — clean up DB.
-        if row is not None:
-            with self.ctx.open_db() as conn:
+            if row is not None:
                 delete_active_channel(conn, channel.id)
                 write_audit(
                     conn,
@@ -229,6 +229,8 @@ class VoiceMasterCog(commands.Cog):
                     target_id=row.owner_id,
                     extra={"channel_id": channel.id, "reason": "external_delete"},
                 )
+        # Tracked channel deleted out from under us — already cleaned up in the block above.
+        if row is not None:
             return
         # Hub or target category deleted by an admin — feature is now broken
         # until it's reconfigured. Log loudly and post to mod log.
@@ -680,7 +682,6 @@ class VoiceMasterCog(commands.Cog):
     # Convenience suppress-context for ignored voice-related Discord errors.
     @staticmethod
     def _suppress_voice_errors():
-        import contextlib
         return contextlib.suppress(discord.Forbidden, discord.HTTPException)
 
     # ── Owner slash commands ──────────────────────────────────────────
@@ -1646,6 +1647,7 @@ class VoiceMasterCog(commands.Cog):
         if not _admin_only(self.ctx, interaction):
             await interaction.response.send_message("Administrator only.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True, thinking=False)
         gid = self.ctx.guild_id
         with self.ctx.open_db() as conn:
             delete_profile(conn, gid, member.id)
@@ -1665,13 +1667,13 @@ class VoiceMasterCog(commands.Cog):
                 target_id=member.id,
                 extra={},
             )
+        await interaction.followup.send(
+            f"Profile cleared for {member.mention}.", ephemeral=True
+        )
         await self._post_admin_audit_mirror(
             interaction,
             action="force-clear-profile",
             summary=f"Cleared saved profile for {member.mention}.",
-        )
-        await interaction.response.send_message(
-            f"Profile cleared for {member.mention}.", ephemeral=True
         )
 
     @voice_admin.command(
@@ -1684,6 +1686,7 @@ class VoiceMasterCog(commands.Cog):
         if not _admin_only(self.ctx, interaction):
             await interaction.response.send_message("Administrator only.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True, thinking=False)
         gid = self.ctx.guild_id
         with self.ctx.open_db() as conn:
             profile = load_profile(conn, gid, member.id) or default_profile()
@@ -1715,12 +1718,12 @@ class VoiceMasterCog(commands.Cog):
             value="\n".join(f"<@{u}>" for u in blocked) or "*(empty)*",
             inline=False,
         )
+        await interaction.followup.send(embed=embed, ephemeral=True)
         await self._post_admin_audit_mirror(
             interaction,
             action="view-profile",
             summary=f"Viewed saved profile of {member.mention}.",
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── Admin: show ───────────────────────────────────────────────────
 

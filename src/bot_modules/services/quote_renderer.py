@@ -18,6 +18,18 @@ _INTER = _ASSETS / "Inter-Regular.ttf"
 _LORA = _ASSETS / "Lora-Regular.ttf"
 _BORDER = Path("assets") / "border.png"
 
+try:
+    from pilmoji import Pilmoji as _Pilmoji
+    from pilmoji.helpers import getsize as _emoji_getsize
+    from pilmoji.source import TwemojiEmojiSource as _EmojiSource
+
+    _HAS_PILMOJI = True
+except ImportError:
+    _Pilmoji = None  # type: ignore[assignment]
+    _emoji_getsize = None  # type: ignore[assignment]
+    _EmojiSource = None  # type: ignore[assignment]
+    _HAS_PILMOJI = False
+
 QUOTE_MAX_CHARS = 280
 
 
@@ -104,7 +116,7 @@ def _load_font_fallback(size: int):
 
 # ── Text wrapping ─────────────────────────────────────────────────────────────
 
-def _wrap_text(text: str, font, max_width: int, draw) -> list[str]:
+def _wrap_text(text: str, font, max_width: int, draw, measure=None) -> list[str]:
     words = text.split()
     if not words:
         return [""]
@@ -112,8 +124,12 @@ def _wrap_text(text: str, font, max_width: int, draw) -> list[str]:
     current = ""
     for word in words:
         candidate = f"{current} {word}".strip()
-        bbox = draw.textbbox((0, 0), candidate, font=font)
-        if int(bbox[2] - bbox[0]) <= max_width or not current:
+        if measure is not None:
+            _w = measure(candidate)
+        else:
+            bbox = draw.textbbox((0, 0), candidate, font=font)
+            _w = int(bbox[2] - bbox[0])
+        if _w <= max_width or not current:
             current = candidate
         else:
             lines.append(current)
@@ -235,7 +251,8 @@ def render_quote_card(
     line_h = int(probe[3] - probe[1])
     line_gap = max(6, line_h // 5)
 
-    lines = _wrap_text(f"“{text}”", body_font, text_col_w, draw)
+    _measure = (lambda t: _emoji_getsize(t, font=body_font)[0]) if _HAS_PILMOJI else None
+    lines = _wrap_text(f"“{text}”", body_font, text_col_w, draw, measure=_measure)
     text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
     text_y_start = (height - text_block_h) // 2
 
@@ -252,11 +269,18 @@ def render_quote_card(
     bg = _bg_rgba.convert("RGB")
     draw = ImageDraw.Draw(bg)
 
-    # Draw text
+    # Draw text — pilmoji renders Unicode + Discord emoji images inline
     text_y = text_y_start
-    for line in lines:
-        draw.text((text_pad_l, text_y), line, font=body_font, fill=theme.text_color)
-        text_y += line_h + line_gap
+    if _HAS_PILMOJI:
+        with _Pilmoji(bg, source=_EmojiSource) as _pm:
+            for line in lines:
+                _pm.text((text_pad_l, text_y), line, fill=theme.text_color, font=body_font)
+                text_y += line_h + line_gap
+    else:
+        for line in lines:
+            draw.text((text_pad_l, text_y), line, font=body_font, fill=theme.text_color)
+            text_y += line_h + line_gap
+    draw = ImageDraw.Draw(bg)
 
     # Pfp drop shadow
     _pfp_sh = Image.new("RGBA", (width, height), (0, 0, 0, 0))

@@ -1,0 +1,6 @@
+backups
+beta_tools
+bot_modules
+dungeonkeeper
+migrations
+web_server

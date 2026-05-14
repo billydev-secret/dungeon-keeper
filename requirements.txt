@@ -18,4 +18,5 @@ edge-tts>=6.1.0
 nudenet
 mediapipe
 Pillow
+pilmoji
 numpy

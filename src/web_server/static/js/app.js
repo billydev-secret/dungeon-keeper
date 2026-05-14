@@ -34,11 +34,8 @@ const SECTIONS = [
       { heading: "Messages", items: [
         { id: "message-cadence",      label: "Message Cadence",      module: "./panels/message-cadence.js" },
         { id: "message-rate",         label: "Message Rate",         module: "./panels/message-rate.js" },
-        { id: "message-rate-drops",   label: "Rate Drops",            module: "./panels/message-rate-drops.js" },
         { id: "burst-ranking",        label: "Burst Ranking",         module: "./panels/burst-ranking.js" },
-        { id: "session-burst",        label: "Session Burst",         module: "./panels/session-burst.js" },
         { id: "dropoff",              label: "Drop-off",              module: "./panels/dropoff.js" },
-        { id: "chilling-effect",      label: "Chilling Effect",       module: "./panels/chilling-effect.js" },
       ]},
       { heading: "People", items: [
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js" },
@@ -110,6 +107,7 @@ const SECTIONS = [
       { id: "config-ai",          label: "AI Commands",      module: "./panels/config-ai.js" },
       { id: "config-veil",        label: "Veil",             module: "./panels/config-veil.js" },
       { id: "config-whisper",     label: "Whisper",          module: "./panels/config-whisper.js" },
+      { id: "config-risky-rolls", label: "Risky Rolls",      module: "./panels/config-risky-rolls.js" },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
       { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js" },
       { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js" },
@@ -138,7 +136,6 @@ const SECTIONS = [
         { id: "help-moderation", label: "Moderation Core",              module: "./panels/help.js" },
         { id: "help-tickets",    label: "Tickets, Policies & Warnings", module: "./panels/help.js" },
         { id: "help-analytics",  label: "Activity & Watch",             module: "./panels/help.js" },
-        { id: "help-ai",         label: "AI Tools",                     module: "./panels/help.js" },
       ]},
       { heading: "Jail", items: [
         { id: "help-jail",       label: "Jail & Release",               module: "./panels/help.js" },

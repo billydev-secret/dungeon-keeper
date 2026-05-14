@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
+
+log = logging.getLogger("dungeonkeeper.privacy")
 
 
 def purge_user_data(
@@ -102,8 +105,8 @@ def purge_user_data(
                 f"DELETE FROM {table} WHERE guild_id = ? AND user_id = ?",
                 (guild_id, user_id),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("Failed to purge %s for user %d in guild %d: %s", table, user_id, guild_id, exc)
 
     for col in ("user_id_a", "user_id_b"):
         try:
@@ -111,7 +114,7 @@ def purge_user_data(
                 f"DELETE FROM wellness_partners WHERE guild_id = ? AND {col} = ?",
                 (guild_id, user_id),
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.warning("Failed to purge wellness_partners (%s) for user %d in guild %d: %s", col, user_id, guild_id, exc)
 
     return len(msg_ids)

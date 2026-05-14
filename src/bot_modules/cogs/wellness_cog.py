@@ -212,15 +212,9 @@ class _SetupWizardView(discord.ui.View):
 
         with self._ctx.open_db() as conn:
             cfg = get_wellness_config(conn, guild.id)
-            opt_in_user(
-                conn,
-                guild.id,
-                interaction.user.id,
-                timezone=self._timezone,
-                enforcement_level=self._enforcement,
-            )
 
         if cfg is None or not cfg.role_id:
+            self.stop()
             await interaction.response.edit_message(
                 content=(
                     "⚠️ Wellness Guardian isn't set up on this server yet. "
@@ -233,6 +227,7 @@ class _SetupWizardView(discord.ui.View):
 
         member = guild.get_member(interaction.user.id)
         if member is None:
+            self.stop()
             await interaction.response.edit_message(
                 content="Could not resolve your member record.", embed=None, view=None
             )
@@ -240,6 +235,7 @@ class _SetupWizardView(discord.ui.View):
 
         role = guild.get_role(cfg.role_id)
         if role is None:
+            self.stop()
             await interaction.response.edit_message(
                 content=(
                     "⚠️ The wellness role no longer exists. "
@@ -250,9 +246,19 @@ class _SetupWizardView(discord.ui.View):
             )
             return
 
+        with self._ctx.open_db() as conn:
+            opt_in_user(
+                conn,
+                guild.id,
+                interaction.user.id,
+                timezone=self._timezone,
+                enforcement_level=self._enforcement,
+            )
+
         try:
             await member.add_roles(role, reason="Wellness Guardian opt-in")
         except discord.HTTPException:
+            self.stop()
             await interaction.response.edit_message(
                 content=(
                     "⚠️ I couldn't assign the wellness role — I'm missing permissions. "
@@ -380,8 +386,9 @@ class _SettingsView(discord.ui.View):
             if not self._check(interaction):
                 await interaction.response.defer()
                 return
-            new_value = not current
             with self._ctx.open_db() as conn:
+                user = get_wellness_user(conn, interaction.guild_id or 0, interaction.user.id)
+                new_value = not (user.public_commitment if user else current)
                 update_user_settings(
                     conn, interaction.guild_id or 0, interaction.user.id,
                     public_commitment=new_value,

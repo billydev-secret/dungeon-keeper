@@ -386,21 +386,31 @@ class AppContext:
         return None
 
     def is_mod(self, interaction: discord.Interaction) -> bool:
+        _log = logging.getLogger("dungeonkeeper.perms")
+        perms = interaction.permissions
         member = self.get_interaction_member(interaction)
-        if member is None:
-            return False
-        perms = member.guild_permissions
+        _log.info(
+            "is_mod user=%s perms_value=%d manage_guild=%s administrator=%s member=%s member_perms=%s",
+            interaction.user.id,
+            perms.value,
+            perms.manage_guild,
+            perms.administrator,
+            member,
+            member.guild_permissions.value if member else None,
+        )
         if perms.manage_guild or perms.administrator:
             return True
+        if member is None:
+            return False
         configured = self.mod_role_ids | self.admin_role_ids
         return bool(configured & {r.id for r in member.roles})
 
     def is_admin(self, interaction: discord.Interaction) -> bool:
+        if interaction.permissions.administrator:
+            return True
         member = self.get_interaction_member(interaction)
         if member is None:
             return False
-        if member.guild_permissions.administrator:
-            return True
         return bool(self.admin_role_ids & {r.id for r in member.roles})
 
     def reload_grant_roles(self) -> None:

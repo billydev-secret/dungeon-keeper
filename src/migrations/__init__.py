@@ -35,6 +35,22 @@ def _migration_files() -> list[Path]:
     return sorted(_MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"))
 
 
+def _exec_migration_sql(conn: sqlite3.Connection, sql: str, name: str) -> None:
+    """Run each statement in a migration individually, tolerating already-applied DDL."""
+    for stmt in sql.split(";"):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc):
+                log.warning("Already-applied DDL skipped in %s: %s", name, exc)
+            else:
+                raise
+    conn.commit()
+
+
 def apply_migrations_sync(db_path: str | Path) -> None:
     """Apply all pending migrations to the database at db_path (sync/sqlite3)."""
     with sqlite3.connect(str(db_path)) as conn:
@@ -50,13 +66,29 @@ def apply_migrations_sync(db_path: str | Path) -> None:
                 continue
             sql = path.read_text(encoding="utf-8")
             log.info("Applying migration: %s", name)
-            conn.executescript(sql)
+            _exec_migration_sql(conn, sql, name)
             conn.execute(
                 "INSERT INTO schema_version (migration, applied_at) VALUES (?, ?)",
                 (name, time.time()),
             )
             conn.commit()
             log.info("Applied migration: %s", name)
+
+
+async def _exec_migration_sql_async(db, sql: str, name: str) -> None:
+    """Run each statement in a migration individually, tolerating already-applied DDL."""
+    for stmt in sql.split(";"):
+        stmt = stmt.strip()
+        if not stmt:
+            continue
+        try:
+            await db.execute(stmt)
+        except sqlite3.OperationalError as exc:
+            if "duplicate column name" in str(exc):
+                log.warning("Already-applied DDL skipped in %s: %s", name, exc)
+            else:
+                raise
+    await db.commit()
 
 
 async def apply_migrations(db) -> None:
@@ -75,7 +107,7 @@ async def apply_migrations(db) -> None:
             continue
         sql = path.read_text(encoding="utf-8")
         log.info("Applying migration: %s", name)
-        await db.executescript(sql)
+        await _exec_migration_sql_async(db, sql, name)
         await db.execute(
             "INSERT INTO schema_version (migration, applied_at) VALUES (?, ?)",
             (name, time.time()),

@@ -59,14 +59,14 @@ _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "General": ("🌿", discord.Color.from_str("#5865F2")),
     "Role Grants": ("🎭", discord.Color.from_str("#57F287")),
     "XP Grant": ("⭐", discord.Color.from_str("#FEE75C")),
+    "Voice": ("🔊", discord.Color.from_str("#2ECC71")),
+    "Music": ("🎵", discord.Color.from_str("#E74C3C")),
+    "Whisper": ("🤫", discord.Color.from_str("#E67E22")),
     "Moderation Actions": ("🛡️", discord.Color.from_str("#ED4245")),
     "Reports": ("📊", discord.Color.from_str("#EB459E")),
     "Activity & Graphs": ("📈", discord.Color.from_str("#5DADE2")),
     "Watch List": ("🔍", discord.Color.from_str("#3498DB")),
-    "AI Moderation": ("🤖", discord.Color.from_str("#5865F2")),
-    "Fun": ("🎉", discord.Color.from_str("#F1C40F")),
-    "Data Management": ("🗄️", discord.Color.from_str("#95A5A6")),
-    "Configuration": ("⚙️", discord.Color.from_str("#1ABC9C")),
+    "Server Tools": ("⚙️", discord.Color.from_str("#95A5A6")),
 }
 
 
@@ -110,6 +110,10 @@ def _build_help_pages(
                     ("/dm_set_mode", "Set your DM preference (open / ask / closed)."),
                     ("/dm_status @user", "Check whether mutual DM permission exists."),
                     ("/dm_revoke @user", "Revoke a DM permission relationship."),
+                    ("/todo task:...", "Add a task to the server's shared todo list."),
+                    ("/support", "Get a link to the support Discord server."),
+                    ("/invite", "Get a bot invite link to add DungeonKeeper to another server."),
+                    ("/delete_me", "Permanently delete your data from this server."),
                 ]
             ),
         )
@@ -139,6 +143,67 @@ def _build_help_pages(
                 + _fmt([("/xp_give member:@user", "Award 20 XP to a member.")]),
             )
         )
+
+    pages.append(
+        _page(
+            "Voice",
+            "Join the hub channel to create your own personal voice channel.\n\n"
+            "**Channel Owner**\n"
+            + _fmt(
+                [
+                    ("/voice lock / /voice unlock", "Restrict or re-open your channel."),
+                    ("/voice hide / /voice unhide", "Make your channel invisible or visible."),
+                    ("/voice rename name:...", "Set a custom channel name."),
+                    ("/voice limit n:...", "Set user capacity (0 = unlimited)."),
+                    ("/voice invite @user", "Add a member to your allow-list and invite them."),
+                    ("/voice kick @user", "Remove a member and add them to your block-list."),
+                    ("/voice transfer @user", "Give ownership to another member in your channel."),
+                    ("/voice claim", "Claim an abandoned channel (original owner left)."),
+                    ("/voice owner", "Show who owns the channel you're in."),
+                    ("/voice trusted add/remove/list", "Manage your auto-invite list."),
+                    ("/voice blocked add/remove/list", "Manage your block list."),
+                    ("/voice profile show/reset", "View or delete your saved channel preferences."),
+                ]
+            ),
+        )
+    )
+
+    pages.append(
+        _page(
+            "Music",
+            "YouTube / Spotify playback. Join a voice channel, then `/play` to start.\n\n"
+            + _fmt(
+                [
+                    ("/play query:...", "Play a YouTube URL, Spotify URL, or free-text search. Joins your VC automatically."),
+                    ("/skip", "Skip the current track."),
+                    ("/pause / /resume", "Pause or resume playback."),
+                    ("/stop", "Clear the queue. Disconnects unless 24/7 mode is on."),
+                    ("/shuffle", "Shuffle the remaining queue."),
+                    ("/loop mode:[off|track|queue]", "Set loop mode for the current track or full queue."),
+                    ("/queue page:1", "View the current queue (10 tracks per page)."),
+                    ("/nowplaying", "Repost the now-playing embed with control buttons."),
+                    ("/disconnect", "Force-disconnect the bot from voice."),
+                    ("/247_status", "List all 24/7-enabled channels in this server."),
+                ]
+            ),
+        )
+    )
+
+    pages.append(
+        _page(
+            "Whisper",
+            "Anonymous messages delivered to opted-in members via DM. "
+            "Sender identities are always logged for mods.\n\n"
+            + _fmt(
+                [
+                    ("/whisper optin", "Opt in to send and receive anonymous whispers."),
+                    ("/whisper optout", "Stop receiving whispers; you disappear from others' autocomplete."),
+                    ("/whisper send target:@user message:...", "Send an anonymous whisper to an opted-in member. Cooldown: 30 s between sends."),
+                    ("/whisper forget-me", "Permanently delete all your whisper data from this server."),
+                ]
+            ),
+        )
+    )
 
     if ctx.is_mod(interaction):
         pages.append(
@@ -226,6 +291,23 @@ def _build_help_pages(
 
         pages.append(
             _page(
+                "Activity & Graphs",
+                "Charts and network visualizations. First-time use: run `/interaction_scan` to backfill history.\n\n"
+                + _fmt(
+                    [
+                        ("/activity", "Bar chart of message volume over time. Scope to a member, channel, or whole server."),
+                        ("/connection_web", "Force-directed graph of who replies to / mentions whom."),
+                        ("/interaction_heatmap", "Adjacency-matrix heatmap — useful for spotting clusters."),
+                        ("/invite_web", "Network graph of who invited whom."),
+                        ("/interaction_scan", "Backfill the interaction graph from message history."),
+                        ("/member_events_scan", "Backfill join/leave history (needed for invite-tree analysis)."),
+                    ]
+                ),
+            )
+        )
+
+        pages.append(
+            _page(
                 "Watch List",
                 "Silently forward a member's public messages to your DMs. "
                 "With an AI key set, only flagged messages are forwarded.\n\n"
@@ -241,29 +323,14 @@ def _build_help_pages(
 
         pages.append(
             _page(
-                "AI Moderation",
-                "Requires `ANTHROPIC_API_KEY`.\n\n"
-                + _fmt(
-                    [
-                        ("/ai review member:@user days:7", "AI flags rule violations and patterns in a member's recent messages."),
-                        ("/ai scan count:50", "AI scans the last N messages in this channel for rule violations."),
-                        ("/ai channel question:... minutes:60", "Ask the AI about a channel's recent activity."),
-                        ("/ai query member:@user question:...", "Ask the AI about a member's message history."),
-                    ]
-                ),
-            )
-        )
-
-        pages.append(
-            _page(
                 "Server Tools",
                 _fmt(
                     [
                         ("/setup", "First-time bot setup — creates log channels, then walks through role/category config."),
                         ("/starboard channel|threshold|emoji|toggle|status", "Configure the starboard."),
-                        ("/todo", "Add a task to the server todo list."),
                         ("/policy open|vote|close|list", "Policy proposals and voting."),
                         ("/delete_user user:@user", "Admin: purge a user's data."),
+                        ("/247 enabled:true autoplay_playlist:...", "(Mod) Toggle 24/7 voice mode for your current channel."),
                     ]
                 ),
             )

@@ -22,11 +22,14 @@ from bot_modules.services.whisper_models import (
     WhisperState,
 )
 from bot_modules.services.whisper_repo import (
+    delete_reply,
     delete_whisper,
+    get_reply,
     get_whisper,
     get_whisper_config,
     insert_guess,
     insert_reply,
+    insert_reply_report,
     insert_report,
     insert_whisper,
     list_received,
@@ -249,6 +252,33 @@ def _do_insert_report(
         return insert_report(
             conn,
             whisper_id=whisper_id,
+            reporter_id=reporter_id,
+            reason=reason,
+        )
+
+
+def _do_get_reply(db_path: Path, reply_id: int):
+    with open_db(db_path) as conn:
+        return get_reply(conn, reply_id)
+
+
+def _do_delete_reply(db_path: Path, reply_id: int) -> None:
+    with open_db(db_path) as conn:
+        delete_reply(conn, reply_id)
+
+
+def _do_insert_reply_report(
+    db_path: Path,
+    *,
+    reply_id: int,
+    reporter_id: int,
+    reason: str,
+) -> bool:
+    """Returns True if inserted, False if duplicate."""
+    with open_db(db_path) as conn:
+        return insert_reply_report(
+            conn,
+            reply_id=reply_id,
             reporter_id=reporter_id,
             reason=reason,
         )
@@ -787,7 +817,16 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
             )
             return
 
-        # Try to DM the other party first so we don't persist if undeliverable.
+        # Persist first so we have the reply_id for the report button.
+        reply_id = await asyncio.to_thread(
+            _do_insert_reply,
+            self.bot.ctx.db_path,
+            whisper_id=self.whisper_id,
+            from_user_id=interaction.user.id,
+            to_user_id=to_user_id,
+            content=content,
+        )
+
         recipient = interaction.client.get_user(to_user_id) or await interaction.client.fetch_user(to_user_id)  # type: ignore[attr-defined]
         try:
             preview = whisper.message
@@ -796,22 +835,14 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
             await recipient.send(
                 f"\U0001f4ec Anonymous reply on Whisper #{self.whisper_id} *(\"{safe_codefence_content(preview)}\")*:\n"
                 f"```{safe_codefence_content(content)}```",
-                view=WhisperReplyDmView(self.bot, self.whisper_id),
+                view=WhisperReplyDmView(self.bot, self.whisper_id, reply_id=reply_id),
             )
         except (discord.Forbidden, discord.HTTPException):
+            await asyncio.to_thread(_do_delete_reply, self.bot.ctx.db_path, reply_id)
             await interaction.response.send_message(
                 "Couldn't deliver — they have DMs disabled.", ephemeral=True
             )
             return
-
-        await asyncio.to_thread(
-            _do_insert_reply,
-            self.bot.ctx.db_path,
-            whisper_id=self.whisper_id,
-            from_user_id=interaction.user.id,
-            to_user_id=to_user_id,
-            content=content,
-        )
 
         # Post reply to mod log (best-effort — don't fail the reply if this fails)
         try:
@@ -858,9 +889,11 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
 class WhisperReplyDmView(discord.ui.View):
     """View attached to incoming reply DMs so the recipient can reply back."""
 
-    def __init__(self, bot: Bot, whisper_id: int) -> None:
+    def __init__(self, bot: Bot, whisper_id: int, *, reply_id: int | None = None) -> None:
         super().__init__(timeout=None)
         self.add_item(WhisperReplyButton(bot, whisper_id))
+        if reply_id is not None:
+            self.add_item(WhisperReportReplyButton(bot, reply_id))
 
 
 class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
@@ -953,6 +986,145 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
             return
         await interaction.response.send_message(
             "Report submitted to moderators.", ephemeral=True
+        )
+
+
+class WhisperReportReplyModal(discord.ui.Modal, title="Report reply"):
+    reason_input: discord.ui.TextInput = discord.ui.TextInput(
+        label="Reason (optional)",
+        style=discord.TextStyle.long,
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(self, bot: Bot, reply_id: int) -> None:
+        super().__init__()
+        self.bot = bot
+        self.reply_id = reply_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        reply = await asyncio.to_thread(
+            _do_get_reply, self.bot.ctx.db_path, self.reply_id
+        )
+        if reply is None:
+            await interaction.response.send_message("Reply not found.", ephemeral=True)
+            return
+        if interaction.user.id != reply.to_user_id:
+            await interaction.response.send_message(
+                "Only the recipient can report a reply.", ephemeral=True
+            )
+            return
+
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, reply.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.send_message("Whisper not found.", ephemeral=True)
+            return
+
+        cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, whisper.guild_id)
+        if interaction.guild is None or cfg.log_channel_id == 0:
+            await interaction.response.send_message(
+                "Mod log channel isn't configured. Report not delivered.",
+                ephemeral=True,
+            )
+            return
+        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+        if not isinstance(log_channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "Mod log channel is misconfigured. Report not delivered.",
+                ephemeral=True,
+            )
+            return
+
+        reason = str(self.reason_input.value).strip() or "(no reason provided)"
+
+        inserted = await asyncio.to_thread(
+            _do_insert_reply_report,
+            self.bot.ctx.db_path,
+            reply_id=self.reply_id,
+            reporter_id=interaction.user.id,
+            reason=reason,
+        )
+        if not inserted:
+            await interaction.response.send_message(
+                "You've already reported this reply.", ephemeral=True
+            )
+            return
+
+        emb = discord.Embed(
+            title="Whisper Reply Reported",
+            description=safe_codefence_content(reply.content),
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        emb.add_field(
+            name="Sender (anonymous)",
+            value=f"<@{reply.from_user_id}> (`{reply.from_user_id}`)",
+            inline=False,
+        )
+        emb.add_field(
+            name="Reporter (recipient)",
+            value=f"<@{interaction.user.id}> (`{interaction.user.id}`)",
+            inline=False,
+        )
+        emb.add_field(name="Reason", value=reason, inline=False)
+        emb.add_field(name="Reply ID", value=str(self.reply_id), inline=False)
+        emb.add_field(name="Whisper ID", value=str(reply.whisper_id), inline=False)
+        try:
+            await log_channel.send(
+                embed=emb, allowed_mentions=discord.AllowedMentions.none()
+            )
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Failed to deliver report (bot can't post to mod log).",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "Reply reported to moderators.", ephemeral=True
+        )
+
+
+class WhisperReportReplyButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"whisper:report_reply:(?P<id>\d+)"),
+):
+    def __init__(self, bot: Bot, reply_id: int, *, row: int | None = None) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Report",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"whisper:report_reply:{reply_id}",
+                row=row,
+            )
+        )
+        self.bot = bot
+        self.reply_id = reply_id
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> WhisperReportReplyButton:
+        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        reply = await asyncio.to_thread(
+            _do_get_reply, self.bot.ctx.db_path, self.reply_id
+        )
+        if reply is None:
+            await interaction.response.send_message("Reply not found.", ephemeral=True)
+            return
+        if interaction.user.id != reply.to_user_id:
+            await interaction.response.send_message(
+                "Only the recipient can report a reply.", ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(
+            WhisperReportReplyModal(self.bot, self.reply_id)
         )
 
 
@@ -1472,6 +1644,7 @@ class WhisperCog(commands.Cog):
             WhisperExposeButton,
             WhisperReplyButton,
             WhisperReportButton,
+            WhisperReportReplyButton,
         )
         # Bootstrap launcher in every configured guild so the button bar is
         # at the bottom of the channel from boot. Run in parallel with a
