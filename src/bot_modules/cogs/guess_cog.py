@@ -1162,7 +1162,7 @@ _MAX_URL_BYTES = 25 * 1024 * 1024
 class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
     image_url: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Image URL",
-        placeholder="Paste a direct link to your image…",
+        placeholder="Paste a URL — or close this and use /guess submit to upload a file",
         required=True,
         max_length=512,
     )
@@ -1228,7 +1228,8 @@ def _prompt_embed() -> discord.Embed:
         title="🎭 Guess",
         description=(
             "Submit anonymized NSFW images for everyone to guess. "
-            "Click below to play."
+            "Click below to play.\n\n"
+            "📎 To upload a photo directly, use `/guess submit`."
         ),
         color=discord.Color.from_rgb(80, 20, 100),
     )

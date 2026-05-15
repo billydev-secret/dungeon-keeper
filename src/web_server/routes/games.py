@@ -23,6 +23,12 @@ _PROMPT_CONFIG_PATH = (
 
 VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama"}
 
+ALL_GAME_TYPES = [
+    "wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama",
+    "traditional", "mfk", "compliment", "ffa", "ttl", "hottakes",
+    "story", "fantasies", "risky_roller",
+]
+
 
 # ── Pydantic models ─────────────────────────────────────────────────────────
 
@@ -77,11 +83,16 @@ class AuditChannelBody(BaseModel):
     channel_id: str
 
 
+class GameConfigBody(BaseModel):
+    enabled: Optional[bool] = None
+    options: Optional[dict] = None
+
+
 class LegitLibsTemplateBody(BaseModel):
     title: str
     body: str
     tier: int
-    tags: Optional[str] = None
+    tags: str = ""
     status: str = "draft"
     player_min: Optional[int] = None
     player_max: Optional[int] = None
@@ -711,6 +722,26 @@ async def get_ll_template(
     return result
 
 
+def _players_from_blanks(blanks_json: str | None) -> tuple[int | None, int | None]:
+    """Return (player_min, player_max) derived from a blanks JSON string.
+
+    Each player fills 5–10 blanks, so:
+      player_min = ceil(count / 10)  — keeps each player under 10
+      player_max = floor(count / 5)  — keeps each player over 5
+    """
+    if not blanks_json:
+        return None, None
+    try:
+        blanks = json.loads(blanks_json)
+        count = len(blanks) if isinstance(blanks, list) else 0
+    except (json.JSONDecodeError, TypeError):
+        return None, None
+    if count == 0:
+        return None, None
+    import math
+    return math.ceil(count / 10), max(1, count // 5)
+
+
 @router.post("/legitlibs/templates")
 async def create_ll_template(
     request: Request,
@@ -720,6 +751,7 @@ async def create_ll_template(
     ctx = get_ctx(request)
 
     def _q():
+        player_min, player_max = _players_from_blanks(body.blanks)
         with ctx.open_db() as conn:
             cur = conn.execute(
                 """INSERT INTO legitlibs_templates
@@ -731,8 +763,8 @@ async def create_ll_template(
                     body.tier,
                     body.tags,
                     body.status,
-                    body.player_min,
-                    body.player_max,
+                    player_min,
+                    player_max,
                     body.blanks,
                     body.notes,
                 ),
@@ -761,9 +793,14 @@ async def update_ll_template(
             if not existing:
                 return None
 
+            fields = body.model_dump(exclude_none=True)
+            if "blanks" in fields:
+                p_min, p_max = _players_from_blanks(fields["blanks"])
+                fields["player_min"] = p_min
+                fields["player_max"] = p_max
             sets = []
             params: list[object] = []
-            for field, value in body.model_dump(exclude_none=True).items():
+            for field, value in fields.items():
                 sets.append(f"{field} = ?")
                 params.append(value)
 
@@ -859,8 +896,8 @@ async def ll_ai_prep(
     raw_text = body.raw_text.strip()
     if not raw_text:
         raise HTTPException(400, "raw_text is required")
-    if len(raw_text) > 2000:
-        raise HTTPException(400, "Text too long (max 2000 characters)")
+    if len(raw_text) > 8000:
+        raise HTTPException(400, "Text too long (max 8000 characters)")
 
     tier = max(1, min(4, body.tier))
 
@@ -870,45 +907,95 @@ async def ll_ai_prep(
     if verb_domains:
         domain_lines += f"; verb domains: {', '.join(verb_domains)}"
 
-    system_prompt = f"""You are a Mad Libs template editor. Given a passage of text and a heat tier (1=Flirty, 2=Spicy, 3=Filthy, 4=Unhinged), choose 4–8 words or short phrases that would be fun fill-in-the-blank slots. Replace each chosen word/phrase with a sequential numeric marker {{1}}, {{2}}, … and output a JSON object. Output 4–8 blanks total even if the passage is long.
+    paragraph_count = max(1, len([p for p in raw_text.split("\n") if p.strip()]))
+    min_blanks = min(max(4, paragraph_count * 2), 24)
+    max_blanks = min(max(min_blanks + 4, paragraph_count * 4), 32)
+
+    system_prompt = f"""You are a Mad Libs template editor. Given a passage of text and a heat tier (1=Flirty, 2=Spicy, 3=Filthy, 4=Unhinged), identify {min_blanks}–{max_blanks} words or short phrases to become fill-in-the-blank slots. Aim for at least 2 blanks per paragraph so the whole passage stays funny.
+
+Output ONLY a compact JSON object listing the blanks — do NOT echo or repeat the passage text.
 
 Rules:
+- "phrase" must be the exact word or phrase as it appears in the passage (use the inflected form; no surrounding punctuation).
 - Choose nouns, verbs, adjectives, adverbs, numbers, or exclamations. Prefer concrete, evocative words.
-- Do NOT blank articles (a, an, the), prepositions, pronouns, or conjunctions.
-- Keep the surrounding text grammatically intact (replace the entire inflected form).
-- Marker IDs must be sequential integers starting at 1 and unique.
-- Available pos values: noun, verb, adjective, adverb, exclamation, number, wildcard
-- Use wildcard only when the slot is intentionally open-ended (any word goes).
-- Available {domain_lines}
+- Do NOT choose articles (a, an, the), prepositions, pronouns, or conjunctions.
+- Each blank must have a unique id (sequential integer string starting at "1").
+- If the same proper noun appears multiple times, use ONE blank entry — it will replace all occurrences.
+- Never reuse an id for two different words/concepts.
+- pos must be one of: noun, verb, adjective, adverb, exclamation, number, wildcard. NEVER use a domain name as pos.
+- Use wildcard only when intentionally open-ended.
+- Available {domain_lines}. Domain is a sub-type of pos, set separately: e.g. a person's name → {{"pos": "noun", "domain": "person"}}; a city → {{"pos": "noun", "domain": "place"}}.
 - Available verb forms: ing, past, infinitive; noun forms: plural
-- Only include domain or form in the blank object when clearly applicable.
+- Only include domain or form when clearly applicable.
 - Output ONLY valid JSON — no markdown fences, no commentary.
 
 JSON format:
-{{"body": "<text with markers>", "blanks": [{{"id": "1", "pos": "noun"}}, ...]}}"""
+{{"blanks": [{{"id": "1", "phrase": "wicked", "pos": "adjective"}}, {{"id": "2", "phrase": "Jim", "pos": "noun", "domain": "person"}}, ...]}}"""
 
     user_prompt = f"Tier: {tier}\n\nText: {raw_text}"
 
-    raw = await generate_text(system_prompt, user_prompt, max_tokens=900, temperature=0.2)
+    # Output is just the blanks list. Budget ~150 chars/token conservatively, 120 chars per blank.
+    max_out = min(4000, max(800, max_blanks * 120))
+    raw = await generate_text(system_prompt, user_prompt, max_tokens=max_out, temperature=0.2)
     if not raw:
         raise HTTPException(502, "AI prep failed — check ANTHROPIC_API_KEY and try again")
 
-    cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-
-    try:
-        parsed = _json.loads(cleaned)
-    except _json.JSONDecodeError:
-        match = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
-        if match:
+    def _extract_json(text: str) -> dict | None:
+        text = _re.sub(r"^```(?:json)?\s*", "", text.strip())
+        text = _re.sub(r"\s*```$", "", text.strip()).strip()
+        decoder = _json.JSONDecoder()
+        try:
+            obj, _ = decoder.raw_decode(text)
+            return obj
+        except _json.JSONDecodeError:
+            pass
+        start = text.find("{")
+        if start != -1:
             try:
-                parsed = _json.loads(match.group())
+                obj, _ = decoder.raw_decode(text[start:])
+                return obj
             except _json.JSONDecodeError:
-                raise HTTPException(502, "AI returned malformed JSON — try again")
-        else:
-            raise HTTPException(502, "AI returned malformed JSON — try again")
+                pass
+        return None
 
-    if not isinstance(parsed.get("body"), str) or not isinstance(parsed.get("blanks"), list):
+    parsed = _extract_json(raw)
+    if parsed is None:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "AI prep bad JSON (len=%d), start=%r, end=%r", len(raw), raw[:400], raw[-200:]
+        )
+        raise HTTPException(502, "AI returned malformed JSON — try again")
+
+    if not isinstance(parsed.get("blanks"), list):
         raise HTTPException(502, "AI response missing required fields — try again")
+
+    # Apply substitutions to build the body. Longest phrases first to avoid partial matches.
+    blanks: list[dict] = parsed["blanks"]
+    body_text = raw_text
+    for blank in sorted(blanks, key=lambda b: len(b.get("phrase", "")), reverse=True):
+        phrase = blank.get("phrase", "").strip()
+        if not phrase:
+            continue
+        marker = "{" + str(blank.get("id", "")) + "}"
+        body_text = _re.sub(r"\b" + _re.escape(phrase) + r"\b", marker, body_text, flags=_re.IGNORECASE)
+
+    # Re-number markers by order of appearance so IDs are always sequential from 1.
+    blanks_by_id = {str(b.get("id", "")): b for b in blanks}
+    seen_order: list[str] = []
+    for m in _re.finditer(r"\{(\d+)\}", body_text):
+        old_id = m.group(1)
+        if old_id not in seen_order:
+            seen_order.append(old_id)
+    remap = {old: str(new) for new, old in enumerate(seen_order, 1)}
+    body_text = _re.sub(r"\{(\d+)\}", lambda m: "{" + remap.get(m.group(1), m.group(1)) + "}", body_text)
+    new_blanks = []
+    for old_id in seen_order:
+        blank = blanks_by_id.get(old_id, {}).copy()
+        blank.pop("phrase", None)
+        blank["id"] = remap[old_id]
+        new_blanks.append(blank)
+    parsed["body"] = body_text
+    parsed["blanks"] = new_blanks
 
     ctx = get_ctx(request)
 
@@ -1062,6 +1149,108 @@ async def remove_allowed_channel(
             conn.execute(
                 "DELETE FROM games_allowed_channels WHERE channel_id = ?", (channel_id,)
             )
+            conn.commit()
+            return {}
+
+    return await run_query(_q)
+
+
+# ── Per-game config ───────────────────────────────────────────────────────────
+
+
+@router.get("/config/games")
+async def get_all_game_configs(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = ctx.guild_id if hasattr(ctx, "guild_id") else 0
+
+    def _q():
+        with ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT game_type, enabled, options FROM games_game_config WHERE guild_id = ?",
+                (guild_id,),
+            ).fetchall()
+            stored = {r[0]: {"enabled": bool(r[1]), "options": json.loads(r[2] or "{}")} for r in rows}
+            games = {}
+            for gt in ALL_GAME_TYPES:
+                cfg = stored.get(gt, {})
+                games[gt] = {
+                    "enabled": cfg.get("enabled", True),
+                    "options": cfg.get("options", {}),
+                }
+            return {"games": games}
+
+    return await run_query(_q)
+
+
+@router.get("/config/games/{game_type}")
+async def get_game_config(
+    request: Request,
+    game_type: str,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    if game_type not in ALL_GAME_TYPES:
+        raise HTTPException(status_code=404, detail=f"Unknown game_type: {game_type}")
+
+    ctx = get_ctx(request)
+    guild_id = ctx.guild_id if hasattr(ctx, "guild_id") else 0
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT enabled, options FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+                (guild_id, game_type),
+            ).fetchone()
+            if not row:
+                return {"game_type": game_type, "enabled": True, "options": {}}
+            return {
+                "game_type": game_type,
+                "enabled": bool(row[0]),
+                "options": json.loads(row[1] or "{}"),
+            }
+
+    return await run_query(_q)
+
+
+@router.put("/config/games/{game_type}")
+async def set_game_config(
+    request: Request,
+    game_type: str,
+    body: GameConfigBody,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    if game_type not in ALL_GAME_TYPES:
+        raise HTTPException(status_code=404, detail=f"Unknown game_type: {game_type}")
+
+    ctx = get_ctx(request)
+    guild_id = ctx.guild_id if hasattr(ctx, "guild_id") else 0
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT enabled, options FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+                (guild_id, game_type),
+            ).fetchone()
+
+            if row:
+                new_enabled = int(body.enabled) if body.enabled is not None else row[0]
+                existing_opts = json.loads(row[1] or "{}")
+                if body.options is not None:
+                    existing_opts.update(body.options)
+                conn.execute(
+                    "UPDATE games_game_config SET enabled = ?, options = ?, updated_at = CURRENT_TIMESTAMP"
+                    " WHERE guild_id = ? AND game_type = ?",
+                    (new_enabled, json.dumps(existing_opts), guild_id, game_type),
+                )
+            else:
+                new_enabled = int(body.enabled) if body.enabled is not None else 1
+                new_opts = body.options or {}
+                conn.execute(
+                    "INSERT INTO games_game_config (guild_id, game_type, enabled, options) VALUES (?, ?, ?, ?)",
+                    (guild_id, game_type, new_enabled, json.dumps(new_opts)),
+                )
             conn.commit()
             return {}
 

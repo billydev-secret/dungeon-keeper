@@ -15,7 +15,7 @@ export function mount(container) {
         <div class="section-label">Allowed Channels</div>
         <div class="field-hint">Only these channel IDs may host party games. Use the Discord channel ID (a large number).</div>
         <div data-region="channels-list" style="margin-bottom:10px;"><div class="empty">Loading</div></div>
-        <div class="form" style="display:flex;gap:8px;align-items:flex-end;">
+        <div class="form" style="display:flex;flex-direction:row;gap:8px;align-items:flex-end;max-width:none;">
           <div class="field" style="margin:0;flex:1;max-width:280px;">
             <label>Channel ID
               <input type="text" data-ctrl="new-channel" placeholder="e.g. 123456789012345678" style="width:100%;" />
@@ -26,11 +26,11 @@ export function mount(container) {
         </div>
       </section>
 
-      <section style="margin-top:24px;">
+      <section>
         <div class="section-label">Audit Channel</div>
         <div class="field-hint">When set, game events are logged to this channel.</div>
         <div data-region="audit-current" style="margin-bottom:10px;"><div class="empty">Loading</div></div>
-        <div class="form" style="display:flex;gap:8px;align-items:flex-end;">
+        <div class="form" style="display:flex;flex-direction:row;gap:8px;align-items:flex-end;max-width:none;">
           <div class="field" style="margin:0;flex:1;max-width:280px;">
             <label>Channel ID
               <input type="text" data-ctrl="audit-channel" placeholder="e.g. 123456789012345678" style="width:100%;" />

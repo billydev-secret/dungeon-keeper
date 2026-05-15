@@ -74,6 +74,14 @@ async def check_allowed_channel(db, channel_id: int) -> bool:
     return row is not None
 
 
+async def check_game_enabled(db, game_type: str, guild_id: int) -> bool:
+    row = await db.fetchone(
+        "SELECT enabled FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+        (guild_id, game_type),
+    )
+    return row is None or bool(row[0])
+
+
 async def get_active_game(db, channel_id: int):
     return await db.fetchone(
         "SELECT * FROM games_active_games WHERE channel_id = ?", (channel_id,)

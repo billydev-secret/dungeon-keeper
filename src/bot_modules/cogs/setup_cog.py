@@ -16,7 +16,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.commands.jail_commands import CLR_TICKET, TicketPanelButton, _setup_view
+from bot_modules.commands.jail_commands import (
+    CLR_TICKET,
+    TicketPanelButton,
+    _add_ticket_panel,
+    _guild_has_any_ticket_panel,
+    _setup_view,
+)
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.services.dm_perms_service import set_panel_settings, set_request_channel
 from bot_modules.services.embeds import MOD_SUCCESS
@@ -173,9 +179,7 @@ class SetupCog(commands.Cog):
 
         # ── Ticket panel channel ──────────────────────────────────────────────
         ro = _readonly_ow(guild)
-        ticket_ch_id = _stored_id(ctx, "ticket_panel_channel_id")
-        ticket_ch = guild.get_channel(ticket_ch_id) if ticket_ch_id else None
-        if not isinstance(ticket_ch, discord.TextChannel):
+        if not _guild_has_any_ticket_panel(ctx, guild.id):
             ticket_ch = await guild.create_text_channel(
                 _SUPPORT_CHANNEL,
                 overwrites=ro,  # type: ignore[arg-type]
@@ -192,11 +196,10 @@ class SetupCog(commands.Cog):
             panel_view = discord.ui.View(timeout=None)
             panel_view.add_item(TicketPanelButton())
             msg = await ticket_ch.send(embed=panel_embed, view=panel_view)
-            ctx.set_config_value("ticket_panel_channel_id", str(ticket_ch.id))
-            ctx.set_config_value("ticket_panel_message_id", str(msg.id))
+            _add_ticket_panel(ctx, guild.id, ticket_ch.id, msg.id)
             lines.append(f"🆕 {ticket_ch.mention} created with ticket panel")
         else:
-            lines.append(f"✅ {ticket_ch.mention} ticket panel already set")
+            lines.append("✅ Ticket panel already exists (skipping)")
 
         # ── DM perms panel channel ────────────────────────────────────────────
         dm_cog = self.bot.get_cog("DmPermsCog")

@@ -31,6 +31,7 @@ from bot_modules.commands.jail_commands import (
     _do_jail,
     _do_unjail,
     _get_admin_role_ids,
+    _add_ticket_panel,
     _get_config,
     _get_mod_role_ids,
     _is_admin,
@@ -324,19 +325,6 @@ class JailCog(commands.Cog):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
 
-        # Delete the previous panel (if any) so we don't leave orphan buttons
-        # behind whenever a mod re-posts the panel in a new channel.
-        old_channel_id = _get_config(ctx, "ticket_panel_channel_id")
-        old_message_id = _get_config(ctx, "ticket_panel_message_id")
-        if old_channel_id and old_message_id:
-            old_channel = guild.get_channel(old_channel_id)
-            if isinstance(old_channel, discord.TextChannel):
-                try:
-                    old_msg = await old_channel.fetch_message(old_message_id)
-                    await old_msg.delete()
-                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                    pass
-
         embed = discord.Embed(
             title="📩 Support Tickets",
             description=(
@@ -348,8 +336,7 @@ class JailCog(commands.Cog):
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
         msg = await channel.send(embed=embed, view=view)
-        ctx.set_config_value("ticket_panel_channel_id", str(channel.id))
-        ctx.set_config_value("ticket_panel_message_id", str(msg.id))
+        _add_ticket_panel(ctx, guild.id, channel.id, msg.id)
         await interaction.response.send_message(
             f"✅ Ticket panel posted in {channel.mention}", ephemeral=True
         )

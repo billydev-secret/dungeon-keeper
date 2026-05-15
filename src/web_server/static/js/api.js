@@ -24,7 +24,9 @@ export async function api(path, params) {
     let detail = res.statusText;
     try {
       const body = await res.json();
-      if (body.detail) detail = body.detail;
+      if (body.detail) detail = Array.isArray(body.detail)
+        ? body.detail.map(e => e.msg || JSON.stringify(e)).join("; ")
+        : String(body.detail);
     } catch (_) {}
     throw new Error(`${res.status}: ${detail}`);
   }
@@ -46,7 +48,9 @@ export async function apiPost(path, body) {
     let detail = res.statusText;
     try {
       const b = await res.json();
-      if (b.detail) detail = b.detail;
+      if (b.detail) detail = Array.isArray(b.detail)
+        ? b.detail.map(e => e.msg || JSON.stringify(e)).join("; ")
+        : String(b.detail);
     } catch (_) {}
     throw new Error(`${res.status}: ${detail}`);
   }

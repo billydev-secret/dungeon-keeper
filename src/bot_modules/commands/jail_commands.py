@@ -88,6 +88,24 @@ def _get_config(ctx: AppContext, key: str, default: str = "0") -> int:
         return int(get_config_value(conn, key, default) or 0)
 
 
+def _add_ticket_panel(ctx: AppContext, guild_id: int, channel_id: int, message_id: int) -> None:
+    import time as _time
+    with ctx.open_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO ticket_panels (guild_id, channel_id, message_id, created_at)"
+            " VALUES (?, ?, ?, ?)",
+            (guild_id, channel_id, message_id, _time.time()),
+        )
+
+
+def _guild_has_any_ticket_panel(ctx: AppContext, guild_id: int) -> bool:
+    with ctx.open_db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM ticket_panels WHERE guild_id = ? LIMIT 1", (guild_id,)
+        ).fetchone()
+    return row is not None
+
+
 def _ts_str(ts: float | None) -> str:
     if ts is None:
         return "N/A"

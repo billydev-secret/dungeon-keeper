@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=17";
+const _moduleVer = "?v=18";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -129,12 +129,19 @@ const SECTIONS = [
   {
     id: "games", label: "Games", perms: ["admin"],
     items: [
-      { id: "games-logs",      label: "Overview & Logs",    module: "./panels/games-logs.js" },
-      { id: "games-bank",      label: "Question Bank",      module: "./panels/games-bank.js" },
-      { id: "games-prompts",   label: "AI Prompts",         module: "./panels/games-prompts.js" },
-      { id: "games-tester",    label: "AI Tester",          module: "./panels/games-tester.js" },
-      { id: "games-legitlibs", label: "LegitLibs",          module: "./panels/games-legitlibs.js" },
-      { id: "games-config",    label: "Config",             module: "./panels/games-config.js" },
+      { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js" },
+      { id: "games-wyr",          label: "🤔 WYR",            module: "./panels/games-wyr.js" },
+      { id: "games-nhie",         label: "⛔ NHIE",           module: "./panels/games-nhie.js" },
+      { id: "games-mlt",          label: "👑 MLT",            module: "./panels/games-mlt.js" },
+      { id: "games-rushmore",     label: "🗿 Rushmore",       module: "./panels/games-rushmore.js" },
+      { id: "games-price",        label: "💰 Price",          module: "./panels/games-price.js" },
+      { id: "games-clapback",     label: "⚔️ Clapback",       module: "./panels/games-clapback.js" },
+      { id: "games-ama",          label: "🎙️ AMA",            module: "./panels/games-ama.js" },
+      { id: "games-risky-roller", label: "🎲 Risky Roller",   module: "./panels/games-risky-roller.js" },
+      { id: "games-prompts",      label: "AI Prompts",        module: "./panels/games-prompts.js" },
+      { id: "games-tester",       label: "AI Tester",         module: "./panels/games-tester.js" },
+      { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
+      { id: "games-config",       label: "Config",            module: "./panels/games-config.js" },
     ],
   },
   {

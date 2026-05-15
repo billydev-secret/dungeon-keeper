@@ -6,6 +6,7 @@ from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_PLAYING, PHASE_RESULTS, PHASE_RECAP
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
+    check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
@@ -290,6 +291,9 @@ class NHIECog(commands.Cog):
                 "This channel isn't set up for games. An admin can enable it with `/config allow-channel`.",
                 ephemeral=True,
             )
+            return
+        if not await check_game_enabled(self.db, "nhie", interaction.guild_id or 0):
+            await interaction.response.send_message("Never Have I Ever is currently disabled on this server.", ephemeral=True)
             return
 
         lives = max(0, min(lives, 10))

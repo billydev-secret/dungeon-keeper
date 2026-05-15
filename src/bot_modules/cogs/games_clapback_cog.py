@@ -16,6 +16,7 @@ from bot_modules.games.constants import (
 )
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
+    check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
@@ -709,6 +710,9 @@ class ClapbackCog(commands.Cog):
                 "This channel isn't set up for games. An admin can enable it with `/games allow-channel`.",
                 ephemeral=True,
             )
+            return
+        if not await check_game_enabled(self.db, "clapback", interaction.guild_id or 0):
+            await interaction.response.send_message("Clapback is currently disabled on this server.", ephemeral=True)
             return
 
         # Clamp values

@@ -71,9 +71,9 @@ export function mount(container) {
       let html = "";
       for (const gt of GAME_TYPES) {
         const g = games[gt] || {};
-        html += `<details style="margin-bottom:8px;border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;" data-game="${gt}">
-          <summary style="padding:10px 14px;cursor:pointer;font-weight:600;">${GAME_ICONS[gt] || ""} ${esc(g.name || GAME_NAMES[gt] || gt)}</summary>
-          <div class="form" style="padding:12px 14px;">
+        html += `<details style="margin-bottom:8px;background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);overflow:hidden;" data-game="${gt}">
+          <summary style="padding:10px 14px;cursor:pointer;font-weight:600;color:var(--ink-bright);">${GAME_ICONS[gt] || ""} ${esc(g.name || GAME_NAMES[gt] || gt)}</summary>
+          <div class="form" style="padding:12px 14px;border-top:1px solid var(--rule-soft);">
             <div class="field">
               <label>Descriptor
                 <input type="text" data-ctrl="${gt}-descriptor" value="${esc(g.descriptor || "").replace(/"/g, "&quot;")}" style="width:100%;" />

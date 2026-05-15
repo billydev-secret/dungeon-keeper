@@ -28,7 +28,7 @@ export function mount(container) {
         <div style="flex:1;min-width:0;">
           <section>
             <div class="section-label">Filters</div>
-            <div class="form" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+            <div class="form" style="display:flex;flex-direction:row;gap:8px;flex-wrap:wrap;align-items:flex-end;max-width:none;">
               <div class="field" style="margin:0;">
                 <label>Game type
                   <select data-ctrl="filter-gt">

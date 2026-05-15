@@ -27,6 +27,7 @@ GAME_COMMANDS = {
     'price': '/price',
     'rushmore': '/rushmore',
     'clapback': '/clapback',
+    'legitlibs': '/legitlibs',
 }
 
 # Short one-line descriptions for the help list
@@ -47,6 +48,7 @@ GAME_DESCRIPTIONS = {
     'price': 'Name your price for absurd scenarios — vote on the most unhinged.',
     'rushmore': 'Snake-draft your top 4 picks — no duplicates allowed.',
     'clapback': 'Write the funniest answer head-to-head, vote for the best.',
+    'legitlibs': 'Fill in the blanks to complete a story — everyone gets their own unhinged version.',
 }
 
 

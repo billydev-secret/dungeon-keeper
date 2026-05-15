@@ -645,6 +645,87 @@ a { text-decoration: none; }
 }
 .field > textarea { min-height: 80px; resize: vertical; }
 
+/* Games panels: inputs/selects/textareas wrapped inside <label> within .field.
+   Non-games panels use the sibling pattern (<label> then <input> as siblings of .field),
+   so this rule only activates where the label wraps the control. */
+.field > label:has(> input:not([type="checkbox"]):not([type="radio"]), > select, > textarea) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.field > label > input:not([type="checkbox"]):not([type="radio"]),
+.field > label > textarea,
+.field > label > select {
+  background: var(--bg-input);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 400;
+  font-family: inherit;
+}
+.field > label > input:not([type="checkbox"]):not([type="radio"]):focus,
+.field > label > textarea:focus,
+.field > label > select:focus {
+  outline: none;
+  border-color: var(--gold-solid);
+}
+.field > label > textarea { resize: vertical; }
+
+/* Inline-edit inputs that appear outside .field wrappers (table cell editors, AI result areas) */
+.field-input {
+  background: var(--bg-input);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.field-input:focus {
+  outline: none;
+  border-color: var(--gold-solid);
+}
+textarea.field-input { resize: vertical; }
+
+/* Inline-edit textarea/select injected into question bank table rows */
+[data-edit-text],
+[data-edit-cat] {
+  background: var(--bg-input);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 6px 8px;
+  width: 100%;
+}
+[data-edit-text]:focus,
+[data-edit-cat]:focus {
+  outline: none;
+  border-color: var(--gold-solid);
+}
+[data-edit-text] { resize: vertical; min-height: 60px; }
+[data-edit-cat]  { margin-top: 4px; }
+
+/* AI tester result textareas */
+[data-result] {
+  background: var(--bg-input);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 7px 9px;
+  resize: vertical;
+  flex: 1;
+}
+[data-result]:focus {
+  outline: none;
+  border-color: var(--gold-solid);
+}
+
 /* Inputs inside the LegitLibs blanks editor table — not inside .field wrappers */
 .blanks-section input,
 .blanks-section select {
@@ -876,6 +957,21 @@ a { text-decoration: none; }
   background: var(--rule-soft);
 }
 .section-label:first-child { margin-top: 0; }
+
+.panel > section,
+.panel > .form {
+  background: var(--bg-card);
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--r);
+  padding: 18px 20px;
+}
+.panel > .form { max-width: none; }
+.panel > section + section,
+.panel > .form   + .form,
+.panel > section + .form,
+.panel > .form   + section {
+  margin-top: 12px;
+}
 
 /* ── End canonical primitives ─────────────────────────────────────── */
 

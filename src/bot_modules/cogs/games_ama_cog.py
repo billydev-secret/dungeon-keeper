@@ -8,6 +8,7 @@ from discord import app_commands
 from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, GAME_ICONS, HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
+    check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
@@ -1238,6 +1239,9 @@ class AMACog(commands.Cog):
                 "This channel isn't set up for games. An admin can enable it with `/games allow-channel`.",
                 ephemeral=True,
             )
+            return
+        if not await check_game_enabled(self.db, "ama", interaction.guild_id or 0):
+            await interaction.response.send_message("Anonymous AMA is currently disabled on this server.", ephemeral=True)
             return
         game_id = await create_game(
             self.db,

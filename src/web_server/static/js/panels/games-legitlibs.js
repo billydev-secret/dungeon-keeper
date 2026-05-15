@@ -536,7 +536,7 @@ export function mount(container) {
       title: fv("title"),
       body: fv("body"),
       tier: parseInt(fv("tier")) || 1,
-      tags: fv("tags") || null,
+      tags: fv("tags") || "",
       status: fv("status") || "draft",
       player_min: parseInt(fv("player_min")) || null,
       player_max: parseInt(fv("player_max")) || null,
