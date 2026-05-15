@@ -72,7 +72,7 @@ export function mount(container) {
         </div>
       </div>
 
-      <div class="home-grid">
+      <div class="home-grid" style="margin-top:14px;">
         <div class="home-card home-card-wide">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
             <div class="home-card-label" style="margin:0;">Messages</div>

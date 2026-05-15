@@ -80,7 +80,7 @@ export function mount(container) {
 
     let entries;
     try {
-      entries = await api("/api/config/birthday/calendar", { days });
+      entries = await api("/api/birthday/calendar", { days });
     } catch (err) {
       summaryEl.textContent = "";
       const errDiv = el("div", null, err.message);

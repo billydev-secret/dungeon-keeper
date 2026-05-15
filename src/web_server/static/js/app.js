@@ -10,6 +10,7 @@ const SECTIONS = [
     id: "home", label: "Dashboard", perms: [],
     items: [
       { id: "home", label: "Dashboard", module: "./panels/home.js" },
+      { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js" },
       { id: "help-quickref", label: "Quick Reference", module: "./panels/help.js" },
     ],
   },
@@ -35,7 +36,6 @@ const SECTIONS = [
         { id: "message-cadence",      label: "Message Cadence",      module: "./panels/message-cadence.js" },
         { id: "message-rate",         label: "Message Rate",         module: "./panels/message-rate.js" },
         { id: "burst-ranking",        label: "Burst Ranking",         module: "./panels/burst-ranking.js" },
-        { id: "dropoff",              label: "Drop-off",              module: "./panels/dropoff.js" },
       ]},
       { heading: "People", items: [
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js" },
@@ -77,10 +77,7 @@ const SECTIONS = [
       { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/mod-policy-tickets.js" },
       { id: "mod-audit",            label: "Audit Log",         module: "./panels/mod-audit.js" },
       { id: "mod-dm-audit",         label: "DM Audit",          module: "./panels/mod-dm-audit.js" },
-      { id: "mod-whisper-audit",    label: "Whisper Audit",     module: "./panels/mod-whisper-audit.js" },
       { id: "mod-confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js" },
-      { id: "veil-audit",           label: "Veil Audit",        module: "./panels/veil-audit.js" },
-      { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js" },
       { id: "message-search", label: "Message Review",  module: "./panels/message-search.js" },
     ],
   },
@@ -99,20 +96,13 @@ const SECTIONS = [
       { id: "config-confessions", label: "Confessions",      module: "./panels/config-confessions.js" },
       { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js" },
       { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js" },
-      { id: "voice-master-channels", label: "Voice Master · Channels", module: "./panels/voice-master-channels.js" },
-      { id: "voice-master-profiles", label: "Voice Master · Profiles", module: "./panels/voice-master-profiles.js" },
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js" },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js" },
-      { id: "config-ai",          label: "AI Commands",      module: "./panels/config-ai.js" },
-      { id: "config-veil",        label: "Veil",             module: "./panels/config-veil.js" },
-      { id: "config-whisper",     label: "Whisper",          module: "./panels/config-whisper.js" },
       { id: "config-risky-rolls", label: "Risky Rolls",      module: "./panels/config-risky-rolls.js" },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
       { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js" },
       { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js" },
-      { id: "live-log",          label: "Live Log",          module: "./panels/live-log.js" },
-      { id: "system-stats",      label: "System Stats",      module: "./panels/system-stats.js" },
     ],
   },
   {
@@ -130,18 +120,54 @@ const SECTIONS = [
     id: "games", label: "Games", perms: ["admin"],
     items: [
       { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js" },
-      { id: "games-wyr",          label: "🤔 WYR",            module: "./panels/games-wyr.js" },
-      { id: "games-nhie",         label: "⛔ NHIE",           module: "./panels/games-nhie.js" },
-      { id: "games-mlt",          label: "👑 MLT",            module: "./panels/games-mlt.js" },
-      { id: "games-rushmore",     label: "🗿 Rushmore",       module: "./panels/games-rushmore.js" },
-      { id: "games-price",        label: "💰 Price",          module: "./panels/games-price.js" },
-      { id: "games-clapback",     label: "⚔️ Clapback",       module: "./panels/games-clapback.js" },
-      { id: "games-ama",          label: "🎙️ AMA",            module: "./panels/games-ama.js" },
       { id: "games-risky-roller", label: "🎲 Risky Roller",   module: "./panels/games-risky-roller.js" },
-      { id: "games-prompts",      label: "AI Prompts",        module: "./panels/games-prompts.js" },
-      { id: "games-tester",       label: "AI Tester",         module: "./panels/games-tester.js" },
       { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
       { id: "games-config",       label: "Config",            module: "./panels/games-config.js" },
+    ],
+    groups: [
+      { heading: "🤔 WYR", items: [
+        { id: "games-wyr",          label: "Questions",  module: "./panels/games-wyr.js" },
+        { id: "games-wyr-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "wyr" },
+        { id: "games-wyr-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "wyr" },
+      ]},
+      { heading: "⛔ NHIE", items: [
+        { id: "games-nhie",         label: "Questions",  module: "./panels/games-nhie.js" },
+        { id: "games-nhie-prompts", label: "Prompts",    module: "./panels/games-prompts.js", gt: "nhie" },
+        { id: "games-nhie-tester",  label: "AI Tester",  module: "./panels/games-tester.js",  gt: "nhie" },
+      ]},
+      { heading: "👑 MLT", items: [
+        { id: "games-mlt",          label: "Questions",  module: "./panels/games-mlt.js" },
+        { id: "games-mlt-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "mlt" },
+        { id: "games-mlt-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "mlt" },
+      ]},
+      { heading: "🗿 Rushmore", items: [
+        { id: "games-rushmore",          label: "Questions",  module: "./panels/games-rushmore.js" },
+        { id: "games-rushmore-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "rushmore" },
+        { id: "games-rushmore-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "rushmore" },
+      ]},
+      { heading: "💰 Price", items: [
+        { id: "games-price",          label: "Questions",  module: "./panels/games-price.js" },
+        { id: "games-price-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "price" },
+        { id: "games-price-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "price" },
+      ]},
+      { heading: "⚔️ Clapback", items: [
+        { id: "games-clapback",          label: "Questions",  module: "./panels/games-clapback.js" },
+        { id: "games-clapback-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "clapback" },
+        { id: "games-clapback-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "clapback" },
+      ]},
+      { heading: "🎙️ AMA", items: [
+        { id: "games-ama",          label: "Questions",  module: "./panels/games-ama.js" },
+        { id: "games-ama-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "ama" },
+        { id: "games-ama-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "ama" },
+      ]},
+      { heading: "Guess Who", items: [
+        { id: "config-veil",  label: "Config",     module: "./panels/config-veil.js" },
+        { id: "veil-audit",   label: "Audit Log",  module: "./panels/veil-audit.js" },
+      ]},
+      { heading: "Whisper", items: [
+        { id: "config-whisper",    label: "Config",     module: "./panels/config-whisper.js" },
+        { id: "mod-whisper-audit", label: "Audit Log",  module: "./panels/mod-whisper-audit.js" },
+      ]},
     ],
   },
   {
@@ -185,7 +211,9 @@ const SECTIONS = [
   {
     id: "dev", label: "Dev", perms: [],
     items: [
-      { id: "help-owner", label: "Developer Tools", module: "./panels/help.js" },
+      { id: "help-owner",    label: "Developer Tools", module: "./panels/help.js" },
+      { id: "live-log",      label: "Live Log",        module: "./panels/live-log.js" },
+      { id: "system-stats",  label: "System Stats",    module: "./panels/system-stats.js" },
     ],
   },
 ];
@@ -360,7 +388,8 @@ function makeNavItem(item, activeId, { isSubitem = false } = {}) {
   if (item.id === activeId) btn.classList.add("active");
 
   btn.addEventListener("click", () => {
-    window.location.hash = `#/${item.id}`;
+    const qs = item.gt ? `?gt=${item.gt}` : "";
+    window.location.hash = `#/${item.id}${qs}`;
   });
   return btn;
 }

@@ -9,7 +9,7 @@ const GAME_NAMES = {
   rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
 };
 
-export function mount(container) {
+export function mount(container, params = {}) {
   let pendingResults = [];
 
   const gtOptions = GAME_TYPES.map((g) => `<option value="${g}">${GAME_NAMES[g] || g}</option>`).join("");
@@ -72,6 +72,8 @@ export function mount(container) {
 
   function ctrl(name) { return container.querySelector(`[data-ctrl="${name}"]`); }
   function region(name) { return container.querySelector(`[data-region="${name}"]`); }
+
+  if (params.gt) ctrl("gt").value = params.gt;
 
   // Custom prompt toggle
   container.querySelector('[data-action="toggle-custom"]').addEventListener("click", () => {

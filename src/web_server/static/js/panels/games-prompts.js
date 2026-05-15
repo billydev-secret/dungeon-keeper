@@ -10,7 +10,7 @@ const GAME_NAMES = {
   rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
 };
 
-export function mount(container) {
+export function mount(container, params = {}) {
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -131,7 +131,12 @@ export function mount(container) {
     }
   });
 
-  load();
+  load().then(() => {
+    if (params.gt) {
+      const target = region("games").querySelector(`[data-game="${params.gt}"]`);
+      if (target) { target.open = true; target.scrollIntoView({ behavior: "smooth", block: "start" }); }
+    }
+  });
 
   return { unmount() {} };
 }
