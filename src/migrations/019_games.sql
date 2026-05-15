@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS games_consent (
 
 CREATE TABLE IF NOT EXISTS games_allowed_channels (
     channel_id  INTEGER PRIMARY KEY,
-    added_by    INTEGER NOT NULL,
+    added_by    INTEGER NOT NULL DEFAULT 0,
     added_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS games_question_bank (
     game_type     TEXT NOT NULL,
     category      TEXT NOT NULL DEFAULT 'sfw',
     question_text TEXT NOT NULL,
-    added_by      INTEGER NOT NULL,
+    added_by      INTEGER NOT NULL DEFAULT 0,
     added_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS games_timer_defaults (
 CREATE TABLE IF NOT EXISTS games_audit_channel (
     guild_id    INTEGER PRIMARY KEY,
     channel_id  INTEGER NOT NULL,
-    set_by      INTEGER NOT NULL,
+    set_by      INTEGER NOT NULL DEFAULT 0,
     set_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -105,7 +105,7 @@ CREATE TABLE IF NOT EXISTS legitlibs_blank_prompts (
 );
 
 CREATE TABLE IF NOT EXISTS legitlibs_templates (
-    template_id  TEXT PRIMARY KEY,
+    template_id  INTEGER PRIMARY KEY AUTOINCREMENT,
     title        TEXT NOT NULL,
     body         TEXT NOT NULL,
     tier         INTEGER NOT NULL,
@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS legitlibs_templates (
     player_min   INTEGER NOT NULL DEFAULT 2,
     player_max   INTEGER NOT NULL DEFAULT 99,
     blanks       TEXT NOT NULL DEFAULT '[]',
-    author_id    INTEGER NOT NULL,
+    author_id    INTEGER NOT NULL DEFAULT 0,
     notes        TEXT DEFAULT '',
     use_count    INTEGER NOT NULL DEFAULT 0,
     last_used_at TIMESTAMP,

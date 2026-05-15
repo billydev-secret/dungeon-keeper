@@ -77,11 +77,7 @@ async def test_prompt_submit_button_sends_ephemeral_instructions():
 
     await submit_btn.callback(interaction)
 
-    interaction.response.send_message.assert_awaited_once()
-    call_kwargs = interaction.response.send_message.call_args.kwargs
-    assert call_kwargs.get("ephemeral") is True
-    msg = interaction.response.send_message.call_args.args[0]
-    assert "/veil submit" in msg.lower()
+    interaction.response.send_modal.assert_awaited_once()
 
 
 @pytest.mark.asyncio

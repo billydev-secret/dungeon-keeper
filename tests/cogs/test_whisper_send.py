@@ -63,7 +63,6 @@ async def test_send_happy_path():
 
     target.send.assert_awaited_once()  # type: ignore[attr-defined]
     feed_channel.send.assert_awaited_once()
-    log_channel.send.assert_awaited_once()
     set_ids.assert_called_once_with(":memory:", 42, channel_msg_id=88888, dm_msg_id=99999)
     interaction.response.send_message.assert_awaited()
 

@@ -19,6 +19,7 @@ async def generate_text(
     user_prompt: str,
     model: str = "claude-haiku-4-5-20251001",
     max_tokens: int = 200,
+    temperature: float = 0.9,
 ) -> str | None:
     """
     Call Anthropic messages API. Returns the response text or None on error.
@@ -30,7 +31,7 @@ async def generate_text(
             system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
             max_tokens=max_tokens,
-            temperature=0.9,
+            temperature=temperature,
         )
         parts = [b.text for b in response.content if getattr(b, "type", None) == "text"]
         return "".join(parts).strip() or None

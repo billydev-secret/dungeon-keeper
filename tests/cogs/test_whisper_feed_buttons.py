@@ -31,14 +31,16 @@ def _cfg() -> WhisperConfig:
 
 
 @pytest.mark.asyncio
-async def test_send_whisper_button_opens_modal():
+async def test_send_whisper_button_sends_instructions():
     view = _make_view()
     interaction = fake_interaction(user=FakeMember(id=1001))
-    interaction.response.send_modal = AsyncMock()
+    interaction.response.send_message = AsyncMock()
 
     await view._on_send_click(interaction)
 
-    interaction.response.send_modal.assert_called_once()
+    interaction.response.send_message.assert_called_once()
+    call_kwargs = interaction.response.send_message.call_args.kwargs
+    assert call_kwargs.get("ephemeral") is True
 
 
 @pytest.mark.asyncio

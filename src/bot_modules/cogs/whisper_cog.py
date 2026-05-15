@@ -1329,6 +1329,7 @@ class WhisperGuessSelectView(discord.ui.View):
         bot: Bot,
         whisper_id: int,
         members: Sequence[discord.Member],
+        page: int = 0,
     ) -> None:
         super().__init__(timeout=120)
         self.bot = bot
@@ -1336,7 +1337,7 @@ class WhisperGuessSelectView(discord.ui.View):
         self._all_members = list(members)
         self._display_members = self._all_members
         self._filter_query = ""
-        self._page = 0
+        self._page = page
         self._rebuild()
 
     def _page_count(self) -> int:

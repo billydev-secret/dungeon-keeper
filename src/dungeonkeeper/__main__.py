@@ -170,7 +170,7 @@ def main() -> None:
         "bot_modules.cogs.starboard_cog",
         "bot_modules.cogs.music_cog",
         "bot_modules.cogs.voice_master_cog",
-        "bot_modules.cogs.veil_cog",
+        "bot_modules.cogs.guess_cog",
         "bot_modules.cogs.quote_cog",
         "bot_modules.cogs.whisper_cog",
         "bot_modules.cogs.emoji_stealer_cog",

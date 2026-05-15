@@ -39,7 +39,7 @@ def test_detection_fields():
 def test_veil_config_defaults():
     cfg = VeilConfig(guild_id=9001)
     assert cfg.crop_difficulty == "medium"
-    assert cfg.guess_cooldown_seconds == 30
+    assert cfg.guess_cooldown_seconds == 60
 
 
 def test_pipeline_result_empty_crops_by_default():

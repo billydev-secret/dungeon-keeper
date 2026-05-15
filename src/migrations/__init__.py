@@ -35,9 +35,32 @@ def _migration_files() -> list[Path]:
     return sorted(_MIGRATIONS_DIR.glob("[0-9][0-9][0-9]_*.sql"))
 
 
+def _strip_line_comments(sql: str) -> str:
+    """Remove -- comments from SQL, respecting single-quoted string literals."""
+    lines = []
+    for line in sql.splitlines():
+        in_string = False
+        i = 0
+        while i < len(line):
+            c = line[i]
+            if c == "'" and not in_string:
+                in_string = True
+            elif c == "'" and in_string:
+                if i + 1 < len(line) and line[i + 1] == "'":
+                    i += 1  # escaped quote
+                else:
+                    in_string = False
+            elif not in_string and line[i : i + 2] == "--":
+                line = line[:i]
+                break
+            i += 1
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _exec_migration_sql(conn: sqlite3.Connection, sql: str, name: str) -> None:
     """Run each statement in a migration individually, tolerating already-applied DDL."""
-    for stmt in sql.split(";"):
+    for stmt in _strip_line_comments(sql).split(";"):
         stmt = stmt.strip()
         if not stmt:
             continue
@@ -77,7 +100,7 @@ def apply_migrations_sync(db_path: str | Path) -> None:
 
 async def _exec_migration_sql_async(db, sql: str, name: str) -> None:
     """Run each statement in a migration individually, tolerating already-applied DDL."""
-    for stmt in sql.split(";"):
+    for stmt in _strip_line_comments(sql).split(";"):
         stmt = stmt.strip()
         if not stmt:
             continue

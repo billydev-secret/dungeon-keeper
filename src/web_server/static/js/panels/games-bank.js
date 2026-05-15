@@ -4,6 +4,11 @@ import { apiPut, apiDelete, showStatus } from "../config-helpers.js";
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
 const GAME_TYPES = ["wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama"];
+const GAME_ICONS = { wyr: "🤔", nhie: "⛔", mlt: "👑", rushmore: "🗿", price: "💰", clapback: "⚔️", ama: "🎙️" };
+const GAME_NAMES = {
+  wyr: "Would You Rather", nhie: "Never Have I Ever", mlt: "Most Likely To",
+  rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
+};
 
 export function mount(container) {
   let currentPage = 1;
@@ -11,7 +16,7 @@ export function mount(container) {
   let currentCategory = "";
   let currentSearch = "";
 
-  const gtOptions = GAME_TYPES.map((g) => `<option value="${g}">${g}</option>`).join("");
+  const gtOptions = GAME_TYPES.map((g) => `<option value="${g}">${GAME_ICONS[g] || ""} ${GAME_NAMES[g] || g}</option>`).join("");
 
   container.innerHTML = `
     <div class="panel">
@@ -36,8 +41,8 @@ export function mount(container) {
                 <label>Category
                   <select data-ctrl="filter-cat">
                     <option value="">All</option>
-                    <option value="sfw">sfw</option>
-                    <option value="nsfw">nsfw</option>
+                    <option value="sfw">SFW</option>
+                    <option value="nsfw">NSFW</option>
                   </select>
                 </label>
               </div>
@@ -54,80 +59,91 @@ export function mount(container) {
             <div data-region="table-wrap"><div class="empty">Loading</div></div>
             <div data-region="pagination" style="display:flex;gap:8px;align-items:center;margin-top:8px;"></div>
           </section>
-          <section style="margin-top:16px;">
-            <div class="section-label">Add Question</div>
-            <div class="form">
-              <div class="field">
-                <label>Game type<select data-ctrl="add-gt">${gtOptions}</select></label>
-              </div>
-              <div class="field">
-                <label>Category
-                  <select data-ctrl="add-cat">
-                    <option value="sfw">sfw</option>
-                    <option value="nsfw">nsfw</option>
-                  </select>
-                </label>
-              </div>
-              <div class="field">
-                <label>Question text
-                  <textarea data-ctrl="add-text" rows="3" placeholder="Enter question text"></textarea>
-                </label>
-              </div>
-              <button class="btn btn-primary" data-action="add">Add Question</button>
-              <span data-status="add" class="save-status" style="margin-left:8px;"></span>
-            </div>
-          </section>
-          <section style="margin-top:16px;">
-            <div class="section-label">Bulk Add</div>
-            <div class="form">
-              <div class="field">
-                <label>Game type<select data-ctrl="bulk-gt">${gtOptions}</select></label>
-              </div>
-              <div class="field">
-                <label>Category
-                  <select data-ctrl="bulk-cat">
-                    <option value="sfw">sfw</option>
-                    <option value="nsfw">nsfw</option>
-                  </select>
-                </label>
-              </div>
-              <div class="field">
-                <label>Questions (one per line)
-                  <textarea data-ctrl="bulk-text" rows="6" placeholder="Line 1&#10;Line 2&#10;..."></textarea>
-                </label>
-              </div>
-              <button class="btn btn-primary" data-action="bulk">Bulk Add</button>
-              <span data-status="bulk" class="save-status" style="margin-left:8px;"></span>
-            </div>
-          </section>
-          <section style="margin-top:16px;">
-            <div class="section-label">Import / Export</div>
-            <div class="form" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
-              <div class="field" style="margin:0;">
-                <label>Game type (export)
-                  <select data-ctrl="export-gt">
-                    <option value="">All</option>
-                    ${gtOptions}
-                  </select>
-                </label>
-              </div>
-              <button class="btn" data-action="export">Export JSON</button>
-              <span style="flex:1"></span>
-              <div class="field" style="margin:0;">
-                <label>Import JSON file
-                  <input type="file" data-ctrl="import-file" accept=".json" />
-                </label>
-              </div>
-              <button class="btn btn-primary" data-action="import">Import</button>
-              <span data-status="import" class="save-status" style="margin-left:8px;"></span>
-            </div>
-          </section>
         </div>
         <div style="width:200px;flex-shrink:0;">
           <div class="section-label">Stats</div>
           <div data-region="stats"><div class="empty">Loading</div></div>
         </div>
       </div>
+
+      <section style="margin-top:16px;">
+        <div class="section-label">Add Question</div>
+        <div class="form" style="max-width:520px;">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div class="field" style="margin:0;flex:1;min-width:140px;">
+              <label>Game type<select data-ctrl="add-gt">${gtOptions}</select></label>
+            </div>
+            <div class="field" style="margin:0;">
+              <label>Category
+                <select data-ctrl="add-cat">
+                  <option value="sfw">SFW</option>
+                  <option value="nsfw">NSFW</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="field">
+            <label>Question text
+              <textarea data-ctrl="add-text" rows="3" placeholder="Enter question text"></textarea>
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="btn btn-primary" data-action="add">Add Question</button>
+            <span data-status="add" class="save-status"></span>
+          </div>
+        </div>
+      </section>
+
+      <section style="margin-top:16px;">
+        <div class="section-label">Bulk Add</div>
+        <div class="form" style="max-width:520px;">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <div class="field" style="margin:0;flex:1;min-width:140px;">
+              <label>Game type<select data-ctrl="bulk-gt">${gtOptions}</select></label>
+            </div>
+            <div class="field" style="margin:0;">
+              <label>Category
+                <select data-ctrl="bulk-cat">
+                  <option value="sfw">SFW</option>
+                  <option value="nsfw">NSFW</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="field">
+            <label>Questions (one per line)
+              <textarea data-ctrl="bulk-text" rows="6" placeholder="Line 1&#10;Line 2&#10;..."></textarea>
+            </label>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="btn btn-primary" data-action="bulk">Bulk Add</button>
+            <span data-status="bulk" class="save-status"></span>
+          </div>
+        </div>
+      </section>
+
+      <section style="margin-top:16px;">
+        <div class="section-label">Import / Export</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+          <div class="field" style="margin:0;">
+            <label>Export game type
+              <select data-ctrl="export-gt">
+                <option value="">All</option>
+                ${gtOptions}
+              </select>
+            </label>
+          </div>
+          <button class="btn" data-action="export">Export JSON</button>
+          <div style="flex:1;min-width:20px;"></div>
+          <div class="field" style="margin:0;">
+            <label>Import JSON file
+              <input type="file" data-ctrl="import-file" accept=".json" />
+            </label>
+          </div>
+          <button class="btn btn-primary" data-action="import">Import</button>
+          <span data-status="import" class="save-status"></span>
+        </div>
+      </section>
     </div>
   `;
 
@@ -143,10 +159,11 @@ export function mount(container) {
       let rows = "";
       for (const gt of GAME_TYPES) {
         const entry = bbt[gt] || {};
-        rows += `<tr><td>${esc(gt)}</td><td>${entry.sfw || 0}</td><td>${entry.nsfw || 0}</td></tr>`;
+        const icon = GAME_ICONS[gt] || "";
+        rows += `<tr><td title="${esc(GAME_NAMES[gt] || gt)}">${icon} ${esc(gt)}</td><td class="num">${entry.sfw || 0}</td><td class="num">${entry.nsfw || 0}</td></tr>`;
       }
-      el.innerHTML = `<table style="font-size:12px;width:100%;"><thead><tr><th>Type</th><th>SFW</th><th>NSFW</th></tr></thead><tbody>${rows}</tbody></table>
-        <div style="margin-top:8px;font-size:12px;">Total: <b>${data.total_questions}</b><br>Games: <b>${data.games_played}</b></div>`;
+      el.innerHTML = `<table style="font-size:12px;width:100%;"><thead><tr><th>Game</th><th class="num" style="text-align:right;">SFW</th><th class="num" style="text-align:right;">NSFW</th></tr></thead><tbody>${rows}</tbody></table>
+        <div style="margin-top:8px;font-size:12px;color:var(--ink-dim);">Total: <b style="color:var(--ink-bright);">${data.total_questions}</b>&ensp;Games: <b style="color:var(--ink-bright);">${data.games_played}</b></div>`;
     } catch (_) {
       region("stats").innerHTML = `<div class="empty">Stats unavailable</div>`;
     }
@@ -178,21 +195,25 @@ export function mount(container) {
     for (const q of data.questions) {
       const added = q.added_at ? String(q.added_at).slice(0, 10) : "";
       const safeText = esc(q.question_text).replace(/"/g, "&quot;");
+      const qIcon = GAME_ICONS[q.game_type] || "";
+      const catChip = q.category === "sfw"
+        ? `<span class="chip chip-success">sfw</span>`
+        : `<span class="chip chip-danger">nsfw</span>`;
       rows += `<tr data-qid="${q.question_id}">
         <td>${q.question_id}</td>
-        <td>${esc(q.game_type)}</td>
-        <td>${esc(q.category)}</td>
+        <td title="${esc(GAME_NAMES[q.game_type] || q.game_type)}">${qIcon} ${esc(q.game_type)}</td>
+        <td>${catChip}</td>
         <td class="q-text" style="word-break:break-word;">${esc(q.question_text)}</td>
-        <td style="font-size:12px;">${esc(added)}</td>
+        <td style="font-size:12px;color:var(--ink-dim);">${esc(added)}</td>
         <td>
-          <button class="btn" style="padding:2px 6px;font-size:12px;" data-action="edit"
+          <button class="btn btn-sm" data-action="edit"
             data-qid="${q.question_id}" data-text="${safeText}" data-cat="${esc(q.category)}">Edit</button>
-          <button class="btn" style="padding:2px 6px;font-size:12px;" data-action="del"
+          <button class="btn btn-sm" data-action="del"
             data-qid="${q.question_id}">Del</button>
         </td>
       </tr>`;
     }
-    wrap.innerHTML = `<table style="width:100%;table-layout:fixed;">
+    wrap.innerHTML = `<table class="data-table" style="table-layout:fixed;">
       <thead><tr>
         <th style="width:60px;">ID</th><th style="width:70px;">Game</th>
         <th style="width:55px;">Cat</th><th>Question</th>
@@ -231,8 +252,8 @@ export function mount(container) {
 
         const actionsCell = row.cells[5];
         actionsCell.innerHTML = `
-          <button class="btn btn-primary" style="padding:2px 6px;font-size:12px;" data-action="save-edit">Save</button>
-          <button class="btn" style="padding:2px 6px;font-size:12px;" data-action="cancel-edit">Cancel</button>`;
+          <button class="btn btn-primary btn-sm" data-action="save-edit">Save</button>
+          <button class="btn btn-sm" data-action="cancel-edit">Cancel</button>`;
 
         actionsCell.querySelector('[data-action="cancel-edit"]').addEventListener("click", () => loadTable());
         actionsCell.querySelector('[data-action="save-edit"]').addEventListener("click", async () => {

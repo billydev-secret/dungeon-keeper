@@ -137,7 +137,7 @@ async def test_correct_guess_attaches_full_image_as_spoiler_and_unlinks(tmp_path
     edit_kwargs = game_msg.edit.call_args.kwargs
     attachments = edit_kwargs["attachments"]
     assert len(attachments) == 1
-    assert attachments[0].filename == "SPOILER_veil_full.png"
+    assert attachments[0].filename == "SPOILER_veil_full.jpg"
     # Embed body has the answer reveal but no inline image set.
     assert edit_kwargs["embed"].image.url is None
     # File is removed and DB path cleared.
@@ -512,6 +512,7 @@ async def test_post_persists_original_bytes_and_stores_path(tmp_path, monkeypatc
     with patch("bot_modules.cogs.veil_cog._do_insert_round", return_value=77), \
          patch("bot_modules.cogs.veil_cog._do_update_round_message"), \
          patch("bot_modules.cogs.veil_cog._do_set_original_path", side_effect=_capture), \
+         patch("bot_modules.cogs.veil_cog._do_set_crop_box"), \
          patch("bot_modules.cogs.veil_cog._do_audit"), \
          patch("bot_modules.cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
          patch("bot_modules.cogs.veil_cog._repost_prompt", new_callable=AsyncMock):

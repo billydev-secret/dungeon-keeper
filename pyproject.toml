@@ -25,9 +25,11 @@ pythonpath = ["src"]
 
 [tool.pyright]
 pythonVersion = "3.10"
+include = ["src"]
 extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
+useLibraryCodeForTypes = false
 reportMissingModuleSource = "none"
 exclude = [
   "src/bot_modules/cogs/games_*",

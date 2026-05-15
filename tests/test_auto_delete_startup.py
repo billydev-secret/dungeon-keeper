@@ -116,6 +116,9 @@ class _FakeMessage:
         self.created_at = created_at
         self.pinned = pinned
 
+    async def delete(self, *, delay: float | None = None, reason: str | None = None) -> None:
+        pass
+
 
 class _FakeChannel:
     """Channel that yields a scripted message list and records deletes."""
@@ -157,9 +160,9 @@ async def test_scan_tracks_messages_younger_than_cutoff(tmp_path):
     with open_db(db_path) as conn:
         init_auto_delete_tables(conn)
 
-    cutoff = datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc)
-    # One eligible message (older than cutoff) + one downtime orphan (younger
-    # than cutoff but unpinned and untracked).
+    cutoff = datetime.now(timezone.utc)
+    # One eligible message (older than cutoff, < 13 days old → bulk-delete eligible)
+    # + one downtime orphan (newer than cutoff → track for later).
     eligible = _FakeMessage(1001, cutoff - timedelta(hours=1))  # delete now
     orphan = _FakeMessage(1002, cutoff + timedelta(minutes=30))  # track for later
     channel = _FakeChannel([eligible, orphan])
@@ -190,7 +193,7 @@ async def test_scan_does_not_track_when_db_path_omitted(tmp_path):
     with open_db(db_path) as conn:
         init_auto_delete_tables(conn)
 
-    cutoff = datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc)
+    cutoff = datetime.now(timezone.utc)
     eligible = _FakeMessage(1001, cutoff - timedelta(hours=1))
     young = _FakeMessage(1002, cutoff + timedelta(minutes=30))
     channel = _FakeChannel([eligible, young])
@@ -356,7 +359,7 @@ async def _run_startup_against_stub_channel(
     channel = _FakeChannel([])
     channel.id = channel_id  # type: ignore[attr-defined]
     monkeypatch.setattr(
-        "utils.get_guild_channel_or_thread",
+        "bot_modules.core.utils.get_guild_channel_or_thread",
         lambda _guild, cid: channel if cid == channel_id else None,
     )
     bot = _StubBot(guild_id)

@@ -4,6 +4,11 @@ import { apiPut, showStatus } from "../config-helpers.js";
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
 const GAME_TYPES = ["wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama"];
+const GAME_ICONS = { wyr: "🤔", nhie: "⛔", mlt: "👑", rushmore: "🗿", price: "💰", clapback: "⚔️", ama: "🎙️" };
+const GAME_NAMES = {
+  wyr: "Would You Rather", nhie: "Never Have I Ever", mlt: "Most Likely To",
+  rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
+};
 
 export function mount(container) {
   container.innerHTML = `
@@ -22,18 +27,22 @@ export function mount(container) {
             </label>
             <div class="field-hint">Describes who the audience is. Used as part of every system prompt.</div>
           </div>
-          <div class="field">
-            <label>SFW tone
-              <textarea data-ctrl="sfw_tone" rows="3" style="width:100%;"></textarea>
-            </label>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;">
+            <div class="field" style="margin:0;">
+              <label>SFW tone
+                <textarea data-ctrl="sfw_tone" rows="4" style="width:100%;"></textarea>
+              </label>
+            </div>
+            <div class="field" style="margin:0;">
+              <label>NSFW tone
+                <textarea data-ctrl="nsfw_tone" rows="4" style="width:100%;"></textarea>
+              </label>
+            </div>
           </div>
-          <div class="field">
-            <label>NSFW tone
-              <textarea data-ctrl="nsfw_tone" rows="3" style="width:100%;"></textarea>
-            </label>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button class="btn btn-primary" data-action="save-global">Save Global</button>
+            <span data-status="global" class="save-status"></span>
           </div>
-          <button class="btn btn-primary" data-action="save-global">Save Global</button>
-          <span data-status="global" class="save-status" style="margin-left:8px;"></span>
         </div>
       </section>
 
@@ -63,7 +72,7 @@ export function mount(container) {
       for (const gt of GAME_TYPES) {
         const g = games[gt] || {};
         html += `<details style="margin-bottom:8px;border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;" data-game="${gt}">
-          <summary style="padding:10px 14px;cursor:pointer;font-weight:600;">${esc(g.name || gt)}</summary>
+          <summary style="padding:10px 14px;cursor:pointer;font-weight:600;">${GAME_ICONS[gt] || ""} ${esc(g.name || GAME_NAMES[gt] || gt)}</summary>
           <div class="form" style="padding:12px 14px;">
             <div class="field">
               <label>Descriptor

@@ -25,7 +25,7 @@ def is_mod_or_admin():
     return app_commands.check(predicate)
 
 
-class ConfigCog(commands.Cog):
+class GamesConfigCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
@@ -259,4 +259,4 @@ class ConfigCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(ConfigCog(bot))
+    await bot.add_cog(GamesConfigCog(bot))

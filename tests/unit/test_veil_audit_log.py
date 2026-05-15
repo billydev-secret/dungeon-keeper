@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.veil_repo import insert_audit_event, list_audit_events
+from bot_modules.services.guess_repo import insert_audit_event, list_audit_events
 
 
 def test_insert_and_list_event(sync_db_path: Path) -> None:

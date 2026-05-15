@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.veil_repo import insert_audit_event
+from bot_modules.services.guess_repo import insert_audit_event
 
 
-# ── GET /api/veil/audit ───────────────────────────────────────────────
+# ── GET /api/guess/audit ───────────────────────────────────────────────
 
 
 def test_veil_audit_returns_events_for_active_guild(authed_client, fake_ctx):
@@ -20,7 +20,7 @@ def test_veil_audit_returns_events_for_active_guild(authed_client, fake_ctx):
             action="delete", round_id=1, details={"by_mod": True},
         )
 
-    resp = authed_client.get("/api/veil/audit")
+    resp = authed_client.get("/api/guess/audit")
     assert resp.status_code == 200
     events = resp.json()["events"]
     assert len(events) == 2
@@ -40,7 +40,7 @@ def test_veil_audit_filter_by_action(authed_client, fake_ctx):
             action="solve", round_id=1,
         )
 
-    resp = authed_client.get("/api/veil/audit?action=solve")
+    resp = authed_client.get("/api/guess/audit?action=solve")
     assert resp.status_code == 200
     events = resp.json()["events"]
     assert len(events) == 1
@@ -48,7 +48,7 @@ def test_veil_audit_filter_by_action(authed_client, fake_ctx):
 
 
 def test_veil_audit_rejects_invalid_action(authed_client):
-    resp = authed_client.get("/api/veil/audit?action=hax")
+    resp = authed_client.get("/api/guess/audit?action=hax")
     assert resp.status_code == 400
 
 
@@ -296,11 +296,11 @@ def test_booster_role_upsert_and_delete(authed_client, fake_ctx):
 def test_get_config_includes_veil_section(authed_client):
     resp = authed_client.get("/api/config")
     assert resp.status_code == 200
-    v = resp.json()["veil"]
+    v = resp.json()["guess"]
     assert v["channel_id"] == "0"
     assert v["role_id"] == "0"
     assert v["crop_difficulty"] == "medium"
-    assert v["guess_cooldown_seconds"] == 30
+    assert v["guess_cooldown_seconds"] == 60
     assert v["min_image_dimension_px"] == 400
     assert v["max_image_size_mb"] == 10
 
@@ -349,31 +349,31 @@ def test_auto_delete_rule_upsert_and_delete(authed_client, fake_ctx):
     assert 3001 not in [r["channel_id"] for r in rules]
 
 
-# ── PUT /api/config/veil ──────────────────────────────────────────────
+# ── PUT /api/config/guess ──────────────────────────────────────────────
 
 
 def test_update_veil_channel(authed_client, fake_ctx):
-    resp = authed_client.put("/api/config/veil", json={"channel_id": "555"})
+    resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     with open_db(fake_ctx.db_path) as conn:
         from bot_modules.core.db_utils import get_config_value
-        val = get_config_value(conn, "veil_channel_id", "0", fake_ctx.guild_id)
+        val = get_config_value(conn, "guess_channel_id", "0", fake_ctx.guild_id)
     assert val == "555"
 
 
 def test_update_veil_crop_difficulty_hard(authed_client, fake_ctx):
-    resp = authed_client.put("/api/config/veil", json={"crop_difficulty": "hard"})
+    resp = authed_client.put("/api/config/guess", json={"crop_difficulty": "hard"})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     with open_db(fake_ctx.db_path) as conn:
         from bot_modules.core.db_utils import get_config_value
-        val = get_config_value(conn, "veil_crop_difficulty", "medium", fake_ctx.guild_id)
+        val = get_config_value(conn, "guess_crop_difficulty", "medium", fake_ctx.guild_id)
     assert val == "hard"
 
 
 def test_update_veil_invalid_difficulty_returns_error(authed_client):
-    resp = authed_client.put("/api/config/veil", json={"crop_difficulty": "insane"})
+    resp = authed_client.put("/api/config/guess", json={"crop_difficulty": "insane"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["ok"] is False

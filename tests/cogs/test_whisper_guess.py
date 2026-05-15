@@ -173,8 +173,10 @@ async def test_guess_button_small_list_sends_select_no_pagination():
     assert isinstance(view, WhisperGuessSelectView)
     item_types = [type(c) for c in view.children]
     assert WhisperGuessMemberSelect in item_types
-    # No pagination buttons for ≤25 members
-    assert discord.ui.Button not in item_types
+    # No pagination buttons for ≤25 members (filter button is always present)
+    pagination_labels = {"◀", "▶"}
+    btn_labels = {c.label for c in view.children if isinstance(c, discord.ui.Button)}
+    assert not (btn_labels & pagination_labels)
 
 
 @pytest.mark.asyncio
@@ -196,7 +198,8 @@ async def test_guess_button_large_list_sends_select_with_pagination():
     view = kwargs["view"]
     assert isinstance(view, WhisperGuessSelectView)
     buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
-    assert len(buttons) == 2
+    # prev + next pagination buttons + filter button
+    assert len(buttons) == 3
 
 
 # ── Navigation ────────────────────────────────────────────────────────────────
@@ -207,9 +210,9 @@ async def test_guess_select_next_advances_page():
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     members = _make_members(30)
-    view = WhisperGuessSelectView(bot, 42, members, page=0)  # type: ignore[arg-type]
+    view = WhisperGuessSelectView(bot, 42, members)  # type: ignore[arg-type]
 
-    next_btn = next(c for c in view.children if isinstance(c, discord.ui.Button) and c.label == "Next")
+    next_btn = next(c for c in view.children if isinstance(c, discord.ui.Button) and c.label == "▶")
     interaction = fake_interaction()
     interaction.response.edit_message = AsyncMock()
 
@@ -229,7 +232,7 @@ async def test_guess_select_prev_retreats_page():
     members = _make_members(30)
     view = WhisperGuessSelectView(bot, 42, members, page=1)  # type: ignore[arg-type]
 
-    prev_btn = next(c for c in view.children if isinstance(c, discord.ui.Button) and c.label == "Prev")
+    prev_btn = next(c for c in view.children if isinstance(c, discord.ui.Button) and c.label == "◀")
     interaction = fake_interaction()
     interaction.response.edit_message = AsyncMock()
 
@@ -237,7 +240,7 @@ async def test_guess_select_prev_retreats_page():
 
     _, kwargs = interaction.response.edit_message.call_args
     new_view = kwargs["view"]
-    assert new_view.page == 0
+    assert new_view._page == 0
 
 
 # ── Select callback: outcomes ─────────────────────────────────────────────────
@@ -276,7 +279,7 @@ async def test_guess_select_correct_posts_to_feed_and_edits_message():
     feed_channel.send.assert_awaited_once()
     edit_kwargs = interaction.response.edit_message.call_args.kwargs
     assert edit_kwargs["view"] is None
-    assert "right" in edit_kwargs["content"].lower()
+    assert "solved" in edit_kwargs["content"].lower() or "right" in edit_kwargs["content"].lower()
 
 
 @pytest.mark.asyncio

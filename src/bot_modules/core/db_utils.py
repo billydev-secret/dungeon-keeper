@@ -143,6 +143,7 @@ class GrantRoleConfig(TypedDict):
     log_channel_id: int
     announce_channel_id: int
     grant_message: str
+    required_role_id: int
 
 
 _DEFAULT_GRANT_ROLES: list[tuple[str, str]] = [
@@ -165,6 +166,7 @@ def init_grant_role_tables(conn: sqlite3.Connection) -> None:
             log_channel_id      INTEGER NOT NULL DEFAULT 0,
             announce_channel_id INTEGER NOT NULL DEFAULT 0,
             grant_message       TEXT NOT NULL DEFAULT '',
+            required_role_id    INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (guild_id, grant_name)
         )
         """
@@ -220,7 +222,7 @@ def get_grant_roles(
     conn: sqlite3.Connection, guild_id: int
 ) -> dict[str, GrantRoleConfig]:
     rows = conn.execute(
-        "SELECT grant_name, label, role_id, log_channel_id, announce_channel_id, grant_message "
+        "SELECT grant_name, label, role_id, log_channel_id, announce_channel_id, grant_message, required_role_id "
         "FROM grant_roles WHERE guild_id = ?",
         (guild_id,),
     ).fetchall()
@@ -232,6 +234,7 @@ def get_grant_roles(
             log_channel_id=row["log_channel_id"],
             announce_channel_id=row["announce_channel_id"],
             grant_message=row["grant_message"],
+            required_role_id=row["required_role_id"],
         )
         for row in rows
     }
@@ -247,17 +250,19 @@ def upsert_grant_role(
     log_channel_id: int,
     announce_channel_id: int,
     grant_message: str,
+    required_role_id: int = 0,
 ) -> None:
     conn.execute(
         """
         INSERT INTO grant_roles
-            (guild_id, grant_name, label, role_id, log_channel_id, announce_channel_id, grant_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (guild_id, grant_name, label, role_id, log_channel_id, announce_channel_id, grant_message, required_role_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, grant_name) DO UPDATE SET
             label=excluded.label, role_id=excluded.role_id,
             log_channel_id=excluded.log_channel_id,
             announce_channel_id=excluded.announce_channel_id,
-            grant_message=excluded.grant_message
+            grant_message=excluded.grant_message,
+            required_role_id=excluded.required_role_id
         """,
         (
             guild_id,
@@ -267,6 +272,7 @@ def upsert_grant_role(
             log_channel_id,
             announce_channel_id,
             grant_message,
+            required_role_id,
         ),
     )
 

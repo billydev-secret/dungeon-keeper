@@ -251,6 +251,7 @@ async def test_post_double_click_inserts_only_once(tmp_path, monkeypatch):
     with patch("bot_modules.cogs.veil_cog._do_insert_round", return_value=77) as insert_mock, \
          patch("bot_modules.cogs.veil_cog._do_update_round_message"), \
          patch("bot_modules.cogs.veil_cog._do_set_original_path"), \
+         patch("bot_modules.cogs.veil_cog._do_set_crop_box"), \
          patch("bot_modules.cogs.veil_cog._do_audit"), \
          patch("bot_modules.cogs.veil_cog.render_crop", return_value=b"\xff\xd8fake"), \
          patch("bot_modules.cogs.veil_cog._repost_prompt", new_callable=AsyncMock):

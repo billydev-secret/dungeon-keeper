@@ -247,20 +247,22 @@ def _fake_game_message() -> MagicMock:
 @pytest.mark.asyncio
 async def test_cog_load_registers_game_views_from_db(sync_db_path: Path):
     """cog_load queries active rounds and calls bot.add_view for each."""
-    from bot_modules.cogs.veil_cog import GameView
-    from bot_modules.services.veil_repo import insert_round
+    from bot_modules.cogs.guess_cog import GuessCog, GameView
+    from bot_modules.services.guess_repo import insert_round
     from bot_modules.core.db_utils import open_db
 
     with open_db(sync_db_path) as conn:
         insert_round(conn, guild_id=GUILD_ID, submitter_id=1001, answer_id=1001)
         insert_round(conn, guild_id=GUILD_ID, submitter_id=1002, answer_id=1002)
 
-    cog = _make_cog(str(sync_db_path))
-    add_view_mock: MagicMock = cog.bot.add_view  # type: ignore[assignment]
+    bot = MagicMock()
+    bot.ctx.db_path = str(sync_db_path)
+    bot.add_view = MagicMock()
+    cog = GuessCog(bot)
     await cog.cog_load()
 
     gameview_calls = [
-        c for c in add_view_mock.call_args_list if isinstance(c.args[0], GameView)
+        c for c in bot.add_view.call_args_list if isinstance(c.args[0], GameView)
     ]
     assert len(gameview_calls) == 2
 
@@ -327,6 +329,7 @@ async def test_on_post_reposts_prompt_after_game_message():
     with patch("bot_modules.cogs.veil_cog.render_crop", return_value=b"fake-crop"), \
          patch("bot_modules.cogs.veil_cog._do_insert_round", return_value=42), \
          patch("bot_modules.cogs.veil_cog._do_update_round_message"), \
+         patch("bot_modules.cogs.veil_cog._do_set_crop_box"), \
          patch("bot_modules.cogs.veil_cog._do_audit"), \
          patch("bot_modules.cogs.veil_cog._repost_prompt", new_callable=AsyncMock) as mock_repost:
         await view._on_post(interaction)

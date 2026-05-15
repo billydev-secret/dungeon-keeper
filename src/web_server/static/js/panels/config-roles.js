@@ -54,6 +54,10 @@ function render(container, grants, channels, roles) {
             <textarea name="grant_message">${g.grant_message}</textarea>
           </div>
           <div class="field">
+            <label>Required Role <span style="color:var(--ink-mute);font-weight:normal;">(target must have this role — none = no requirement)</span></label>
+            <select name="required_role_id">${roleSelect(roles, g.required_role_id)}</select>
+          </div>
+          <div class="field">
             <label>Grant Permissions</label>
             <div data-perm-list="${name}" style="margin-bottom:8px;">${permListHTML}</div>
             <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
@@ -108,6 +112,10 @@ function render(container, grants, channels, roles) {
         <div class="field">
           <label>Grant Message</label>
           <textarea name="grant_message" placeholder="Welcome {member} to {role}!"></textarea>
+        </div>
+        <div class="field">
+          <label>Required Role <span style="color:var(--ink-mute);font-weight:normal;">(target must have this role — none = no requirement)</span></label>
+          <select name="required_role_id">${roleSelect(roles, "0")}</select>
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <button type="submit" class="btn btn-primary">Add</button>
@@ -196,6 +204,7 @@ function render(container, grants, channels, roles) {
           log_channel_id: fd.get("log_channel_id"),
           announce_channel_id: fd.get("announce_channel_id"),
           grant_message: fd.get("grant_message"),
+          required_role_id: fd.get("required_role_id"),
           permissions: g._perms || g.permissions || [],
         });
         showStatus(status, true);
@@ -234,6 +243,7 @@ function render(container, grants, channels, roles) {
         log_channel_id: fd.get("log_channel_id"),
         announce_channel_id: fd.get("announce_channel_id"),
         grant_message: fd.get("grant_message"),
+        required_role_id: fd.get("required_role_id"),
       });
       const fresh = await loadConfig();
       render(container, fresh.roles, channels, roles);

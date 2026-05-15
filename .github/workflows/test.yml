@@ -27,6 +27,9 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      - name: Type check (pyright)
+        run: pyright
+
       - name: Run tests
         env:
           BOT_ENV: dev

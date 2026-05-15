@@ -4,11 +4,15 @@ import { showStatus } from "../config-helpers.js";
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
 const GAME_TYPES = ["wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama"];
+const GAME_NAMES = {
+  wyr: "Would You Rather", nhie: "Never Have I Ever", mlt: "Most Likely To",
+  rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
+};
 
 export function mount(container) {
   let pendingResults = [];
 
-  const gtOptions = GAME_TYPES.map((g) => `<option value="${g}">${g}</option>`).join("");
+  const gtOptions = GAME_TYPES.map((g) => `<option value="${g}">${GAME_NAMES[g] || g}</option>`).join("");
 
   container.innerHTML = `
     <div class="panel">
@@ -28,8 +32,8 @@ export function mount(container) {
             <div class="field" style="margin:0;">
               <label>Category
                 <select data-ctrl="cat">
-                  <option value="sfw">sfw</option>
-                  <option value="nsfw">nsfw</option>
+                  <option value="sfw">SFW</option>
+                  <option value="nsfw">NSFW</option>
                 </select>
               </label>
             </div>

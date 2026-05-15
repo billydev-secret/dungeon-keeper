@@ -1,12 +1,12 @@
 # tests/unit/test_veil_repo.py
-"""Tier 1 unit tests: veil repo layer (sync sqlite3)."""
+"""Tier 1 unit tests: guess repo layer (sync sqlite3)."""
 from __future__ import annotations
 
 from pathlib import Path
 
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.veil_repo import (
+from bot_modules.services.guess_repo import (
     count_guesses_for_round,
     count_unique_guessers_for_round,
     delete_optin,
@@ -18,14 +18,14 @@ from bot_modules.services.veil_repo import (
     get_optin,
     get_reusable_rounds,
     get_round,
-    get_veil_config,
+    get_guess_config,
     insert_guess,
     insert_round,
     is_opted_in,
     mark_round_solved,
     set_round_answer_optout,
     set_round_reroll_count,
-    set_veil_config_value,
+    set_guess_config_value,
     soft_delete_round,
     update_round_message,
     upsert_optin,
@@ -38,16 +38,16 @@ USER_B = 1002
 
 def test_get_veil_config_defaults(sync_db_path: Path):
     with open_db(sync_db_path) as conn:
-        cfg = get_veil_config(conn, GUILD)
+        cfg = get_guess_config(conn, GUILD)
     assert cfg.guild_id == GUILD
     assert cfg.crop_difficulty == "medium"
-    assert cfg.guess_cooldown_seconds == 30
+    assert cfg.guess_cooldown_seconds == 60
 
 
 def test_set_and_get_veil_config_value(sync_db_path: Path):
     with open_db(sync_db_path) as conn:
-        set_veil_config_value(conn, GUILD, "veil_crop_difficulty", "hard")
-        cfg = get_veil_config(conn, GUILD)
+        set_guess_config_value(conn, GUILD, "guess_crop_difficulty", "hard")
+        cfg = get_guess_config(conn, GUILD)
     assert cfg.crop_difficulty == "hard"
 
 

@@ -8,7 +8,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.veil_models import VeilConfig, VeilRound
-from bot_modules.services.veil_repo import (
+from bot_modules.services.guess_repo import (
     flag_user_open_rounds_optout,
     get_round,
     insert_round,

@@ -101,6 +101,16 @@ class LegitLibsTemplateUpdateBody(BaseModel):
     notes: Optional[str] = None
 
 
+class LegitLibsResolveBody(BaseModel):
+    blanks: list[dict]
+    tier: int
+
+
+class LegitLibsAIPrepBody(BaseModel):
+    raw_text: str
+    tier: int = 2
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
@@ -174,12 +184,19 @@ async def get_stats(
                     bank_by_type[gt] = {"sfw": 0, "nsfw": 0}
                 bank_by_type[gt][cat] = cnt
 
+            # Games by type: {game_type: N}
+            hist_rows = conn.execute(
+                "SELECT game_type, COUNT(*) FROM games_game_history GROUP BY game_type"
+            ).fetchall()
+            games_by_type: dict[str, int] = {gt: cnt for gt, cnt in hist_rows}
+
             return {
                 "total_questions": total_q,
                 "games_played": games_played,
                 "rounds_played": rounds_played,
                 "unique_players": unique_players,
                 "bank_by_type": bank_by_type,
+                "games_by_type": games_by_type,
             }
 
     return await run_query(_q)
@@ -651,7 +668,7 @@ async def list_ll_templates(
                     "title": r[1],
                     "tier": r[2],
                     "status": r[3],
-                    "tags": r[4],
+                    "tags": [t.strip() for t in r[4].split(",") if t.strip()] if r[4] else [],
                     "player_min": r[5],
                     "player_max": r[6],
                     "use_count": r[7],
@@ -807,23 +824,182 @@ async def get_ll_axes(
             ).fetchall()
 
             pos_values: list[dict] = []
-            domains_by_pos: dict[str, list[str]] = {}
-            forms_by_pos: dict[str, list[str]] = {}
+            domains_by_pos: dict[str, list[dict]] = {}
+            forms_by_pos: dict[str, list[dict]] = {}
 
             for r in rows:
                 axis, value, parent_pos, min_tier = r[0], r[1], r[2], r[3]
                 if axis == "pos":
                     pos_values.append({"value": value, "min_tier": min_tier})
                 elif axis == "domain" and parent_pos:
-                    domains_by_pos.setdefault(parent_pos, []).append(value)
+                    domains_by_pos.setdefault(parent_pos, []).append({"value": value, "min_tier": min_tier})
                 elif axis == "form" and parent_pos:
-                    forms_by_pos.setdefault(parent_pos, []).append(value)
+                    forms_by_pos.setdefault(parent_pos, []).append({"value": value, "min_tier": min_tier})
 
             return {
                 "pos_values": pos_values,
                 "domains_by_pos": domains_by_pos,
                 "forms_by_pos": forms_by_pos,
             }
+
+    return await run_query(_q)
+
+
+@router.post("/legitlibs/ai-prep")
+async def ll_ai_prep(
+    request: Request,
+    body: LegitLibsAIPrepBody,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    import json as _json
+    import re as _re
+    from bot_modules.games.utils.ai_client import generate_text
+    from bot_modules.cogs.games_legitlibs.validation import validate_template
+
+    raw_text = body.raw_text.strip()
+    if not raw_text:
+        raise HTTPException(400, "raw_text is required")
+    if len(raw_text) > 2000:
+        raise HTTPException(400, "Text too long (max 2000 characters)")
+
+    tier = max(1, min(4, body.tier))
+
+    noun_domains = ["place", "person"] + (["body"] if tier >= 2 else []) + (["kink"] if tier >= 4 else [])
+    verb_domains = ["intimate"] if tier >= 3 else []
+    domain_lines = f"noun domains: {', '.join(noun_domains)}"
+    if verb_domains:
+        domain_lines += f"; verb domains: {', '.join(verb_domains)}"
+
+    system_prompt = f"""You are a Mad Libs template editor. Given a passage of text and a heat tier (1=Flirty, 2=Spicy, 3=Filthy, 4=Unhinged), choose 4–8 words or short phrases that would be fun fill-in-the-blank slots. Replace each chosen word/phrase with a sequential numeric marker {{1}}, {{2}}, … and output a JSON object. Output 4–8 blanks total even if the passage is long.
+
+Rules:
+- Choose nouns, verbs, adjectives, adverbs, numbers, or exclamations. Prefer concrete, evocative words.
+- Do NOT blank articles (a, an, the), prepositions, pronouns, or conjunctions.
+- Keep the surrounding text grammatically intact (replace the entire inflected form).
+- Marker IDs must be sequential integers starting at 1 and unique.
+- Available pos values: noun, verb, adjective, adverb, exclamation, number, wildcard
+- Use wildcard only when the slot is intentionally open-ended (any word goes).
+- Available {domain_lines}
+- Available verb forms: ing, past, infinitive; noun forms: plural
+- Only include domain or form in the blank object when clearly applicable.
+- Output ONLY valid JSON — no markdown fences, no commentary.
+
+JSON format:
+{{"body": "<text with markers>", "blanks": [{{"id": "1", "pos": "noun"}}, ...]}}"""
+
+    user_prompt = f"Tier: {tier}\n\nText: {raw_text}"
+
+    raw = await generate_text(system_prompt, user_prompt, max_tokens=900, temperature=0.2)
+    if not raw:
+        raise HTTPException(502, "AI prep failed — check ANTHROPIC_API_KEY and try again")
+
+    cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+
+    try:
+        parsed = _json.loads(cleaned)
+    except _json.JSONDecodeError:
+        match = _re.search(r"\{.*\}", cleaned, _re.DOTALL)
+        if match:
+            try:
+                parsed = _json.loads(match.group())
+            except _json.JSONDecodeError:
+                raise HTTPException(502, "AI returned malformed JSON — try again")
+        else:
+            raise HTTPException(502, "AI returned malformed JSON — try again")
+
+    if not isinstance(parsed.get("body"), str) or not isinstance(parsed.get("blanks"), list):
+        raise HTTPException(502, "AI response missing required fields — try again")
+
+    ctx = get_ctx(request)
+
+    def _get_axes():
+        with ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT axis, value, parent_pos, min_tier FROM legitlibs_blank_axes"
+            ).fetchall()
+            axes: dict = {"pos": [], "domains": {}, "forms": {}}
+            for r in rows:
+                axis, value, parent_pos, min_tier = r[0], r[1], r[2], r[3]
+                if axis == "pos":
+                    axes["pos"].append({"value": value, "min_tier": min_tier})
+                elif axis == "domain" and parent_pos:
+                    axes["domains"].setdefault(parent_pos, []).append({"value": value, "min_tier": min_tier})
+                elif axis == "form" and parent_pos:
+                    axes["forms"].setdefault(parent_pos, []).append({"value": value, "min_tier": min_tier})
+            return axes
+
+    axes = await run_query(_get_axes)
+
+    errors = validate_template(parsed["body"], parsed["blanks"], tier, axes)
+    if errors:
+        raise HTTPException(422, f"AI output failed validation: {'; '.join(errors)}")
+
+    return {"body": parsed["body"], "blanks": parsed["blanks"]}
+
+
+@router.post("/legitlibs/resolve")
+async def resolve_ll_blanks(
+    request: Request,
+    body: LegitLibsResolveBody,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+
+    def _q():
+        from bot_modules.cogs.games_legitlibs.data import resolve_blank
+
+        with ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT pos, domain, form, tier, prompt, examples, length_cap"
+                " FROM legitlibs_blank_prompts"
+            ).fetchall()
+            prompts = {
+                (r["pos"], r["domain"], r["form"], r["tier"]): {
+                    "prompt": r["prompt"],
+                    "examples": json.loads(r["examples"]),
+                    "length_cap": r["length_cap"],
+                }
+                for r in rows
+            }
+            out = []
+            for b in body.blanks:
+                pos = b.get("pos", "")
+                domain = b.get("domain") or None
+                form = b.get("form") or None
+                parts = [pos or "?"]
+                if domain:
+                    parts.append(domain)
+                if form:
+                    parts.append(form)
+                axis_label = " · ".join(parts).replace("_", " ")
+                if not pos:
+                    out.append({
+                        "marker": b.get("id", "?"),
+                        "axis_label": axis_label,
+                        "prompt": None,
+                        "examples_preview": "",
+                        "error": "missing POS",
+                    })
+                    continue
+                resolved = resolve_blank(prompts, pos, domain, form, body.tier)
+                if resolved is None:
+                    out.append({
+                        "marker": b.get("id", "?"),
+                        "axis_label": axis_label,
+                        "prompt": None,
+                        "examples_preview": "",
+                        "error": "no prompt for this combination",
+                    })
+                else:
+                    examples = resolved["examples"][:3]
+                    out.append({
+                        "marker": b.get("id", "?"),
+                        "axis_label": axis_label,
+                        "prompt": resolved["prompt"],
+                        "examples_preview": ", ".join(f'"{e}"' for e in examples),
+                        "error": None,
+                    })
+            return {"resolutions": out}
 
     return await run_query(_q)
 

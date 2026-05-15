@@ -40,6 +40,7 @@ async def _execute_grant(
     announce_channel_id: int,
     grant_message: str,
     ctx: AppContext,
+    required_role_id: int = 0,
 ) -> None:
     """Shared grant logic for all role-grant commands."""
     guild = interaction.guild
@@ -75,6 +76,21 @@ async def _execute_grant(
             "The configured role no longer exists.", ephemeral=True
         )
         return
+
+    if required_role_id > 0 and not ctx.is_mod(interaction):
+        req_role = guild.get_role(required_role_id)
+        if req_role is None:
+            await interaction.response.send_message(
+                "This grant is misconfigured — the required role no longer exists. Contact an admin.",
+                ephemeral=True,
+            )
+            return
+        if req_role not in member.roles:
+            await interaction.response.send_message(
+                f"{member.mention} needs {req_role.mention} before they can receive {role.mention}.",
+                ephemeral=True,
+            )
+            return
 
     if role in member.roles:
         await interaction.response.send_message(
@@ -199,4 +215,5 @@ def register_role_grant_commands(bot: Bot, ctx: AppContext) -> None:
             announce_channel_id=cfg["announce_channel_id"],
             grant_message=cfg["grant_message"],
             ctx=ctx,
+            required_role_id=cfg.get("required_role_id", 0),
         )

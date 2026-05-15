@@ -61,7 +61,7 @@ from bot_modules.services.starboard_service import (
     get_starboard_config as _get_starboard_config,
     upsert_starboard_config as _upsert_starboard_config,
 )
-from bot_modules.services.veil_repo import get_veil_config as _get_veil_config
+from bot_modules.services.guess_repo import get_guess_config as _get_guess_config
 from bot_modules.services.whisper_repo import get_whisper_config as _get_whisper_config
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
@@ -240,15 +240,15 @@ def _bot_identity_section(guild) -> dict:
     }
 
 
-def _veil_section(conn, guild_id: int) -> dict:
-    vc = _get_veil_config(conn, guild_id)
+def _guess_section(conn, guild_id: int) -> dict:
+    gc = _get_guess_config(conn, guild_id)
     return {
-        "channel_id": str(vc.veil_channel_id),
-        "role_id": str(vc.veil_role_id),
-        "crop_difficulty": vc.crop_difficulty,
-        "guess_cooldown_seconds": vc.guess_cooldown_seconds,
-        "min_image_dimension_px": vc.min_image_dimension_px,
-        "max_image_size_mb": vc.max_image_size_mb,
+        "channel_id": str(gc.guess_channel_id),
+        "role_id": str(gc.guess_role_id),
+        "crop_difficulty": gc.crop_difficulty,
+        "guess_cooldown_seconds": gc.guess_cooldown_seconds,
+        "min_image_dimension_px": gc.min_image_dimension_px,
+        "max_image_size_mb": gc.max_image_size_mb,
     }
 
 
@@ -471,6 +471,7 @@ async def get_config(
                         "log_channel_id": str(cfg["log_channel_id"]),
                         "announce_channel_id": str(cfg["announce_channel_id"]),
                         "grant_message": cfg["grant_message"],
+                        "required_role_id": str(cfg["required_role_id"]),
                         "permissions": [
                             {"entity_type": et, "entity_id": str(eid)}
                             for et, eid in get_grant_permissions(
@@ -509,7 +510,7 @@ async def get_config(
                 "starboard": _starboard_section(conn, guild_id),
                 "birthday": _birthday_section(conn, guild_id),
                 "bot_identity": _bot_identity_section(prune_guild),
-                "veil": _veil_section(conn, guild_id),
+                "guess": _guess_section(conn, guild_id),
                 "whisper": _whisper_section(conn, guild_id),
                 "risky": _risky_section(conn, guild_id),
             }
@@ -1000,6 +1001,7 @@ class RoleGrantUpdate(BaseModel):
     log_channel_id: str | None = None
     announce_channel_id: str | None = None
     grant_message: str | None = None
+    required_role_id: str | None = None
     permissions: list[dict] | None = None
 
 
@@ -1036,6 +1038,9 @@ async def update_role_grant(
                     grant_message=body.grant_message
                     if body.grant_message is not None
                     else cur["grant_message"],
+                    required_role_id=int(body.required_role_id)
+                    if body.required_role_id is not None
+                    else cur["required_role_id"],
                 )
             else:
                 upsert_grant_role(
@@ -1051,6 +1056,9 @@ async def update_role_grant(
                     if body.announce_channel_id
                     else 0,
                     grant_message=body.grant_message or "",
+                    required_role_id=int(body.required_role_id)
+                    if body.required_role_id
+                    else 0,
                 )
             if body.permissions is not None:
                 for et, eid in get_grant_permissions(conn, guild_id, grant_name):
@@ -1681,19 +1689,19 @@ async def birthday_calendar(
     return await run_query(_q)
 
 
-_VEIL_VALID_DIFFICULTIES = {"easy", "medium", "hard"}
+_GUESS_VALID_DIFFICULTIES = {"easy", "medium", "hard"}
 
-_VEIL_AUDIT_ACTIONS = {"submit", "delete", "solve", "guess_cap_hit"}
+_GUESS_AUDIT_ACTIONS = {"submit", "delete", "solve", "guess_cap_hit"}
 
 
-@router.get("/veil/audit")
-async def list_veil_audit(
+@router.get("/guess/audit")
+async def list_guess_audit(
     request: Request,
     limit: int = 100,
     action: str | None = None,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    """List recent Veil audit events for the active guild.
+    """List recent Guess audit events for the active guild.
 
     Query params:
         limit: max rows (1-500, default 100)
@@ -1704,11 +1712,11 @@ async def list_veil_audit(
     _require_primary_guild(request)
 
     capped_limit = max(1, min(500, limit))
-    if action is not None and action not in _VEIL_AUDIT_ACTIONS:
-        raise HTTPException(400, f"action must be one of {sorted(_VEIL_AUDIT_ACTIONS)}")
+    if action is not None and action not in _GUESS_AUDIT_ACTIONS:
+        raise HTTPException(400, f"action must be one of {sorted(_GUESS_AUDIT_ACTIONS)}")
 
     def _q():
-        from bot_modules.services.veil_repo import list_audit_events
+        from bot_modules.services.guess_repo import list_audit_events
         with ctx.open_db() as conn:
             events = list_audit_events(
                 conn, guild_id, limit=capped_limit, action=action
@@ -1730,7 +1738,7 @@ async def list_veil_audit(
     return await run_query(_q)
 
 
-class VeilConfigUpdate(BaseModel):
+class GuessConfigUpdate(BaseModel):
     channel_id: str | None = None
     role_id: str | None = None
     crop_difficulty: str | None = None
@@ -1739,10 +1747,10 @@ class VeilConfigUpdate(BaseModel):
     max_image_size_mb: int | None = None
 
 
-@router.put("/config/veil")
-async def update_veil_config(
+@router.put("/config/guess")
+async def update_guess_config(
     request: Request,
-    body: VeilConfigUpdate,
+    body: GuessConfigUpdate,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
@@ -1750,22 +1758,22 @@ async def update_veil_config(
     _require_primary_guild(request)
 
     def _q():
-        from bot_modules.services.veil_repo import set_veil_config_value
-        if body.crop_difficulty is not None and body.crop_difficulty not in _VEIL_VALID_DIFFICULTIES:
-            return {"ok": False, "detail": f"crop_difficulty must be one of {sorted(_VEIL_VALID_DIFFICULTIES)}"}
+        from bot_modules.services.guess_repo import set_guess_config_value
+        if body.crop_difficulty is not None and body.crop_difficulty not in _GUESS_VALID_DIFFICULTIES:
+            return {"ok": False, "detail": f"crop_difficulty must be one of {sorted(_GUESS_VALID_DIFFICULTIES)}"}
         with ctx.open_db() as conn:
             if body.channel_id is not None:
-                set_veil_config_value(conn, guild_id, "veil_channel_id", body.channel_id)
+                set_guess_config_value(conn, guild_id, "guess_channel_id", body.channel_id)
             if body.role_id is not None:
-                set_veil_config_value(conn, guild_id, "veil_role_id", body.role_id)
+                set_guess_config_value(conn, guild_id, "guess_role_id", body.role_id)
             if body.crop_difficulty is not None:
-                set_veil_config_value(conn, guild_id, "veil_crop_difficulty", body.crop_difficulty)
+                set_guess_config_value(conn, guild_id, "guess_crop_difficulty", body.crop_difficulty)
             if body.guess_cooldown_seconds is not None:
-                set_veil_config_value(conn, guild_id, "veil_guess_cooldown_seconds", str(body.guess_cooldown_seconds))
+                set_guess_config_value(conn, guild_id, "guess_guess_cooldown_seconds", str(body.guess_cooldown_seconds))
             if body.min_image_dimension_px is not None:
-                set_veil_config_value(conn, guild_id, "veil_min_image_dimension_px", str(body.min_image_dimension_px))
+                set_guess_config_value(conn, guild_id, "guess_min_image_dimension_px", str(body.min_image_dimension_px))
             if body.max_image_size_mb is not None:
-                set_veil_config_value(conn, guild_id, "veil_max_image_size_mb", str(body.max_image_size_mb))
+                set_guess_config_value(conn, guild_id, "guess_max_image_size_mb", str(body.max_image_size_mb))
         return {"ok": True}
 
     return await run_query(_q)

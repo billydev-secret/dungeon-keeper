@@ -228,7 +228,7 @@ async def test_auto_label_is_always_plain_auto(inter: MagicMock) -> None:
     with patch("bot_modules.cogs.veil_cog.render_crop_editor", return_value=_FAKE_JPEG):
         await view._on_auto(inter)
         await view._on_auto(inter)
-    assert view._auto_btn.label == "Auto"  # type: ignore[attr-defined]
+    assert view._auto_btn.label == "  Auto  "  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

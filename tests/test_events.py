@@ -21,6 +21,9 @@ def _make_bot() -> MagicMock:
     bot.user.id = 1
     bot.get_guild = MagicMock(return_value=None)
     bot.guilds = []
+    # events_cog conditionally awaits bot.games_db.fetchall()
+    bot.games_db = AsyncMock()
+    bot.games_db.fetchall = AsyncMock(return_value=[])
     return bot
 
 
@@ -200,7 +203,7 @@ async def test_on_ready_does_not_spawn_duplicate_backfill_task(mock_create_task)
 
 # ── on_raw_message_delete ─────────────────────────────────────────────
 
-@patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_message")
+@patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_message")
 async def test_no_guild_id_ignored_on_delete(mock_remove):
     ctx = _make_ctx()
     cog = EventsCog(_make_bot(), ctx)
@@ -210,7 +213,7 @@ async def test_no_guild_id_ignored_on_delete(mock_remove):
     mock_remove.assert_not_called()
 
 
-@patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_message")
+@patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_message")
 async def test_with_guild_id_clears_auto_delete_tracking(mock_remove):
     """Auto-delete tracking is per-message bookkeeping and is cleared, but the
     messages table itself is a permanent archive — see _archive_only test."""
@@ -233,7 +236,7 @@ async def test_message_archive_is_permanent_on_delete():
     payload.guild_id = 1
     payload.channel_id = 10
     payload.message_id = 999
-    with patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_message"):
+    with patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_message"):
         await cog.on_raw_message_delete(payload)
     # No DB connection should be opened to mutate the messages table.
     ctx.open_db.assert_not_called()
@@ -241,7 +244,7 @@ async def test_message_archive_is_permanent_on_delete():
 
 # ── on_raw_bulk_message_delete ────────────────────────────────────────
 
-@patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_messages")
+@patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_messages")
 async def test_no_guild_id_ignored_on_bulk_delete(mock_remove):
     ctx = _make_ctx()
     cog = EventsCog(_make_bot(), ctx)
@@ -251,7 +254,7 @@ async def test_no_guild_id_ignored_on_bulk_delete(mock_remove):
     mock_remove.assert_not_called()
 
 
-@patch("bot_modules.services.auto_delete_service.remove_tracked_auto_delete_messages")
+@patch("bot_modules.cogs.events_cog.remove_tracked_auto_delete_messages")
 async def test_with_guild_id_clears_bulk_auto_delete_tracking(mock_remove):
     """Same as the single-delete case: clear tracking, but never touch the
     messages table itself (the archive is permanent)."""
