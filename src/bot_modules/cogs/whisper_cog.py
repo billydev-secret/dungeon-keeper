@@ -47,11 +47,13 @@ from bot_modules.services.whisper_service import (
     ERROR_GUESS_ALREADY_SOLVED,
     ERROR_GUESS_NO_ATTEMPTS,
     ERROR_GUESS_NOT_TARGET,
+    ERROR_NOT_CONFIGURED,
     MAX_MESSAGE_LENGTH,
     GuessValidationError,
     SendValidationError,
     TransitionValidationError,
     evaluate_guess,
+    is_configured,
     is_locked,
     is_terminal_for_sender,
     safe_codefence_content,
@@ -852,25 +854,10 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
             )
             return
 
-        cfg = await asyncio.to_thread(
-            _load_config, self.bot.ctx.db_path, whisper.guild_id
-        )
-        if interaction.guild is None or cfg.log_channel_id == 0:
-            await interaction.response.send_message(
-                "Mod log channel isn't configured. Report not delivered.",
-                ephemeral=True,
-            )
-            return
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if not isinstance(log_channel, discord.TextChannel):
-            await interaction.response.send_message(
-                "Mod log channel is misconfigured. Report not delivered.",
-                ephemeral=True,
-            )
-            return
-
         reason = str(self.reason_input.value).strip() or "(no reason provided)"
 
+        # Always persist the report — it surfaces on the web mod dashboard
+        # regardless of whether a Discord mod-log channel is configured.
         inserted = await asyncio.to_thread(
             _do_insert_report,
             self.bot.ctx.db_path,
@@ -884,34 +871,38 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
             )
             return
 
-        emb = discord.Embed(
-            title="Whisper Reported",
-            description=safe_codefence_content(whisper.message),
-            color=discord.Color.red(),
-            timestamp=discord.utils.utcnow(),
+        # Best-effort Discord mod-log post (optional; web dashboard is canonical).
+        cfg = await asyncio.to_thread(
+            _load_config, self.bot.ctx.db_path, whisper.guild_id
         )
-        emb.add_field(
-            name="Sender",
-            value=f"<@{whisper.sender_id}> (`{whisper.sender_id}`)",
-            inline=False,
-        )
-        emb.add_field(
-            name="Reporter (Target)",
-            value=f"<@{whisper.target_id}> (`{whisper.target_id}`)",
-            inline=False,
-        )
-        emb.add_field(name="Reason", value=reason, inline=False)
-        emb.add_field(name="Whisper ID", value=str(whisper.id), inline=False)
-        try:
-            await log_channel.send(
-                embed=emb, allowed_mentions=discord.AllowedMentions.none()
-            )
-        except discord.HTTPException:
-            await interaction.response.send_message(
-                "Failed to deliver report (bot can't post to mod log).",
-                ephemeral=True,
-            )
-            return
+        if cfg.log_channel_id and interaction.guild is not None:
+            log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+            if isinstance(log_channel, discord.TextChannel):
+                emb = discord.Embed(
+                    title="Whisper Reported",
+                    description=safe_codefence_content(whisper.message),
+                    color=discord.Color.red(),
+                    timestamp=discord.utils.utcnow(),
+                )
+                emb.add_field(
+                    name="Sender",
+                    value=f"<@{whisper.sender_id}> (`{whisper.sender_id}`)",
+                    inline=False,
+                )
+                emb.add_field(
+                    name="Reporter (Target)",
+                    value=f"<@{whisper.target_id}> (`{whisper.target_id}`)",
+                    inline=False,
+                )
+                emb.add_field(name="Reason", value=reason, inline=False)
+                emb.add_field(name="Whisper ID", value=str(whisper.id), inline=False)
+                try:
+                    await log_channel.send(
+                        embed=emb,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    log.warning("Failed to post whisper report to mod log")
         await interaction.response.send_message(
             "Report submitted to moderators.", ephemeral=True
         )
@@ -950,23 +941,10 @@ class WhisperReportReplyModal(discord.ui.Modal, title="Report reply"):
             await interaction.response.send_message("Whisper not found.", ephemeral=True)
             return
 
-        cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, whisper.guild_id)
-        if interaction.guild is None or cfg.log_channel_id == 0:
-            await interaction.response.send_message(
-                "Mod log channel isn't configured. Report not delivered.",
-                ephemeral=True,
-            )
-            return
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
-        if not isinstance(log_channel, discord.TextChannel):
-            await interaction.response.send_message(
-                "Mod log channel is misconfigured. Report not delivered.",
-                ephemeral=True,
-            )
-            return
-
         reason = str(self.reason_input.value).strip() or "(no reason provided)"
 
+        # Persist first — the web dashboard surfaces this regardless of any
+        # Discord mod-log channel configuration.
         inserted = await asyncio.to_thread(
             _do_insert_reply_report,
             self.bot.ctx.db_path,
@@ -980,35 +958,38 @@ class WhisperReportReplyModal(discord.ui.Modal, title="Report reply"):
             )
             return
 
-        emb = discord.Embed(
-            title="Whisper Reply Reported",
-            description=safe_codefence_content(reply.content),
-            color=discord.Color.red(),
-            timestamp=discord.utils.utcnow(),
+        cfg = await asyncio.to_thread(
+            _load_config, self.bot.ctx.db_path, whisper.guild_id
         )
-        emb.add_field(
-            name="Sender (anonymous)",
-            value=f"<@{reply.from_user_id}> (`{reply.from_user_id}`)",
-            inline=False,
-        )
-        emb.add_field(
-            name="Reporter (recipient)",
-            value=f"<@{interaction.user.id}> (`{interaction.user.id}`)",
-            inline=False,
-        )
-        emb.add_field(name="Reason", value=reason, inline=False)
-        emb.add_field(name="Reply ID", value=str(self.reply_id), inline=False)
-        emb.add_field(name="Whisper ID", value=str(reply.whisper_id), inline=False)
-        try:
-            await log_channel.send(
-                embed=emb, allowed_mentions=discord.AllowedMentions.none()
-            )
-        except discord.HTTPException:
-            await interaction.response.send_message(
-                "Failed to deliver report (bot can't post to mod log).",
-                ephemeral=True,
-            )
-            return
+        if cfg.log_channel_id and interaction.guild is not None:
+            log_channel = interaction.guild.get_channel(cfg.log_channel_id)
+            if isinstance(log_channel, discord.TextChannel):
+                emb = discord.Embed(
+                    title="Whisper Reply Reported",
+                    description=safe_codefence_content(reply.content),
+                    color=discord.Color.red(),
+                    timestamp=discord.utils.utcnow(),
+                )
+                emb.add_field(
+                    name="Sender (anonymous)",
+                    value=f"<@{reply.from_user_id}> (`{reply.from_user_id}`)",
+                    inline=False,
+                )
+                emb.add_field(
+                    name="Reporter (recipient)",
+                    value=f"<@{interaction.user.id}> (`{interaction.user.id}`)",
+                    inline=False,
+                )
+                emb.add_field(name="Reason", value=reason, inline=False)
+                emb.add_field(name="Reply ID", value=str(self.reply_id), inline=False)
+                emb.add_field(name="Whisper ID", value=str(reply.whisper_id), inline=False)
+                try:
+                    await log_channel.send(
+                        embed=emb,
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                except discord.HTTPException:
+                    log.warning("Failed to post whisper reply report to mod log")
         await interaction.response.send_message(
             "Reply reported to moderators.", ephemeral=True
         )
@@ -2543,9 +2524,9 @@ class WhisperCog(commands.Cog):
         cfg = await asyncio.to_thread(
             _load_config, self.ctx.db_path, interaction.guild.id
         )
-        if cfg.role_id == 0:
+        if not is_configured(cfg):
             await interaction.response.send_message(
-                "Whispers aren't configured in this server yet.", ephemeral=True
+                ERROR_NOT_CONFIGURED, ephemeral=True
             )
             return
         role = interaction.guild.get_role(cfg.role_id)

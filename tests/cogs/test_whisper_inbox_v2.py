@@ -387,7 +387,7 @@ async def test_report_modal_posts_to_mod_log():
 
 
 @pytest.mark.asyncio
-async def test_report_modal_no_log_channel_rejected():
+async def test_report_modal_records_even_when_no_log_channel():
     from bot_modules.cogs.whisper_cog import WhisperReportModal
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -399,12 +399,16 @@ async def test_report_modal_no_log_channel_rejected():
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(log_channel_id=0)):
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg(log_channel_id=0)), \
+         patch("bot_modules.cogs.whisper_cog._do_insert_report", return_value=True) as ins:
         await modal.on_submit(interaction)
 
+    # Report still gets recorded (visible on the web mod dashboard) even when
+    # the Discord mod-log channel isn't set.
+    ins.assert_called_once()
     args, kwargs = interaction.response.send_message.call_args
     assert kwargs.get("ephemeral") is True
-    assert "configured" in args[0].lower() or "log" in args[0].lower()
+    assert "submitted" in args[0].lower() or "report" in args[0].lower()
 
 
 @pytest.mark.asyncio

@@ -55,7 +55,10 @@ class SendValidationError(Exception):
 
 
 def is_configured(cfg: WhisperConfig) -> bool:
-    return cfg.role_id != 0 and cfg.channel_id != 0 and cfg.log_channel_id != 0
+    """Whispers need a role (who can send/receive) and a feed channel (where
+    the launcher lives + shared whispers go). Mod-log channel is optional —
+    reports are still recorded in the DB and surfaced via the web dashboard."""
+    return cfg.role_id != 0 and cfg.channel_id != 0
 
 
 def validate_send(
