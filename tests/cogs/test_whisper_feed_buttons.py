@@ -1,6 +1,7 @@
 """Cog-level: persistent feed-channel buttons."""
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,7 +22,7 @@ def _make_view():
 def _w(state: WhisperState = "pending") -> Whisper:
     return Whisper(
         id=1, guild_id=9001, sender_id=1001, target_id=2001, message="x",
-        created_at=0.0, state=state, solved=False, exposed=False,
+        created_at=time.time(), state=state, solved=False, exposed=False,
         guesses_left=3, channel_msg_id=88888, dm_msg_id=99999,
     )
 
@@ -59,21 +60,6 @@ async def test_check_whispers_lists_pending_and_shared():
 
 
 @pytest.mark.asyncio
-async def test_check_hidden_lists_only_hidden():
-    view = _make_view()
-    interaction = fake_interaction(user=FakeMember(id=2001))
-    interaction.guild = MagicMock()
-    interaction.guild.id = 9001
-    interaction.response.send_message = AsyncMock()
-
-    with patch("bot_modules.cogs.whisper_cog._do_list_received", return_value=[_w("hidden"), _w("hidden")]):
-        await view._on_check_hidden_click(interaction)
-
-    args, kwargs = interaction.response.send_message.call_args
-    assert kwargs.get("ephemeral") is True
-
-
-@pytest.mark.asyncio
 async def test_view_registered_on_cog_load():
     """Persistent view must be added via bot.add_view at cog load so buttons survive restart."""
     from bot_modules.cogs.whisper_cog import WhisperCog
@@ -88,12 +74,12 @@ async def test_view_registered_on_cog_load():
 
 @pytest.mark.asyncio
 async def test_dynamic_buttons_registered_on_cog_load():
-    """Per-whisper Guess/Share/Hide/Expose buttons must register as dynamic items so they survive bot restart."""
+    """Per-whisper Guess/Share/Delete/Expose buttons must register as dynamic items so they survive bot restart."""
     from bot_modules.cogs.whisper_cog import (
         WhisperCog,
+        WhisperDeleteButton,
         WhisperExposeButton,
         WhisperGuessButton,
-        WhisperHideButton,
         WhisperShareButton,
     )
     bot = MagicMock()
@@ -106,5 +92,5 @@ async def test_dynamic_buttons_registered_on_cog_load():
     args = bot.add_dynamic_items.call_args.args
     assert WhisperGuessButton in args
     assert WhisperShareButton in args
-    assert WhisperHideButton in args
+    assert WhisperDeleteButton in args
     assert WhisperExposeButton in args

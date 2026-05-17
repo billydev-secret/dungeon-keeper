@@ -1,6 +1,7 @@
-"""Cog-level: share / hide / expose flows."""
+"""Cog-level: share / delete / expose flows."""
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -11,13 +12,20 @@ from tests.fakes import FakeMember, fake_interaction
 
 SENDER, TARGET = 1001, 2001
 FEED, LOG = 8001, 8002
+DM_MSG_ID = 99999
 
 
-def _w(*, state: WhisperState = "pending", solved: bool = False) -> Whisper:
+def _w(
+    *,
+    state: WhisperState = "pending",
+    solved: bool = False,
+    deleted_at: float | None = None,
+) -> Whisper:
     return Whisper(
         id=42, guild_id=9001, sender_id=SENDER, target_id=TARGET, message="hi",
-        created_at=0.0, state=state, solved=solved, exposed=False,
-        guesses_left=3, channel_msg_id=88888, dm_msg_id=99999,
+        created_at=time.time(), state=state, solved=solved, exposed=False,
+        guesses_left=3, channel_msg_id=88888, dm_msg_id=DM_MSG_ID,
+        deleted_at=deleted_at,
     )
 
 
@@ -32,11 +40,11 @@ def _make_share_button():
     return WhisperShareButton(bot, 42)
 
 
-def _make_hide_button():
-    from bot_modules.cogs.whisper_cog import WhisperHideButton
+def _make_delete_button():
+    from bot_modules.cogs.whisper_cog import WhisperDeleteButton
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
-    return WhisperHideButton(bot, 42)
+    return WhisperDeleteButton(bot, 42)
 
 
 def _make_expose_button():
@@ -44,6 +52,9 @@ def _make_expose_button():
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return WhisperExposeButton(bot, 42)
+
+
+# ── Share ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -74,7 +85,7 @@ async def test_share_target_pending_deletes_old_and_posts_new_to_feed():
     assert "fresh Whisper was shared" in sent_content
     assert _w().message in sent_content
     set_ids.assert_called_once_with(
-        ":memory:", 42, channel_msg_id=77777, dm_msg_id=99999
+        ":memory:", 42, channel_msg_id=77777, dm_msg_id=DM_MSG_ID
     )
 
 
@@ -84,32 +95,19 @@ async def test_share_non_pending_rejected():
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(state="shared")), \
          patch("bot_modules.cogs.whisper_cog._do_update_state") as upd:
         await button.callback(interaction)
 
     upd.assert_not_called()
-    args, kwargs = interaction.response.send_message.call_args
+    _, kwargs = interaction.response.send_message.call_args
     assert kwargs.get("ephemeral") is True
 
 
 @pytest.mark.asyncio
-async def test_hide_target_pending_updates_state_no_edit():
-    button = _make_hide_button()
-    interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.response.send_message = AsyncMock()
-    interaction.message = None  # no DM-edit path in this test
-
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("bot_modules.cogs.whisper_cog._do_update_state") as upd:
-        await button.callback(interaction)
-
-    upd.assert_called_once_with(":memory:", 42, "hidden")
-
-
-@pytest.mark.asyncio
-async def test_share_edits_dm_view_to_remove_decide_buttons():
-    """After Share, the DM view should drop Share/Hide so only Guess remains."""
+async def test_share_edits_dm_view_when_invoked_from_dm():
+    """Share clicked from the DM (interaction.message.id == dm_msg_id) updates
+    the DM view to drop Share/Delete, leaving just Guess."""
     button = _make_share_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
@@ -123,6 +121,7 @@ async def test_share_edits_dm_view_to_remove_decide_buttons():
     interaction.guild.get_channel = MagicMock(return_value=feed_channel)
 
     dm_msg = MagicMock()
+    dm_msg.id = DM_MSG_ID
     dm_msg.edit = AsyncMock()
     interaction.message = dm_msg
 
@@ -140,51 +139,122 @@ async def test_share_edits_dm_view_to_remove_decide_buttons():
 
 
 @pytest.mark.asyncio
-async def test_hide_edits_dm_view_to_remove_decide_buttons():
-    """After Hide, the DM view should drop Share/Hide so only Guess remains."""
-    button = _make_hide_button()
+async def test_share_from_inbox_leaves_other_message_alone():
+    """Share clicked from the inbox dropdown (interaction.message.id != dm_msg_id)
+    must NOT edit interaction.message — only the action runs."""
+    button = _make_share_button()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+    interaction.guild = MagicMock()
+
+    feed_channel = MagicMock(spec=discord.TextChannel)
+    feed_channel.fetch_message = AsyncMock()
+    feed_channel.send = AsyncMock(return_value=MagicMock(id=77777))
+    interaction.guild.get_channel = MagicMock(return_value=feed_channel)
+
+    other_msg = MagicMock()
+    other_msg.id = 111111  # not the DM
+    other_msg.edit = AsyncMock()
+    interaction.message = other_msg
+
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state"), \
+         patch("bot_modules.cogs.whisper_cog._do_set_message_ids"):
+        await button.callback(interaction)
+
+    other_msg.edit.assert_not_called()
+
+
+# ── Delete ────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_target_soft_deletes():
+    button = _make_delete_button()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+    interaction.message = None
+
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_soft_delete") as sd:
+        await button.callback(interaction)
+
+    sd.assert_called_once_with(":memory:", 42)
+    _, kwargs = interaction.response.send_message.call_args
+    assert kwargs.get("ephemeral") is True
+    assert "remov" in interaction.response.send_message.call_args.args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_delete_non_target_rejected():
+    button = _make_delete_button()
+    interaction = fake_interaction(user=FakeMember(id=SENDER))  # sender, not target
+    interaction.response.send_message = AsyncMock()
+    interaction.message = None
+
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_soft_delete") as sd:
+        await button.callback(interaction)
+
+    sd.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_already_deleted_rejected():
+    button = _make_delete_button()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+    interaction.message = None
+
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper",
+               return_value=_w(deleted_at=1234.0)), \
+         patch("bot_modules.cogs.whisper_cog._do_soft_delete") as sd:
+        await button.callback(interaction)
+
+    sd.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_from_dm_clears_dm_view():
+    """Delete clicked from the DM clears all DM buttons (terminal)."""
+    button = _make_delete_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_message = AsyncMock()
 
     dm_msg = MagicMock()
+    dm_msg.id = DM_MSG_ID
     dm_msg.edit = AsyncMock()
     interaction.message = dm_msg
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("bot_modules.cogs.whisper_cog._do_update_state"):
-        await button.callback(interaction)
-
-    dm_msg.edit.assert_awaited_once()
-    edited_view = dm_msg.edit.call_args.kwargs["view"]
-    from bot_modules.cogs.whisper_cog import WhisperGuessButton
-    button_types = [type(item) for item in edited_view.children]
-    assert button_types == [WhisperGuessButton]
-
-
-@pytest.mark.asyncio
-async def test_hide_after_exhausted_strips_all_buttons():
-    """If the target has already exhausted guesses, Hide should clear the
-    DM view entirely (no Guess button to leave behind)."""
-    button = _make_hide_button()
-    interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.response.send_message = AsyncMock()
-
-    dm_msg = MagicMock()
-    dm_msg.edit = AsyncMock()
-    interaction.message = dm_msg
-
-    # Exhausted: guesses_left=0
-    exhausted = Whisper(
-        id=42, guild_id=9001, sender_id=SENDER, target_id=TARGET, message="hi",
-        created_at=0.0, state="pending", solved=False, exposed=False,
-        guesses_left=0, channel_msg_id=88888, dm_msg_id=99999,
-    )
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=exhausted), \
-         patch("bot_modules.cogs.whisper_cog._do_update_state"):
+         patch("bot_modules.cogs.whisper_cog._do_soft_delete"):
         await button.callback(interaction)
 
     dm_msg.edit.assert_awaited_once()
     assert dm_msg.edit.call_args.kwargs["view"] is None
+
+
+@pytest.mark.asyncio
+async def test_delete_from_inbox_leaves_other_message_alone():
+    """Delete clicked from the inbox dropdown must NOT edit interaction.message."""
+    button = _make_delete_button()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.send_message = AsyncMock()
+
+    other_msg = MagicMock()
+    other_msg.id = 111111
+    other_msg.edit = AsyncMock()
+    interaction.message = other_msg
+
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_soft_delete"):
+        await button.callback(interaction)
+
+    other_msg.edit.assert_not_called()
+
+
+# ── Expose ────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio

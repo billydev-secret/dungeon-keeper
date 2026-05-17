@@ -1,6 +1,7 @@
 """Cog-level: inbox v2 UI + reply + report flows."""
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -20,7 +21,11 @@ def _w(
     sender_id: int = SENDER,
     target_id: int = TARGET,
     message: str = "hi there",
-    created_at: float = 0.0,
+    created_at: float | None = None,
+    solved: bool = False,
+    guesses_left: int = 3,
+    exposed: bool = False,
+    deleted_at: float | None = None,
 ) -> Whisper:
     return Whisper(
         id=wid,
@@ -28,13 +33,14 @@ def _w(
         sender_id=sender_id,
         target_id=target_id,
         message=message,
-        created_at=created_at,
+        created_at=time.time() if created_at is None else created_at,
         state=state,
-        solved=False,
-        exposed=False,
-        guesses_left=3,
+        solved=solved,
+        exposed=exposed,
+        guesses_left=guesses_left,
         channel_msg_id=88888,
         dm_msg_id=99999,
+        deleted_at=deleted_at,
     )
 
 
@@ -68,81 +74,136 @@ def test_format_time_ago_days_plural_singular():
     assert _format_time_ago(0, now=86400 * 7) == "7 days ago"
 
 
-# ── _build_inbox ─────────────────────────────────────────────────────────────
+# ── WhisperInboxSelectView ───────────────────────────────────────────────────
 
 
-def test_build_inbox_empty():
-    from bot_modules.cogs.whisper_cog import _build_inbox
+def _make_inbox(whispers, *, mode: str = "received"):
+    from bot_modules.cogs.whisper_cog import WhisperInboxSelectView
     bot = MagicMock()
-    embed, view = _build_inbox(bot, [], title="Your Inbox", hidden_view=False)
-    assert "(0)" in embed.title  # type: ignore[operator]
-    assert "No whispers" in (embed.description or "")
+    bot.ctx.db_path = ":memory:"
+    return WhisperInboxSelectView(bot, whispers, invoker_id=TARGET, mode=mode)
+
+
+def test_inbox_empty_view():
+    view = _make_inbox([])
+    emb = view.embed()
+    assert "(0)" in (emb.title or "")
+    assert "No whispers" in (emb.description or "")
     assert len(view.children) == 0
 
 
-def test_build_inbox_shows_numbered_messages_and_buttons():
-    from bot_modules.cogs.whisper_cog import (
-        WhisperGuessButton,
-        WhisperHideButton,
-        WhisperReplyButton,
-        WhisperReportButton,
-        WhisperShareButton,
-        _build_inbox,
-    )
-    bot = MagicMock()
+def test_inbox_renders_dropdown_and_action_row():
+    """Three whispers should yield: 1 select (row 0), Filter btn (row 1),
+    Share+Guess+Reply+Report+Delete (row 2). No pagination since <=25."""
     whispers = [_w(wid=10 + i, message=f"msg {i}") for i in range(3)]
-    embed, view = _build_inbox(bot, whispers, title="Your Inbox", hidden_view=False)
-    assert "**Message #1:**" in (embed.description or "")
-    assert "**Message #3:**" in (embed.description or "")
-    # 3 messages × 5 buttons = 15 items
-    assert len(view.children) == 15
-    button_types = {type(c) for c in view.children}
-    assert button_types == {
-        WhisperShareButton,
-        WhisperHideButton,
-        WhisperGuessButton,
-        WhisperReplyButton,
-        WhisperReportButton,
-    }
-
-
-def test_build_inbox_caps_at_five_visible_and_shows_hint_footer():
-    from bot_modules.cogs.whisper_cog import _build_inbox
-    bot = MagicMock()
-    whispers = [_w(wid=10 + i) for i in range(7)]
-    embed, view = _build_inbox(bot, whispers, title="Your Inbox", hidden_view=False)
-    # 5 messages × 5 buttons = 25 items
-    assert len(view.children) == 25
-    assert embed.footer.text is not None
-    assert "Last 5" in embed.footer.text
-    assert "Hide old" in embed.footer.text
-    assert "7 messages total" in embed.footer.text
-
-
-def test_build_inbox_hidden_view_omits_hide_old_hint():
-    from bot_modules.cogs.whisper_cog import _build_inbox
-    bot = MagicMock()
-    whispers = [_w(wid=10 + i) for i in range(7)]
-    embed, view = _build_inbox(
-        bot, whispers, title="Hidden Whispers", hidden_view=True
-    )
-    assert embed.footer.text is not None
-    assert "Last 5" in embed.footer.text
-    assert "Hide old" not in embed.footer.text
-
-
-def test_build_inbox_assigns_unique_row_per_message():
-    from bot_modules.cogs.whisper_cog import _build_inbox
-    bot = MagicMock()
-    whispers = [_w(wid=10 + i) for i in range(3)]
-    _embed, view = _build_inbox(
-        bot, whispers, title="Your Inbox", hidden_view=False
-    )
-    # First 5 buttons → row 0, next 5 → row 1, next 5 → row 2
+    view = _make_inbox(whispers)
     rows = [item.row for item in view.children]
-    assert rows[0:5] == [0] * 5
-    assert rows[5:10] == [1] * 5
-    assert rows[10:15] == [2] * 5
+    # row 0: select
+    assert rows.count(0) == 1
+    # row 1: filter button only (no pagination)
+    assert rows.count(1) == 1
+    # row 2: action buttons (Guess, Share, Reply, Report, Delete = 5)
+    assert rows.count(2) == 5
+
+
+def test_inbox_select_options_use_status_and_preview():
+    whispers = [
+        _w(wid=10, message="first message", state="pending"),
+        _w(wid=11, message="second message", state="shared"),
+    ]
+    view = _make_inbox(whispers)
+    sel = next(c for c in view.children if isinstance(c, discord.ui.Select))
+    labels = [o.label for o in sel.options]
+    descriptions = [o.description for o in sel.options]
+    assert any("New" in lbl for lbl in labels)
+    assert any("Shared" in lbl for lbl in labels)
+    assert "first message" in (descriptions[0] or "")
+
+
+def test_inbox_paginates_past_25():
+    whispers = [_w(wid=100 + i, message=f"m{i}") for i in range(30)]
+    view = _make_inbox(whispers)
+    rows = [item.row for item in view.children]
+    # Pagination active: row 1 has ◀ ▶ Filter = 3 items
+    assert rows.count(1) == 3
+    # Select shows first 25 only
+    sel = next(c for c in view.children if isinstance(c, discord.ui.Select))
+    assert len(sel.options) == 25
+
+
+def test_inbox_locked_whisper_omits_guess_button():
+    from bot_modules.services.whisper_service import LOCK_DURATION_SECONDS
+    old = _w(created_at=time.time() - LOCK_DURATION_SECONDS - 1)
+    view = _make_inbox([old])
+    # row 2 should be: Share + Reply + Report + Delete = 4 (no Guess)
+    rows = [item.row for item in view.children]
+    assert rows.count(2) == 4
+
+
+def test_inbox_shared_whisper_omits_share_button():
+    whispers = [_w(state="shared")]
+    view = _make_inbox(whispers)
+    # row 2: Guess + Reply + Report + Delete = 4 (no Share)
+    rows = [item.row for item in view.children]
+    assert rows.count(2) == 4
+
+
+def test_inbox_exhausted_guesses_omits_guess_button():
+    whispers = [_w(guesses_left=0)]
+    view = _make_inbox(whispers)
+    # row 2: Share + Reply + Report + Delete = 4 (no Guess)
+    rows = [item.row for item in view.children]
+    assert rows.count(2) == 4
+
+
+def test_inbox_sent_mode_only_delete_action():
+    """Sender's own inbox shows just the Delete action (no Share/Guess/Reply/Report)."""
+    whispers = [_w(sender_id=TARGET, target_id=999, message="my secret")]
+    view = _make_inbox(whispers, mode="sent")
+    rows = [item.row for item in view.children]
+    assert rows.count(2) == 1
+
+
+def test_inbox_interaction_check_rejects_other_user():
+    """Only the inbox owner can interact with the view."""
+    view = _make_inbox([_w()])
+    other = fake_interaction(user=FakeMember(id=OTHER))
+    other.response.send_message = AsyncMock()
+    import asyncio
+    ok = asyncio.run(view.interaction_check(other))
+    assert ok is False
+    other.response.send_message.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_inbox_delete_removes_from_cache_and_redraws():
+    view = _make_inbox([_w(wid=10), _w(wid=11)])
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.edit_message = AsyncMock()
+    # Selected starts at first whisper (id=10)
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(wid=10)), \
+         patch("bot_modules.cogs.whisper_cog._do_soft_delete") as sd:
+        await view._on_delete(interaction)
+    sd.assert_called_once_with(":memory:", 10)
+    assert len(view._all) == 1
+    assert view._all[0].id == 11
+    assert view._selected_id == 11
+    interaction.response.edit_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_inbox_share_updates_cached_state_and_redraws():
+    target_w = _w(wid=10, state="pending")
+    view = _make_inbox([target_w])
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.edit_message = AsyncMock()
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=target_w), \
+         patch("bot_modules.cogs.whisper_cog._do_update_state") as upd, \
+         patch("bot_modules.cogs.whisper_cog._share_side_effects", AsyncMock()):
+        await view._on_share(interaction)
+    upd.assert_called_once_with(":memory:", 10, "shared")
+    assert view._all[0].state == "shared"
+    interaction.response.edit_message.assert_awaited_once()
 
 
 # ── WhisperReplyButton + WhisperReplyModal ───────────────────────────────────
@@ -450,60 +511,6 @@ async def test_reply_modal_dm_includes_whisper_id():
     sender_user.send.assert_awaited_once()
     sent_content = sender_user.send.call_args.args[0]
     assert "Whisper #42" in sent_content
-
-
-# ── S2: Unhide button ────────────────────────────────────────────────────────
-
-
-def test_build_inbox_hidden_view_uses_unhide_button():
-    """hidden_view=True should yield WhisperUnhideButton instead of WhisperHideButton."""
-    from bot_modules.cogs.whisper_cog import (
-        WhisperHideButton,
-        WhisperUnhideButton,
-        _build_inbox,
-    )
-    bot = MagicMock()
-    whispers = [_w(wid=10 + i) for i in range(2)]
-    _embed, view = _build_inbox(bot, whispers, title="Hidden Whispers", hidden_view=True)
-    button_types = {type(c) for c in view.children}
-    assert WhisperUnhideButton in button_types
-    assert WhisperHideButton not in button_types
-
-
-@pytest.mark.asyncio
-async def test_unhide_button_transitions_state_to_pending():
-    """Unhide callback should update state from hidden -> pending."""
-    from bot_modules.cogs.whisper_cog import WhisperUnhideButton
-    bot = MagicMock()
-    bot.ctx.db_path = ":memory:"
-    button = WhisperUnhideButton(bot, 42)
-    interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.response.send_message = AsyncMock()
-
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
-         patch("bot_modules.cogs.whisper_cog._do_update_state") as update_state:
-        await button.callback(interaction)
-
-    update_state.assert_called_once_with(":memory:", 42, "pending")
-    interaction.response.send_message.assert_awaited()
-
-
-@pytest.mark.asyncio
-async def test_unhide_button_rejects_non_target():
-    """Unhide callback rejects users who aren't the recipient."""
-    from bot_modules.cogs.whisper_cog import WhisperUnhideButton
-    bot = MagicMock()
-    bot.ctx.db_path = ":memory:"
-    button = WhisperUnhideButton(bot, 42)
-    interaction = fake_interaction(user=FakeMember(id=OTHER))
-    interaction.response.send_message = AsyncMock()
-
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(state="hidden")), \
-         patch("bot_modules.cogs.whisper_cog._do_update_state") as update_state:
-        await button.callback(interaction)
-
-    update_state.assert_not_called()
-    interaction.response.send_message.assert_awaited()
 
 
 @pytest.mark.asyncio

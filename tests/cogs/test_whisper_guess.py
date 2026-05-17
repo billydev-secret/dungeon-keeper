@@ -302,7 +302,7 @@ async def test_guess_select_wrong_shows_remaining_count():
 
 @pytest.mark.asyncio
 async def test_guess_select_exhausted_removes_guess_button_from_dm():
-    from bot_modules.cogs.whisper_cog import WhisperShareButton, WhisperHideButton, WhisperGuessButton
+    from bot_modules.cogs.whisper_cog import WhisperShareButton, WhisperDeleteButton, WhisperGuessButton
     sel = _make_select()
     sel._values = ["9999"]  # wrong, final guess
     interaction = fake_interaction(user=FakeMember(id=TARGET))
@@ -323,7 +323,7 @@ async def test_guess_select_exhausted_removes_guess_button_from_dm():
     edited_view = dm_msg.edit.call_args.kwargs["view"]
     button_types = [type(item) for item in edited_view.children]
     assert WhisperShareButton in button_types
-    assert WhisperHideButton in button_types
+    assert WhisperDeleteButton in button_types
     assert WhisperGuessButton not in button_types
 
     edit_kwargs = interaction.response.edit_message.call_args.kwargs
