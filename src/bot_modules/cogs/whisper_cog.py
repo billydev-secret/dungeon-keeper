@@ -52,6 +52,7 @@ from bot_modules.services.whisper_service import (
     TransitionValidationError,
     evaluate_guess,
     is_locked,
+    is_terminal_for_sender,
     safe_codefence_content,
     validate_delete,
     validate_expose,
@@ -1818,6 +1819,14 @@ class WhisperFeedView(discord.ui.View):
         check_btn.callback = self._on_check_click
         self.add_item(check_btn)
 
+        sent_btn = discord.ui.Button(
+            label="My Sent",
+            style=discord.ButtonStyle.secondary,
+            custom_id="whisper:check_sent",
+        )
+        sent_btn.callback = self._on_check_sent_click
+        self.add_item(sent_btn)
+
     async def _on_send_click(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_message(_SEND_INSTRUCTIONS, ephemeral=True)
 
@@ -1832,6 +1841,22 @@ class WhisperFeedView(discord.ui.View):
         )
         view = WhisperInboxSelectView(
             self.bot, whispers, invoker_id=interaction.user.id, mode="received"
+        )
+        await interaction.response.send_message(
+            embed=view.embed(), view=view, ephemeral=True
+        )
+
+    async def _on_check_sent_click(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        whispers = await asyncio.to_thread(
+            _do_list_sent,
+            self.bot.ctx.db_path,
+            guild_id=interaction.guild.id,
+            sender_id=interaction.user.id,
+        )
+        active = [w for w in whispers if not is_terminal_for_sender(w)]
+        view = WhisperInboxSelectView(
+            self.bot, active, invoker_id=interaction.user.id, mode="sent"
         )
         await interaction.response.send_message(
             embed=view.embed(), view=view, ephemeral=True
@@ -2143,6 +2168,30 @@ class WhisperCog(commands.Cog):
     @whisper_group.command(name="optout", description="Opt out of whispers.")
     async def whisper_optout(self, interaction: discord.Interaction) -> None:
         await self._optout_impl(interaction)
+
+    @whisper_group.command(
+        name="sent",
+        description="See the whispers you've sent in this server (active only).",
+    )
+    async def whisper_sent(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "This command can only be used in a server.", ephemeral=True
+            )
+            return
+        whispers = await asyncio.to_thread(
+            _do_list_sent,
+            self.ctx.db_path,
+            guild_id=interaction.guild.id,
+            sender_id=interaction.user.id,
+        )
+        active = [w for w in whispers if not is_terminal_for_sender(w)]
+        view = WhisperInboxSelectView(
+            self.bot, active, invoker_id=interaction.user.id, mode="sent"
+        )
+        await interaction.response.send_message(
+            embed=view.embed(), view=view, ephemeral=True
+        )
 
     async def _send_impl(
         self,
