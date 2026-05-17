@@ -47,6 +47,7 @@ from bot_modules.services.whisper_service import (
     ERROR_GUESS_ALREADY_SOLVED,
     ERROR_GUESS_NO_ATTEMPTS,
     ERROR_GUESS_NOT_TARGET,
+    MAX_MESSAGE_LENGTH,
     GuessValidationError,
     SendValidationError,
     TransitionValidationError,
@@ -1789,13 +1790,241 @@ class WhisperInboxSelectView(discord.ui.View):
         )
 
 
-# ── Persistent feed-channel view (Send / My Inbox) ───────────────────────────
+# ── Send picker (button-driven flow) ─────────────────────────────────────────
 
-_SEND_INSTRUCTIONS = (
-    "Use `/whisper send` to send an anonymous message. "
-    "Pick the recipient from autocomplete — only opted-in members appear.\n\n"
-    "-# Your identity is logged by admins for moderation."
-)
+
+_SEND_PICKER_PAGE_SIZE = 25
+
+
+class WhisperSendComposeModal(discord.ui.Modal, title="Send anonymous whisper"):
+    message_input: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="Your message",
+        style=discord.TextStyle.long,
+        required=True,
+        max_length=MAX_MESSAGE_LENGTH,
+        placeholder="They get 3 guesses to figure out it was you.",
+    )
+
+    def __init__(self, cog: WhisperCog, target_id: int) -> None:
+        super().__init__()
+        self._cog = cog
+        self._target_id = target_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Whisper can only be used in a server.", ephemeral=True
+            )
+            return
+        member = interaction.guild.get_member(self._target_id)
+        if member is None:
+            await interaction.response.send_message(
+                "That member isn't in this server any more.", ephemeral=True
+            )
+            return
+        content = str(self.message_input.value)
+        await self._cog._send_impl(interaction, target=member, message=content)
+
+
+class _WhisperSendTargetSelect(discord.ui.Select):  # type: ignore[type-arg]
+    def __init__(
+        self,
+        cog: WhisperCog,
+        members: Sequence[discord.Member],
+        page: int,
+        *,
+        placeholder: str,
+    ) -> None:
+        page_members = members[
+            page * _SEND_PICKER_PAGE_SIZE : (page + 1) * _SEND_PICKER_PAGE_SIZE
+        ]
+        options = [
+            discord.SelectOption(
+                label=m.display_name[:100],
+                value=str(m.id),
+                description=(f"@{m.name}" if m.name != m.display_name else None),
+            )
+            for m in page_members
+        ]
+        super().__init__(
+            placeholder=placeholder[:150],
+            options=options,
+            min_values=1,
+            max_values=1,
+        )
+        self._cog = cog
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        target_id = int(self.values[0])
+        await interaction.response.send_modal(
+            WhisperSendComposeModal(self._cog, target_id)
+        )
+
+
+class _WhisperSendFilterModal(discord.ui.Modal, title="Filter members"):
+    query: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="Search",
+        placeholder="Type a name…",
+        required=True,
+        max_length=50,
+    )
+
+    def __init__(self, parent: WhisperSendTargetSelectView) -> None:
+        super().__init__()
+        self._parent = parent
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        q = str(self.query.value).strip()
+        q_lower = q.lower()
+
+        def _score(m: discord.Member) -> int:
+            name = m.display_name.lower()
+            if name == q_lower:
+                return 4
+            if name.startswith(q_lower):
+                return 3
+            if q_lower in name:
+                return 2
+            it = iter(name)
+            if all(c in it for c in q_lower):
+                return 1
+            return 0
+
+        scored = sorted(
+            ((m, _score(m)) for m in self._parent._all_members),
+            key=lambda x: -x[1],
+        )
+        self._parent._display_members = [m for m, s in scored if s > 0]
+        self._parent._filter_query = q
+        self._parent._page = 0
+        self._parent._rebuild()
+        await interaction.response.edit_message(view=self._parent)
+
+
+class WhisperSendTargetSelectView(discord.ui.View):
+    """Paginated/filterable picker of opt-in members for the button-driven
+    send flow. Selecting a member opens WhisperSendComposeModal."""
+
+    def __init__(
+        self,
+        cog: WhisperCog,
+        members: Sequence[discord.Member],
+        *,
+        invoker_id: int,
+        page: int = 0,
+    ) -> None:
+        super().__init__(timeout=120)
+        self.cog = cog
+        self._invoker_id = invoker_id
+        self._all_members = list(members)
+        self._display_members = self._all_members
+        self._filter_query = ""
+        self._page = page
+        self._rebuild()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self._invoker_id:
+            await interaction.response.send_message(
+                "This picker isn't for you.", ephemeral=True
+            )
+            return False
+        return True
+
+    def _page_count(self) -> int:
+        return max(
+            1,
+            (len(self._display_members) + _SEND_PICKER_PAGE_SIZE - 1)
+            // _SEND_PICKER_PAGE_SIZE,
+        )
+
+    def _rebuild(self) -> None:
+        self.clear_items()
+        page_count = self._page_count()
+
+        if self._filter_query:
+            n = len(self._display_members)
+            placeholder = (
+                f'🔍 "{self._filter_query}" — {n} match'
+                f'{"es" if n != 1 else ""}'
+            )
+            if page_count > 1:
+                placeholder += f" ({self._page + 1}/{page_count})"
+        elif page_count > 1:
+            placeholder = f"Pick recipient… ({self._page + 1}/{page_count})"
+        else:
+            placeholder = "Pick recipient…"
+
+        if self._display_members:
+            self.add_item(
+                _WhisperSendTargetSelect(
+                    self.cog, self._display_members, self._page,
+                    placeholder=placeholder,
+                )
+            )
+        else:
+            empty: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
+                placeholder="No members match.",
+                options=[
+                    discord.SelectOption(label="No results", value="__none__")
+                ],
+                disabled=True,
+                row=0,
+            )
+            self.add_item(empty)
+
+        if page_count > 1:
+            prev_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="◀",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self._page == 0),
+                row=1,
+            )
+            prev_btn.callback = self._on_prev
+            self.add_item(prev_btn)
+            next_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="▶",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self._page >= page_count - 1),
+                row=1,
+            )
+            next_btn.callback = self._on_next
+            self.add_item(next_btn)
+
+        filter_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="🔍 Filter", style=discord.ButtonStyle.secondary, row=1
+        )
+        filter_btn.callback = self._on_filter
+        self.add_item(filter_btn)
+
+        if self._filter_query:
+            clear_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="✕ Clear", style=discord.ButtonStyle.danger, row=1
+            )
+            clear_btn.callback = self._on_clear_filter
+            self.add_item(clear_btn)
+
+    async def _on_prev(self, interaction: discord.Interaction) -> None:
+        self._page = max(0, self._page - 1)
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_next(self, interaction: discord.Interaction) -> None:
+        self._page = min(self._page_count() - 1, self._page + 1)
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
+    async def _on_filter(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(_WhisperSendFilterModal(self))
+
+    async def _on_clear_filter(self, interaction: discord.Interaction) -> None:
+        self._display_members = self._all_members
+        self._filter_query = ""
+        self._page = 0
+        self._rebuild()
+        await interaction.response.edit_message(view=self)
+
+
+# ── Persistent feed-channel view (Send / My Inbox / My Sent) ─────────────────
 
 
 class WhisperFeedView(discord.ui.View):
@@ -1828,7 +2057,55 @@ class WhisperFeedView(discord.ui.View):
         self.add_item(sent_btn)
 
     async def _on_send_click(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_message(_SEND_INSTRUCTIONS, ephemeral=True)
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "Whisper can only be used in a server.", ephemeral=True
+            )
+            return
+        cfg = await asyncio.to_thread(
+            _load_config, self.bot.ctx.db_path, interaction.guild.id
+        )
+        if cfg.role_id == 0:
+            await interaction.response.send_message(
+                "Whispers aren't configured in this server yet.", ephemeral=True
+            )
+            return
+        role = interaction.guild.get_role(cfg.role_id)
+        if role is None:
+            await interaction.response.send_message(
+                "Whisper role no longer exists. Ask an admin to fix the config.",
+                ephemeral=True,
+            )
+            return
+        if cfg.role_id not in {r.id for r in getattr(interaction.user, "roles", [])}:
+            await interaction.response.send_message(
+                "You need the Whisper role first. Use `/whisper optin` to join.",
+                ephemeral=True,
+            )
+            return
+        members = sorted(
+            [m for m in role.members if m.id != interaction.user.id],
+            key=lambda m: m.display_name.lower(),
+        )
+        if not members:
+            await interaction.response.send_message(
+                "No other opted-in members to whisper to yet.", ephemeral=True
+            )
+            return
+        cog = self.bot.get_cog("WhisperCog")
+        if not isinstance(cog, WhisperCog):
+            await interaction.response.send_message(
+                "Whisper cog isn't loaded. Tell an admin.", ephemeral=True
+            )
+            return
+        view = WhisperSendTargetSelectView(
+            cog, members, invoker_id=interaction.user.id
+        )
+        await interaction.response.send_message(
+            "Pick someone to whisper. "
+            "-# Your identity is logged for moderation.",
+            view=view, ephemeral=True,
+        )
 
     async def _on_check_click(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
@@ -2264,7 +2541,8 @@ class WhisperCog(commands.Cog):
 
         try:
             dm_msg = await target.send(
-                f"Someone in **{interaction.guild.name}** sent you a secret message:\n"
+                f"\U0001f4ec You got a Whisper from someone in **{interaction.guild.name}**.\n"
+                f"You have **3 guesses** to figure out who sent it — wrong guesses are gone forever.\n"
                 f"```{safe_codefence_content(message.strip())}```",
                 view=WhisperDmView(self.bot, whisper_id),
             )

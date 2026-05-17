@@ -32,16 +32,65 @@ def _cfg() -> WhisperConfig:
 
 
 @pytest.mark.asyncio
-async def test_send_whisper_button_sends_instructions():
-    view = _make_view()
-    interaction = fake_interaction(user=FakeMember(id=1001))
+async def test_send_whisper_button_opens_target_picker():
+    """Clicking Send Whisper opens the paginated target picker (ephemeral)."""
+    from bot_modules.cogs.whisper_cog import (
+        WhisperCog,
+        WhisperSendTargetSelectView,
+    )
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    cog = WhisperCog(bot)
+    bot.get_cog = MagicMock(return_value=cog)
+
+    from bot_modules.cogs.whisper_cog import WhisperFeedView
+    view = WhisperFeedView(bot)
+
+    sender = FakeMember(id=1001)
+    role = MagicMock()
+    role.id = ROLE
+    role.members = [FakeMember(id=4001, display_name="alice"), FakeMember(id=4002, display_name="bob")]
+    sender.roles = [role]
+    interaction = fake_interaction(user=sender)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    interaction.guild.get_role = MagicMock(return_value=role)
     interaction.response.send_message = AsyncMock()
 
-    await view._on_send_click(interaction)
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
+        await view._on_send_click(interaction)
 
-    interaction.response.send_message.assert_called_once()
-    call_kwargs = interaction.response.send_message.call_args.kwargs
-    assert call_kwargs.get("ephemeral") is True
+    interaction.response.send_message.assert_awaited_once()
+    sent_kwargs = interaction.response.send_message.call_args.kwargs
+    assert sent_kwargs.get("ephemeral") is True
+    assert isinstance(sent_kwargs.get("view"), WhisperSendTargetSelectView)
+
+
+@pytest.mark.asyncio
+async def test_send_whisper_button_rejects_without_role():
+    """User must hold the whisper role to invoke the picker."""
+    from bot_modules.cogs.whisper_cog import WhisperFeedView
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    view = WhisperFeedView(bot)
+
+    sender = FakeMember(id=1001)
+    sender.roles = []  # no whisper role
+    role = MagicMock()
+    role.id = ROLE
+    role.members = []
+    interaction = fake_interaction(user=sender)
+    interaction.guild = MagicMock()
+    interaction.guild.id = 9001
+    interaction.guild.get_role = MagicMock(return_value=role)
+    interaction.response.send_message = AsyncMock()
+
+    with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
+        await view._on_send_click(interaction)
+
+    interaction.response.send_message.assert_awaited_once()
+    args = interaction.response.send_message.call_args.args
+    assert "optin" in args[0].lower() or "role" in args[0].lower()
 
 
 @pytest.mark.asyncio
