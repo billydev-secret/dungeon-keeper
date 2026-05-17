@@ -219,7 +219,8 @@ async def test_reply_button_third_party_rejected():
     interaction.response.send_modal = AsyncMock()
     interaction.response.send_message = AsyncMock()
 
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_count_replies", return_value=0):
         await button.callback(interaction)
 
     interaction.response.send_modal.assert_not_called()
@@ -235,7 +236,8 @@ async def test_reply_button_target_opens_modal():
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.response.send_modal = AsyncMock()
 
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()):
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_count_replies", return_value=0):
         await button.callback(interaction)
 
     interaction.response.send_modal.assert_called_once()
@@ -257,6 +259,7 @@ async def test_reply_modal_target_dms_sender():
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_count_replies", return_value=0), \
          patch("bot_modules.cogs.whisper_cog._do_insert_reply", return_value=99) as ins:
         await modal.on_submit(interaction)
 
@@ -287,6 +290,7 @@ async def test_reply_modal_sender_dms_target():
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_count_replies", return_value=0), \
          patch("bot_modules.cogs.whisper_cog._do_insert_reply", return_value=99) as ins:
         await modal.on_submit(interaction)
 
@@ -318,6 +322,7 @@ async def test_reply_modal_dm_forbidden_does_not_persist():
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_count_replies", return_value=0), \
          patch("bot_modules.cogs.whisper_cog._do_insert_reply", return_value=99), \
          patch("bot_modules.cogs.whisper_cog._do_delete_reply") as del_mock:
         await modal.on_submit(interaction)
@@ -504,6 +509,7 @@ async def test_reply_modal_dm_includes_whisper_id():
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(wid=42)), \
+         patch("bot_modules.cogs.whisper_cog._do_count_replies", return_value=0), \
          patch("bot_modules.cogs.whisper_cog._do_insert_reply", return_value=99), \
          patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await modal.on_submit(interaction)
@@ -537,6 +543,7 @@ async def test_reply_modal_posts_to_mod_log():
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_count_replies", return_value=0), \
          patch("bot_modules.cogs.whisper_cog._do_insert_reply", return_value=99), \
          patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await modal.on_submit(interaction)

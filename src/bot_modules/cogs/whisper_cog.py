@@ -55,6 +55,7 @@ from bot_modules.services.whisper_service import (
     safe_codefence_content,
     validate_delete,
     validate_expose,
+    validate_reply,
     validate_send,
     validate_share,
 )
@@ -620,10 +621,17 @@ class WhisperReplyButton(
         if whisper is None:
             await interaction.response.send_message("Whisper not found.", ephemeral=True)
             return
-        if interaction.user.id not in (whisper.sender_id, whisper.target_id):
-            await interaction.response.send_message(
-                "Only the sender or recipient can reply.", ephemeral=True
+        reply_count = await asyncio.to_thread(
+            _do_count_replies, self.bot.ctx.db_path, self.whisper_id
+        )
+        try:
+            validate_reply(
+                whisper,
+                invoker_id=interaction.user.id,
+                reply_count=reply_count,
             )
+        except TransitionValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
             return
         await interaction.response.send_modal(
             WhisperReplyModal(self.bot, self.whisper_id)
@@ -706,15 +714,24 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
                 "Whisper not found.", ephemeral=True
             )
             return
-        if interaction.user.id == whisper.target_id:
-            to_user_id = whisper.sender_id
-        elif interaction.user.id == whisper.sender_id:
-            to_user_id = whisper.target_id
-        else:
-            await interaction.response.send_message(
-                "Only the sender or recipient can reply.", ephemeral=True
+        reply_count = await asyncio.to_thread(
+            _do_count_replies, self.bot.ctx.db_path, self.whisper_id
+        )
+        try:
+            validate_reply(
+                whisper,
+                invoker_id=interaction.user.id,
+                reply_count=reply_count,
             )
+        except TransitionValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
             return
+
+        to_user_id = (
+            whisper.sender_id
+            if interaction.user.id == whisper.target_id
+            else whisper.target_id
+        )
 
         content = str(self.reply_input.value).strip()
         if not content:
@@ -793,11 +810,14 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
 
 
 class WhisperReplyDmView(discord.ui.View):
-    """View attached to incoming reply DMs so the recipient can reply back."""
+    """View attached to incoming reply DMs. The reply chain ends here — only a
+    Report button is offered for moderation. (One reply per whisper.)"""
 
     def __init__(self, bot: Bot, whisper_id: int, *, reply_id: int | None = None) -> None:
         super().__init__(timeout=None)
-        self.add_item(WhisperReplyButton(bot, whisper_id))
+        # whisper_id is preserved on the view for backwards compatibility with
+        # any callers that still pass it; no button uses it any more.
+        _ = whisper_id  # noqa: F841
         if reply_id is not None:
             self.add_item(WhisperReportReplyButton(bot, reply_id))
 
@@ -1738,10 +1758,17 @@ class WhisperInboxSelectView(discord.ui.View):
         selected = self._selected()
         if selected is None:
             return
-        if interaction.user.id not in (selected.sender_id, selected.target_id):
-            await interaction.response.send_message(
-                "Only the sender or recipient can reply.", ephemeral=True
+        reply_count = await asyncio.to_thread(
+            _do_count_replies, self.bot.ctx.db_path, selected.id
+        )
+        try:
+            validate_reply(
+                selected,
+                invoker_id=interaction.user.id,
+                reply_count=reply_count,
             )
+        except TransitionValidationError as e:
+            await interaction.response.send_message(e.message, ephemeral=True)
             return
         await interaction.response.send_modal(
             WhisperReplyModal(self.bot, selected.id)
