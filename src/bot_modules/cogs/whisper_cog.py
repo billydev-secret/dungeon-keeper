@@ -2521,23 +2521,22 @@ class WhisperCog(commands.Cog):
                 "Whisper can only be used in a server.", ephemeral=True
             )
             return
+        await interaction.response.defer(ephemeral=True)
         cfg = await asyncio.to_thread(
             _load_config, self.ctx.db_path, interaction.guild.id
         )
         if not is_configured(cfg):
-            await interaction.response.send_message(
-                ERROR_NOT_CONFIGURED, ephemeral=True
-            )
+            await interaction.followup.send(ERROR_NOT_CONFIGURED, ephemeral=True)
             return
         role = interaction.guild.get_role(cfg.role_id)
         if role is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Whisper role no longer exists. Ask an admin to fix the config.",
                 ephemeral=True,
             )
             return
         if cfg.role_id not in {r.id for r in getattr(interaction.user, "roles", [])}:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You need the Whisper role first. Use `/whisper optin` to join.",
                 ephemeral=True,
             )
@@ -2547,14 +2546,14 @@ class WhisperCog(commands.Cog):
             key=lambda m: m.display_name.lower(),
         )
         if not members:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "No other opted-in members to whisper to yet.", ephemeral=True
             )
             return
         view = WhisperSendTargetSelectView(
             self, members, invoker_id=interaction.user.id
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Pick someone to whisper. "
             "-# Your identity is logged for moderation.",
             view=view, ephemeral=True,
