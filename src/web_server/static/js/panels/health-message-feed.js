@@ -91,7 +91,7 @@ export function mount(container) {
         </div>
       </div>
 
-      <div class="home-grid">
+      <div class="home-grid" style="margin-top:14px;">
         <div class="home-card home-card-wide">
           <div class="mf-filters" style="display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:12px;">
             <label style="display:flex;align-items:center;gap:4px;font-size:13px;">

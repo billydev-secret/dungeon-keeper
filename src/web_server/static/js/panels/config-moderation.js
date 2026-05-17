@@ -1,14 +1,12 @@
-import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
+import { loadConfig, loadChannels, loadCategories, loadRoles, channelSelect, categorySelect, roleSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
 
   (async () => {
-    const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
+    const [config, channels, categories, roles] = await Promise.all([loadConfig(), loadChannels(), loadCategories(), loadRoles()]);
     const m = config.moderation;
 
-    // Build category options from channels (Discord categories are type 4, but
-    // the meta endpoint returns text channels — we accept channel IDs here)
     container.innerHTML = `
       <div class="panel">
         <header>
@@ -22,13 +20,13 @@ export function mount(container) {
             <div class="field-hint">Role assigned to jailed members</div>
           </div>
           <div class="field">
-            <label>Jail Category ID</label>
-            <input type="text" name="jail_category_id" value="${m.jail_category_id !== "0" ? m.jail_category_id : ""}" placeholder="Category ID" />
+            <label>Jail Category</label>
+            <select name="jail_category_id">${categorySelect(categories, m.jail_category_id)}</select>
             <div class="field-hint">Discord category where jail channels are created</div>
           </div>
           <div class="field">
-            <label>Ticket Category ID</label>
-            <input type="text" name="ticket_category_id" value="${m.ticket_category_id !== "0" ? m.ticket_category_id : ""}" placeholder="Category ID" />
+            <label>Ticket Category</label>
+            <select name="ticket_category_id">${categorySelect(categories, m.ticket_category_id)}</select>
             <div class="field-hint">Discord category where ticket channels are created</div>
           </div>
           <div class="field">

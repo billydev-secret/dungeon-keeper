@@ -135,7 +135,6 @@ def decide_action(
     conn,
     user: WellnessUser,
     message: discord.Message,
-    now: float,
 ) -> EnforcementDecision:
     """Compute the enforcement action for a single message. See module docstring."""
     if not user.is_active or user.is_paused:
@@ -376,7 +375,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                     update_slow_mode_last_message(conn, guild.id, author.id, now)
 
             # 2. Cap evaluation + escalation
-            decision = decide_action(conn, user, message, now)
+            decision = decide_action(conn, user, message)
 
             if decision.action == Action.ALLOW:
                 return False
@@ -391,29 +390,20 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                 log.exception("wellness: streak violation update failed")
 
             if decision.action == Action.NUDGE:
-                await _send_nudge(ctx, conn, message, user, decision)
+                await _send_nudge(conn, message, user, decision)
                 return False
 
             if decision.action == Action.COOLDOWN:
                 set_cooldown(conn, guild.id, author.id, now + COOLDOWN_DURATION_SECONDS)
-                await _send_cooldown(ctx, message, user, decision)
+                await _send_cooldown(message, user)
                 return False
 
             if decision.action == Action.FRICTION:
                 if not _bot_can_manage_messages(message):
                     # Degrade to nudge if we can't actually delete messages
-                    await _send_nudge(ctx, conn, message, user, decision)
+                    await _send_nudge(conn, message, user, decision)
                     return False
-                # Arm slow mode for the duration of the cap window(s)
-                _arm_friction_for_caps(
-                    conn,
-                    guild.id,
-                    author.id,
-                    decision.cap_hits,
-                    now_local,
-                    user.daily_reset_hour,
-                )
-                # Try to DM first; only delete if DM succeeded
+                # Try to DM first; only delete (and arm slow mode) if DM succeeded
                 dm_ok = await _try_dm(
                     author,
                     embed=discord.Embed(
@@ -436,7 +426,15 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                     await message.delete()
                 except (discord.Forbidden, discord.NotFound):
                     return False
-                # Record this as the last message ts for the rate limit
+                # Delete succeeded — now commit the slow mode state to DB
+                _arm_friction_for_caps(
+                    conn,
+                    guild.id,
+                    author.id,
+                    decision.cap_hits,
+                    now_local,
+                    user.daily_reset_hour,
+                )
                 update_slow_mode_last_message(conn, guild.id, author.id, now)
                 return True
     except Exception:
@@ -480,12 +478,7 @@ def _effective_cap_limit(cap: WellnessCap, now_local) -> int:
     return cap.cap_limit
 
 
-def _format_cap_summary(cap: WellnessCap, count: int) -> str:
-    return f"{count}/{cap.cap_limit} {cap.window}"
-
-
 async def _send_nudge(
-    ctx,
     conn,
     message: discord.Message,
     user: WellnessUser,
@@ -518,9 +511,7 @@ async def _send_nudge(
     await _deliver_user_notice(message, user, desc)
 
 
-async def _send_cooldown(
-    ctx, message: discord.Message, user: WellnessUser, decision: EnforcementDecision
-) -> None:
+async def _send_cooldown(message: discord.Message, user: WellnessUser) -> None:
     desc = (
         "☕ Time for a 5-minute breather. "
         "Stretch, hydrate, look out a window. You can keep posting — this is just a gentle pause."
@@ -596,7 +587,7 @@ async def _handle_away_mentions(ctx, message: discord.Message) -> None:
                 continue
             away_targets.append((mentioned, other))
         # Reserve rate-limit slots immediately so a flood of mentions can't burst past it
-        for mentioned, _other in away_targets:
+        for mentioned, _ in away_targets:
             record_away_sent(conn, guild_id, mentioned.id, message.channel.id, now)
 
     if not away_targets:

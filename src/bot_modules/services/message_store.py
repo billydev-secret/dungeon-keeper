@@ -476,6 +476,7 @@ def delete_message(conn: sqlite3.Connection, message_id: int) -> None:
     conn.execute("DELETE FROM message_reactions WHERE message_id = ?", (message_id,))
     conn.execute("DELETE FROM message_mentions WHERE message_id = ?", (message_id,))
     conn.execute("DELETE FROM message_attachments WHERE message_id = ?", (message_id,))
+    conn.execute("DELETE FROM message_embeds WHERE message_id = ?", (message_id,))
     conn.execute("DELETE FROM message_sentiment WHERE message_id = ?", (message_id,))
     conn.execute("DELETE FROM messages WHERE message_id = ?", (message_id,))
 
@@ -486,11 +487,12 @@ def delete_messages_bulk(conn: sqlite3.Connection, message_ids: set[int]) -> Non
         return
     ph = ",".join("?" * len(message_ids))
     ids = list(message_ids)
-    conn.execute(f"DELETE FROM message_reactions  WHERE message_id IN ({ph})", ids)
-    conn.execute(f"DELETE FROM message_mentions   WHERE message_id IN ({ph})", ids)
+    conn.execute(f"DELETE FROM message_reactions   WHERE message_id IN ({ph})", ids)
+    conn.execute(f"DELETE FROM message_mentions    WHERE message_id IN ({ph})", ids)
     conn.execute(f"DELETE FROM message_attachments WHERE message_id IN ({ph})", ids)
-    conn.execute(f"DELETE FROM message_sentiment  WHERE message_id IN ({ph})", ids)
-    conn.execute(f"DELETE FROM messages            WHERE message_id IN ({ph})", ids)
+    conn.execute(f"DELETE FROM message_embeds      WHERE message_id IN ({ph})", ids)
+    conn.execute(f"DELETE FROM message_sentiment   WHERE message_id IN ({ph})", ids)
+    conn.execute(f"DELETE FROM messages             WHERE message_id IN ({ph})", ids)
 
 
 # GIF / image-link patterns: Tenor, Giphy, Imgur GIFs, Discord CDN GIFs, bare .gif URLs

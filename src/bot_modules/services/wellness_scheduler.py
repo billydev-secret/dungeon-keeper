@@ -127,7 +127,7 @@ async def _send_blackout_entry_dm(
     await _try_dm(member, embed=embed)
 
 
-async def _lift_expired_slow_mode(bot: discord.Client, db_path: Path) -> None:
+async def _lift_expired_slow_mode(db_path: Path) -> None:
     now = time.time()
     with open_db(db_path) as conn:
         expired = list_expired_slow_mode(conn, now)
@@ -135,7 +135,7 @@ async def _lift_expired_slow_mode(bot: discord.Client, db_path: Path) -> None:
             lift_slow_mode(conn, state.guild_id, state.user_id)
 
 
-async def _resume_expired_pauses(bot: discord.Client, db_path: Path) -> None:
+async def _resume_expired_pauses(db_path: Path) -> None:
     """Auto-resume users whose paused_until has passed."""
     now = time.time()
     with open_db(db_path) as conn:
@@ -147,7 +147,7 @@ async def _resume_expired_pauses(bot: discord.Client, db_path: Path) -> None:
             resume_user(conn, int(r["guild_id"]), int(r["user_id"]))
 
 
-async def _nightly_maintenance(bot: discord.Client, db_path: Path) -> None:
+async def _nightly_maintenance(db_path: Path) -> None:
     """Heavy maintenance: GC counter rows and sweep retired users."""
     with open_db(db_path) as conn:
         gc_old_cap_data(conn)
@@ -193,15 +193,15 @@ async def wellness_tick_loop(bot: discord.Client, db_path: Path) -> None:
     while not bot.is_closed():
         try:
             await _process_blackout_transitions(bot, db_path)
-            await _lift_expired_slow_mode(bot, db_path)
-            await _resume_expired_pauses(bot, db_path)
+            await _lift_expired_slow_mode(db_path)
+            await _resume_expired_pauses(db_path)
             await _credit_clean_days(bot, db_path)
 
             # Nightly maintenance — fire once per UTC day at minute 5
             now_utc = user_now("UTC")
             today = now_utc.date().isoformat()
             if last_nightly_day != today and now_utc.hour == 0 and now_utc.minute >= 5:
-                await _nightly_maintenance(bot, db_path)
+                await _nightly_maintenance(db_path)
                 last_nightly_day = today
         except Exception:
             log.exception("wellness_tick_loop error")
@@ -257,7 +257,7 @@ def _build_active_embed(
 
 
 async def _rebuild_active_list_for_guild(
-    bot: discord.Client, db_path: Path, guild: discord.Guild
+    db_path: Path, guild: discord.Guild
 ) -> None:
     with open_db(db_path) as conn:
         cfg = get_wellness_config(conn, guild.id)
@@ -313,7 +313,7 @@ async def _rebuild_active_list_for_guild(
 
 
 async def _post_milestone_celebrations(
-    bot: discord.Client, db_path: Path, guild: discord.Guild
+    db_path: Path, guild: discord.Guild
 ) -> None:
     """Post celebration messages for users whose badge upgraded since last check."""
     with open_db(db_path) as conn:
@@ -381,7 +381,7 @@ async def _post_milestone_celebrations(
 
 def _badge_rank(badge: str) -> int:
     """Return the MILESTONES index for a badge, or -1 if unknown."""
-    for i, (_threshold, emoji) in enumerate(MILESTONES):
+    for i, (_, emoji) in enumerate(MILESTONES):
         if emoji == badge:
             return i
     return -1
@@ -396,8 +396,8 @@ async def wellness_active_list_loop(bot: discord.Client, db_path: Path) -> None:
         try:
             for guild in bot.guilds:
                 try:
-                    await _post_milestone_celebrations(bot, db_path, guild)
-                    await _rebuild_active_list_for_guild(bot, db_path, guild)
+                    await _post_milestone_celebrations(db_path, guild)
+                    await _rebuild_active_list_for_guild(db_path, guild)
                 except Exception:
                     log.exception(
                         "wellness_active_list_loop: guild %s error",
@@ -449,14 +449,13 @@ def _build_weekly_report_embed(
 
 def _iso_week_for(now_local) -> tuple[int, int, str]:
     """Return (iso_year, iso_week, week_start_iso) for the user's now."""
-    iso_year, iso_week, _iso_weekday = now_local.isocalendar()
+    iso_year, iso_week, _ = now_local.isocalendar()
     # Compute Monday of this ISO week
     week_start = now_local.date() - timedelta(days=now_local.weekday())
     return iso_year, iso_week, week_start.isoformat()
 
 
 async def _generate_and_send_weekly_report(
-    bot: discord.Client,
     db_path: Path,
     guild: discord.Guild,
     user,
@@ -510,8 +509,8 @@ async def _generate_and_send_weekly_report(
     try:
         await member.send(embed=embed)
     except (discord.Forbidden, discord.HTTPException):
-        log.info(
-            "wellness_weekly_report: DM closed for user %s",
+        log.warning(
+            "wellness_weekly_report: DM closed for user %s — report archived but not delivered",
             format_user_for_log(member, user.user_id),
         )
 
@@ -533,7 +532,7 @@ async def wellness_weekly_report_loop(bot: discord.Client, db_path: Path) -> Non
                     if u.is_paused:
                         continue
                     try:
-                        await _generate_and_send_weekly_report(bot, db_path, guild, u)
+                        await _generate_and_send_weekly_report(db_path, guild, u)
                     except Exception:
                         log.exception(
                             "wellness_weekly_report_loop: failed for guild=%s user=%s",

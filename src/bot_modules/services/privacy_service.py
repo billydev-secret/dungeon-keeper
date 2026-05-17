@@ -108,7 +108,7 @@ def purge_user_data(
         except Exception as exc:
             log.warning("Failed to purge %s for user %d in guild %d: %s", table, user_id, guild_id, exc)
 
-    for col in ("user_id_a", "user_id_b"):
+    for col in ("user_a", "user_b"):
         try:
             conn.execute(
                 f"DELETE FROM wellness_partners WHERE guild_id = ? AND {col} = ?",

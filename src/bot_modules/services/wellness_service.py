@@ -470,7 +470,8 @@ def opt_in_user(
         ),
     )
     user = get_wellness_user(conn, guild_id, user_id)
-    assert user is not None
+    if user is None:
+        raise RuntimeError(f"wellness_users row missing after upsert for {guild_id}/{user_id}")
     return user
 
 
@@ -606,6 +607,20 @@ def gc_opted_out_users(
             "DELETE FROM wellness_users WHERE guild_id = ? AND user_id = ?", (gid, uid)
         )
         conn.execute(
+            """
+            DELETE FROM wellness_cap_counters
+             WHERE cap_id IN (SELECT id FROM wellness_caps WHERE guild_id = ? AND user_id = ?)
+            """,
+            (gid, uid),
+        )
+        conn.execute(
+            """
+            DELETE FROM wellness_cap_overages
+             WHERE cap_id IN (SELECT id FROM wellness_caps WHERE guild_id = ? AND user_id = ?)
+            """,
+            (gid, uid),
+        )
+        conn.execute(
             "DELETE FROM wellness_caps WHERE guild_id = ? AND user_id = ?", (gid, uid)
         )
         conn.execute(
@@ -697,7 +712,8 @@ def upsert_wellness_config(
             (guild_id,),
         )
         existing = get_wellness_config(conn, guild_id)
-        assert existing is not None
+        if existing is None:
+            raise RuntimeError(f"wellness_config row missing after insert for guild {guild_id}")
 
     fields: list[str] = []
     values: list = []
@@ -724,7 +740,8 @@ def upsert_wellness_config(
             values,
         )
     result = get_wellness_config(conn, guild_id)
-    assert result is not None
+    if result is None:
+        raise RuntimeError(f"wellness_config row missing after update for guild {guild_id}")
     return result
 
 
@@ -1311,7 +1328,8 @@ def ensure_streak(
         (guild_id, user_id, today_iso, time.time()),
     )
     streak = get_streak(conn, guild_id, user_id)
-    assert streak is not None
+    if streak is None:
+        raise RuntimeError(f"wellness_streaks row missing after insert for {guild_id}/{user_id}")
     return streak
 
 

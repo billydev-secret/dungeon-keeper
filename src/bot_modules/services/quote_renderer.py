@@ -117,26 +117,28 @@ def _load_font_fallback(size: int):
 # ── Text wrapping ─────────────────────────────────────────────────────────────
 
 def _wrap_text(text: str, font, max_width: int, draw, measure=None) -> list[str]:
-    words = text.split()
-    if not words:
-        return [""]
-    lines: list[str] = []
-    current = ""
-    for word in words:
-        candidate = f"{current} {word}".strip()
-        if measure is not None:
-            _w = measure(candidate)
-        else:
-            bbox = draw.textbbox((0, 0), candidate, font=font)
-            _w = int(bbox[2] - bbox[0])
-        if _w <= max_width or not current:
-            current = candidate
-        else:
-            lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    return lines or [""]
+    result: list[str] = []
+    for para in text.splitlines():
+        words = para.split()
+        if not words:
+            result.append("")
+            continue
+        current = ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if measure is not None:
+                _w = measure(candidate)
+            else:
+                bbox = draw.textbbox((0, 0), candidate, font=font)
+                _w = int(bbox[2] - bbox[0])
+            if _w <= max_width or not current:
+                current = candidate
+            else:
+                result.append(current)
+                current = word
+        if current:
+            result.append(current)
+    return result or [""]
 
 
 # ── Pfp-background card ───────────────────────────────────────────────────────

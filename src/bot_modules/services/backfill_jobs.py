@@ -103,8 +103,8 @@ def _embed_to_dict(e: discord.Embed) -> dict:
         "color": e.color.value if e.color else None,
         "image": e.image.url if e.image else None,
         "thumbnail": e.thumbnail.url if e.thumbnail else None,
-        "author": {"name": e.author.name} if e.author else None,
-        "footer": {"text": e.footer.text} if e.footer else None,
+        "author": e.author.name if e.author else None,
+        "footer": e.footer.text if e.footer else None,
     }
 
 

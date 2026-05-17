@@ -8,6 +8,7 @@ Both show a guild picker when DungeonKeeper is in multiple emoji-capable servers
 """
 from __future__ import annotations
 
+import io
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -16,6 +17,7 @@ import discord
 import httpx
 from discord import app_commands
 from discord.ext import commands
+from PIL import Image
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -24,6 +26,41 @@ log = logging.getLogger("dungeonkeeper.emoji_stealer")
 
 _EMOJI_RE = re.compile(r"<(a?):(\w+):(\d+)>")
 _HTTPS_RE = re.compile(r"^https://", re.IGNORECASE)
+_DISCORD_MAX_BYTES = 256 * 1024
+
+
+def _compress_gif(data: bytes) -> bytes:
+    """Resize animated GIF frames to fit under Discord's 256 KB emoji limit."""
+    if len(data) <= _DISCORD_MAX_BYTES or not data[:3] == b"GIF":
+        return data
+    for dim in (96, 64, 48, 32):
+        img = Image.open(io.BytesIO(data))
+        frames: list[Image.Image] = []
+        durations: list[int] = []
+        loop = img.info.get("loop", 0)
+        try:
+            while True:
+                frames.append(img.convert("RGBA").resize((dim, dim), Image.Resampling.LANCZOS))
+                durations.append(img.info.get("duration", 100))
+                img.seek(img.tell() + 1)
+        except EOFError:
+            pass
+        if not frames:
+            return data
+        out = io.BytesIO()
+        frames[0].save(
+            out,
+            format="GIF",
+            save_all=True,
+            append_images=frames[1:],
+            loop=loop,
+            duration=durations,
+            optimize=True,
+        )
+        result = out.getvalue()
+        if len(result) <= _DISCORD_MAX_BYTES:
+            return result
+    return data
 
 
 def _emoji_url(emoji_id: int, animated: bool) -> str:
@@ -49,7 +86,7 @@ def _eligible_guilds(bot: Bot) -> list[discord.Guild]:
 async def _upload(
     guild: discord.Guild, name: str, data: bytes
 ) -> discord.Emoji:
-    return await guild.create_custom_emoji(name=_sanitize_name(name), image=data)
+    return await guild.create_custom_emoji(name=_sanitize_name(name), image=_compress_gif(data))
 
 
 # ---------------------------------------------------------------------------

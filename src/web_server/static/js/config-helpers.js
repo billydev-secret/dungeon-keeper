@@ -18,6 +18,22 @@ export async function loadChannels() {
   return _channels;
 }
 
+let _categories = null;
+export async function loadCategories() {
+  if (_categories) return _categories;
+  try { _categories = await api("/api/meta/channels?types=category"); } catch (_) { _categories = []; }
+  return _categories;
+}
+
+export function categorySelect(categories, selected, { allowNone = true } = {}) {
+  let html = allowNone ? '<option value="0">(none)</option>' : "";
+  for (const c of categories) {
+    const sel = c.id === selected ? " selected" : "";
+    html += `<option value="${c.id}"${sel}>${c.name}</option>`;
+  }
+  return html;
+}
+
 export async function loadRoles() {
   if (_roles) return _roles;
   try { _roles = await api("/api/meta/roles"); } catch (_) { _roles = []; }
