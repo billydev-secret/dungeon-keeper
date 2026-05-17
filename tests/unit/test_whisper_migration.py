@@ -22,6 +22,7 @@ def test_whispers_columns(sync_db_path: Path):
         "id", "guild_id", "sender_id", "target_id", "message",
         "created_at", "state", "solved", "exposed", "guesses_left",
         "channel_msg_id", "dm_msg_id",
+        "deleted_at",
     }
 
 
@@ -41,4 +42,5 @@ def test_whisper_indexes_exist(sync_db_path: Path):
     names = {r["name"] for r in rows}
     assert "idx_whispers_target" in names
     assert "idx_whispers_sender" in names
+    assert "idx_whispers_sender_active" in names
     assert "idx_whisper_guesses_whisper" in names

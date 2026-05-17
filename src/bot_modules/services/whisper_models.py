@@ -33,6 +33,7 @@ class Whisper:
     guesses_left: int
     channel_msg_id: int | None
     dm_msg_id: int | None
+    deleted_at: float | None = None
 
 
 @dataclass

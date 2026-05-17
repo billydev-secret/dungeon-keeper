@@ -5,11 +5,14 @@ rules expressed as pure functions, easily unit-tested.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from bot_modules.services.whisper_models import STATE_PENDING, Whisper, WhisperConfig
 
 MAX_MESSAGE_LENGTH = 1000
+LOCK_DURATION_SECONDS = 30 * 86400  # whispers age-lock after 30 days
+REPLY_LIMIT_PER_WHISPER = 1
 
 
 def safe_codefence_content(s: str) -> str:
@@ -30,10 +33,17 @@ ERROR_GUESS_NOT_TARGET = "Only the recipient can guess."
 ERROR_GUESS_SELF = "You can't guess yourself."
 ERROR_GUESS_ALREADY_SOLVED = "This whisper has already been solved."
 ERROR_GUESS_NO_ATTEMPTS = "No more guesses left."
+ERROR_GUESS_LOCKED = "This whisper is too old — guesses are locked."
 
 ERROR_ALREADY_DECIDED = "Already decided."
 ERROR_EXPOSE_NOT_TARGET = "Only the recipient can expose this."
 ERROR_EXPOSE_NEEDS_SOLVE = "Can only expose a solved whisper."
+
+ERROR_DELETE_NOT_TARGET = "Only the recipient can delete a whisper."
+ERROR_ALREADY_DELETED = "This whisper is already deleted."
+
+ERROR_REPLY_NOT_PARTICIPANT = "Only the sender or recipient can reply."
+ERROR_REPLY_ALREADY_USED = "This whisper has already been replied to."
 
 
 class SendValidationError(Exception):
@@ -86,8 +96,28 @@ class GuessOutcome:
     exhausted: bool
 
 
+def is_locked(whisper: Whisper, *, now: float | None = None) -> bool:
+    """A whisper is age-locked once it's older than LOCK_DURATION_SECONDS."""
+    current = now if now is not None else time.time()
+    return (current - whisper.created_at) > LOCK_DURATION_SECONDS
+
+
+def is_terminal_for_sender(whisper: Whisper, *, now: float | None = None) -> bool:
+    """True when no further game-state change can happen — so the sender inbox
+    auto-hides it. Exposed (revealed), out-of-guesses without solve, or age-locked."""
+    if whisper.exposed:
+        return True
+    if whisper.guesses_left == 0 and not whisper.solved:
+        return True
+    return is_locked(whisper, now=now)
+
+
 def evaluate_guess(
-    whisper: Whisper, *, guesser_id: int, guessed_id: int
+    whisper: Whisper,
+    *,
+    guesser_id: int,
+    guessed_id: int,
+    now: float | None = None,
 ) -> GuessOutcome:
     """Pure-logic guess evaluator. Caller is responsible for persisting the
     resulting state changes (insert_guess, decrement_guesses_left, mark_solved)."""
@@ -99,6 +129,8 @@ def evaluate_guess(
         raise GuessValidationError(ERROR_GUESS_ALREADY_SOLVED)
     if whisper.guesses_left <= 0:
         raise GuessValidationError(ERROR_GUESS_NO_ATTEMPTS)
+    if is_locked(whisper, now=now):
+        raise GuessValidationError(ERROR_GUESS_LOCKED)
 
     correct = guessed_id == whisper.sender_id
     remaining = whisper.guesses_left - 1
@@ -136,3 +168,20 @@ def validate_expose(whisper: Whisper, *, invoker_id: int) -> None:
     _check_target(whisper, invoker_id, ERROR_EXPOSE_NOT_TARGET)
     if not whisper.solved:
         raise TransitionValidationError(ERROR_EXPOSE_NEEDS_SOLVE)
+
+
+def validate_delete(whisper: Whisper, *, invoker_id: int) -> None:
+    """Soft-delete is target-only; idempotent rejection if already deleted."""
+    _check_target(whisper, invoker_id, ERROR_DELETE_NOT_TARGET)
+    if whisper.deleted_at is not None:
+        raise TransitionValidationError(ERROR_ALREADY_DELETED)
+
+
+def validate_reply(
+    whisper: Whisper, *, invoker_id: int, reply_count: int
+) -> None:
+    """Enforce the one-reply-per-whisper cap."""
+    if invoker_id not in (whisper.sender_id, whisper.target_id):
+        raise TransitionValidationError(ERROR_REPLY_NOT_PARTICIPANT)
+    if reply_count >= REPLY_LIMIT_PER_WHISPER:
+        raise TransitionValidationError(ERROR_REPLY_ALREADY_USED)

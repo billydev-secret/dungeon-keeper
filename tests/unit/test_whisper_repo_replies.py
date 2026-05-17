@@ -59,3 +59,31 @@ def test_replies_cascade_delete(sync_db_path: Path):
         conn.execute("DELETE FROM whispers WHERE id = ?", (wid,))
         replies = list_replies_for_whisper(conn, whisper_id=wid)
     assert replies == []
+
+
+def test_count_replies(sync_db_path: Path):
+    from bot_modules.services.whisper_repo import count_replies
+    with open_db(sync_db_path) as conn:
+        wid = insert_whisper(
+            conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="x"
+        )
+        assert count_replies(conn, wid) == 0
+        insert_reply(
+            conn, whisper_id=wid, from_user_id=TARGET, to_user_id=SENDER, content="r1"
+        )
+        assert count_replies(conn, wid) == 1
+        insert_reply(
+            conn, whisper_id=wid, from_user_id=SENDER, to_user_id=TARGET, content="r2"
+        )
+        assert count_replies(conn, wid) == 2
+
+
+def test_count_replies_isolated_per_whisper(sync_db_path: Path):
+    from bot_modules.services.whisper_repo import count_replies
+    with open_db(sync_db_path) as conn:
+        w1 = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="a")
+        w2 = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="b")
+        insert_reply(conn, whisper_id=w1, from_user_id=TARGET, to_user_id=SENDER, content="r")
+    with open_db(sync_db_path) as conn:
+        assert count_replies(conn, w1) == 1
+        assert count_replies(conn, w2) == 0

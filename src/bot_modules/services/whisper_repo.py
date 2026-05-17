@@ -61,6 +61,7 @@ def _row_to_whisper(row: sqlite3.Row) -> Whisper:
         guesses_left=row["guesses_left"],
         channel_msg_id=row["channel_msg_id"],
         dm_msg_id=row["dm_msg_id"],
+        deleted_at=row["deleted_at"],
     )
 
 
@@ -181,10 +182,11 @@ def list_received(
     target_id: int,
     state: WhisperState,
 ) -> list[Whisper]:
+    """Active (non-deleted) whispers received by target_id with this state."""
     rows = conn.execute(
         """
         SELECT * FROM whispers
-        WHERE guild_id = ? AND target_id = ? AND state = ?
+        WHERE guild_id = ? AND target_id = ? AND state = ? AND deleted_at IS NULL
         ORDER BY created_at DESC
         """,
         (guild_id, target_id, state),
@@ -199,6 +201,7 @@ def list_received_in_states(
     target_id: int,
     states: list[WhisperState],
 ) -> list[Whisper]:
+    """Active (non-deleted) whispers received by target_id whose state is in states."""
     if not states:
         return []
     placeholders = ",".join("?" * len(states))
@@ -206,11 +209,50 @@ def list_received_in_states(
         f"""
         SELECT * FROM whispers
         WHERE guild_id = ? AND target_id = ? AND state IN ({placeholders})
+              AND deleted_at IS NULL
         ORDER BY created_at DESC
         """,
         (guild_id, target_id, *states),
     ).fetchall()
     return [_row_to_whisper(r) for r in rows]
+
+
+def list_sent(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    sender_id: int,
+) -> list[Whisper]:
+    """All whispers sent by sender_id (including target-deleted; sender sees their own copy)."""
+    rows = conn.execute(
+        """
+        SELECT * FROM whispers
+        WHERE guild_id = ? AND sender_id = ?
+        ORDER BY created_at DESC
+        """,
+        (guild_id, sender_id),
+    ).fetchall()
+    return [_row_to_whisper(r) for r in rows]
+
+
+def soft_delete_whisper(
+    conn: sqlite3.Connection, whisper_id: int, *, now: float | None = None
+) -> None:
+    """Mark whisper as soft-deleted (target removed from inbox). No-op if already deleted."""
+    ts = now if now is not None else time.time()
+    conn.execute(
+        "UPDATE whispers SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
+        (ts, whisper_id),
+    )
+
+
+def count_replies(conn: sqlite3.Connection, whisper_id: int) -> int:
+    """Count replies for a whisper (drives the one-reply cap)."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS c FROM whisper_replies WHERE whisper_id = ?",
+        (whisper_id,),
+    ).fetchone()
+    return int(row["c"])
 
 
 def _row_to_reply(row: sqlite3.Row) -> WhisperReply:

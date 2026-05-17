@@ -1,6 +1,7 @@
 """Cog-level: Guess button + select-dropdown flow."""
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -16,7 +17,7 @@ FEED = 8001
 def _w(*, solved: bool = False, guesses_left: int = 3) -> Whisper:
     return Whisper(
         id=42, guild_id=9001, sender_id=SENDER, target_id=TARGET, message="hi",
-        created_at=0.0, state="pending", solved=solved, exposed=False,
+        created_at=time.time(), state="pending", solved=solved, exposed=False,
         guesses_left=guesses_left, channel_msg_id=88888, dm_msg_id=99999,
     )
 
