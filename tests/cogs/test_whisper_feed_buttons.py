@@ -69,9 +69,11 @@ async def test_send_whisper_button_opens_target_picker():
 @pytest.mark.asyncio
 async def test_send_whisper_button_rejects_without_role():
     """User must hold the whisper role to invoke the picker."""
-    from bot_modules.cogs.whisper_cog import WhisperFeedView
+    from bot_modules.cogs.whisper_cog import WhisperCog, WhisperFeedView
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
+    cog = WhisperCog(bot)
+    bot.get_cog = MagicMock(return_value=cog)
     view = WhisperFeedView(bot)
 
     sender = FakeMember(id=1001)

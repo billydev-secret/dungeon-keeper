@@ -62,9 +62,11 @@ async def test_send_click_opens_picker_excluding_self():
 @pytest.mark.asyncio
 async def test_send_click_rejects_empty_role():
     """No other opted-in members → friendly message, no picker."""
-    from bot_modules.cogs.whisper_cog import WhisperFeedView
+    from bot_modules.cogs.whisper_cog import WhisperCog, WhisperFeedView
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
+    cog = WhisperCog(bot)
+    bot.get_cog = MagicMock(return_value=cog)
     view = WhisperFeedView(bot)
 
     role = _role_with_members([SENDER])  # only the sender

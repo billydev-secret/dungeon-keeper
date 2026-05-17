@@ -2057,55 +2057,13 @@ class WhisperFeedView(discord.ui.View):
         self.add_item(sent_btn)
 
     async def _on_send_click(self, interaction: discord.Interaction) -> None:
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "Whisper can only be used in a server.", ephemeral=True
-            )
-            return
-        cfg = await asyncio.to_thread(
-            _load_config, self.bot.ctx.db_path, interaction.guild.id
-        )
-        if cfg.role_id == 0:
-            await interaction.response.send_message(
-                "Whispers aren't configured in this server yet.", ephemeral=True
-            )
-            return
-        role = interaction.guild.get_role(cfg.role_id)
-        if role is None:
-            await interaction.response.send_message(
-                "Whisper role no longer exists. Ask an admin to fix the config.",
-                ephemeral=True,
-            )
-            return
-        if cfg.role_id not in {r.id for r in getattr(interaction.user, "roles", [])}:
-            await interaction.response.send_message(
-                "You need the Whisper role first. Use `/whisper optin` to join.",
-                ephemeral=True,
-            )
-            return
-        members = sorted(
-            [m for m in role.members if m.id != interaction.user.id],
-            key=lambda m: m.display_name.lower(),
-        )
-        if not members:
-            await interaction.response.send_message(
-                "No other opted-in members to whisper to yet.", ephemeral=True
-            )
-            return
         cog = self.bot.get_cog("WhisperCog")
         if not isinstance(cog, WhisperCog):
             await interaction.response.send_message(
                 "Whisper cog isn't loaded. Tell an admin.", ephemeral=True
             )
             return
-        view = WhisperSendTargetSelectView(
-            cog, members, invoker_id=interaction.user.id
-        )
-        await interaction.response.send_message(
-            "Pick someone to whisper. "
-            "-# Your identity is logged for moderation.",
-            view=view, ephemeral=True,
-        )
+        await cog._open_send_picker(interaction)
 
     async def _on_check_click(self, interaction: discord.Interaction) -> None:
         assert interaction.guild is not None
@@ -2574,71 +2532,59 @@ class WhisperCog(commands.Cog):
             ephemeral=True,
         )
 
-    async def _target_autocomplete(
-        self,
-        interaction: discord.Interaction,
-        current: str,
-    ) -> list[app_commands.Choice[str]]:
-        """Autocomplete callback restricting /whisper send target to opted-in
-        members (those holding the configured whisper role)."""
-        if interaction.guild is None:
-            return []
-        cfg = await asyncio.to_thread(
-            _load_config, self.ctx.db_path, interaction.guild.id
-        )
-        if cfg.role_id == 0:
-            return []
-        role = interaction.guild.get_role(cfg.role_id)
-        if role is None:
-            return []
-        needle = current.lower()
-        matches: list[app_commands.Choice[str]] = []
-        for m in role.members:
-            if m.id == interaction.user.id:
-                continue
-            display = (getattr(m, "display_name", None) or m.name).lower()
-            handle = m.name.lower()
-            if needle and needle not in display and needle not in handle:
-                continue
-            label = getattr(m, "display_name", None) or m.name
-            matches.append(app_commands.Choice(name=label, value=str(m.id)))
-            if len(matches) >= 25:
-                break
-        return matches
-
-    @whisper_group.command(
-        name="send",
-        description="Send an anonymous whisper to another opted-in member.",
-    )
-    @app_commands.describe(
-        target="Recipient (must be opted in)",
-        message="Your anonymous message",
-    )
-    @app_commands.autocomplete(target=_target_autocomplete)
-    async def whisper_send(
-        self,
-        interaction: discord.Interaction,
-        target: str,
-        message: str,
-    ) -> None:
+    async def _open_send_picker(self, interaction: discord.Interaction) -> None:
+        """Open the paginated opt-in member picker for the send flow. Used by
+        both the feed-launcher button and the /whisper send slash command."""
         if interaction.guild is None:
             await interaction.response.send_message(
                 "Whisper can only be used in a server.", ephemeral=True
             )
             return
-        if not target.isdigit():
+        cfg = await asyncio.to_thread(
+            _load_config, self.ctx.db_path, interaction.guild.id
+        )
+        if cfg.role_id == 0:
             await interaction.response.send_message(
-                "Pick a recipient from the autocomplete suggestions.",
+                "Whispers aren't configured in this server yet.", ephemeral=True
+            )
+            return
+        role = interaction.guild.get_role(cfg.role_id)
+        if role is None:
+            await interaction.response.send_message(
+                "Whisper role no longer exists. Ask an admin to fix the config.",
                 ephemeral=True,
             )
             return
-        member = interaction.guild.get_member(int(target))
-        if member is None:
+        if cfg.role_id not in {r.id for r in getattr(interaction.user, "roles", [])}:
             await interaction.response.send_message(
-                "That member isn't in this server.", ephemeral=True
+                "You need the Whisper role first. Use `/whisper optin` to join.",
+                ephemeral=True,
             )
             return
-        await self._send_impl(interaction, target=member, message=message)
+        members = sorted(
+            [m for m in role.members if m.id != interaction.user.id],
+            key=lambda m: m.display_name.lower(),
+        )
+        if not members:
+            await interaction.response.send_message(
+                "No other opted-in members to whisper to yet.", ephemeral=True
+            )
+            return
+        view = WhisperSendTargetSelectView(
+            self, members, invoker_id=interaction.user.id
+        )
+        await interaction.response.send_message(
+            "Pick someone to whisper. "
+            "-# Your identity is logged for moderation.",
+            view=view, ephemeral=True,
+        )
+
+    @whisper_group.command(
+        name="send",
+        description="Send an anonymous whisper — opens a recipient picker.",
+    )
+    async def whisper_send(self, interaction: discord.Interaction) -> None:
+        await self._open_send_picker(interaction)
 
 
 async def setup(bot: Bot) -> None:
