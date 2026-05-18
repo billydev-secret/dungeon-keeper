@@ -13,6 +13,7 @@ from bot_modules.jail.logic import (
     restore_roles,
     snapshot_roles,
     tally_votes,
+    vote_outcome,
 )
 from bot_modules.services.moderation import fmt_duration, parse_duration
 
@@ -162,3 +163,56 @@ def test_resolve_vote_pending_missing_votes():
     eligible = {1, 2, 3}
     tally = {"yes": [1], "no": [], "abstain": [], "awaiting": [2, 3]}
     assert resolve_policy_vote(tally, eligible) == "pending"
+
+
+# ── vote_outcome (timeout-aware) ──────────────────────────────────────
+
+def test_vote_outcome_pre_timeout_pending_with_awaiting():
+    eligible = {1, 2, 3}
+    tally = {"yes": [1], "no": [], "abstain": [], "awaiting": [2, 3]}
+    assert vote_outcome(tally, eligible, expired=False) == "pending"
+
+
+def test_vote_outcome_pre_timeout_no_with_awaiting_stays_pending():
+    # A 'no' alone does not finalize while anyone is still awaiting — the
+    # vote waits for full participation (or the timeout sweeper).
+    eligible = {1, 2, 3}
+    tally = {"yes": [1], "no": [2], "abstain": [], "awaiting": [3]}
+    assert vote_outcome(tally, eligible, expired=False) == "pending"
+
+
+def test_vote_outcome_pre_timeout_all_voted_no_rejects():
+    eligible = {1, 2}
+    tally = {"yes": [1], "no": [2], "abstain": [], "awaiting": []}
+    assert vote_outcome(tally, eligible, expired=False) == "rejected"
+
+
+def test_vote_outcome_pre_timeout_all_voted_yes_adopts():
+    eligible = {1, 2}
+    tally = {"yes": [1, 2], "no": [], "abstain": [], "awaiting": []}
+    assert vote_outcome(tally, eligible, expired=False) == "adopted"
+
+
+def test_vote_outcome_expired_drops_absentees_adopts():
+    # After timeout, the two absentees stop blocking adoption.
+    eligible = {1, 2, 3, 4}
+    tally = {"yes": [1, 2], "no": [], "abstain": [], "awaiting": [3, 4]}
+    assert vote_outcome(tally, eligible, expired=True) == "adopted"
+
+
+def test_vote_outcome_expired_abstain_counts_as_participation():
+    eligible = {1, 2, 3}
+    tally = {"yes": [1], "no": [], "abstain": [2], "awaiting": [3]}
+    assert vote_outcome(tally, eligible, expired=True) == "adopted"
+
+
+def test_vote_outcome_expired_no_still_rejects():
+    eligible = {1, 2, 3}
+    tally = {"yes": [1], "no": [2], "abstain": [], "awaiting": [3]}
+    assert vote_outcome(tally, eligible, expired=True) == "rejected"
+
+
+def test_vote_outcome_expired_no_quorum():
+    eligible = {1, 2, 3}
+    tally = {"yes": [], "no": [], "abstain": [], "awaiting": [1, 2, 3]}
+    assert vote_outcome(tally, eligible, expired=True) == "rejected_no_quorum"

@@ -891,12 +891,42 @@ def resolve_policy_vote(
     policy_id: int,
     *,
     status: str,
-) -> None:
+) -> bool:
+    """Set a policy ticket's status iff it's currently 'voting'.
+
+    Returns True if the row was updated, False if it was already resolved
+    (which is how concurrent finalizers, e.g. a late vote racing the
+    timeout sweeper, detect that another path won).
+    """
     now = time.time()
-    conn.execute(
-        "UPDATE policy_tickets SET status = ?, vote_ended_at = ? WHERE id = ?",
+    cur = conn.execute(
+        "UPDATE policy_tickets SET status = ?, vote_ended_at = ? "
+        "WHERE id = ? AND status = 'voting'",
         (status, now, policy_id),
     )
+    return cur.rowcount == 1
+
+
+def find_expired_policy_votes(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    timeout_seconds: float,
+    now_ts: float | None = None,
+) -> list[PolicyTicketRow]:
+    """Return policy_tickets whose voting deadline has passed."""
+    if timeout_seconds <= 0:
+        return []
+    if now_ts is None:
+        now_ts = time.time()
+    cutoff = now_ts - timeout_seconds
+    rows = conn.execute(
+        "SELECT * FROM policy_tickets "
+        "WHERE guild_id = ? AND status = 'voting' "
+        "AND vote_started_at IS NOT NULL AND vote_started_at <= ?",
+        (guild_id, cutoff),
+    ).fetchall()
+    return [dict(r) for r in rows]  # type: ignore[misc]
 
 
 def close_policy_ticket(

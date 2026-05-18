@@ -68,6 +68,8 @@ _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
 _RISKY_MIN_GAME_KEY = "risky_min_game_seconds"
 _BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂"
+_POLICY_VOTE_TIMEOUT_KEY = "policy_vote_timeout_hours"
+_POLICY_VOTE_TIMEOUT_DEFAULT = 72
 
 router = APIRouter()
 
@@ -267,6 +269,17 @@ def _risky_section(conn, guild_id: int) -> dict:
     return {
         "ping_role_id": ping_role,
         "min_game_seconds": int(min_secs),
+    }
+
+
+def _policy_section(conn, guild_id: int) -> dict:
+    return {
+        "vote_timeout_hours": _int_val(
+            conn,
+            _POLICY_VOTE_TIMEOUT_KEY,
+            _POLICY_VOTE_TIMEOUT_DEFAULT,
+            guild_id=guild_id,
+        ),
     }
 
 
@@ -513,6 +526,7 @@ async def get_config(
                 "guess": _guess_section(conn, guild_id),
                 "whisper": _whisper_section(conn, guild_id),
                 "risky": _risky_section(conn, guild_id),
+                "policy": _policy_section(conn, guild_id),
             }
 
     return await run_query(_q)
@@ -1635,6 +1649,37 @@ async def update_risky(
         rr_state.min_game_seconds[guild_id] = new_min_secs
 
     return result
+
+
+class PolicyConfigUpdate(BaseModel):
+    vote_timeout_hours: int | None = None
+
+
+@router.put("/config/policy")
+async def update_policy(
+    request: Request,
+    body: PolicyConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    _require_primary_guild(request)
+
+    if body.vote_timeout_hours is not None and body.vote_timeout_hours < 1:
+        raise HTTPException(400, "vote_timeout_hours must be at least 1")
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.vote_timeout_hours is not None:
+                set_config_value(
+                    conn,
+                    _POLICY_VOTE_TIMEOUT_KEY,
+                    str(body.vote_timeout_hours),
+                    guild_id,
+                )
+        return {"ok": True}
+
+    return await run_query(_q)
 
 
 @router.get("/birthday/calendar")

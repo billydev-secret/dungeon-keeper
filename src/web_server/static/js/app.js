@@ -90,6 +90,7 @@ const SECTIONS = [
       { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js" },
       { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js" },
       { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js" },
+      { id: "config-policy-tickets", label: "Policy Tickets",  module: "./panels/config-policy-tickets.js" },
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js" },
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
       { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js" },
@@ -99,7 +100,6 @@ const SECTIONS = [
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js" },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js" },
-      { id: "config-risky-rolls", label: "Risky Rolls",      module: "./panels/config-risky-rolls.js" },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
       { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js" },
       { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js" },
@@ -120,11 +120,14 @@ const SECTIONS = [
     id: "games", label: "Games", perms: ["admin"],
     items: [
       { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js" },
-      { id: "games-risky-roller", label: "🎲 Risky Roller",   module: "./panels/games-risky-roller.js" },
       { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
       { id: "games-config",       label: "Config",            module: "./panels/games-config.js" },
     ],
     groups: [
+      { heading: "🎲 Risky Roller", items: [
+        { id: "games-risky-roller",  label: "Sessions",  module: "./panels/games-risky-roller.js" },
+        { id: "config-risky-rolls",  label: "Config",    module: "./panels/config-risky-rolls.js" },
+      ]},
       { heading: "🤔 WYR", items: [
         { id: "games-wyr",          label: "Questions",  module: "./panels/games-wyr.js" },
         { id: "games-wyr-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "wyr" },

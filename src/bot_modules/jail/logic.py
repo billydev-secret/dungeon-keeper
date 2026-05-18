@@ -108,7 +108,40 @@ def resolve_policy_vote(
     """
     if tally["no"]:
         return "rejected"
-    # All eligible must have voted yes for adoption
     if not tally["awaiting"] and not tally["no"] and len(tally["yes"]) == len(eligible):
+        return "adopted"
+    return "pending"
+
+
+def vote_outcome(
+    tally: dict[str, list[int]],
+    eligible: set[int],
+    *,
+    expired: bool,
+) -> str:
+    """Return the vote outcome, accounting for an optional timeout.
+
+    Pre-timeout (``expired=False``): while anyone in ``awaiting`` hasn't
+    voted, the result is 'pending' regardless of how others voted. Once
+    everyone has voted, any 'no' rejects; otherwise adopted.
+
+    Post-timeout (``expired=True``): absentees in ``awaiting`` are dropped
+    from the tally. Any 'no' still rejects. If nobody in ``eligible`` voted
+    at all, the outcome is 'rejected_no_quorum'. Otherwise the remaining
+    voters (yes + abstain) carry the vote and it is 'adopted'.
+
+    Returns one of: 'adopted', 'rejected', 'rejected_no_quorum', 'pending'.
+    """
+    if expired:
+        if tally["no"]:
+            return "rejected"
+        if not tally["yes"] and not tally["abstain"]:
+            return "rejected_no_quorum"
+        return "adopted"
+    if tally["awaiting"]:
+        return "pending"
+    if tally["no"]:
+        return "rejected"
+    if len(tally["yes"]) == len(eligible):
         return "adopted"
     return "pending"

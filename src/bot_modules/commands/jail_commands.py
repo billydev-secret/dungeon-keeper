@@ -33,6 +33,7 @@ from bot_modules.services.moderation import (
     create_jail,
     create_ticket,
     delete_ticket,
+    find_expired_policy_votes,
     fmt_duration,
     generate_transcript,
     render_transcript_markdown,
@@ -48,7 +49,9 @@ from bot_modules.services.moderation import (
     resolve_policy_vote,
     store_transcript,
     write_audit,
+    PolicyTicketRow,
 )
+from bot_modules.jail.logic import vote_outcome as _vote_outcome
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext
@@ -610,6 +613,184 @@ class TicketDeleteButton(
 # CLR_POLICY now imported above from services.embeds
 
 
+async def finalize_policy_vote(
+    ctx: AppContext,
+    guild: discord.Guild,
+    policy_id: int,
+    outcome: str,
+    *,
+    channel: discord.TextChannel | None,
+    yes_ids: list[int],
+    no_ids: list[int],
+    abstain_ids: list[int],
+    actor_id: int,
+    timed_out: bool,
+) -> bool:
+    """Commit a policy vote resolution: DB, audit, channel announcement, transcript, delete.
+
+    Guarded against double-finalization: returns False if the policy row's
+    status has already moved out of 'voting' (a concurrent finalizer won).
+    Returns True after the row is resolved and side-effects have been issued.
+
+    ``outcome`` must be one of: 'adopted', 'rejected', 'rejected_no_quorum'.
+    'rejected_no_quorum' only makes sense when ``timed_out=True``.
+    """
+    db_status = "passed" if outcome == "adopted" else "failed"
+
+    with ctx.open_db() as conn:
+        won = resolve_policy_vote(conn, policy_id, status=db_status)
+        if not won:
+            return False
+        policy = get_policy_ticket(conn, policy_id)
+        if policy is None:
+            return False
+        policy_row_id: int | None = None
+        adopted_text = policy["vote_text"] or policy["description"]
+        if outcome == "adopted":
+            policy_row_id = add_policy(
+                conn,
+                guild_id=guild.id,
+                policy_ticket_id=policy_id,
+                title=policy["title"],
+                description=adopted_text,
+            )
+        audit_extra: dict = {
+            "policy_id": policy_id,
+            "yes": len(yes_ids),
+            "no": len(no_ids),
+            "abstain": len(abstain_ids),
+            "timed_out": timed_out,
+        }
+        if outcome == "rejected_no_quorum":
+            audit_extra["no_quorum"] = True
+        if outcome == "adopted":
+            audit_extra["policy_row_id"] = policy_row_id
+            audit_extra["vote_text"] = adopted_text
+            audit_action = "policy_passed"
+        else:
+            audit_action = "policy_vote_failed"
+        write_audit(
+            conn,
+            guild_id=guild.id,
+            action=audit_action,
+            actor_id=actor_id,
+            extra=audit_extra,
+        )
+
+    vote_text = policy["vote_text"] or policy["title"]
+
+    if channel is not None:
+        creator = guild.get_member(policy["creator_id"])
+        if outcome == "adopted":
+            adopted_suffix = (
+                f"({len(yes_ids)} yes, {len(abstain_ids)} abstain"
+                + (", absentees ignored after timeout)" if timed_out else ")")
+            )
+            await channel.send(
+                f'✅ **Policy adopted!** "{policy["title"]}" is now in effect.\n'
+                f"**Adopted policy:** {adopted_text}\n"
+                f"{adopted_suffix}"
+            )
+            with ctx.open_db() as conn:
+                adopted_policies = get_policies_by_ticket_id(conn, policy_id)
+            if adopted_policies:
+                adopted_embed = discord.Embed(
+                    title="Adopted Policies",
+                    color=CLR_SUCCESS,
+                )
+                for p in adopted_policies:
+                    adopted_embed.add_field(
+                        name=p["title"],
+                        value=p["description"][:1024],
+                        inline=False,
+                    )
+                await channel.send(embed=adopted_embed)
+            extra_meta = {
+                "resolution": "passed",
+                "policy_title": policy["title"],
+                "adopted_text": adopted_text,
+                "vote_yes": len(yes_ids),
+                "vote_no": 0,
+                "vote_abstain": len(abstain_ids),
+                "timed_out": timed_out,
+            }
+            delete_reason = f"Policy #{policy_id} adopted"
+        elif outcome == "rejected_no_quorum":
+            await channel.send(
+                "❌ **Policy timed out.** Nobody voted within the timeout window.\n"
+                f"**Rejected policy:** {vote_text}"
+            )
+            extra_meta = {
+                "resolution": "failed",
+                "policy_title": policy["title"],
+                "vote_yes": 0,
+                "vote_no": 0,
+                "vote_abstain": 0,
+                "timed_out": True,
+                "no_quorum": True,
+            }
+            delete_reason = f"Policy #{policy_id} timed out (no quorum)"
+        else:
+            reject_reason = (
+                "did not achieve unanimous support before the timeout"
+                if timed_out
+                else "did not achieve unanimous support"
+            )
+            await channel.send(
+                f"❌ **Policy rejected.** The proposal {reject_reason}.\n"
+                f"**Rejected policy:** {vote_text}"
+            )
+            extra_meta = {
+                "resolution": "failed",
+                "policy_title": policy["title"],
+                "vote_yes": len(yes_ids),
+                "vote_no": len(no_ids),
+                "vote_abstain": len(abstain_ids),
+                "timed_out": timed_out,
+            }
+            delete_reason = f"Policy #{policy_id} rejected"
+
+        transcript_user = creator or guild.me
+        await _collect_and_post_transcript(
+            ctx,
+            channel,
+            record_type="policy_ticket",
+            record_id=policy_id,
+            user=transcript_user,
+            extra_meta=extra_meta,
+        )
+        await channel.delete(reason=delete_reason)
+
+    if outcome == "adopted":
+        audit_embed = discord.Embed(
+            title="✅ Policy Adopted",
+            description=(
+                f"**{policy['title']}**\n📜 {adopted_text}\n\n"
+                f"Vote: {len(yes_ids)} yes, {len(abstain_ids)} abstain"
+                + (" (timed out)" if timed_out else "")
+            ),
+            color=CLR_SUCCESS,
+        )
+    elif outcome == "rejected_no_quorum":
+        audit_embed = discord.Embed(
+            title="❌ Policy Timed Out",
+            description=f"**{policy['title']}**\n📜 {vote_text}\n\nNo votes were cast.",
+            color=discord.Color.from_str("#E74C3C"),
+        )
+    else:
+        audit_embed = discord.Embed(
+            title="❌ Policy Rejected",
+            description=(
+                f"**{policy['title']}**\n📜 {vote_text}\n\n"
+                f"Vote: {len(yes_ids)} yes, {len(no_ids)} no, {len(abstain_ids)} abstain"
+                + (" (timed out)" if timed_out else "")
+            ),
+            color=discord.Color.from_str("#E74C3C"),
+        )
+    await _post_audit(ctx, guild, audit_embed)
+    return True
+
+
 async def _handle_policy_vote(
     interaction: discord.Interaction, policy_id: int, vote: str
 ) -> None:
@@ -696,142 +877,40 @@ async def _handle_policy_vote(
         inline=False,
     )
 
-    # Check if all eligible voters have voted
+    # A 'no' alone does not finalize — we wait until every eligible mod has
+    # voted (or the timeout sweeper takes over). This preserves the existing
+    # "unanimous required, no early-reject" rule.
     all_voted = len(awaiting_ids) == 0
+    has_no = len(no_ids) > 0
+    outcome: str | None = None
     if all_voted:
-        has_no = len(no_ids) > 0
-        if has_no:
-            # Failed
-            with ctx.open_db() as conn:
-                resolve_policy_vote(conn, policy_id, status="failed")
-                write_audit(
-                    conn,
-                    guild_id=guild.id,
-                    action="policy_vote_failed",
-                    actor_id=member.id,
-                    extra={
-                        "policy_id": policy_id,
-                        "yes": len(yes_ids),
-                        "no": len(no_ids),
-                        "abstain": len(abstain_ids),
-                    },
-                )
-            embed.color = discord.Color.from_str("#E74C3C")
-            embed.set_field_at(2, name="Status", value="❌ Rejected", inline=True)
-            view = discord.ui.View(timeout=None)  # No more buttons
-            await interaction.response.edit_message(embed=embed, view=view)
-            await interaction.followup.send(
-                f"Your vote ({vote}) has been recorded.", ephemeral=True
-            )
-            channel = interaction.channel
-            vote_text = policy["vote_text"] or policy["title"]
-            if isinstance(channel, discord.TextChannel):
-                await channel.send(
-                    f"❌ **Policy rejected.** The proposal did not achieve unanimous support.\n"
-                    f"**Rejected policy:** {vote_text}"
-                )
-                # Generate transcript before deleting
-                creator = guild.get_member(policy["creator_id"]) or member
-                await _collect_and_post_transcript(
-                    ctx,
-                    channel,
-                    record_type="policy_ticket",
-                    record_id=policy_id,
-                    user=creator,
-                    extra_meta={
-                        "resolution": "failed",
-                        "policy_title": policy["title"],
-                        "vote_yes": len(yes_ids),
-                        "vote_no": len(no_ids),
-                        "vote_abstain": len(abstain_ids),
-                    },
-                )
-                await channel.delete(reason=f"Policy #{policy_id} rejected")
-            audit_embed = discord.Embed(
-                title="❌ Policy Rejected",
-                description=f"**{policy['title']}**\n📜 {vote_text}\n\nVote: {len(yes_ids)} yes, {len(no_ids)} no, {len(abstain_ids)} abstain",
-                color=discord.Color.from_str("#E74C3C"),
-            )
-            await _post_audit(ctx, guild, audit_embed)
-        else:
-            # Passed — store the vote_text as the adopted policy
-            adopted_text = policy["vote_text"] or policy["description"]
-            with ctx.open_db() as conn:
-                resolve_policy_vote(conn, policy_id, status="passed")
-                policy_row_id = add_policy(
-                    conn,
-                    guild_id=guild.id,
-                    policy_ticket_id=policy_id,
-                    title=policy["title"],
-                    description=adopted_text,
-                )
-                write_audit(
-                    conn,
-                    guild_id=guild.id,
-                    action="policy_passed",
-                    actor_id=member.id,
-                    extra={
-                        "policy_id": policy_id,
-                        "policy_row_id": policy_row_id,
-                        "vote_text": adopted_text,
-                        "yes": len(yes_ids),
-                        "no": 0,
-                        "abstain": len(abstain_ids),
-                    },
-                )
+        outcome = "rejected" if has_no else "adopted"
+
+    if outcome is not None:
+        if outcome == "adopted":
             embed.color = CLR_SUCCESS
             embed.set_field_at(2, name="Status", value="✅ Adopted", inline=True)
-            view = discord.ui.View(timeout=None)
-            await interaction.response.edit_message(embed=embed, view=view)
-            await interaction.followup.send(
-                f"Your vote ({vote}) has been recorded.", ephemeral=True
-            )
-            channel = interaction.channel
-            if isinstance(channel, discord.TextChannel):
-                await channel.send(
-                    f'✅ **Policy adopted!** "{policy["title"]}" is now in effect.\n'
-                    f"**Adopted policy:** {adopted_text}\n"
-                    f"({len(yes_ids)} yes, {len(abstain_ids)} abstain)"
-                )
-                # List adopted policies
-                with ctx.open_db() as conn:
-                    adopted_policies = get_policies_by_ticket_id(conn, policy_id)
-                if adopted_policies:
-                    adopted_embed = discord.Embed(
-                        title="Adopted Policies",
-                        color=CLR_SUCCESS,
-                    )
-                    for p in adopted_policies:
-                        adopted_embed.add_field(
-                            name=p["title"],
-                            value=p["description"][:1024],
-                            inline=False,
-                        )
-                    await channel.send(embed=adopted_embed)
-                # Generate transcript before deleting
-                creator = guild.get_member(policy["creator_id"]) or member
-                await _collect_and_post_transcript(
-                    ctx,
-                    channel,
-                    record_type="policy_ticket",
-                    record_id=policy_id,
-                    user=creator,
-                    extra_meta={
-                        "resolution": "passed",
-                        "policy_title": policy["title"],
-                        "adopted_text": adopted_text,
-                        "vote_yes": len(yes_ids),
-                        "vote_no": 0,
-                        "vote_abstain": len(abstain_ids),
-                    },
-                )
-                await channel.delete(reason=f"Policy #{policy_id} adopted")
-            audit_embed = discord.Embed(
-                title="✅ Policy Adopted",
-                description=f"**{policy['title']}**\n📜 {adopted_text}\n\nVote: {len(yes_ids)} yes, {len(abstain_ids)} abstain",
-                color=CLR_SUCCESS,
-            )
-            await _post_audit(ctx, guild, audit_embed)
+        else:
+            embed.color = discord.Color.from_str("#E74C3C")
+            embed.set_field_at(2, name="Status", value="❌ Rejected", inline=True)
+        view = discord.ui.View(timeout=None)  # No more buttons
+        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.followup.send(
+            f"Your vote ({vote}) has been recorded.", ephemeral=True
+        )
+        channel = interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None
+        await finalize_policy_vote(
+            ctx,
+            guild,
+            policy_id,
+            outcome,
+            channel=channel,
+            yes_ids=yes_ids,
+            no_ids=no_ids,
+            abstain_ids=abstain_ids,
+            actor_id=member.id,
+            timed_out=False,
+        )
     else:
         # Still waiting for votes — update embed, keep buttons
         view = discord.ui.View(timeout=None)
@@ -1538,6 +1617,112 @@ async def jail_expiry_loop(bot: discord.Client, ctx: AppContext) -> None:
         except Exception:
             log.exception("Error in jail expiry loop")
         await asyncio.sleep(60)
+
+
+# Default if no per-guild override is set. Kept in sync with the
+# `policy_vote_timeout_hours` admin setting (see web_server/routes/config.py).
+_POLICY_VOTE_TIMEOUT_DEFAULT_HOURS = 72
+
+
+def _policy_vote_timeout_seconds(ctx: AppContext, guild_id: int) -> float:
+    with ctx.open_db() as conn:
+        raw = get_config_value(
+            conn,
+            "policy_vote_timeout_hours",
+            str(_POLICY_VOTE_TIMEOUT_DEFAULT_HOURS),
+            guild_id,
+        )
+    try:
+        hours = int(raw)
+    except (TypeError, ValueError):
+        hours = _POLICY_VOTE_TIMEOUT_DEFAULT_HOURS
+    return max(hours, 0) * 3600.0
+
+
+async def policy_vote_timeout_loop(bot: discord.Client, ctx: AppContext) -> None:
+    """Background task that resolves policy votes past their deadline."""
+    await bot.wait_until_ready()
+    while not bot.is_closed():
+        try:
+            guild = bot.get_guild(ctx.guild_id)
+            if guild is not None:
+                timeout_secs = _policy_vote_timeout_seconds(ctx, guild.id)
+                if timeout_secs > 0:
+                    with ctx.open_db() as conn:
+                        expired = find_expired_policy_votes(
+                            conn, guild.id, timeout_seconds=timeout_secs
+                        )
+                    for policy in expired:
+                        try:
+                            await _resolve_expired_policy(bot, ctx, guild, policy)
+                        except Exception:
+                            log.exception(
+                                "Failed to resolve expired policy %s",
+                                policy.get("id"),
+                            )
+        except Exception:
+            log.exception("Error in policy vote timeout loop")
+        await asyncio.sleep(60)
+
+
+async def _resolve_expired_policy(
+    bot: discord.Client,
+    ctx: AppContext,
+    guild: discord.Guild,
+    policy: PolicyTicketRow,
+) -> None:
+    policy_id = policy["id"]
+    mod_role_ids = _get_mod_role_ids(ctx)
+    admin_role_ids = _get_admin_role_ids(ctx)
+    all_role_ids = mod_role_ids | admin_role_ids
+    eligible: set[int] = set()
+    for m in guild.members:
+        if m.bot:
+            continue
+        if m.guild_permissions.administrator:
+            eligible.add(m.id)
+            continue
+        if all_role_ids & {r.id for r in m.roles}:
+            eligible.add(m.id)
+
+    with ctx.open_db() as conn:
+        votes = get_policy_votes(conn, policy_id)
+    vote_map = {v["user_id"]: v["vote"] for v in votes}
+    voted_ids = set(vote_map.keys()) & eligible
+    yes_ids = [uid for uid in voted_ids if vote_map[uid] == "yes"]
+    no_ids = [uid for uid in voted_ids if vote_map[uid] == "no"]
+    abstain_ids = [uid for uid in voted_ids if vote_map[uid] == "abstain"]
+    awaiting_ids = eligible - voted_ids
+
+    tally = {
+        "yes": yes_ids,
+        "no": no_ids,
+        "abstain": abstain_ids,
+        "awaiting": list(awaiting_ids),
+    }
+    outcome = _vote_outcome(tally, eligible, expired=True)
+    if outcome == "pending":
+        # vote_outcome never returns "pending" when expired=True, but guard
+        # so we never finalize the wrong way if the rule ever changes.
+        return
+
+    raw_channel = guild.get_channel(policy["channel_id"]) if policy["channel_id"] else None
+    channel = raw_channel if isinstance(raw_channel, discord.TextChannel) else None
+
+    bot_user = bot.user
+    actor_id = bot_user.id if bot_user is not None else 0
+    await finalize_policy_vote(
+        ctx,
+        guild,
+        policy_id,
+        outcome,
+        channel=channel,
+        yes_ids=yes_ids,
+        no_ids=no_ids,
+        abstain_ids=abstain_ids,
+        actor_id=actor_id,
+        timed_out=True,
+    )
 
 
 class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Message"):

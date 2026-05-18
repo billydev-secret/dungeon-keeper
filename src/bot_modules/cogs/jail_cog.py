@@ -39,6 +39,7 @@ from bot_modules.commands.jail_commands import (
     _post_audit,
     _ts_str,
     jail_expiry_loop,
+    policy_vote_timeout_loop,
 )
 from bot_modules.services.embeds import MOD_WARNING as CLR_WARNING
 from bot_modules.services.moderation import (
@@ -237,6 +238,10 @@ class JailCog(commands.Cog):
 
         # Start jail expiry background task
         bot.startup_task_factories.append(lambda: jail_expiry_loop(bot, ctx))
+        # Resolve policy votes whose 72h (or configured) window has passed.
+        bot.startup_task_factories.append(
+            lambda: policy_vote_timeout_loop(bot, ctx)
+        )
 
     async def cog_unload(self) -> None:
         if hasattr(self, "_jail_context_menu"):
