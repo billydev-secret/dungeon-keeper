@@ -567,22 +567,27 @@ class WhisperExposeButton(
             sender_member.mention if sender_member else f"<@{whisper.sender_id}>"
         )
 
-        if interaction.message:
+        # Reveal sender in the recipient's DM inbox
+        if whisper.dm_msg_id:
             try:
-                new_content = (
-                    (interaction.message.content or "")
-                    + f"\n\n\U0001f4a5 Sender: {sender_label}\n"
-                    f"```{safe_codefence_content(whisper.message)}```"
-                )
-                await interaction.message.edit(
-                    content=new_content,
+                dm_channel = await interaction.user.create_dm()
+                dm_msg = await dm_channel.fetch_message(whisper.dm_msg_id)
+                await dm_msg.edit(
+                    content=(dm_msg.content or "") + f"\n\n\U0001f4a5 Sender: {sender_label}",
                     view=None,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
             except discord.HTTPException:
-                log.warning("Failed to edit message on expose")
+                log.warning("Failed to edit DM on expose")
 
-        await interaction.response.send_message("Revealed.", ephemeral=True)
+        # Remove the Expose button from the channel message
+        if interaction.message:
+            try:
+                await interaction.message.edit(view=None)
+            except discord.HTTPException:
+                log.warning("Failed to clear expose view from channel message")
+
+        await interaction.response.send_message("Revealed in your inbox.", ephemeral=True)
 
 
 class WhisperReplyButton(
@@ -1047,7 +1052,7 @@ class WhisperExposeView(discord.ui.View):
         self.add_item(WhisperExposeButton(bot, whisper_id))
 
 
-# ── Per-whisper DM view (Guess + Share + Delete) ─────────────────────────────
+# ── Per-whisper DM view (Guess + Share + Reply + Delete) ─────────────────────
 class WhisperDmView(discord.ui.View):
     def __init__(self, bot: Bot, whisper_id: int) -> None:
         super().__init__(timeout=None)
@@ -1055,6 +1060,7 @@ class WhisperDmView(discord.ui.View):
         self.whisper_id = whisper_id
         self.add_item(WhisperGuessButton(bot, whisper_id))
         self.add_item(WhisperShareButton(bot, whisper_id))
+        self.add_item(WhisperReplyButton(bot, whisper_id))
         self.add_item(WhisperDeleteButton(bot, whisper_id))
 
     @classmethod
@@ -1066,6 +1072,7 @@ class WhisperDmView(discord.ui.View):
         v.bot = bot
         v.whisper_id = whisper_id
         v.add_item(WhisperShareButton(bot, whisper_id))
+        v.add_item(WhisperReplyButton(bot, whisper_id))
         v.add_item(WhisperDeleteButton(bot, whisper_id))
         return v
 
@@ -1078,6 +1085,7 @@ class WhisperDmView(discord.ui.View):
         v.bot = bot
         v.whisper_id = whisper_id
         v.add_item(WhisperGuessButton(bot, whisper_id))
+        v.add_item(WhisperReplyButton(bot, whisper_id))
         return v
 
 
@@ -1646,6 +1654,14 @@ class WhisperInboxSelectView(discord.ui.View):
             )
             report_btn.callback = self._on_report
             self.add_item(report_btn)
+        else:
+            sent_reply_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="Reply",
+                style=discord.ButtonStyle.success,
+                row=row,
+            )
+            sent_reply_btn.callback = self._on_reply
+            self.add_item(sent_reply_btn)
         delete_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label="Delete",
             style=discord.ButtonStyle.secondary,

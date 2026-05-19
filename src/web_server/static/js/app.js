@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=18";
+const _moduleVer = "?v=19";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -78,6 +78,7 @@ const SECTIONS = [
       { id: "mod-audit",            label: "Audit Log",         module: "./panels/mod-audit.js" },
       { id: "mod-dm-audit",         label: "DM Audit",          module: "./panels/mod-dm-audit.js" },
       { id: "mod-confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js" },
+      { id: "quotes-audit",          label: "Quotes Audit",       module: "./panels/quotes-audit.js" },
       { id: "message-search", label: "Message Review",  module: "./panels/message-search.js" },
     ],
   },

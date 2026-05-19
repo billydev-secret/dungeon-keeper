@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import io
 import logging
+import time
 from typing import TYPE_CHECKING
 
 import discord
@@ -143,16 +144,21 @@ class QuoteStyleView(discord.ui.View):
             )
             return
 
-        file = discord.File(io.BytesIO(card_bytes), filename="quote.jpg")
+        file = discord.File(io.BytesIO(card_bytes), filename="quote.png")
         preview_view = QuotePreviewView(
             bot=self.bot,
             channel=msg.channel,  # type: ignore[arg-type]
             card_bytes=card_bytes,
+            quoter_id=interaction.user.id,
+            quoted_user_id=msg.author.id,
+            quoted_message_id=msg.id,
+            theme_key=self._theme_key,
+            font_key=self._font_key,
         )
         self.stop()
         await interaction.edit_original_response(
             content="",
-            embed=discord.Embed().set_image(url="attachment://quote.jpg"),
+            embed=discord.Embed().set_image(url="attachment://quote.png"),
             attachments=[file],
             view=preview_view,
         )
@@ -168,11 +174,21 @@ class QuotePreviewView(discord.ui.View):
         bot: "Bot",
         channel: discord.TextChannel | discord.Thread | discord.VoiceChannel,
         card_bytes: bytes,
+        quoter_id: int = 0,
+        quoted_user_id: int = 0,
+        quoted_message_id: int = 0,
+        theme_key: str = "",
+        font_key: str = "",
     ) -> None:
         super().__init__(timeout=_PREVIEW_TIMEOUT)
         self.bot = bot
         self.channel = channel
         self.card_bytes = card_bytes
+        self.quoter_id = quoter_id
+        self.quoted_user_id = quoted_user_id
+        self.quoted_message_id = quoted_message_id
+        self.theme_key = theme_key
+        self.font_key = font_key
 
         post_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label="Post",
@@ -196,7 +212,7 @@ class QuotePreviewView(discord.ui.View):
         self.stop()
         await interaction.response.edit_message(content="Posted!", embed=None, attachments=[], view=None)
         try:
-            file = discord.File(io.BytesIO(self.card_bytes), filename="quote.jpg")
+            file = discord.File(io.BytesIO(self.card_bytes), filename="quote.png")
             posted_msg = await self.channel.send(file=file)
         except discord.HTTPException:
             log.exception("quote: failed to post card to channel")
@@ -210,6 +226,30 @@ class QuotePreviewView(discord.ui.View):
                 await posted_msg.add_reaction(emoji)
             except Exception:
                 log.warning("quote: could not add starboard reaction", exc_info=True)
+
+            try:
+                with self.bot.ctx.open_db() as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO quote_audit_log
+                            (ts, guild_id, channel_id, quoter_id, quoted_user_id,
+                             quoted_message_id, posted_message_id, theme, font)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            time.time(),
+                            self.channel.guild.id,
+                            self.channel.id,
+                            self.quoter_id,
+                            self.quoted_user_id,
+                            self.quoted_message_id,
+                            posted_msg.id,
+                            self.theme_key,
+                            self.font_key,
+                        ),
+                    )
+            except Exception:
+                log.warning("quote: could not write audit log", exc_info=True)
 
 
 # ── Cog ───────────────────────────────────────────────────────────────────────

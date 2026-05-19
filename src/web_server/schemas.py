@@ -900,3 +900,25 @@ class BackfillStartedResponse(BaseModel):
     ok: bool = True
     job: str
     message: str = ""
+
+
+# ── Quote audit log ────────────────────────────────────────────────────
+
+
+class QuoteAuditEntry(BaseModel):
+    id: int
+    ts: float
+    channel_id: str
+    quoter_id: str
+    quoter_name: str = ""
+    quoted_user_id: str
+    quoted_user_name: str = ""
+    quoted_message_id: str
+    posted_message_id: str
+    theme: str
+    font: str
+
+
+class QuoteAuditLogResponse(BaseModel):
+    total: int
+    entries: list[QuoteAuditEntry]

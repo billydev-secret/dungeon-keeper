@@ -246,6 +246,11 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(games_routes.router, prefix="/api/games", tags=["games"])
 
+    # ── Quotes ──────────────────────────────────────────────────────────
+    from web_server.routes import quotes as quotes_routes
+
+    app.include_router(quotes_routes.router, prefix="/api", tags=["quotes"])
+
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()
 

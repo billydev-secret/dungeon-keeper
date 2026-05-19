@@ -200,11 +200,10 @@ def render_quote_card(
     font_style: str = "inter",
     width: int = 900,
     height: int = 500,
-    jpeg_quality: int = 90,
 ) -> bytes:
     """Render a quote card with the avatar as a blurred, color-graded background.
 
-    Layout: pfp on LEFT, text on RIGHT.
+    Layout: pfp on LEFT, text on RIGHT. Returns PNG bytes with transparent corners.
     """
     from PIL import Image, ImageDraw, ImageFilter  # noqa: PLC0415
 
@@ -339,8 +338,11 @@ def render_quote_card(
         _bg_rgba.alpha_composite(border)
         bg = _bg_rgba.convert("RGB")
 
+    # Apply rounded-rect transparency — pixels outside the card shape go fully transparent
+    out = bg.convert("RGBA")
+    out.putalpha(rr_mask)
     buf = io.BytesIO()
-    bg.save(buf, format="JPEG", quality=jpeg_quality)
+    out.save(buf, format="PNG")
     return buf.getvalue()
 
 
