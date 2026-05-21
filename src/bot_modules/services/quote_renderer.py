@@ -10,6 +10,7 @@ so the problem is immediately visible rather than silently degrading.
 from __future__ import annotations
 
 import io
+import re as _re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,9 @@ except ImportError:
     _HAS_PILMOJI = False
 
 QUOTE_MAX_CHARS = 280
+
+# Matches Discord custom emoji tokens: <:name:id> and <a:name:id>
+_DISCORD_EMOJI_RE = _re.compile(r'<a?:[^:]+:(\d+)>')
 
 
 # ── Theme definition ──────────────────────────────────────────────────────────
@@ -141,6 +145,77 @@ def _wrap_text(text: str, font, max_width: int, draw, measure=None) -> list[str]
     return result or [""]
 
 
+def _make_emoji_measure(base_fn, emoji_size: int):
+    """Wrap a text-measure function to account for Discord custom emoji token widths."""
+    def _measure(s: str) -> int:
+        total = 0
+        pos = 0
+        for m in _DISCORD_EMOJI_RE.finditer(s):
+            seg = s[pos:m.start()]
+            if seg:
+                total += base_fn(seg)
+            total += emoji_size
+            pos = m.end()
+        tail = s[pos:]
+        if tail:
+            total += base_fn(tail)
+        return total
+    return _measure
+
+
+def _render_line_mixed(
+    line: str,
+    x: int,
+    y: int,
+    *,
+    font,
+    color: tuple[int, int, int],
+    emoji_size: int,
+    custom_emojis: "dict[str, bytes] | None",
+    bg,
+    draw,
+    pilmoji=None,
+) -> None:
+    """Render a text line, compositing Discord custom emoji images at token positions."""
+    from PIL import Image as _I  # noqa: PLC0415
+
+    cx = x
+    pos = 0
+    for m in _DISCORD_EMOJI_RE.finditer(line):
+        seg = line[pos:m.start()]
+        if seg:
+            if pilmoji is not None:
+                pilmoji.text((cx, y), seg, fill=color, font=font)
+                seg_w = _emoji_getsize(seg, font=font)[0]  # type: ignore[misc]
+            else:
+                draw.text((cx, y), seg, fill=color, font=font)
+                bbox = draw.textbbox((cx, y), seg, font=font)
+                seg_w = int(bbox[2] - bbox[0])
+            cx += seg_w
+
+        eid = m.group(1)
+        if custom_emojis and eid in custom_emojis:
+            try:
+                ei = _I.open(io.BytesIO(custom_emojis[eid]))
+                if getattr(ei, "n_frames", 1) > 1:
+                    ei.seek(0)
+                ei = ei.convert("RGBA").resize(
+                    (emoji_size, emoji_size), _I.Resampling.LANCZOS  # type: ignore[attr-defined]
+                )
+                bg.paste(ei, (cx, y), mask=ei.split()[3])
+            except Exception:
+                pass
+        cx += emoji_size
+        pos = m.end()
+
+    tail = line[pos:]
+    if tail:
+        if pilmoji is not None:
+            pilmoji.text((cx, y), tail, fill=color, font=font)
+        else:
+            draw.text((cx, y), tail, fill=color, font=font)
+
+
 # ── Pfp-background card ───────────────────────────────────────────────────────
 
 def _build_background(
@@ -200,6 +275,7 @@ def render_quote_card(
     font_style: str = "inter",
     width: int = 900,
     height: int = 500,
+    custom_emojis: "dict[str, bytes] | None" = None,
 ) -> bytes:
     """Render a quote card with the avatar as a blurred, color-graded background.
 
@@ -213,15 +289,13 @@ def render_quote_card(
     # Blurred background, face offset left 20%
     bg = _build_background(avatar_bytes, width, height, theme, offset_x=int(width * 0.20))
 
-    # Clip to just inside the frame inner edges with a uniform 3px gap.
-    # Frame inner edges at 900x500: top/bottom ~28px, left/right ~59px.
-    _ix = max(4, int(width * 0.068))   # ~62px at 900
-    _iy = max(4, int(height * 0.062))  # ~31px at 500
-    rr_mask = Image.new("L", (width, height), 0)
-    ImageDraw.Draw(rr_mask).rounded_rectangle(
-        (_ix, _iy, width - _ix, height - _iy), radius=50, fill=255,
+    # Outer card shape — full canvas with rounded corners matching the border frame.
+    card_mask = Image.new("L", (width, height), 0)
+    ImageDraw.Draw(card_mask).rounded_rectangle(
+        (0, 0, width - 1, height - 1),
+        radius=max(20, int(min(width, height) * 0.10)),
+        fill=255,
     )
-    bg = Image.composite(bg, Image.new("RGB", (width, height), (0, 0, 0)), rr_mask)
 
     # Gold gradient denser toward bottom-right (flower corner)
     _grad = Image.new("L", (width, height))
@@ -252,8 +326,15 @@ def render_quote_card(
     line_h = int(probe[3] - probe[1])
     line_gap = max(6, line_h // 5)
 
-    _measure = (lambda t: _emoji_getsize(t, font=body_font)[0]) if _HAS_PILMOJI else None
-    lines = _wrap_text(f"“{text}”", body_font, text_col_w, draw, measure=_measure)
+    if _HAS_PILMOJI:
+        def _base_m(t: str) -> int:
+            return _emoji_getsize(t, font=body_font)[0]  # type: ignore[misc]
+    else:
+        def _base_m(t: str) -> int:  # type: ignore[misc]
+            return int(draw.textbbox((0, 0), t, font=body_font)[2] - draw.textbbox((0, 0), t, font=body_font)[0])
+    _quoted_text = f"“{text}”"
+    _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
+    lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
     text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
     text_y_start = (height - text_block_h) // 2
 
@@ -262,7 +343,7 @@ def render_quote_card(
     _sdraw = ImageDraw.Draw(_shadow)
     _sy = text_y_start
     for line in lines:
-        _sdraw.text((text_pad_l + 4, _sy + 4), line, font=body_font, fill=(0, 0, 0, 170))
+        _sdraw.text((text_pad_l + 4, _sy + 4), _DISCORD_EMOJI_RE.sub('', line), font=body_font, fill=(0, 0, 0, 170))
         _sy += line_h + line_gap
     _shadow = _shadow.filter(ImageFilter.GaussianBlur(radius=5))
     _bg_rgba = bg.convert("RGBA")
@@ -270,16 +351,26 @@ def render_quote_card(
     bg = _bg_rgba.convert("RGB")
     draw = ImageDraw.Draw(bg)
 
-    # Draw text — pilmoji renders Unicode + Discord emoji images inline
+    # Draw text — pilmoji handles Unicode emoji; _render_line_mixed composites Discord custom emojis
     text_y = text_y_start
     if _HAS_PILMOJI:
-        with _Pilmoji(bg, source=_EmojiSource) as _pm:
+        with _Pilmoji(bg, source=_EmojiSource) as _pm:  # type: ignore[misc]
             for line in lines:
-                _pm.text((text_pad_l, text_y), line, fill=theme.text_color, font=body_font)
+                _render_line_mixed(
+                    line, text_pad_l, text_y,
+                    font=body_font, color=theme.text_color,
+                    emoji_size=line_h, custom_emojis=custom_emojis,
+                    bg=bg, draw=draw, pilmoji=_pm,
+                )
                 text_y += line_h + line_gap
     else:
         for line in lines:
-            draw.text((text_pad_l, text_y), line, font=body_font, fill=theme.text_color)
+            _render_line_mixed(
+                line, text_pad_l, text_y,
+                font=body_font, color=theme.text_color,
+                emoji_size=line_h, custom_emojis=custom_emojis,
+                bg=bg, draw=draw,
+            )
             text_y += line_h + line_gap
     draw = ImageDraw.Draw(bg)
 
@@ -327,20 +418,19 @@ def render_quote_card(
         draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
         draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
 
-    # Border overlay — flipped so poppies land bottom-right
+    # Apply rounded-rect transparency — pixels outside the card shape go fully transparent
+    out = bg.convert("RGBA")
+    out.putalpha(card_mask)
+
+    # Border overlay — composited after transparency so it shows over the full card area
     if _BORDER.exists():
         border = Image.open(_BORDER).convert("RGBA")
         border = border.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         border = border.resize((width, height), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
         lum = border.convert("RGB").convert("L")
         border.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))  # type: ignore[arg-type]
-        _bg_rgba = bg.convert("RGBA")
-        _bg_rgba.alpha_composite(border)
-        bg = _bg_rgba.convert("RGB")
+        out.alpha_composite(border)
 
-    # Apply rounded-rect transparency — pixels outside the card shape go fully transparent
-    out = bg.convert("RGBA")
-    out.putalpha(rr_mask)
     buf = io.BytesIO()
     out.save(buf, format="PNG")
     return buf.getvalue()

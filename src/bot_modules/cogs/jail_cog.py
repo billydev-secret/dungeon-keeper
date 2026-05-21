@@ -183,6 +183,95 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
                 await channel.send(f"🗳️ Vote now! {' '.join(role_mentions)}")
 
 
+class _WarnFromMessageModal(discord.ui.Modal, title="Warn User — Message Context"):
+    notes: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="Moderator notes (optional)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(self, source_message: discord.Message, ctx: "AppContext") -> None:
+        super().__init__()
+        self.source_message = source_message
+        self._ctx = ctx
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        ctx = self._ctx
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
+
+        target = guild.get_member(self.source_message.author.id)
+        if target is None:
+            await interaction.response.send_message(
+                "That user is no longer in this server.", ephemeral=True
+            )
+            return
+
+        reason_text = self.source_message.content.strip()
+        notes_text = self.notes.value.strip()
+        full_reason = reason_text
+        if notes_text:
+            full_reason = f"{reason_text}\n\n**Mod notes:** {notes_text}"
+
+        with ctx.open_db() as conn:
+            warning_id = create_warning(
+                conn,
+                guild_id=guild.id,
+                user_id=target.id,
+                moderator_id=member.id,
+                reason=full_reason,
+            )
+            count = get_active_warning_count(conn, guild.id, target.id)
+            write_audit(
+                conn,
+                guild_id=guild.id,
+                action="warning_issue",
+                actor_id=member.id,
+                target_id=target.id,
+                extra={
+                    "warning_id": warning_id,
+                    "reason": full_reason,
+                    "count": count,
+                    "source_message_id": self.source_message.id,
+                    "source_channel_id": self.source_message.channel.id,
+                },
+            )
+
+        await interaction.response.send_message(
+            f"⚠️ Warning issued to {target.mention}. They now have **{count}** active warning(s).",
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+        audit_embed = discord.Embed(
+            title="⚠️ Warning Issued",
+            description=(
+                f"{target.mention} warned by {member.mention}\n"
+                + (f"**Reason:** {reason_text}\n" if reason_text else "")
+                + (f"**Notes:** {notes_text}\n" if notes_text else "")
+                + f"**Active warnings:** {count}\n"
+                + f"[Jump to source message]({self.source_message.jump_url})"
+            ),
+            color=CLR_WARNING,
+        )
+        await _post_audit(ctx, guild, audit_embed)
+
+        with ctx.open_db() as conn:
+            threshold = int(get_config_value(conn, "warning_threshold", "3"))
+        if count >= threshold and (count - 1) < threshold:
+            admin_ids = _get_admin_role_ids(ctx)
+            pings = " ".join(f"<@&{rid}>" for rid in admin_ids) if admin_ids else ""
+            alert = discord.Embed(
+                title="🚨 Warning Threshold Reached",
+                description=f"{target.mention} has reached **{count}** active warnings.\n{pings}",
+                color=CLR_JAIL,
+            )
+            await _post_audit(ctx, guild, alert)
+
+
 class JailCog(commands.Cog):
     ticket = app_commands.Group(name="ticket", description="Ticket management commands.")
     policy = app_commands.Group(
@@ -236,6 +325,33 @@ class JailCog(commands.Cog):
         bot.tree.add_command(ticket_ctx_menu)
         self._ticket_context_menu = ticket_ctx_menu
 
+        async def warn_message_ctx(
+            interaction: discord.Interaction, message: discord.Message
+        ) -> None:
+            invoker = interaction.user
+            if not isinstance(invoker, discord.Member) or not _is_mod(invoker, ctx):
+                await interaction.response.send_message("Mod only.", ephemeral=True)
+                return
+            if message.author.bot:
+                await interaction.response.send_message(
+                    "Can't warn a bot.", ephemeral=True
+                )
+                return
+            if not message.content or not message.content.strip():
+                await interaction.response.send_message(
+                    "That message has no text content to use as a warning reason.",
+                    ephemeral=True,
+                )
+                return
+            await interaction.response.send_modal(_WarnFromMessageModal(message, ctx))
+
+        warn_msg_ctx_menu = app_commands.ContextMenu(
+            name="Warn User (Message)", callback=warn_message_ctx
+        )
+        warn_msg_ctx_menu.default_permissions = discord.Permissions(moderate_members=True)
+        bot.tree.add_command(warn_msg_ctx_menu)
+        self._warn_msg_context_menu = warn_msg_ctx_menu
+
         # Start jail expiry background task
         bot.startup_task_factories.append(lambda: jail_expiry_loop(bot, ctx))
         # Resolve policy votes whose 72h (or configured) window has passed.
@@ -251,6 +367,10 @@ class JailCog(commands.Cog):
         if hasattr(self, "_ticket_context_menu"):
             self.bot.tree.remove_command(
                 "Open Ticket About This Message", type=discord.AppCommandType.message
+            )
+        if hasattr(self, "_warn_msg_context_menu"):
+            self.bot.tree.remove_command(
+                "Warn User (Message)", type=discord.AppCommandType.message
             )
 
     # ── /jail ─────────────────────────────────────────────────────────────

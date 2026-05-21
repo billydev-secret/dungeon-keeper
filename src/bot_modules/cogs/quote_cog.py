@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import time
 from typing import TYPE_CHECKING
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -30,6 +32,7 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.quote")
 
 _STYLE_TIMEOUT = 120
+_EMOJI_RE = re.compile(r'<(a?):([^:]+):(\d+)>')
 _PREVIEW_TIMEOUT = 120
 
 
@@ -127,6 +130,24 @@ class QuoteStyleView(discord.ui.View):
         text = msg.content.strip()
         author_name = msg.author.display_name
 
+        custom_emojis: dict[str, bytes] = {}
+        emoji_matches = _EMOJI_RE.findall(text)
+        if emoji_matches:
+            async with aiohttp.ClientSession() as _session:
+                for animated, _name, eid in emoji_matches:
+                    if eid in custom_emojis:
+                        continue
+                    ext = "gif" if animated else "png"
+                    try:
+                        async with _session.get(
+                            f"https://cdn.discordapp.com/emojis/{eid}.{ext}",
+                            headers={"User-Agent": "DungeonKeeper/1.0"},
+                        ) as resp:
+                            if resp.status == 200:
+                                custom_emojis[eid] = await resp.read()
+                    except Exception:
+                        log.warning("quote: failed to fetch emoji %s", eid)
+
         try:
             import asyncio  # noqa: PLC0415
             card_bytes = await asyncio.to_thread(
@@ -136,6 +157,7 @@ class QuoteStyleView(discord.ui.View):
                 avatar_bytes=avatar_bytes,
                 theme=theme,
                 font_style=font_style,
+                custom_emojis=custom_emojis or None,
             )
         except Exception:
             log.exception("quote: render_quote_card failed")
