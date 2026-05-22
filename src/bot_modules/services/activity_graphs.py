@@ -225,7 +225,7 @@ def _append_exclusions(
         params.extend(exclude_user_ids)
     if exclude_channel_ids:
         ph = ",".join("?" * len(exclude_channel_ids))
-        where += f" AND channel_id NOT IN ({ph})"
+        where += f" AND (channel_id IS NULL OR channel_id NOT IN ({ph}))"
         params.extend(exclude_channel_ids)
     return where
 
