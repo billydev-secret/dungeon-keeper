@@ -3,34 +3,9 @@ default_stages: [pre-commit]
 repos:
   - repo: local
     hooks:
-      - id: ruff
-        name: ruff
-        entry: ./.venv/Scripts/python.exe -m ruff check --fix .
+      - id: lint
+        name: lint (ruff + pyright)
+        entry: ./.venv/Scripts/python.exe -m pytest -q tests/test_lint.py
         language: system
         pass_filenames: false
-      # - id: mypy
-      #   name: mypy
-      #   entry: ./.venv/Scripts/python.exe -m mypy . --exclude .venv
-      #   language: system
-      #   pass_filenames: false
-#      - id: pytest
-#        name: pytest
-#        entry: ./.venv/Scripts/python.exe -m pytest -q
-#        language: system
-#        pass_filenames: false
-#        always_run: true
-      - id: eslint
-        name: eslint
-        entry: eslint
-        language: node
-        types: [javascript]
-        files: ^web/static/
-        exclude: ^web/static/vendor/
-        additional_dependencies: ['eslint@8.57.1']
-      - id: stylelint
-        name: stylelint
-        entry: stylelint
-        language: node
-        types: [css]
-        files: ^web/static/
-        additional_dependencies: ['stylelint@16.14.1', 'stylelint-config-standard@37.0.0']
+        always_run: true

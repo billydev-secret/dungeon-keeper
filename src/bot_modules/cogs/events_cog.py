@@ -251,6 +251,8 @@ class EventsCog(commands.Cog):
 
     async def cog_load(self) -> None:
         self.bot.tree.error(_on_tree_error)
+        from bot_modules.services import ollama_client
+        ollama_client.start_loading(self.ctx.db_path)
 
     def _log_background_task_result(self, task: asyncio.Task[None]) -> None:
         try:
@@ -614,17 +616,36 @@ class EventsCog(commands.Cog):
         if not watchers:
             return
 
+        reason = ""
+        from bot_modules.services import ollama_client
+        if ollama_client.is_available():
+            from bot_modules.services.ai_moderation_service import ai_check_watched_message
+            try:
+                is_violation, reason = await ai_check_watched_message(
+                    message, db_path=self.ctx.db_path
+                )
+            except Exception as exc:
+                log.warning(
+                    "AI watch check failed for %s: %s — notifying anyway.",
+                    message.author.display_name,
+                    exc,
+                )
+                is_violation = True
+            if not is_violation:
+                return
+
         channel_name = getattr(message.channel, "name", str(message.channel.id))
         guild_name = message.guild.name if message.guild else "Unknown Server"
 
         body = message.content or "*[no text content]*"
         attachment_lines = "\n".join(a.url for a in message.attachments)
+        rule_line = f"\n⚠️ **Rule concern:** {reason}" if reason else ""
         footer = (f"{attachment_lines}\n" if attachment_lines else "") + (
             f"— **{message.author.display_name}** (@{message.author.name}) "
             f"in **{guild_name}** / #{channel_name}\n"
             f"{message.jump_url}"
         )
-        dm_text = f"{body}\n\n{footer}"
+        dm_text = f"{body}{rule_line}\n\n{footer}"
 
         for watcher_id in watchers:
             try:

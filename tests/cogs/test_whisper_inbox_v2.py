@@ -157,11 +157,13 @@ def test_inbox_exhausted_guesses_omits_guess_button():
 
 
 def test_inbox_sent_mode_only_delete_action():
-    """Sender's own inbox shows just the Delete action (no Share/Guess/Reply/Report)."""
+    """Sender's own inbox shows Reply + Delete (no Share/Guess/Report)."""
     whispers = [_w(sender_id=TARGET, target_id=999, message="my secret")]
     view = _make_inbox(whispers, mode="sent")
     rows = [item.row for item in view.children]
-    assert rows.count(2) == 1
+    assert rows.count(2) == 2
+    labels = {item.label for item in view.children if item.row == 2}
+    assert labels == {"Reply", "Delete"}
 
 
 def test_inbox_interaction_check_rejects_other_user():

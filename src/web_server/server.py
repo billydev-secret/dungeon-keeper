@@ -193,6 +193,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     from web_server.routes import config as config_routes
     from web_server.routes import home as home_routes
     from web_server.routes import logs as logs_routes
+    from web_server.routes import ai_routes
     from web_server.routes import messages as messages_routes
     from web_server.routes import meta as meta_routes
     from web_server.routes import moderation as moderation_routes
@@ -202,6 +203,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(meta_routes.router, prefix="/api", tags=["meta"])
     app.include_router(reports_routes.router, prefix="/api/reports", tags=["reports"])
     app.include_router(config_routes.router, prefix="/api", tags=["config"])
+    app.include_router(ai_routes.router, prefix="/api", tags=["ai"])
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])

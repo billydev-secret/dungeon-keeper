@@ -68,6 +68,12 @@ def _setup_logging() -> None:
     root.setLevel(logging.INFO)
     root.addHandler(queue_handler)
 
+    llm_level = os.getenv("LOG_LEVEL_LLM", "").upper()
+    if llm_level:
+        logging.getLogger("dungeonkeeper.llm").setLevel(
+            getattr(logging, llm_level, logging.DEBUG)
+        )
+
     _log_queue_listener = listener
 
 
@@ -159,6 +165,7 @@ def main() -> None:
         "bot_modules.cogs.privacy_cog",
         "bot_modules.cogs.reports_cog",
         "bot_modules.cogs.todo_cog",
+        "bot_modules.cogs.ai_mod_cog",
         "bot_modules.cogs.watch_cog",
         "bot_modules.cogs.wellness_cog",
         "bot_modules.cogs.xp_cog",

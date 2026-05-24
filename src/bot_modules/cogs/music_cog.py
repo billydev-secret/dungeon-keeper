@@ -61,6 +61,8 @@ class MusicCog(commands.Cog):
         self._spotify: SpotifyResolver | None = None
         self._queues: dict[int, GuildQueue] = {}
         self._disabled = False
+        self._starting = True
+        self._startup_task: asyncio.Task[None] | None = None
         # alone-in-channel watchers: guild_id -> Task
         self._idle_tasks: dict[int, asyncio.Task[None]] = {}
         super().__init__()
@@ -73,6 +75,9 @@ class MusicCog(commands.Cog):
         lavalink = LavalinkManager()
         self._lavalink = lavalink
         self._spotify = SpotifyResolver(db_path=self.ctx.db_path)
+        self._startup_task = asyncio.create_task(self._start_lavalink(lavalink))
+
+    async def _start_lavalink(self, lavalink: LavalinkManager) -> None:
         try:
             await lavalink.start()
             node = wavelink.Node(
@@ -86,6 +91,8 @@ class MusicCog(commands.Cog):
             with contextlib.suppress(Exception):
                 await lavalink.stop()
             return
+        finally:
+            self._starting = False
 
         self.bot.add_view(NowPlayingView())
         self.bot.startup_task_factories.append(
@@ -95,6 +102,10 @@ class MusicCog(commands.Cog):
 
     async def cog_unload(self) -> None:
         log.info("Music cog unloading")
+        if self._startup_task and not self._startup_task.done():
+            self._startup_task.cancel()
+            with contextlib.suppress(Exception):
+                await self._startup_task
         for task in self._idle_tasks.values():
             task.cancel()
         self._idle_tasks.clear()
@@ -139,6 +150,9 @@ class MusicCog(commands.Cog):
         self, interaction: discord.Interaction
     ) -> wavelink.Player | None:
         """Ensure the bot is in the same voice channel as the user; return Player."""
+        if self._starting:
+            await self._ephemeral(interaction, "Music is warming up, try again in a moment.")
+            return None
         if self._disabled:
             await self._ephemeral(interaction, "Music is currently unavailable.")
             return None
@@ -206,6 +220,9 @@ class MusicCog(commands.Cog):
     @app_commands.command(name="play", description="Play a YouTube or Spotify URL or search.")
     @app_commands.describe(query="YouTube URL, Spotify URL/playlist, or search terms.")
     async def play(self, interaction: discord.Interaction, query: str) -> None:
+        if self._starting:
+            await self._ephemeral(interaction, "Music is warming up, try again in a moment.")
+            return
         if self._disabled:
             await self._ephemeral(interaction, "Music is currently unavailable.")
             return

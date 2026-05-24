@@ -125,7 +125,9 @@ async def test_send_picker_lists_only_role_members_excluding_self():
     with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await cog._open_send_picker(interaction)
 
-    sent_kwargs = interaction.response.send_message.call_args.kwargs
+    interaction.response.defer.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    sent_kwargs = interaction.followup.send.call_args.kwargs
     picker = sent_kwargs.get("view")
     assert isinstance(picker, WhisperSendTargetSelectView)
     member_ids = {m.id for m in picker._all_members}
@@ -146,7 +148,9 @@ async def test_send_picker_rejects_when_role_unset():
     with patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg_no_role):
         await cog._open_send_picker(interaction)
 
-    args = interaction.response.send_message.call_args.args
+    interaction.response.defer.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    args = interaction.followup.send.call_args.args
     assert "configured" in args[0].lower() or "set up" in args[0].lower()
 
 
@@ -167,7 +171,9 @@ async def test_send_picker_rejects_when_caller_lacks_role():
     with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await cog._open_send_picker(interaction)
 
-    args = interaction.response.send_message.call_args.args
+    interaction.response.defer.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    args = interaction.followup.send.call_args.args
     assert "optin" in args[0].lower() or "role" in args[0].lower()
 
 

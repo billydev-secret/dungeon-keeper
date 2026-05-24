@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 import re
 from datetime import datetime, timezone
@@ -69,6 +71,7 @@ from bot_modules.services.moderation import (
     write_audit,
 )
 from bot_modules.core.db_utils import get_config_value
+from bot_modules.services.activity_graphs import query_message_activity, render_activity_chart
 
 
 # ── Embed / display limits ────────────────────────────────────────────────
@@ -1540,14 +1543,96 @@ class JailCog(commands.Cog):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
 
-        with ctx.open_db() as conn:
-            active_jail = get_active_jail(conn, guild.id, user.id)
-            jail_hist = get_jail_history(conn, guild.id, user.id)
-            warns = get_warnings(conn, guild.id, user.id)
-            tickets = get_ticket_history(conn, guild.id, user.id)
+        await interaction.response.defer(ephemeral=True)
+
+        since_30d = datetime.now(timezone.utc).timestamp() - 30 * 86400
+
+        def _fetch():
+            with ctx.open_db() as conn:
+                active_jail = get_active_jail(conn, guild.id, user.id)
+                jail_hist = get_jail_history(conn, guild.id, user.id)
+                warns = get_warnings(conn, guild.id, user.id)
+                tickets = get_ticket_history(conn, guild.id, user.id)
+
+                xp_row = conn.execute(
+                    "SELECT total_xp, level FROM member_xp WHERE guild_id = ? AND user_id = ?",
+                    (guild.id, user.id),
+                ).fetchone()
+
+                watcher_count = conn.execute(
+                    "SELECT COUNT(*) FROM watched_users WHERE guild_id = ? AND watched_user_id = ?",
+                    (guild.id, user.id),
+                ).fetchone()[0]
+
+                last_ts = conn.execute(
+                    "SELECT MAX(created_at) FROM processed_messages WHERE guild_id = ? AND user_id = ?",
+                    (guild.id, user.id),
+                ).fetchone()[0]
+
+                top_channels = conn.execute(
+                    """
+                    SELECT channel_id, COUNT(*) AS cnt
+                    FROM processed_messages
+                    WHERE guild_id = ? AND user_id = ? AND created_at >= ?
+                    GROUP BY channel_id ORDER BY cnt DESC LIMIT 3
+                    """,
+                    (guild.id, user.id, since_30d),
+                ).fetchall()
+
+                labels, msg_counts, member_counts = query_message_activity(
+                    conn, guild.id, "day", user_id=user.id, utc_offset_hours=ctx.tz_offset_hours
+                )
+
+            return (
+                active_jail, jail_hist, warns, tickets,
+                xp_row, watcher_count, last_ts, top_channels,
+                labels, msg_counts, member_counts,
+            )
+
+        (
+            active_jail, jail_hist, warns, tickets,
+            xp_row, watcher_count, last_ts, top_channels,
+            labels, msg_counts, member_counts,
+        ) = await asyncio.to_thread(_fetch)
+
+        chart_bytes = await asyncio.to_thread(
+            render_activity_chart,
+            labels,
+            msg_counts,
+            member_counts,
+            f"{user.display_name} — 30-Day Activity",
+            "day",
+            show_members=False,
+        )
 
         embed = discord.Embed(title=f"Mod Info — {user}", color=CLR_INFO)
+        if user.display_avatar:
+            embed.set_thumbnail(url=user.display_avatar.url)
 
+        # ── Account ──────────────────────────────────────────────────────────
+        created_ts = int(user.created_at.timestamp())
+        age_days = (datetime.now(timezone.utc) - user.created_at).days
+        joined_ts = int(user.joined_at.timestamp()) if user.joined_at else None
+        acct_lines = f"Created: <t:{created_ts}:D> ({age_days}d ago)"
+        if joined_ts:
+            acct_lines += f"\nJoined: <t:{joined_ts}:D>"
+        embed.add_field(name="👤 Account", value=acct_lines, inline=True)
+
+        # ── XP / Level ───────────────────────────────────────────────────────
+        if xp_row:
+            xp_text = f"Level **{xp_row['level']}** · {xp_row['total_xp']:,.0f} XP"
+        else:
+            xp_text = "No XP recorded"
+        embed.add_field(name="⭐ Level", value=xp_text, inline=True)
+
+        # ── Watch list ───────────────────────────────────────────────────────
+        if watcher_count:
+            watch_text = f"👁 **{watcher_count} mod{'s' if watcher_count != 1 else ''} watching**"
+        else:
+            watch_text = "Not watched"
+        embed.add_field(name="🔍 Watch List", value=watch_text, inline=True)
+
+        # ── Jail ─────────────────────────────────────────────────────────────
         if active_jail:
             jail_text = f"**Currently jailed** since {_ts_str(active_jail['created_at'])}"
             if active_jail["expires_at"]:
@@ -1564,12 +1649,14 @@ class JailCog(commands.Cog):
                 jail_text += f"\n  Most recent: {_ts_str(recent['created_at'])} — {recent.get('release_reason', '')}"
         embed.add_field(name="🔒 Jail", value=jail_text, inline=False)
 
+        # ── Warnings ─────────────────────────────────────────────────────────
         active_warns = [w for w in warns if not w["revoked"]]
         warn_text = f"**Active:** {len(active_warns)} / **Total:** {len(warns)}"
         for w in active_warns[:3]:
             warn_text += f"\n  #{w['id']} — {_ts_str(w['created_at'])} — {w['reason'] or 'no reason'}"
         embed.add_field(name="⚠️ Warnings", value=warn_text, inline=False)
 
+        # ── Tickets ──────────────────────────────────────────────────────────
         open_t = sum(1 for t in tickets if t["status"] == "open")
         closed_t = sum(1 for t in tickets if t["status"] in ("closed", "deleted"))
         ticket_text = f"**Open:** {open_t} / **Closed:** {closed_t}"
@@ -1578,7 +1665,25 @@ class JailCog(commands.Cog):
             ticket_text += f"\n  Most recent: #{recent_ticket['id']} — {recent_ticket['status']} — {_ts_str(recent_ticket['created_at'])}"
         embed.add_field(name="📩 Tickets", value=ticket_text, inline=False)
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        # ── Activity ─────────────────────────────────────────────────────────
+        total_30d = sum(msg_counts)
+        last_seen = _ts_str(last_ts) if last_ts else "Never"
+        ch_lines = "\n".join(
+            f"<#{row['channel_id']}> — {row['cnt']} msgs" for row in top_channels
+        ) or "No activity"
+        embed.add_field(
+            name=f"💬 Activity — {total_30d} msgs (30d)",
+            value=f"Last seen: {last_seen}\n{ch_lines}",
+            inline=False,
+        )
+
+        embed.set_image(url="attachment://modinfo_activity.png")
+
+        await interaction.followup.send(
+            embed=embed,
+            file=discord.File(io.BytesIO(chart_bytes), filename="modinfo_activity.png"),
+            ephemeral=True,
+        )
 
 
 async def setup(bot: Bot) -> None:

@@ -15,6 +15,9 @@ export function mount(container) {
 
     const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+    const phaseLabel = { ready: "Ready", downloading: "Downloading…", loading: "Loading model…", error: "Error", idle: "Not started" };
+    const phaseClass = { ready: "chip-success", downloading: "chip-warning", loading: "chip-warning", error: "chip-danger", idle: "chip-neutral" };
+
     const modelOptions = (models, selected, { allowGlobal = false } = {}) => {
       let html = allowGlobal ? `<option value=""${!selected ? " selected" : ""}>(use global default)</option>` : "";
       for (const m of models) {
@@ -64,9 +67,14 @@ export function mount(container) {
         </div>`;
     }
 
-    const apiKeyNote = data.has_api_key
-      ? `<span class="chip chip-success">ANTHROPIC_API_KEY is set</span>`
-      : `<span class="chip chip-danger">ANTHROPIC_API_KEY is not set — AI features are disabled</span>`;
+    const llm = data.llm_status;
+    const llmChipClass = phaseClass[llm.phase] || "chip-neutral";
+    const llmChipText = llm.phase === "ready"
+      ? `LLM ready — ${llm.model}`
+      : llm.phase === "error"
+        ? `LLM error — ${llm.error}`
+        : phaseLabel[llm.phase] || llm.phase;
+    const apiKeyNote = `<span class="chip ${llmChipClass}" id="llm-status-chip">${esc(llmChipText)}</span>`;
 
     container.innerHTML = `
       <div class="panel">
@@ -105,6 +113,139 @@ export function mount(container) {
         </div>
       </div>
     `;
+
+    // ── Model source section (DOM-built to avoid innerHTML for dynamic values) ──
+    const modelSourceSection = document.createElement("div");
+    modelSourceSection.style.cssText = "margin-bottom:24px;";
+
+    const msLabel = document.createElement("div");
+    msLabel.className = "section-label";
+    msLabel.textContent = "Local LLM Model";
+    modelSourceSection.appendChild(msLabel);
+
+    const msHint = document.createElement("div");
+    msHint.className = "field-hint";
+    msHint.style.marginBottom = "12px";
+    msHint.textContent = "Set the HuggingFace repo and filename to have the bot download the model automatically. Public repos only — no token needed.";
+    modelSourceSection.appendChild(msHint);
+
+    const msForm = document.createElement("form");
+    msForm.className = "form";
+    msForm.style.maxWidth = "none";
+
+    const addField = (label, name, value, hint) => {
+      const wrap = document.createElement("div");
+      wrap.className = "field";
+      const lbl = document.createElement("label");
+      lbl.textContent = label;
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.name = name;
+      inp.value = value || "";
+      inp.className = "input";
+      inp.placeholder = hint;
+      wrap.appendChild(lbl);
+      wrap.appendChild(inp);
+      return wrap;
+    };
+
+    const fieldRow = document.createElement("div");
+    fieldRow.className = "field-row";
+    fieldRow.appendChild(addField("HuggingFace Repo", "hf_repo", data.llm_hf_repo, "e.g. bartowski/Llama-3.2-3B-Instruct-GGUF"));
+    fieldRow.appendChild(addField("Model File", "hf_file", data.llm_hf_file, "e.g. Llama-3.2-3B-Instruct-Q4_K_M.gguf"));
+    fieldRow.appendChild(addField("Local Save Path", "model_path", data.llm_model_path, "e.g. /models/llama.gguf"));
+    msForm.appendChild(fieldRow);
+
+    const msActions = document.createElement("div");
+    msActions.style.display = "flex";
+    msActions.style.gap = "8px";
+    msActions.style.alignItems = "center";
+    msActions.style.marginTop = "8px";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "submit";
+    saveBtn.className = "btn btn-primary";
+    saveBtn.textContent = "Save";
+
+    const reloadBtn = document.createElement("button");
+    reloadBtn.type = "button";
+    reloadBtn.className = "btn";
+    reloadBtn.textContent = "Download & Reload";
+
+    const msStatus = document.createElement("span");
+    msStatus.className = "save-status";
+
+    msActions.appendChild(saveBtn);
+    msActions.appendChild(reloadBtn);
+    msActions.appendChild(msStatus);
+    msForm.appendChild(msActions);
+    modelSourceSection.appendChild(msForm);
+
+    const panelEl = container.querySelector(".panel");
+    const firstSectionLabel = panelEl.querySelector(".section-label");
+    panelEl.insertBefore(modelSourceSection, firstSectionLabel);
+
+    msForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(msForm);
+      try {
+        await apiPut("/api/config/ai/model-source", {
+          model_path: fd.get("model_path"),
+          hf_repo:    fd.get("hf_repo"),
+          hf_file:    fd.get("hf_file"),
+        });
+        showStatus(msStatus, true);
+      } catch (err) {
+        showStatus(msStatus, false, err.message);
+      }
+    });
+
+    // Poll status while downloading or loading.
+    let _pollInterval = null;
+    const statusChip = container.querySelector("#llm-status-chip");
+
+    const _updateChip = (s) => {
+      if (!statusChip) return;
+      statusChip.className = `chip ${phaseClass[s.phase] || "chip-neutral"}`;
+      if (s.phase === "ready") {
+        statusChip.textContent = `LLM ready — ${s.model}`;
+      } else if (s.phase === "error") {
+        statusChip.textContent = `LLM error — ${s.error}`;
+      } else {
+        statusChip.textContent = phaseLabel[s.phase] || s.phase;
+      }
+    };
+
+    const _startPolling = () => {
+      if (_pollInterval) return;
+      _pollInterval = setInterval(async () => {
+        try {
+          const s = await api("/api/config/ai/model-status");
+          _updateChip(s);
+          if (s.phase === "ready" || s.phase === "error" || s.phase === "idle") {
+            clearInterval(_pollInterval);
+            _pollInterval = null;
+          }
+        } catch (_) { /* ignore */ }
+      }, 2000);
+    };
+
+    reloadBtn.addEventListener("click", async () => {
+      reloadBtn.disabled = true;
+      try {
+        await fetch("/api/config/ai/model-reload", { method: "POST", credentials: "same-origin" });
+        _startPolling();
+        showStatus(msStatus, true, "Reload started");
+      } catch (err) {
+        showStatus(msStatus, false, err.message);
+      } finally {
+        reloadBtn.disabled = false;
+      }
+    });
+
+    if (llm.phase === "downloading" || llm.phase === "loading") {
+      _startPolling();
+    }
 
     // ── Models form ────────────────────────────────────────────────
     const modelsForm = container.querySelector("[data-models-form]");
@@ -197,21 +338,16 @@ export function mount(container) {
           testStatus.textContent = "Running…";
           testOutput.textContent = "";
           try {
-            const model = modelSelect.value || undefined;
-            const res = await fetch("/api/config/ai/test", {
+            const res = await fetch(`/api/config/ai/prompts/${key}/test`, {
               method: "POST",
               credentials: "same-origin",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                system: textarea.value,
-                user_input: testInput.value,
-                model,
-              }),
+              body: JSON.stringify({ user_input: testInput.value }),
             });
             const result = await res.json();
-            if (result.ok) {
-              testStatus.textContent = `${result.model} | ${result.input_tokens} in / ${result.output_tokens} out`;
-              testOutput.textContent = result.response;
+            if (res.ok) {
+              testStatus.textContent = "Done";
+              testOutput.textContent = result.result;
             } else {
               testStatus.textContent = "";
               testOutput.textContent = `Error: ${result.detail}`;

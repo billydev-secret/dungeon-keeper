@@ -40,9 +40,9 @@ class GamesDb:
         await asyncio.to_thread(_run)
 
     async def lastrowid(self, query: str, params=()) -> int:
-        def _run():
+        def _run() -> int:
             with open_db(self._db_path) as conn:
                 cur = conn.execute(query, params)
                 conn.commit()
-                return cur.lastrowid
+                return cur.lastrowid or 0
         return await asyncio.to_thread(_run)

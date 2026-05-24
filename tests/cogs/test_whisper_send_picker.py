@@ -51,7 +51,9 @@ async def test_send_click_opens_picker_excluding_self():
     with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await view._on_send_click(interaction)
 
-    sent_kwargs = interaction.response.send_message.call_args.kwargs
+    interaction.response.defer.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    sent_kwargs = interaction.followup.send.call_args.kwargs
     picker = sent_kwargs.get("view")
     assert isinstance(picker, WhisperSendTargetSelectView)
     member_ids = {m.id for m in picker._all_members}
@@ -81,7 +83,9 @@ async def test_send_click_rejects_empty_role():
     with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await view._on_send_click(interaction)
 
-    args = interaction.response.send_message.call_args.args
+    interaction.response.defer.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    args = interaction.followup.send.call_args.args
     assert "no other" in args[0].lower() or "opted-in" in args[0].lower()
 
 

@@ -133,9 +133,9 @@ async def test_share_edits_dm_view_when_invoked_from_dm():
 
     dm_msg.edit.assert_awaited_once()
     edited_view = dm_msg.edit.call_args.kwargs["view"]
-    from bot_modules.cogs.whisper_cog import WhisperGuessButton
+    from bot_modules.cogs.whisper_cog import WhisperGuessButton, WhisperReplyButton
     button_types = [type(item) for item in edited_view.children]
-    assert button_types == [WhisperGuessButton]
+    assert button_types == [WhisperGuessButton, WhisperReplyButton]
 
 
 @pytest.mark.asyncio

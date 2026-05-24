@@ -60,8 +60,9 @@ async def test_send_whisper_button_opens_target_picker():
     with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await view._on_send_click(interaction)
 
-    interaction.response.send_message.assert_awaited_once()
-    sent_kwargs = interaction.response.send_message.call_args.kwargs
+    interaction.response.defer.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    sent_kwargs = interaction.followup.send.call_args.kwargs
     assert sent_kwargs.get("ephemeral") is True
     assert isinstance(sent_kwargs.get("view"), WhisperSendTargetSelectView)
 
@@ -90,8 +91,9 @@ async def test_send_whisper_button_rejects_without_role():
     with patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()):
         await view._on_send_click(interaction)
 
-    interaction.response.send_message.assert_awaited_once()
-    args = interaction.response.send_message.call_args.args
+    interaction.response.defer.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once()
+    args = interaction.followup.send.call_args.args
     assert "optin" in args[0].lower() or "role" in args[0].lower()
 
 

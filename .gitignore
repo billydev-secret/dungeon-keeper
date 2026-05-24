@@ -18,6 +18,7 @@ lavalink/logs/
 *.db
 log.txt
 log_beta_tools.txt
+node_modules/
 veil_cache/
 test_*.jpg
 test_*.png

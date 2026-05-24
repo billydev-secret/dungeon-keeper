@@ -20,3 +20,5 @@ mediapipe
 Pillow
 pilmoji
 numpy
+llama-cpp-python>=0.3.0
+huggingface_hub>=0.24.0

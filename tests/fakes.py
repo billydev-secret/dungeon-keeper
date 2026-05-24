@@ -33,8 +33,8 @@ class FakeRole:
 @dataclass
 class FakeUser:
     id: int = 1001
-    name: str = "alt_jailbird"
-    display_name: str = "alt_jailbird"
+    name: str = "lorem_ipsum"
+    display_name: str = "Lorem Ipsum"
     bot: bool = False
     roles: list = field(default_factory=list)
     guild_permissions: MagicMock = field(default_factory=lambda: MagicMock(administrator=False))
@@ -51,6 +51,14 @@ class FakeMember(FakeUser):
     guild: object | None = None
     add_roles: AsyncMock = field(default_factory=AsyncMock)
     remove_roles: AsyncMock = field(default_factory=AsyncMock)
+
+    def __post_init__(self) -> None:
+        _dm_msg = MagicMock()
+        _dm_msg.edit = AsyncMock()
+        _dm_msg.content = ""
+        _dm_channel = MagicMock()
+        _dm_channel.fetch_message = AsyncMock(return_value=_dm_msg)
+        self.create_dm = AsyncMock(return_value=_dm_channel)
 
     def has_role(self, role_id: int) -> bool:
         return any(getattr(r, "id", r) == role_id for r in self.roles)

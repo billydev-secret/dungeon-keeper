@@ -214,7 +214,8 @@ class SpotifyResolver:
                 cause = exc.__cause__
                 if isinstance(cause, SpotifyException):
                     user_authed = fetch_client is not client
-                    if cause.http_status == 401:
+                    http_status = getattr(cause, "http_status", None)
+                    if http_status == 401:
                         msg = (
                             "Playlist is private — the bot can only access "
                             "public playlists."
@@ -225,7 +226,7 @@ class SpotifyResolver:
                                 "authorized bot owner account."
                             )
                         raise SpotifyResolveError(msg) from cause
-                    if cause.http_status == 403:
+                    if http_status == 403:
                         # User-OAuth was used but the authorized account
                         # doesn't have access (different owner / not shared).
                         if user_authed:
@@ -239,7 +240,7 @@ class SpotifyResolver:
                             "Spotify forbade this playlist (403). It may be "
                             "region-locked or restricted."
                         ) from cause
-                    if cause.http_status == 404:
+                    if http_status == 404:
                         raise SpotifyResolveError("Playlist not found.") from cause
                 raise
             return SpotifyResolveResult(
