@@ -287,6 +287,7 @@ async def nsfw_gender(
 async def message_rate(
     request: Request,
     days: int = 30,
+    channel_id: int | None = None,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
@@ -301,12 +302,13 @@ async def message_rate(
                 guild_id,
                 days,
                 tz,
+                channel_id=channel_id,
             )
 
     return await cached_run_query(
         "message-rate",
         guild_id,
-        {"days": days},
+        {"days": days, "channel_id": channel_id},
         _q,
     )
 

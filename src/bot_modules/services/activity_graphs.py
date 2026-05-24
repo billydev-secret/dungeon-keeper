@@ -2729,6 +2729,7 @@ def query_message_rate_10min(
     days: int,
     *,
     utc_offset_hours: float = 0,
+    channel_id: int | None = None,
 ) -> list[int]:
     """Aggregate message counts from the last *days* days into 144 ten-minute
     time-of-day buckets.
@@ -2745,15 +2746,17 @@ def query_message_rate_10min(
         f"(CAST(strftime('%H', datetime({shifted}, 'unixepoch')) AS INTEGER) * 6 "
         f"+ CAST(strftime('%M', datetime({shifted}, 'unixepoch')) AS INTEGER) / 10)"
     )
+    channel_clause = "AND channel_id = ? " if channel_id is not None else ""
+    params: tuple = (guild_id, since_ts, channel_id) if channel_id is not None else (guild_id, since_ts)
 
     rows = conn.execute(
         f"""
         SELECT {bucket_expr} AS bucket, COUNT(*) AS msg_count
         FROM processed_messages
-        WHERE guild_id = ? AND created_at >= ?
+        WHERE guild_id = ? AND created_at >= ? {channel_clause}
         GROUP BY bucket
         """,
-        (guild_id, since_ts),
+        params,
     ).fetchall()
 
     counts_by_bucket = {int(row[0]): int(row[1]) for row in rows}

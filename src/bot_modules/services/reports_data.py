@@ -313,12 +313,15 @@ def get_message_rate_data(
     guild_id: int,
     days: int,
     utc_offset_hours: float,
+    *,
+    channel_id: int | None = None,
 ) -> MessageRateData:
     counts = query_message_rate_10min(
         conn,
         guild_id,
         days,
         utc_offset_hours=utc_offset_hours,
+        channel_id=channel_id,
     )
     tz_label = f"UTC{utc_offset_hours:+g}" if utc_offset_hours else "UTC"
     return {

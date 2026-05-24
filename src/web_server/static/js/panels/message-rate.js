@@ -13,6 +13,9 @@ export function mount(container, initialParams) {
         <label>Days to average
           <input type="number" data-control="days" min="1" max="365" value="${initialParams.days || 30}" />
         </label>
+        <label>Channel
+          <select data-control="channel"><option value="">All channels</option></select>
+        </label>
       </div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
       <div data-slider-wrap></div>
@@ -20,9 +23,23 @@ export function mount(container, initialParams) {
   `;
 
   const daysEl = container.querySelector('[data-control="days"]');
+  const chanEl = container.querySelector('[data-control="channel"]');
   let chart = null;
   let slider = null;
   const sliderWrap = container.querySelector("[data-slider-wrap]");
+
+  async function loadChannels() {
+    try {
+      const channels = await api("/api/meta/channels");
+      for (const ch of channels) {
+        const opt = document.createElement("option");
+        opt.value = ch.id;
+        opt.textContent = ch.name;
+        chanEl.appendChild(opt);
+      }
+      if (initialParams.channel_id) chanEl.value = initialParams.channel_id;
+    } catch (_) {}
+  }
 
   function bucketLabels() {
     const out = [];
@@ -36,9 +53,11 @@ export function mount(container, initialParams) {
 
   async function refresh() {
     const days = Math.max(1, Math.min(365, parseInt(daysEl.value) || 7));
-    history.replaceState(null, "", `#/message-rate?days=${days}`);
+    const params = { days };
+    if (chanEl.value) params.channel_id = chanEl.value;
+    history.replaceState(null, "", `#/message-rate?${new URLSearchParams(params)}`);
     try {
-      const data = await api("/api/reports/message-rate", { days });
+      const data = await api("/api/reports/message-rate", params);
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
       const wrap = container.querySelector(".chart-wrap");
@@ -68,7 +87,8 @@ export function mount(container, initialParams) {
   }
 
   daysEl.addEventListener("change", refresh);
-  refresh();
+  chanEl.addEventListener("change", refresh);
+  (async () => { await loadChannels(); await refresh(); })();
 
   return { unmount() { if (chart) { chart.destroy(); chart = null; } if (slider) { slider.destroy(); slider = null; } } };
 }
