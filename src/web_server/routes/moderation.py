@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from web_server.helpers import resolve_names as _resolve_names
 from bot_modules.services.moderation import (
@@ -958,6 +958,7 @@ async def dm_audit_log(
     request: Request,
     limit: int = 50,
     action: str | None = None,
+    req_type: str | None = Query(None, alias="type"),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -973,6 +974,9 @@ async def dm_audit_log(
             if action:
                 clauses.append("action = ?")
                 params.append(action)
+            if req_type:
+                clauses.append("notes = ?")
+                params.append(f"type={req_type}")
             where = " AND ".join(clauses)
             total = conn.execute(
                 f"SELECT COUNT(*) FROM dm_audit_log WHERE {where}", params

@@ -16,6 +16,15 @@ const ACTION_BADGE = {
   relationship_revoked: "badge-warning",
 };
 
+const TYPE_LABELS = { dm: "DM", friend: "Friend Request" };
+const TYPE_BADGE  = { dm: "badge-info", friend: "badge-warning" };
+
+function parseType(notes) {
+  if (!notes) return null;
+  const m = notes.match(/^type=(\w+)/);
+  return m ? m[1] : null;
+}
+
 function fmtTs(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000);
@@ -55,18 +64,31 @@ function setContent(wrap, node) {
 }
 
 function buildRow(e) {
-  const label = ACTION_LABELS[e.action] || e.action;
+  const label    = ACTION_LABELS[e.action] || e.action;
   const badgeCls = ACTION_BADGE[e.action] || "";
   const actor = e.actor_name  || e.actor_id  || "—";
   const userA = e.user_a_name || e.user_a_id || "—";
   const userB = e.user_b_name || e.user_b_id || "—";
-  const notes = e.notes || "—";
+
+  const reqType = parseType(e.notes);
+  const restNotes = reqType
+    ? (e.notes.replace(/^type=\w+[,;]?\s*/, "") || "—")
+    : (e.notes || "—");
+
+  const actionTd = el("td", null, badge(label, badgeCls));
+  if (reqType) {
+    actionTd.append(
+      " ",
+      badge(TYPE_LABELS[reqType] || reqType, TYPE_BADGE[reqType] || "badge-dim"),
+    );
+  }
+
   return el("tr", null,
-    el("td", null, badge(label, badgeCls)),
+    actionTd,
     el("td", null, actor),
     el("td", null, userA),
     el("td", null, userB),
-    el("td", { className: "reason-cell", title: notes }, notes),
+    el("td", { className: "reason-cell", title: restNotes }, restNotes),
     el("td", null, fmtTs(e.timestamp)),
   );
 }
@@ -97,12 +119,17 @@ export function mount(container) {
   container.replaceChildren();
 
   const actionSel = el("select", null,
-    mkOpt("", "All"),
+    mkOpt("", "All Actions"),
     mkOpt("request_asked", "Request Asked"),
     mkOpt("request_accepted", "Request Accepted"),
     mkOpt("request_denied", "Request Denied"),
     mkOpt("request_expired", "Request Expired"),
     mkOpt("relationship_revoked", "Revoked"),
+  );
+  const typeSel = el("select", null,
+    mkOpt("", "All Types"),
+    mkOpt("dm", "DM"),
+    mkOpt("friend", "Friend Request"),
   );
   const limitSel = el("select", null,
     mkOpt("50", "50"), mkOpt("100", "100"), mkOpt("200", "200"),
@@ -113,6 +140,7 @@ export function mount(container) {
   const refresh = async () => {
     const params = { limit: limitSel.value };
     if (actionSel.value) params.action = actionSel.value;
+    if (typeSel.value) params.type = typeSel.value;
     try {
       const data = await api("/api/moderation/dm-audit", params);
       if (!data.entries.length) {
@@ -126,6 +154,7 @@ export function mount(container) {
   };
 
   actionSel.addEventListener("change", refresh);
+  typeSel.addEventListener("change", refresh);
   limitSel.addEventListener("change", refresh);
 
   const panel = el("div", { className: "panel" },
@@ -135,6 +164,7 @@ export function mount(container) {
     ),
     el("div", { className: "controls" },
       el("label", null, "Action ", actionSel),
+      el("label", null, "Type ", typeSel),
       el("label", null, "Show ", limitSel),
     ),
     tableWrap,
