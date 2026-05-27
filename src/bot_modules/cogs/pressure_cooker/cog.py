@@ -224,13 +224,14 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
         me = guild.me
         if not me.guild_permissions.manage_nicknames:
             return "I need the **Manage Nicknames** permission to enforce this game."
-        if challenger.id == guild.owner_id or target.id == guild.owner_id:
-            return "Cannot challenge or target the server owner — Discord doesn't allow renaming them."
-        if me.top_role <= challenger.top_role or me.top_role <= target.top_role:
-            return (
-                "My highest role must be above both players' roles to rename the loser. "
-                "Ask an admin to fix my role position."
-            )
+        # Server owner can't be renamed by bots — they self-apply if they lose.
+        # Skip the role-hierarchy check for them; check everyone else.
+        for member in (challenger, target):
+            if member.id != guild.owner_id and me.top_role <= member.top_role:
+                return (
+                    "My highest role must be above both players' roles to rename the loser. "
+                    "Ask an admin to fix my role position."
+                )
         return None
 
     # ── Rate limit ────────────────────────────────────────────────────────────
@@ -660,6 +661,29 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
             return
 
         original_nick = loser.nick
+
+        if loser.id == guild.owner_id:
+            # Discord doesn't allow bots to rename the server owner.
+            # Record the sentence so stats work; owner applies it themselves.
+            await pdb.apply_nick(
+                self.db,
+                game_id=game.id,
+                guild_id=guild.id,
+                loser_id=game.loser_id,  # type: ignore[arg-type]
+                winner_id=game.winner_id,  # type: ignore[arg-type]
+                original_nick=original_nick,
+                imposed_nick=cleaned_nick,
+                sentence_hours=cfg["sentence_hours"],
+            )
+            await pdb.set_game_state(self.db, game_id, "NICKED")
+            embed = self._build_result_embed(game, guild, imposed_nick=cleaned_nick)
+            await interaction.response.edit_message(embed=embed)
+            await interaction.followup.send(
+                f"📋 Discord won't let me rename the server owner. "
+                f"**{loser.display_name}**, your sentence is: **{cleaned_nick}** — please apply it yourself.",
+            )
+            return
+
         try:
             await loser.edit(nick=cleaned_nick, reason=f"Pressure Cooker: lost to {interaction.user.display_name}")
         except discord.Forbidden:

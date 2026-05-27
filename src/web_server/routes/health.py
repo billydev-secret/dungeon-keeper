@@ -1073,6 +1073,7 @@ async def health_mod_workload(
 @router.get("/health/mod-engagement")
 async def health_mod_engagement(
     request: Request,
+    days: int = Query(7, ge=1, le=365),
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
@@ -1088,6 +1089,7 @@ async def health_mod_engagement(
                 guild_id,
                 mod_ids=extras["mod_ids"],
                 recent_joins=extras["recent_joins"],
+                days=days,
             )
             user_ids = {int(m["user_id"]) for m in data["mods"]}
             names = _resolve_user_names(conn, guild, guild_id, user_ids)

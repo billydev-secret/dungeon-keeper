@@ -1745,6 +1745,7 @@ def compute_mod_engagement(
     mod_ids: list[int] | None = None,
     recent_joins: dict[int, float] | None = None,
     now: float | None = None,
+    days: int = 7,
 ) -> dict:
     """Per-moderator community engagement metrics.
 
@@ -1753,16 +1754,17 @@ def compute_mod_engagement(
     admin channels that compute_mod_workload already covers.
     """
     now = now or time.time()
-    seven_days_ago = _ts(7, now=now)
-    thirty_days_ago = _ts(30, now=now)
+    window_ago = _ts(days, now=now)
+    newcomer_window_ago = _ts(30, now=now)
 
     mod_set = set(mod_ids) if mod_ids else set()
     if not mod_set:
         return {
             "mods": [],
-            "total_public_messages_7d": 0,
-            "avg_unique_reach_7d": 0,
-            "total_newcomer_touchpoints_30d": 0,
+            "days": days,
+            "total_public_messages": 0,
+            "avg_unique_reach": 0,
+            "total_newcomer_touchpoints": 0,
             "engagement_gini": 0,
         }
 
@@ -1799,17 +1801,37 @@ def compute_mod_engagement(
         ch_ph = ",".join("?" for _ in mod_channel_ids)
         return f" AND {col} NOT IN ({ch_ph})", tuple(mod_channel_ids)
 
-    # Public message counts (7d, excluding mod channels)
     ch_clause, ch_params = _not_in_mod_channels("channel_id")
+
+    # Public message counts (window, excluding mod channels)
     pub_msg_rows = conn.execute(
         f"SELECT author_id, COUNT(*) AS cnt FROM messages "
         f"WHERE guild_id=? AND ts>=? AND author_id IN ({mod_ph}){ch_clause} "
         f"GROUP BY author_id",
-        (guild_id, seven_days_ago) + mod_params + ch_params,
+        (guild_id, window_ago) + mod_params + ch_params,
     ).fetchall()
     pub_msgs: dict[int, int] = {r["author_id"]: r["cnt"] for r in pub_msg_rows}
 
-    # Unique reach (7d): distinct members engaged via replies/mentions OR reactions given
+    # Conversation initiations: public messages that are NOT replies (reply_to_id IS NULL)
+    init_rows = conn.execute(
+        f"SELECT author_id, COUNT(*) AS cnt FROM messages "
+        f"WHERE guild_id=? AND ts>=? AND author_id IN ({mod_ph}) "
+        f"AND reply_to_id IS NULL{ch_clause} "
+        f"GROUP BY author_id",
+        (guild_id, window_ago) + mod_params + ch_params,
+    ).fetchall()
+    initiations: dict[int, int] = {r["author_id"]: r["cnt"] for r in init_rows}
+
+    # Channel breadth: distinct public channels each mod posted in
+    breadth_rows = conn.execute(
+        f"SELECT author_id, COUNT(DISTINCT channel_id) AS cnt FROM messages "
+        f"WHERE guild_id=? AND ts>=? AND author_id IN ({mod_ph}){ch_clause} "
+        f"GROUP BY author_id",
+        (guild_id, window_ago) + mod_params + ch_params,
+    ).fetchall()
+    channel_breadth: dict[int, int] = {r["author_id"]: r["cnt"] for r in breadth_rows}
+
+    # Unique reach (window): distinct members engaged via replies/mentions OR reactions given
     reach_rows = conn.execute(
         f"""
         SELECT mod_id, COUNT(DISTINCT member_id) AS unique_reach
@@ -1824,34 +1846,35 @@ def compute_mod_engagement(
         )
         GROUP BY mod_id
         """,
-        (guild_id, seven_days_ago) + mod_params + (guild_id, seven_days_ago) + mod_params,
+        (guild_id, window_ago) + mod_params + (guild_id, window_ago) + mod_params,
     ).fetchall()
     reach_by_mod: dict[int, int] = {r["mod_id"]: r["unique_reach"] for r in reach_rows}
 
-    # Reactions received on public messages (7d, excluding mod channels)
+    # Reactions received on public messages (window, excluding mod channels)
     rx_rows = conn.execute(
         f"SELECT author_id, COUNT(*) AS cnt FROM reaction_log "
         f"WHERE guild_id=? AND ts>=? AND author_id IN ({mod_ph}){ch_clause} "
         f"GROUP BY author_id",
-        (guild_id, seven_days_ago) + mod_params + ch_params,
+        (guild_id, window_ago) + mod_params + ch_params,
     ).fetchall()
     reactions_received: dict[int, int] = {r["author_id"]: r["cnt"] for r in rx_rows}
 
-    # Replies received from non-mods (7d)
+    # Replies received from non-mods (window)
     replies_rows = conn.execute(
         f"SELECT to_user_id, COUNT(*) AS cnt FROM user_interactions_log "
         f"WHERE guild_id=? AND ts>=? AND to_user_id IN ({mod_ph}) "
         f"AND from_user_id NOT IN ({mod_ph}) "
         f"GROUP BY to_user_id",
-        (guild_id, seven_days_ago) + mod_params + mod_params,
+        (guild_id, window_ago) + mod_params + mod_params,
     ).fetchall()
     replies_received: dict[int, int] = {r["to_user_id"]: r["cnt"] for r in replies_rows}
 
-    # Newcomer touchpoints (30d): interactions with members who joined in the last 30 days
+    # Newcomer touchpoints: interactions (within window) with members who joined in last 30d
     newcomer_ids: set[int] = set()
     if recent_joins:
-        cutoff = now - 30 * _DAY
-        newcomer_ids = {uid for uid, ts in recent_joins.items() if ts >= cutoff} - mod_set
+        newcomer_ids = {
+            uid for uid, ts in recent_joins.items() if ts >= newcomer_window_ago
+        } - mod_set
     newcomer_touchpoints: dict[int, int] = {}
     if newcomer_ids:
         nc_ph = ",".join("?" for _ in newcomer_ids)
@@ -1860,21 +1883,28 @@ def compute_mod_engagement(
             f"WHERE guild_id=? AND ts>=? AND from_user_id IN ({mod_ph}) "
             f"AND to_user_id IN ({nc_ph}) "
             f"GROUP BY from_user_id",
-            (guild_id, thirty_days_ago) + mod_params + tuple(newcomer_ids),
+            (guild_id, window_ago) + mod_params + tuple(newcomer_ids),
         ).fetchall()
         newcomer_touchpoints = {r["from_user_id"]: r["cnt"] for r in nc_rows}
 
     # Assemble per-mod rows, sorted by unique reach descending
     mods = []
     for mid in mod_set:
+        msgs = pub_msgs.get(mid, 0)
+        rx = reactions_received.get(mid, 0)
+        rp = replies_received.get(mid, 0)
+        eng_rate = round((rx + rp) / msgs, 2) if msgs else 0.0
         mods.append(
             {
                 "user_id": str(mid),
                 "user_name": "",
-                "public_messages": pub_msgs.get(mid, 0),
+                "public_messages": msgs,
+                "initiations": initiations.get(mid, 0),
+                "channel_breadth": channel_breadth.get(mid, 0),
                 "unique_reach": reach_by_mod.get(mid, 0),
-                "reactions_received": reactions_received.get(mid, 0),
-                "replies_received": replies_received.get(mid, 0),
+                "reactions_received": rx,
+                "replies_received": rp,
+                "engagement_rate": eng_rate,
                 "newcomer_touchpoints": newcomer_touchpoints.get(mid, 0),
             }
         )
@@ -1887,8 +1917,9 @@ def compute_mod_engagement(
 
     return {
         "mods": mods,
-        "total_public_messages_7d": total_pub,
-        "avg_unique_reach_7d": avg_reach,
-        "total_newcomer_touchpoints_30d": total_newcomer,
+        "days": days,
+        "total_public_messages": total_pub,
+        "avg_unique_reach": avg_reach,
+        "total_newcomer_touchpoints": total_newcomer,
         "engagement_gini": eng_gini,
     }
