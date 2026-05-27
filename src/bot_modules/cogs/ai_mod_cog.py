@@ -37,6 +37,9 @@ class AiModCog(commands.Cog):
         self.ctx = ctx
         super().__init__()
 
+    async def cog_load(self) -> None:
+        ollama_client.start_loading(self.ctx.db_path)
+
     @ai.command(
         name="review",
         description="AI flags rule violations and concerning patterns in a member's recent messages.",

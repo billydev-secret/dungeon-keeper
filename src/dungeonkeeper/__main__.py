@@ -182,6 +182,7 @@ def main() -> None:
         "bot_modules.cogs.whisper_cog",
         "bot_modules.cogs.emoji_stealer_cog",
         "bot_modules.cogs.risky_roll_cog",
+        "bot_modules.cogs.pressure_cooker",
         # ── Party Games (PoppyBot) ────────────────────────────────
         "bot_modules.cogs.games_session_cog",
         "bot_modules.cogs.games_consent_cog",

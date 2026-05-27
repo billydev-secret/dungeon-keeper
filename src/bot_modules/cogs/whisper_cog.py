@@ -1042,16 +1042,6 @@ class WhisperReportReplyButton(
         )
 
 
-# ── Expose view: posted in feed channel after correct guess ──────────────────
-
-class WhisperExposeView(discord.ui.View):
-    def __init__(self, bot: Bot, whisper_id: int) -> None:
-        super().__init__(timeout=None)
-        self.bot = bot
-        self.whisper_id = whisper_id
-        self.add_item(WhisperExposeButton(bot, whisper_id))
-
-
 # ── Per-whisper DM view (Guess + Share + Reply + Delete) ─────────────────────
 class WhisperDmView(discord.ui.View):
     def __init__(self, bot: Bot, whisper_id: int) -> None:
@@ -1128,7 +1118,6 @@ async def _handle_guess_outcome(
                 try:
                     await feed_channel.send(
                         f"✅ <@{whisper.target_id}> solved the whisper!",
-                        view=WhisperExposeView(bot, whisper.id),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                 except discord.HTTPException:

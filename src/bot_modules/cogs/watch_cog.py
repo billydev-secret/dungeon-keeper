@@ -1,7 +1,8 @@
-"""Watch list commands."""
+"""Watch list commands and message monitoring."""
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import discord
@@ -13,11 +14,13 @@ from bot_modules.services.watch_service import add_watched_user, remove_watched_
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
 
+log = logging.getLogger("dungeonkeeper.watch")
+
 
 class WatchCog(commands.Cog):
     watch = app_commands.Group(
         name="watch",
-        description="Silently monitor a member's public messages via DM.",
+        description="Monitor a member — AI flags rule-concerning posts to your DMs.",
         default_permissions=discord.Permissions(manage_guild=True),
     )
 
@@ -28,7 +31,7 @@ class WatchCog(commands.Cog):
 
     @watch.command(
         name="add",
-        description="Start watching a member. Their messages are forwarded to your DMs.",
+        description="Start watching a member. The AI screens their posts and DMs you when it flags a concern.",
     )
     @app_commands.describe(user="Member to watch.")
     async def watch_add(
@@ -66,8 +69,13 @@ class WatchCog(commands.Cog):
 
         ctx.watched_users.setdefault(watched_id, set()).add(watcher_id)
 
+        from bot_modules.services import ollama_client
+        if ollama_client.is_available():
+            note = "The AI will screen their posts and DM you only when it flags a rule concern."
+        else:
+            note = "AI filtering is not available — all their public posts will be DM'd to you."
         await interaction.response.send_message(
-            f"Now watching {user.mention}. Their public posts will be DM'd to you.",
+            f"Now watching {user.mention}. {note}",
             ephemeral=True,
         )
 
@@ -137,6 +145,74 @@ class WatchCog(commands.Cog):
         await interaction.response.send_message(
             "You are currently watching: " + ", ".join(labels), ephemeral=True
         )
+
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+        if message.author.id not in self.ctx.watched_users:
+            return
+        await self._notify_watchers(message)
+
+    async def _notify_watchers(self, message: discord.Message) -> None:
+        watchers = list(self.ctx.watched_users.get(message.author.id, set()))
+        if not watchers:
+            return
+
+        reason = ""
+        from bot_modules.services import ollama_client
+        if ollama_client.is_available():
+            from bot_modules.services.ai_moderation_service import ai_check_watched_message
+            try:
+                is_violation, reason = await ai_check_watched_message(
+                    message, db_path=self.ctx.db_path
+                )
+            except Exception as exc:
+                log.warning(
+                    "AI watch check failed for %s: %s — notifying anyway.",
+                    message.author.display_name,
+                    exc,
+                )
+                is_violation = True
+            if not is_violation:
+                return
+
+        channel_name = getattr(message.channel, "name", str(message.channel.id))
+        guild_name = message.guild.name if message.guild else "Unknown Server"
+
+        body = message.content or "*[no text content]*"
+        attachment_lines = "\n".join(a.url for a in message.attachments)
+        rule_line = f"\n⚠️ **Rule concern:** {reason}" if reason else ""
+        footer = (f"{attachment_lines}\n" if attachment_lines else "") + (
+            f"— **{message.author.display_name}** (@{message.author.name}) "
+            f"in **{guild_name}** / #{channel_name}\n"
+            f"{message.jump_url}"
+        )
+        dm_text = f"{body}{rule_line}\n\n{footer}"
+
+        for watcher_id in watchers:
+            try:
+                watcher = (
+                    self.bot.get_user(watcher_id) or await self.bot.fetch_user(watcher_id)
+                )
+            except discord.HTTPException as exc:
+                log.warning(
+                    "Could not fetch watcher (id=%s) while relaying post from %s: %s",
+                    watcher_id,
+                    message.author.display_name,
+                    exc,
+                )
+                continue
+            try:
+                await watcher.send(dm_text)
+            except (discord.Forbidden, discord.HTTPException) as exc:
+                log.warning(
+                    "Could not DM watcher %s for watched user %s: %s",
+                    watcher.display_name,
+                    message.author.display_name,
+                    exc,
+                )
 
 
 async def setup(bot: Bot) -> None:

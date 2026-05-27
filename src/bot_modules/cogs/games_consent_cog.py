@@ -102,5 +102,21 @@ class ConsentCog(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot or not message.mentions:
+            return
+        from bot_modules.games.utils.consent_check import scan_mentions_for_consent
+        active_channel_ids: set[int] = {
+            v._channel_id
+            for v in self.bot.active_views.values()  # type: ignore[attr-defined]
+            if hasattr(v, "_channel_id")
+        }
+        if not active_channel_ids:
+            rows = await self.db.fetchall("SELECT channel_id FROM games_active_games")
+            active_channel_ids = {row["channel_id"] for row in rows}
+        await scan_mentions_for_consent(self.db, message, active_channel_ids)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(ConsentCog(bot))

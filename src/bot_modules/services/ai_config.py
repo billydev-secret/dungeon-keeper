@@ -28,6 +28,7 @@ DEFAULT_WELLNESS_MODEL = ollama_client.default_model()
 KNOWN_MODELS: list[str] = [
     "Llama-3.2-3B-Instruct-Q4_K_M.gguf",   # default
     "Llama-3.2-3B-Instruct-Q8_0.gguf",
+    "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
     "Llama-3.1-8B-Instruct-Q4_K_M.gguf",
     "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
     "gemma-2-2b-it-Q4_K_M.gguf",

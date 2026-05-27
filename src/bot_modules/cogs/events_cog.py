@@ -251,8 +251,6 @@ class EventsCog(commands.Cog):
 
     async def cog_load(self) -> None:
         self.bot.tree.error(_on_tree_error)
-        from bot_modules.services import ollama_client
-        ollama_client.start_loading(self.ctx.db_path)
 
     def _log_background_task_result(self, task: asyncio.Task[None]) -> None:
         try:
@@ -591,84 +589,6 @@ class EventsCog(commands.Cog):
                 settings=self.ctx.xp_settings,
                 db_path=self.ctx.db_path,
             )
-
-        if message.author.id in self.ctx.watched_users:
-            await self._dm_watchers(message)
-
-        if hasattr(self.bot, "games_db"):
-            from bot_modules.games.utils.consent_check import scan_mentions_for_consent
-            active_channel_ids: set[int] = {
-                v._channel_id
-                for v in self.bot.active_views.values()  # type: ignore[attr-defined]
-                if hasattr(v, "_channel_id")
-            }
-            if not active_channel_ids:
-                rows = await self.bot.games_db.fetchall(  # type: ignore[attr-defined]
-                    "SELECT channel_id FROM games_active_games"
-                )
-                active_channel_ids = {row["channel_id"] for row in rows}
-            await scan_mentions_for_consent(
-                self.bot.games_db, message, active_channel_ids  # type: ignore[attr-defined]
-            )
-
-    async def _dm_watchers(self, message: discord.Message) -> None:
-        watchers = list(self.ctx.watched_users.get(message.author.id, set()))
-        if not watchers:
-            return
-
-        reason = ""
-        from bot_modules.services import ollama_client
-        if ollama_client.is_available():
-            from bot_modules.services.ai_moderation_service import ai_check_watched_message
-            try:
-                is_violation, reason = await ai_check_watched_message(
-                    message, db_path=self.ctx.db_path
-                )
-            except Exception as exc:
-                log.warning(
-                    "AI watch check failed for %s: %s — notifying anyway.",
-                    message.author.display_name,
-                    exc,
-                )
-                is_violation = True
-            if not is_violation:
-                return
-
-        channel_name = getattr(message.channel, "name", str(message.channel.id))
-        guild_name = message.guild.name if message.guild else "Unknown Server"
-
-        body = message.content or "*[no text content]*"
-        attachment_lines = "\n".join(a.url for a in message.attachments)
-        rule_line = f"\n⚠️ **Rule concern:** {reason}" if reason else ""
-        footer = (f"{attachment_lines}\n" if attachment_lines else "") + (
-            f"— **{message.author.display_name}** (@{message.author.name}) "
-            f"in **{guild_name}** / #{channel_name}\n"
-            f"{message.jump_url}"
-        )
-        dm_text = f"{body}{rule_line}\n\n{footer}"
-
-        for watcher_id in watchers:
-            try:
-                watcher = (
-                    self.bot.get_user(watcher_id) or await self.bot.fetch_user(watcher_id)
-                )
-            except discord.HTTPException as exc:
-                log.warning(
-                    "Could not fetch watcher (id=%s) while relaying post from %s: %s",
-                    watcher_id,
-                    message.author.display_name,
-                    exc,
-                )
-                continue
-            try:
-                await watcher.send(dm_text)
-            except (discord.Forbidden, discord.HTTPException) as exc:
-                log.warning(
-                    "Could not DM watcher %s for watched user %s: %s",
-                    watcher.display_name,
-                    message.author.display_name,
-                    exc,
-                )
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
