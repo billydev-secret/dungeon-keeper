@@ -23,6 +23,7 @@ const SECTIONS = [
         { id: "health-sentiment-feed",  label: "Sentiment Feed",    module: "./panels/health-sentiment-feed.js" },
         { id: "health-message-feed",   label: "Message Feed",       module: "./panels/health-message-feed.js" },
         { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
+        { id: "health-mod-engagement",  label: "Mod Engagement",     module: "./panels/health-mod-engagement.js" },
       ]},
       { heading: "General", items: [
         { id: "health-heatmap",         label: "Activity Heatmap",   module: "./panels/health-heatmap.js" },

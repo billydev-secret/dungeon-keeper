@@ -1736,3 +1736,159 @@ def compute_composite_health(
         "dimensions": dimensions,
         "recommendations": recommendations,
     }
+
+
+def compute_mod_engagement(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    mod_ids: list[int] | None = None,
+    recent_joins: dict[int, float] | None = None,
+    now: float | None = None,
+) -> dict:
+    """Per-moderator community engagement metrics.
+
+    Measures public-channel reach, member response, newcomer onboarding
+    contact, and public-message volume — all excluding mod/ticket/jail
+    admin channels that compute_mod_workload already covers.
+    """
+    now = now or time.time()
+    seven_days_ago = _ts(7, now=now)
+    thirty_days_ago = _ts(30, now=now)
+
+    mod_set = set(mod_ids) if mod_ids else set()
+    if not mod_set:
+        return {
+            "mods": [],
+            "total_public_messages_7d": 0,
+            "avg_unique_reach_7d": 0,
+            "total_newcomer_touchpoints_30d": 0,
+            "engagement_gini": 0,
+        }
+
+    # Build mod_channel_ids to exclude (mirrors compute_mod_workload logic)
+    from bot_modules.core.db_utils import get_config_value
+
+    mod_channel_ids: set[int] = set()
+    mc_raw = get_config_value(conn, "mod_channel_id", "0", guild_id)
+    if mc_raw and mc_raw != "0":
+        try:
+            mod_channel_ids.add(int(mc_raw))
+        except ValueError:
+            pass
+    for r in conn.execute(
+        "SELECT channel_id FROM tickets WHERE guild_id=? AND channel_id>0", (guild_id,)
+    ).fetchall():
+        mod_channel_ids.add(r["channel_id"])
+    for r in conn.execute(
+        "SELECT channel_id FROM jails WHERE guild_id=? AND channel_id>0", (guild_id,)
+    ).fetchall():
+        mod_channel_ids.add(r["channel_id"])
+    for r in conn.execute(
+        "SELECT channel_id FROM policy_tickets WHERE guild_id=? AND channel_id>0",
+        (guild_id,),
+    ).fetchall():
+        mod_channel_ids.add(r["channel_id"])
+
+    mod_ph = ",".join("?" for _ in mod_set)
+    mod_params = tuple(mod_set)
+
+    def _not_in_mod_channels(col: str) -> tuple[str, tuple]:
+        if not mod_channel_ids:
+            return "", ()
+        ch_ph = ",".join("?" for _ in mod_channel_ids)
+        return f" AND {col} NOT IN ({ch_ph})", tuple(mod_channel_ids)
+
+    # Public message counts (7d, excluding mod channels)
+    ch_clause, ch_params = _not_in_mod_channels("channel_id")
+    pub_msg_rows = conn.execute(
+        f"SELECT author_id, COUNT(*) AS cnt FROM messages "
+        f"WHERE guild_id=? AND ts>=? AND author_id IN ({mod_ph}){ch_clause} "
+        f"GROUP BY author_id",
+        (guild_id, seven_days_ago) + mod_params + ch_params,
+    ).fetchall()
+    pub_msgs: dict[int, int] = {r["author_id"]: r["cnt"] for r in pub_msg_rows}
+
+    # Unique reach (7d): distinct members engaged via replies/mentions OR reactions given
+    reach_rows = conn.execute(
+        f"""
+        SELECT mod_id, COUNT(DISTINCT member_id) AS unique_reach
+        FROM (
+            SELECT from_user_id AS mod_id, to_user_id AS member_id
+            FROM user_interactions_log
+            WHERE guild_id=? AND ts>=? AND from_user_id IN ({mod_ph})
+            UNION
+            SELECT reactor_id, author_id
+            FROM reaction_log
+            WHERE guild_id=? AND ts>=? AND reactor_id IN ({mod_ph})
+        )
+        GROUP BY mod_id
+        """,
+        (guild_id, seven_days_ago) + mod_params + (guild_id, seven_days_ago) + mod_params,
+    ).fetchall()
+    reach_by_mod: dict[int, int] = {r["mod_id"]: r["unique_reach"] for r in reach_rows}
+
+    # Reactions received on public messages (7d, excluding mod channels)
+    rx_rows = conn.execute(
+        f"SELECT author_id, COUNT(*) AS cnt FROM reaction_log "
+        f"WHERE guild_id=? AND ts>=? AND author_id IN ({mod_ph}){ch_clause} "
+        f"GROUP BY author_id",
+        (guild_id, seven_days_ago) + mod_params + ch_params,
+    ).fetchall()
+    reactions_received: dict[int, int] = {r["author_id"]: r["cnt"] for r in rx_rows}
+
+    # Replies received from non-mods (7d)
+    replies_rows = conn.execute(
+        f"SELECT to_user_id, COUNT(*) AS cnt FROM user_interactions_log "
+        f"WHERE guild_id=? AND ts>=? AND to_user_id IN ({mod_ph}) "
+        f"AND from_user_id NOT IN ({mod_ph}) "
+        f"GROUP BY to_user_id",
+        (guild_id, seven_days_ago) + mod_params + mod_params,
+    ).fetchall()
+    replies_received: dict[int, int] = {r["to_user_id"]: r["cnt"] for r in replies_rows}
+
+    # Newcomer touchpoints (30d): interactions with members who joined in the last 30 days
+    newcomer_ids: set[int] = set()
+    if recent_joins:
+        cutoff = now - 30 * _DAY
+        newcomer_ids = {uid for uid, ts in recent_joins.items() if ts >= cutoff} - mod_set
+    newcomer_touchpoints: dict[int, int] = {}
+    if newcomer_ids:
+        nc_ph = ",".join("?" for _ in newcomer_ids)
+        nc_rows = conn.execute(
+            f"SELECT from_user_id, COUNT(*) AS cnt FROM user_interactions_log "
+            f"WHERE guild_id=? AND ts>=? AND from_user_id IN ({mod_ph}) "
+            f"AND to_user_id IN ({nc_ph}) "
+            f"GROUP BY from_user_id",
+            (guild_id, thirty_days_ago) + mod_params + tuple(newcomer_ids),
+        ).fetchall()
+        newcomer_touchpoints = {r["from_user_id"]: r["cnt"] for r in nc_rows}
+
+    # Assemble per-mod rows, sorted by unique reach descending
+    mods = []
+    for mid in mod_set:
+        mods.append(
+            {
+                "user_id": str(mid),
+                "user_name": "",
+                "public_messages": pub_msgs.get(mid, 0),
+                "unique_reach": reach_by_mod.get(mid, 0),
+                "reactions_received": reactions_received.get(mid, 0),
+                "replies_received": replies_received.get(mid, 0),
+                "newcomer_touchpoints": newcomer_touchpoints.get(mid, 0),
+            }
+        )
+    mods.sort(key=lambda m: m["unique_reach"], reverse=True)  # type: ignore[arg-type,return-value]
+
+    total_pub = sum(m["public_messages"] for m in mods)
+    avg_reach = round(sum(m["unique_reach"] for m in mods) / len(mods), 1) if mods else 0
+    total_newcomer = sum(m["newcomer_touchpoints"] for m in mods)
+    eng_gini = round(_gini([float(m["unique_reach"]) for m in mods]), 3) if mods else 0
+
+    return {
+        "mods": mods,
+        "total_public_messages_7d": total_pub,
+        "avg_unique_reach_7d": avg_reach,
+        "total_newcomer_touchpoints_30d": total_newcomer,
+        "engagement_gini": eng_gini,
+    }

@@ -20,6 +20,7 @@ from bot_modules.services.health_metrics import (
     compute_gini,
     compute_heatmap,
     compute_incidents,
+    compute_mod_engagement,
     compute_mod_workload,
     compute_newcomer_funnel,
     compute_sentiment,
@@ -1063,6 +1064,34 @@ async def health_mod_workload(
             user_ids = {int(m["user_id"]) for m in data["mod_actions"]}
             names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for m in data["mod_actions"]:
+                m["user_name"] = names.get(int(m["user_id"]), "")
+            return data
+
+    return await run_query(_q)
+
+
+@router.get("/health/mod-engagement")
+async def health_mod_engagement(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    extras = _guild_extras(ctx, guild)
+
+    def _q():
+        with ctx.open_db() as conn:
+            data = compute_mod_engagement(
+                conn,
+                guild_id,
+                mod_ids=extras["mod_ids"],
+                recent_joins=extras["recent_joins"],
+            )
+            user_ids = {int(m["user_id"]) for m in data["mods"]}
+            names = _resolve_user_names(conn, guild, guild_id, user_ids)
+            for m in data["mods"]:
                 m["user_name"] = names.get(int(m["user_id"]), "")
             return data
 
