@@ -42,6 +42,16 @@ async def me(
         member = guild.get_member(user.user_id)
         if member is not None:
             status = str(member.status)
+
+    def _q_editor_role():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+            return str(row["role_id"]) if row else None
+
+    games_editor_role_id = await run_query(_q_editor_role)
+
     return MeResponse(
         user_id=str(user.user_id),
         username=user.username,
@@ -57,6 +67,7 @@ async def me(
         primary_guild_id=str(ctx.guild_id),
         avatar_url=user.avatar_url,
         status=status,
+        games_editor_role_id=games_editor_role_id,
     )
 
 
@@ -120,6 +131,15 @@ async def select_guild(
             role_names = [r.name for r in member.roles if not r.is_default()]
             status = str(member.status)
 
+    def _q_editor_role_select():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+            return str(row["role_id"]) if row else None
+
+    games_editor_role_id = await run_query(_q_editor_role_select)
+
     session_guilds = _guilds_from_session(request)
     body = MeResponse(
         user_id=str(user.user_id),
@@ -136,6 +156,7 @@ async def select_guild(
         primary_guild_id=str(ctx.guild_id),
         avatar_url=user.avatar_url,
         status=status,
+        games_editor_role_id=games_editor_role_id,
     )
 
     from web_server.routes.oauth import _is_secure

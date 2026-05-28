@@ -6,7 +6,7 @@ import asyncio
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
@@ -25,6 +25,10 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
 
 
+_BULK_MAX_AGE = 13 * 24 * 3600  # 13-day buffer before Discord's 14-day hard cutoff
+_BULK_CHUNK = 100
+
+
 async def _delete_messages_older_than(
     channel: discord.TextChannel | discord.Thread,
     cutoff: datetime,
@@ -35,26 +39,47 @@ async def _delete_messages_older_than(
     deleted = 0
     skipped_pinned = 0
     failed = 0
-    next_delete_at = 0.0
+
+    now_ts = time.time()
+    bulk_cutoff_ts = now_ts - _BULK_MAX_AGE
+    bulk_batch: list[discord.Message] = []
+    old_batch: list[discord.Message] = []
 
     async for message in channel.history(limit=None, before=cutoff, oldest_first=True):
         scanned += 1
         if message.pinned:
             skipped_pinned += 1
             continue
+        msg_ts = message.created_at.timestamp() if message.created_at else 0.0
+        if msg_ts > bulk_cutoff_ts:
+            bulk_batch.append(message)
+        else:
+            old_batch.append(message)
+
+    # Bulk-delete recent messages (< 13 days) in chunks of 100
+    for i in range(0, len(bulk_batch), _BULK_CHUNK):
+        chunk = bulk_batch[i : i + _BULK_CHUNK]
+        try:
+            await channel.delete_messages(chunk, reason=reason)
+            deleted += len(chunk)
+        except discord.Forbidden:
+            failed += len(chunk)
+            return scanned, deleted, skipped_pinned, failed
+        except discord.HTTPException:
+            failed += len(chunk)
+        if i + _BULK_CHUNK < len(bulk_batch):
+            await asyncio.sleep(AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds)
+
+    # Individual delete for messages older than 13 days
+    next_delete_at = 0.0
+    for message in old_batch:
         now_monotonic = time.monotonic()
         if now_monotonic < next_delete_at:
             await asyncio.sleep(next_delete_at - now_monotonic)
         try:
-            delete_call = cast(Any, message.delete)
-            try:
-                await delete_call(reason=reason)
-            except TypeError:
-                await message.delete()
+            await message.delete()
             deleted += 1
-            next_delete_at = (
-                time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
-            )
+            next_delete_at = time.monotonic() + AUTO_DELETE_SETTINGS.delete_pause_seconds
         except discord.Forbidden:
             failed += 1
             break

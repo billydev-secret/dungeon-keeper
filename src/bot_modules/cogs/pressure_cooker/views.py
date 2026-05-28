@@ -133,7 +133,12 @@ class GameView(discord.ui.View):
 # ── ResultView ────────────────────────────────────────────────────────────────
 
 class ResultView(discord.ui.View):
-    """Set Nickname / Honor / Rematch — persistent (timeout=None)."""
+    """Post-game buttons — persistent (timeout=None).
+
+    mode="nick"    → Set Nickname + Rematch
+    mode="stakes"  → I'll Honor This + Rematch
+    Additional modes can be added as the game expands.
+    """
 
     def __init__(
         self,
@@ -143,6 +148,8 @@ class ResultView(discord.ui.View):
         on_set_nick: Callable[[discord.Interaction, int], Awaitable[None]],
         on_honor: Callable[[discord.Interaction, int], Awaitable[None]],
         on_rematch: Callable[[discord.Interaction, int], Awaitable[None]],
+        *,
+        mode: str = "nick",
     ) -> None:
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -152,21 +159,24 @@ class ResultView(discord.ui.View):
         self._on_honor = on_honor
         self._on_rematch = on_rematch
 
-        nick_btn = discord.ui.Button(
-            label="Set Nickname",
-            style=discord.ButtonStyle.primary,
-            emoji="📝",
-            custom_id=f"set_nick:{game_id}",
-        )
-        nick_btn.callback = self._set_nick_callback
-
-        honor_btn = discord.ui.Button(
-            label="I'll honor this",
-            style=discord.ButtonStyle.secondary,
-            emoji="🤝",
-            custom_id=f"honor:{game_id}",
-        )
-        honor_btn.callback = self._honor_callback
+        if mode == "nick":
+            nick_btn = discord.ui.Button(
+                label="Set Nickname",
+                style=discord.ButtonStyle.primary,
+                emoji="📝",
+                custom_id=f"set_nick:{game_id}",
+            )
+            nick_btn.callback = self._set_nick_callback
+            self.add_item(nick_btn)
+        elif mode == "stakes":
+            honor_btn = discord.ui.Button(
+                label="I'll honor this",
+                style=discord.ButtonStyle.secondary,
+                emoji="🤝",
+                custom_id=f"honor:{game_id}",
+            )
+            honor_btn.callback = self._honor_callback
+            self.add_item(honor_btn)
 
         rematch_btn = discord.ui.Button(
             label="Rematch",
@@ -175,9 +185,6 @@ class ResultView(discord.ui.View):
             custom_id=f"rematch:{game_id}",
         )
         rematch_btn.callback = self._rematch_callback
-
-        self.add_item(nick_btn)
-        self.add_item(honor_btn)
         self.add_item(rematch_btn)
 
     async def _set_nick_callback(self, interaction: discord.Interaction) -> None:

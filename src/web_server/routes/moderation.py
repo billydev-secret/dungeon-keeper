@@ -893,7 +893,7 @@ async def audit_log(
     request: Request,
     limit: int = 50,
     action: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -959,7 +959,7 @@ async def dm_audit_log(
     limit: int = 50,
     action: str | None = None,
     req_type: str | None = Query(None, alias="type"),
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1017,7 +1017,7 @@ async def whisper_audit_log(
     limit: int = 50,
     state: str | None = None,
     reported_only: bool = False,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1084,7 +1084,7 @@ async def whisper_audit_log(
 async def confessions_audit_log(
     request: Request,
     limit: int = 50,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

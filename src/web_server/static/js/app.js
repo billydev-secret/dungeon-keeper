@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=19";
+const _moduleVer = "?v=20";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -76,16 +76,15 @@ const SECTIONS = [
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js" },
       { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/mod-policy-tickets.js" },
-      { id: "mod-audit",            label: "Audit Log",         module: "./panels/mod-audit.js" },
-      { id: "mod-dm-audit",         label: "DM Audit",          module: "./panels/mod-dm-audit.js" },
-      { id: "mod-confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js" },
-      { id: "quotes-audit",          label: "Quotes Audit",       module: "./panels/quotes-audit.js" },
       { id: "message-search", label: "Message Review",  module: "./panels/message-search.js" },
     ],
   },
   {
     id: "config", label: "Config", perms: ["admin"],
     items: [
+      { id: "mod-audit",      label: "Audit Log",   module: "./panels/mod-audit.js" },
+      { id: "mod-dm-audit",   label: "DM Audit",    module: "./panels/mod-dm-audit.js" },
+      { id: "quotes-audit",   label: "Quotes Audit", module: "./panels/quotes-audit.js" },
       { id: "config-global",     label: "Global",          module: "./panels/config-global.js" },
       { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js" },
       { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js" },
@@ -96,7 +95,6 @@ const SECTIONS = [
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js" },
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
       { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js" },
-      { id: "config-confessions", label: "Confessions",      module: "./panels/config-confessions.js" },
       { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js" },
       { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js" },
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js" },
@@ -120,59 +118,56 @@ const SECTIONS = [
     ],
   },
   {
-    id: "games", label: "Games", perms: ["admin"],
+    id: "games", label: "Games", perms: ["admin"], gameHostRole: true,
     items: [
       { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js" },
       { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
       { id: "games-config",       label: "Config",            module: "./panels/games-config.js" },
     ],
     groups: [
-      { heading: "🎲 Risky Roller", items: [
+      { heading: "Risky Roller", items: [
         { id: "games-risky-roller",  label: "Sessions",  module: "./panels/games-risky-roller.js" },
         { id: "config-risky-rolls",  label: "Config",    module: "./panels/config-risky-rolls.js" },
       ]},
-      { heading: "🤔 WYR", items: [
-        { id: "games-wyr",          label: "Questions",  module: "./panels/games-wyr.js" },
-        { id: "games-wyr-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "wyr" },
-        { id: "games-wyr-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "wyr" },
+      { heading: "WYR", items: [
+        { id: "games-wyr",        label: "Questions",  module: "./panels/games-wyr.js" },
+        { id: "games-wyr-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "wyr" },
       ]},
-      { heading: "⛔ NHIE", items: [
-        { id: "games-nhie",         label: "Questions",  module: "./panels/games-nhie.js" },
-        { id: "games-nhie-prompts", label: "Prompts",    module: "./panels/games-prompts.js", gt: "nhie" },
-        { id: "games-nhie-tester",  label: "AI Tester",  module: "./panels/games-tester.js",  gt: "nhie" },
+      { heading: "NHIE", items: [
+        { id: "games-nhie",        label: "Questions",  module: "./panels/games-nhie.js" },
+        { id: "games-nhie-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "nhie" },
       ]},
-      { heading: "👑 MLT", items: [
-        { id: "games-mlt",          label: "Questions",  module: "./panels/games-mlt.js" },
-        { id: "games-mlt-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "mlt" },
-        { id: "games-mlt-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "mlt" },
+      { heading: "MLT", items: [
+        { id: "games-mlt",        label: "Questions",  module: "./panels/games-mlt.js" },
+        { id: "games-mlt-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "mlt" },
       ]},
-      { heading: "🗿 Rushmore", items: [
-        { id: "games-rushmore",          label: "Questions",  module: "./panels/games-rushmore.js" },
-        { id: "games-rushmore-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "rushmore" },
-        { id: "games-rushmore-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "rushmore" },
+      { heading: "Rushmore", items: [
+        { id: "games-rushmore",        label: "Questions",  module: "./panels/games-rushmore.js" },
+        { id: "games-rushmore-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "rushmore" },
       ]},
-      { heading: "💰 Price", items: [
-        { id: "games-price",          label: "Questions",  module: "./panels/games-price.js" },
-        { id: "games-price-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "price" },
-        { id: "games-price-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "price" },
+      { heading: "Price", items: [
+        { id: "games-price",        label: "Questions",  module: "./panels/games-price.js" },
+        { id: "games-price-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "price" },
       ]},
-      { heading: "⚔️ Clapback", items: [
-        { id: "games-clapback",          label: "Questions",  module: "./panels/games-clapback.js" },
-        { id: "games-clapback-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "clapback" },
-        { id: "games-clapback-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "clapback" },
+      { heading: "Clapback", items: [
+        { id: "games-clapback",        label: "Questions",  module: "./panels/games-clapback.js" },
+        { id: "games-clapback-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "clapback" },
       ]},
-      { heading: "🎙️ AMA", items: [
-        { id: "games-ama",          label: "Questions",  module: "./panels/games-ama.js" },
-        { id: "games-ama-prompts",  label: "Prompts",    module: "./panels/games-prompts.js", gt: "ama" },
-        { id: "games-ama-tester",   label: "AI Tester",  module: "./panels/games-tester.js",  gt: "ama" },
+      { heading: "AMA", items: [
+        { id: "games-ama",        label: "Questions",  module: "./panels/games-ama.js" },
+        { id: "games-ama-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "ama" },
       ]},
       { heading: "Guess Who", items: [
         { id: "config-veil",  label: "Config",     module: "./panels/config-veil.js" },
-        { id: "veil-audit",   label: "Audit Log",  module: "./panels/veil-audit.js" },
+        { id: "veil-audit",   label: "Audit Log",  module: "./panels/guess-audit.js" },
       ]},
       { heading: "Whisper", items: [
         { id: "config-whisper",    label: "Config",     module: "./panels/config-whisper.js" },
         { id: "mod-whisper-audit", label: "Audit Log",  module: "./panels/mod-whisper-audit.js" },
+      ]},
+      { heading: "Confessions", items: [
+        { id: "config-confessions",  label: "Config",     module: "./panels/config-confessions.js" },
+        { id: "confessions-audit",   label: "Audit Log",  module: "./panels/mod-confessions-audit.js" },
       ]},
     ],
   },
@@ -246,6 +241,13 @@ function rebuildIndex() {
   visibleSections = SECTIONS.filter((sec) => {
     // Hide Config for non-primary guilds (config tables are not guild-scoped)
     if (sec.id === "config" && isNonPrimaryGuild) return false;
+
+    // Game host role: show Games section to admins OR configured role holders
+    if (sec.gameHostRole) {
+      if (userPerms.has("admin")) return true;
+      const hostRoleId = window.__dk_user?.games_editor_role_id;
+      return !!(hostRoleId && userRoleIds.has(hostRoleId));
+    }
 
     const permOk = !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p));
     if (!permOk) return false;
@@ -519,6 +521,7 @@ function applyMeData(me) {
     role_names: userRoleNames,
     guild_id: me.guild_id,
     primary_guild_id: primaryGuildId,
+    games_editor_role_id: me.games_editor_role_id || null,
   };
 
   // Hide Config section when viewing a non-primary guild

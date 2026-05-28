@@ -78,6 +78,7 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
                         self._handle_set_nick,
                         self._handle_honor,
                         self._handle_rematch,
+                        mode="stakes" if game.stakes_text else "nick",
                     ),
                     message_id=game.result_message_id,
                 )
@@ -588,6 +589,7 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
                     self._handle_set_nick,
                     self._handle_honor,
                     self._handle_rematch,
+                    mode="stakes" if game.stakes_text else "nick",
                 )
                 result_msg = await interaction.followup.send(
                     content=f"{guild.get_member(game.winner_id).mention} {guild.get_member(game.loser_id).mention}",  # type: ignore[union-attr]
@@ -604,15 +606,21 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
                 await interaction.edit_original_response(embed=embed)
 
     async def _handle_set_nick(self, interaction: discord.Interaction, game_id: int) -> None:
+        game = await pdb.get_game(self.db, game_id)
+        if not game or game.state != "RESOLVED":
+            await interaction.response.send_message(
+                "A nickname has already been set for this game.", ephemeral=True
+            )
+            return
         await interaction.response.send_modal(NicknameModal(game_id, self._handle_nick_submit))
 
     async def _handle_nick_submit(
         self, interaction: discord.Interaction, game_id: int, raw_nick: str
     ) -> None:
         game = await pdb.get_game(self.db, game_id)
-        if not game or game.state not in ("RESOLVED", "NICKED"):
+        if not game or game.state != "RESOLVED":
             await interaction.response.send_message(
-                "This game is no longer waiting for a nickname.", ephemeral=True
+                "A nickname has already been set for this game.", ephemeral=True
             )
             return
         if interaction.user.id != game.winner_id:

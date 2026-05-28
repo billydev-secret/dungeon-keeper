@@ -23,6 +23,7 @@ class MeResponse(BaseModel):
     primary_guild_id: str | None = None
     avatar_url: str | None = None
     status: str | None = None
+    games_editor_role_id: str | None = None
 
 
 class RoleMeta(BaseModel):

@@ -297,15 +297,25 @@ class BaseRiskyRollView(discord.ui.View):
                 item.disabled = True
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item) -> None:
+        # Interaction token expired (user clicked too slowly) — nothing we can do
+        if isinstance(error, discord.NotFound) and error.code == 10062:
+            log.debug(
+                "Interaction expired in %s (game %s) — user clicked after token timeout",
+                type(self).__name__, self.game_id or "?",
+            )
+            return
         if self.game_id:
             log.exception("Unhandled error in %s (game %s)", type(self).__name__, self.game_id, exc_info=error)
         else:
             log.exception("Unhandled error in %s", type(self).__name__, exc_info=error)
         msg = "Something went wrong. Please try again."
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
 
 class RiskyRollView(BaseRiskyRollView):
@@ -316,17 +326,18 @@ class RiskyRollView(BaseRiskyRollView):
         emoji="🎲",
     )
     async def roll_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         async with app_state.get_game_lock(self.game_id):
             state = app_state.active_games.get(self.game_id)
             if not state or not state.is_open:
-                await interaction.response.send_message("No open round to roll in.", ephemeral=True)
+                await interaction.followup.send("No open round to roll in.", ephemeral=True)
                 return
 
             if not state.can_roll(interaction.user.id):
                 if state.reroll_user_ids:
-                    await interaction.response.send_message("You cannot reroll right now.", ephemeral=True)
+                    await interaction.followup.send("You cannot reroll right now.", ephemeral=True)
                     return
-                await interaction.response.send_message("You already rolled this round.", ephemeral=True)
+                await interaction.followup.send("You already rolled this round.", ephemeral=True)
                 return
 
             roll = random.randint(1, 100)
@@ -341,7 +352,7 @@ class RiskyRollView(BaseRiskyRollView):
                 roll,
             )
 
-            await interaction.response.edit_message(embed=build_embed(state), view=self)
+            await interaction.edit_original_response(embed=build_embed(state), view=self)
 
             if state.auto_close_players and len(state.rolls) == state.auto_close_players:
                 task = app_state.auto_close_tasks.pop(self.game_id, None)

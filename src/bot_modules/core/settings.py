@@ -20,8 +20,8 @@ class AutoDeleteSettings:
     min_interval_seconds: int = 60
     # How often to poll for auto-delete tasks (seconds)
     poll_seconds: int = 60
-    # Pause between individual message deletions (seconds)
-    delete_pause_seconds: float = 0.35
+    # Pause between individual message deletions (seconds — ~1/s to stay under Discord's per-channel bucket)
+    delete_pause_seconds: float = 1.1
     # Pause between bulk-delete requests (rate limit is ~1/s per channel)
     bulk_delete_pause_seconds: float = 1.1
     # Pause between bulk role/permission modifications (seconds)

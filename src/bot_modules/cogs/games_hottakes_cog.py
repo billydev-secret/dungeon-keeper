@@ -36,11 +36,12 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
         placeholder="Type your spiciest opinion here...",
     )
 
-    def __init__(self, game_id: str, db, origin_message: discord.Message | None = None):
+    def __init__(self, game_id: str, db, origin_message: discord.Message | None = None, *, queue_mode: bool = False):
         super().__init__()
         self.game_id = game_id
         self.db = db
         self._origin_message = origin_message
+        self.queue_mode = queue_mode
 
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Hot Take", interaction.channel.name if interaction.channel else "unknown")
@@ -62,6 +63,13 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
                 game_type="hottakes", user=interaction.user,
                 content=self.take.value, label="Hot Take Submission",
             )
+
+        if self.queue_mode:
+            await interaction.response.send_message(
+                "✅ Hot take queued! It will be voted on after the current takes.",
+                ephemeral=True,
+            )
+            return
 
         take_count = len(payload.get("takes", []))
         await interaction.response.send_message(
@@ -147,7 +155,6 @@ class HotTakesSubmitView(discord.ui.View):
                 game_id=self.game_id,
                 host_id=self.host_id,
                 host_name=interaction.user.display_name,
-                takes=shuffled,
                 channel=interaction.channel,
             )
         except Exception as e:
@@ -270,6 +277,15 @@ class HotTakeVoteView(discord.ui.View):
         msg = f"✅ Voted **{label}**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
+
+    @discord.ui.button(label="📝 Submit Take", style=discord.ButtonStyle.secondary, custom_id="ht_v_submit", row=1)
+    async def submit_take(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        if self.game_id not in self.bot.active_views:
+            await interaction.response.send_message("This game has already ended.", ephemeral=True)
+            return
+        modal = SubmitHotTakeModal(self.game_id, self.db, queue_mode=True)
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="⏭️ Next Take", style=discord.ButtonStyle.secondary, custom_id="ht_next", row=1)
     async def next_take(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -412,15 +428,25 @@ class HotTakesCog(commands.Cog):
         game_id: str,
         host_id: int,
         host_name: str,
-        takes: list,
         channel,
     ):
-        total_takes = len(takes)
         results = []
+        processed = 0
 
-        for i, take_data in enumerate(takes):
+        while True:
+            payload = await get_game_payload(self.db, game_id)
+            if game_id not in self.bot.active_views:
+                return
+
+            all_takes = payload.get("takes", [])
+            if processed >= len(all_takes):
+                break
+
+            take_data = all_takes[processed]
+            processed += 1
             take_text = take_data["text"]
-            take_num = i + 1
+            take_num = processed
+            total_takes = len(all_takes)
 
             advanced = asyncio.Event()
 
@@ -499,11 +525,12 @@ class HotTakesCog(commands.Cog):
         # Results were saved incrementally in advance(); just read final state
         payload = await get_game_payload(self.db, game_id)
 
-        await view._post_recap(channel, payload)
+        if processed > 0:
+            await view._post_recap(channel, payload)
         await end_game(
             self.db, game_id,
             player_count=len({v for r in results for v in r.get("voters", [])}),
-            round_count=total_takes,
+            round_count=processed,
             payload=payload,
         )
         if game_id in self.bot.active_views:

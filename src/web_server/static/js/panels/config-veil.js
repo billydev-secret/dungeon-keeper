@@ -55,7 +55,7 @@ export function mount(container) {
       loadChannels(),
       loadRoles(),
     ]);
-    const v = config.veil;
+    const v = config.guess;
 
     container.textContent = "";
     const panel = document.createElement("div");
@@ -118,7 +118,7 @@ export function mount(container) {
       e.preventDefault();
       const fd = new FormData(form);
       try {
-        await apiPut("/api/config/veil", {
+        await apiPut("/api/config/guess", {
           channel_id: fd.get("channel_id"),
           role_id: fd.get("role_id"),
           crop_difficulty: fd.get("crop_difficulty"),

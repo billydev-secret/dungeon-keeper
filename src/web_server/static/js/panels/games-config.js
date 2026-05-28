@@ -27,6 +27,22 @@ export function mount(container) {
       </section>
 
       <section>
+        <div class="section-label">Game Host Role</div>
+        <div class="field-hint">Members with this Discord role can access all game settings and the LegitLibs editor. Admins always have access. Leave blank to restrict to admins only.</div>
+        <div data-region="editor-role-current" style="margin-bottom:10px;"><div class="empty">Loading</div></div>
+        <div class="form" style="display:flex;flex-direction:row;gap:8px;align-items:flex-end;max-width:none;">
+          <div class="field" style="margin:0;flex:1;max-width:280px;">
+            <label>Role ID
+              <input type="text" data-ctrl="editor-role" placeholder="e.g. 123456789012345678" style="width:100%;" />
+            </label>
+          </div>
+          <button class="btn btn-primary" data-action="save-editor-role">Save</button>
+          <button class="btn" data-action="clear-editor-role">Clear</button>
+          <span data-status="editor-role" class="save-status" style="margin-left:4px;"></span>
+        </div>
+      </section>
+
+      <section>
         <div class="section-label">Audit Channel</div>
         <div class="field-hint">When set, game events are logged to this channel.</div>
         <div data-region="audit-current" style="margin-bottom:10px;"><div class="empty">Loading</div></div>
@@ -84,6 +100,22 @@ export function mount(container) {
     }
   }
 
+  async function loadEditorRole() {
+    const el = region("editor-role-current");
+    try {
+      const data = await api("/api/games/config/editor-role");
+      if (data?.role_id) {
+        el.innerHTML = `<div>Current: <code>${esc(data.role_id)}</code></div>`;
+        ctrl("editor-role").value = data.role_id;
+      } else {
+        el.innerHTML = `<div class="empty">No editor role set — admins only.</div>`;
+        ctrl("editor-role").value = "";
+      }
+    } catch (err) {
+      el.innerHTML = `<div class="empty">Error: ${esc(err.message)}</div>`;
+    }
+  }
+
   async function loadAudit() {
     const el = region("audit-current");
     try {
@@ -98,6 +130,27 @@ export function mount(container) {
       el.innerHTML = `<div class="empty">Error: ${esc(err.message)}</div>`;
     }
   }
+
+  container.querySelector('[data-action="save-editor-role"]').addEventListener("click", async () => {
+    const st = container.querySelector('[data-status="editor-role"]');
+    const rid = ctrl("editor-role").value.trim();
+    if (!rid) { showStatus(st, false, "Role ID required"); return; }
+    try {
+      await apiPut("/api/games/config/editor-role", { role_id: rid });
+      showStatus(st, true, "Saved");
+      loadEditorRole();
+    } catch (err) { showStatus(st, false, err.message); }
+  });
+
+  container.querySelector('[data-action="clear-editor-role"]').addEventListener("click", async () => {
+    const st = container.querySelector('[data-status="editor-role"]');
+    if (!confirm("Remove the LegitLibs editor role? Only admins will have access.")) return;
+    try {
+      await apiDelete("/api/games/config/editor-role");
+      showStatus(st, true, "Cleared");
+      loadEditorRole();
+    } catch (err) { showStatus(st, false, err.message); }
+  });
 
   container.querySelector('[data-action="add-channel"]').addEventListener("click", async () => {
     const st = container.querySelector('[data-status="channel"]');
@@ -127,6 +180,7 @@ export function mount(container) {
   });
 
   loadChannels();
+  loadEditorRole();
   loadAudit();
 
   return { unmount() {} };

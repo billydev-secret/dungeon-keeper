@@ -150,6 +150,32 @@ async def run_query(fn: Callable[..., T], *args, **kwargs) -> T:
     return await asyncio.to_thread(fn, *args, **kwargs)
 
 
+async def require_game_host(
+    request: Request,
+    auth: AuthBackend = Depends(get_auth),
+) -> AuthenticatedUser:
+    """Allow admins OR holders of the configured game-host role."""
+    user = await auth.authenticate(request)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if "admin" in user.perms:
+        return user
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+            return int(row["role_id"]) if row else None
+
+    host_role_id = await run_query(_q)
+    if host_role_id and host_role_id in user.role_ids:
+        return user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+
 def require_perms(required: set[str]) -> Callable[..., Awaitable[AuthenticatedUser]]:
     """Return a FastAPI dependency that enforces ``required`` permissions."""
     required_frozen = frozenset(required)

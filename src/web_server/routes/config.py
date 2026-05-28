@@ -49,7 +49,7 @@ from bot_modules.services.dm_perms_service import (
     set_request_channel,
 )
 from web_server.auth import AuthenticatedUser
-from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
 from bot_modules.core.xp_system import _XP_COEFF_PREFIX, DEFAULT_XP_SETTINGS
 from bot_modules.services.confessions_service import (
     GuildConfig as _ConfessionsGuildConfig,
@@ -1322,7 +1322,7 @@ class ConfessionsConfigUpdate(BaseModel):
 async def update_confessions(
     request: Request,
     body: ConfessionsConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1410,7 +1410,7 @@ class PostButtonRequest(BaseModel):
 async def post_confessions_button(
     request: Request,
     body: PostButtonRequest,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1796,7 +1796,7 @@ class GuessConfigUpdate(BaseModel):
 async def update_guess_config(
     request: Request,
     body: GuessConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1834,7 +1834,7 @@ class WhisperConfigUpdate(BaseModel):
 async def update_whisper_config(
     request: Request,
     body: WhisperConfigUpdate,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

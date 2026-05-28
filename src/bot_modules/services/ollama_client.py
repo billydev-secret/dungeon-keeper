@@ -266,6 +266,7 @@ async def chat(
     system: str,
     user_content: str,
     max_tokens: int = 2048,
+    temperature: float = 0.7,
 ) -> str:
     """Run a single-turn chat and return the response text.
 
@@ -294,7 +295,7 @@ async def chat(
                 {"role": "user", "content": user_content},
             ],
             max_tokens=max_tokens,
-            temperature=0.7,
+            temperature=temperature,
         )
         elapsed = time.monotonic() - t0
         text = (result["choices"][0]["message"]["content"] or "").strip()  # type: ignore[index]

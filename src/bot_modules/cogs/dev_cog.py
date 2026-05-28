@@ -1,8 +1,13 @@
 """Developer tools — hot-reload cog extensions."""
 from __future__ import annotations
 
+import ast
+import importlib
+import inspect
 import logging
 import os
+import sys
+import types
 from typing import TYPE_CHECKING
 
 import discord
@@ -15,6 +20,70 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.dev")
+
+
+def _is_stateful(val: object) -> bool:
+    """Return True for mutable runtime values that should survive a module reload."""
+    if val is None:
+        return False
+    if isinstance(val, (bool, int, float, str, bytes, tuple, frozenset)):
+        return False
+    if isinstance(val, type):
+        return False
+    if isinstance(val, types.ModuleType):
+        return False
+    if isinstance(val, (types.FunctionType, types.MethodType,
+                        types.BuiltinFunctionType, types.BuiltinMethodType)):
+        return False
+    return True
+
+
+def _snapshot(mod: types.ModuleType) -> dict[str, object]:
+    return {
+        name: val
+        for name, val in vars(mod).items()
+        if not name.startswith("__") and _is_stateful(val)
+    }
+
+
+def _restore(mod: types.ModuleType, snapshot: dict[str, object]) -> None:
+    for name, val in snapshot.items():
+        setattr(mod, name, val)
+
+
+def _dep_names(extension: str) -> list[str]:
+    """Return bot_modules.* dependency module names imported by the extension."""
+    mod = sys.modules.get(extension)
+    if mod is None:
+        return []
+    try:
+        source = inspect.getsource(mod)
+        tree = ast.parse(source)
+    except (OSError, TypeError, SyntaxError):
+        return []
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def _add(name: str) -> None:
+        if name not in seen and name in sys.modules:
+            seen.add(name)
+            ordered.append(name)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if base.startswith("bot_modules."):
+                _add(base)
+                # `from pkg import submod` — submod may be a submodule
+                for alias in node.names:
+                    _add(f"{base}.{alias.name}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("bot_modules."):
+                    _add(alias.name)
+
+    return ordered
 
 
 class DevCog(commands.Cog):
@@ -45,6 +114,15 @@ class DevCog(commands.Cog):
             return
         await interaction.response.defer(ephemeral=True)
         try:
+            for dep_name in _dep_names(extension):
+                dep_mod = sys.modules[dep_name]
+                snap = _snapshot(dep_mod)
+                try:
+                    importlib.reload(dep_mod)
+                except Exception:
+                    log.exception("Deep reload failed for dependency %s", dep_name)
+                else:
+                    _restore(dep_mod, snap)
             await self.bot.reload_extension(extension)
             db_path = self.bot.ctx.db_path
             if self.bot.debug:

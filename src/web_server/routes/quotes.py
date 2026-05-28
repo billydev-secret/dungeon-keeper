@@ -15,7 +15,7 @@ async def quote_audit_log(
     request: Request,
     limit: int = 50,
     theme: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from web_server.auth import AuthenticatedUser
-from web_server.deps import get_ctx, require_perms, run_query
+from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
 
 log = logging.getLogger("dungeonkeeper.games")
 
@@ -143,7 +143,7 @@ def _save_prompt_config(cfg: dict) -> None:
 @router.get("/stats")
 async def get_stats(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -219,7 +219,7 @@ async def get_stats(
 @router.get("/bank")
 async def list_bank(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
     game_type: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
@@ -282,7 +282,7 @@ async def list_bank(
 async def create_question(
     request: Request,
     body: BankCreateBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     if body.game_type not in VALID_GAME_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid game_type: {body.game_type}")
@@ -308,7 +308,7 @@ async def update_question(
     request: Request,
     question_id: int,
     body: BankUpdateBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     if body.category and body.category not in ("sfw", "nsfw"):
         raise HTTPException(status_code=400, detail="category must be 'sfw' or 'nsfw'")
@@ -352,7 +352,7 @@ async def update_question(
 async def delete_question(
     request: Request,
     question_id: int,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -380,7 +380,7 @@ async def delete_question(
 async def bulk_add_questions(
     request: Request,
     body: BankBulkBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     if body.game_type not in VALID_GAME_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid game_type: {body.game_type}")
@@ -408,7 +408,7 @@ async def bulk_add_questions(
 @router.get("/bank/export")
 async def export_bank(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
     game_type: Optional[str] = Query(None),
 ):
     ctx = get_ctx(request)
@@ -437,7 +437,7 @@ async def export_bank(
 @router.post("/bank/import")
 async def import_bank(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     raw = await request.json()
     if not isinstance(raw, list):
@@ -481,7 +481,7 @@ async def import_bank(
 @router.get("/prompts")
 async def get_prompts(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     return _load_prompt_config()
 
@@ -490,7 +490,7 @@ async def get_prompts(
 async def update_global_prompts(
     request: Request,
     body: PromptsGlobalBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     cfg = _load_prompt_config()
     cfg["audience"] = body.audience
@@ -505,7 +505,7 @@ async def update_game_prompt(
     request: Request,
     game_type: str,
     body: PromptsGameBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     if game_type not in VALID_GAME_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid game_type: {game_type}")
@@ -532,7 +532,7 @@ async def update_game_prompt(
 async def generate_questions(
     request: Request,
     body: GenerateBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     from bot_modules.games.utils.ai_client import generate_text
 
@@ -575,7 +575,7 @@ async def generate_questions(
 @router.get("/history")
 async def get_history(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     game_type: Optional[str] = Query(None),
@@ -632,7 +632,7 @@ async def get_history(
 @router.get("/legitlibs/templates")
 async def list_ll_templates(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
     tier: Optional[int] = Query(None),
     status: Optional[str] = Query(None),
 ):
@@ -694,7 +694,7 @@ async def list_ll_templates(
 async def get_ll_template(
     request: Request,
     template_id: int,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -746,7 +746,7 @@ def _players_from_blanks(blanks_json: str | None) -> tuple[int | None, int | Non
 async def create_ll_template(
     request: Request,
     body: LegitLibsTemplateBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -780,7 +780,7 @@ async def update_ll_template(
     request: Request,
     template_id: int,
     body: LegitLibsTemplateUpdateBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -823,7 +823,7 @@ async def update_ll_template(
 async def delete_ll_template(
     request: Request,
     template_id: int,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -850,7 +850,7 @@ async def delete_ll_template(
 @router.get("/legitlibs/axes")
 async def get_ll_axes(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -886,7 +886,7 @@ async def get_ll_axes(
 async def ll_ai_prep(
     request: Request,
     body: LegitLibsAIPrepBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     import json as _json
     import re as _re
@@ -1028,7 +1028,7 @@ JSON format:
 async def resolve_ll_blanks(
     request: Request,
     body: LegitLibsResolveBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -1097,7 +1097,7 @@ async def resolve_ll_blanks(
 @router.get("/config/channels")
 async def get_allowed_channels(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -1120,7 +1120,7 @@ async def get_allowed_channels(
 async def add_allowed_channel(
     request: Request,
     body: ChannelAddBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -1140,7 +1140,7 @@ async def add_allowed_channel(
 async def remove_allowed_channel(
     request: Request,
     channel_id: str,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -1161,7 +1161,7 @@ async def remove_allowed_channel(
 @router.get("/config/games")
 async def get_all_game_configs(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
     guild_id = ctx.guild_id if hasattr(ctx, "guild_id") else 0
@@ -1189,7 +1189,7 @@ async def get_all_game_configs(
 async def get_game_config(
     request: Request,
     game_type: str,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     if game_type not in ALL_GAME_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown game_type: {game_type}")
@@ -1219,7 +1219,7 @@ async def set_game_config(
     request: Request,
     game_type: str,
     body: GameConfigBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     if game_type not in ALL_GAME_TYPES:
         raise HTTPException(status_code=404, detail=f"Unknown game_type: {game_type}")
@@ -1263,7 +1263,7 @@ async def set_game_config(
 @router.get("/config/audit")
 async def get_audit_channel(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -1283,7 +1283,7 @@ async def get_audit_channel(
 async def set_audit_channel(
     request: Request,
     body: AuditChannelBody,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
 
@@ -1303,6 +1303,78 @@ async def set_audit_channel(
                     "INSERT INTO games_audit_channel (guild_id, channel_id) VALUES (?, ?)",
                     (guild_id, body.channel_id),
                 )
+            conn.commit()
+            return {}
+
+    return await run_query(_q)
+
+
+# ── Game host role management ──────────────────────────────────────────────────
+
+
+class EditorRoleBody(BaseModel):
+    role_id: str
+
+
+@router.get("/config/editor-role")
+async def get_editor_role(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT role_id FROM games_editor_role WHERE guild_id = ?", (guild_id,)
+            ).fetchone()
+            return {"role_id": str(row["role_id"])} if row else {"role_id": None}
+
+    return await run_query(_q)
+
+
+@router.put("/config/editor-role")
+async def set_editor_role(
+    request: Request,
+    body: EditorRoleBody,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    try:
+        role_id = int(body.role_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="role_id must be a numeric snowflake")
+
+    def _q():
+        with ctx.open_db() as conn:
+            conn.execute(
+                """INSERT INTO games_editor_role (guild_id, role_id, set_by)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(guild_id) DO UPDATE SET role_id = excluded.role_id,
+                       set_by = excluded.set_by, set_at = CURRENT_TIMESTAMP""",
+                (guild_id, role_id, user.user_id),
+            )
+            conn.commit()
+            return {"role_id": str(role_id)}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/editor-role")
+async def clear_editor_role(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            conn.execute(
+                "DELETE FROM games_editor_role WHERE guild_id = ?", (guild_id,)
+            )
             conn.commit()
             return {}
 
