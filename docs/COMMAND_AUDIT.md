@@ -35,7 +35,7 @@ Only four registered commands genuinely duplicated a live dashboard route:
 | `/activity` (activity_cog) | `GET /activity` | Removed — delisted + cog file deleted |
 | `/config` (config_cog) | `GET/POST /config…` | Removed — delisted + cog file deleted (config now web-only, per decision) |
 | `/report promotion_review` (reports_cog) | reports section | Removed — `report` group dropped; `quality_leave` kept |
-| `/voice voice-admin …` config (voice_master_cog) | `/voice-master/config`, `/voice-master/name-blocklist`, `/voice-master/profiles` | PENDING — see below |
+| `/voice voice-admin …` config (voice_master_cog) | `/voice-master/config`, `/voice-master/name-blocklist`, `/voice-master/profiles` | Removed — config setters, view-profile, name-blocklist group; kept post/force actions + force-clear-profile |
 
 `/help` (mod_cog) updated: removed the dead "Activity & Graphs" page and the `promotion_review` entry.
 
@@ -46,31 +46,27 @@ Only four registered commands genuinely duplicated a live dashboard route:
 
 ---
 
-## Pending decision 1 — voice-admin split (needs confirmation)
+## Done — dead-file cleanup
 
-`voice_admin` mixes web-duplicated config with Discord-coupled actions. Proposed split:
+Confirmed (not in the Discord `/` menu) and deleted — 8 unloaded cogs + 3 unused command modules
+with **no importers and no tests**:
 
-- **Remove** (covered by `/voice-master/config` & friends): `set-hub`, `set-category`,
-  `set-control-channel`, `set-default-name`, `set-int`, `disable-saves`, `saveable-fields`, `show`,
-  `view-profile` (→ `GET /voice-master/profiles/{user_id}`), and the whole `name-blocklist` group
-  (add/remove/list → `/voice-master/name-blocklist`).
-- **Keep**: `post-panel`, `post-inline-panel` (post into a channel), `force-delete`, `force-transfer`
-  (real-time actions). **`force-clear-profile`**: recommend KEEP — it's a destructive admin action and
-  the web profiles route appears to be **read-only** (`GET` only, no clear/delete). Removing it would
-  leave no replacement.
-
-This is surgical editing of ~10 interleaved methods in a 1760-line cog with live listeners — held for
-explicit go-ahead on the split (esp. `force-clear-profile`).
-
-## Pending decision 2 — delete the dead files? (intent confirmation)
-
-Strong evidence says the 8 unloaded cogs above were **deliberately migrated** (web routes exist; stale
-`/help`). If confirmed, these are safe to delete as cleanup:
-
-- **Dead cogs (8):** `drama_cog`, `interaction_cog`, `gender_cog`, `auto_delete_cog`, `welcome_cog`,
+- **Cogs (8):** `drama_cog`, `interaction_cog`, `gender_cog`, `auto_delete_cog`, `welcome_cog`,
   `foolsday_cog`, `wellness_admin_cog`, `inactivity_prune_cog`.
-- **Dead `commands/*.py` (7):** `xp_commands`, `interaction_commands`, `activity_commands`,
-  `mod_commands`, `auto_delete_commands`, `foolsday_commands`, `invite_commands`
-  (keep `drama_commands.py` — imported by `web_server/routes/reports.py`).
+- **`commands/*.py` (3):** `auto_delete_commands`, `foolsday_commands`, `invite_commands`.
+- Kept `drama_commands.py` (imported by `web_server/routes/reports.py`).
+- (`activity_commands.py` from the original list never existed in this repo.)
 
-Not deleted yet — confirm these were intentional (not unfinished work) first.
+`pytest --co` collects 1631 tests with no import errors after deletion.
+
+## Still open
+
+1. **3 production-dead but *test-covered* command modules:** `xp_commands`, `interaction_commands`,
+   `mod_commands`. Not loaded in production (the live equivalents are `xp_cog` / `mod_cog`;
+   interaction is web-only), but `tests/test_commands.py` still imports and exercises their
+   `register_*` functions. Deleting them requires removing those tests too — held for a decision
+   (the "has tests" signal differs from the zero-coverage files already deleted).
+2. **Now-orphaned helper modules** left behind by the deleted cogs (e.g. `gender_commands.py`,
+   `welcome_commands.py`, `wellness_admin_commands.py`, `inactivity_prune_commands.py`,
+   `services/foolsday_service.py`). Likely dead now, but each needs a fresh importer check (some may
+   still be used by the web) before removal — a follow-up cleanup pass.
