@@ -19,15 +19,31 @@ router = APIRouter()
 async def home_data(
     request: Request,
     fields: Optional[str] = Query(None),
-    _: AuthenticatedUser = Depends(require_perms(set())),
+    user: AuthenticatedUser = Depends(require_perms(set())),
 ):
     # If fields is provided, only compute those field groups.
     # Valid groups: messages, nsfw, top_channels, top_users, xp, moderation,
     #              mod_actions, returned, starters, butterflies, loyalists
     # If omitted, compute everything (backward compatible).
+    is_mod = "moderator" in user.perms or "admin" in user.perms
+    is_admin = "admin" in user.perms
+
+    _ALL_GROUPS = {
+        "messages", "nsfw", "top_channels", "top_users", "xp", "voice",
+        "moderation", "mod_actions", "returned", "starters", "butterflies", "loyalists",
+    }
     wanted: set[str] | None = None
     if fields:
         wanted = {f.strip() for f in fields.split(",") if f.strip()}
+
+    # Strip privileged groups for users who lack the required perms.
+    restricted: set[str] = set()
+    if not is_mod:
+        restricted.add("moderation")
+    if not is_admin:
+        restricted.add("mod_actions")
+    if restricted:
+        wanted = (_ALL_GROUPS if wanted is None else wanted) - restricted
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)

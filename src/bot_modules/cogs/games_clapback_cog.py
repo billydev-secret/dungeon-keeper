@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+import re
 
 import discord
 from discord.ext import commands
@@ -116,15 +117,12 @@ def create_matchups(
             break
         if best_matchups is None:
             best_matchups = pairs
-    # If all attempts had duplicates, just use the last one
-    if best_matchups is None:
-        best_matchups = []
-        for i in range(0, len(player_ids), 2):
-            best_matchups.append({
-                "pair": [player_ids[i], player_ids[i + 1]],
-                "votes": {},
-                "winner": None,
-            })
+    # If all attempts had duplicates (or produced no pairs), force-pair anyway
+    if not best_matchups and len(player_ids) >= 2:
+        best_matchups = [
+            {"pair": [player_ids[i], player_ids[i + 1]], "votes": {}, "winner": None}
+            for i in range(0, len(player_ids), 2)
+        ]
 
     return best_matchups, bye_player
 
@@ -223,7 +221,7 @@ class ClapbackAnswerModal(discord.ui.Modal, title="Your Answer"):
             "%s submitted answer in game %s",
             interaction.user.display_name, self.game_id,
         )
-        answer = self.answer_input.value.strip()
+        answer = re.sub(r'@(everyone|here)', '@​\\1', self.answer_input.value.strip())
         if not answer:
             await interaction.response.send_message(
                 "Nice try, but you need to actually write something. 😄",
@@ -518,9 +516,9 @@ class ClapbackVoteView(discord.ui.View):
             return
 
         uid = interaction.user.id
-        if uid == voted_for:
+        if uid in (self.player_a, self.player_b):
             await interaction.response.send_message(
-                "You can't vote for your own answer! 😎",
+                "You can't vote on your own matchup! 😎",
                 ephemeral=True,
             )
             return
@@ -546,10 +544,8 @@ class ClapbackVoteView(discord.ui.View):
             f"Voted for {label}!", ephemeral=True, delete_after=3,
         )
 
-        # Everyone votes except the submitter of their own answer.
-        # Each matchup participant has exactly one valid choice (the other),
-        # so eligible = total players (each can cast one vote).
-        eligible = len(self.players)
+        # Matchup participants can't vote — everyone else does.
+        eligible = len(self.players) - 2
         if vote_count >= eligible and eligible > 0:
             if self.game_id in self.cog._vote_events:
                 self.cog._vote_events[self.game_id].set()
@@ -1073,7 +1069,7 @@ class ClapbackCog(commands.Cog):
             l_pts = result["scores"][loser_id]
 
             reveal = discord.Embed(
-                title="⚡ Q U I P L A S H ⚡",
+                title="⚡ C L A P B A C K ⚡",
                 color=CLAPBACK_WIN_COLOR,
             )
             reveal.add_field(

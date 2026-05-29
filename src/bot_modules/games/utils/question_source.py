@@ -6,7 +6,7 @@ from bot_modules.games.utils.ai_client import generate_text
 
 log = logging.getLogger(__name__)
 
-_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "prompt_config.json")
+_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "prompt_config.json")
 
 
 # ── Config loader ──────────────────────────────────────────────────

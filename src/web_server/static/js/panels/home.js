@@ -1,5 +1,5 @@
 import { api } from "../api.js";
-import { WIDGET_MAP, DEFAULT_HOME, DEFAULT_ADMIN } from "../widget-registry.js";
+import { WIDGET_MAP, DEFAULT_HOME, DEFAULT_MOD, DEFAULT_ADMIN } from "../widget-registry.js";
 import { renderGrid, showWidgetPicker } from "../widget-grid.js";
 import { esc } from "../tiles/tile-helpers.js";
 
@@ -7,7 +7,7 @@ const STORAGE_VERSION = 3;
 
 function entryId(e) { return typeof e === "string" ? e : e?.id; }
 
-function getLayout(userId, isAdmin) {
+function getLayout(userId, isAdmin, isMod) {
   try {
     const raw = localStorage.getItem(`dk_layout_${userId}`);
     if (raw) {
@@ -19,7 +19,7 @@ function getLayout(userId, isAdmin) {
       }
     }
   } catch (_) {}
-  return isAdmin ? [...DEFAULT_ADMIN] : [...DEFAULT_HOME];
+  return isAdmin ? [...DEFAULT_ADMIN] : isMod ? [...DEFAULT_MOD] : [...DEFAULT_HOME];
 }
 
 function saveLayout(userId, layout) {
@@ -47,8 +47,9 @@ export function mount(container) {
   const userId = user.user_id || "0";
   const perms = user.perms || new Set();
   const isAdmin = perms.has("admin");
+  const isMod = perms.has("moderator") || isAdmin;
 
-  let layout = getLayout(userId, isAdmin);
+  let layout = getLayout(userId, isAdmin, isMod);
   let editMode = false;
   let refreshTimer = null;
   let data = { home: null, health: null };
@@ -148,7 +149,7 @@ export function mount(container) {
     const resetBtn = panel.querySelector(".home-reset-btn");
     if (resetBtn) {
       resetBtn.addEventListener("click", () => {
-        layout = isAdmin ? [...DEFAULT_ADMIN] : [...DEFAULT_HOME];
+        layout = isAdmin ? [...DEFAULT_ADMIN] : isMod ? [...DEFAULT_MOD] : [...DEFAULT_HOME];
         saveLayout(userId, layout);
         render();
       });

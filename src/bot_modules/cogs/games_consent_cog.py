@@ -25,8 +25,8 @@ class ConsentView(discord.ui.View):
             (interaction.user.id,),
         )
         embed = discord.Embed(
-            title="✅ Consent Updated",
-            description="You've **opted in** — mentions and NSFW content enabled.",
+            title="✅ Preference Updated",
+            description="You've **opted in** — recorded as happy to participate fully.",
             color=SUCCESS_COLOR,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -43,8 +43,8 @@ class ConsentView(discord.ui.View):
             (interaction.user.id,),
         )
         embed = discord.Embed(
-            title="❌ Consent Updated",
-            description="You've **opted out** — no mentions, NSFW restricted.",
+            title="❌ Preference Updated",
+            description="You've **opted out** — recorded as preferring not to be included.",
             color=ERROR_COLOR,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -64,8 +64,9 @@ class ConsentCog(commands.Cog):
         embed = discord.Embed(
             title="🌸 Consent Settings",
             description=(
-                "**Opt in** — get @mentioned in games, access NSFW content, full participation.\n"
-                "**Opt out** — display name only, no mentions, NSFW restricted.\n\n"
+                "Record your participation preference for game nights.\n\n"
+                "**Opt in** — happy to be included, mentioned, and participate fully.\n"
+                "**Opt out** — prefer to observe or participate on your own terms.\n\n"
                 "You can change this at any time."
             ),
             color=GOLDEN_MEADOW_COLOR,

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import discord
@@ -124,10 +125,14 @@ class ComplimentView(discord.ui.View):
 
         await interaction.edit_original_response(view=self)
         if unique_mentions:
-            await interaction.followup.send(
-                content=" ".join(unique_mentions),
-                delete_after=15,
-            )
+            ping_msg = await interaction.followup.send(content=" ".join(unique_mentions), wait=True)
+            async def _delete_ping():
+                await asyncio.sleep(15)
+                try:
+                    await ping_msg.delete()
+                except discord.HTTPException:
+                    pass
+            asyncio.create_task(_delete_ping())
         await interaction.followup.send(embed=embed)
 
         log.info("Game %s ended — %d players", self.game_id, len(participants))
@@ -179,6 +184,16 @@ class ComplimentCog(commands.Cog):
     @property
     def db(self):
         return self.bot.games_db
+
+    async def cog_load(self) -> None:
+        rows = await self.db.fetchall(
+            "SELECT game_id, host_id FROM games_active_games WHERE game_type = 'compliment'"
+        )
+        for row in rows:
+            view = ComplimentView(row["game_id"], row["host_id"], self.db, self.bot)
+            self.bot.add_view(view)
+            self.bot.active_views[row["game_id"]] = view
+        log.info("compliment: re-registered %d active ComplimentView(s)", len(rows))
 
     @app_commands.command(name="compliment", description="Start Spin the Compliment — random anonymous pairing!")
     async def compliment(self, interaction: discord.Interaction):

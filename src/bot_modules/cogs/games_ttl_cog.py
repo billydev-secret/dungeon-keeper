@@ -446,6 +446,10 @@ class TTLCog(commands.Cog):
                         scores[uid_str] = {"fooled": 0, "correct_guesses": 0, "total_guessers": 0}
                     scores[uid_str]["correct_guesses"] += 1
 
+                def _flush_scores(p):
+                    p["scores"] = dict(scores)
+                await modify_payload(self.db, game_id, _flush_scores)
+
                 reveal_embed = view._build_reveal_embed(_sub_name, correct, fooled, guild)
                 for item in view.children:
                     item.disabled = True

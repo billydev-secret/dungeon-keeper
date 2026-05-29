@@ -129,8 +129,10 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
 
             await modify_payload(self.db, self.game_id, _mark_posted)
             await interaction.response.send_message("Your question has been posted anonymously!", ephemeral=True)
+            # Increment turn counter only after the question is actually posted
+            await self.ama_view.register_question_asked(self.channel)
         else:
-            # Screened — send to channel for host to approve/reject
+            # Screened — DM the host so the question stays hidden from the channel
             approve_view = ScreenedQuestionView(
                 game_id=self.game_id,
                 question_text=self.question.value,
@@ -141,23 +143,30 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 asker_id=interaction.user.id,
                 ama_view=self.ama_view,
             )
+            dm_sent = False
             try:
                 host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
                 if host_member:
                     hot_seat_name = (interaction.guild.get_member(self.hot_seat_id).display_name
                                      if interaction.guild.get_member(self.hot_seat_id) else "the hot seat")
-                    await interaction.guild.get_channel(self.channel.id).send(
-                        f"📨 New screened question for **{hot_seat_name}**:",
+                    await host_member.send(
+                        f"📨 New screened question for **{hot_seat_name}** (in {self.channel.mention}):",
                         view=approve_view,
                     )
+                    dm_sent = True
+            except discord.Forbidden:
+                pass
             except Exception:
                 pass
-            await interaction.response.send_message(
-                "✅ Your question has been submitted for review by the host.", ephemeral=True
-            )
-
-        # Increment turn counter (advances on questions asked, not answered)
-        await self.ama_view.register_question_asked(self.channel)
+            if dm_sent:
+                await interaction.response.send_message(
+                    "✅ Your question has been submitted for host review.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "⚠️ Couldn't reach the host (DMs may be disabled) — your question was not submitted.", ephemeral=True
+                )
+            # Turn counter for screened mode advances only when the host approves
 
 
 class ReplyModal(discord.ui.Modal, title="Your Reply"):
@@ -241,9 +250,12 @@ class ScreenedQuestionView(discord.ui.View):
     @discord.ui.button(label="✅ Approve", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        if interaction.user.id != self.ama_view.host_id:
+            await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
+            return
         embed = discord.Embed(
             title=f"{GAME_ICONS['ama']} QUESTION",
-            description=f'"{self.question_text}"',
+            description=f'"{discord.utils.escape_markdown(self.question_text)}"',
             color=GOLDEN_MEADOW_COLOR,
         )
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
@@ -266,9 +278,15 @@ class ScreenedQuestionView(discord.ui.View):
             questions[self.question_idx].setdefault("hot_seat_id", self.hot_seat_id)
         await update_game_payload(self.db, self.game_id, payload)
 
+        # Advance turn counter now that the question is actually posted
+        await self.ama_view.register_question_asked(self.channel)
+
     @discord.ui.button(label="❌ Reject", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        if interaction.user.id != self.ama_view.host_id:
+            await interaction.response.send_message("Only the host can reject questions.", ephemeral=True)
+            return
         self.stop()
         await interaction.response.edit_message(content="❌ Question rejected.", view=None)
 

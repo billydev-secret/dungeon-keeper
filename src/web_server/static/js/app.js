@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=20";
+const _moduleVer = "?v=21";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -10,7 +10,6 @@ const SECTIONS = [
     id: "home", label: "Dashboard", perms: [],
     items: [
       { id: "home", label: "Dashboard", module: "./panels/home.js" },
-      { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js" },
       { id: "help-quickref", label: "Quick Reference", module: "./panels/help.js" },
     ],
   },
@@ -72,6 +71,7 @@ const SECTIONS = [
   {
     id: "moderation", label: "Moderation", perms: ["moderator"],
     items: [
+      { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js" },
       { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js" },
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js" },
@@ -210,7 +210,7 @@ const SECTIONS = [
     ],
   },
   {
-    id: "dev", label: "Dev", perms: [],
+    id: "dev", label: "Dev", perms: ["admin"],
     items: [
       { id: "help-owner",    label: "Developer Tools", module: "./panels/help.js" },
       { id: "live-log",      label: "Live Log",        module: "./panels/live-log.js" },
@@ -565,7 +565,7 @@ function renderUserBar(me) {
   const initial = (me.username || "?").charAt(0).toUpperCase();
   const isGuest = me.user_id === "0";
   const status = isGuest ? "offline" : (me.status || "online");
-  const statusLabel = isGuest ? "guest" : `${(me.perms || []).includes("admin") ? "Keeper" : "Member"} · ${status}`;
+  const statusLabel = isGuest ? "guest" : status;
   const avatarInner = (!isGuest && me.avatar_url)
     ? `<img class="user-avatar-img" src="${escText(me.avatar_url)}" alt="">`
     : escText(initial);

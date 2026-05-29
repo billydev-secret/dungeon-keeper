@@ -427,7 +427,7 @@ class NHIECog(commands.Cog):
             # Check for winner (1 or fewer players remaining)
             if max_lives > 0:
                 alive = [uid for uid, hp in current_lives.items() if hp > 0 and uid not in current_eliminated]
-                if len(alive) <= 1:
+                if current_lives and len(alive) <= 1:
                     if alive:
                         winner_name = resolve_name(guild, alive[0])
                         try:

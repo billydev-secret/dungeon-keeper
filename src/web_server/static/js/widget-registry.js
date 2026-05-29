@@ -8,7 +8,7 @@ const WIDGETS = [
   { id: "home-presence",    label: "Presence",                category: "Home", perms: [], source: "home", wide: false, nav: "health-dau-mau" },
   { id: "home-xp",          label: "XP Today",                category: "Home", perms: [], source: "home", wide: false, nav: "xp-leaderboard" },
   { id: "home-joins",       label: "Recent Joins",            category: "Home", perms: [], source: "home", wide: false, nav: "join-times" },
-  { id: "home-moderation",  label: "Moderation",              category: "Home", perms: [], source: "home", wide: false, nav: "mod-jails" },
+  { id: "home-moderation",  label: "Moderation",              category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "mod-jails" },
   { id: "home-voice",       label: "In Voice Now",            category: "Home", perms: [], source: "home", wide: false, nav: "voice-activity" },
   { id: "home-channels",    label: "Hottest Channels (1h)",   category: "Home", perms: [], source: "home", wide: false, nav: "channel-comparison" },
   { id: "home-users",       label: "Most Active Users (1h)",  category: "Home", perms: [], source: "home", wide: false, nav: "activity" },
@@ -16,7 +16,7 @@ const WIDGETS = [
   { id: "home-starters",    label: "Conversation Starters",   category: "Home", perms: [], source: "home", wide: false, nav: "interaction-graph" },
   { id: "home-butterflies", label: "Social Butterflies",      category: "Home", perms: [], source: "home", wide: false, nav: "connection-graph" },
   { id: "home-loyalists",   label: "Channel Loyalists",       category: "Home", perms: [], source: "home", wide: false, nav: "health-channel-health" },
-  { id: "home-mod-actions", label: "Recent Mod Actions",      category: "Home", perms: [], source: "home", wide: true,  nav: "mod-audit" },
+  { id: "home-mod-actions", label: "Recent Mod Actions",      category: "Home", perms: ["admin"], source: "home", wide: true,  nav: "mod-audit" },
 
   // ── Health tiles ─────────────────────────────────────────────────
   { id: "health-composite",        label: "Community Health",    category: "Health", perms: ["admin"], source: "health", tileKey: "composite",        wide: true,  nav: "health-composite-score", needsNames: false },
@@ -42,15 +42,30 @@ export const WIDGET_MAP = Object.fromEntries(WIDGETS.map(w => [w.id, w]));
 export const ALL_WIDGETS = WIDGETS;
 
 // Default layout for first-time users
+// Default for regular users — no moderation or admin tiles
 export const DEFAULT_HOME = [
+  "home-messages", "home-nsfw", "home-presence", "home-xp",
+  "home-joins", "home-voice", "home-channels",
+  "home-users", "home-returned", "home-starters", "home-butterflies",
+  "home-loyalists",
+];
+
+// Default for moderators — adds moderation snapshot
+export const DEFAULT_MOD = [
+  "home-messages", "home-nsfw", "home-presence", "home-xp",
+  "home-joins", "home-moderation", "home-voice", "home-channels",
+  "home-users", "home-returned", "home-starters", "home-butterflies",
+  "home-loyalists",
+];
+
+// Admin default: health score + full mod tiles
+export const DEFAULT_ADMIN = [
+  "health-composite",
   "home-messages", "home-nsfw", "home-presence", "home-xp",
   "home-joins", "home-moderation", "home-voice", "home-channels",
   "home-users", "home-returned", "home-starters", "home-butterflies",
   "home-loyalists", "home-mod-actions",
 ];
-
-// Admin default prepends composite health score
-export const DEFAULT_ADMIN = ["health-composite", ...DEFAULT_HOME];
 
 // Dynamic import loaders keyed by widget id
 const TILE_LOADERS = {

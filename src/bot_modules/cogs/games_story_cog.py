@@ -419,7 +419,7 @@ class StoryCog(commands.Cog):
             payload["sentences"] = sentences
             await update_game_payload(self.db, game_id, payload)
 
-            await channel.send(f"> *{new_sentence}*")
+            await channel.send(f"> *{discord.utils.escape_markdown(new_sentence)}*", allowed_mentions=discord.AllowedMentions.none())
             sentence_count += 1
             turn_index += 1
 
@@ -447,6 +447,8 @@ class StoryCog(commands.Cog):
             color=GOLDEN_MEADOW_COLOR,
         )
         story_text = " ".join(esc(s["text"]) for s in sentences)
+        if len(story_text) > 4090:
+            story_text = story_text[:4087] + "…"
         embed.description = f"*{story_text}*"
         embed.add_field(
             name="A Golden Meadow Original",

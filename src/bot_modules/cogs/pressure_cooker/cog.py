@@ -591,8 +591,12 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
                     self._handle_rematch,
                     mode="stakes" if game.stakes_text else "nick",
                 )
+                assert game.winner_id is not None and game.loser_id is not None
+                winner_m = guild.get_member(game.winner_id)
+                loser_m = guild.get_member(game.loser_id)
+                ping_content = " ".join(m.mention for m in (winner_m, loser_m) if m)
                 result_msg = await interaction.followup.send(
-                    content=f"{guild.get_member(game.winner_id).mention} {guild.get_member(game.loser_id).mention}",  # type: ignore[union-attr]
+                    content=ping_content,
                     embed=result_embed,
                     view=result_view,
                 )
@@ -615,6 +619,12 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
         await interaction.response.send_modal(NicknameModal(game_id, self._handle_nick_submit))
 
     async def _handle_nick_submit(
+        self, interaction: discord.Interaction, game_id: int, raw_nick: str
+    ) -> None:
+        async with self._get_lock(game_id):
+            await self._handle_nick_submit_locked(interaction, game_id, raw_nick)
+
+    async def _handle_nick_submit_locked(
         self, interaction: discord.Interaction, game_id: int, raw_nick: str
     ) -> None:
         game = await pdb.get_game(self.db, game_id)
@@ -663,7 +673,7 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
             return
 
         challenger_member = guild.get_member(game.challenger_id)  # type: ignore[arg-type]
-        perm_error = await self._check_bot_can_nick(guild, challenger_member, loser)  # type: ignore[arg-type]
+        perm_error = await self._check_bot_can_nick(guild, challenger_member or loser, loser)  # type: ignore[arg-type]
         if perm_error:
             await interaction.response.send_message(perm_error, ephemeral=True)
             return

@@ -33,6 +33,7 @@ GAME_ICONS = {
     'rushmore': '🗿',
     'clapback': '⚔️',
     'legitlibs': '📝',
+    'pressure': '♨️',
 }
 
 GAME_NAMES = {
@@ -53,6 +54,7 @@ GAME_NAMES = {
     'rushmore': 'Mt. Rushmore Draft',
     'clapback': 'Clapback',
     'legitlibs': 'LegitLibs',
+    'pressure': 'Pressure Cooker',
 }
 
 HOW_TO_PLAY = {
@@ -77,10 +79,10 @@ HOW_TO_PLAY = {
     ),
     'compliment': (
         "💛 **Spin the Compliment**\n"
-        "Random anonymous pairings — everyone gives one person a compliment.\n\n"
+        "Random pairings — everyone gives one person a compliment.\n\n"
         "1. Click **Add Me!** to join the pool\n"
         "2. The host clicks **Close & Generate** when the pool is ready\n"
-        "3. Each player is paired with someone else (no self-pairings)\n"
+        "3. Pairings are revealed publicly — each player sees who they're giving to\n"
         "4. Reply in the channel with a compliment for your assigned partner\n\n"
         "💡 Need at least 2 players to generate pairings."
     ),
@@ -214,5 +216,19 @@ HOW_TO_PLAY = {
         "4. At the end, the full cast is shown so you know who wrote what\n\n"
         "**Heat tiers:** 🌶️ Flirty · 🌶️🌶️ Spicy · 🌶️🌶️🌶️ Filthy · 💀 Unhinged\n\n"
         "💡 You can resubmit to overwrite your fills before the timer runs out."
+    ),
+    'pressure': (
+        "♨️ **Pressure Cooker**\n"
+        "A high-stakes nickname duel — pump the gauge and hope it doesn't blow.\n\n"
+        "1. Use `/pressure challenge @user` to issue a challenge (optional: add custom stakes text)\n"
+        "2. The target has 60 seconds to **Accept** or **Decline**\n"
+        "3. Players take turns clicking **Pump** — each pump adds a random amount to the gauge\n"
+        "4. First player to push the gauge past 100 **BUSTS** and loses\n"
+        "5. The winner sets a nickname for the loser (default: 24 hours)\n\n"
+        "⚙️ **Other commands:**\n"
+        "• `/pressure cancel` — cancel your pending challenge\n"
+        "• `/pressure stats` — view your win/loss record\n"
+        "• `/pressure revert` — request early nickname restoration (if enabled by mods)\n"
+        "• `/pressure config` — configure cooldowns, sentence length, etc. (mods only)"
     ),
 }

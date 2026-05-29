@@ -244,7 +244,7 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
             saved = False
             def _store(p):
                 nonlocal saved
-                if p.get("state") in ("filling", "revealing"):
+                if p.get("state") == "filling":
                     p.setdefault("submissions", {})[str(uid)] = {"fills": fills, "partial": partial}
                     saved = True
             await modify_payload(db, game_id, _store)
@@ -319,6 +319,18 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
                     embed = build_reveal_embed(template["title"], tier, filled, i, total)
                     await channel.send(embed=embed)
                     await asyncio.sleep(3)
+
+                # Cast reveal — show who wrote which submission
+                cast_lines = [
+                    f"**#{i}** — {resolve_name(guild, int(uid))}"
+                    for i, uid in enumerate(uid_list, 1)
+                ]
+                cast_embed = discord.Embed(
+                    title=f"{_GAME_ICONS_LL} WHO WROTE WHAT",
+                    description="\n".join(cast_lines),
+                    color=0x99AAB5,
+                )
+                await channel.send(embed=cast_embed)
 
             await mark_template_used(db, guild.id, template["template_id"])
         finally:
