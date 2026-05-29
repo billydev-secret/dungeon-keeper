@@ -59,14 +59,22 @@ with **no importers and no tests**:
 
 `pytest --co` collects 1631 tests with no import errors after deletion.
 
+## Done — follow-up cleanup
+
+1. **3 test-covered dead command modules deleted** (`xp_commands`, `interaction_commands`,
+   `mod_commands`) along with their `tests/test_commands.py` groups; the `role_grant` tests were kept.
+2. **8 orphaned command modules deleted** (no importers, no tests): `config_commands`,
+   `gender_commands`, `inactivity_prune_commands`, `welcome_commands`, `wellness_admin_commands`,
+   `wellness_commands`, `watch_commands`, `privacy_commands`. The live `watch_cog`/`privacy_cog`/
+   `wellness_cog` define their commands inline; the web config/gender routes call the *services*
+   directly, not these modules.
+   - Kept: `drama_commands` (web reports), `jail_commands`, `role_grant_commands`,
+     `voice_master_commands` — all have live importers.
+   - `gender_service` / `welcome_service` are **not** orphaned (used by live web routes + `events_cog`).
+
 ## Still open
 
-1. **3 production-dead but *test-covered* command modules:** `xp_commands`, `interaction_commands`,
-   `mod_commands`. Not loaded in production (the live equivalents are `xp_cog` / `mod_cog`;
-   interaction is web-only), but `tests/test_commands.py` still imports and exercises their
-   `register_*` functions. Deleting them requires removing those tests too — held for a decision
-   (the "has tests" signal differs from the zero-coverage files already deleted).
-2. **Now-orphaned helper modules** left behind by the deleted cogs (e.g. `gender_commands.py`,
-   `welcome_commands.py`, `wellness_admin_commands.py`, `inactivity_prune_commands.py`,
-   `services/foolsday_service.py`). Likely dead now, but each needs a fresh importer check (some may
-   still be used by the web) before removal — a follow-up cleanup pass.
+- **`services/foolsday_service.py`** — production-unused (only the deleted `foolsday_cog` used it),
+  but it has a dedicated test (`tests/test_foolsday_service.py`) and implements a **seasonal**
+  (April Fools) shuffle algorithm. Left in place — confirm the feature is fully retired before
+  deleting it + its test.
