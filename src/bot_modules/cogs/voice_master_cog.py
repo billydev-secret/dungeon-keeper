@@ -61,10 +61,8 @@ from bot_modules.services.voice_master_service import (
     try_dm,
 )
 from bot_modules.services.voice_master_service import (
-    add_name_blocklist,
     delete_profile,
     remove_member_from_all_lists,
-    remove_name_blocklist,
     trusted_prune_loop,
 )
 
@@ -106,11 +104,6 @@ class VoiceMasterCog(commands.Cog):
         name="voice-admin",
         description="Voice Master admin configuration.",
         default_permissions=discord.Permissions(administrator=True),
-    )
-    voice_admin_blocklist = app_commands.Group(
-        name="name-blocklist",
-        description="Manage the per-server channel-name blocklist.",
-        parent=voice_admin,
     )
 
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
@@ -1198,68 +1191,6 @@ class VoiceMasterCog(commands.Cog):
             return
         await _ephemeral(interaction, f"Owner: {owner.mention}")
 
-    # ── Admin: set channels ───────────────────────────────────────────
-
-    @voice_admin.command(name="set-hub", description="Set the click-to-create Hub voice channel.")
-    @app_commands.describe(channel="A voice channel members will join to spin up their own room.")
-    async def set_hub(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.VoiceChannel,
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn, self.ctx.guild_id, "voice_master_hub_channel_id", str(channel.id)
-            )
-        await interaction.response.send_message(
-            f"Hub set to {channel.mention}.", ephemeral=True
-        )
-
-    @voice_admin.command(name="set-category", description="Set the category where created channels live.")
-    @app_commands.describe(category="The target category for new voice channels.")
-    async def set_category(
-        self,
-        interaction: discord.Interaction,
-        category: discord.CategoryChannel,
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn, self.ctx.guild_id, "voice_master_category_id", str(category.id)
-            )
-        await interaction.response.send_message(
-            f"Target category set to **{category.name}**.", ephemeral=True
-        )
-
-    @voice_admin.command(
-        name="set-control-channel",
-        description="Set the text channel where the panel and join requests go.",
-    )
-    @app_commands.describe(channel="A text channel for the persistent control panel.")
-    async def set_control_channel(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn,
-                self.ctx.guild_id,
-                "voice_master_control_channel_id",
-                str(channel.id),
-            )
-        await interaction.response.send_message(
-            f"Control channel set to {channel.mention}.", ephemeral=True
-        )
-
     @voice_admin.command(
         name="post-panel",
         description="Post (or repost) the persistent owner-control panel in the configured control channel.",
@@ -1293,68 +1224,6 @@ class VoiceMasterCog(commands.Cog):
             f"Panel posted: {msg.jump_url}", ephemeral=True
         )
 
-    # ── Admin: numeric / template knobs (one command, key-driven) ─────
-
-    @voice_admin.command(
-        name="set-default-name",
-        description="Set the default channel name template ({display_name}, {username}).",
-    )
-    async def set_default_name(
-        self, interaction: discord.Interaction, template: str
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn,
-                self.ctx.guild_id,
-                "voice_master_default_name_template",
-                template or DEFAULT_NAME_TEMPLATE,
-            )
-        await interaction.response.send_message(
-            f"Default name template set to: `{template or DEFAULT_NAME_TEMPLATE}`",
-            ephemeral=True,
-        )
-
-    @voice_admin.command(
-        name="set-int",
-        description="Set a numeric Voice Master config value.",
-    )
-    @app_commands.describe(
-        key="Which numeric setting to change.",
-        value="The new value (non-negative integer).",
-    )
-    @app_commands.choices(
-        key=[
-            app_commands.Choice(name="default-user-limit", value="voice_master_default_user_limit"),
-            app_commands.Choice(name="default-bitrate", value="voice_master_default_bitrate"),
-            app_commands.Choice(name="create-cooldown-s", value="voice_master_create_cooldown_s"),
-            app_commands.Choice(name="max-per-member", value="voice_master_max_per_member"),
-            app_commands.Choice(name="trust-cap", value="voice_master_trust_cap"),
-            app_commands.Choice(name="block-cap", value="voice_master_block_cap"),
-            app_commands.Choice(name="owner-grace-s", value="voice_master_owner_grace_s"),
-            app_commands.Choice(name="empty-grace-s", value="voice_master_empty_grace_s"),
-            app_commands.Choice(name="trusted-prune-days", value="voice_master_trusted_prune_days"),
-        ]
-    )
-    async def set_int(
-        self,
-        interaction: discord.Interaction,
-        key: app_commands.Choice[str],
-        value: app_commands.Range[int, 0, 100000],
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn, self.ctx.guild_id, key.value, str(value)
-            )
-        await interaction.response.send_message(
-            f"`{key.name}` set to **{value}**.", ephemeral=True
-        )
-
     @voice_admin.command(
         name="post-inline-panel",
         description="Toggle whether the panel is auto-posted in each new channel's text chat.",
@@ -1375,135 +1244,6 @@ class VoiceMasterCog(commands.Cog):
         await interaction.response.send_message(
             f"Inline panel auto-post: **{'enabled' if enabled else 'disabled'}**.",
             ephemeral=True,
-        )
-
-    @voice_admin.command(
-        name="disable-saves",
-        description="Force every channel to use server defaults (ignore per-member profiles).",
-    )
-    async def disable_saves(
-        self, interaction: discord.Interaction, enabled: bool
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn,
-                self.ctx.guild_id,
-                "voice_master_disable_saves",
-                "1" if enabled else "0",
-            )
-        await interaction.response.send_message(
-            f"Per-member profile saves: **{'disabled' if enabled else 'enabled'}**.",
-            ephemeral=True,
-        )
-
-    @voice_admin.command(
-        name="saveable-fields",
-        description="Comma-separated list of fields owners may save (name,limit,locked,hidden,trusted,blocked).",
-    )
-    async def saveable_fields(
-        self, interaction: discord.Interaction, fields: str
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        valid = {"name", "limit", "locked", "hidden", "trusted", "blocked"}
-        chosen = {s.strip().lower() for s in fields.split(",") if s.strip()}
-        if not chosen.issubset(valid):
-            bad = ", ".join(sorted(chosen - valid))
-            await interaction.response.send_message(
-                f"Unknown field(s): {bad}. Valid: {', '.join(sorted(valid))}.",
-                ephemeral=True,
-            )
-            return
-        with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn,
-                self.ctx.guild_id,
-                "voice_master_saveable_fields",
-                ",".join(sorted(chosen)),
-            )
-        await interaction.response.send_message(
-            f"Saveable fields: `{','.join(sorted(chosen))}`.", ephemeral=True
-        )
-
-    # ── Admin: name blocklist ─────────────────────────────────────────
-
-    @voice_admin_blocklist.command(name="add", description="Add a substring to the channel-name blocklist.")
-    async def name_blocklist_add(
-        self, interaction: discord.Interaction, pattern: str
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        cleaned = pattern.strip().lower()
-        if not cleaned:
-            await interaction.response.send_message("Pattern can't be empty.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            added = add_name_blocklist(
-                conn, self.ctx.guild_id, cleaned, interaction.user.id
-            )
-            write_audit(
-                conn,
-                guild_id=self.ctx.guild_id,
-                action="vm_name_blocklist_add",
-                actor_id=interaction.user.id,
-                extra={"pattern": cleaned},
-            )
-        if added:
-            await interaction.response.send_message(
-                f"Added `{cleaned}` to the name blocklist.", ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                f"`{cleaned}` was already on the blocklist.", ephemeral=True
-            )
-
-    @voice_admin_blocklist.command(name="remove", description="Remove a substring from the blocklist.")
-    async def name_blocklist_remove(
-        self, interaction: discord.Interaction, pattern: str
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        cleaned = pattern.strip().lower()
-        with self.ctx.open_db() as conn:
-            removed = remove_name_blocklist(conn, self.ctx.guild_id, cleaned)
-            if removed:
-                write_audit(
-                    conn,
-                    guild_id=self.ctx.guild_id,
-                    action="vm_name_blocklist_remove",
-                    actor_id=interaction.user.id,
-                    extra={"pattern": cleaned},
-                )
-        if removed:
-            await interaction.response.send_message(
-                f"Removed `{cleaned}` from the blocklist.", ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                f"`{cleaned}` wasn't on the blocklist.", ephemeral=True
-            )
-
-    @voice_admin_blocklist.command(name="list", description="List all blocked name patterns.")
-    async def name_blocklist_list(self, interaction: discord.Interaction) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            patterns = list_name_blocklist(conn, self.ctx.guild_id)
-        if not patterns:
-            await interaction.response.send_message(
-                "No patterns on the name blocklist.", ephemeral=True
-            )
-            return
-        rendered = "\n".join(f"• `{p}`" for p in patterns)
-        await interaction.response.send_message(
-            f"Name blocklist ({len(patterns)}):\n{rendered}", ephemeral=True
         )
 
     # ── Admin: force overrides (all mod-log mirrored) ─────────────────
@@ -1675,110 +1415,6 @@ class VoiceMasterCog(commands.Cog):
             action="force-clear-profile",
             summary=f"Cleared saved profile for {member.mention}.",
         )
-
-    @voice_admin.command(
-        name="view-profile",
-        description="Inspect a member's saved Voice Master profile (logged).",
-    )
-    async def view_profile(
-        self, interaction: discord.Interaction, member: discord.Member
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        gid = self.ctx.guild_id
-        with self.ctx.open_db() as conn:
-            profile = load_profile(conn, gid, member.id) or default_profile()
-            trusted = list_trusted(conn, gid, member.id)
-            blocked = list_blocked(conn, gid, member.id)
-            write_audit(
-                conn,
-                guild_id=gid,
-                action="vm_admin_view_profile",
-                actor_id=interaction.user.id,
-                target_id=member.id,
-                extra={},
-            )
-        embed = discord.Embed(
-            title=f"Voice Master profile · {member.display_name}",
-            color=discord.Color.orange(),
-        )
-        embed.add_field(name="Saved name", value=profile.saved_name or "*(default)*", inline=False)
-        embed.add_field(name="User limit", value=str(profile.saved_limit) if profile.saved_limit else "no cap", inline=True)
-        embed.add_field(name="Locked", value="yes" if profile.locked else "no", inline=True)
-        embed.add_field(name="Hidden", value="yes" if profile.hidden else "no", inline=True)
-        embed.add_field(
-            name=f"Trusted ({len(trusted)})",
-            value="\n".join(f"<@{u}>" for u in trusted) or "*(empty)*",
-            inline=False,
-        )
-        embed.add_field(
-            name=f"Blocked ({len(blocked)})",
-            value="\n".join(f"<@{u}>" for u in blocked) or "*(empty)*",
-            inline=False,
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-        await self._post_admin_audit_mirror(
-            interaction,
-            action="view-profile",
-            summary=f"Viewed saved profile of {member.mention}.",
-        )
-
-    # ── Admin: show ───────────────────────────────────────────────────
-
-    @voice_admin.command(name="show", description="Show the current Voice Master configuration.")
-    async def show(self, interaction: discord.Interaction) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, self.ctx.guild_id)
-
-        guild = interaction.guild
-        hub = guild.get_channel(cfg.hub_channel_id) if guild and cfg.hub_channel_id else None
-        cat = guild.get_channel(cfg.category_id) if guild and cfg.category_id else None
-        ctrl = guild.get_channel(cfg.control_channel_id) if guild and cfg.control_channel_id else None
-
-        def _ref(c: object, fallback_id: int) -> str:
-            if c is None:
-                return f"`{fallback_id or 'unset'}`"
-            mention = getattr(c, "mention", None)
-            if mention:
-                return mention
-            return f"**{getattr(c, 'name', fallback_id)}**"
-
-        embed = discord.Embed(
-            title="Voice Master configuration",
-            color=discord.Color.blurple(),
-        )
-        embed.add_field(name="Hub", value=_ref(hub, cfg.hub_channel_id), inline=True)
-        embed.add_field(name="Category", value=_ref(cat, cfg.category_id), inline=True)
-        embed.add_field(
-            name="Control channel", value=_ref(ctrl, cfg.control_channel_id), inline=True
-        )
-        embed.add_field(name="Name template", value=f"`{cfg.default_name_template}`", inline=False)
-        embed.add_field(name="Default user limit", value=str(cfg.default_user_limit), inline=True)
-        embed.add_field(name="Default bitrate", value=str(cfg.default_bitrate or "guild default"), inline=True)
-        embed.add_field(name="Create cooldown (s)", value=str(cfg.create_cooldown_s), inline=True)
-        embed.add_field(name="Max per member", value=str(cfg.max_per_member), inline=True)
-        embed.add_field(name="Trust cap", value=str(cfg.trust_cap), inline=True)
-        embed.add_field(name="Block cap", value=str(cfg.block_cap), inline=True)
-        embed.add_field(name="Owner grace (s)", value=str(cfg.owner_grace_s), inline=True)
-        embed.add_field(name="Empty grace (s)", value=str(cfg.empty_grace_s), inline=True)
-        embed.add_field(
-            name="Trusted prune (days)",
-            value=str(cfg.trusted_prune_days) if cfg.trusted_prune_days else "never",
-            inline=True,
-        )
-        embed.add_field(name="Disable saves", value="yes" if cfg.disable_saves else "no", inline=True)
-        embed.add_field(name="Inline panel", value="yes" if cfg.post_inline_panel else "no", inline=True)
-        embed.add_field(
-            name="Saveable fields",
-            value=", ".join(sorted(cfg.saveable_fields)),
-            inline=False,
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: Bot) -> None:
