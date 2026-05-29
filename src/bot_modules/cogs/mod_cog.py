@@ -280,27 +280,9 @@ def _build_help_pages(
                 "Reports",
                 _fmt(
                     [
-                        ("/report promotion_review", "Members past level 5 who still lack NSFW access."),
                         ("/quality_leave add member:@user days:30", "Put a member on leave (pauses quality scoring)."),
                         ("/quality_leave remove member:@user", "End a member's leave of absence."),
                         ("/quality_leave list", "List members currently on leave."),
-                    ]
-                ),
-            )
-        )
-
-        pages.append(
-            _page(
-                "Activity & Graphs",
-                "Charts and network visualizations. First-time use: run `/interaction_scan` to backfill history.\n\n"
-                + _fmt(
-                    [
-                        ("/activity", "Bar chart of message volume over time. Scope to a member, channel, or whole server."),
-                        ("/connection_web", "Force-directed graph of who replies to / mentions whom."),
-                        ("/interaction_heatmap", "Adjacency-matrix heatmap — useful for spotting clusters."),
-                        ("/invite_web", "Network graph of who invited whom."),
-                        ("/interaction_scan", "Backfill the interaction graph from message history."),
-                        ("/member_events_scan", "Backfill join/leave history (needed for invite-tree analysis)."),
                     ]
                 ),
             )

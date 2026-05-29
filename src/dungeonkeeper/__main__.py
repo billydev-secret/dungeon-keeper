@@ -155,8 +155,6 @@ def main() -> None:
     bot.active_views: dict = {}  # type: ignore[attr-defined]
     bot.extension_names = [
         "bot_modules.cogs.events_cog",
-        "bot_modules.cogs.activity_cog",
-        "bot_modules.cogs.config_cog",
         "bot_modules.cogs.role_grant_cog",
         "bot_modules.cogs.invite_cog",
         "bot_modules.cogs.support_cog",
