@@ -15,17 +15,17 @@ Discord moderation, community, voice, and analytics bot.
 ### XP & analytics
 - **XP system** — earn XP from text, voice, replies, and image posts; configurable level milestones grant roles; channel exclusions; history backfill; level-up + level-5 announcements.
 - **Leaderboards** — `/xp_leaderboards` by source and time window with your own rank.
-- **Activity graphs** — `/activity` for an inline message/XP-over-time chart. Drop-off, session burst, and burst ranking analytics live in the web dashboard.
-- **Reports** — `/report promotion_review`, `/quality_leave add/remove/list` for tracking members on leave.
+- **Activity graphs** — message/XP-over-time charts, drop-off, session burst, and burst-ranking analytics live in the web dashboard.
+- **Reports** — member/role/engagement reports live in the web dashboard; `/quality_leave add/remove/list` tracks members on leave of absence.
 - **Optional web dashboard** — opt-in LAN dashboard (`DASHBOARD_ENABLED=1`) with cached metrics: DAU/MAU, heatmap, channel health, Gini, social graph, sentiment, newcomer funnel, cohort retention, churn risk, mod workload, incidents, NSFW gender distribution, and more. Cache is pre-warmed every hour and refreshed every 15 min.
 
 ### Voice
-- **Voice Master** — click a hub channel to spawn your own voice channel; lock/unlock, hide/unhide, rename, user-limit, invite, kick, transfer, claim, owner. Persistent per-user profiles with trust list, block list, knock-to-join, and admin hub/category/template/name-blocklist configuration.
+- **Voice Master** — click a hub channel to spawn your own voice channel; lock/unlock, hide/unhide, rename, user-limit, invite, kick, transfer, claim, owner. Persistent per-user profiles with trust list, block list, and knock-to-join. Hub/category/template/name-blocklist configuration is managed from the web dashboard.
 - **Music** — YouTube and Spotify playback via Lavalink: `/play`, `/skip`, `/shuffle`, `/loop`, `/queue`, `/pause`, `/resume`, `/stop`, `/nowplaying`, `/disconnect`. Mod-only `/247` keeps the bot in a voice channel indefinitely.
 
 ### Onboarding & community
 - **Role grants** — `/grant role:<key> member:<@user>` with per-role permission allowlist (e.g. greeters can grant Denizen, mods can grant NSFW/Veteran).
-- **Welcome / leave** — configurable templates with `/welcome_preview` and `/leave_preview`.
+- **Welcome / leave** — configurable templates, edited and previewed from the web dashboard.
 - **Booster role buttons** — persistent click-to-claim buttons that survive restarts.
 - **Birthday** — `/birthday set` records a member's birthday.
 - **Confessions** — anonymous `/confess` modal posting to a configured channel.
@@ -93,7 +93,7 @@ Optional:
 ## Configuration
 
 Runtime config is stored in `dungeonkeeper.db` (`config` and `config_ids` tables).
-Most settings are configured through slash commands after the bot is running, primarily via `/config`.
+Most settings are configured through the web dashboard after the bot is running (`DASHBOARD_ENABLED=1`).
 
 `config` keys:
 | Key | Description |
@@ -122,7 +122,6 @@ Most settings are configured through slash commands after the bot is running, pr
 - `/invite` — Get a link to invite this bot
 - `/support` — Get a link to the support Discord
 - `/xp_leaderboards [timescale]` — Top XP earners by source and your standing
-- `/activity [resolution] [member] [channel]` — Bar chart of message volume over time
 - `/todo <task>` — Add a task to the shared server todo list
 - `/birthday set` — Record your birthday
 - `/confess` — Post an anonymous confession (modal)
@@ -152,13 +151,9 @@ Most settings are configured through slash commands after the bot is running, pr
 - `/voice profile show/reset` — Inspect or reset your saved profile
 
 **Voice Master Admin** (mod)
-- `/voice-admin set-hub`, `/voice-admin set-category`, `/voice-admin set-control-channel`
-- `/voice-admin post-panel`, `/voice-admin post-inline-panel`
-- `/voice-admin set-default-name`, `/voice-admin set-int`
-- `/voice-admin disable-saves`, `/voice-admin saveable-fields`
-- `/voice-admin name-blocklist add/remove/list`
-- `/voice-admin force-delete`, `/voice-admin force-transfer`, `/voice-admin force-clear-profile`, `/voice-admin view-profile`
-- `/voice-admin show` — Show full Voice Master configuration
+- `/voice-admin post-panel`, `/voice-admin post-inline-panel` — Post / toggle the owner-control panel
+- `/voice-admin force-delete`, `/voice-admin force-transfer`, `/voice-admin force-clear-profile` — Admin overrides on member channels
+- *Hub/category/control-channel/template/name-blocklist settings and profile inspection are managed from the web dashboard (`/voice-master/config`, `/voice-master/name-blocklist`, `/voice-master/profiles`).*
 
 **Music**
 - `/play <query>` — Play YouTube/Spotify URL or search terms
@@ -172,17 +167,11 @@ Most settings are configured through slash commands after the bot is running, pr
 
 **XP**
 - `/xp_give @member` — Manually award 20 XP (mod or allowlisted users)
-- `/xp_excluded_channels` — List channels where XP is disabled (mod)
-- `/xp_backfill_history [days]` — Scan message history to fill XP gaps (mod)
-- `/xp_level_review [level]` — Histogram of time-to-reach for a given level (mod)
+- *XP-excluded-channel management, history backfill, and level-review live in the web dashboard.*
 
 **Reports** (mod)
-- `/report promotion_review` — Promotion candidate analysis
 - `/quality_leave add/remove/list` — Manage members on leave of absence
-
-**Activity & Graphs** (mod)
-- `/activity [resolution] [member] [channel] [mode]` — Bar chart of messages or XP over time
-- *Drop-off, session burst, burst ranking, and most other engagement reports live in the web dashboard.*
+- *Member/role/engagement reports (promotion review, role growth, inactivity, activity graphs, drop-off, session/burst, interaction graphs, etc.) live in the web dashboard.*
 
 **Watch List** (mod)
 - `/watch add @user` / `/watch remove @user` / `/watch list`
@@ -203,9 +192,8 @@ Most settings are configured through slash commands after the bot is running, pr
 - `/starboard channel/threshold/emoji/toggle/exclude/unexclude/status`
 
 **Configuration** (mod)
-- `/config` — Open the unified settings panel for any feature
 - `/setup` — First-time bot setup: provision channels + walk through role/category config
-- `/welcome_preview` / `/leave_preview` — Preview welcome/leave templates
+- *All other settings (welcome/leave, role grants, XP logging, inactivity prune, spoiler guard, booster roles, AI, channels) are managed from the web dashboard.*
 
 **Utility** (mod)
 - `/purge [count] [after]` — Delete messages by count and/or cutoff time

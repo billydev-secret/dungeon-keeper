@@ -64,7 +64,6 @@ _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "Whisper": ("🤫", discord.Color.from_str("#E67E22")),
     "Moderation Actions": ("🛡️", discord.Color.from_str("#ED4245")),
     "Reports": ("📊", discord.Color.from_str("#EB459E")),
-    "Activity & Graphs": ("📈", discord.Color.from_str("#5DADE2")),
     "Watch List": ("🔍", discord.Color.from_str("#3498DB")),
     "Server Tools": ("⚙️", discord.Color.from_str("#95A5A6")),
 }
