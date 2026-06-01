@@ -168,7 +168,7 @@ def _auto_detect_auth(guild_id: int) -> AuthBackend:
 
 
 def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
-    app = FastAPI(title="TGM Dashboard", docs_url="/api/docs", redoc_url=None)
+    app = FastAPI(title="Dungeon Keeper Dashboard", docs_url="/api/docs", redoc_url=None)
     app.state.ctx = ctx
     app.state.auth = auth or _auto_detect_auth(ctx.guild_id)
 

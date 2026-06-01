@@ -68,6 +68,10 @@ def _make_ctx(**kwargs) -> MagicMock:
         "kink": {"label": "Kink", "role_id": 0, "log_channel_id": 0, "announce_channel_id": 0, "grant_message": "", "required_role_id": 0},
         "goldengirl": {"label": "Golden Girl", "role_id": 0, "log_channel_id": 0, "announce_channel_id": 0, "grant_message": "", "required_role_id": 0},
     })
+    # Grant definitions are read per-guild via ctx.guild_config(gid).grant_roles.
+    _gc = MagicMock()
+    _gc.grant_roles = ctx.grant_roles
+    ctx.guild_config = MagicMock(return_value=_gc)
     ctx.can_use_grant_role = MagicMock(return_value=kwargs.get("can_grant_any_role", False))
     ctx.greeter_role_id = kwargs.get("greeter_role_id", 0)
     ctx.spoiler_required_channels = kwargs.get("spoiler_required_channels", set())

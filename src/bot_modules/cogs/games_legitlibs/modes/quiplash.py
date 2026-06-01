@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import asyncio
 import logging
-import random
 from datetime import datetime, timezone
 
 import discord
@@ -14,6 +15,17 @@ from bot_modules.games.constants import GAME_ICONS
 from ..data import (
     pick_template, mark_template_used, get_prompts, get_channel_max_tier,
     HEAT_LABELS,
+)
+from ..quiplash_logic import (
+    add_player as ql_add_player,
+    build_initial_payload as ql_build_initial_payload,
+    claim_start as ql_claim_start,
+    clamp_tier as ql_clamp_tier,
+    collect_complete_submissions as ql_collect_complete_submissions,
+    get_prior_submission as ql_get_prior_submission,
+    shuffle_reveal_order as ql_shuffle_reveal_order,
+    store_submission as ql_store_submission,
+    submitted_count as ql_submitted_count,
 )
 from ..rendering import (
     build_join_embed, build_fill_embed, build_reveal_embed,
@@ -39,13 +51,13 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
 
     # Enforce per-channel tier cap
     max_tier = await get_channel_max_tier(db, channel.id)
-    if tier > max_tier:
+    tier, clamped = ql_clamp_tier(tier, max_tier)
+    if clamped:
         await interaction.followup.send(
             f"This channel's tier cap is {max_tier} ({HEAT_LABELS[max_tier]}). "
             f"Using tier {max_tier} instead.",
             ephemeral=True,
         )
-        tier = max_tier
 
     # Pick a template
     prompts = await get_prompts(db)
@@ -63,20 +75,7 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
     game_id = await create_game(
         db, channel.id, host.id, "legitlibs",
         state="joining",
-        payload={
-            "mode": "quiplash",
-            "tier": tier,
-            "template_id": template["template_id"],
-            "template": {
-                "title": template["title"],
-                "body": template["body"],
-                "blanks": blanks,
-            },
-            "players": [host.id],
-            "host_id": host.id,
-            "state": "joining",
-            "submissions": {},
-        },
+        payload=ql_build_initial_payload(host.id, tier, template),
     )
     cog._game_canceled.discard(game_id)
 
@@ -94,10 +93,9 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
             if uid in payload["players"]:
                 await action_interaction.response.send_message("You're already in!", ephemeral=True)
                 return
-            def _add_player(p):
-                if uid not in p["players"]:
-                    p["players"].append(uid)
-            payload = await modify_payload(db, game_id, _add_player)
+            def _add(p):
+                ql_add_player(p, uid)
+            payload = await modify_payload(db, game_id, _add)
             await action_interaction.response.send_message("✅ You joined!", ephemeral=True)
 
             new_embed = build_join_embed(
@@ -118,9 +116,7 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
             claimed = False
             def _claim_start(p):
                 nonlocal claimed
-                if p.get("state") == "joining":
-                    p["state"] = "filling"
-                    claimed = True
+                claimed = ql_claim_start(p)
             payload = await modify_payload(db, game_id, _claim_start)
             if not claimed:
                 await action_interaction.response.send_message("Round already started.", ephemeral=True)
@@ -159,6 +155,8 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
     # ── Fill phase ──────────────────────────────────────────────────────────
     async def _run_fill_phase(start_interaction: discord.Interaction, payload: dict):
         await update_game_state(db, game_id, "filling")
+        # NOTE: claim_start already set state="filling" in payload; this is
+        # belt-and-braces in case some other code path lands here without it.
         def _set_filling(p):
             p["state"] = "filling"
         await modify_payload(db, game_id, _set_filling)
@@ -192,11 +190,7 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
             if cur_payload.get("state") != "filling":
                 return
 
-            submitted = sum(
-                1 for uid in player_ids
-                if str(uid) in cur_payload.get("submissions", {})
-                and not cur_payload["submissions"][str(uid)].get("partial")
-            )
+            submitted = ql_submitted_count(cur_payload, player_ids)
             new_embed = build_fill_embed(
                 host.display_name, template["title"], tier,
                 len(player_ids), submitted, deadline,
@@ -236,17 +230,13 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
             await submit_interaction.response.send_message("You're not in this round.", ephemeral=True)
             return
 
-        prior_submission = cur_payload.get("submissions", {}).get(str(uid)) or {}
-        prior_fills = prior_submission.get("fills", {}) if isinstance(prior_submission, dict) else {}
-        had_complete = bool(prior_submission) and not prior_submission.get("partial", False)
+        prior_fills, had_complete = ql_get_prior_submission(cur_payload, uid)
 
         async def _save_fills(sub_interaction: discord.Interaction, fills: dict, partial: bool):
             saved = False
             def _store(p):
                 nonlocal saved
-                if p.get("state") == "filling":
-                    p.setdefault("submissions", {})[str(uid)] = {"fills": fills, "partial": partial}
-                    saved = True
+                saved = ql_store_submission(p, uid, fills, partial)
             await modify_payload(db, game_id, _store)
             if saved:
                 msg = "✅ Fills updated!" if had_complete else "✅ Fills saved! You can resubmit to tweak them."
@@ -284,10 +274,7 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
         submissions = cur_payload.get("submissions", {})
 
         # Collect complete (non-partial) submissions
-        complete = {
-            uid: data for uid, data in submissions.items()
-            if not data.get("partial", False)
-        }
+        complete = ql_collect_complete_submissions(submissions)
 
         try:
             if not complete:
@@ -297,8 +284,7 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
             await update_game_state(db, game_id, "revealing")
 
             # Shuffle order for anonymous reveal
-            uid_list = list(complete.keys())
-            random.shuffle(uid_list)
+            uid_list = ql_shuffle_reveal_order(list(complete.keys()))
 
             total = len(uid_list)
 

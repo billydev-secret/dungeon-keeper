@@ -139,84 +139,104 @@ def get_prompt_info(key: str) -> PromptInfo | None:
 # ── Read helpers ───────────────────────────────────────────────────────
 
 
-def get_mod_model(conn: sqlite3.Connection) -> str:
-    return get_config_value(conn, _MOD_MODEL_KEY, DEFAULT_MOD_MODEL) or DEFAULT_MOD_MODEL
+def get_mod_model(conn: sqlite3.Connection, guild_id: int = 0) -> str:
+    """Read the configured moderation model for ``guild_id``.
+
+    Falls back to the legacy ``guild_id=0`` row (via ``get_config_value``'s
+    default behavior) when no per-guild override exists, then to
+    ``DEFAULT_MOD_MODEL``. Callers should pass the active session/guild ID
+    so writes from the dashboard at the same guild ID are read back here.
+    """
+    return (
+        get_config_value(conn, _MOD_MODEL_KEY, DEFAULT_MOD_MODEL, guild_id)
+        or DEFAULT_MOD_MODEL
+    )
 
 
-def get_wellness_model(conn: sqlite3.Connection) -> str:
-    return get_config_value(conn, _WELLNESS_MODEL_KEY, DEFAULT_WELLNESS_MODEL) or DEFAULT_WELLNESS_MODEL
+def get_wellness_model(conn: sqlite3.Connection, guild_id: int = 0) -> str:
+    """Read the configured wellness model for ``guild_id``. See ``get_mod_model``."""
+    return (
+        get_config_value(conn, _WELLNESS_MODEL_KEY, DEFAULT_WELLNESS_MODEL, guild_id)
+        or DEFAULT_WELLNESS_MODEL
+    )
 
 
-def get_command_model(conn: sqlite3.Connection, prompt_key: str) -> str:
+def get_command_model(
+    conn: sqlite3.Connection, prompt_key: str, guild_id: int = 0
+) -> str:
     info = _PROMPTS_BY_KEY.get(prompt_key)
     if info and info.model_key:
-        per_cmd = get_config_value(conn, info.model_key, "")
+        per_cmd = get_config_value(conn, info.model_key, "", guild_id)
         if per_cmd:
             return per_cmd
     if prompt_key == "ai_prompt_wellness_encouragement":
-        return get_wellness_model(conn)
-    return get_mod_model(conn)
+        return get_wellness_model(conn, guild_id)
+    return get_mod_model(conn, guild_id)
 
 
 def get_command_model_with_source(
-    conn: sqlite3.Connection, prompt_key: str
+    conn: sqlite3.Connection, prompt_key: str, guild_id: int = 0
 ) -> tuple[str, bool]:
     info = _PROMPTS_BY_KEY.get(prompt_key)
     if info and info.model_key:
-        per_cmd = get_config_value(conn, info.model_key, "")
+        per_cmd = get_config_value(conn, info.model_key, "", guild_id)
         if per_cmd:
             return per_cmd, True
     if prompt_key == "ai_prompt_wellness_encouragement":
-        return get_wellness_model(conn), False
-    return get_mod_model(conn), False
+        return get_wellness_model(conn, guild_id), False
+    return get_mod_model(conn, guild_id), False
 
 
-def get_command_model_from_path(db_path: Path, prompt_key: str) -> str:
+def get_command_model_from_path(
+    db_path: Path, prompt_key: str, guild_id: int = 0
+) -> str:
     try:
         with open_db(db_path) as conn:
-            return get_command_model(conn, prompt_key)
+            return get_command_model(conn, prompt_key, guild_id)
     except Exception:
         return DEFAULT_MOD_MODEL
 
 
-def get_prompt(conn: sqlite3.Connection, key: str) -> str:
+def get_prompt(conn: sqlite3.Connection, key: str, guild_id: int = 0) -> str:
     info = _PROMPTS_BY_KEY.get(key)
     if info is None:
         raise KeyError(f"Unknown AI prompt key: {key}")
-    raw = get_config_value(conn, key, "")
+    raw = get_config_value(conn, key, "", guild_id)
     return raw if raw else info.default_factory()
 
 
-def get_prompt_with_source(conn: sqlite3.Connection, key: str) -> tuple[str, bool]:
+def get_prompt_with_source(
+    conn: sqlite3.Connection, key: str, guild_id: int = 0
+) -> tuple[str, bool]:
     info = _PROMPTS_BY_KEY.get(key)
     if info is None:
         raise KeyError(f"Unknown AI prompt key: {key}")
-    raw = get_config_value(conn, key, "")
+    raw = get_config_value(conn, key, "", guild_id)
     if raw:
         return raw, True
     return info.default_factory(), False
 
 
-def get_mod_model_from_path(db_path: Path) -> str:
+def get_mod_model_from_path(db_path: Path, guild_id: int = 0) -> str:
     try:
         with open_db(db_path) as conn:
-            return get_mod_model(conn)
+            return get_mod_model(conn, guild_id)
     except Exception:
         return DEFAULT_MOD_MODEL
 
 
-def get_wellness_model_from_path(db_path: Path) -> str:
+def get_wellness_model_from_path(db_path: Path, guild_id: int = 0) -> str:
     try:
         with open_db(db_path) as conn:
-            return get_wellness_model(conn)
+            return get_wellness_model(conn, guild_id)
     except Exception:
         return DEFAULT_WELLNESS_MODEL
 
 
-def get_prompt_from_path(db_path: Path, key: str) -> str:
+def get_prompt_from_path(db_path: Path, key: str, guild_id: int = 0) -> str:
     try:
         with open_db(db_path) as conn:
-            return get_prompt(conn, key)
+            return get_prompt(conn, key, guild_id)
     except Exception:
         info = _PROMPTS_BY_KEY.get(key)
         return info.default_factory() if info else ""

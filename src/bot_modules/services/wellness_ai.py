@@ -37,6 +37,7 @@ async def generate_weekly_encouragement(
     is_personal_best: bool,
     compliance_pct: int,
     db_path: Path | None = None,
+    guild_id: int = 0,
 ) -> str:
     from bot_modules.services import ollama_client
 
@@ -45,9 +46,13 @@ async def generate_weekly_encouragement(
 
     from bot_modules.services.ai_config import get_prompt_from_path, get_wellness_model_from_path
 
-    model = get_wellness_model_from_path(db_path) if db_path else ollama_client.default_model()
+    model = (
+        get_wellness_model_from_path(db_path, guild_id)
+        if db_path
+        else ollama_client.default_model()
+    )
     system = (
-        get_prompt_from_path(db_path, "ai_prompt_wellness_encouragement")
+        get_prompt_from_path(db_path, "ai_prompt_wellness_encouragement", guild_id)
         if db_path
         else _ENCOURAGEMENT_SYSTEM
     )

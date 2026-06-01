@@ -1,0 +1,122 @@
+"""Embed builders for the Voice Master cog.
+
+These functions take primitive arguments and return new ``discord.Embed``
+objects. None of them perform IO. The cog used to build identical embeds
+inline at several sites; consolidating here means a copy change happens
+in one place and is testable without a Discord client.
+
+The cog still owns the message sends and view attachments; this module
+only builds the embed payload.
+"""
+
+from __future__ import annotations
+
+import discord
+
+
+def build_profile_show_embed(
+    *,
+    saved_name: str | None,
+    saved_limit: int,
+    locked: bool,
+    hidden: bool,
+    trusted_count: int,
+    blocked_count: int,
+) -> discord.Embed:
+    """Embed for ``/voice profile show``.
+
+    Empty ``saved_name`` renders ``*(template default)*`` so the user can
+    tell the difference between "I cleared this" and "I never set it"
+    (functionally identical, but the UI explains the fall-through).
+    """
+    embed = discord.Embed(
+        title="Your Voice Master profile",
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="Saved name",
+        value=saved_name or "*(template default)*",
+        inline=False,
+    )
+    embed.add_field(
+        name="User limit",
+        value=str(saved_limit) if saved_limit else "no cap",
+        inline=True,
+    )
+    embed.add_field(name="Locked", value="yes" if locked else "no", inline=True)
+    embed.add_field(name="Hidden", value="yes" if hidden else "no", inline=True)
+    embed.add_field(name="Trusted (count)", value=str(trusted_count), inline=True)
+    embed.add_field(name="Blocked (count)", value=str(blocked_count), inline=True)
+    return embed
+
+
+def build_admin_audit_mirror_embed(
+    *,
+    action: str,
+    summary: str,
+    actor_name: str,
+    actor_id: int,
+) -> discord.Embed:
+    """Embed posted to mod-log for any ``/voice-admin`` force-* action.
+
+    ``action`` is the short label (e.g. ``"force-delete"``); the title
+    prefixes with ``Voice Master ·`` so the audit feed groups our
+    actions visually with other domain entries.
+    """
+    embed = discord.Embed(
+        title=f"Voice Master · {action}",
+        description=summary,
+        color=discord.Color.orange(),
+    )
+    embed.set_footer(text=f"by {actor_name} ({actor_id})")
+    return embed
+
+
+def build_panel_embed() -> discord.Embed:
+    """Embed for the persistent control-channel Voice Master panel."""
+    embed = discord.Embed(
+        title="Voice Master controls",
+        description=(
+            "Join the Hub voice channel to spin up your own room.\n"
+            "Use these buttons to manage **the channel you currently own**.\n\n"
+            "🔒 / 🔓 Lock or unlock — control whether new members can join.\n"
+            "👁️ / 👀 Hide or unhide — control whether the channel is visible "
+            "at all.\n"
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(
+        text="Buttons act on the channel you own. Don't own one? Join the Hub."
+    )
+    return embed
+
+
+def build_inline_panel_embed(*, owner_mention: str) -> discord.Embed:
+    """Owner-greeting embed for the panel posted into a new channel's chat."""
+    return discord.Embed(
+        title="Your voice channel is ready",
+        description=(
+            f"Welcome, {owner_mention}. Use the buttons below to manage "
+            "**this channel** — lock/hide it, rename it, set a user limit, "
+            "invite or kick members, transfer ownership, or reset it. "
+            "Changes you make are saved as your default for next time."
+        ),
+        color=discord.Color.blurple(),
+    )
+
+
+def build_knock_request_embed(
+    *,
+    requester_mention: str,
+    owner_mention: str,
+    channel_name: str,
+) -> discord.Embed:
+    """Embed posted to the control channel when someone knocks on a channel."""
+    return discord.Embed(
+        title="🔔 Voice channel knock",
+        description=(
+            f"{requester_mention} is asking to join **{channel_name}**.\n"
+            f"Owner: {owner_mention} — choose below."
+        ),
+        color=discord.Color.gold(),
+    )

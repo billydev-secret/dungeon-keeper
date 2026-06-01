@@ -8,68 +8,29 @@ Both show a guild picker when DungeonKeeper is in multiple emoji-capable servers
 """
 from __future__ import annotations
 
-import io
 import logging
-import re
 from typing import TYPE_CHECKING
 
 import discord
 import httpx
 from discord import app_commands
 from discord.ext import commands
-from PIL import Image
+
+from bot_modules.emoji_stealer.compress import compress_gif_for_emoji
+from bot_modules.emoji_stealer.logic import (
+    build_steal_prompt,
+    emoji_cdn_url,
+    extract_emojis_from_text,
+    format_steal_all_summary,
+    is_https_url,
+    sanitize_emoji_name,
+    validate_emoji_name,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.emoji_stealer")
-
-_EMOJI_RE = re.compile(r"<(a?):(\w+):(\d+)>")
-_HTTPS_RE = re.compile(r"^https://", re.IGNORECASE)
-_DISCORD_MAX_BYTES = 256 * 1024
-
-
-def _compress_gif(data: bytes) -> bytes:
-    """Resize animated GIF frames to fit under Discord's 256 KB emoji limit."""
-    if len(data) <= _DISCORD_MAX_BYTES or not data[:3] == b"GIF":
-        return data
-    for dim in (96, 64, 48, 32):
-        img = Image.open(io.BytesIO(data))
-        frames: list[Image.Image] = []
-        durations: list[int] = []
-        loop = img.info.get("loop", 0)
-        try:
-            while True:
-                frames.append(img.convert("RGBA").resize((dim, dim), Image.Resampling.LANCZOS))
-                durations.append(img.info.get("duration", 100))
-                img.seek(img.tell() + 1)
-        except EOFError:
-            pass
-        if not frames:
-            return data
-        out = io.BytesIO()
-        frames[0].save(
-            out,
-            format="GIF",
-            save_all=True,
-            append_images=frames[1:],
-            loop=loop,
-            duration=durations,
-            optimize=True,
-        )
-        result = out.getvalue()
-        if len(result) <= _DISCORD_MAX_BYTES:
-            return result
-    return data
-
-
-def _emoji_url(emoji_id: int, animated: bool) -> str:
-    return f"https://cdn.discordapp.com/emojis/{emoji_id}.{'gif' if animated else 'png'}"
-
-
-def _sanitize_name(name: str) -> str:
-    name = re.sub(r"[^\w]", "_", name)[:32]
-    return name if len(name) >= 2 else name + "_e"
 
 
 async def _fetch_bytes(url: str) -> bytes:
@@ -86,7 +47,9 @@ def _eligible_guilds(bot: Bot) -> list[discord.Guild]:
 async def _upload(
     guild: discord.Guild, name: str, data: bytes
 ) -> discord.Emoji:
-    return await guild.create_custom_emoji(name=_sanitize_name(name), image=_compress_gif(data))
+    return await guild.create_custom_emoji(
+        name=sanitize_emoji_name(name), image=compress_gif_for_emoji(data)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -247,7 +210,7 @@ class _StealView(discord.ui.View):
         guild = self._sel_guild
         await interaction.response.edit_message(content="Downloading emoji...", view=None)
         try:
-            data = await _fetch_bytes(_emoji_url(emoji_id, animated))
+            data = await _fetch_bytes(emoji_cdn_url(emoji_id, animated))
             new_emoji = await _upload(guild, name, data)
         except discord.Forbidden:
             await interaction.edit_original_response(
@@ -275,7 +238,7 @@ class _StealView(discord.ui.View):
         failed: list[tuple[str, str]] = []
         for animated, name, emoji_id in all_emojis:
             try:
-                data = await _fetch_bytes(_emoji_url(emoji_id, animated))
+                data = await _fetch_bytes(emoji_cdn_url(emoji_id, animated))
                 new_emoji = await _upload(guild, name, data)
                 added.append(new_emoji)
             except discord.Forbidden:
@@ -288,17 +251,13 @@ class _StealView(discord.ui.View):
             except httpx.HTTPError as exc:
                 failed.append((name, str(exc)))
 
-        lines: list[str] = []
-        if added:
-            emoji_str = " ".join(str(e) for e in added)
-            lines.append(
-                f"Added **{len(added)}** emoji{'s' if len(added) != 1 else ''} "
-                f"to **{guild.name}**: {emoji_str}"
-            )
-        if failed:
-            fail_str = ", ".join(f"`:{n}:` ({r})" for n, r in failed)
-            lines.append(f"Failed **{len(failed)}**: {fail_str}")
-        await interaction.edit_original_response(content="\n".join(lines))
+        await interaction.edit_original_response(
+            content=format_steal_all_summary(
+                added_mentions=[str(e) for e in added],
+                guild_name=guild.name,
+                failed=failed,
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -332,14 +291,7 @@ class EmojiStealerCog(commands.Cog):
             )
             return
 
-        seen: set[int] = set()
-        emojis: list[tuple[bool, str, int]] = []
-        for animated_str, name, id_str in _EMOJI_RE.findall(message.content or ""):
-            emoji_id = int(id_str)
-            if emoji_id not in seen:
-                seen.add(emoji_id)
-                emojis.append((bool(animated_str), name, emoji_id))
-
+        emojis = extract_emojis_from_text(message.content or "")
         if not emojis:
             await interaction.response.send_message(
                 "No custom emojis found in that message.", ephemeral=True
@@ -352,7 +304,7 @@ class EmojiStealerCog(commands.Cog):
             guild = guilds[0]
             await interaction.response.defer(ephemeral=True, thinking=True)
             try:
-                data = await _fetch_bytes(_emoji_url(emoji_id, animated))
+                data = await _fetch_bytes(emoji_cdn_url(emoji_id, animated))
                 new_emoji = await _upload(guild, name, data)
             except discord.Forbidden:
                 await interaction.followup.send(
@@ -370,14 +322,12 @@ class EmojiStealerCog(commands.Cog):
             )
             return
 
-        n_emoji = len(emojis)
-        n_guild = len(guilds)
-        if n_emoji > 1 and n_guild > 1:
-            prompt = f"Found **{n_emoji}** emojis — pick one and a server:"
-        elif n_emoji > 1:
-            prompt = f"Found **{n_emoji}** emojis — pick one to add to **{guilds[0].name}**:"
-        else:
-            prompt = f"Add `:{emojis[0][1]}:` — which server?"
+        prompt = build_steal_prompt(
+            n_emoji=len(emojis),
+            guild_count=len(guilds),
+            first_emoji_name=emojis[0][1],
+            first_guild_name=guilds[0].name,
+        )
 
         await interaction.response.send_message(
             prompt, view=_StealView(emojis, guilds, interaction.user.id), ephemeral=True
@@ -398,18 +348,15 @@ class EmojiStealerCog(commands.Cog):
         url: str,
         name: str,
     ) -> None:
-        if not _HTTPS_RE.match(url):
+        if not is_https_url(url):
             await interaction.response.send_message(
                 "URL must start with `https://`.", ephemeral=True
             )
             return
 
-        clean_name = _sanitize_name(name)
-        if len(clean_name) < 2:
-            await interaction.response.send_message(
-                "Emoji name must be at least 2 characters (letters, numbers, underscores).",
-                ephemeral=True,
-            )
+        ok, clean_name, error_msg = validate_emoji_name(name)
+        if not ok:
+            await interaction.response.send_message(error_msg, ephemeral=True)
             return
 
         guilds = _eligible_guilds(self.bot)

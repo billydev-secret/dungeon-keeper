@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -10,6 +11,7 @@ import pytest
 from discord import app_commands
 
 from bot_modules.cogs.events_cog import EventsCog, _collect_backfill_channels, _on_tree_error
+from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -42,6 +44,18 @@ def _make_ctx(**kwargs) -> MagicMock:
     mock_conn = MagicMock()
     ctx.open_db.return_value.__enter__ = MagicMock(return_value=mock_conn)
     ctx.open_db.return_value.__exit__ = MagicMock(return_value=False)
+    # on_message and reaction handlers read config via ctx.guild_config(gid);
+    # return a stub carrying the same per-guild values the test passed in.
+    _stub = _StubGuildConfig(
+        spoiler_required_channels=kwargs.get("spoiler_required_channels", set()),
+        bypass_role_ids=kwargs.get("bypass_role_ids", set()),
+        recorded_bot_user_ids=kwargs.get("recorded_bot_user_ids", set()),
+        xp_excluded_channel_ids=kwargs.get("xp_excluded_channel_ids", set()),
+        level_5_role_id=kwargs.get("level_5_role_id", 0),
+        level_5_log_channel_id=kwargs.get("level_5_log_channel_id", 0),
+        level_up_log_channel_id=kwargs.get("level_up_log_channel_id", 0),
+    )
+    ctx.guild_config = MagicMock(return_value=_stub)
     return ctx
 
 
@@ -408,3 +422,249 @@ async def test_generic_error_sends_failure_message():
     ix.response.send_message.assert_awaited_once()
     assert ix.response.send_message.call_args[1]["ephemeral"] is True
     assert "failed" in ix.response.send_message.call_args[0][0].lower()
+
+
+# ── on_member_join / on_member_remove per-guild config ────────────────
+# Regression bait for the prelaunch P0 fix: welcome/leave/greeter channels
+# must be read from ``ctx.guild_config(member.guild.id)``, not the home-guild
+# flat fields on ctx. A 2nd guild that hasn't configured welcome must NOT
+# inherit the home guild's settings via the legacy fallback.
+
+
+class _StubGuildConfig:
+    def __init__(
+        self,
+        *,
+        welcome_channel_id: int = 0,
+        welcome_message: str = "",
+        welcome_ping_role_id: int = 0,
+        greeter_chat_channel_id: int = 0,
+        leave_channel_id: int = 0,
+        leave_message: str = "",
+        spoiler_required_channels: Any = None,
+        bypass_role_ids: Any = None,
+        recorded_bot_user_ids: Any = None,
+        xp_excluded_channel_ids: Any = None,
+        level_5_role_id: int = 0,
+        level_5_log_channel_id: int = 0,
+        level_up_log_channel_id: int = 0,
+        xp_settings: Any = DEFAULT_XP_SETTINGS,
+    ):
+        self.welcome_channel_id = welcome_channel_id
+        self.welcome_message = welcome_message
+        self.welcome_ping_role_id = welcome_ping_role_id
+        self.greeter_chat_channel_id = greeter_chat_channel_id
+        self.leave_channel_id = leave_channel_id
+        self.leave_message = leave_message
+        self.spoiler_required_channels = (
+            frozenset() if spoiler_required_channels is None else frozenset(spoiler_required_channels)
+        )
+        self.bypass_role_ids = (
+            frozenset() if bypass_role_ids is None else frozenset(bypass_role_ids)
+        )
+        self.recorded_bot_user_ids = (
+            frozenset() if recorded_bot_user_ids is None else frozenset(recorded_bot_user_ids)
+        )
+        self.xp_excluded_channel_ids = (
+            frozenset() if xp_excluded_channel_ids is None else frozenset(xp_excluded_channel_ids)
+        )
+        self.level_5_role_id = level_5_role_id
+        self.level_5_log_channel_id = level_5_log_channel_id
+        self.level_up_log_channel_id = level_up_log_channel_id
+        self.xp_settings = xp_settings
+
+
+def _make_member(*, guild_id: int = 1, member_id: int = 100, is_bot: bool = False) -> MagicMock:
+    member = MagicMock(spec=discord.Member)
+    member.id = member_id
+    member.bot = is_bot
+    member.display_name = f"user-{member_id}"
+    member.mention = f"<@{member_id}>"
+    guild = MagicMock()
+    guild.id = guild_id
+    guild.name = f"guild-{guild_id}"
+    member.guild = guild
+    member.created_at = MagicMock()
+    member.created_at.timestamp = MagicMock(return_value=1_000_000.0)
+    member.__str__ = MagicMock(return_value=f"user-{member_id}#0001")
+    return member
+
+
+def _patch_join_deps():
+    """Patch the side-effectful imports inside on_member_join."""
+    return [
+        patch("bot_modules.cogs.events_cog.check_jail_rejoin", new_callable=AsyncMock),
+        patch("bot_modules.cogs.events_cog.upsert_known_user"),
+        patch("bot_modules.cogs.events_cog.record_member_event"),
+        patch("bot_modules.cogs.events_cog.check_join_raid"),
+        patch(
+            "bot_modules.cogs.events_cog.detect_inviter",
+            new_callable=AsyncMock,
+            return_value=(None, None),
+        ),
+        patch("bot_modules.cogs.events_cog.build_welcome_embed", return_value="<embed>"),
+    ]
+
+
+def _patch_leave_deps():
+    return [
+        patch("bot_modules.cogs.events_cog.mark_member_left"),
+        patch("bot_modules.cogs.events_cog.record_member_event"),
+        patch("bot_modules.cogs.events_cog.build_leave_embed", return_value="<embed>"),
+    ]
+
+
+async def test_on_member_join_uses_per_guild_welcome_channel():
+    """Welcome channel comes from cfg, not from ctx flat fields."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    # ctx flat fields would point to a DIFFERENT channel; the cog must ignore them.
+    ctx.welcome_channel_id = 999
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(welcome_channel_id=42, welcome_message="hi"),
+    )
+    cog = EventsCog(bot, ctx)
+
+    welcome_channel = MagicMock(spec=discord.TextChannel)
+    welcome_channel.send = AsyncMock()
+    member = _make_member(guild_id=7)
+    member.guild.get_channel = MagicMock(return_value=welcome_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    ctx.guild_config.assert_called_with(7)  # per-guild lookup
+    member.guild.get_channel.assert_any_call(42)  # NOT 999
+    welcome_channel.send.assert_awaited_once()
+
+
+async def test_on_member_join_skips_welcome_when_channel_unset():
+    """Empty guild_config (e.g. unconfigured 2nd guild) → no welcome message sent."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.welcome_channel_id = 999  # home guild has one; this guild does not
+    ctx.guild_config = MagicMock(return_value=_StubGuildConfig())  # all zeros
+    cog = EventsCog(bot, ctx)
+
+    member = _make_member(guild_id=20)
+    member.guild.get_channel = MagicMock(return_value=MagicMock(spec=discord.TextChannel))
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    # get_channel was never asked about welcome_channel_id=0
+    for call in member.guild.get_channel.call_args_list:
+        assert call.args[0] != 999  # home guild's channel must NOT be used
+
+
+async def test_on_member_join_includes_ping_role_when_set():
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(welcome_channel_id=42, welcome_ping_role_id=88),
+    )
+    cog = EventsCog(bot, ctx)
+
+    welcome_channel = MagicMock(spec=discord.TextChannel)
+    welcome_channel.send = AsyncMock()
+    member = _make_member()
+    member.guild.get_channel = MagicMock(return_value=welcome_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    sent_kwargs = welcome_channel.send.call_args.kwargs
+    assert sent_kwargs["content"] == "<@&88>"
+
+
+async def test_on_member_join_omits_ping_when_role_unset():
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(welcome_channel_id=42, welcome_ping_role_id=0),
+    )
+    cog = EventsCog(bot, ctx)
+
+    welcome_channel = MagicMock(spec=discord.TextChannel)
+    welcome_channel.send = AsyncMock()
+    member = _make_member()
+    member.guild.get_channel = MagicMock(return_value=welcome_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    sent_kwargs = welcome_channel.send.call_args.kwargs
+    assert sent_kwargs["content"] is None
+
+
+async def test_on_member_join_sends_greeter_ping():
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(greeter_chat_channel_id=77),
+    )
+    cog = EventsCog(bot, ctx)
+
+    greeter_channel = MagicMock(spec=discord.TextChannel)
+    greeter_channel.send = AsyncMock()
+    member = _make_member(member_id=500)
+    member.guild.get_channel = MagicMock(return_value=greeter_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    greeter_channel.send.assert_awaited_once_with("@here - <@500> has arrived")
+
+
+async def test_on_member_remove_uses_per_guild_leave_channel():
+    """Leave channel comes from cfg, not ctx flat fields."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.leave_channel_id = 999  # home guild
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(leave_channel_id=44, leave_message="bye"),
+    )
+    cog = EventsCog(bot, ctx)
+
+    leave_channel = MagicMock(spec=discord.TextChannel)
+    leave_channel.send = AsyncMock()
+    member = _make_member(guild_id=7)
+    member.guild.get_channel = MagicMock(return_value=leave_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_leave_deps():
+            stack.enter_context(p)
+        await cog.on_member_remove(member)
+
+    ctx.guild_config.assert_called_with(7)
+    member.guild.get_channel.assert_called_with(44)  # NOT 999
+    leave_channel.send.assert_awaited_once()
+
+
+async def test_on_member_remove_skips_when_channel_unset():
+    """No leave channel configured → no message sent; channel lookup not attempted."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.leave_channel_id = 999  # home guild has one
+    ctx.guild_config = MagicMock(return_value=_StubGuildConfig(leave_channel_id=0))
+    cog = EventsCog(bot, ctx)
+
+    member = _make_member(guild_id=20)
+    member.guild.get_channel = MagicMock()
+
+    with ExitStack() as stack:
+        for p in _patch_leave_deps():
+            stack.enter_context(p)
+        await cog.on_member_remove(member)
+
+    member.guild.get_channel.assert_not_called()

@@ -10,9 +10,13 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.services.risky_roll import state as rr_state
-from bot_modules.services.risky_roll.store import MAX_GAMES_PER_CHANNEL, StateStore
 from bot_modules.services.risky_roll.formatters import build_embed
+from bot_modules.services.risky_roll.logic import (
+    collect_channel_state_ids,
+    normalize_auto_close_options,
+)
 from bot_modules.services.risky_roll.models import RiskyRollState
+from bot_modules.services.risky_roll.store import MAX_GAMES_PER_CHANNEL, StateStore
 from bot_modules.services.risky_roll.views import (
     QuestionReplyView,
     RiskyRollView,
@@ -194,12 +198,15 @@ class RiskyRollCog(commands.Cog):
                 )
                 return
 
+            normalized_players, normalized_minutes = normalize_auto_close_options(
+                auto_close_players, auto_close_minutes
+            )
             state = RiskyRollState(
                 channel_id=interaction.channel.id,
                 guild_id=interaction.guild.id,
                 opener_id=interaction.user.id,
-                auto_close_players=auto_close_players if auto_close_players and auto_close_players >= 2 else None,
-                auto_close_minutes=auto_close_minutes if auto_close_minutes and auto_close_minutes > 0 else None,
+                auto_close_players=normalized_players,
+                auto_close_minutes=normalized_minutes,
                 skip_min_game_time=skip_min_game_time,
             )
             rr_state.active_games[state.game_id] = state
@@ -274,9 +281,12 @@ class RiskyRollCog(commands.Cog):
         async with rr_state.get_channel_lock(interaction.channel.id):
             channel_id = interaction.channel.id
 
-            game_ids = [gid for gid, s in rr_state.active_games.items() if s.channel_id == channel_id]
-            question_ids = [gid for gid, s in rr_state.pending_questions.items() if s.channel_id == channel_id]
-            posted_message_ids = [mid for mid, s in rr_state.posted_questions.items() if s.channel_id == channel_id]
+            game_ids, question_ids, posted_message_ids = collect_channel_state_ids(
+                rr_state.active_games,
+                rr_state.pending_questions,
+                rr_state.posted_questions,
+                channel_id,
+            )
 
             if not game_ids and not question_ids and not posted_message_ids:
                 await interaction.response.send_message(

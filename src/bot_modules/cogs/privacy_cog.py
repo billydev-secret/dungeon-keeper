@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.privacy.logic import (
+    chunk_for_bulk_delete,
+    group_messages_by_channel,
+    is_forum_thread,
+    partition_by_bulk_delete_window,
+    render_deletion_summary,
+    render_empty_summary,
+    render_progress_bar,
+    render_scan_status,
+    should_throttle,
+)
 from bot_modules.services.discord_scan import find_user_messages
 from bot_modules.services.privacy_service import purge_user_data
 
@@ -18,8 +28,6 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.privacy")
-
-_FOURTEEN_DAYS = timedelta(days=14)
 
 # ---------------------------------------------------------------------------
 # Confirmation view
@@ -58,11 +66,6 @@ class _ConfirmDeleteView(discord.ui.View):
 # Deletion logic
 # ---------------------------------------------------------------------------
 
-def _is_forum_thread(channel: discord.abc.GuildChannel | discord.Thread | None) -> bool:
-    return isinstance(channel, discord.Thread) and isinstance(
-        channel.parent, discord.ForumChannel
-    )
-
 
 async def _delete_discord_messages(
     guild: discord.Guild,
@@ -78,9 +81,7 @@ async def _delete_discord_messages(
 
     on_progress: optional async callable(deleted, failed, replaced) called after each channel.
     """
-    by_channel: dict[int, list[int]] = {}
-    for message_id, channel_id in msg_rows:
-        by_channel.setdefault(channel_id, []).append(message_id)
+    by_channel = group_messages_by_channel(msg_rows)
 
     deleted = 0
     failed = 0
@@ -149,7 +150,7 @@ async def _delete_discord_messages(
         # Forum thread OPs: message_id == channel_id (Discord snowflake parity).
         # Delete the OP and re-post its content under the bot so the thread —
         # and any replies from other members — survives.
-        if _is_forum_thread(channel) and channel_id in message_ids:
+        if is_forum_thread(channel) and channel_id in message_ids:
             try:
                 op = await channel.fetch_message(channel_id)  # type: ignore[union-attr]
                 await op.delete()
@@ -171,17 +172,10 @@ async def _delete_discord_messages(
                     pass
             continue
 
-        cutoff = datetime.now(timezone.utc) - _FOURTEEN_DAYS
-        recent: list[int] = []
-        old: list[int] = []
-        for mid in message_ids:
-            if discord.utils.snowflake_time(mid) > cutoff:
-                recent.append(mid)
-            else:
-                old.append(mid)
+        recent, old = partition_by_bulk_delete_window(message_ids)
 
-        for i in range(0, len(recent), 100):
-            batch = [discord.Object(id=mid) for mid in recent[i : i + 100]]
+        for chunk in chunk_for_bulk_delete(recent):
+            batch = [discord.Object(id=mid) for mid in chunk]
             try:
                 await channel.delete_messages(batch)  # type: ignore[union-attr]
                 deleted += len(batch)
@@ -248,13 +242,11 @@ async def _run_deletion(
         nonlocal last_scan_update
         # Throttle edits — Discord rate-limits edit_original_response.
         now = asyncio.get_running_loop().time()
-        if done < total and now - last_scan_update < 2.0:
+        if should_throttle(last_scan_update, now, done=done, total=total, interval=2.0):
             return
         last_scan_update = now
         await _edit_or_send(
-            original_interaction,
-            f"Scanning the server for your messages — channel **{done}/{total}** "
-            f"(**{found}** found so far)…",
+            original_interaction, render_scan_status(done, total, found)
         )
 
     msg_rows = await find_user_messages(
@@ -265,34 +257,26 @@ async def _run_deletion(
     if total == 0:
         with ctx.open_db() as conn:
             purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
-        archive_note = " (your message archive is preserved)" if keep_messages else ""
         await _edit_or_send(
             original_interaction,
-            "All done. No messages found in any channel I can read. "
-            f"Server-side data (XP, activity, profile): **cleared**{archive_note}.",
+            render_empty_summary(keep_messages=keep_messages),
         )
         return
 
     # Phase 2 — delete what we found on Discord. The local archive is safe:
     # on_raw_message_delete no longer touches the messages table, so the
     # user's records here survive the Discord-side deletion.
-    def _render_bar(done: int) -> str:
-        width = 20
-        filled = round(width * done / total) if total else width
-        bar = "█" * filled + "░" * (width - filled)
-        return f"`[{bar}]` {done}/{total}"
-
     last_delete_update = 0.0
 
     async def _delete_progress(deleted: int, failed: int, replaced: int) -> None:
         nonlocal last_delete_update
         done = deleted + failed + replaced
         now = asyncio.get_running_loop().time()
-        if done < total and now - last_delete_update < 1.5:
+        if should_throttle(last_delete_update, now, done=done, total=total, interval=1.5):
             return
         last_delete_update = now
         await _edit_or_send(
-            original_interaction, f"Deleting… {_render_bar(done)}"
+            original_interaction, f"Deleting… {render_progress_bar(done, total)}"
         )
 
     discord_deleted, discord_failed, discord_replaced = await _delete_discord_messages(
@@ -302,18 +286,15 @@ async def _run_deletion(
     with ctx.open_db() as conn:
         purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
 
-    archive_note = " (your message archive is preserved)" if keep_messages else ""
-    lines = [
-        "All done. Here's what was removed:",
-        f"Discord messages deleted: **{discord_deleted}**",
-        f"Server-side data (XP, activity, profile): **cleared**{archive_note}",
-    ]
-    if discord_replaced:
-        lines.append(f"Forum posts replaced with tombstone: **{discord_replaced}**")
-    if discord_failed:
-        lines.append(f"Messages that couldn't be deleted (no access): **{discord_failed}**")
-
-    await _edit_or_send(original_interaction, "\n".join(lines))
+    await _edit_or_send(
+        original_interaction,
+        render_deletion_summary(
+            deleted=discord_deleted,
+            failed=discord_failed,
+            replaced=discord_replaced,
+            keep_messages=keep_messages,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

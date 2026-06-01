@@ -200,6 +200,7 @@ async def backfill_xp_async(
         "xp_awarded": 0.0,
     }
 
+    cfg = ctx.guild_config(guild.id)
     me = guild.get_member(ctx.bot.user.id) if ctx.bot and ctx.bot.user else None
     all_channels = await _collect_channels(guild, me)
 
@@ -208,7 +209,7 @@ async def backfill_xp_async(
             channel_id: int | None = getattr(channel, "id", None)
             parent_id = getattr(channel, "parent_id", None)
             if channel_id is None or not is_channel_xp_eligible(
-                channel_id, parent_id, ctx.xp_excluded_channel_ids
+                channel_id, parent_id, cfg.xp_excluded_channel_ids
             ):
                 continue
 
@@ -272,7 +273,7 @@ async def backfill_xp_async(
                             is_reply_to_human=is_reply_to_human,
                             pair_streak=pair_streak,
                         ),
-                        ctx.xp_settings,
+                        cfg.xp_settings,
                     )
 
                     award = apply_xp_award(
@@ -280,7 +281,7 @@ async def backfill_xp_async(
                         guild.id,
                         message.author.id,
                         breakdown.awarded_xp,
-                        settings=ctx.xp_settings,
+                        settings=cfg.xp_settings,
                     )
 
                     reply_award = 0.0
@@ -352,7 +353,7 @@ async def backfill_xp_async(
 
     for m in granted_members.values():
         await maybe_grant_level_role(
-            m, DEFAULT_XP_SETTINGS.role_grant_level, ctx.level_5_role_id
+            m, DEFAULT_XP_SETTINGS.role_grant_level, cfg.level_5_role_id
         )
 
     stats["xp_awarded"] = round(stats["xp_awarded"], 2)

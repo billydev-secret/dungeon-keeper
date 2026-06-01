@@ -6,11 +6,142 @@ trivially unit-testable without fakes or mocks.
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
 # Re-export duration helpers from moderation so tests import from one place
 from bot_modules.services.moderation import fmt_duration, parse_duration  # noqa: F401
+
+
+# ── Channel name sanitization ─────────────────────────────────────────
+
+# Discord accepts only [a-z0-9_-] in channel names. Anything else gets
+# squashed to a hyphen (then collapsed at the edges).
+_CHANNEL_NAME_INVALID_RE = re.compile(r"[^a-z0-9_-]+")
+
+
+def sanitize_channel_name(part: str, *, fallback: str = "user") -> str:
+    """Reduce *part* to a string Discord will accept as (a piece of) a channel name.
+
+    The cog formats jail/ticket/policy channels as e.g. ``jail-{name}-{ts}`` —
+    if ``name`` contains uppercase, spaces, or symbols, Discord rejects the
+    creation. This helper lowercases, replaces every invalid run with a single
+    hyphen, and strips edge hyphens so the result never starts or ends with one.
+
+    An empty input (or one made entirely of invalid characters) returns
+    ``fallback`` so the cog always has a non-empty piece to interpolate.
+    """
+    cleaned = _CHANNEL_NAME_INVALID_RE.sub("-", part.lower()).strip("-")
+    return cleaned or fallback
+
+
+# ── Mention-list capping ──────────────────────────────────────────────
+
+
+def cap_mentions(
+    ids: list[int] | set[int],
+    *,
+    max_count: int = 25,
+) -> tuple[list[int], int]:
+    """Cap an ID list to ``max_count``, returning ``(shown, overflow_count)``.
+
+    Discord embed fields max out at 1024 characters. A field full of
+    ``<@123456789012345678>`` mentions hits that ceiling around 25 entries,
+    so the policy-vote embed has to truncate when the eligible roster grows
+    past that cap. The caller then renders ``"+N more"`` for the overflow.
+
+    Sorted so the output is deterministic regardless of input ordering — the
+    same set always produces the same shown roster across embed refreshes.
+    """
+    sorted_ids = sorted(ids)
+    if len(sorted_ids) <= max_count:
+        return sorted_ids, 0
+    return sorted_ids[:max_count], len(sorted_ids) - max_count
+
+
+# ── Setup wizard metadata ─────────────────────────────────────────────
+
+
+# Step → (title, description, config_key, select_kind, placeholder).
+# ``select_kind`` is one of ``"role"``, ``"channel"``, ``"category"`` — the
+# cog/commands layer picks the right UI element based on this. Decoupling
+# the data from the View construction lets tests pin the wording without
+# instantiating a discord.ui.View.
+_SETUP_STEPS: dict[int, dict[str, str]] = {
+    1: {
+        "title": "Setup — Step 1/6",
+        "description": "Which roles should have **moderator** access?",
+        "config_key": "mod_role_ids",
+        "select_kind": "role",
+        "placeholder": "Select mod roles…",
+    },
+    2: {
+        "title": "Setup — Step 2/6",
+        "description": (
+            "Which roles are **admin/senior staff**? "
+            "(for escalations and warning alerts)"
+        ),
+        "config_key": "admin_role_ids",
+        "select_kind": "role",
+        "placeholder": "Select admin roles…",
+    },
+    3: {
+        "title": "Setup — Step 3/6",
+        "description": "Where should **jail channels** be created?",
+        "config_key": "jail_category_id",
+        "select_kind": "category",
+        "placeholder": "Select jail category…",
+    },
+    4: {
+        "title": "Setup — Step 4/6",
+        "description": "Where should **ticket channels** be created?",
+        "config_key": "ticket_category_id",
+        "select_kind": "category",
+        "placeholder": "Select ticket category…",
+    },
+    5: {
+        "title": "Setup — Step 5/6",
+        "description": "Where should **audit logs** be posted?",
+        "config_key": "log_channel_id",
+        "select_kind": "channel",
+        "placeholder": "Select log channel…",
+    },
+    6: {
+        "title": "Setup — Step 6/6",
+        "description": (
+            "Where should **transcripts** be posted? "
+            "(can be the same as log channel)"
+        ),
+        "config_key": "transcript_channel_id",
+        "select_kind": "channel",
+        "placeholder": "Select transcript channel…",
+    },
+}
+
+SETUP_FINAL_STEP = 6
+
+
+def setup_step_meta(step: int) -> dict[str, str] | None:
+    """Return the per-step metadata for the ``/setup`` wizard, or ``None`` when done.
+
+    Returning ``None`` past the final step signals "no more wizard pages" —
+    the caller then renders the "Setup Complete" embed. Returning ``None``
+    (rather than raising) makes the loop in the cog straightforward:
+
+        meta = setup_step_meta(step)
+        if meta is None:
+            ... render completion ...
+    """
+    if step < 1 or step > SETUP_FINAL_STEP:
+        return None
+    # Return a copy so callers can't mutate the module-level table.
+    return dict(_SETUP_STEPS[step])
+
+
+def setup_button_label(step: int) -> str:
+    """Return the next-button label for the given step ("Next →" or "Finish")."""
+    return "Finish" if step >= SETUP_FINAL_STEP else "Next →"
 
 
 # ── Role snapshots ────────────────────────────────────────────────────

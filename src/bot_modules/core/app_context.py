@@ -280,6 +280,132 @@ class Bot(commands.Bot):
                 await asyncio.sleep(restart_delay)
 
 
+def _parse_id_csv(raw: str) -> frozenset[int]:
+    """Parse a comma-separated string of integer IDs into a frozenset."""
+    return frozenset(int(x) for x in raw.split(",") if x.strip().isdigit())
+
+
+@dataclass(frozen=True)
+class GuildConfig:
+    """Immutable snapshot of one guild's config (core-slice fields).
+
+    Built lazily and cached per guild on :class:`AppContext` via
+    ``ctx.guild_config(guild_id)``. For the home guild, reads its own
+    ``guild_id`` with the legacy ``guild_id=0`` fallback; for other guilds,
+    reads strictly (``allow_legacy_fallback=False``) so an unconfigured guild
+    gets real defaults instead of silently inheriting the home/legacy values.
+    """
+
+    guild_id: int
+    # welcome / leave
+    welcome_channel_id: int
+    welcome_message: str
+    welcome_ping_role_id: int
+    greeter_chat_channel_id: int
+    leave_channel_id: int
+    leave_message: str
+    join_leave_log_channel_id: int
+    # moderation / permissions
+    mod_channel_id: int
+    mod_role_ids: frozenset[int]
+    admin_role_ids: frozenset[int]
+    # message archival / spoiler enforcement
+    spoiler_required_channels: frozenset[int]
+    bypass_role_ids: frozenset[int]
+    recorded_bot_user_ids: frozenset[int]
+    # XP / leveling
+    xp_excluded_channel_ids: frozenset[int]
+    xp_grant_allowed_user_ids: frozenset[int]
+    level_5_role_id: int
+    level_5_log_channel_id: int
+    level_up_log_channel_id: int
+    xp_settings: XpSettings
+    # role-grant definitions (member self-assignable roles)
+    grant_roles: dict[str, GrantRoleConfig]
+
+    @classmethod
+    def load(
+        cls,
+        conn: sqlite3.Connection,
+        guild_id: int,
+        *,
+        allow_legacy_fallback: bool,
+    ) -> "GuildConfig":
+        from bot_modules.services.welcome_service import (
+            DEFAULT_LEAVE_MESSAGE,
+            DEFAULT_WELCOME_MESSAGE,
+        )
+
+        def _val(key: str, default: str = "") -> str:
+            return get_config_value(
+                conn,
+                key,
+                default,
+                guild_id,
+                allow_legacy_fallback=allow_legacy_fallback,
+            )
+
+        def _int(key: str, default: int = 0) -> int:
+            return _parse_int_config(_val(key, str(default)), key=key, default=default)
+
+        def _ids(bucket: str) -> frozenset[int]:
+            return frozenset(
+                get_config_id_set(
+                    conn,
+                    bucket,
+                    guild_id,
+                    allow_legacy_fallback=allow_legacy_fallback,
+                )
+            )
+
+        leave_channel_id = _int("leave_channel_id")
+        return cls(
+            guild_id=guild_id,
+            welcome_channel_id=_int("welcome_channel_id"),
+            welcome_message=_val("welcome_message", DEFAULT_WELCOME_MESSAGE),
+            welcome_ping_role_id=_int("welcome_ping_role_id"),
+            greeter_chat_channel_id=_int("greeter_chat_channel_id"),
+            leave_channel_id=leave_channel_id,
+            leave_message=_val("leave_message", DEFAULT_LEAVE_MESSAGE),
+            join_leave_log_channel_id=_parse_int_config(
+                _val("join_leave_log_channel_id", str(leave_channel_id)),
+                key="join_leave_log_channel_id",
+                default=leave_channel_id,
+            ),
+            mod_channel_id=_int("mod_channel_id"),
+            mod_role_ids=_parse_id_csv(_val("mod_role_ids")),
+            admin_role_ids=_parse_id_csv(_val("admin_role_ids")),
+            spoiler_required_channels=_ids("spoiler_required_channels"),
+            bypass_role_ids=_ids("bypass_role_ids"),
+            recorded_bot_user_ids=_ids("recorded_bot_user_ids"),
+            xp_excluded_channel_ids=_ids("xp_excluded_channel_ids"),
+            xp_grant_allowed_user_ids=_ids("xp_grant_allowed_user_ids"),
+            level_5_role_id=_int("xp_level_5_role_id"),
+            level_5_log_channel_id=_int("xp_level_5_log_channel_id"),
+            level_up_log_channel_id=_int("xp_level_up_log_channel_id"),
+            # XP coefficients keep the legacy guild_id=0 fallback intentionally:
+            # they are global algorithm tuning, not guild identity, and home's
+            # coeffs live under home's real id (guild_id=0 holds only ai/tree-hash
+            # rows), so a second guild falls back to DEFAULT_XP_SETTINGS, never
+            # home's tuning. Do not "fix" this to strict.
+            xp_settings=load_xp_settings(conn, guild_id),
+            grant_roles=get_grant_roles(conn, guild_id),
+        )
+
+    def member_is_mod(self, member: discord.Member) -> bool:
+        """True if the member holds a configured mod or admin role.
+
+        The Discord ``manage_guild``/``administrator`` short-circuit is the
+        caller's responsibility (see ``AppContext.is_mod``).
+        """
+        configured = self.mod_role_ids | self.admin_role_ids
+        return bool(configured & {r.id for r in member.roles})
+
+    def member_is_admin(self, member: discord.Member) -> bool:
+        """True if the member holds a configured admin role."""
+        return bool(self.admin_role_ids & {r.id for r in member.roles})
+
+
 @dataclass
 class AppContext:
     bot: Bot
@@ -311,9 +437,34 @@ class AppContext:
     watched_users: dict[int, set[int]] = field(default_factory=dict)
     mod_role_ids: set[int] = field(default_factory=set)
     admin_role_ids: set[int] = field(default_factory=set)
+    _guild_config_cache: dict[int, GuildConfig] = field(default_factory=dict)
 
     def open_db(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
         return open_db(self.db_path)
+
+    def guild_config(self, guild_id: int) -> GuildConfig:
+        """Return the cached per-guild config snapshot, loading it on first use.
+
+        The home guild reads with the legacy ``guild_id=0`` fallback; other
+        guilds read strictly so an unconfigured guild gets real defaults.
+        """
+        cfg = self._guild_config_cache.get(guild_id)
+        if cfg is None:
+            with self.open_db() as conn:
+                cfg = GuildConfig.load(
+                    conn,
+                    guild_id,
+                    allow_legacy_fallback=(guild_id == self.guild_id),
+                )
+            self._guild_config_cache[guild_id] = cfg
+        return cfg
+
+    def invalidate_guild_config(self, guild_id: int) -> None:
+        """Drop the cached snapshot for a guild so the next read reloads it.
+
+        Call after any config write so runtime readers pick up the change.
+        """
+        self._guild_config_cache.pop(guild_id, None)
 
     def reload_xp_settings(self) -> None:
         """Reload XP algorithm coefficients from the config DB."""
@@ -321,35 +472,57 @@ class AppContext:
             self.xp_settings = load_xp_settings(conn, self.guild_id)
 
     def reload_permission_roles(self) -> None:
-        """Reload mod/admin role ID caches from the config DB."""
+        """Reload the home guild's mod/admin role ID caches from the config DB.
+
+        Scoped to ``self.guild_id`` (with legacy ``guild_id=0`` fallback) so the
+        flat caches agree with ``guild_config(self.guild_id)``; other guilds are
+        resolved per-event via ``guild_config``.
+        """
         with self.open_db() as conn:
-            mod_raw = get_config_value(conn, "mod_role_ids", "")
-            admin_raw = get_config_value(conn, "admin_role_ids", "")
+            mod_raw = get_config_value(conn, "mod_role_ids", "", self.guild_id)
+            admin_raw = get_config_value(conn, "admin_role_ids", "", self.guild_id)
         self.mod_role_ids = {int(x) for x in mod_raw.split(",") if x.strip().isdigit()}
         self.admin_role_ids = {int(x) for x in admin_raw.split(",") if x.strip().isdigit()}
 
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
             add_config_id(conn, bucket, value, self.guild_id)
-            return get_config_id_set(conn, bucket, self.guild_id)
+            result = get_config_id_set(conn, bucket, self.guild_id)
+        # Always the home guild — refresh the per-guild snapshot so guild_config()
+        # readers (spoiler/bypass/xp-excluded/…) see the change without a restart.
+        self.invalidate_guild_config(self.guild_id)
+        return result
 
     def remove_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
             remove_config_id(conn, bucket, value, self.guild_id)
-            return get_config_id_set(conn, bucket, self.guild_id)
+            result = get_config_id_set(conn, bucket, self.guild_id)
+        self.invalidate_guild_config(self.guild_id)
+        return result
 
     def clear_config_id_bucket(self, bucket: str) -> None:
         with self.open_db() as conn:
             clear_config_id_bucket(conn, bucket, self.guild_id)
+        self.invalidate_guild_config(self.guild_id)
 
-    def set_config_value(self, key: str, value: str) -> str:
+    def set_config_value(
+        self, key: str, value: str, guild_id: int | None = None
+    ) -> str:
+        """Write a config value for ``guild_id`` (defaults to the home guild).
+
+        Keeps the home flat caches consistent and invalidates the per-guild
+        snapshot so ``guild_config()`` readers see the write.
+        """
+        gid = self.guild_id if guild_id is None else guild_id
         with self.open_db() as conn:
-            _db_set_config_value(conn, key, value, self.guild_id)
-            result = get_config_value(conn, key, value, self.guild_id)
-        if key == "mod_role_ids":
-            self.mod_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
-        elif key == "admin_role_ids":
-            self.admin_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
+            _db_set_config_value(conn, key, value, gid)
+            result = get_config_value(conn, key, value, gid)
+        if gid == self.guild_id:
+            if key == "mod_role_ids":
+                self.mod_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
+            elif key == "admin_role_ids":
+                self.admin_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
+        self.invalidate_guild_config(gid)
         return result
 
     def delete_config_value(self, key: str) -> None:
@@ -359,6 +532,7 @@ class AppContext:
             self.mod_role_ids = set()
         elif key == "admin_role_ids":
             self.admin_role_ids = set()
+        self.invalidate_guild_config(self.guild_id)
 
     def get_interaction_member(
         self, interaction: discord.Interaction
@@ -400,18 +574,17 @@ class AppContext:
         )
         if perms.manage_guild or perms.administrator:
             return True
-        if member is None:
+        if member is None or interaction.guild_id is None:
             return False
-        configured = self.mod_role_ids | self.admin_role_ids
-        return bool(configured & {r.id for r in member.roles})
+        return self.guild_config(interaction.guild_id).member_is_mod(member)
 
     def is_admin(self, interaction: discord.Interaction) -> bool:
         if interaction.permissions.administrator:
             return True
         member = self.get_interaction_member(interaction)
-        if member is None:
+        if member is None or interaction.guild_id is None:
             return False
-        return bool(self.admin_role_ids & {r.id for r in member.roles})
+        return self.guild_config(interaction.guild_id).member_is_admin(member)
 
     def reload_grant_roles(self) -> None:
         with self.open_db() as conn:
@@ -422,12 +595,13 @@ class AppContext:
         if self.is_mod(interaction):
             return True
         member = self.get_interaction_member(interaction)
-        if member is None:
+        if member is None or interaction.guild_id is None:
             return False
+        gid = interaction.guild_id
         role_ids = [r.id for r in member.roles]
         with self.open_db() as conn:
-            for grant_name in self.grant_roles:
-                if can_use_grant(conn, self.guild_id, grant_name, member.id, role_ids):
+            for grant_name in self.guild_config(gid).grant_roles:
+                if can_use_grant(conn, gid, grant_name, member.id, role_ids):
                     return True
         return False
 
@@ -437,16 +611,21 @@ class AppContext:
         if self.is_mod(interaction):
             return True
         member = self.get_interaction_member(interaction)
-        if member is None:
+        if member is None or interaction.guild_id is None:
             return False
         role_ids = [r.id for r in member.roles]
         with self.open_db() as conn:
-            return can_use_grant(conn, self.guild_id, grant_name, member.id, role_ids)
+            return can_use_grant(
+                conn, interaction.guild_id, grant_name, member.id, role_ids
+            )
 
     def can_use_xp_grant(self, interaction: discord.Interaction) -> bool:
         if self.is_mod(interaction):
             return True
-        return interaction.user.id in self.xp_grant_allowed_user_ids
+        if interaction.guild_id is None:
+            return False
+        allowed = self.guild_config(interaction.guild_id).xp_grant_allowed_user_ids
+        return interaction.user.id in allowed
 
     def get_member_last_activity_map(self, conn, guild_id: int, user_ids: list[int]):
         from bot_modules.core.xp_system import get_member_last_activity_map

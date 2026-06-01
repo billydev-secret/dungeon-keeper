@@ -36,18 +36,26 @@ def open_db(db_path: Path) -> Generator[sqlite3.Connection, None, None]:
 
 
 def get_config_value(
-    conn: sqlite3.Connection, key: str, default: str, guild_id: int = 0
+    conn: sqlite3.Connection,
+    key: str,
+    default: str,
+    guild_id: int = 0,
+    *,
+    allow_legacy_fallback: bool = True,
 ) -> str:
     """Retrieve configuration value from config table.
 
-    Tries guild-specific first, then falls back to ``guild_id=0`` (legacy).
+    Tries guild-specific first, then (unless ``allow_legacy_fallback`` is False)
+    falls back to ``guild_id=0`` (legacy). Pass ``allow_legacy_fallback=False``
+    for non-home guilds so an unconfigured guild gets real defaults instead of
+    silently inheriting the legacy/home ``guild_id=0`` values.
     """
     row = conn.execute(
         "SELECT value FROM config WHERE guild_id = ? AND key = ?", (guild_id, key)
     ).fetchone()
     if row:
         return row["value"]
-    if guild_id != 0:
+    if guild_id != 0 and allow_legacy_fallback:
         # Fall back to legacy (guild_id=0) row
         row = conn.execute(
             "SELECT value FROM config WHERE guild_id = 0 AND key = ?", (key,)
@@ -55,6 +63,15 @@ def get_config_value(
         if row:
             return row["value"]
     return default
+
+
+def get_tz_offset_hours(conn: sqlite3.Connection, guild_id: int = 0) -> float:
+    """Return the guild's configured UTC offset (hours), defaulting to 0.0."""
+    raw = get_config_value(conn, "tz_offset_hours", "0", guild_id)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def set_config_value(
@@ -111,11 +128,18 @@ def clear_config_id_bucket(
 
 
 def get_config_id_set(
-    conn: sqlite3.Connection, bucket: str, guild_id: int = 0
+    conn: sqlite3.Connection,
+    bucket: str,
+    guild_id: int = 0,
+    *,
+    allow_legacy_fallback: bool = True,
 ) -> set[int]:
     """Retrieve set of integer IDs from config_ids table for given bucket.
 
-    Tries guild-specific first, then falls back to ``guild_id=0`` (legacy).
+    Tries guild-specific first, then (unless ``allow_legacy_fallback`` is False)
+    falls back to ``guild_id=0`` (legacy). Pass ``allow_legacy_fallback=False``
+    for non-home guilds so an unconfigured guild gets an empty set instead of
+    silently inheriting the legacy/home ``guild_id=0`` values.
     """
     rows = conn.execute(
         "SELECT value FROM config_ids WHERE guild_id = ? AND bucket = ? ORDER BY value",
@@ -123,7 +147,7 @@ def get_config_id_set(
     ).fetchall()
     if rows:
         return {int(row["value"]) for row in rows}
-    if guild_id != 0:
+    if guild_id != 0 and allow_legacy_fallback:
         rows = conn.execute(
             "SELECT value FROM config_ids WHERE guild_id = 0 AND bucket = ? ORDER BY value",
             (bucket,),

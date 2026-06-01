@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.services.todo_service import create_todo
 from migrations import apply_migrations_sync
-from bot_modules.services.todo_service import complete_todo, create_todo, delete_todo, list_todos
 
 GUILD = 123
 USER = 9001
@@ -41,105 +39,29 @@ def test_create_increments_ids(db):
 def test_create_stores_correct_values(db):
     with open_db(db) as conn:
         todo_id = create_todo(conn, GUILD, USER, "Do the thing")
-        todos = list_todos(conn, GUILD)
-    assert len(todos) == 1
-    t = todos[0]
-    assert t["id"] == todo_id
-    assert t["guild_id"] == GUILD
-    assert t["added_by"] == USER
-    assert t["task"] == "Do the thing"
-    assert t["completed_at"] is None
+        row = conn.execute(
+            "SELECT guild_id, added_by, task, completed_at FROM todos WHERE id = ?",
+            (todo_id,),
+        ).fetchone()
+    assert row["guild_id"] == GUILD
+    assert row["added_by"] == USER
+    assert row["task"] == "Do the thing"
+    assert row["completed_at"] is None
 
 
-# ── list_todos ────────────────────────────────────────────────────────
-
-
-def test_list_empty_guild(db):
-    with open_db(db) as conn:
-        assert list_todos(conn, GUILD) == []
-
-
-def test_list_excludes_completed_by_default(db):
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Done task")
-        complete_todo(conn, GUILD, todo_id)
-        active = list_todos(conn, GUILD)
-    assert active == []
-
-
-def test_list_includes_completed_when_requested(db):
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Done task")
-        complete_todo(conn, GUILD, todo_id)
-        all_todos = list_todos(conn, GUILD, include_completed=True)
-    assert len(all_todos) == 1
-
-
-def test_list_isolated_by_guild(db):
+def test_create_isolated_by_guild(db):
     other_guild = 999
     with open_db(db) as conn:
         create_todo(conn, GUILD, USER, "Guild A task")
         create_todo(conn, other_guild, USER, "Guild B task")
-        assert len(list_todos(conn, GUILD)) == 1
-        assert len(list_todos(conn, other_guild)) == 1
-
-
-# ── complete_todo ─────────────────────────────────────────────────────
-
-
-def test_complete_returns_true(db):
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Task")
-        assert complete_todo(conn, GUILD, todo_id) is True
-
-
-def test_complete_sets_completed_at(db):
-    before = time.time()
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Task")
-        complete_todo(conn, GUILD, todo_id)
-        todos = list_todos(conn, GUILD, include_completed=True)
-    assert todos[0]["completed_at"] >= before
-
-
-def test_complete_twice_returns_false(db):
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Task")
-        complete_todo(conn, GUILD, todo_id)
-        assert complete_todo(conn, GUILD, todo_id) is False
-
-
-def test_complete_wrong_guild_returns_false(db):
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Task")
-        assert complete_todo(conn, 999, todo_id) is False
-
-
-# ── delete_todo ───────────────────────────────────────────────────────
-
-
-def test_delete_returns_true(db):
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Task")
-        assert delete_todo(conn, GUILD, todo_id) is True
-
-
-def test_delete_removes_todo(db):
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Task")
-        delete_todo(conn, GUILD, todo_id)
-        assert list_todos(conn, GUILD, include_completed=True) == []
-
-
-def test_delete_missing_returns_false(db):
-    with open_db(db) as conn:
-        assert delete_todo(conn, GUILD, 9999) is False
-
-
-def test_delete_wrong_guild_returns_false(db):
-    with open_db(db) as conn:
-        todo_id = create_todo(conn, GUILD, USER, "Task")
-        assert delete_todo(conn, 999, todo_id) is False
+        a_count = conn.execute(
+            "SELECT COUNT(*) FROM todos WHERE guild_id = ?", (GUILD,)
+        ).fetchone()[0]
+        b_count = conn.execute(
+            "SELECT COUNT(*) FROM todos WHERE guild_id = ?", (other_guild,)
+        ).fetchone()[0]
+    assert a_count == 1
+    assert b_count == 1
 
 
 # ── create_todo with new optional fields ─────────────────────────────

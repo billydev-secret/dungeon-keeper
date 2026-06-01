@@ -4,18 +4,23 @@ Name Your Price — game cog.
 A scenario is posed and everyone secretly submits a dollar amount for how much
 money it would take for them to do it.  Prices are revealed sorted lowest to
 highest, then the room votes on "Most Reasonable" and "Most Unhinged."
+
+Pure logic and embed builders live in
+``bot_modules/games_price/{logic,embeds}.py``; this module keeps only
+the Discord glue (slash command, modals, views, round loop).
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import random
-import statistics
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_JOINING, PHASE_PLAYING, PHASE_RESULTS, PHASE_RECAP
+from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_RECAP
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
@@ -32,63 +37,32 @@ from bot_modules.games.utils.game_manager import (
 from bot_modules.games.utils.question_source import get_price_scenario
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.utils.timer import GameTimer
+from bot_modules.games_price.embeds import (
+    build_recap_embed,
+    build_reveal_embed,
+    build_round_results_embed,
+    build_scenario_embed,
+    build_start_embed,
+    build_vote_embed,
+)
+from bot_modules.games_price.logic import (
+    build_ladder,
+    collect_all_players,
+    compute_highlight,
+    compute_recap_awards,
+    format_price,
+    parse_price,
+    tally_winners,
+)
 
 log = logging.getLogger(__name__)
-
-# ── Price parsing / formatting ───────────────────────────────────────────────
-
-def parse_price(raw: str) -> int | None:
-    """Parse user input into an integer dollar amount (0 – 999,999,999)."""
-    cleaned = raw.strip().replace("$", "").replace(",", "").strip()
-    if not cleaned:
-        return None
-
-    multipliers = {
-        "k": 1_000, "m": 1_000_000, "million": 1_000_000,
-        "b": 1_000_000_000, "billion": 1_000_000_000,
-    }
-    lower = cleaned.lower()
-    for suffix, mult in multipliers.items():
-        if lower.endswith(suffix):
-            num_part = cleaned[: len(cleaned) - len(suffix)].strip()
-            try:
-                return max(0, min(int(float(num_part) * mult), 999_999_999))
-            except ValueError:
-                return None
-
-    try:
-        value = int(float(cleaned))
-        return max(0, min(value, 999_999_999))
-    except ValueError:
-        return None
-
-
-def format_price(amount: int) -> str:
-    if amount >= 1_000_000_000:
-        return f"${amount / 1_000_000_000:.1f}B"
-    elif amount >= 1_000_000:
-        return f"${amount / 1_000_000:.1f}M"
-    elif amount >= 1_000:
-        return f"${amount:,}"
-    else:
-        return f"${amount}"
-
-
-def _price_label(amount: int) -> str:
-    """Price string with optional flavour for extremes."""
-    base = format_price(amount)
-    if amount == 0:
-        return f"{base} (free?!)"
-    if amount >= 999_000_000:
-        return f"{base} (absolutely not)"
-    return base
 
 
 # ── AI prompts ───────────────────────────────────────────────────────────────
 
 PRICE_SYSTEM_PROMPT = (
     "You are generating 'Name Your Price' scenarios for an adult party game "
-    "in the Golden Meadow Discord community. Each scenario poses a situation "
+    "in this Discord community. Each scenario poses a situation "
     "where players must decide how much money it would take for them to do it. "
     "Scenarios should be funny, creative, slightly uncomfortable, or absurd. "
     "They should be things where different people would genuinely price differently."
@@ -104,171 +78,6 @@ PRICE_USER_PROMPT = (
     "- How much to let your ex write your dating profile?\n"
     "Return only the scenario text, no preamble."
 )
-
-
-# ── Embed builders ───────────────────────────────────────────────────────────
-
-def _footer(host_name: str) -> str:
-    return f"{GAME_ICONS['price']} Name Your Price • Hosted by {host_name}"
-
-
-def build_start_embed(host_name: str, round_num: int, total_rounds: int) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} NAME YOUR PRICE",
-        description=f"Hosted by: **{discord.utils.escape_markdown(host_name)}** | "
-                    f"Round {round_num}/{total_rounds}",
-        color=PHASE_JOINING,
-    )
-    embed.add_field(name="Status", value="Starting up — first scenario incoming...", inline=False)
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_scenario_embed(
-    host_name: str,
-    scenario: str,
-    round_num: int,
-    total_rounds: int,
-    timer_secs: int,
-    submitted: int,
-    total_players: int | None = None,
-) -> discord.Embed:
-    from bot_modules.games.utils.timer import format_deadline, now_plus
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} NAME YOUR PRICE — Round {round_num}/{total_rounds}",
-        color=PHASE_PLAYING,
-    )
-    embed.add_field(name="Timer", value=format_deadline(now_plus(timer_secs)), inline=False)
-    embed.add_field(
-        name="Scenario",
-        value=f'# "{discord.utils.escape_markdown(scenario)}"',
-        inline=False,
-    )
-    sub_text = f"💵 Submitted: **{submitted}**"
-    if total_players is not None:
-        sub_text += f"/{total_players}"
-    embed.add_field(name="Submissions", value=sub_text, inline=False)
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_reveal_embed(
-    host_name: str,
-    scenario: str,
-    round_num: int,
-    total_rounds: int,
-    ladder: list[tuple[str, int]],
-    guild,
-) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} REVEAL — Round {round_num}/{total_rounds}",
-        color=PHASE_RESULTS,
-    )
-    embed.add_field(
-        name="Scenario",
-        value=f'"{discord.utils.escape_markdown(scenario)}"',
-        inline=False,
-    )
-    lines = []
-    for name, amount in ladder:
-        lines.append(f"`{format_price(amount):>12}` — **{discord.utils.escape_markdown(name)}**"
-                      + (" (free?!)" if amount == 0 else "")
-                      + (" (absolutely not)" if amount >= 999_000_000 else ""))
-    embed.add_field(name="💵 Price Ladder", value="\n".join(lines) or "—", inline=False)
-
-    amounts = [a for _, a in ladder]
-    if amounts:
-        spread = f"{format_price(min(amounts))} — {format_price(max(amounts))}"
-        median = format_price(int(statistics.median(amounts)))
-        avg = format_price(int(statistics.mean(amounts)))
-        embed.add_field(name="📊 Stats", value=f"Spread: {spread}\nMedian: {median}\nAverage: {avg}", inline=False)
-
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_vote_embed(
-    host_name: str,
-    scenario: str,
-    round_num: int,
-    total_rounds: int,
-    timer_secs: int,
-) -> discord.Embed:
-    from bot_modules.games.utils.timer import format_deadline, now_plus
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} VOTE — Round {round_num}/{total_rounds}",
-        color=PHASE_PLAYING,
-    )
-    embed.add_field(name="Timer", value=format_deadline(now_plus(timer_secs)), inline=False)
-    embed.add_field(
-        name="Scenario",
-        value=f'"{discord.utils.escape_markdown(scenario)}"',
-        inline=False,
-    )
-    embed.add_field(
-        name="Vote",
-        value="Who had the **Most Reasonable** price? Who was the **Most Unhinged**?",
-        inline=False,
-    )
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_round_results_embed(
-    host_name: str,
-    round_num: int,
-    total_rounds: int,
-    reasonable_winner: str,
-    reasonable_price: int,
-    reasonable_votes: int,
-    unhinged_winner: str,
-    unhinged_price: int,
-    unhinged_votes: int,
-) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} ROUND {round_num} RESULTS",
-        color=PHASE_RESULTS,
-    )
-    embed.add_field(
-        name="🎯 Most Reasonable",
-        value=f"**{discord.utils.escape_markdown(reasonable_winner)}** ({format_price(reasonable_price)}) — {reasonable_votes} vote{'s' if reasonable_votes != 1 else ''}",
-        inline=False,
-    )
-    embed.add_field(
-        name="🤯 Most Unhinged",
-        value=f"**{discord.utils.escape_markdown(unhinged_winner)}** ({format_price(unhinged_price)}) — {unhinged_votes} vote{'s' if unhinged_votes != 1 else ''}",
-        inline=False,
-    )
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_recap_embed(
-    host_name: str,
-    rounds_played: int,
-    player_count: int,
-    awards: dict,
-    highlight: str | None,
-) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['price']} NAME YOUR PRICE — GAME OVER",
-        color=PHASE_RECAP,
-    )
-    embed.add_field(
-        name="Summary",
-        value=f"🎮 Rounds played: **{rounds_played}**\n👥 Players: **{player_count}**",
-        inline=False,
-    )
-    award_lines = []
-    for key, (label, name, detail) in awards.items():
-        if name:
-            award_lines.append(f"{label} **{discord.utils.escape_markdown(name)}** — {detail}")
-    if award_lines:
-        embed.add_field(name="🏆 Awards", value="\n".join(award_lines), inline=False)
-    if highlight:
-        embed.add_field(name="💡 Highlight", value=highlight, inline=False)
-    embed.set_footer(text=_footer(host_name))
-    return embed
 
 
 # ── Modals ───────────────────────────────────────────────────────────────────
@@ -1024,9 +833,9 @@ class PriceCog(commands.Cog):
             return
 
         # ── Reveal phase ──
-        ladder = sorted(prices.items(), key=lambda x: x[1])
+        ladder = build_ladder(prices)
         named_ladder = [(resolve_name(guild, uid), amt) for uid, amt in ladder]
-        reveal_embed = build_reveal_embed(host_name, scenario, round_num, total_rounds, named_ladder, guild)
+        reveal_embed = build_reveal_embed(host_name, scenario, round_num, total_rounds, named_ladder)
 
         try:
             await msg.edit(embed=reveal_embed, view=None)
@@ -1105,28 +914,8 @@ class PriceCog(commands.Cog):
             pass
 
         # ── Tally votes ──
-        reasonable_tally: dict[int, int] = {}
-        for voter, target in vote_view.reasonable_votes.items():
-            reasonable_tally[target] = reasonable_tally.get(target, 0) + 1
-
-        unhinged_tally: dict[int, int] = {}
-        for voter, target in vote_view.unhinged_votes.items():
-            unhinged_tally[target] = unhinged_tally.get(target, 0) + 1
-
-        # Winners (handle ties by picking all with max votes)
-        r_winner_uid, r_votes = None, 0
-        if reasonable_tally:
-            max_r = max(reasonable_tally.values())
-            r_winners = [uid for uid, v in reasonable_tally.items() if v == max_r]
-            r_winner_uid = r_winners[0]
-            r_votes = max_r
-
-        u_winner_uid, u_votes = None, 0
-        if unhinged_tally:
-            max_u = max(unhinged_tally.values())
-            u_winners = [uid for uid, v in unhinged_tally.items() if v == max_u]
-            u_winner_uid = u_winners[0]
-            u_votes = max_u
+        r_winners, r_votes = tally_winners(vote_view.reasonable_votes)
+        u_winners, u_votes = tally_winners(vote_view.unhinged_votes)
 
         # Save votes to payload
         payload = await get_game_payload(self.db, game_id)
@@ -1139,27 +928,27 @@ class PriceCog(commands.Cog):
 
         # Update running scores — all tied winners get a point
         scores = payload.setdefault("scores", {"reasonable_wins": {}, "unhinged_wins": {}})
-        if reasonable_tally:
-            for uid in r_winners:
-                key = str(uid)
-                scores["reasonable_wins"][key] = scores["reasonable_wins"].get(key, 0) + 1
-        if unhinged_tally:
-            for uid in u_winners:
-                key = str(uid)
-                scores["unhinged_wins"][key] = scores["unhinged_wins"].get(key, 0) + 1
+        for uid in r_winners:
+            key = str(uid)
+            scores["reasonable_wins"][key] = scores["reasonable_wins"].get(key, 0) + 1
+        for uid in u_winners:
+            key = str(uid)
+            scores["unhinged_wins"][key] = scores["unhinged_wins"].get(key, 0) + 1
 
         await update_game_payload(self.db, game_id, payload)
 
         # ── Show round results ──
+        r_winner_uid = r_winners[0] if r_winners else None
+        u_winner_uid = u_winners[0] if u_winners else None
         r_name = resolve_name(guild, r_winner_uid) if r_winner_uid else "Nobody"
         u_name = resolve_name(guild, u_winner_uid) if u_winner_uid else "Nobody"
         r_price = prices.get(r_winner_uid, 0) if r_winner_uid else 0
         u_price = prices.get(u_winner_uid, 0) if u_winner_uid else 0
 
         # If ties, list all winners
-        if reasonable_tally and len(r_winners) > 1:
+        if len(r_winners) > 1:
             r_name = " & ".join(resolve_name(guild, uid) for uid in r_winners)
-        if unhinged_tally and len(u_winners) > 1:
+        if len(u_winners) > 1:
             u_name = " & ".join(resolve_name(guild, uid) for uid in u_winners)
 
         results_embed = build_round_results_embed(
@@ -1191,89 +980,25 @@ class PriceCog(commands.Cog):
         rounds_data = payload.get("rounds", {})
         scores = payload.get("scores", {"reasonable_wins": {}, "unhinged_wins": {}})
 
-        # Gather all prices per player across all rounds
-        player_prices: dict[int, list[int]] = {}
-        for rnd in rounds_data.values():
-            for uid_str, amt in rnd.get("prices", {}).items():
-                uid = int(uid_str)
-                player_prices.setdefault(uid, []).append(amt)
-
-        all_players = set(player_prices.keys())
+        all_players = collect_all_players(rounds_data)
         rounds_played = len(rounds_data)
 
-        # Build awards
-        awards = {}
-
-        # Most Reasonable overall
-        rw = scores.get("reasonable_wins", {})
-        if rw:
-            max_r = max(rw.values())
-            winners = [uid for uid, v in rw.items() if v == max_r]
-            name = " & ".join(resolve_name(guild, int(uid)) for uid in winners)
-            awards["reasonable"] = ("🎯 Most Reasonable (overall):", name, f"won {max_r} round{'s' if max_r != 1 else ''}")
-
-        # Most Unhinged overall
-        uw = scores.get("unhinged_wins", {})
-        if uw:
-            max_u = max(uw.values())
-            winners = [uid for uid, v in uw.items() if v == max_u]
-            name = " & ".join(resolve_name(guild, int(uid)) for uid in winners)
-            awards["unhinged"] = ("🤯 Most Unhinged (overall):", name, f"won {max_u} round{'s' if max_u != 1 else ''}")
-
-        # Biggest Spender (highest average)
-        if player_prices:
-            avg_prices = {uid: statistics.mean(p) for uid, p in player_prices.items()}
-            max_avg_uid = max(avg_prices, key=avg_prices.get)
-            awards["spender"] = (
-                "💸 Biggest Spender:",
-                resolve_name(guild, max_avg_uid),
-                f"avg {format_price(int(avg_prices[max_avg_uid]))}",
-            )
-
-            # Cheapest Date (lowest average)
-            min_avg_uid = min(avg_prices, key=avg_prices.get)
-            awards["cheapest"] = (
-                "🆓 Cheapest Date:",
-                resolve_name(guild, min_avg_uid),
-                f"avg {format_price(int(avg_prices[min_avg_uid]))}",
-            )
-
-        # Consistency / Wildest Swings (need at least 2 rounds of data)
-        multi_round_players = {uid: p for uid, p in player_prices.items() if len(p) >= 2}
-        if multi_round_players:
-            std_devs = {uid: statistics.stdev(p) for uid, p in multi_round_players.items()}
-            most_consistent = min(std_devs, key=std_devs.get)
-            awards["consistent"] = (
-                "📏 Most Consistent:",
-                resolve_name(guild, most_consistent),
-                f"std dev {format_price(int(std_devs[most_consistent]))}",
-            )
-            wildest = max(std_devs, key=std_devs.get)
-            awards["wildest"] = (
-                "🎢 Wildest Swings:",
-                resolve_name(guild, wildest),
-                f"std dev {format_price(int(std_devs[wildest]))}",
-            )
+        # Build awards — logic returns (label, [uids], detail); resolve uids here.
+        raw_awards = compute_recap_awards(rounds_data, scores)
+        awards: dict[str, tuple[str, str, str]] = {}
+        for slug, (label, uids, detail) in raw_awards.items():
+            name = " & ".join(resolve_name(guild, uid) for uid in uids)
+            awards[slug] = (label, name, detail)
 
         # Highlight — widest spread round
-        highlight = None
-        if rounds_data:
-            widest_round = None
-            widest_spread = -1
-            for rnum, rnd in rounds_data.items():
-                p = rnd.get("prices", {})
-                if len(p) >= 2:
-                    amounts = list(p.values())
-                    spread = max(amounts) - min(amounts)
-                    if spread > widest_spread:
-                        widest_spread = spread
-                        widest_round = rnum
-            if widest_round is not None:
-                rnd_prices = list(rounds_data[widest_round]["prices"].values())
-                highlight = (
-                    f"Round {widest_round} had the widest spread — "
-                    f"{format_price(min(rnd_prices))} to {format_price(max(rnd_prices))}"
-                )
+        highlight: str | None = None
+        hi = compute_highlight(rounds_data)
+        if hi is not None:
+            rnum, lo, hi_amt = hi
+            highlight = (
+                f"Round {rnum} had the widest spread — "
+                f"{format_price(lo)} to {format_price(hi_amt)}"
+            )
 
         recap_embed = build_recap_embed(host_name, rounds_played, len(all_players), awards, highlight)
         recap_view = PriceRecapView(game_id, host_id, self, settings)

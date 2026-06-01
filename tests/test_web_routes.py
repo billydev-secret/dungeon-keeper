@@ -59,7 +59,10 @@ class _TestCtx:
         self.greeter_role_id = 0
         self.greeter_chat_channel_id = 0
         self.join_leave_log_channel_id = 0
+        self.mod_role_ids: set[int] = set()
+        self.admin_role_ids: set[int] = set()
         self.reload_xp_settings_calls = 0
+        self._guild_config_cache: dict = {}
 
     def open_db(self):
         return open_db(self.db_path)
@@ -69,6 +72,30 @@ class _TestCtx:
 
     def reload_grant_roles(self) -> None:
         pass
+
+    def reload_permission_roles(self) -> None:
+        from bot_modules.core.db_utils import get_config_value
+
+        with self.open_db() as conn:
+            mod_raw = get_config_value(conn, "mod_role_ids", "", self.guild_id)
+            admin_raw = get_config_value(conn, "admin_role_ids", "", self.guild_id)
+        self.mod_role_ids = {int(x) for x in mod_raw.split(",") if x.strip().isdigit()}
+        self.admin_role_ids = {int(x) for x in admin_raw.split(",") if x.strip().isdigit()}
+
+    def guild_config(self, guild_id: int):
+        from bot_modules.core.app_context import GuildConfig
+
+        cfg = self._guild_config_cache.get(guild_id)
+        if cfg is None:
+            with self.open_db() as conn:
+                cfg = GuildConfig.load(
+                    conn, guild_id, allow_legacy_fallback=(guild_id == self.guild_id)
+                )
+            self._guild_config_cache[guild_id] = cfg
+        return cfg
+
+    def invalidate_guild_config(self, guild_id: int) -> None:
+        self._guild_config_cache.pop(guild_id, None)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -346,13 +373,16 @@ def test_update_role_grant_creates_row_and_permissions(ctx, make_client):
     assert permissions == {("role", 704), ("user", 705)}
 
 
-def test_config_edits_require_primary_guild(ctx, make_client):
+def test_config_edits_work_for_non_primary_guild(ctx, make_client):
+    # All config editing is now per-guild — a non-primary guild can edit its own
+    # config (no more primary-guild gating). Writes are scoped to the active guild.
     client = make_client(auth_mode="discord", active_guild_id=999)
 
-    response = client.put("/api/config/global", json={"tz_offset_hours": 3.0})
+    response = client.put(
+        "/api/config/prune", json={"role_id": "1", "inactivity_days": 30}
+    )
 
-    assert response.status_code == 403
-    assert "primary guild" in response.json()["detail"].lower()
+    assert response.status_code == 200
 
 
 def test_reports_cache_clear_endpoint_scopes_to_active_guild(ctx, make_client):
@@ -369,7 +399,9 @@ def test_reports_cache_clear_endpoint_scopes_to_active_guild(ctx, make_client):
 
 
 def test_role_growth_endpoint_caches_results_and_parses_roles(ctx, make_client):
-    ctx.tz_offset_hours = 3.5
+    # tz is now read per-guild fresh from the DB, not the ctx flat.
+    with open_db(ctx.db_path) as conn:
+        set_config_value(conn, "tz_offset_hours", "3.5", ctx.guild_id)
     client = make_client()
     payload = {
         "resolution": "month",

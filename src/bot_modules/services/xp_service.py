@@ -64,7 +64,7 @@ def should_grant_level_role(
 
 def channel_is_xp_allowed(
     channel: GuildTextLike,
-    excluded_channel_ids: set[int],
+    excluded_channel_ids: frozenset[int] | set[int],
 ) -> bool:
     """Check if XP should be awarded in a channel."""
     channel_id = getattr(channel, "id", None)

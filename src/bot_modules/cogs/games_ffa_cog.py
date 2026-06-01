@@ -3,7 +3,7 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, GAME_ICONS, HOW_TO_PLAY
+from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
@@ -15,21 +15,10 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     ConfirmCloseView,
 )
+from bot_modules.games_ffa.embeds import build_ffa_embed
+from bot_modules.games_ffa.logic import add_anon_reply
 
 log = logging.getLogger(__name__)
-
-
-def build_ffa_embed(question: str, host_name: str, reply_count: int = 0) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['ffa']} FREE FOR ALL",
-        color=GOLDEN_MEADOW_COLOR,
-    )
-    embed.add_field(name="Question", value=f"# {discord.utils.escape_markdown(question)}", inline=False)
-    footer_parts = [f"{GAME_ICONS['ffa']} Free For All"]
-    if reply_count > 0:
-        footer_parts.append(f"📊 {reply_count} anonymous replies")
-    embed.set_footer(text=" • ".join(footer_parts))
-    return embed
 
 
 class AnonymousReplyModal(discord.ui.Modal, title="Anonymous Reply"):
@@ -50,12 +39,7 @@ class AnonymousReplyModal(discord.ui.Modal, title="Anonymous Reply"):
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Anonymous Reply", interaction.channel.name if interaction.channel else "unknown")
         def _add_reply(payload):
-            anon_replies = payload.setdefault("anon_replies", {})
-            anon_id = len(anon_replies) + 1
-            anon_replies[str(anon_id)] = {
-                "user_id": interaction.user.id,
-                "text": self.answer.value,
-            }
+            add_anon_reply(payload, interaction.user.id, self.answer.value)
         payload = await modify_payload(self.db, self.game_id, _add_reply)
 
         # Audit log
@@ -78,7 +62,6 @@ class AnonymousReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             try:
                 embed = build_ffa_embed(
                     self.ffa_view.question,
-                    "",
                     reply_count=len(anon_replies),
                 )
                 await self.ffa_view._game_msg.edit(embed=embed)
@@ -197,7 +180,7 @@ class FFACog(commands.Cog):
         )
 
         log.info("Game %s (ffa) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-        embed = build_ffa_embed(question, interaction.user.display_name)
+        embed = build_ffa_embed(question)
         view = FFAView(game_id, interaction.user.id, question, self.db, self.bot)
         self.bot.active_views[game_id] = view
 

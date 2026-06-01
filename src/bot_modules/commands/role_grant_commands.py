@@ -177,7 +177,7 @@ def register_role_grant_commands(bot: Bot, ctx: AppContext) -> None:
         current: str,
     ) -> list[app_commands.Choice[str]]:
         choices: list[app_commands.Choice[str]] = []
-        for key, cfg in ctx.grant_roles.items():
+        for key, cfg in ctx.guild_config(interaction.guild_id or 0).grant_roles.items():
             if (
                 current.lower() in key.lower()
                 or current.lower() in cfg["label"].lower()
@@ -201,7 +201,7 @@ def register_role_grant_commands(bot: Bot, ctx: AppContext) -> None:
                 "You don't have permission to use this command.", ephemeral=True
             )
             return
-        cfg = ctx.grant_roles.get(role)
+        cfg = ctx.guild_config(interaction.guild_id or 0).grant_roles.get(role)
         if cfg is None:
             await interaction.response.send_message(
                 "This grant role is not configured.", ephemeral=True

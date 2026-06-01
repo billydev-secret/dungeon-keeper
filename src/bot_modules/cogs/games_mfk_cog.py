@@ -1,9 +1,8 @@
 import logging
-import random
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, GAME_ICONS, HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     create_game,
@@ -15,25 +14,19 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     resolve_names,
 )
+from bot_modules.games_mfk.embeds import (
+    build_assignments_embed,
+    build_lobby_embed,
+)
+from bot_modules.games_mfk.logic import (
+    DEFAULT_LABELS,
+    assign_targets,
+    parse_labels,
+    serialize_assignments,
+    toggle_participant,
+)
 
 log = logging.getLogger(__name__)
-
-DEFAULT_LABELS = ["Marry", "Fornicate", "Kiss"]
-
-
-def build_mfk_embed(host_name: str, participants: list[str], labels: list[str] | None = None) -> discord.Embed:
-    labels = labels or DEFAULT_LABELS
-    title_str = ", ".join(labels)
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['mfk']} {title_str.upper()}",
-        color=GOLDEN_MEADOW_COLOR,
-    )
-    embed.add_field(name="Host", value=host_name, inline=True)
-    embed.add_field(name="Categories", value=" · ".join(f"**{lbl}**" for lbl in labels), inline=True)
-    pool_str = ", ".join(participants) if participants else "—"
-    embed.add_field(name=f"Pool ({len(participants)})", value=pool_str, inline=False)
-    embed.set_footer(text=f"{GAME_ICONS['mfk']} {title_str}")
-    return embed
 
 
 class MFKView(discord.ui.View):
@@ -57,16 +50,10 @@ class MFKView(discord.ui.View):
     async def join_pool(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         user_id = interaction.user.id
-        action_holder = {}
+        action_holder: dict[str, str] = {}
 
         def _toggle(payload):
-            participants = payload.setdefault("participants", [])
-            if user_id in participants:
-                participants.remove(user_id)
-                action_holder["action"] = "left"
-            else:
-                participants.append(user_id)
-                action_holder["action"] = "joined"
+            action_holder["action"] = toggle_participant(payload, user_id)
 
         payload = await modify_payload(self.db, self.game_id, _toggle)
         action = action_holder["action"]
@@ -74,7 +61,7 @@ class MFKView(discord.ui.View):
 
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
         names = resolve_names(interaction.guild, payload.get("participants", []))
-        embed = build_mfk_embed(
+        embed = build_lobby_embed(
             host_member.display_name if host_member else "Host",
             names,
             labels=self.labels,
@@ -102,33 +89,23 @@ class MFKView(discord.ui.View):
         await interaction.response.defer()
 
         # Each player gets 3 random names from the pool (not themselves)
-        assignments = {}
-        for player_id in participants:
-            others = [p for p in participants if p != player_id]
-            assignments[player_id] = random.sample(others, 3)
+        assignments = assign_targets(participants)
 
-        title_str = ", ".join(self.labels)
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['mfk']} {title_str.upper()} — YOUR THREE NAMES",
-            description=f"Reply with your {title_str} picks!",
-            color=GOLDEN_MEADOW_COLOR,
-        )
-        mentions = []
+        # Resolve mentions + target display names against the live guild
+        player_assignments: list[tuple[str, list[str]]] = []
+        mentions: list[str] = []
         for player_id, trio in assignments.items():
             player = interaction.guild.get_member(player_id) if interaction.guild else None
             player_str = player.mention if player else str(player_id)
             if player:
                 mentions.append(player.mention)
-            names = []
+            target_names: list[str] = []
             for uid in trio:
                 m = interaction.guild.get_member(uid) if interaction.guild else None
-                names.append(m.display_name if m else str(uid))
-            embed.add_field(
-                name=player_str,
-                value=f"**{names[0]}** · **{names[1]}** · **{names[2]}**",
-                inline=False,
-            )
-        embed.set_footer(text=f"{GAME_ICONS['mfk']} {title_str}")
+                target_names.append(m.display_name if m else str(uid))
+            player_assignments.append((player_str, target_names))
+
+        embed = build_assignments_embed(player_assignments, labels=self.labels)
 
         self.stop()
         for item in self.children:
@@ -147,7 +124,7 @@ class MFKView(discord.ui.View):
             self.db,
             self.game_id,
             player_count=len(participants),
-            payload={"assignments": {str(k): v for k, v in assignments.items()}},
+            payload={"assignments": serialize_assignments(assignments)},
         )
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]
@@ -180,9 +157,6 @@ class MFKView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["mfk"], ephemeral=True)
 
-    def _resolve_names(self, guild, participants: list[int]) -> list[str]:
-        return resolve_names(guild, participants)
-
 
 class MFKCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -206,17 +180,10 @@ class MFKCog(commands.Cog):
             return
 
         # Parse custom labels
-        labels = None
-        if options:
-            parts = [p.strip() for p in options.split(",") if p.strip()]
-            if len(parts) != 3:
-                await interaction.response.send_message(
-                    f"Need exactly 3 comma-separated options (got {len(parts)}). "
-                    'Example: `Cruise, Wedding, Vacation`',
-                    ephemeral=True,
-                )
-                return
-            labels = parts
+        labels, label_error = parse_labels(options)
+        if label_error is not None:
+            await interaction.response.send_message(label_error, ephemeral=True)
+            return
 
         game_id = await create_game(
             self.db,
@@ -228,7 +195,7 @@ class MFKCog(commands.Cog):
         )
 
         log.info("Game %s (mfk) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-        embed = build_mfk_embed(interaction.user.display_name, [], labels=labels)
+        embed = build_lobby_embed(interaction.user.display_name, [], labels=labels)
         view = MFKView(game_id, interaction.user.id, self.db, self.bot, labels=labels)
         self.bot.active_views[game_id] = view
 

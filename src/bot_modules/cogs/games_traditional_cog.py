@@ -1,48 +1,35 @@
 import logging
-import random
+
 import discord
-from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, GAME_ICONS, HOW_TO_PLAY
+from discord.ext import commands
+
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
+    ConfirmCloseView,
     check_allowed_channel,
     create_game,
-    update_game_message,
-    update_game_payload,
+    end_game,
     get_game_payload,
     modify_payload,
-    end_game,
+    update_game_message,
+    update_game_payload,
     update_session,
-    ConfirmCloseView,
+)
+from bot_modules.games_traditional.embeds import (
+    build_lobby_embed,
+    build_recap_embed,
+    build_tod_embed,
+    format_question_post,
+)
+from bot_modules.games_traditional.logic import (
+    CAT_LABELS,
+    record_asked,
+    select_next_question_target,
+    toggle_pref,
 )
 
 log = logging.getLogger(__name__)
-
-CATEGORIES = ["sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare"]
-CAT_LABELS = {
-    "sfw_truth": "SFW Truth",
-    "sfw_dare": "SFW Dare",
-    "nsfw_truth": "NSFW Truth",
-    "nsfw_dare": "NSFW Dare",
-}
-
-
-def build_tod_embed(host_name: str, payload: dict, guild=None, closed: bool = False) -> discord.Embed:
-    title = f"{GAME_ICONS['traditional']} TRUTH OR DARE"
-    if closed:
-        title += " — GAME OVER"
-    embed = discord.Embed(title=title, color=GOLDEN_MEADOW_COLOR)
-    embed.add_field(name="Host", value=host_name, inline=True)
-
-    participants: list = payload.get("participants", [])
-    embed.add_field(name="Participants", value=str(len(participants)), inline=True)
-
-    asked = payload.get("asked", {})
-    embed.add_field(name="Questions Asked", value=str(len(asked)), inline=True)
-
-    embed.set_footer(text=f"{GAME_ICONS['traditional']} Truth or Dare")
-    return embed
-
 
 
 class AskQuestionModal(discord.ui.Modal):
@@ -67,19 +54,14 @@ class AskQuestionModal(discord.ui.Modal):
         log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, self.title, interaction.channel.name if interaction.channel else "unknown")
         payload = await get_game_payload(self.db, self.game_id)
 
-        # Record the question
-        asked = payload.setdefault("asked", {})
-        key = f"{self.target_id}:{self.cat}"
-        asked[key] = self.question.value
+        # Record the question (pure dict transform)
+        record_asked(payload, self.target_id, self.cat, self.question.value)
         await update_game_payload(self.db, self.game_id, payload)
 
         target_member = interaction.guild.get_member(int(self.target_id)) if interaction.guild else None
         mention = target_member.mention if target_member else f"**{self.target_name}**"
 
-        await self.channel.send(
-            f"**{GAME_ICONS['traditional']} {CAT_LABELS[self.cat]}** for {mention}\n"
-            f"**{self.question.value}**"
-        )
+        await self.channel.send(format_question_post(self.cat, mention, self.question.value))
 
         await interaction.response.send_message("Question posted!", ephemeral=True)
 
@@ -111,7 +93,7 @@ class TraditionalHostView(discord.ui.View):
     async def _update_embed(self, interaction: discord.Interaction, payload: dict):
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
         host_name = host_member.display_name if host_member else "Host"
-        embed = build_tod_embed(host_name, payload, guild=interaction.guild)
+        embed = build_tod_embed(host_name, payload)
         if hasattr(self, '_message') and self._message:
             try:
                 await self._message.edit(embed=embed, view=self)
@@ -142,26 +124,10 @@ class TraditionalHostView(discord.ui.View):
 
     async def _toggle_pref(self, interaction: discord.Interaction, category: str):
         user_id = interaction.user.id
-        str_id = str(user_id)
-        action_holder = {}
+        action_holder: dict[str, str] = {}
 
         def _do_toggle(payload):
-            participants = payload.setdefault("participants", [])
-            prefs = payload.setdefault("prefs", {})
-
-            if user_id not in participants:
-                participants.append(user_id)
-
-            user_prefs = prefs.setdefault(str_id, [])
-            if category in user_prefs:
-                user_prefs.remove(category)
-                action_holder["action"] = "removed"
-                if not user_prefs:
-                    participants.remove(user_id)
-                    del prefs[str_id]
-            else:
-                user_prefs.append(category)
-                action_holder["action"] = "added"
+            action_holder["action"] = toggle_pref(payload, user_id, category)
 
         payload = await modify_payload(self.db, self.game_id, _do_toggle)
         await self._update_embed(interaction, payload)
@@ -184,29 +150,16 @@ class TraditionalHostView(discord.ui.View):
             await interaction.response.send_message("No players have joined yet!", ephemeral=True)
             return
 
-        available = []
-        for user_id, user_cats in prefs.items():
-            member = interaction.guild.get_member(int(user_id)) if interaction.guild else None
-            name = member.display_name if member else str(user_id)
-            for cat in user_cats:
-                key = f"{user_id}:{cat}"
-                if key not in asked:
-                    available.append((user_id, name, cat))
-
-        if not available:
+        choice = select_next_question_target(prefs, asked)
+        if choice is None:
             await interaction.response.send_message(
                 "All player/category combinations have been asked!", ephemeral=True
             )
             return
 
-        target_counts = {}
-        for user_id, name, cat in available:
-            count = sum(1 for k in asked if k.startswith(f"{user_id}:"))
-            target_counts.setdefault(user_id, count)
-
-        min_count = min(target_counts.values())
-        least_asked = [(uid, name, cat) for uid, name, cat in available if target_counts[uid] == min_count]
-        chosen_uid, chosen_name, chosen_cat = random.choice(least_asked)
+        chosen_uid, chosen_cat = choice
+        member = interaction.guild.get_member(int(chosen_uid)) if interaction.guild else None
+        chosen_name = member.display_name if member else str(chosen_uid)
 
         modal = AskQuestionModal(
             self.game_id, self.db, interaction.channel, self.host_id, self.bot,
@@ -238,23 +191,9 @@ class TraditionalHostView(discord.ui.View):
         payload = await self._get_payload()
         participants = payload.get("participants", [])
         asked = payload.get("asked", {})
-
         total_q = len(asked)
-        by_cat = {cat: 0 for cat in CATEGORIES}
-        for key in asked:
-            _, cat = key.rsplit(":", 1)
-            if cat in by_cat:
-                by_cat[cat] += 1
 
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['traditional']} TRUTH OR DARE — GAME OVER",
-            color=0x808080,
-        )
-        embed.add_field(name="Total Questions Asked", value=str(total_q), inline=True)
-        embed.add_field(name="Participants", value=str(len(participants)), inline=True)
-        for cat, count in by_cat.items():
-            if count:
-                embed.add_field(name=CAT_LABELS[cat], value=str(count), inline=True)
+        embed = build_recap_embed(payload)
 
         self.stop()
         for item in self.children:
@@ -302,15 +241,7 @@ class TraditionalCog(commands.Cog):
             state="joining",
         )
 
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['traditional']} TRUTH OR DARE",
-            description="Select your preferences below to join!",
-            color=GOLDEN_MEADOW_COLOR,
-        )
-        embed.add_field(name="Host", value=interaction.user.display_name, inline=True)
-        embed.add_field(name="Participants", value="0", inline=True)
-        embed.add_field(name="Questions Asked", value="0", inline=True)
-        embed.set_footer(text=f"{GAME_ICONS['traditional']} Truth or Dare")
+        embed = build_lobby_embed(interaction.user.display_name)
 
         log.info("Game %s (traditional) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         host_view = TraditionalHostView(game_id, interaction.user.id, self.db, self.bot)

@@ -74,13 +74,6 @@ _POLICY_VOTE_TIMEOUT_DEFAULT = 72
 router = APIRouter()
 
 
-def _require_primary_guild(request: Request) -> None:
-    """Raise 403 if the active guild is not the primary (config-owning) guild."""
-    ctx = request.app.state.ctx
-    if get_active_guild_id(request) != ctx.guild_id:
-        raise HTTPException(403, "Config editing is only available for the primary guild")
-
-
 # ── Read helpers ───────────────────────────────────────────────────────
 
 
@@ -551,7 +544,7 @@ async def update_global(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
+    is_home = guild_id == ctx.guild_id
 
     def _q():
         with ctx.open_db() as conn:
@@ -559,31 +552,40 @@ async def update_global(
                 set_config_value(
                     conn, "tz_offset_hours", str(body.tz_offset_hours), guild_id
                 )
-                ctx.tz_offset_hours = body.tz_offset_hours
+                if is_home:
+                    ctx.tz_offset_hours = body.tz_offset_hours
             if body.mod_channel_id is not None:
                 set_config_value(
                     conn, "mod_channel_id", body.mod_channel_id, guild_id
                 )
-                ctx.mod_channel_id = int(body.mod_channel_id)
+                if is_home:
+                    ctx.mod_channel_id = int(body.mod_channel_id)
             if body.bypass_role_ids is not None:
                 clear_config_id_bucket(conn, "bypass_role_ids", guild_id)
                 for rid in body.bypass_role_ids:
                     add_config_id(conn, "bypass_role_ids", int(rid), guild_id)
-                ctx.bypass_role_ids = {int(r) for r in body.bypass_role_ids}
+                if is_home:
+                    ctx.bypass_role_ids = {int(r) for r in body.bypass_role_ids}
             if body.recorded_bot_user_ids is not None:
                 clear_config_id_bucket(conn, "recorded_bot_user_ids", guild_id)
                 for uid in body.recorded_bot_user_ids:
                     add_config_id(conn, "recorded_bot_user_ids", int(uid), guild_id)
-                ctx.recorded_bot_user_ids = {
-                    int(u) for u in body.recorded_bot_user_ids
-                }
+                if is_home:
+                    ctx.recorded_bot_user_ids = {
+                        int(u) for u in body.recorded_bot_user_ids
+                    }
             if body.booster_swatch_dir is not None:
-                set_config_value(
-                    conn, "booster_swatch_dir", body.booster_swatch_dir, guild_id
-                )
+                # booster_swatch_dir is a single host filesystem path read
+                # globally (guild_id=0); pin the write there to avoid a
+                # write-to-active / read-from-0 mismatch.
+                set_config_value(conn, "booster_swatch_dir", body.booster_swatch_dir, 0)
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    # tz_offset_hours, mod_channel_id, bypass_role_ids, recorded_bot_user_ids are
+    # read per-guild (guild_config snapshot or fresh tz read); refresh the cache.
+    ctx.invalidate_guild_config(guild_id)
+    return result
 
 
 class WelcomeConfigUpdate(BaseModel):
@@ -605,7 +607,6 @@ async def update_welcome(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     _FIELDS = {
         "welcome_channel_id": "welcome_channel_id",
@@ -624,15 +625,23 @@ async def update_welcome(
                 val = getattr(body, field_name)
                 if val is not None:
                     set_config_value(conn, config_key, val, guild_id)
-                    # Update live context for int fields
-                    if hasattr(ctx, config_key):
+                    # Keep the home guild's flat ctx fields fresh for straggler
+                    # readers not yet migrated to guild_config() (e.g. the
+                    # reports route reads ctx.greeter_role_id /
+                    # ctx.join_leave_log_channel_id). Only for the home guild —
+                    # mutating these for another guild would corrupt home state.
+                    if guild_id == ctx.guild_id and hasattr(ctx, config_key):
                         try:
                             setattr(ctx, config_key, int(val))
                         except ValueError:
                             setattr(ctx, config_key, val)
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    # Welcome/leave handlers read these via ctx.guild_config(guild_id); drop the
+    # cached snapshot so the next event reloads the edited values.
+    ctx.invalidate_guild_config(guild_id)
+    return result
 
 
 @router.get("/config/welcome/preview")
@@ -719,7 +728,11 @@ async def update_xp(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
+    # Per-guild aware: XP config is read at runtime via ctx.guild_config(gid).
+    # In-memory flat-field updates below are kept for the home guild only (some
+    # cosmetic home readers remain); other guilds are refreshed via the
+    # invalidate_guild_config call after the write.
+    is_home = guild_id == ctx.guild_id
 
     def _q():
         with ctx.open_db() as conn:
@@ -727,7 +740,8 @@ async def update_xp(
                 set_config_value(
                     conn, "xp_level_5_role_id", body.level_5_role_id, guild_id
                 )
-                ctx.level_5_role_id = int(body.level_5_role_id)
+                if is_home:
+                    ctx.level_5_role_id = int(body.level_5_role_id)
             if body.level_5_log_channel_id is not None:
                 set_config_value(
                     conn,
@@ -735,7 +749,8 @@ async def update_xp(
                     body.level_5_log_channel_id,
                     guild_id,
                 )
-                ctx.level_5_log_channel_id = int(body.level_5_log_channel_id)
+                if is_home:
+                    ctx.level_5_log_channel_id = int(body.level_5_log_channel_id)
             if body.level_up_log_channel_id is not None:
                 set_config_value(
                     conn,
@@ -743,7 +758,8 @@ async def update_xp(
                     body.level_up_log_channel_id,
                     guild_id,
                 )
-                ctx.level_up_log_channel_id = int(body.level_up_log_channel_id)
+                if is_home:
+                    ctx.level_up_log_channel_id = int(body.level_up_log_channel_id)
             if body.xp_grant_allowed_user_ids is not None:
                 clear_config_id_bucket(
                     conn, "xp_grant_allowed_user_ids", guild_id
@@ -752,9 +768,10 @@ async def update_xp(
                     add_config_id(
                         conn, "xp_grant_allowed_user_ids", int(uid), guild_id
                     )
-                ctx.xp_grant_allowed_user_ids = {
-                    int(u) for u in body.xp_grant_allowed_user_ids
-                }
+                if is_home:
+                    ctx.xp_grant_allowed_user_ids = {
+                        int(u) for u in body.xp_grant_allowed_user_ids
+                    }
             if body.xp_excluded_channel_ids is not None:
                 clear_config_id_bucket(
                     conn, "xp_excluded_channel_ids", guild_id
@@ -763,9 +780,10 @@ async def update_xp(
                     add_config_id(
                         conn, "xp_excluded_channel_ids", int(cid), guild_id
                     )
-                ctx.xp_excluded_channel_ids = {
-                    int(c) for c in body.xp_excluded_channel_ids
-                }
+                if is_home:
+                    ctx.xp_excluded_channel_ids = {
+                        int(c) for c in body.xp_excluded_channel_ids
+                    }
 
             # Persist algorithm coefficients
             _COEFF_FIELDS = [
@@ -793,13 +811,18 @@ async def update_xp(
                         guild_id,
                     )
 
-            # Reload live XP settings on ctx
-            if hasattr(ctx, "reload_xp_settings"):
+            # Reload live XP settings on ctx (home guild only — reload_xp_settings
+            # reads ctx.guild_id).
+            if is_home and hasattr(ctx, "reload_xp_settings"):
                 ctx.reload_xp_settings()
 
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    # XP config is read per-guild via ctx.guild_config(gid); drop the snapshot so
+    # the next message/voice tick reloads the edited values.
+    ctx.invalidate_guild_config(guild_id)
+    return result
 
 
 class PruneConfigUpdate(BaseModel):
@@ -815,7 +838,6 @@ async def update_prune(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         from bot_modules.services.inactivity_prune_service import (
@@ -849,7 +871,6 @@ async def add_prune_exemption(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         add_prune_exception(ctx.db_path, guild_id, int(user_id))
@@ -866,7 +887,6 @@ async def delete_prune_exemption(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         remove_prune_exception(ctx.db_path, guild_id, int(user_id))
@@ -898,7 +918,6 @@ async def preview_prune(
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     if not body.role_id or body.role_id == "0" or body.inactivity_days <= 0:
         return {"role_name": None, "candidates": []}
@@ -978,7 +997,6 @@ async def update_moderation(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     _FIELDS = {
         "jailed_role_id": "jailed_role_id",
@@ -1006,7 +1024,15 @@ async def update_moderation(
                 )
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    # Permission checks read mod/admin roles via ctx.guild_config(guild_id); drop
+    # the cached snapshot so the next check reloads the edited roles.
+    ctx.invalidate_guild_config(guild_id)
+    if guild_id == ctx.guild_id:
+        # Keep the home guild's flat role caches in sync for stragglers not yet
+        # migrated to guild_config() (e.g. setup_cog reads ctx.mod_role_ids).
+        ctx.reload_permission_roles()
+    return result
 
 
 class RoleGrantUpdate(BaseModel):
@@ -1028,7 +1054,6 @@ async def update_role_grant(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1085,10 +1110,13 @@ async def update_role_grant(
                         perm["entity_type"],
                         int(perm["entity_id"]),
                     )
-        ctx.reload_grant_roles()
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    ctx.invalidate_guild_config(guild_id)
+    if guild_id == ctx.guild_id:
+        ctx.reload_grant_roles()
+    return result
 
 
 @router.delete("/config/roles/{grant_name}")
@@ -1099,14 +1127,17 @@ async def delete_role_grant(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
             delete_grant_role(conn, guild_id, grant_name)
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    ctx.invalidate_guild_config(guild_id)
+    if guild_id == ctx.guild_id:
+        ctx.reload_grant_roles()
+    return result
 
 
 class SpoilerConfigUpdate(BaseModel):
@@ -1121,7 +1152,7 @@ async def update_spoiler(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
+    is_home = guild_id == ctx.guild_id
 
     def _q():
         with ctx.open_db() as conn:
@@ -1131,12 +1162,16 @@ async def update_spoiler(
                     add_config_id(
                         conn, "spoiler_required_channels", int(cid), guild_id
                     )
-                ctx.spoiler_required_channels = {
-                    int(c) for c in body.spoiler_required_channels
-                }
+                if is_home:
+                    ctx.spoiler_required_channels = {
+                        int(c) for c in body.spoiler_required_channels
+                    }
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    # on_message reads spoiler channels via ctx.guild_config(gid); refresh it.
+    ctx.invalidate_guild_config(guild_id)
+    return result
 
 
 # ── Booster roles ─────────────────────────────────────────────────────
@@ -1158,7 +1193,6 @@ async def update_booster_role(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1184,7 +1218,6 @@ async def remove_booster_role(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1209,7 +1242,6 @@ async def post_booster_panel(
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     bot = getattr(ctx, "bot", None)
     if bot is None:
@@ -1239,7 +1271,6 @@ async def sync_booster_swatches(
     """Scan the configured swatch directory; create/remove roles to match."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     bot = getattr(ctx, "bot", None)
     if bot is None:
@@ -1272,7 +1303,6 @@ async def update_auto_delete(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         upsert_auto_delete_rule(
@@ -1295,7 +1325,6 @@ async def remove_auto_delete(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         remove_auto_delete_rule(ctx.db_path, guild_id, int(channel_id))
@@ -1326,7 +1355,6 @@ async def update_confessions(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         cfg = _confessions_get_config(ctx.db_path, guild_id)
@@ -1364,7 +1392,6 @@ async def block_confessions_user(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         cfg = _confessions_get_config(ctx.db_path, guild_id)
@@ -1387,7 +1414,6 @@ async def unblock_confessions_user(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         cfg = _confessions_get_config(ctx.db_path, guild_id)
@@ -1414,7 +1440,6 @@ async def post_confessions_button(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     bot = getattr(ctx, "bot", None)
     if bot is None:
@@ -1445,7 +1470,6 @@ async def update_dms(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         if body.request_channel_id is not None:
@@ -1465,7 +1489,6 @@ async def post_dms_panel(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     bot = getattr(ctx, "bot", None)
     if bot is None:
@@ -1503,7 +1526,6 @@ async def update_starboard(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1563,7 +1585,6 @@ async def update_birthday(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1597,7 +1618,6 @@ async def update_risky(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     if body.min_game_seconds is not None and body.min_game_seconds < 0:
         raise HTTPException(400, "min_game_seconds cannot be negative")
@@ -1663,7 +1683,6 @@ async def update_policy(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     if body.vote_timeout_hours is not None and body.vote_timeout_hours < 1:
         raise HTTPException(400, "vote_timeout_hours must be at least 1")
@@ -1754,7 +1773,6 @@ async def list_guess_audit(
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     capped_limit = max(1, min(500, limit))
     if action is not None and action not in _GUESS_AUDIT_ACTIONS:
@@ -1800,7 +1818,6 @@ async def update_guess_config(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         from bot_modules.services.guess_repo import set_guess_config_value
@@ -1838,7 +1855,6 @@ async def update_whisper_config(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     def _q():
         from bot_modules.services.whisper_repo import set_whisper_config_value
@@ -1868,7 +1884,6 @@ async def update_bot_identity(
     import discord
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    _require_primary_guild(request)
 
     bot = getattr(ctx, "bot", None)
     if bot is None:

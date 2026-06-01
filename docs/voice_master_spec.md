@@ -1,348 +1,156 @@
-# Dungeon Keeper — Voice Master Feature Spec
+# Voice Master — Feature Spec
 
-**Status:** Feature spec for handoff to Claude Code
-**Scope:** Feature behavior only. No implementation details.
-**Module:** New cog within Dungeon Keeper
+Members create personal voice channels on demand by joining a designated **Hub** channel. The bot creates a new channel in the configured category, applies the member's saved profile (or defaults), moves them in, and marks them as owner. Channels are deleted automatically when empty.
 
----
+## Commands
 
-## 1. Overview
+| Command | Type | Permission | Purpose |
+|---|---|---|---|
+| `/voice rename <name>` | Slash | Channel owner | Rename your channel |
+| `/voice lock` / `/voice unlock` | Slash | Channel owner | Deny / restore `Connect` for `@everyone` |
+| `/voice hide` / `/voice unhide` | Slash | Channel owner | Deny / restore `View Channel` for `@everyone` |
+| `/voice limit <number>` | Slash | Channel owner | Set or clear the user cap (1–99, or none) |
+| `/voice invite <member> [remember]` | Slash | Channel owner | Grant Connect; optionally add to trust list |
+| `/voice kick <member> [remember]` | Slash | Channel owner | Remove Connect; optionally add to blocklist |
+| `/voice transfer <member>` | Slash | Channel owner | Hand ownership to a member currently in the channel |
+| `/voice claim` | Slash | Member in channel | Take ownership when the owner has been gone past the grace period |
+| `/voice reset` | Slash | Channel owner | Wipe custom perms / settings on the current channel |
+| `/voice owner` | Slash | Everyone | See who owns a channel |
+| `/voice trusted list \| add \| remove` | Slash | Member (manages own list) | Manage your trust list |
+| `/voice blocked list \| add \| remove` | Slash | Member (manages own list) | Manage your blocklist |
+| `/voice profile show` | Slash | Member (own profile) | See saved settings |
+| `/voice profile reset [field]` | Slash | Member (own profile) | Reset all saved settings or just one field |
+| Persistent panel buttons | Persistent | Channel owner | Same actions surfaced as buttons in a designated text channel |
 
-Voice Master gives members on-demand control over their own voice channels in The Golden Meadow. Members create personal channels by joining a designated "click to create" lobby (the Hub), and from there manage who can join, what the channel is called, and whether it's open to the meadow at large.
+## Behaviour
 
-Channels persist as long as anyone is in them. When the last person leaves, the channel is deleted automatically. Each member has a saved profile that remembers their preferences across sessions, so their next channel picks up where they left off.
+### The Hub
 
-**Goals:**
-- Low-friction, member-owned voice spaces — no mod intervention required
-- Rooms that feel like *the owner's* space — named, sized, and gated however they want
-- Empty channels never linger; the category stays clean
-- Surface is discoverable without a tutorial
+A configured voice channel acts as the **Hub** (e.g. "+ Create Voice"). When a member joins it, the bot creates a new channel in the configured target category, applies the member's saved profile, and moves them in. They are now the owner. The Hub channel itself stays in place.
 
----
+### Profiles (saved across sessions)
 
-## 2. Core Concept: The Hub
+Every member has a per-guild saved profile that persists across channel lifecycles. When they create a new channel, it's pre-configured with:
 
-A designated voice channel acts as the **Hub** (e.g. "➕ Create Voice"). When a member joins the Hub, the bot:
+- Their last channel name (or the default template if never renamed)
+- Their lock / hide states at last use
+- Their user-limit preference
+- Their trust list applied (each trusted member auto-granted Connect)
+- Their blocklist applied (each blocked member auto-denied Connect)
 
-1. Creates a new voice channel in the configured Voice Master category
-2. Applies the member's saved profile (or defaults, if no profile exists)
-3. Moves the member into the new channel
-4. Marks them as the **owner** of that channel
+Any change to their active channel writes through to the profile automatically (rename, lock, hide, limit, trusted invite, permanent block). One-off invites and one-off kicks do **not** persist. If any apply-on-create step fails (saved name is now blocklisted, trusted member left the server, etc.) the bot skips that piece and continues, sending the owner one ephemeral notification listing what was skipped.
 
-The owner gets a control panel (slash commands and a persistent button panel in a designated text channel) for managing their channel.
+### Trust list and blocklist
 
----
+Inviting and kicking each come in two flavours:
 
-## 3. Owner Capabilities
+- **One-off invite / one-off kick** — applies only to the current channel. Default.
+- **Trusted invite / permanent block** — applies to the current channel **and** writes to the member's saved trust list / blocklist, so every future channel they own auto-applies it.
 
-The owner of a voice channel can perform all of the following actions on their channel:
+Trust and block lists are private to the owner. Trusted members get no "you are trusted by X" notification; blocked members aren't notified either.
 
-### Channel Settings
-- **Rename** — change the display name. Subject to a configurable cooldown (Discord enforces 2 channel edits per 10 minutes per channel — design must respect this). Profanity/blocklist filtering applies.
-- **Set user limit** — cap the number of users (1–99). Or remove the cap.
-- **Lock** — denies `Connect` to `@everyone`. Members already in the channel are not kicked. Trusted members (see §6) retain access.
-- **Unlock** — restores `Connect` for `@everyone`.
-- **Hide** — denies `View Channel` to `@everyone`. Channel becomes invisible to non-invited members. Distinct from lock: locked-but-visible means people see the room exists; hidden means they don't.
-- **Unhide** — restores `View Channel` for `@everyone`.
+### Persistent panel
 
-### Member Management
-- **Invite (one-off)** — grants `Connect` to a specific member for this channel only. Sends them a DM with a clickable join link. Disappears when the channel is deleted.
-- **Trusted invite** — grants `Connect` *and* adds the member to the owner's persistent trust list (see §6). Every future channel the owner creates auto-grants them access.
-- **Kick** — removes a member's `Connect` permission and disconnects them if they're currently in the channel. One-off by default.
-- **Permanent block** — kick + add to the owner's persistent blocklist. Auto-denied on every future channel.
+A single message in a designated text channel holds buttons for every owner action: Lock, Unlock, Hide, Unhide, Rename (modal), Limit (modal), Invite (user-select + remember checkbox), Kick (user-select + remember checkbox), Transfer (user-select limited to channel members), Reset (confirmation), Profile (inspect / reset). Buttons act on the channel the clicker currently owns; if they don't own one, the bot replies ephemerally "You don't own a voice channel right now — join the Hub to create one."
 
-### Ownership
-- **Transfer ownership** — hand control to another member currently in the channel.
-- **Claim ownership** — if the current owner is no longer in the channel and has been disconnected from it for at least the configured threshold (default 5 minutes) or has left the server, any remaining member can claim ownership.
-- **Reset channel** — wipe all custom permissions and settings on the *current channel*, returning it to default state. Owner is preserved.
+The Reset button asks the owner to choose between resetting just this channel (current state) or also resetting their saved profile.
 
-### Profile Management
-- **Reset profile** — see §6.
+### Ownership and the grace period
 
----
+When the owner leaves the channel, ownership stays with them — they can return at any time. If they've been gone for past the configured **grace period** (default 5 min) or have left the server entirely, any remaining member can claim ownership via `/voice claim` or the panel.
 
-## 4. Member Capabilities (Non-Owners)
+If the owner is banned or kicked from the server, ownership auto-transfers to a remaining member (if any), otherwise the channel is auto-deleted. The departed member is purged from other members' trust lists.
 
-- **Request to join a locked channel** — sends a notification to the owner (in the designated control text channel, pinging the owner) with Accept / Deny buttons. The owner can grant access without needing to type a command.
-- **See who owns a channel** — a simple lookup so members know who to ask. Available via `/voice owner` or by clicking the channel info on the panel.
+### Cleanup
 
----
+Channels are ephemeral — deleted automatically when empty. A configurable **empty-channel grace period** (default 15 s) prevents deletion when someone disconnects and reconnects briefly. The channel-to-owner mapping is persisted, so on bot restart the bot reconciles state: empty tracked channels are cleaned up, occupied tracked channels resume normally with ownership preserved, and untracked channels in the category are left alone with a warning logged.
 
-## 5. Default Channel Behavior
+### Rename cooldown
 
-When a new channel is created from the Hub *and the member has no saved profile*:
+Discord limits each channel to 2 edits per 10 minutes. The bot tracks edits per channel and rejects rename attempts that would exceed this with "You can rename again in X seconds." Invite and kick operations also consume this budget (they change channel permissions), so the bot is conservative.
 
-| Field | Default |
+### Saveable-fields whitelist
+
+The admin-controlled `voice_master_saveable_fields` config (see Configuration) is a comma-separated list of field names. A field's auto-save behaviour only fires if its name is present in the list. Removing a token turns off auto-save for that one field while leaving the others on. There's also a global kill switch (`voice_master_disable_saves`) that disables every auto-save.
+
+### Category fallback
+
+If the target category has hit Discord's 50-channel cap, the bot creates the channel outside the category, notifies the owner, and alerts admins. If the server itself has hit the 500-channel cap, creation fails with a clear message.
+
+## Permissions
+
+- **Bot:** Manage Channels (create, delete, rename, edit perms), Move Members (move the creator in), Connect (verify and clean up), View Channels (in the category).
+- **User:** A "Voice Master Admin" role (configurable) is needed to change setup or use admin overrides; otherwise any member can use the Hub.
+
+## User-visible errors
+
+| When | The user sees |
 |---|---|
-| Name | Configurable template, default `{owner display name}'s Room` |
-| Visibility | Public (visible and joinable by `@everyone`) |
-| User limit | None |
-| Bitrate | Server default |
-| Category | Configured Voice Master category |
+| Panel button click without owning a channel | "You don't own a voice channel right now — join the Hub to create one." |
+| Rename would exceed Discord's 2-per-10-min edit cap | "You can rename again in X seconds." |
+| `/voice claim` before the owner's grace period has elapsed | Ephemeral rejection naming the time remaining |
+| Trying to trust yourself or a bot | Friendly rejection |
+| Saved profile applies a name that's now blocklisted | Channel falls back to the default name template; owner gets an ephemeral notice |
+| Trusted member left the server | Silently skipped on apply; surfaces on profile view |
+| Category hit Discord's 50-channel cap | Channel created outside the category; owner notified; admins alerted |
+| Server hit Discord's 500-channel cap | "Couldn't create your channel — server is full." |
+| Hub or category was deleted by an admin | Feature disables; admins alerted; nothing auto-recreates |
 
-All defaults are configurable per-server by admins (see §9).
+## Non-goals
 
----
+- Soundboards or per-channel audio settings.
+- Channel templates / presets ("Game Night", "Co-working").
+- Multiple named profiles per member.
+- Sharing or import/export of profiles between members.
+- Stage channel support.
+- Voice activity / talk-time tracking.
+- Auto-region selection.
 
-## 6. Saved Preferences & Channel State
+## Configuration
 
-Every member has a **saved channel profile** that persists across sessions. When they join the Hub, their new channel is created with their saved settings already applied — name, lock state, user limit, hidden state, trust list, and blocklist.
+Setup:
 
-The first time someone creates a channel, defaults apply. From then on, any change they make to their active channel writes through to their profile automatically. Next time they spin one up, it picks up where they left off.
+- Hub voice channel
+- Target category for created channels
+- Control text channel (where the persistent panel and join-request notifications live)
 
-### What Gets Saved (per member)
+Defaults applied to fresh channels:
 
-- **Channel name** — last custom name, or default template if never renamed
-- **Lock state** — locked (private) or unlocked (public) at last use
-- **Hidden state** — hidden from `@everyone` view at last use
-- **User limit** — preferred cap, or no limit
-- **Bitrate** — saved for forward compatibility (not in v1 owner controls)
-- **Trust list** — members the owner has explicitly chosen to remember as trusted
-- **Blocklist** — members the owner has explicitly chosen to remember as blocked
+- Name template (supports `{display_name}`, `{username}`; default `{display_name}'s Room`)
+- User limit (default: no limit)
+- Bitrate (default: server default)
 
-### Trust List vs. One-Off Invites
+Limits and cooldowns:
 
-Inviting someone is the common case and shouldn't pollute saved state. So invites have two flavors:
+- Rename cooldown (must respect Discord's 2-per-10-min)
+- Create cooldown (default 30 s between Hub joins)
+- Max channels per member (default 1)
+- Trust list size cap (default 25), blocklist size cap (default 25)
+- Owner-disconnect grace period before claim is allowed (default 5 min)
+- Empty-channel grace period before delete (default 15 s)
+- Trusted-member auto-prune threshold in days absent (default: never)
 
-**One-off invite** (default) — grants `Connect` for this channel only. Disappears when the channel is deleted. This is what the 👋 Invite button does by default.
+Saveable-fields toggles:
 
-**Trusted invite** — grants `Connect` *and* adds the member to the owner's trust list. Every future channel the owner creates will auto-grant them access, even when locked or hidden. Exposed as a "Remember this person" checkbox in the invite modal, or via `/voice trust @user`.
+- `voice_master_disable_saves` — global kill switch for all auto-save (default off).
+- `voice_master_saveable_fields` — comma-separated whitelist of fields that auto-save. Default `"name,limit,locked,hidden,trusted,blocked"`. Removing a token turns off auto-save for that one field.
 
-Same two-flavor pattern for kicks: one-off kick vs. permanent block.
+Moderation overrides (logged):
 
-### Trust & Block List Management
+- Channel-name blocklist (words / patterns)
+- Force-delete a channel
+- Force-transfer ownership
+- Force-clear a member's profile
+- View a member's profile
 
-- `/voice trusted list` — ephemeral list of all trusted members
-- `/voice trusted add @user` — add without needing them in a channel
-- `/voice trusted remove @user` — pull them off
-- `/voice blocked list` / `add` / `remove` — same pattern for the blocklist
+## Stored data
 
-### Apply-on-Create Flow
+Per-guild and per-member, all in the database:
 
-When a member joins the Hub:
+- **Active channels** — channel id, owner id, creation timestamp, recent edit timestamps (for cooldown tracking).
+- **Member profiles** — saved name, lock state, hide state, user limit, bitrate. Per-guild — settings in one server don't carry across to another.
+- **Trust list entries** — one row per (owner, trusted member, guild).
+- **Block list entries** — one row per (owner, blocked member, guild).
+- **Guild config** — Hub channel, category, control channel, all admin defaults and caps.
 
-1. Bot creates the channel in the configured category
-2. Loads the member's saved profile (or defaults if none)
-3. Applies name, user limit, lock state, hidden state in a single batch
-4. Applies trust list (grants `Connect` to each trusted member)
-5. Applies blocklist (denies `Connect` to each blocked member)
-6. Moves the member in
-
-If any step fails silently (saved name is now blocklisted, trusted member left the server, etc.), the bot skips that piece and continues. The owner receives one ephemeral notification listing what was skipped, if anything.
-
-### Auto-Save Behavior
-
-Changes to the active channel write through to the profile in real time:
-
-- Rename → saves new name
-- Lock / unlock → saves lock state
-- Hide / unhide → saves hidden state
-- Set limit → saves limit
-- Trusted invite → adds to trust list
-- Permanent block → adds to blocklist
-
-One-off invites and one-off kicks do **not** write to the profile.
-
-### Profile Inspection & Reset
-
-- `/voice profile show` — ephemeral display of saved settings: name, lock state, limit, trust list, blocklist
-- `/voice profile reset` — clears everything to server defaults. Confirmation prompt required.
-- `/voice profile reset name` / `limit` / `trusted` / `blocked` — granular resets
-
-The 🧹 Reset button on the panel must distinguish between two actions:
-- "Reset just this channel" (current state only)
-- "Reset my saved profile too" (current state + persisted profile)
-
-These are easy to confuse, so the button opens a confirmation with both options clearly labeled.
-
-### Privacy
-
-The trust list and blocklist are private to the owner. No one else — including the members on them — can see who's on them. A trusted member knows they have access (they can join locked channels) but receives no "you are trusted by X" notification. A blocked member is not notified they're blocked; they simply find they can't connect.
-
-Admins with override permissions can view any member's profile for moderation, and any such view is logged.
-
----
-
-## 7. Persistence & Cleanup
-
-- Channels are **ephemeral** — deleted automatically when empty
-- A grace period (configurable, default 15 seconds) prevents deletion if someone briefly disconnects and reconnects
-- Channel-to-owner mapping is persisted in the database, not held in memory only
-- On bot restart, the bot reconciles state on boot:
-  - Tracked channels that are now empty → cleaned up
-  - Tracked channels with people still in them → resume normally, ownership preserved
-  - Untracked channels in the Voice Master category → leave alone, log a warning
-
----
-
-## 8. Interface Design
-
-Two complementary control surfaces. Both should always be available; members pick what they prefer.
-
-### Slash Commands
-
-```
-/voice rename <name>
-/voice lock
-/voice unlock
-/voice hide
-/voice unhide
-/voice limit <number>
-/voice invite <member> [remember: true/false]
-/voice kick <member> [remember: true/false]
-/voice transfer <member>
-/voice claim
-/voice reset
-/voice owner
-/voice trusted list | add <member> | remove <member>
-/voice blocked list | add <member> | remove <member>
-/voice profile show
-/voice profile reset [field]
-```
-
-### Persistent Panel
-
-A single message in a designated text channel, with buttons:
-
-| Button | Action |
-|---|---|
-| 🔒 Lock | Lock channel |
-| 🔓 Unlock | Unlock channel |
-| 👁️ Hide | Hide channel |
-| 👀 Unhide | Unhide channel |
-| ✏️ Rename | Opens modal |
-| 🔢 Limit | Opens modal |
-| 👋 Invite | Opens user-select + "remember" checkbox |
-| 🚫 Kick | Opens user-select + "remember" checkbox |
-| 👑 Transfer | Opens user-select (only members in channel) |
-| 🧹 Reset | Opens confirm dialog with two options |
-| ⚙️ Profile | Opens profile inspect/reset menu |
-
-Buttons only act on the channel the clicker currently owns. If they don't own a channel, the bot responds ephemerally: "You don't own a voice channel right now — join the Hub to create one."
-
-The panel uses modals for text inputs (rename, limit) and user-select dropdowns for member targets (invite, kick, transfer). The "remember this person" toggle on invite/kick is a checkbox inside the modal.
-
----
-
-## 9. Admin Configuration
-
-Server admins (or members with a configured "Voice Master Admin" role) can configure:
-
-### Setup
-- **Hub channel** — the click-to-create voice channel
-- **Target category** — where created channels live
-- **Control text channel** — where the persistent panel and join request notifications appear
-
-### Defaults
-- **Default name template** — supports tokens like `{display_name}`, `{username}`
-- **Default user limit** — number or "no limit"
-- **Default bitrate**
-
-### Limits & Cooldowns
-- **Rename cooldown** — must respect Discord's 2-edits-per-10-min hard limit
-- **Create cooldown** — prevents spam (default e.g. 30 seconds between Hub joins)
-- **Max channels per member** — default 1
-- **Trust list size cap** — default 25
-- **Blocklist size cap** — default 25
-- **Owner-disconnect grace period** — before claim becomes available, default 5 minutes
-- **Empty-channel grace period** — before auto-delete, default 15 seconds
-- **Trusted member auto-prune threshold** — days absent before auto-removal from trust lists, default never
-
-### Moderation Controls
-- **Name blocklist** — words/patterns that can't appear in channel names
-- **Disable saved preferences server-wide** — force every channel to use server defaults
-- **Saveable fields whitelist** — e.g. allow saving limit and trust list but force the name to always be the default template
-- **Force-delete a channel** — admin override
-- **Force-transfer ownership** — admin override
-- **Force-clear a member's profile** — admin override (logged)
-- **View a member's profile** — admin override (logged)
-
----
-
-## 10. Permissions Required (Bot)
-
-- `Manage Channels` — create, delete, rename, edit permissions
-- `Move Members` — to move the creator into their new channel
-- `Connect` — to verify channels and clean up
-- `View Channels` — in the Voice Master category
-
----
-
-## 11. Edge Cases & Behavior Notes
-
-### Ownership
-- **Owner leaves but channel still active:** ownership stays with them. They can return and resume control. Other members can claim only after the configured grace period (default 5 min) or if the owner has left the server entirely.
-- **Owner disconnects briefly:** does not transfer or void ownership.
-- **Owner is timed out:** ownership stays; they cannot use commands while timed out. Channel persists.
-- **Owner is banned or kicked from server:** channel is auto-transferred to a remaining member if any, otherwise auto-deleted. Their entry is removed from all other members' trust lists (cleanup job).
-
-### Channel & Server Limits
-- **Discord's 50-channel-per-category limit hit:** bot falls back to creating outside the category, notifies the owner, alerts admins.
-- **Discord's 500-channel server limit hit:** creation fails gracefully with a clear message to the user.
-- **Hub channel deleted by an admin:** bot logs an error and disables the feature until reconfigured. Does not auto-recreate the Hub.
-- **Target category deleted:** same — disable, log, alert.
-
-### Member Management
-- **Kicked member tries to rejoin:** can't, until re-invited or channel is unlocked (or, if blocked, never on this owner's channels).
-- **Trusted member left the server:** silently skipped on apply. Stays in the list in case they return. Auto-pruned per admin config (default never).
-- **Trusted member is now server-banned:** skipped on apply, flagged for removal on next profile view.
-- **Member tries to trust themselves:** rejected with a friendly error.
-- **Member tries to trust a bot:** rejected.
-
-### Profile
-- **Saved name is now blocklisted by admins:** falls back to default template, owner notified.
-- **Saved profile references a member who no longer exists:** silently skipped, member is pruned from list per admin config.
-- **Profile data exceeds list caps:** oldest entries are pruned (FIFO) when caps are exceeded; user is notified.
-
-### Rename Cooldown
-- Discord allows only 2 channel edits per 10 minutes per channel. The bot must:
-  - Track edits per channel in memory
-  - Reject rename attempts that would exceed the limit, with a clear message ("You can rename again in X seconds")
-  - Note: this counts *all* edits, not just renames, so internal permission changes from invite/kick also consume the budget. The bot must be conservative.
-
----
-
-## 12. Out of Scope (v1)
-
-Deliberately excluded to keep surface area tight:
-
-- Soundboards / per-channel audio settings
-- Channel templates ("Game Night," "Co-working," "Hangout" presets)
-- Multiple named profiles per member ("Game Night profile" vs "Co-working profile")
-- Sharing profiles between members
-- Profile import/export
-- Stage channel support
-- Voice activity / talk-time tracking
-- Integration with the member quality scoring algorithm (worth revisiting in v2 — voice engagement is currently invisible to it)
-- Auto-region selection
-
----
-
-## 13. Success Criteria
-
-The feature is working well when:
-
-- Members create voice channels without asking for help
-- Mods are not pinged to "kick someone from voice" or "make this private"
-- Channels feel like *their* space — named, sized, gated however the owner wants
-- Empty channels never linger; the category stays clean
-- The control surface is discoverable enough that new members find it without a tutorial
-- Saved preferences make repeat use feel effortless — members don't reconfigure every time
-
----
-
-## 14. Data Model Notes (for implementer)
-
-The implementer should design schemas for at least the following persistent entities:
-
-- **Active channel** — channel ID, owner ID, guild ID, created-at timestamp, last-edit timestamps (for cooldown tracking)
-- **Member profile** — user ID, guild ID, saved name, saved limit, saved lock state, saved hidden state, saved bitrate
-- **Trust list entry** — owner user ID, trusted user ID, guild ID, added-at timestamp
-- **Block list entry** — owner user ID, blocked user ID, guild ID, added-at timestamp
-- **Guild config** — guild ID, hub channel ID, category ID, control channel ID, all configurable defaults and caps
-
-Profiles are per-guild, not global. A member's saved settings in The Golden Meadow are independent of any other server.
-
----
-
-*End of spec.*
+Admin profile views are logged.

@@ -17,6 +17,15 @@ where = ["src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+# Run tests in parallel via pytest-xdist. Pass ``-n 0`` to disable for
+# debugging a single test (the last -n on the command line wins).
+addopts = "-n auto"
+
+[tool.coverage.run]
+# Required for --cov to work under pytest-xdist: each worker writes its own
+# .coverage.* file and pytest-cov combines them at the end.
+parallel = true
+source = ["src"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["E402"]

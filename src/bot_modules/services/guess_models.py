@@ -39,7 +39,7 @@ class GuessConfig:
     guess_cooldown_seconds: int = 60
     crop_difficulty: str = "medium"
     min_image_dimension_px: int = 400
-    max_image_size_mb: int = 25
+    max_image_size_mb: int = 10
     prompt_message_id: int = 0
 
 

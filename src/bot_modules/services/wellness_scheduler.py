@@ -484,6 +484,7 @@ async def _generate_and_send_weekly_report(
         is_personal_best=bool(summary["is_personal_best"]),
         compliance_pct=int(summary["compliance_pct"]),
         db_path=db_path,
+        guild_id=guild.id,
     )
 
     member = guild.get_member(user.user_id)

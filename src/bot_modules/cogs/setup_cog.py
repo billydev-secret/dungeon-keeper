@@ -67,7 +67,8 @@ def _private_ow(
             read_message_history=True,
             manage_messages=True,
         )
-    for rid in ctx.mod_role_ids | ctx.admin_role_ids:
+    cfg = ctx.guild_config(guild.id)
+    for rid in cfg.mod_role_ids | cfg.admin_role_ids:
         role = guild.get_role(rid)
         if role:
             ow[role] = discord.PermissionOverwrite(
@@ -94,9 +95,9 @@ def _readonly_ow(
     return ow
 
 
-def _stored_id(ctx: AppContext, config_key: str) -> int:
+def _stored_id(ctx: AppContext, config_key: str, guild_id: int) -> int:
     with ctx.open_db() as conn:
-        raw = get_config_value(conn, config_key, "0", ctx.guild_id)
+        raw = get_config_value(conn, config_key, "0", guild_id)
     return int(raw) if raw.strip().isdigit() else 0
 
 
@@ -159,21 +160,23 @@ class SetupCog(commands.Cog):
             lines.append(f"✅ **{_BOT_LOGS_CAT}** category exists")
 
         # ── Private log channels ──────────────────────────────────────────────
+        is_home = guild.id == ctx.guild_id
         for config_key, ch_name, ctx_attr, topic in _PRIVATE_CHANNELS:
-            existing_id = _stored_id(ctx, config_key)
+            existing_id = _stored_id(ctx, config_key, guild.id)
             ch = guild.get_channel(existing_id) if existing_id else None
             if isinstance(ch, discord.TextChannel):
-                # Resync the in-memory ctx mirror in case it drifted from DB
-                # (e.g. after a partial reload).
-                if ctx_attr:
+                # Resync the home in-memory ctx mirror in case it drifted from
+                # DB (e.g. after a partial reload). Non-home guilds read via
+                # guild_config, refreshed by the invalidation below.
+                if ctx_attr and is_home:
                     setattr(ctx, ctx_attr, ch.id)
                 lines.append(f"✅ {ch.mention} already set")
             else:
                 ch = await guild.create_text_channel(
                     ch_name, category=logs_cat, overwrites=priv, topic=topic  # type: ignore[arg-type]
                 )
-                ctx.set_config_value(config_key, str(ch.id))
-                if ctx_attr:
+                ctx.set_config_value(config_key, str(ch.id), guild.id)
+                if ctx_attr and is_home:
                     setattr(ctx, ctx_attr, ch.id)
                 lines.append(f"🆕 {ch.mention} created")
 
@@ -220,9 +223,10 @@ class SetupCog(commands.Cog):
                 await dm_cog._ensure_panel(guild, dm_ch.id, force_repost=True)  # type: ignore[union-attr]
                 set_panel_settings(ctx.db_path, guild.id, dm_ch.id, None)
                 # Route DM requests to the mod log if no request channel is set yet
-                if ctx.mod_channel_id and not dm_cog.request_channels.get(guild.id):  # type: ignore[union-attr]
-                    set_request_channel(ctx.db_path, guild.id, ctx.mod_channel_id)
-                    dm_cog.request_channels[guild.id] = ctx.mod_channel_id  # type: ignore[union-attr]
+                mod_channel_id = ctx.guild_config(guild.id).mod_channel_id
+                if mod_channel_id and not dm_cog.request_channels.get(guild.id):  # type: ignore[union-attr]
+                    set_request_channel(ctx.db_path, guild.id, mod_channel_id)
+                    dm_cog.request_channels[guild.id] = mod_channel_id  # type: ignore[union-attr]
                 lines.append(f"🆕 {dm_ch.mention} created with DM panel")
             else:
                 lines.append(f"✅ {dm_ch.mention} DM panel already set")

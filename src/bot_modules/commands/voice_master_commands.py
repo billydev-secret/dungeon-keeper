@@ -23,16 +23,54 @@ from bot_modules.services.voice_master_service import (
     get_owned_channel,
     list_name_blocklist,
     load_voice_master_config,
-    name_is_blocked,
     record_edit_in_db,
     set_owner,
     set_voice_master_config_value,
     try_dm,
     update_profile_field,
 )
+from bot_modules.voice_master.embeds import (
+    build_inline_panel_embed as _build_inline_panel_embed,
+    build_knock_request_embed,
+    build_panel_embed as _build_panel_embed,
+)
+from bot_modules.voice_master.logic import (
+    MemberInfo,
+    PANEL_BUTTON_ORDER,
+    all_panel_button_metas,
+    build_join_url,
+    build_transfer_picker_plan,
+    format_edit_rate_limit_error,
+    format_hide_result,
+    format_invite_dm,
+    format_invite_result,
+    format_kick_result,
+    format_knock_accepted_dm,
+    format_limit_result,
+    format_lock_result,
+    format_rename_result,
+    format_reset_result,
+    format_transfer_result,
+    parse_limit_input,
+    should_save_profile_field,
+    user_picker_labels,
+    validate_invite_target,
+    validate_kick_target,
+    validate_limit_value,
+    validate_rename_input,
+    validate_transfer_target,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext
+
+
+_STYLE_BY_NAME: dict[str, discord.ButtonStyle] = {
+    "primary": discord.ButtonStyle.primary,
+    "secondary": discord.ButtonStyle.secondary,
+    "success": discord.ButtonStyle.success,
+    "danger": discord.ButtonStyle.danger,
+}
 
 log = logging.getLogger("dungeonkeeper.voice_master.commands")
 
@@ -128,7 +166,11 @@ def _maybe_save_profile_field(
     "locked", "hidden"); ``profile_field`` is the column on VoiceProfile
     (e.g. "saved_name", "saved_limit", "locked", "hidden").
     """
-    if cfg.disable_saves or saveable_key not in cfg.saveable_fields:
+    if not should_save_profile_field(
+        saveable_key=saveable_key,
+        disable_saves=cfg.disable_saves,
+        saveable_fields=cfg.saveable_fields,
+    ):
         return
     update_profile_field(conn, guild_id, owner_id, field=profile_field, value=value)
 
@@ -149,8 +191,9 @@ async def _gate_and_record_edit(
     if not allowed:
         await _ephemeral(
             interaction,
-            f"Discord limits voice channel edits to 2 per "
-            f"{int(EDIT_WINDOW_S/60)} minutes — try again in {int(retry)}s.",
+            format_edit_rate_limit_error(
+                retry_seconds=retry, window_s=EDIT_WINDOW_S
+            ),
         )
         return False
     with ctx.open_db() as conn:
@@ -200,9 +243,7 @@ async def _apply_lock(
             actor_id=interaction.user.id,
             extra={"channel_id": channel.id},
         )
-    await _ephemeral(
-        interaction, f"Channel **{'locked' if locked else 'unlocked'}**."
-    )
+    await _ephemeral(interaction, format_lock_result(locked=locked))
 
 
 async def _apply_rename(
@@ -215,19 +256,15 @@ async def _apply_rename(
     ctx = _ctx_from_interaction(interaction)
     if ctx is None:
         return
-    new_name = new_name.strip()
-    if not new_name:
-        await _ephemeral(interaction, "Channel name can't be empty.")
-        return
-    if len(new_name) > MAX_NAME_LEN:
-        new_name = new_name[:MAX_NAME_LEN]
     with ctx.open_db() as conn:
         patterns = list_name_blocklist(conn, channel.guild.id)
-    if name_is_blocked(new_name, patterns):
-        await _ephemeral(
-            interaction, "That name matches a server-wide content filter — pick another."
-        )
+    result = validate_rename_input(
+        new_name, max_len=MAX_NAME_LEN, blocklist_patterns=patterns
+    )
+    if result.error_message is not None:
+        await _ephemeral(interaction, result.error_message)
         return
+    new_name = result.cleaned
     await _defer_if_needed(interaction)
     try:
         await channel.edit(
@@ -250,7 +287,7 @@ async def _apply_rename(
             actor_id=interaction.user.id,
             extra={"channel_id": channel.id, "name": new_name},
         )
-    await _ephemeral(interaction, f"Renamed to **{new_name}**.")
+    await _ephemeral(interaction, format_rename_result(new_name=new_name))
 
 
 async def _reset_channel_overwrites(
@@ -302,12 +339,7 @@ async def _apply_reset(
             actor_id=interaction.user.id,
             extra={"channel_id": channel.id},
         )
-    msg = (
-        "Channel **and** saved profile reset."
-        if also_profile
-        else "Channel reset to defaults (your saved profile is unchanged)."
-    )
-    await _ephemeral(interaction, msg)
+    await _ephemeral(interaction, format_reset_result(also_profile=also_profile))
 
 
 async def _apply_transfer(
@@ -320,17 +352,18 @@ async def _apply_transfer(
     ctx = _ctx_from_interaction(interaction)
     if ctx is None:
         return
-    if new_owner.bot:
-        await _ephemeral(interaction, "Can't transfer ownership to a bot.")
-        return
-    if new_owner.id == row.owner_id:
-        await _ephemeral(interaction, "You're already the owner.")
-        return
-    if new_owner.voice is None or new_owner.voice.channel is None or new_owner.voice.channel.id != channel.id:
-        await _ephemeral(
-            interaction,
-            "The new owner must currently be in the voice channel.",
-        )
+    in_channel = (
+        new_owner.voice is not None
+        and new_owner.voice.channel is not None
+        and new_owner.voice.channel.id == channel.id
+    )
+    err = validate_transfer_target(
+        target_is_bot=new_owner.bot,
+        target_is_current_owner=new_owner.id == row.owner_id,
+        target_in_channel=in_channel,
+    )
+    if err is not None:
+        await _ephemeral(interaction, err)
         return
     await _defer_if_needed(interaction)
     # Grant the new owner explicit access (so future locks/hides don't bite them).
@@ -355,7 +388,8 @@ async def _apply_transfer(
             extra={"channel_id": channel.id},
         )
     await _ephemeral(
-        interaction, f"Ownership transferred to {new_owner.mention}."
+        interaction,
+        format_transfer_result(new_owner_mention=new_owner.mention),
     )
 
 
@@ -370,11 +404,12 @@ async def _apply_invite(
     ctx = _ctx_from_interaction(interaction)
     if ctx is None:
         return
-    if target.bot:
-        await _ephemeral(interaction, "Can't invite bots.")
-        return
-    if target.id == row.owner_id:
-        await _ephemeral(interaction, "You're already the owner.")
+    err = validate_invite_target(
+        target_is_bot=target.bot,
+        target_is_owner=target.id == row.owner_id,
+    )
+    if err is not None:
+        await _ephemeral(interaction, err)
         return
     await _defer_if_needed(interaction)
     overwrite = channel.overwrites_for(target)
@@ -391,7 +426,11 @@ async def _apply_invite(
     cap_evicted: int | None = None
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
-        if remember and not cfg.disable_saves and "trusted" in cfg.saveable_fields:
+        if remember and should_save_profile_field(
+            saveable_key="trusted",
+            disable_saves=cfg.disable_saves,
+            saveable_fields=cfg.saveable_fields,
+        ):
             _, cap_evicted = add_trusted(
                 conn,
                 channel.guild.id,
@@ -409,24 +448,26 @@ async def _apply_invite(
         )
 
     # DM the invitee with a clickable jump-into-channel link.
-    join_url = (
-        f"https://discord.com/channels/{channel.guild.id}/{channel.id}"
+    join_url = build_join_url(
+        guild_id=channel.guild.id, channel_id=channel.id
     )
     await try_dm(
         target,
-        content=(
-            f"You've been invited to **{channel.name}** by "
-            f"{interaction.user.mention} in **{channel.guild.name}**.\n"
-            f"{join_url}"
+        content=format_invite_dm(
+            channel_name=channel.name,
+            inviter_mention=interaction.user.mention,
+            guild_name=channel.guild.name,
+            join_url=join_url,
         ),
     )
 
-    extra = ""
-    if cap_evicted is not None:
-        extra = f" (Trust list cap reached — removed <@{cap_evicted}>.)"
-    word = "remembered" if remember else "invited"
     await _ephemeral(
-        interaction, f"{target.mention} {word} for this channel.{extra}"
+        interaction,
+        format_invite_result(
+            target_mention=target.mention,
+            remember=remember,
+            cap_evicted_id=cap_evicted,
+        ),
     )
 
 
@@ -441,11 +482,12 @@ async def _apply_kick(
     ctx = _ctx_from_interaction(interaction)
     if ctx is None:
         return
-    if target.bot:
-        await _ephemeral(interaction, "Can't kick bots.")
-        return
-    if target.id == row.owner_id:
-        await _ephemeral(interaction, "You can't kick yourself — transfer ownership first.")
+    err = validate_kick_target(
+        target_is_bot=target.bot,
+        target_is_self_owner=target.id == row.owner_id,
+    )
+    if err is not None:
+        await _ephemeral(interaction, err)
         return
     await _defer_if_needed(interaction)
     overwrite = channel.overwrites_for(target)
@@ -468,7 +510,11 @@ async def _apply_kick(
     cap_evicted: int | None = None
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
-        if remember and not cfg.disable_saves and "blocked" in cfg.saveable_fields:
+        if remember and should_save_profile_field(
+            saveable_key="blocked",
+            disable_saves=cfg.disable_saves,
+            saveable_fields=cfg.saveable_fields,
+        ):
             _, cap_evicted = add_blocked(
                 conn,
                 channel.guild.id,
@@ -485,11 +531,14 @@ async def _apply_kick(
             extra={"channel_id": channel.id, "remember": remember},
         )
 
-    extra = ""
-    if cap_evicted is not None:
-        extra = f" (Block list cap reached — removed <@{cap_evicted}>.)"
-    word = "blocked permanently" if remember else "kicked"
-    await _ephemeral(interaction, f"{target.mention} {word}.{extra}")
+    await _ephemeral(
+        interaction,
+        format_kick_result(
+            target_mention=target.mention,
+            remember=remember,
+            cap_evicted_id=cap_evicted,
+        ),
+    )
 
 
 async def _apply_limit(
@@ -502,8 +551,9 @@ async def _apply_limit(
     ctx = _ctx_from_interaction(interaction)
     if ctx is None:
         return
-    if new_limit < 0 or new_limit > 99:
-        await _ephemeral(interaction, "User limit must be between 0 and 99 (0 = no cap).")
+    err = validate_limit_value(new_limit)
+    if err is not None:
+        await _ephemeral(interaction, err)
         return
     await _defer_if_needed(interaction)
     try:
@@ -527,10 +577,7 @@ async def _apply_limit(
             actor_id=interaction.user.id,
             extra={"channel_id": channel.id, "limit": new_limit},
         )
-    await _ephemeral(
-        interaction,
-        f"User limit set to **{new_limit if new_limit > 0 else 'no cap'}**.",
-    )
+    await _ephemeral(interaction, format_limit_result(new_limit=new_limit))
 
 
 async def _apply_hide(
@@ -570,9 +617,7 @@ async def _apply_hide(
             actor_id=interaction.user.id,
             extra={"channel_id": channel.id},
         )
-    await _ephemeral(
-        interaction, f"Channel is now **{'hidden' if hidden else 'visible'}**."
-    )
+    await _ephemeral(interaction, format_hide_result(hidden=hidden))
 
 
 # ---------------------------------------------------------------------------
@@ -685,10 +730,11 @@ class _LimitModal(discord.ui.Modal, title="Set user limit"):
         ctx = _ctx_from_interaction(interaction)
         if ctx is None or interaction.guild is None:
             return
-        try:
-            value = int(self.new_limit.value.strip())
-        except ValueError:
-            await _ephemeral(interaction, "Limit must be a whole number.")
+        value, parse_err = parse_limit_input(self.new_limit.value)
+        if parse_err is not None or value is None:
+            await _ephemeral(
+                interaction, parse_err or "Limit must be a whole number."
+            )
             return
         channel = interaction.guild.get_channel(self._channel_id)
         if not isinstance(channel, discord.VoiceChannel):
@@ -713,19 +759,31 @@ class _TransferPickerView(discord.ui.View):
         self._owner_id = owner_id
         # Pre-populate the dropdown options from members currently in the channel
         # (UserSelect doesn't support filtering; use a regular Select instead).
-        opts = [
-            discord.SelectOption(
-                label=m.display_name,
-                value=str(m.id),
-                description=f"@{m.name}",
-            )
-            for m in in_channel
-            if not m.bot and m.id != owner_id
-        ][:25]
-        self.member_select.options = opts or [
-            discord.SelectOption(label="No eligible members in the channel", value="0")
-        ]
-        if not opts:
+        plan = build_transfer_picker_plan(
+            [
+                MemberInfo(
+                    id=m.id,
+                    display_name=m.display_name,
+                    name=m.name,
+                    is_bot=m.bot,
+                )
+                for m in in_channel
+            ],
+            owner_id=owner_id,
+        )
+        if plan.has_options:
+            self.member_select.options = [
+                discord.SelectOption(
+                    label=opt.label, value=opt.value, description=opt.description
+                )
+                for opt in plan.options
+            ]
+        else:
+            self.member_select.options = [
+                discord.SelectOption(
+                    label="No eligible members in the channel", value="0"
+                )
+            ]
             self.member_select.disabled = True
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -776,13 +834,10 @@ class _UserPickerView(discord.ui.View):
         self._owner_id = owner_id
         self._mode = mode  # "invite" or "kick"
         self._selected: discord.Member | None = None
-        self.user_select.placeholder = (
-            "Pick a member to invite" if mode == "invite" else "Pick a member to kick"
-        )
-        self.action_one.label = "Invite" if mode == "invite" else "Kick"
-        self.action_two.label = (
-            "Trusted invite (remember)" if mode == "invite" else "Permanent block (remember)"
-        )
+        labels = user_picker_labels(mode)
+        self.user_select.placeholder = labels.placeholder
+        self.action_one.label = labels.action_one
+        self.action_two.label = labels.action_two
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._owner_id:
@@ -991,24 +1046,49 @@ async def _on_reset(
     )
 
 
-_register_button("lock",     label="Lock",     emoji="🔒",   style=discord.ButtonStyle.secondary, on_click=_on_lock)
-_register_button("unlock",   label="Unlock",   emoji="🔓",   style=discord.ButtonStyle.secondary, on_click=_on_unlock)
-_register_button("hide",     label="Hide",     emoji="👁️",  style=discord.ButtonStyle.secondary, on_click=_on_hide)
-_register_button("unhide",   label="Unhide",   emoji="👀",   style=discord.ButtonStyle.secondary, on_click=_on_unhide)
-_register_button("rename",   label="Rename",   emoji="✏️",  style=discord.ButtonStyle.primary,   on_click=_on_rename)
-_register_button("limit",    label="Limit",    emoji="🔢",   style=discord.ButtonStyle.primary,   on_click=_on_limit)
-_register_button("invite",   label="Invite",   emoji="👋",   style=discord.ButtonStyle.success,   on_click=_on_invite)
-_register_button("kick",     label="Kick",     emoji="🚫",   style=discord.ButtonStyle.danger,    on_click=_on_kick)
-_register_button("transfer", label="Transfer", emoji="👑",   style=discord.ButtonStyle.primary,   on_click=_on_transfer)
-_register_button("reset",    label="Reset",    emoji="🧹",   style=discord.ButtonStyle.secondary, on_click=_on_reset)
+_ON_CLICKS: dict[str, Callable[
+    [discord.Interaction, discord.VoiceChannel, "ActiveChannel"],
+    Awaitable[None],
+]] = {
+    "lock": _on_lock,
+    "unlock": _on_unlock,
+    "hide": _on_hide,
+    "unhide": _on_unhide,
+    "rename": _on_rename,
+    "limit": _on_limit,
+    "invite": _on_invite,
+    "kick": _on_kick,
+    "transfer": _on_transfer,
+    "reset": _on_reset,
+}
+
+
+def _register_panel_buttons_from_meta() -> None:
+    """Translate the pure-Python meta table into runtime button specs.
+
+    The meta lives in ``voice_master.logic`` so tests can pin the
+    visible labels/emojis/style names without instantiating any Discord
+    UI. This thin glue maps the style-name strings to enum values and
+    couples each action to its handler.
+    """
+    for meta in all_panel_button_metas():
+        on_click = _ON_CLICKS.get(meta.action)
+        if on_click is None:
+            continue
+        _register_button(
+            meta.action,
+            label=meta.label,
+            emoji=meta.emoji,
+            style=_STYLE_BY_NAME[meta.style_name],
+            on_click=on_click,
+        )
+
+
+_register_panel_buttons_from_meta()
 
 
 # Order in which buttons appear on the panel. Update this when adding new ones.
-PANEL_BUTTON_ACTIONS = (
-    "lock", "unlock", "hide", "unhide",
-    "rename", "limit", "invite", "kick",
-    "transfer", "reset",
-)
+PANEL_BUTTON_ACTIONS = PANEL_BUTTON_ORDER
 
 # Backward-compat alias for the cog's `add_dynamic_items` registration loop.
 PANEL_BUTTON_CLASSES = (_PanelButton,)
@@ -1020,18 +1100,8 @@ PANEL_BUTTON_CLASSES = (_PanelButton,)
 
 
 def build_panel_embed() -> discord.Embed:
-    embed = discord.Embed(
-        title="Voice Master controls",
-        description=(
-            "Join the Hub voice channel to spin up your own room.\n"
-            "Use these buttons to manage **the channel you currently own**.\n\n"
-            "🔒 / 🔓 Lock or unlock — control whether new members can join.\n"
-            "👁️ / 👀 Hide or unhide — control whether the channel is visible at all.\n"
-        ),
-        color=discord.Color.blurple(),
-    )
-    embed.set_footer(text="Buttons act on the channel you own. Don't own one? Join the Hub.")
-    return embed
+    """Thin wrapper around the pure embed builder; kept for cog import paths."""
+    return _build_panel_embed()
 
 
 def build_panel_view() -> discord.ui.View:
@@ -1102,9 +1172,11 @@ class _KnockResponseView(discord.ui.View):
                 )
         await try_dm(
             requester,
-            content=(
-                f"Your knock on **{channel.name}** was accepted. "
-                f"https://discord.com/channels/{channel.guild.id}/{channel.id}"
+            content=format_knock_accepted_dm(
+                channel_name=channel.name,
+                join_url=build_join_url(
+                    guild_id=channel.guild.id, channel_id=channel.id
+                ),
             ),
         )
         for child in self.children:
@@ -1149,13 +1221,10 @@ async def post_knock_request(
     control = channel.guild.get_channel(cfg.control_channel_id)
     if not isinstance(control, discord.TextChannel):
         return False
-    embed = discord.Embed(
-        title="🔔 Voice channel knock",
-        description=(
-            f"{requester.mention} is asking to join **{channel.name}**.\n"
-            f"Owner: {owner.mention} — choose below."
-        ),
-        color=discord.Color.gold(),
+    embed = build_knock_request_embed(
+        requester_mention=requester.mention,
+        owner_mention=owner.mention,
+        channel_name=channel.name,
     )
     view = _KnockResponseView(
         channel_id=channel.id,
@@ -1188,15 +1257,7 @@ async def post_panel(
 
 def build_inline_panel_embed(owner: discord.Member) -> discord.Embed:
     """Owner-greeting embed for the panel posted into the new channel's chat."""
-    return discord.Embed(
-        title="Your voice channel is ready",
-        description=(
-            f"Welcome, {owner.mention}. Use the buttons below to manage **this channel** — "
-            "lock/hide it, rename it, set a user limit, invite or kick members, transfer "
-            "ownership, or reset it. Changes you make are saved as your default for next time."
-        ),
-        color=discord.Color.blurple(),
-    )
+    return _build_inline_panel_embed(owner_mention=owner.mention)
 
 
 async def post_inline_panel(

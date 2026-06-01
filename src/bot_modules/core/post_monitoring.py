@@ -23,8 +23,8 @@ def message_has_qualifying_image(message: discord.Message) -> bool:
 async def enforce_spoiler_requirement(
     message: discord.Message,
     *,
-    spoiler_required_channels: set[int],
-    bypass_role_ids: set[int],
+    spoiler_required_channels: frozenset[int] | set[int],
+    bypass_role_ids: frozenset[int] | set[int],
     log: logging.Logger,
 ) -> bool:
     if message.channel.id not in spoiler_required_channels:

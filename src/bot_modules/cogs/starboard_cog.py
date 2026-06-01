@@ -10,7 +10,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.db_utils import add_config_id, get_config_id_set, remove_config_id
-from bot_modules.services.embeds import STARBOARD_PRIMARY
 from bot_modules.services.starboard_service import (
     add_reactor,
     delete_starboard_post,
@@ -22,6 +21,17 @@ from bot_modules.services.starboard_service import (
     update_starboard_post_count,
     upsert_starboard_config,
 )
+from bot_modules.starboard.embeds import (
+    build_starboard_embed,
+    build_status_embed,
+    updated_starboard_embed,
+)
+from bot_modules.starboard.filters import (
+    merge_default_config,
+    nsfw_leak_blocked,
+    should_process_reaction,
+    validate_emoji,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -29,39 +39,6 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.starboard")
 
 _EXCLUDED_BUCKET = "starboard_excluded_channels"
-
-
-# ---------------------------------------------------------------------------
-# Embed helpers
-# ---------------------------------------------------------------------------
-
-
-def _build_embed(message: discord.Message, star_count: int, emoji: str) -> discord.Embed:
-    embed = discord.Embed(
-        description=message.content[:2000] if message.content else None,
-        color=STARBOARD_PRIMARY,
-        timestamp=message.created_at,
-    )
-    channel_name = getattr(message.channel, "name", str(message.channel.id))
-    embed.set_author(
-        name=f"{message.author.display_name} in #{channel_name}",
-        icon_url=message.author.display_avatar.url,
-    )
-    embed.add_field(name="Original", value=f"[Jump to message]({message.jump_url})", inline=False)
-    embed.set_footer(text=f"{emoji} {star_count}")
-
-    for attachment in message.attachments:
-        if attachment.content_type and attachment.content_type.startswith("image/"):
-            embed.set_image(url=attachment.url)
-            break
-
-    return embed
-
-
-def _updated_embed(old_embed: discord.Embed, star_count: int, emoji: str) -> discord.Embed:
-    new_embed = old_embed.copy()
-    new_embed.set_footer(text=f"{emoji} {star_count}")
-    return new_embed
 
 
 # ---------------------------------------------------------------------------
@@ -93,28 +70,19 @@ class StarboardCog(commands.Cog):
             return None
 
     def _default_cfg(self, conn, guild_id: int) -> dict:
-        row = get_starboard_config(conn, guild_id)
-        if row:
-            return {
-                "channel_id": row["channel_id"],
-                "threshold": row["threshold"],
-                "emoji": row["emoji"],
-                "enabled": row["enabled"],
-            }
-        return {"channel_id": 0, "threshold": 3, "emoji": "⭐", "enabled": 1}
+        return merge_default_config(get_starboard_config(conn, guild_id))
 
     # ------------------------------------------------------------------
     # Reaction events
     # ------------------------------------------------------------------
 
-    # Note: this cog is intentionally single-guild — every listener early-
-    # returns unless ``payload.guild_id == self.ctx.guild_id``. Other cogs
-    # in this codebase iterate ``bot.guilds``; the starboard sticks to the
-    # bot's primary guild because it depends on a single configured channel.
+    # Per-guild: every listener resolves starboard config via
+    # ``get_starboard_config(conn, payload.guild_id)`` and early-returns when a
+    # guild has no enabled starboard, so the cog works across all guilds.
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        if payload.guild_id is None or payload.guild_id != self.ctx.guild_id:
+        if payload.guild_id is None:
             return
 
         guild_id = payload.guild_id
@@ -122,17 +90,21 @@ class StarboardCog(commands.Cog):
 
         with self.ctx.open_db() as conn:
             cfg = get_starboard_config(conn, guild_id)
-            if cfg is None or not cfg["enabled"] or not cfg["channel_id"]:
+            if cfg is None:
                 return
             emoji: str = cfg["emoji"]
             threshold: int = cfg["threshold"]
             sb_channel_id: int = cfg["channel_id"]
+            excluded = get_config_id_set(conn, _EXCLUDED_BUCKET, guild_id)
 
-            if str(payload.emoji) != emoji:
-                return
-            if payload.channel_id == sb_channel_id:
-                return
-            if payload.channel_id in get_config_id_set(conn, _EXCLUDED_BUCKET, guild_id):
+            if not should_process_reaction(
+                cfg_enabled=bool(cfg["enabled"]),
+                cfg_channel_id=sb_channel_id,
+                cfg_emoji=emoji,
+                payload_emoji=str(payload.emoji),
+                payload_channel_id=payload.channel_id,
+                excluded_channel_ids=excluded,
+            ):
                 return
 
             add_reactor(conn, guild_id, message_id, payload.user_id)
@@ -148,7 +120,7 @@ class StarboardCog(commands.Cog):
             sb_msg = await self._fetch_sb_message(sb_channel_id, sb_message_id)
             if sb_msg and sb_msg.embeds:
                 await sb_msg.edit(
-                    embed=_updated_embed(sb_msg.embeds[0], effective_count, emoji),
+                    embed=updated_starboard_embed(sb_msg.embeds[0], effective_count, emoji),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 return
@@ -172,9 +144,10 @@ class StarboardCog(commands.Cog):
         sb_channel = self.bot.get_channel(sb_channel_id)
         if not isinstance(sb_channel, discord.TextChannel):
             return
-        source_nsfw = bool(getattr(orig_channel, "nsfw", False))
-        sb_nsfw = bool(getattr(sb_channel, "nsfw", False))
-        if source_nsfw and not sb_nsfw:
+        if nsfw_leak_blocked(
+            source_nsfw=bool(getattr(orig_channel, "nsfw", False)),
+            starboard_nsfw=bool(getattr(sb_channel, "nsfw", False)),
+        ):
             return
 
         try:
@@ -192,7 +165,7 @@ class StarboardCog(commands.Cog):
             if get_starboard_post(conn, guild_id, message_id) is not None:
                 return
 
-        embed = _build_embed(message, effective_count, emoji)
+        embed = build_starboard_embed(message, effective_count, emoji)
         try:
             sb_msg = await sb_channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
@@ -207,7 +180,7 @@ class StarboardCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload: discord.RawReactionActionEvent) -> None:
-        if payload.guild_id is None or payload.guild_id != self.ctx.guild_id:
+        if payload.guild_id is None:
             return
 
         guild_id = payload.guild_id
@@ -215,16 +188,20 @@ class StarboardCog(commands.Cog):
 
         with self.ctx.open_db() as conn:
             cfg = get_starboard_config(conn, guild_id)
-            if cfg is None or not cfg["enabled"] or not cfg["channel_id"]:
+            if cfg is None:
                 return
             emoji: str = cfg["emoji"]
             sb_channel_id: int = cfg["channel_id"]
+            excluded = get_config_id_set(conn, _EXCLUDED_BUCKET, guild_id)
 
-            if str(payload.emoji) != emoji:
-                return
-            if payload.channel_id == sb_channel_id:
-                return
-            if payload.channel_id in get_config_id_set(conn, _EXCLUDED_BUCKET, guild_id):
+            if not should_process_reaction(
+                cfg_enabled=bool(cfg["enabled"]),
+                cfg_channel_id=sb_channel_id,
+                cfg_emoji=emoji,
+                payload_emoji=str(payload.emoji),
+                payload_channel_id=payload.channel_id,
+                excluded_channel_ids=excluded,
+            ):
                 return
 
             remove_reactor(conn, guild_id, message_id, payload.user_id)
@@ -240,7 +217,7 @@ class StarboardCog(commands.Cog):
         sb_msg = await self._fetch_sb_message(sb_channel_id, sb_message_id)
         if sb_msg and sb_msg.embeds:
             await sb_msg.edit(
-                embed=_updated_embed(sb_msg.embeds[0], effective_count, emoji),
+                embed=updated_starboard_embed(sb_msg.embeds[0], effective_count, emoji),
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         elif sb_msg is None:
@@ -318,25 +295,11 @@ class StarboardCog(commands.Cog):
         if not self.ctx.is_mod(interaction):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
+        ok, error_message = validate_emoji(emoji)
+        if not ok:
+            await interaction.response.send_message(error_message, ephemeral=True)
+            return
         emoji = emoji.strip()
-        if not emoji:
-            await interaction.response.send_message("Emoji cannot be empty.", ephemeral=True)
-            return
-
-        # Validate that this string actually parses as something Discord will
-        # send back as a reaction emoji. discord.py's PartialEmoji rejects
-        # plain text — a user typing "starboard" can't silently break the cog.
-        try:
-            parsed = discord.PartialEmoji.from_str(emoji)
-        except Exception:  # noqa: BLE001 — defensive against any parse error
-            parsed = None
-        if parsed is None or (parsed.id is None and not parsed.name):
-            await interaction.response.send_message(
-                "That doesn't look like a reaction emoji. Use a unicode emoji "
-                "(e.g. ⭐) or a server custom emoji (e.g. <:name:123456>).",
-                ephemeral=True,
-            )
-            return
 
         guild_id = interaction.guild_id
         if guild_id is None:
@@ -409,18 +372,7 @@ class StarboardCog(commands.Cog):
             cfg = self._default_cfg(conn, guild_id)
             excluded_ids = get_config_id_set(conn, _EXCLUDED_BUCKET, guild_id)
 
-        channel_mention = f"<#{cfg['channel_id']}>" if cfg["channel_id"] else "*not set*"
-        state = "enabled" if cfg["enabled"] else "disabled"
-        excluded_text = (
-            " ".join(f"<#{cid}>" for cid in sorted(excluded_ids)) if excluded_ids else "*none*"
-        )
-
-        embed = discord.Embed(title="Starboard Configuration", color=STARBOARD_PRIMARY)
-        embed.add_field(name="Status", value=state, inline=True)
-        embed.add_field(name="Channel", value=channel_mention, inline=True)
-        embed.add_field(name="Threshold", value=str(cfg["threshold"]), inline=True)
-        embed.add_field(name="Emoji", value=cfg["emoji"], inline=True)
-        embed.add_field(name="Excluded channels", value=excluded_text, inline=False)
+        embed = build_status_embed(cfg, excluded_ids)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

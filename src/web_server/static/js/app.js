@@ -100,7 +100,7 @@ const SECTIONS = [
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js" },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js" },
-      { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js" },
+      { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
       { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js" },
       { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js" },
@@ -158,8 +158,8 @@ const SECTIONS = [
         { id: "games-ama-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "ama" },
       ]},
       { heading: "Guess Who", items: [
-        { id: "config-veil",  label: "Config",     module: "./panels/config-veil.js" },
-        { id: "veil-audit",   label: "Audit Log",  module: "./panels/guess-audit.js" },
+        { id: "config-guess", label: "Config",     module: "./panels/config-guess.js" },
+        { id: "guess-audit",  label: "Audit Log",  module: "./panels/guess-audit.js" },
       ]},
       { heading: "Whisper", items: [
         { id: "config-whisper",    label: "Config",     module: "./panels/config-whisper.js" },
@@ -190,7 +190,7 @@ const SECTIONS = [
         { id: "help-music",      label: "Music & TTS",                  module: "./panels/help.js" },
       ]},
       { heading: "Community Games", items: [
-        { id: "help-veil",        label: "Veil",                        module: "./panels/help.js" },
+        { id: "help-guess",       label: "Guess Who",                   module: "./panels/help.js" },
         { id: "help-whisper",     label: "Whisper",                     module: "./panels/help.js" },
         { id: "help-confessions", label: "Confessions",                 module: "./panels/help.js" },
       ]},
@@ -239,9 +239,6 @@ function rebuildIndex() {
     window.__dk_user.guild_id !== primaryGuildId;
 
   visibleSections = SECTIONS.filter((sec) => {
-    // Hide Config for non-primary guilds (config tables are not guild-scoped)
-    if (sec.id === "config" && isNonPrimaryGuild) return false;
-
     // Game host role: show Games section to admins OR configured role holders
     if (sec.gameHostRole) {
       if (userPerms.has("admin")) return true;
@@ -257,6 +254,20 @@ function rebuildIndex() {
     }
     return true;
   });
+
+  // Config is per-guild. For a non-primary guild, show every Config page except
+  // those marked `primaryOnly` (genuinely-global settings like the AI models,
+  // which live under guild_id=0 and apply bot-wide).
+  if (isNonPrimaryGuild) {
+    visibleSections = visibleSections
+      .map((sec) =>
+        sec.id === "config"
+          ? { ...sec, items: (sec.items || []).filter((it) => !it.primaryOnly) }
+          : sec
+      )
+      .filter((sec) => sec.id !== "config" || (sec.items && sec.items.length > 0));
+  }
+
   ALL_PAGES = visibleSections.flatMap(allPages);
   PAGE_TO_SECTION = {};
   for (const sec of visibleSections) {
@@ -524,7 +535,7 @@ function applyMeData(me) {
     games_editor_role_id: me.games_editor_role_id || null,
   };
 
-  // Hide Config section when viewing a non-primary guild
+  // Recompute visible nav (Config pages are filtered per primary/non-primary)
   rebuildIndex();
 }
 

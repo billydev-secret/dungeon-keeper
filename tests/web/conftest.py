@@ -45,7 +45,10 @@ class FakeCtx:
         self.greeter_role_id = 0
         self.greeter_chat_channel_id = 0
         self.join_leave_log_channel_id = 0
+        self.mod_role_ids: set[int] = set()
+        self.admin_role_ids: set[int] = set()
         self._xp_reload_count = 0
+        self._guild_config_cache: dict = {}
 
     def open_db(self):
         return open_db(self.db_path)
@@ -55,6 +58,30 @@ class FakeCtx:
 
     def reload_grant_roles(self) -> None:
         pass
+
+    def reload_permission_roles(self) -> None:
+        from bot_modules.core.db_utils import get_config_value
+
+        with self.open_db() as conn:
+            mod_raw = get_config_value(conn, "mod_role_ids", "", self.guild_id)
+            admin_raw = get_config_value(conn, "admin_role_ids", "", self.guild_id)
+        self.mod_role_ids = {int(x) for x in mod_raw.split(",") if x.strip().isdigit()}
+        self.admin_role_ids = {int(x) for x in admin_raw.split(",") if x.strip().isdigit()}
+
+    def guild_config(self, guild_id: int):
+        from bot_modules.core.app_context import GuildConfig
+
+        cfg = self._guild_config_cache.get(guild_id)
+        if cfg is None:
+            with self.open_db() as conn:
+                cfg = GuildConfig.load(
+                    conn, guild_id, allow_legacy_fallback=(guild_id == self.guild_id)
+                )
+            self._guild_config_cache[guild_id] = cfg
+        return cfg
+
+    def invalidate_guild_config(self, guild_id: int) -> None:
+        self._guild_config_cache.pop(guild_id, None)
 
 
 @pytest.fixture

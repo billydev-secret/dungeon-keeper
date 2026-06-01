@@ -3,7 +3,7 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_JOINING, PHASE_PLAYING, PHASE_RESULTS
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
@@ -18,23 +18,28 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
 )
 from bot_modules.games.utils.question_source import get_mlt_prompt
+from bot_modules.games_mlt.embeds import (
+    build_closed_embed,
+    build_join_embed,
+    build_results_embed,
+    build_round_embed,
+)
+from bot_modules.games_mlt.logic import (
+    MIN_PLAYERS,
+    add_player,
+    apply_vote,
+    bump_crowns,
+    can_start,
+    encode_round_votes,
+    find_round_winners,
+    is_eligible_voter,
+    pop_next_prompt,
+    queue_prompt,
+    remove_player,
+    tally_votes,
+)
 
 log = logging.getLogger(__name__)
-
-
-def build_mlt_join_embed(host_name: str, players: list[str]) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['mlt']} MOST LIKELY TO",
-        color=PHASE_JOINING,
-    )
-    embed.add_field(name="Host", value=host_name, inline=True)
-    embed.add_field(
-        name=f"Players ({len(players)})",
-        value=", ".join(players) if players else "—",
-        inline=False,
-    )
-    embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To")
-    return embed
 
 
 class MLTJoinView(discord.ui.View):
@@ -60,15 +65,13 @@ class MLTJoinView(discord.ui.View):
         log.info("%s joined game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.setdefault("players", [])
-        uid = interaction.user.id
-        if uid not in players:
-            players.append(uid)
+        add_player(players, interaction.user.id)
         await update_game_payload(self.db, self.game_id, payload)
 
         guild = interaction.guild
         names = resolve_names(guild, players)
         host_member = guild.get_member(self.host_id) if guild else None
-        embed = build_mlt_join_embed(
+        embed = build_join_embed(
             host_member.display_name if host_member else "Host", names
         )
         await interaction.response.edit_message(embed=embed, view=self)
@@ -80,15 +83,13 @@ class MLTJoinView(discord.ui.View):
         log.info("%s left game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.setdefault("players", [])
-        uid = interaction.user.id
-        if uid in players:
-            players.remove(uid)
+        remove_player(players, interaction.user.id)
         await update_game_payload(self.db, self.game_id, payload)
 
         guild = interaction.guild
         names = resolve_names(guild, players)
         host_member = guild.get_member(self.host_id) if guild else None
-        embed = build_mlt_join_embed(
+        embed = build_join_embed(
             host_member.display_name if host_member else "Host", names
         )
         await interaction.response.edit_message(embed=embed, view=self)
@@ -102,8 +103,10 @@ class MLTJoinView(discord.ui.View):
             return
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
-        if len(players) < 3:
-            await interaction.response.send_message("❌ Need at least 3 players to start!", ephemeral=True)
+        if not can_start(players):
+            await interaction.response.send_message(
+                f"❌ Need at least {MIN_PLAYERS} players to start!", ephemeral=True
+            )
             return
 
         self.stop()
@@ -173,8 +176,7 @@ class PoseMLTModal(discord.ui.Modal, title="Pose a Prompt"):
         if self._view._closed:
             await interaction.response.send_message("This round already ended.", ephemeral=True)
             return
-        self._view.queued_prompts.append(self.prompt.value.strip())
-        count = len(self._view.queued_prompts)
+        count = queue_prompt(self._view.queued_prompts, self.prompt.value)
         self._view.next_btn.label = f"⏭️ Next ({count} queued)"
         try:
             await self._message.edit(view=self._view)
@@ -238,48 +240,31 @@ class MLTVoteView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
-        if interaction.user.id not in self.players:
+        if not is_eligible_voter(interaction.user.id, self.players):
             await interaction.response.send_message("You're not in the player pool.", ephemeral=True)
             return
         target_id = int(interaction.data["values"][0])
-        prev = self.votes.get(interaction.user.id)
-        self.votes[interaction.user.id] = target_id
+        changed = apply_vote(self.votes, interaction.user.id, target_id)
         member = self.guild.get_member(target_id) if self.guild else None
         name = member.display_name if member else str(target_id)
-        changed = prev is not None and prev != target_id
         msg = f"✅ Voted for **{name}**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True)
 
     def _build_embed(self, closed=False) -> discord.Embed:
-        title = f"{GAME_ICONS['mlt']} MOST LIKELY TO..."
-        if closed:
-            title += " — ROUND OVER"
-        embed = discord.Embed(title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING)
-        embed.add_field(name="Prompt", value=discord.utils.escape_markdown(self.prompt), inline=False)
-        embed.add_field(
-            name="Round",
-            value=f"{self.round_num} — {len(self.votes)} votes",
-            inline=False,
+        return build_round_embed(
+            prompt=self.prompt,
+            round_num=self.round_num,
+            vote_count=len(self.votes),
+            closed=closed,
         )
-        embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To  •  Round {self.round_num}")
-        return embed
 
     def _build_results_embed(self, tally: dict) -> discord.Embed:
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['mlt']} MOST LIKELY TO {self.prompt}",
-            color=PHASE_RESULTS,
+        return build_results_embed(
+            prompt=self.prompt,
+            round_num=self.round_num,
+            tally=tally,
+            guild=self.guild,
         )
-        sorted_tally = sorted(tally.items(), key=lambda x: -x[1])
-        max_votes = sorted_tally[0][1] if sorted_tally else 0
-        lines = []
-        for uid, count in sorted_tally:
-            member = self.guild.get_member(uid) if self.guild else None
-            name = member.display_name if member else str(uid)
-            crown = "👑 " if count == max_votes and count > 0 else "   "
-            lines.append(f"{crown}**{name}** — {count} votes")
-        embed.description = "\n".join(lines) if lines else "No votes cast."
-        embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To  •  Round {self.round_num} Results")
-        return embed
 
     @discord.ui.button(label="✍️ Pose Prompt", style=discord.ButtonStyle.primary, custom_id="mlt_pose", row=1)
     async def pose_prompt(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -315,8 +300,11 @@ class MLTVoteView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             try:
-                embed = self._build_embed(closed=True)
-                embed.title = f"{GAME_ICONS['mlt']} MOST LIKELY TO — CLOSED"
+                embed = build_closed_embed(
+                    prompt=self.prompt,
+                    round_num=self.round_num,
+                    vote_count=len(self.votes),
+                )
                 await game_msg.edit(embed=embed, view=self)
             except Exception:
                 pass
@@ -369,7 +357,7 @@ class MLTCog(commands.Cog):
         )
 
         log.info("Game %s (mlt) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-        embed = build_mlt_join_embed(interaction.user.display_name, [])
+        embed = build_join_embed(interaction.user.display_name, [])
         view = MLTJoinView(game_id, interaction.user.id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
 
@@ -413,9 +401,7 @@ class MLTCog(commands.Cog):
                 return
             view._closed = True
 
-            tally: dict[int, int] = {uid: 0 for uid in players}
-            for target_id in view.votes.values():
-                tally[target_id] = tally.get(target_id, 0) + 1
+            tally = tally_votes(view.votes, players)
 
             results_embed = view._build_results_embed(tally)
             for item in view.children:
@@ -434,17 +420,11 @@ class MLTCog(commands.Cog):
 
             payload = await get_game_payload(self.db, game_id)
             crowns = payload.setdefault("crowns", {})
-            if tally:
-                max_votes = max(tally.values())
-                if max_votes > 0:
-                    for uid, count in tally.items():
-                        if count == max_votes:
-                            crowns[str(uid)] = crowns.get(str(uid), 0) + 1
-            payload["rounds"][str(round_num)]["votes"] = {str(k): v for k, v in view.votes.items()}
+            bump_crowns(crowns, find_round_winners(tally))
+            payload["rounds"][str(round_num)]["votes"] = encode_round_votes(view.votes)
             await update_game_payload(self.db, game_id, payload)
 
-            remaining = list(view.queued_prompts)
-            next_custom = remaining.pop(0) if remaining else None
+            next_custom, remaining = pop_next_prompt(view.queued_prompts)
             try:
                 await self._run_round(
                     interaction=interaction,

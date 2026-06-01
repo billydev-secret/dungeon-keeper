@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.music.np")
 
-EMBED_COLOR = 0xC9A961  # warm gold (Golden Meadow palette)
+EMBED_COLOR = 0xC9A961  # warm gold (brand palette)
 
 _LOOP_EMOJI = {
     LoopMode.OFF: "➡️",     # ➡️

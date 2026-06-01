@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.services.todo_service import create_todo
+from bot_modules.services.todo_service import TASK_MAX_LEN, create_todo
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -15,7 +15,6 @@ if TYPE_CHECKING:
 _MAX_CONTENT_LEN = 1500
 _NO_TEXT_MARKER = "[no text content]"
 _NOTES_MAX_LEN = 1000
-_TASK_MAX_LEN = 500
 
 
 def _format_task_label(*, author_display: str, channel_name: str) -> str:
@@ -62,8 +61,8 @@ class _TodoFromMessageModal(discord.ui.Modal, title="Add to Todo"):
         author_display = getattr(self._message.author, "display_name", "unknown")
         channel_name = getattr(self._message.channel, "name", "unknown")
         task = _format_task_label(author_display=author_display, channel_name=channel_name)
-        if len(task) > _TASK_MAX_LEN:
-            task = task[: _TASK_MAX_LEN - 1] + "…"
+        if len(task) > TASK_MAX_LEN:
+            task = task[: TASK_MAX_LEN - 1] + "…"
 
         description = _format_description(
             message_content=self._message.content or "",
@@ -126,9 +125,9 @@ class TodoCog(commands.Cog):
         if not task:
             await interaction.response.send_message("Task cannot be empty.", ephemeral=True)
             return
-        if len(task) > _TASK_MAX_LEN:
+        if len(task) > TASK_MAX_LEN:
             await interaction.response.send_message(
-                f"Task must be {_TASK_MAX_LEN} characters or fewer.", ephemeral=True
+                f"Task must be {TASK_MAX_LEN} characters or fewer.", ephemeral=True
             )
             return
         with self.ctx.open_db() as conn:
