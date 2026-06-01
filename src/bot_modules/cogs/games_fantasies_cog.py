@@ -4,7 +4,7 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, GAME_ICONS, HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
@@ -16,7 +16,20 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     ConfirmCloseView,
 )
-from bot_modules.games.utils.live_bar import LiveBarUpdater, build_bar
+from bot_modules.games.utils.live_bar import LiveBarUpdater
+from bot_modules.games_fantasies.embeds import (
+    build_lobby_embed,
+    build_recap_embed,
+    build_round_submit_embed,
+    build_vote_embed,
+)
+from bot_modules.games_fantasies.logic import (
+    add_entry,
+    apply_vote,
+    build_result_entry,
+    get_round_entries,
+    normalize_category,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,28 +54,21 @@ class SubmitEntryModal(discord.ui.Modal, title="Submit a Fantasy or Dealbreaker"
 
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Submit Entry", interaction.channel.name if interaction.channel else "unknown")
-        raw_cat = self.category.value.strip().lower()
-        if raw_cat.startswith("f"):
-            category = "Fantasy"
-        elif raw_cat.startswith("d"):
-            category = "Dealbreaker"
-        else:
+        category = normalize_category(self.category.value)
+        if category is None:
             await interaction.response.send_message(
                 "Category must be 'Fantasy' or 'Dealbreaker'.", ephemeral=True
             )
             return
 
-        round_key = str(self.round_num)
-        entry = {
-            "user_id": interaction.user.id,
-            "text": self.entry.value,
-            "category": category,
-        }
-
         def _add_entry(payload):
-            rounds = payload.setdefault("rounds", {})
-            rnd = rounds.setdefault(round_key, {"entries": []})
-            rnd["entries"].append(entry)
+            add_entry(
+                payload,
+                round_num=self.round_num,
+                user_id=interaction.user.id,
+                text=self.entry.value,
+                category=category,
+            )
 
         await modify_payload(self.db, self.game_id, _add_entry)
 
@@ -230,31 +236,15 @@ class FantasiesVoteView(discord.ui.View):
         return False
 
     def _build_embed(self, closed: bool = False) -> discord.Embed:
-        total = len(self.same_votes) + len(self.nope_votes)
-        bar_s, pct_s = build_bar(len(self.same_votes), total)
-        bar_n, pct_n = build_bar(len(self.nope_votes), total)
-
-        title = f"{GAME_ICONS['fantasies']} {self.category} #{self.entry_num}"
-        if closed:
-            title += " — VOTE CLOSED"
-        embed = discord.Embed(title=title, color=GOLDEN_MEADOW_COLOR)
-        embed.add_field(name="Entry", value=discord.utils.escape_markdown(self.entry_text), inline=False)
-        embed.add_field(
-            name="Votes",
-            value=(
-                f"✅ Same\n{bar_s} {pct_s} ({len(self.same_votes)})\n"
-                f"❌ Not for me\n{bar_n} {pct_n} ({len(self.nope_votes)})"
-            ),
-            inline=False,
+        return build_vote_embed(
+            entry_text=self.entry_text,
+            entry_num=self.entry_num,
+            category=self.category,
+            same_votes=self.same_votes,
+            nope_votes=self.nope_votes,
+            total_entries=self.total_entries,
+            closed=closed,
         )
-        if self.total_entries:
-            embed.add_field(
-                name="Progress",
-                value=f"Entry {self.entry_num}/{self.total_entries}",
-                inline=False,
-            )
-        embed.set_footer(text=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers")
-        return embed
 
     @discord.ui.button(label="✅ Same", style=discord.ButtonStyle.success, custom_id="fan_same", row=0)
     async def vote_same(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -262,12 +252,9 @@ class FantasiesVoteView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
             return
-        uid = interaction.user.id
-        changed = uid in self.nope_votes
-        if changed:
-            self.nope_votes.remove(uid)
-        if uid not in self.same_votes:
-            self.same_votes.append(uid)
+        changed = apply_vote(
+            self.same_votes, self.nope_votes, interaction.user.id, "same"
+        )
         msg = f"✅ Voted **Same**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
@@ -278,12 +265,9 @@ class FantasiesVoteView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
             return
-        uid = interaction.user.id
-        changed = uid in self.same_votes
-        if changed:
-            self.same_votes.remove(uid)
-        if uid not in self.nope_votes:
-            self.nope_votes.append(uid)
+        changed = apply_vote(
+            self.same_votes, self.nope_votes, interaction.user.id, "nope"
+        )
         msg = f"✅ Voted **Not for me**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
@@ -356,13 +340,7 @@ class FantasiesCog(commands.Cog):
             payload={"rounds": {}, "results": []},
         )
 
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['fantasies']} FANTASIES & DEALBREAKERS",
-            description="Submit anonymously each round, then vote!",
-            color=GOLDEN_MEADOW_COLOR,
-        )
-        embed.add_field(name="Host", value=interaction.user.display_name, inline=True)
-        embed.set_footer(text=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers")
+        embed = build_lobby_embed(interaction.user.display_name)
 
         log.info("Game %s (fantasies) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         view = FantasiesMainView(game_id, interaction.user.id, self.db, self.bot, self)
@@ -381,11 +359,7 @@ class FantasiesCog(commands.Cog):
         round_num: int,
         channel,
     ):
-        submit_embed = discord.Embed(
-            title=f"{GAME_ICONS['fantasies']} ROUND {round_num}",
-            description="Submit your fantasy or dealbreaker anonymously!",
-            color=GOLDEN_MEADOW_COLOR,
-        )
+        submit_embed = build_round_submit_embed(round_num)
         submit_view = SubmitRoundView(game_id, host_id, round_num, self.db, self.bot)
         # Let the main view know so it can stop us on close
         main_view = self.bot.active_views.get(game_id)
@@ -404,7 +378,7 @@ class FantasiesCog(commands.Cog):
             return
 
         payload = await get_game_payload(self.db, game_id)
-        entries = payload.get("rounds", {}).get(str(round_num), {}).get("entries", [])
+        entries = get_round_entries(payload, round_num)
 
         if not entries:
             await channel.send("No entries submitted for this round.")
@@ -422,18 +396,13 @@ class FantasiesCog(commands.Cog):
                     return
                 view._closed = True
 
-                total = len(view.same_votes) + len(view.nope_votes)
-                same_pct = len(view.same_votes) / total if total > 0 else 0
-
-                result_entry = {
-                    "text": _text,
-                    "category": _cat,
-                    "same": len(view.same_votes),
-                    "nope": len(view.nope_votes),
-                    "same_pct": same_pct,
-                    "author": _author,
-                    "voters": list(view.same_votes) + list(view.nope_votes),
-                }
+                result_entry = build_result_entry(
+                    text=_text,
+                    category=_cat,
+                    author=_author,
+                    same_votes=view.same_votes,
+                    nope_votes=view.nope_votes,
+                )
                 results.append(result_entry)
 
                 # Persist incrementally so mid-game close doesn't lose prior results
@@ -480,42 +449,9 @@ class FantasiesCog(commands.Cog):
 
     async def _post_recap(self, channel, payload: dict):
         results = payload.get("results", [])
-        if not results:
+        embed = build_recap_embed(results)
+        if embed is None:
             return
-
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['fantasies']} FANTASIES & DEALBREAKERS — RESULTS",
-            color=0x808080,
-        )
-
-        most_shared = max(results, key=lambda x: x.get("same_pct", 0))
-        embed.add_field(
-            name="🌟 Most Universally Shared",
-            value=f'"{most_shared["text"]}" ({most_shared["same_pct"]:.0%} Same)',
-            inline=False,
-        )
-
-        most_polar = min(results, key=lambda x: abs(x.get("same_pct", 0) - 0.5))
-        embed.add_field(
-            name="⚡ Most Polarizing",
-            value=f'"{most_polar["text"]}"',
-            inline=False,
-        )
-
-        biggest_outlier = min(results, key=lambda x: x.get("same_pct", 1))
-        embed.add_field(
-            name="🏔️ Biggest Outlier",
-            value=f'"{biggest_outlier["text"]}" ({biggest_outlier["same_pct"]:.0%} Same)',
-            inline=False,
-        )
-
-        total_voters = set()
-        for r in results:
-            total_voters.update(r.get("voters", []))
-
-        embed.add_field(name="Total Submissions", value=str(len(results)), inline=True)
-        embed.add_field(name="Total Voters", value=str(len(total_voters)), inline=True)
-
         await channel.send(embed=embed)
 
 

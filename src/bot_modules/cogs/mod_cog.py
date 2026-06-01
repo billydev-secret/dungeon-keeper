@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.settings import AUTO_DELETE_SETTINGS
 
 if TYPE_CHECKING:
@@ -62,10 +63,8 @@ _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "Voice": ("🔊", discord.Color.from_str("#2ECC71")),
     "Music": ("🎵", discord.Color.from_str("#E74C3C")),
     "Whisper": ("🤫", discord.Color.from_str("#E67E22")),
-    "Moderation Actions": ("🛡️", discord.Color.from_str("#ED4245")),
-    "Reports": ("📊", discord.Color.from_str("#EB459E")),
-    "Watch List": ("🔍", discord.Color.from_str("#3498DB")),
-    "Server Tools": ("⚙️", discord.Color.from_str("#95A5A6")),
+    "Image Guessing Games": ("🎭", discord.Color.from_str("#9B59B6")),
+    "Games Night": ("🎲", discord.Color.from_str("#F1C40F")),
 }
 
 
@@ -120,7 +119,7 @@ def _build_help_pages(
 
     if ctx.can_grant_any_role(interaction):
         grant_cmds: list[tuple[str, str]] = []
-        for gname, gcfg in ctx.grant_roles.items():
+        for gname, gcfg in ctx.guild_config(interaction.guild_id or 0).grant_roles.items():
             grant_cmds.append(
                 (
                     f"/grant role:{gname} member:@user",
@@ -204,118 +203,73 @@ def _build_help_pages(
         )
     )
 
-    if ctx.is_mod(interaction):
-        pages.append(
-            _page(
-                "Moderation Actions",
-                "All actions are logged and transcribed.\n\n"
-                "**🔒 Jail**\n"
-                + _fmt(
-                    [
-                        (
-                            "/jail user:@user duration:24h reason:...",
-                            "Place a member in a private jail channel. "
-                            "Duration: `30m`, `2h`, `7d`, or omit for indefinite.",
-                        ),
-                        (
-                            "/unjail user:@user reason:...",
-                            "Release a jailed member. Restores their roles and saves a transcript.",
-                        ),
-                        ("/pull user:@user", "Bring someone into this jail/ticket channel."),
-                        ("/remove user:@user", "Remove someone you pulled into this channel."),
-                    ]
-                )
-                + "\n\n**⚠️ Warnings**\n"
-                + _fmt(
-                    [
-                        (
-                            "/warn user:@user reason:...",
-                            "Issue a warning (mod-only, user is not notified). Admins are pinged at the threshold.",
-                        ),
-                        (
-                            "/warnings user:@user",
-                            "List all warnings for a member (active + revoked).",
-                        ),
-                        (
-                            "/revokewarn user:@user warning_id:42 reason:...",
-                            "Revoke a warning by ID. Stays in history but stops counting.",
-                        ),
-                        (
-                            "/modinfo user:@user",
-                            "Full mod profile: jail status, warnings, and tickets. Run this first.",
-                        ),
-                    ]
-                )
-                + "\n\n**📩 Tickets**\n"
-                + _fmt(
-                    [
-                        (
-                            "/ticket close reason:...",
-                            "Close this ticket. It becomes read-only with Reopen/Delete buttons.",
-                        ),
-                        ("/ticket reopen", "Reopen a closed ticket."),
-                        ("/ticket delete", "Delete a closed ticket. A transcript is saved first."),
-                        ("/ticket claim", "Claim this ticket — you'll get DM pings on new activity."),
-                        (
-                            "/ticket escalate reason:...",
-                            "Bring admins into this ticket and ping them.",
-                        ),
-                    ]
-                )
-                + "\n\n**🧹 Cleanup**\n"
-                + _fmt(
-                    [
-                        (
-                            "/purge count:50",
-                            "Bulk-delete messages. Use `after:19:35` for time-based, or both.",
-                        ),
-                    ]
-                ),
+    pages.append(
+        _page(
+            "Image Guessing Games",
+            "Submit a cropped NSFW image; opted-in members guess whose body it is. "
+            "Veil uses a dropdown picker, Guess uses written-name guessing with a leaderboard.\n\n"
+            "**🫥 Veil**\n"
+            + _fmt(
+                [
+                    ("/veil submit image:<attachment>", "Submit an NSFW image to the Veil channel — bot validates, crops, previews, then posts."),
+                ]
             )
+            + "\n\n**❓ Guess**\n"
+            + _fmt(
+                [
+                    ("/guess submit image:<attachment>", "Open the Guess crop editor — position the reveal, then post."),
+                    ("/guess optin", "Join the Guess pool so you appear in submitter / guesser autocomplete."),
+                    ("/guess confess text:...", "Drop an anonymous text confession into the Guess channel."),
+                    ("/guess leaderboard", "Top submitters and top guessers in this server."),
+                ]
+            ),
         )
+    )
 
-        pages.append(
-            _page(
-                "Reports",
-                _fmt(
-                    [
-                        ("/quality_leave add member:@user days:30", "Put a member on leave (pauses quality scoring)."),
-                        ("/quality_leave remove member:@user", "End a member's leave of absence."),
-                        ("/quality_leave list", "List members currently on leave."),
-                    ]
-                ),
+    pages.append(
+        _page(
+            "Games Night",
+            "Group games for hangouts. Anyone can start one in an allowed channel; only one game per channel at a time.\n\n"
+            "**Vote / react games**\n"
+            + _fmt(
+                [
+                    ("/wyr", "Would You Rather."),
+                    ("/nhie", "Never Have I Ever."),
+                    ("/mfk", "Marry, Fornicate, Kiss — pick from three members."),
+                    ("/mlt", "Most Likely To."),
+                    ("/twotruths", "Two Truths and a Lie."),
+                    ("/traditional", "Traditional Truth or Dare."),
+                ]
             )
-        )
-
-        pages.append(
-            _page(
-                "Watch List",
-                "Silently forward a member's public messages to your DMs. "
-                "With an AI key set, only flagged messages are forwarded.\n\n"
-                + _fmt(
-                    [
-                        ("/watch add user:@user", "Start watching a member."),
-                        ("/watch remove user:@user", "Stop watching a member."),
-                        ("/watch list", "List everyone you are watching."),
-                    ]
-                ),
+            + "\n\n**Anonymous & themed**\n"
+            + _fmt(
+                [
+                    ("/fantasies", "Fantasies & Dealbreakers — anonymous matching."),
+                    ("/ama", "Anonymous Ask Me Anything."),
+                    ("/hottakes", "Hot Takes / Unpopular Opinions debate."),
+                    ("/compliment", "Spin the Compliment — random anonymous pairing."),
+                ]
             )
-        )
-
-        pages.append(
-            _page(
-                "Server Tools",
-                _fmt(
-                    [
-                        ("/setup", "First-time bot setup — creates log channels, then walks through role/category config."),
-                        ("/starboard channel|threshold|emoji|toggle|status", "Configure the starboard."),
-                        ("/policy open|vote|close|list", "Policy proposals and voting."),
-                        ("/delete_user user:@user", "Admin: purge a user's data."),
-                        ("/247 enabled:true autoplay_playlist:...", "(Mod) Toggle 24/7 voice mode for your current channel."),
-                    ]
-                ),
+            + "\n\n**Creative & strategy**\n"
+            + _fmt(
+                [
+                    ("/story", "Story Builder (Exquisite Corpse) — collaborative writing."),
+                    ("/price", "Name Your Price — bidding game."),
+                    ("/rushmore", "Mt. Rushmore Draft — pick your top 4."),
+                    ("/clapback", "Clapback comedy head-to-head."),
+                    ("/risky start", "Open a Risky Rolls round — dice-based dare ladder."),
+                ]
             )
+            + "\n\n**Settings & help**\n"
+            + _fmt(
+                [
+                    ("/consent", "Configure which game modes can pull you in."),
+                    ("/games-help", "Full game-mode browser."),
+                    ("/games-support", "Link to the support server."),
+                ]
+            ),
         )
+    )
 
     return pages
 
@@ -457,6 +411,9 @@ class ModCog(commands.Cog):
             )
             return
 
+        with ctx.open_db() as conn:
+            tz_hours = get_tz_offset_hours(conn, interaction.guild_id or 0)
+
         after_dt: datetime | None = None
         if after is not None:
             try:
@@ -465,15 +422,15 @@ class ModCog(commands.Cog):
                     raise ValueError
                 h, m = int(parts[0]), int(parts[1])
                 s = int(parts[2]) if len(parts) == 3 else 0
-                server_tz = timezone(timedelta(hours=ctx.tz_offset_hours))
+                server_tz = timezone(timedelta(hours=tz_hours))
                 now = datetime.now(server_tz)
                 after_dt = now.replace(hour=h, minute=m, second=s, microsecond=0)
                 if after_dt > now:
                     after_dt -= timedelta(days=1)
             except (ValueError, IndexError):
                 tz_label = (
-                    f"UTC{ctx.tz_offset_hours:+g}"
-                    if ctx.tz_offset_hours != 0
+                    f"UTC{tz_hours:+g}"
+                    if tz_hours != 0
                     else "UTC"
                 )
                 await interaction.response.send_message(

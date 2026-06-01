@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import datetime, timezone
@@ -8,6 +10,23 @@ from bot_modules.games.utils.game_manager import (
     create_game, update_game_message, update_game_state,
     modify_payload, get_game_payload, end_game, update_session,
     resolve_names,
+)
+from ..classic_logic import (
+    add_player as cl_add_player,
+    add_volunteer as cl_add_volunteer,
+    build_initial_payload as cl_build_initial_payload,
+    claim_start as cl_claim_start,
+    clamp_tier as cl_clamp_tier,
+    existing_fill_values as cl_existing_fill_values,
+    filter_rescuers as cl_filter_rescuers,
+    freeze_rescue as cl_freeze_rescue,
+    init_rescue as cl_init_rescue,
+    my_blank_ids as cl_my_blank_ids,
+    remove_player as cl_remove_player,
+    rescuers_done_count as cl_rescuers_done_count,
+    set_rescue_fill_state as cl_set_rescue_fill_state,
+    store_round1_fills as cl_store_round1_fills,
+    store_rescue_fills as cl_store_rescue_fills,
 )
 from ..data import (
     pick_template, mark_template_used, get_prompts, get_channel_max_tier,
@@ -45,13 +64,13 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
 
     # Enforce per-channel tier cap
     max_tier = await get_channel_max_tier(db, channel.id)
-    if tier > max_tier:
+    tier, clamped = cl_clamp_tier(tier, max_tier)
+    if clamped:
         await interaction.followup.send(
             f"This channel's tier cap is {max_tier} ({HEAT_LABELS[max_tier]}). "
             f"Using tier {max_tier} instead.",
             ephemeral=True,
         )
-        tier = max_tier
 
     # Pick a template
     prompts = await get_prompts(db)
@@ -69,21 +88,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
     game_id = await create_game(
         db, channel.id, host.id, "legitlibs",
         state="joining",
-        payload={
-            "mode": "classic",
-            "tier": tier,
-            "template_id": template["template_id"],
-            "template": {
-                "title": template["title"],
-                "body": template["body"],
-                "blanks": blanks,
-            },
-            "players": [host.id],
-            "host_id": host.id,
-            "state": "joining",
-            "assignments": {},
-            "fills": {},
-        },
+        payload=cl_build_initial_payload(host.id, tier, template),
     )
     cog._game_canceled.discard(game_id)
 
@@ -114,10 +119,9 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
                 await action_interaction.response.send_message(
                     "You're already in!", ephemeral=True)
                 return
-            def _add_player(p):
-                if uid not in p["players"]:
-                    p["players"].append(uid)
-            payload = await modify_payload(db, game_id, _add_player)
+            def _add(p):
+                cl_add_player(p, uid)
+            payload = await modify_payload(db, game_id, _add)
             await action_interaction.response.send_message("✅ You joined!", ephemeral=True)
 
             new_embed = build_join_embed(
@@ -141,10 +145,9 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
                 await action_interaction.response.send_message(
                     "You're not in this round.", ephemeral=True)
                 return
-            def _remove_player(p):
-                if uid in p["players"]:
-                    p["players"].remove(uid)
-            payload = await modify_payload(db, game_id, _remove_player)
+            def _remove(p):
+                cl_remove_player(p, uid)
+            payload = await modify_payload(db, game_id, _remove)
             await action_interaction.response.send_message("You've left.", ephemeral=True)
 
             new_embed = build_join_embed(
@@ -166,10 +169,8 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             claimed = False
             def _claim_start(p):
                 nonlocal claimed
-                if p.get("state") == "joining":
-                    p["assignments"] = assign_blanks_round_robin(blanks, p["players"])
-                    p["state"] = "filling"
-                    claimed = True
+                assignments = assign_blanks_round_robin(blanks, p.get("players", []))
+                claimed = cl_claim_start(p, assignments)
             payload = await modify_payload(db, game_id, _claim_start)
             if not claimed:
                 await action_interaction.response.send_message(
@@ -291,8 +292,8 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             return
 
         assignments = cur_payload.get("assignments", {})
-        my_blank_ids = [bid for bid, pid in assignments.items() if pid == uid]
-        if not my_blank_ids:
+        blank_ids = cl_my_blank_ids(assignments, uid)
+        if not blank_ids:
             await submit_interaction.response.send_message(
                 "You weren't assigned any blanks this round. "
                 "You'll be eligible to volunteer if any go unfilled.",
@@ -300,13 +301,10 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             )
             return
 
-        my_blanks = [b for b in blanks if b["id"] in my_blank_ids]
+        my_blanks = [b for b in blanks if b["id"] in blank_ids]
 
         cur_fills = cur_payload.get("fills", {})
-        prior = {
-            b["id"]: cur_fills[b["id"]]["value"]
-            for b in my_blanks if b["id"] in cur_fills
-        }
+        prior = cl_existing_fill_values(blanks, cur_fills, blank_ids)
 
         async def _save_fills(sub_interaction: discord.Interaction,
                               fills: dict, partial: bool):
@@ -320,11 +318,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             saved = False
             def _store(p):
                 nonlocal saved
-                if p.get("state") == "filling":
-                    p.setdefault("fills", {})
-                    for bid, val in fills.items():
-                        p["fills"][bid] = {"value": val, "by": uid}
-                    saved = True
+                saved = cl_store_round1_fills(p, fills, uid)
             updated_payload = await modify_payload(db, game_id, _store)
             if not saved:
                 await sub_interaction.response.send_message(
@@ -333,7 +327,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
                 )
                 return
 
-            had_all = all(bid in cur_fills for bid in my_blank_ids)
+            had_all = all(bid in cur_fills for bid in blank_ids)
             msg_text = "✅ Fills updated!" if had_all else "✅ Fills saved!"
             await sub_interaction.response.send_message(msg_text, ephemeral=True)
 
@@ -382,14 +376,9 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
     async def _run_rescue_claim_phase():
         nonlocal rescue_claim_msg
         await update_game_state(db, game_id, "rescuing_claim")
+        claim_deadline_ts = int(datetime.now(timezone.utc).timestamp()) + CLAIM_TIMEOUT
         def _init_rescue(p):
-            p["state"] = "rescuing_claim"
-            p["rescue"] = {
-                "volunteers": [],
-                "assignments": {},
-                "claim_deadline": int(datetime.now(timezone.utc).timestamp()) + CLAIM_TIMEOUT,
-                "fill_deadline": 0,
-            }
+            cl_init_rescue(p, claim_deadline_ts)
         payload = await modify_payload(db, game_id, _init_rescue)
 
         unfilled = compute_unfilled(blanks, payload.get("fills", {}))
@@ -447,37 +436,30 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
         rescue_assign = assign_rescue(unfilled_now, vols)
         fill_deadline_rescue = int(datetime.now(timezone.utc).timestamp()) + RESCUE_TIMEOUT
         def _freeze(p):
-            p["rescue"]["assignments"] = rescue_assign
-            p["rescue"]["fill_deadline"] = fill_deadline_rescue
+            cl_freeze_rescue(p, rescue_assign, fill_deadline_rescue)
         await modify_payload(db, game_id, _freeze)
         await _run_rescue_fill_phase()
 
     async def _handle_volunteer(vol_interaction: discord.Interaction):
-        cur_payload = await get_game_payload(db, game_id)
-        if cur_payload.get("state") != "rescuing_claim":
+        uid = vol_interaction.user.id
+        outcome = {"value": "closed"}
+        def _add_vol(p):
+            outcome["value"] = cl_add_volunteer(p, uid)
+        await modify_payload(db, game_id, _add_vol)
+        if outcome["value"] == "closed":
             await vol_interaction.response.send_message(
                 "The claim window is closed.", ephemeral=True)
             return
-
-        uid = vol_interaction.user.id
-        if uid not in cur_payload.get("players", []):
+        if outcome["value"] == "not_player":
             await vol_interaction.response.send_message(
                 "Only players in this round can volunteer.", ephemeral=True)
             return
-
-        vols = cur_payload.get("rescue", {}).get("volunteers", [])
-        if uid in vols:
+        if outcome["value"] == "already":
             await vol_interaction.response.send_message(
                 "You're already signed up. Stay tuned for your blanks.",
                 ephemeral=True,
             )
             return
-
-        def _add_vol(p):
-            p.setdefault("rescue", {}).setdefault("volunteers", [])
-            if uid not in p["rescue"]["volunteers"]:
-                p["rescue"]["volunteers"].append(uid)
-        await modify_payload(db, game_id, _add_vol)
         await vol_interaction.response.send_message(
             "🙋 You're in the rescue squad! You'll get your blanks when the timer runs out.",
             ephemeral=True,
@@ -491,18 +473,18 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
         nonlocal rescue_fill_msg
         await update_game_state(db, game_id, "rescuing_fill")
         def _set_rescue_fill(p):
-            p["state"] = "rescuing_fill"
+            cl_set_rescue_fill_state(p)
         payload = await modify_payload(db, game_id, _set_rescue_fill)
 
         rescue_assignments = payload["rescue"]["assignments"]
         vols = payload["rescue"]["volunteers"]
         deadline = payload["rescue"]["fill_deadline"]
 
-        rescuers = [v for v in vols if v in rescue_assignments.values()]
+        rescuers = cl_filter_rescuers(rescue_assignments, vols)
 
         fill_embed = build_classic_rescue_fill_embed(
             template["title"], tier,
-            _rescuers_done_count(rescue_assignments, payload.get("fills", {}), rescuers),
+            cl_rescuers_done_count(rescue_assignments, payload.get("fills", {}), rescuers),
             len(rescuers),
             deadline,
         )
@@ -524,7 +506,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             if cur_payload.get("state") != "rescuing_fill":
                 return
 
-            done = _rescuers_done_count(
+            done = cl_rescuers_done_count(
                 rescue_assignments, cur_payload.get("fills", {}), rescuers,
             )
             new_embed = build_classic_rescue_fill_embed(
@@ -559,20 +541,17 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
 
         uid = submit_interaction.user.id
         rescue_assignments = cur_payload.get("rescue", {}).get("assignments", {})
-        my_blank_ids = [bid for bid, pid in rescue_assignments.items() if pid == uid]
-        if not my_blank_ids:
+        rescue_blank_ids = cl_my_blank_ids(rescue_assignments, uid)
+        if not rescue_blank_ids:
             await submit_interaction.response.send_message(
                 "Rescue is for volunteers assigned blanks. Maybe next round!",
                 ephemeral=True,
             )
             return
 
-        my_blanks = [b for b in blanks if b["id"] in my_blank_ids]
+        my_blanks = [b for b in blanks if b["id"] in rescue_blank_ids]
         cur_fills = cur_payload.get("fills", {})
-        prior = {
-            b["id"]: cur_fills[b["id"]]["value"]
-            for b in my_blanks if b["id"] in cur_fills
-        }
+        prior = cl_existing_fill_values(blanks, cur_fills, rescue_blank_ids)
 
         async def _save_rescue_fills(sub_interaction: discord.Interaction,
                                       fills: dict, partial: bool):
@@ -581,11 +560,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             saved = False
             def _store(p):
                 nonlocal saved
-                if p.get("state") == "rescuing_fill":
-                    p.setdefault("fills", {})
-                    for bid, val in fills.items():
-                        p["fills"][bid] = {"value": val, "by": uid}
-                    saved = True
+                saved = cl_store_rescue_fills(p, fills, uid)
             await modify_payload(db, game_id, _store)
             if saved:
                 await sub_interaction.response.send_message(
@@ -601,15 +576,6 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             existing_fills=prior,
         )
         await submit_interaction.response.send_modal(modal)
-
-    def _rescuers_done_count(rescue_assignments: dict, fills: dict,
-                              rescuers: list[int]) -> int:
-        done = 0
-        for pid in rescuers:
-            their = [bid for bid, v in rescue_assignments.items() if v == pid]
-            if their and all(bid in fills for bid in their):
-                done += 1
-        return done
 
     # ── Reveal phase ────────────────────────────────────────────────────────
     async def _run_reveal_phase():

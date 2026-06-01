@@ -1,11 +1,10 @@
 import asyncio
 import logging
-import random
 
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_JOINING, PHASE_PLAYING, PHASE_RESULTS, PHASE_RECAP
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     create_game,
@@ -16,7 +15,21 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     ConfirmCloseView,
 )
-from bot_modules.games.utils.live_bar import LiveBarUpdater, build_bar
+from bot_modules.games.utils.live_bar import LiveBarUpdater
+from bot_modules.games_ttl.embeds import (
+    build_guess_embed,
+    build_lobby_embed,
+    build_recap_embed,
+    build_reveal_embed,
+)
+from bot_modules.games_ttl.logic import (
+    add_submission,
+    compute_recap_winners,
+    parse_lie_index,
+    shuffle_statements,
+    tally_votes,
+    update_scores,
+)
 
 log = logging.getLogger(__name__)
 
@@ -39,30 +52,20 @@ class SubmitStatementsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Statements", interaction.channel.name if interaction.channel else "unknown")
-        lie_val = self.lie_index.value.strip().lower()
-        # Accept "1"/"2"/"3" or "a"/"b"/"c" or "first"/"second"/"third"
-        lie_map = {"1": "1", "2": "2", "3": "3", "a": "1", "b": "2", "c": "3",
-                   "first": "1", "second": "2", "third": "3", "one": "1", "two": "2", "three": "3"}
-        lie_val = lie_map.get(lie_val, lie_val)
-        if lie_val not in ("1", "2", "3"):
+        lie_idx = parse_lie_index(self.lie_index.value)
+        if lie_idx is None:
             await interaction.response.send_message(
                 "❌ Please enter **1**, **2**, or **3** to indicate which statement is the lie.",
                 ephemeral=True,
             )
             return
 
-        uid_str = str(interaction.user.id)
+        uid = interaction.user.id
         display_name = interaction.user.display_name
+        statements = [self.s1.value, self.s2.value, self.s3.value]
 
         def _add_submission(payload):
-            submissions = payload.setdefault("submissions", {})
-            submissions[uid_str] = {
-                "statements": [self.s1.value, self.s2.value, self.s3.value],
-                "lie": int(lie_val) - 1,
-            }
-            names_map = payload.setdefault("submitter_names", {})
-            names_map[uid_str] = display_name
-            payload["submission_count"] = len(submissions)
+            add_submission(payload, uid, display_name, statements, lie_idx)
 
         payload = await modify_payload(self.db, self.game_id, _add_submission)
         await interaction.response.send_message("✅ Your statements have been submitted!", ephemeral=True)
@@ -204,48 +207,26 @@ class TTLGuessView(discord.ui.View):
         return False
 
     def _build_embed(self, subject_name: str, closed: bool = False) -> discord.Embed:
-        title = f"{GAME_ICONS['ttl']} GUESS THE LIE — {subject_name}'s turn"
-        if closed:
-            title = f"{GAME_ICONS['ttl']} REVEAL — {subject_name}"
-        embed = discord.Embed(title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING)
-
-        vote_counts = [0, 0, 0]
-        for v in self.votes.values():
-            vote_counts[v] += 1
-        total = sum(vote_counts)
-
-        for i, stmt in enumerate(self.statements):
-            bar, pct = build_bar(vote_counts[i], total)
-            num = ["1️⃣", "2️⃣", "3️⃣"][i]
-            count = vote_counts[i]
-            embed.add_field(
-                name=f"{num} {bar} {pct} ({count})",
-                value=f'"{discord.utils.escape_markdown(stmt)}"',
-                inline=False,
-            )
-
-        embed.set_footer(text=f"{GAME_ICONS['ttl']} Two Truths and a Lie")
-        return embed
+        return build_guess_embed(subject_name, self.statements, self.votes, closed=closed)
 
     def _build_reveal_embed(self, subject_name: str, correct_voters: list, fooled_voters: list, guild) -> discord.Embed:
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['ttl']} REVEAL — {subject_name}",
-            color=PHASE_RESULTS,
+        def _resolver(uid_str: str) -> str:
+            if guild is None:
+                return uid_str
+            try:
+                m = guild.get_member(int(uid_str))
+            except (TypeError, ValueError):
+                m = None
+            return m.display_name if m else uid_str
+
+        return build_reveal_embed(
+            subject_name=subject_name,
+            statements=self.statements,
+            lie_index=self.lie_index,
+            correct_voters=correct_voters,
+            fooled_voters=fooled_voters,
+            name_resolver=_resolver,
         )
-        lie_stmt = self.statements[self.lie_index]
-        lie_num = ["1️⃣", "2️⃣", "3️⃣"][self.lie_index]
-        embed.add_field(name=f"The lie was {lie_num}", value=f'"{lie_stmt}" ✅', inline=False)
-
-        def names(voters):
-            parts = []
-            for uid in voters:
-                m = guild.get_member(uid) if guild else None
-                parts.append(m.display_name if m else str(uid))
-            return ", ".join(parts) if parts else "—"
-
-        embed.add_field(name=f"🎯 Correct ({len(correct_voters)})", value=names(correct_voters), inline=False)
-        embed.add_field(name=f"❌ Fooled ({len(fooled_voters)})", value=names(fooled_voters), inline=False)
-        return embed
 
     @discord.ui.button(label="1️⃣", style=discord.ButtonStyle.primary, custom_id="ttl_v1", row=0)
     async def vote_1(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -357,17 +338,7 @@ class TTLCog(commands.Cog):
             payload={"submissions": {}, "submission_count": 0, "submitter_names": {}, "scores": {}, "prompt": prompt},
         )
 
-        description = "Submit your three statements — two true, one lie.\nWhen everyone's ready, the host will start the guessing!"
-        if prompt:
-            description = f"**Prompt:** {prompt}\n\n{description}"
-
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['ttl']} TWO TRUTHS AND A LIE",
-            description=description,
-            color=PHASE_JOINING,
-        )
-        embed.add_field(name="Players (0)", value="—", inline=True)
-        embed.set_footer(text=f"{GAME_ICONS['ttl']} Two Truths and a Lie")
+        embed = build_lobby_embed(prompt=prompt)
 
         log.info("Game %s (ttl) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         view = TTLSubmitView(game_id, interaction.user.id, self.db, self.bot, self, prompt=prompt)
@@ -406,15 +377,9 @@ class TTLCog(commands.Cog):
             subject_id = int(subject_id_str)
             data = submissions[subject_id_str]
             # Shuffle statements so the lie isn't always in the submitted position
-            original_statements = data["statements"]
-            lie_index_original = data["lie"]
-            indices = list(range(3))
-            random.shuffle(indices)
-            statements = [original_statements[i] for i in indices]
-            lie_index = indices.index(lie_index_original)
-
-            if subject_id_str not in scores:
-                scores[subject_id_str] = {"fooled": 0, "correct_guesses": 0, "total_guessers": 0}
+            statements, lie_index = shuffle_statements(
+                data["statements"], data["lie"]
+            )
 
             subject_member = guild.get_member(subject_id) if guild else None
             subject_name = subject_member.display_name if subject_member else subject_id_str
@@ -435,16 +400,8 @@ class TTLCog(commands.Cog):
                     return
                 view._closed = True
 
-                correct = [uid for uid, v in view.votes.items() if v == _lie]
-                fooled = [uid for uid, v in view.votes.items() if v != _lie]
-
-                scores[str(_sub_id)]["fooled"] += len(fooled)
-                scores[str(_sub_id)]["total_guessers"] += len(view.votes)
-                for uid in correct:
-                    uid_str = str(uid)
-                    if uid_str not in scores:
-                        scores[uid_str] = {"fooled": 0, "correct_guesses": 0, "total_guessers": 0}
-                    scores[uid_str]["correct_guesses"] += 1
+                correct, fooled = tally_votes(view.votes, _lie)
+                update_scores(scores, _sub_id, correct, fooled, len(view.votes))
 
                 def _flush_scores(p):
                     p["scores"] = dict(scores)
@@ -495,47 +452,27 @@ class TTLCog(commands.Cog):
         payload["scores"] = scores
         player_ids = list(played_ids)
 
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['ttl']} TWO TRUTHS AND A LIE — FINAL RESULTS",
-            color=PHASE_RECAP,
-        )
-        mentions = set()
-        subject_scores = {uid: s for uid, s in scores.items() if uid in played_ids}
-        if subject_scores:
-            max_fooled = max(s["fooled"] for s in subject_scores.values())
-            liar_names = []
-            for uid, s in subject_scores.items():
-                if s["fooled"] == max_fooled:
-                    m = guild.get_member(int(uid)) if guild else None
-                    liar_names.append(m.mention if m else uid)
-                    if m:
-                        mentions.add(m.mention)
-            embed.add_field(name="🤥 Best Liar", value=f"{', '.join(liar_names)} ({max_fooled} fooled)", inline=True)
+        stats = compute_recap_winners(scores, played_ids)
 
-            min_fooled = min(s["fooled"] for s in subject_scores.values())
-            honest_names = []
-            for uid, s in subject_scores.items():
-                if s["fooled"] == min_fooled:
-                    m = guild.get_member(int(uid)) if guild else None
-                    honest_names.append(m.mention if m else uid)
-                    if m:
-                        mentions.add(m.mention)
-            embed.add_field(name="😇 Most Honest", value=f"{', '.join(honest_names)}", inline=True)
+        def _name_resolver(uid_str: str) -> str:
+            if guild is None:
+                return uid_str
+            try:
+                m = guild.get_member(int(uid_str))
+            except (TypeError, ValueError):
+                m = None
+            return m.mention if m else uid_str
 
-        if scores:
-            max_correct = max(s["correct_guesses"] for s in scores.values())
-            guesser_names = []
-            for uid, s in scores.items():
-                if s["correct_guesses"] == max_correct:
-                    m = guild.get_member(int(uid)) if guild else None
-                    guesser_names.append(m.mention if m else uid)
-                    if m:
-                        mentions.add(m.mention)
-            embed.add_field(
-                name="🎯 Best Guesser",
-                value=f"{', '.join(guesser_names)} ({max_correct} correct)",
-                inline=True,
-            )
+        def _mention_resolver(uid_str: str) -> str | None:
+            if guild is None:
+                return None
+            try:
+                m = guild.get_member(int(uid_str))
+            except (TypeError, ValueError):
+                m = None
+            return m.mention if m else None
+
+        embed, mentions = build_recap_embed(stats, _name_resolver, _mention_resolver)
 
         ping_str = " ".join(mentions) if mentions else None
         await channel.send(content=ping_str, embed=embed)

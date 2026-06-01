@@ -10,13 +10,26 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from bot_modules.confessions.logic import (
+    REPLY_HELP_TEXT,
+    build_dm_notification_text,
+    compute_confession_max_chars,
+    compute_reply_cooldown,
+    compute_reply_max_chars,
+    is_op_reply,
+    is_stale_interaction_error_code,
+    message_exposes_reply_buttons,
+    message_has_confess_launcher,
+    parse_button_custom_id,
+    parse_notify_pref,
+    resolve_thread_root_info,
+    should_notify_op,
+)
 from bot_modules.services.confessions_service import (
     ERROR_NOT_CONFIGURED,
     ERROR_PANIC_MODE,
     ERROR_REPLIES_DISABLED,
     ERROR_USER_BLOCKED,
-    MAX_DISCORD_MESSAGE_LENGTH,
-    MIN_REPLY_COOLDOWN_SECONDS,
     anon_circle_from_index,
     anon_name_from_index,
     build_anon_reply,
@@ -28,7 +41,6 @@ from bot_modules.services.confessions_service import (
     get_or_assign_anon_identity,
     get_thread_info,
     init_db,
-    jump_link,
     log_confession,
     log_reply,
     purge_old_thread_posts,
@@ -43,8 +55,6 @@ if TYPE_CHECKING:
     from bot_modules.services.confessions_service import GuildConfig
 
 log = logging.getLogger(__name__)
-
-CONFESSION_HEADER_LENGTH = 2
 
 
 # ---------------------------------------------------------------------------
@@ -88,20 +98,17 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             return
 
         content = str(self.confession.value).strip()
-        pref = str(self.notify_pref.value or "").strip().lower()
-        if pref in ("", "y", "yes", "true", "1", "on"):
-            ping_pref = True
-        elif pref in ("n", "no", "false", "0", "off"):
-            ping_pref = False
-        else:
+        pref_parsed = parse_notify_pref(self.notify_pref.value)
+        if pref_parsed is None:
             await self.cog._safe_ephemeral(interaction, "Invalid notify setting. Use `yes` or `no`.")
             return
+        ping_pref = pref_parsed
 
         if not content:
             await self.cog._safe_ephemeral(interaction, "Confession can't be empty.")
             return
 
-        confession_max_chars = min(cfg.max_chars, max(1, MAX_DISCORD_MESSAGE_LENGTH - CONFESSION_HEADER_LENGTH))
+        confession_max_chars = compute_confession_max_chars(cfg.max_chars)
         if len(content) > confession_max_chars:
             await self.cog._safe_ephemeral(
                 interaction, f"That's too long (max **{confession_max_chars}** characters for this confession format)."
@@ -249,19 +256,16 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             return
 
         content = str(self.reply.value).strip()
-        pref = str(self.notify_pref.value or "").strip().lower()
-        if pref in ("", "y", "yes", "true", "1", "on"):
-            my_notify_pref = 1
-        elif pref in ("n", "no", "false", "0", "off"):
-            my_notify_pref = 0
-        else:
+        pref_parsed = parse_notify_pref(self.notify_pref.value)
+        if pref_parsed is None:
             await self.cog._safe_ephemeral(interaction, "Invalid notify setting. Use `yes` or `no`.")
             return
+        my_notify_pref = 1 if pref_parsed else 0
 
         if not content:
             await self.cog._safe_ephemeral(interaction, "Reply can't be empty.")
             return
-        reply_max_chars = min(cfg.max_chars, MAX_DISCORD_MESSAGE_LENGTH)
+        reply_max_chars = compute_reply_max_chars(cfg.max_chars)
         if len(content) > reply_max_chars:
             await self.cog._safe_ephemeral(
                 interaction, f"That's too long (max **{reply_max_chars}** characters for replies)."
@@ -275,7 +279,7 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         except discord.HTTPException:
             return
 
-        reply_cooldown = max(MIN_REPLY_COOLDOWN_SECONDS, cfg.cooldown_seconds // 2)
+        reply_cooldown = compute_reply_cooldown(cfg.cooldown_seconds)
         ok, msg = check_and_bump_limits(
             db_path, interaction.guild.id, interaction.user.id,
             is_reply=True, cooldown_seconds=reply_cooldown, per_day_limit=0,
@@ -284,16 +288,21 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             await self.cog._safe_ephemeral(interaction, msg)
             return
 
-        root_message_id = self.parent_message_id
-        parent_author_id = 0
-        parent_notify_pref = 1 if cfg.notify_op_on_reply else 0
         thread_info = get_thread_info(db_path, interaction.guild.id, self.parent_message_id)
-        if thread_info:
-            root_message_id, parent_author_id, parent_notify_pref = thread_info
-            if parent_notify_pref not in (0, 1):
-                parent_notify_pref = 1 if cfg.notify_op_on_reply else 0
+        root_info = resolve_thread_root_info(
+            thread_info,
+            fallback_parent_message_id=self.parent_message_id,
+            fallback_notify_op_on_reply=cfg.notify_op_on_reply,
+        )
+        root_message_id = root_info.root_message_id
+        parent_author_id = root_info.parent_author_id
+        parent_notify_pref = root_info.parent_notify_pref
 
-        is_op = not self.ephemeral and parent_author_id > 0 and interaction.user.id == parent_author_id
+        is_op = is_op_reply(
+            ephemeral=self.ephemeral,
+            parent_author_id=parent_author_id,
+            replier_id=interaction.user.id,
+        )
         circle = None
         anon_name = None
         if not is_op:
@@ -335,7 +344,11 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                 channel_id=reply_channel.id, root_message_id=root_message_id,
                 original_author_id=interaction.user.id, notify_original_author=my_notify_pref,
             )
-            if parent_author_id > 0 and parent_author_id != interaction.user.id and parent_notify_pref:
+            if should_notify_op(
+                parent_author_id=parent_author_id,
+                replier_id=interaction.user.id,
+                parent_notify_pref=parent_notify_pref,
+            ):
                 await self.cog.notify_original_poster(
                     guild=interaction.guild, original_author_id=parent_author_id,
                     reply_channel_id=reply_channel.id, reply_message_id=reply_msg.id,
@@ -380,7 +393,11 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             channel_id=dest_channel.id, root_message_id=root_message_id,
             original_author_id=interaction.user.id, notify_original_author=my_notify_pref,
         )
-        if parent_author_id > 0 and parent_author_id != interaction.user.id and parent_notify_pref:
+        if should_notify_op(
+            parent_author_id=parent_author_id,
+            replier_id=interaction.user.id,
+            parent_notify_pref=parent_notify_pref,
+        ):
             await self.cog.notify_original_poster(
                 guild=interaction.guild, original_author_id=parent_author_id,
                 reply_channel_id=dest_channel.id, reply_message_id=reply_msg.id,
@@ -436,12 +453,7 @@ class ConfessionsCog(commands.Cog):
 
     @staticmethod
     def _message_has_confess_launcher(message: discord.Message, guild_id: int) -> bool:
-        target_id = f"nc|{guild_id}"
-        return any(
-            getattr(child, "custom_id", None) == target_id
-            for row in message.components
-            for child in getattr(row, "children", [])
-        )
+        return message_has_confess_launcher(message.components, guild_id)
 
     async def _cleanup_duplicate_launchers(
         self, channel: discord.TextChannel, guild_id: int, *, keep_message_id: int
@@ -558,10 +570,13 @@ class ConfessionsCog(commands.Cog):
         if user is None:
             return
         confession_ch = confession_channel_id or reply_channel_id
-        text = (
-            f"Someone replied to your anonymous confession in **{guild.name}**.\n"
-            f"Reply: {jump_link(guild.id, reply_channel_id, reply_message_id)}\n"
-            f"Confession: {jump_link(guild.id, confession_ch, root_message_id)}"
+        text = build_dm_notification_text(
+            guild_name=guild.name,
+            guild_id=guild.id,
+            reply_channel_id=reply_channel_id,
+            reply_message_id=reply_message_id,
+            confession_channel_id=confession_ch,
+            root_message_id=root_message_id,
         )
         try:
             await user.send(text, allowed_mentions=discord.AllowedMentions.none())
@@ -591,12 +606,7 @@ class ConfessionsCog(commands.Cog):
             return False
         if get_thread_info(self.ctx.db_path, guild_id, msg.id):
             return True
-        return any(
-            isinstance(_cid := getattr(child, "custom_id", None), str)
-            and (_cid.startswith("cr|") or _cid.startswith("crn|"))
-            for row in msg.components
-            for child in getattr(row, "children", [])
-        )
+        return message_exposes_reply_buttons(msg.components)
 
     # ── Listeners ────────────────────────────────────────────────────────────
 
@@ -627,41 +637,33 @@ class ConfessionsCog(commands.Cog):
             if not isinstance(custom_id, str):
                 return
 
-            if custom_id.startswith("nc|"):
+            decoded = parse_button_custom_id(custom_id)
+            if decoded.kind == "ignore":
+                return
+
+            if decoded.kind == "new_confession":
                 action = "new confession"
-                parts = custom_id.split("|")
-                if len(parts) != 2 or not parts[1].isdigit():
-                    await self._safe_ephemeral(interaction, "Invalid confession button.")
-                    return
-                if not interaction.guild or interaction.guild.id != int(parts[1]):
+                if not interaction.guild or interaction.guild.id != decoded.guild_id:
                     await self._safe_ephemeral(interaction, "Invalid confession button.")
                     return
                 if not interaction.response.is_done():
                     await interaction.response.send_modal(ConfessModal(self))
                 return
 
-            if (
-                custom_id != "cr"
-                and not custom_id.startswith("cr|")
-                and not custom_id.startswith("crn|")
-                and not custom_id.startswith("crh|")
-            ):
-                return
             action = "anonymous reply"
+
+            if decoded.kind == "invalid":
+                assert decoded.error is not None
+                await self._safe_ephemeral(interaction, decoded.error)
+                return
 
             if not interaction.guild:
                 await self._safe_ephemeral(interaction, "Invalid reply target.")
                 return
 
-            if custom_id.startswith("crh|"):
+            if decoded.kind == "reply_help":
                 action = "help request"
-                await self._safe_ephemeral(
-                    interaction,
-                    "**🎭 Reply Anonymously** — gives you a consistent identity in this thread. "
-                    "Your name and color stay the same across all your replies here.\n\n"
-                    "**🎲 Reply as Someone New** — gives you a one-time random identity for just "
-                    "that message. A fresh name and color every time you click it.",
-                )
+                await self._safe_ephemeral(interaction, REPLY_HELP_TEXT)
                 return
 
             cfg = get_config(self.ctx.db_path, interaction.guild.id)
@@ -678,12 +680,12 @@ class ConfessionsCog(commands.Cog):
                 await self._safe_ephemeral(interaction, "You can't submit anonymous replies on this server.")
                 return
 
-            if custom_id.startswith("cr|"):
-                parts = custom_id.split("|")
-                if len(parts) != 2 or not parts[1].isdigit():
-                    await self._safe_ephemeral(interaction, "Invalid reply button.")
-                    return
-                root_message_id = int(parts[1])
+            if decoded.kind in ("reply", "reply_new"):
+                assert decoded.root_id is not None
+                ephemeral_identity = decoded.kind == "reply_new"
+                if ephemeral_identity:
+                    action = "ephemeral anonymous reply"
+                root_message_id = decoded.root_id
                 if not get_thread_info(self.ctx.db_path, interaction.guild.id, root_message_id):
                     await self._safe_ephemeral(interaction, "This confession can no longer be replied to.")
                     return
@@ -700,39 +702,12 @@ class ConfessionsCog(commands.Cog):
                             parent_channel_id=cfg.dest_channel_id,
                             parent_message_id=root_message_id,
                             thread_id=discord_thread_id,
+                            ephemeral=ephemeral_identity,
                         )
                     )
                 return
 
-            if custom_id.startswith("crn|"):
-                action = "ephemeral anonymous reply"
-                parts = custom_id.split("|")
-                if len(parts) != 2 or not parts[1].isdigit():
-                    await self._safe_ephemeral(interaction, "Invalid reply button.")
-                    return
-                root_message_id = int(parts[1])
-                if not get_thread_info(self.ctx.db_path, interaction.guild.id, root_message_id):
-                    await self._safe_ephemeral(interaction, "This confession can no longer be replied to.")
-                    return
-                discord_thread_id = get_discord_thread_id(self.ctx.db_path, interaction.guild.id, root_message_id)
-                if discord_thread_id:
-                    thread_obj = self.bot.get_channel(discord_thread_id)
-                    if isinstance(thread_obj, discord.Thread) and thread_obj.locked:
-                        await self._safe_ephemeral(interaction, "This confession thread is locked.")
-                        return
-                if not interaction.response.is_done():
-                    await interaction.response.send_modal(
-                        ReplyModal(
-                            self, cfg,
-                            parent_channel_id=cfg.dest_channel_id,
-                            parent_message_id=root_message_id,
-                            thread_id=discord_thread_id,
-                            ephemeral=True,
-                        )
-                    )
-                return
-
-            # Legacy plain "cr" button
+            # decoded.kind == "legacy_reply" — plain "cr" button on old posts
             target_msg = interaction.message
             if target_msg is None:
                 await self._safe_ephemeral(interaction, "That message no longer exists.")
@@ -757,7 +732,7 @@ class ConfessionsCog(commands.Cog):
             )
             await self._safe_ephemeral(interaction, "I don't have enough access to handle that action.")
         except discord.HTTPException as exc:
-            if exc.code in (40060, 10062):
+            if is_stale_interaction_error_code(exc.code):
                 log.debug("Stale interaction during %s (code=%r)", action, exc.code)
                 return
             log.exception(

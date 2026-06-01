@@ -19,8 +19,8 @@ import discord
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.services.embeds import (
     MOD_INFO as CLR_INFO,
-    MOD_JAIL as CLR_JAIL,
-    MOD_POLICY as CLR_POLICY,
+    MOD_JAIL as CLR_JAIL,  # noqa: F401  re-exported for jail_cog
+    MOD_POLICY as CLR_POLICY,  # noqa: F401  re-exported for jail_cog
     MOD_SUCCESS as CLR_SUCCESS,
     MOD_TICKET as CLR_TICKET,
 )
@@ -29,8 +29,6 @@ from bot_modules.services.moderation import (
     cast_policy_vote,
     close_ticket,
     compute_roles_to_restore,
-    compute_roles_to_snapshot,
-    create_jail,
     create_ticket,
     delete_ticket,
     find_expired_policy_votes,
@@ -51,7 +49,17 @@ from bot_modules.services.moderation import (
     write_audit,
     PolicyTicketRow,
 )
-from bot_modules.jail.logic import vote_outcome as _vote_outcome
+from bot_modules.jail.embeds import (
+    build_policy_vote_update_embed,
+    build_setup_complete_embed,
+    build_setup_step_embed,
+)
+from bot_modules.jail.logic import (
+    SETUP_FINAL_STEP,
+    setup_button_label,
+    setup_step_meta,
+    vote_outcome as _vote_outcome,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext
@@ -64,31 +72,31 @@ log = logging.getLogger("dungeonkeeper.jail_commands")
 # ---------------------------------------------------------------------------
 
 
-def _get_mod_role_ids(ctx: AppContext) -> set[int]:
-    return set(ctx.mod_role_ids)
+def _get_mod_role_ids(ctx: AppContext, guild_id: int) -> set[int]:
+    return set(ctx.guild_config(guild_id).mod_role_ids)
 
 
-def _get_admin_role_ids(ctx: AppContext) -> set[int]:
-    return set(ctx.admin_role_ids)
+def _get_admin_role_ids(ctx: AppContext, guild_id: int) -> set[int]:
+    return set(ctx.guild_config(guild_id).admin_role_ids)
 
 
 def _is_mod(member: discord.Member, ctx: AppContext) -> bool:
     """Check if member has mod access via configured roles or manage_guild."""
     if member.guild_permissions.manage_guild or member.guild_permissions.administrator:
         return True
-    return bool(ctx.mod_role_ids & {r.id for r in member.roles})
+    return ctx.guild_config(member.guild.id).member_is_mod(member)
 
 
 def _is_admin(member: discord.Member, ctx: AppContext) -> bool:
     """Check if member has admin access via the Discord ADMINISTRATOR bit or a configured admin role."""
     if member.guild_permissions.administrator:
         return True
-    return bool(ctx.admin_role_ids & {r.id for r in member.roles})
+    return ctx.guild_config(member.guild.id).member_is_admin(member)
 
 
-def _get_config(ctx: AppContext, key: str, default: str = "0") -> int:
+def _get_config(ctx: AppContext, key: str, default: str = "0", guild_id: int = 0) -> int:
     with ctx.open_db() as conn:
-        return int(get_config_value(conn, key, default) or 0)
+        return int(get_config_value(conn, key, default, guild_id) or 0)
 
 
 def _add_ticket_panel(ctx: AppContext, guild_id: int, channel_id: int, message_id: int) -> None:
@@ -233,7 +241,7 @@ class _SetupRoleSelect(discord.ui.RoleSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         ids = ",".join(str(r.id) for r in self.values)
-        self.ctx.set_config_value(self.config_key, ids)
+        self.ctx.set_config_value(self.config_key, ids, interaction.guild_id)
         names = ", ".join(f"@{r.name}" for r in self.values) or "(none)"
         await interaction.response.send_message(
             f"✅ Set **{self.config_key}** → {names}", ephemeral=True
@@ -253,7 +261,7 @@ class _SetupChannelSelect(discord.ui.ChannelSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         ch = self.values[0]
-        self.ctx.set_config_value(self.config_key, str(ch.id))
+        self.ctx.set_config_value(self.config_key, str(ch.id), interaction.guild_id)
         await interaction.response.send_message(
             f"✅ Set **{self.config_key}** → #{ch}", ephemeral=True
         )
@@ -272,97 +280,55 @@ class _SetupCategorySelect(discord.ui.ChannelSelect):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         cat = self.values[0]
-        self.ctx.set_config_value(self.config_key, str(cat.id))
+        self.ctx.set_config_value(self.config_key, str(cat.id), interaction.guild_id)
         await interaction.response.send_message(
             f"✅ Set **{self.config_key}** → {cat}", ephemeral=True
         )
 
 
+# Maps the ``select_kind`` strings returned by ``setup_step_meta`` to the
+# concrete Select classes here. Keeps the data (what each step asks for) in
+# ``jail/logic.py`` while the Discord-side UI construction stays here where
+# the Select classes live.
+_SETUP_SELECTS: dict[str, type] = {
+    "role": _SetupRoleSelect,
+    "channel": _SetupChannelSelect,
+    "category": _SetupCategorySelect,
+}
+
+
 def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.View]:
-    """Return the embed + view for a given setup step."""
+    """Return the embed + view for a given setup step.
+
+    The per-step content (title, description, config key, select type,
+    placeholder) lives in ``jail.logic.setup_step_meta`` so its wording can
+    be tested without spinning up a View. This function is the glue:
+    pick the right ``discord.ui.Select`` subclass, wire up the Next button,
+    and return the rendered embed/view pair.
+    """
+    meta = setup_step_meta(step)
+    if meta is None:
+        return build_setup_complete_embed(), discord.ui.View()
+
     view = discord.ui.View(timeout=300)
+    select_cls = _SETUP_SELECTS[meta["select_kind"]]
+    view.add_item(select_cls(meta["config_key"], ctx, placeholder=meta["placeholder"]))
 
-    if step == 1:
-        embed = discord.Embed(
-            title="Setup — Step 1/6",
-            description="Which roles should have **moderator** access?",
-            color=CLR_TICKET,
-        )
-        view.add_item(
-            _SetupRoleSelect("mod_role_ids", ctx, placeholder="Select mod roles…")
-        )
-    elif step == 2:
-        embed = discord.Embed(
-            title="Setup — Step 2/6",
-            description="Which roles are **admin/senior staff**? (for escalations and warning alerts)",
-            color=CLR_TICKET,
-        )
-        view.add_item(
-            _SetupRoleSelect("admin_role_ids", ctx, placeholder="Select admin roles…")
-        )
-    elif step == 3:
-        embed = discord.Embed(
-            title="Setup — Step 3/6",
-            description="Where should **jail channels** be created?",
-            color=CLR_TICKET,
-        )
-        view.add_item(
-            _SetupCategorySelect(
-                "jail_category_id", ctx, placeholder="Select jail category…"
-            )
-        )
-    elif step == 4:
-        embed = discord.Embed(
-            title="Setup — Step 4/6",
-            description="Where should **ticket channels** be created?",
-            color=CLR_TICKET,
-        )
-        view.add_item(
-            _SetupCategorySelect(
-                "ticket_category_id", ctx, placeholder="Select ticket category…"
-            )
-        )
-    elif step == 5:
-        embed = discord.Embed(
-            title="Setup — Step 5/6",
-            description="Where should **audit logs** be posted?",
-            color=CLR_TICKET,
-        )
-        view.add_item(
-            _SetupChannelSelect(
-                "log_channel_id", ctx, placeholder="Select log channel…"
-            )
-        )
-    elif step == 6:
-        embed = discord.Embed(
-            title="Setup — Step 6/6",
-            description="Where should **transcripts** be posted? (can be the same as log channel)",
-            color=CLR_TICKET,
-        )
-        view.add_item(
-            _SetupChannelSelect(
-                "transcript_channel_id", ctx, placeholder="Select transcript channel…"
-            )
-        )
-    else:
-        embed = discord.Embed(
-            title="Setup Complete",
-            description="All settings saved. Use `/config` to adjust later.",
-            color=CLR_SUCCESS,
-        )
-        return embed, discord.ui.View()
-
-    # Next / skip
     async def next_step(interaction: discord.Interaction):
         e, v = _setup_view(ctx, step + 1)
         await interaction.response.edit_message(embed=e, view=v)
 
     btn: discord.ui.Button = discord.ui.Button(
-        label="Next →" if step < 6 else "Finish", style=discord.ButtonStyle.primary
+        label=setup_button_label(step), style=discord.ButtonStyle.primary,
     )  # type: ignore[assignment]
     btn.callback = next_step  # type: ignore[method-assign]
     view.add_item(btn)
-    return embed, view
+    return build_setup_step_embed(meta), view
+
+
+# Kept for backwards compatibility with anything that imported the constant
+# from ``jail_commands``. The canonical source is ``jail.logic.SETUP_FINAL_STEP``.
+_SETUP_FINAL_STEP = SETUP_FINAL_STEP
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -822,8 +788,8 @@ async def _handle_policy_vote(
         votes = get_policy_votes(conn, policy_id)
 
     # Build eligible voter set
-    mod_role_ids = _get_mod_role_ids(ctx)
-    admin_role_ids = _get_admin_role_ids(ctx)
+    mod_role_ids = _get_mod_role_ids(ctx, guild.id)
+    admin_role_ids = _get_admin_role_ids(ctx, guild.id)
     all_role_ids = mod_role_ids | admin_role_ids
     eligible: set[int] = set()
     for m in guild.members:
@@ -840,59 +806,26 @@ async def _handle_policy_vote(
     yes_ids = [uid for uid in voted_ids if vote_map[uid] == "yes"]
     no_ids = [uid for uid in voted_ids if vote_map[uid] == "no"]
     abstain_ids = [uid for uid in voted_ids if vote_map[uid] == "abstain"]
-    awaiting_ids = eligible - voted_ids
-
-    # Build updated embed
-    embed = discord.Embed(
-        title=f"Policy Vote: {policy['title']}",
-        color=CLR_POLICY,
-    )
-    embed.add_field(
-        name="📜 Policy Text",
-        value=policy["vote_text"] or policy["description"] or "(no text)",
-        inline=False,
-    )
-    embed.add_field(
-        name="Votes Cast", value=f"{len(voted_ids)}/{len(eligible)}", inline=True
-    )
-    embed.add_field(name="Status", value="🗳️ Voting", inline=True)
-    embed.add_field(
-        name="✅ Yes",
-        value=", ".join(f"<@{uid}>" for uid in yes_ids) or "—",
-        inline=False,
-    )
-    embed.add_field(
-        name="❌ No",
-        value=", ".join(f"<@{uid}>" for uid in no_ids) or "—",
-        inline=False,
-    )
-    embed.add_field(
-        name="➖ Abstain",
-        value=", ".join(f"<@{uid}>" for uid in abstain_ids) or "—",
-        inline=False,
-    )
-    embed.add_field(
-        name="⏳ Awaiting",
-        value=", ".join(f"<@{uid}>" for uid in awaiting_ids) or "—",
-        inline=False,
-    )
+    awaiting_ids = list(eligible - voted_ids)
 
     # A 'no' alone does not finalize — we wait until every eligible mod has
     # voted (or the timeout sweeper takes over). This preserves the existing
     # "unanimous required, no early-reject" rule.
-    all_voted = len(awaiting_ids) == 0
-    has_no = len(no_ids) > 0
     outcome: str | None = None
-    if all_voted:
-        outcome = "rejected" if has_no else "adopted"
+    if not awaiting_ids:
+        outcome = "rejected" if no_ids else "adopted"
+
+    embed = build_policy_vote_update_embed(
+        policy_title=policy["title"],
+        vote_text=policy["vote_text"] or policy["description"] or "",
+        yes_ids=yes_ids,
+        no_ids=no_ids,
+        abstain_ids=abstain_ids,
+        awaiting_ids=awaiting_ids,
+        outcome=outcome,
+    )
 
     if outcome is not None:
-        if outcome == "adopted":
-            embed.color = CLR_SUCCESS
-            embed.set_field_at(2, name="Status", value="✅ Adopted", inline=True)
-        else:
-            embed.color = discord.Color.from_str("#E74C3C")
-            embed.set_field_at(2, name="Status", value="❌ Rejected", inline=True)
         view = discord.ui.View(timeout=None)  # No more buttons
         await interaction.response.edit_message(embed=embed, view=view)
         await interaction.followup.send(
@@ -1031,7 +964,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         # Create channel
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{user.name[:16]}-{ts}"
-        mod_role_ids = _get_mod_role_ids(ctx)
+        mod_role_ids = _get_mod_role_ids(ctx, guild.id)
 
         overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -1263,208 +1196,55 @@ async def _do_jail(
     duration_str: str = "",
     reason: str = "",
 ) -> None:
+    """Slash-command entry to the canonical jail flow.
+
+    Translates ``interaction`` context into a call to :func:`apply_jail` and
+    surfaces the structured result as an ephemeral interaction response.
+    Precondition rejections (bot/self/admin/mod/already-jailed) come back
+    as initial responses so they appear immediately; everything else is a
+    followup so the user sees the "thinking" indicator while role/channel
+    creation runs.
+    """
+    from bot_modules.jail.apply import apply_jail, check_jail_preconditions
+
     guild = interaction.guild
     mod = interaction.user
     if guild is None or not isinstance(mod, discord.Member):
         await interaction.response.send_message("Server-only command.", ephemeral=True)
         return
 
-    # Validation
-    if target.bot:
-        await interaction.response.send_message("Cannot jail a bot.", ephemeral=True)
-        return
-    if target.id == mod.id:
-        await interaction.response.send_message("Cannot jail yourself.", ephemeral=True)
-        return
-    if _is_admin(target, ctx):
-        await interaction.response.send_message("Cannot jail an admin.", ephemeral=True)
-        return
-    if _is_mod(target, ctx) and not _is_admin(mod, ctx):
+    # Cheap precondition checks → initial response (no defer required).
+    precheck = check_jail_preconditions(ctx, guild, target, mod)
+    if precheck is not None:
         await interaction.response.send_message(
-            "Only admins can jail a moderator.", ephemeral=True
+            precheck.error_message or "Cannot jail this user.", ephemeral=True
         )
         return
-    with ctx.open_db() as conn:
-        if get_active_jail(conn, guild.id, target.id):
-            await interaction.response.send_message(
-                f"{target} is already jailed.", ephemeral=True
-            )
-            return
 
     duration_seconds = parse_duration(duration_str) if duration_str else None
 
     await interaction.response.defer(ephemeral=True)
 
-    # Ensure @Jailed role exists
-    jailed_role_id = _get_config(ctx, "jailed_role_id")
-    jailed_role = guild.get_role(jailed_role_id) if jailed_role_id else None
-    if not jailed_role:
-        try:
-            jailed_role = await guild.create_role(
-                name="Jailed",
-                reason="Dungeon Keeper jail system setup",
-                permissions=discord.Permissions.none(),
-            )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "I don't have permission to create roles. Grant **Manage Roles** and try again.",
-                ephemeral=True,
-            )
-            return
-        ctx.set_config_value("jailed_role_id", str(jailed_role.id))
-        # Deny view + send on all channels
-        for channel in guild.channels:
-            try:
-                await channel.set_permissions(
-                    jailed_role, view_channel=False, send_messages=False
-                )
-            except discord.Forbidden:
-                pass
-
-    # Snapshot roles
-    stored_roles = compute_roles_to_snapshot(
-        [r.id for r in target.roles],
-        default_role_id=guild.default_role.id,
-        jailed_role_id=jailed_role.id,
+    result = await apply_jail(
+        ctx,
+        guild,
+        target,
+        mod,
+        reason=reason,
+        duration_seconds=duration_seconds,
+        source="command",
     )
 
-    # Strip roles + assign Jailed
-    try:
-        await target.edit(roles=[jailed_role], reason=f"Jailed by {mod}")
-    except discord.Forbidden:
+    if not result.ok:
         await interaction.followup.send(
-            "I don't have permission to manage this user's roles.", ephemeral=True
+            result.error_message or "Failed to jail user.", ephemeral=True
         )
         return
 
-    # Create jail channel
-    cat_id = _get_config(ctx, "jail_category_id")
-    category = guild.get_channel(cat_id) if cat_id else None
-    if not isinstance(category, discord.CategoryChannel):
-        category = None
-
-    ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
-    ch_name = f"jail-{target.name[:16]}-{ts}"
-    mod_role_ids = _get_mod_role_ids(ctx)
-
-    overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
-        guild.default_role: discord.PermissionOverwrite(
-            view_channel=False, send_messages=False
-        ),
-        jailed_role: discord.PermissionOverwrite(view_channel=False),
-        target: discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            read_message_history=True,
-            attach_files=True,
-        ),
-    }
-    if guild.me:
-        overwrites[guild.me] = discord.PermissionOverwrite(
-            view_channel=True,
-            send_messages=True,
-            manage_channels=True,
-            manage_messages=True,
-            read_message_history=True,
-        )
-    for rid in mod_role_ids:
-        role = guild.get_role(rid)
-        if role:
-            overwrites[role] = discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-                manage_messages=True,
-            )
-
-    try:
-        jail_channel = await guild.create_text_channel(
-            ch_name, category=category, overwrites=overwrites  # type: ignore[arg-type]
-        )
-    except discord.Forbidden:
-        await interaction.followup.send(
-            "I don't have permission to create channels. Grant **Manage Channels** and try again.",
-            ephemeral=True,
-        )
-        return
-
-    # DB record
-    with ctx.open_db() as conn:
-        jail_id = create_jail(
-            conn,
-            guild_id=guild.id,
-            user_id=target.id,
-            moderator_id=mod.id,
-            reason=reason,
-            stored_roles=stored_roles,
-            channel_id=jail_channel.id,
-            duration_seconds=duration_seconds,
-        )
-        write_audit(
-            conn,
-            guild_id=guild.id,
-            action="jail_create",
-            actor_id=mod.id,
-            target_id=target.id,
-            extra={
-                "jail_id": jail_id,
-                "reason": reason,
-                "duration": fmt_duration(duration_seconds)
-                if duration_seconds
-                else "indefinite",
-            },
-        )
-
-    # Post embed in jail channel
-    duration_text = fmt_duration(duration_seconds) if duration_seconds else "Indefinite"
-    now_ts = int(datetime.now(timezone.utc).timestamp())
-    expiry_ts = now_ts + duration_seconds if duration_seconds else None
-    countdown_line = (
-        f"**Releases:** <t:{expiry_ts}:R> (<t:{expiry_ts}:f>)\n"
-        if expiry_ts
-        else ""
-    )
-    embed = discord.Embed(
-        title="Moderation Hold",
-        description=(
-            f"{target.mention}, you have been placed in a moderation hold.\n\n"
-            f"**Moderator:** {mod.mention}\n"
-            f"**Duration:** {duration_text}\n"
-            + countdown_line
-            + (f"**Reason:** {reason}\n" if reason else "")
-            + "\nA moderator will review your case here."
-        ),
-        color=CLR_JAIL,
-        timestamp=datetime.now(timezone.utc),
-    )
-    await jail_channel.send(embed=embed)
-
-    # DM the user
-    dm_embed = discord.Embed(
-        title="You've been placed in a moderation hold",
-        description=(
-            f"**Server:** {guild.name}\n"
-            f"**Moderator:** {mod}\n"
-            f"**Duration:** {duration_text}\n"
-            + (f"**Reason:** {reason}\n" if reason else "")
-            + "\nPlease check the jail channel — a moderator will review your situation."
-        ),
-        color=CLR_JAIL,
-    )
-    await _dm_user(target, embed=dm_embed, fallback_channel=jail_channel)
-
+    channel_mention = f"<#{result.channel_id}>" if result.channel_id else "(channel)"
     await interaction.followup.send(
-        f"✅ {target} has been jailed → {jail_channel.mention}", ephemeral=True
+        f"✅ {target} has been jailed → {channel_mention}", ephemeral=True
     )
-
-    # Audit
-    audit_embed = discord.Embed(
-        title="🔒 Member Jailed",
-        description=f"{target.mention} jailed by {mod.mention}\n**Duration:** {duration_text}"
-        + (f"\n**Reason:** {reason}" if reason else ""),
-        color=CLR_JAIL,
-    )
-    await _post_audit(ctx, guild, audit_embed)
 
 
 async def _do_unjail(
@@ -1561,7 +1341,7 @@ async def check_jail_rejoin(ctx: AppContext, member: discord.Member) -> bool:
     if not jail:
         return False
 
-    jailed_role_id = _get_config(ctx, "jailed_role_id")
+    jailed_role_id = _get_config(ctx, "jailed_role_id", guild_id=member.guild.id)
     jailed_role = member.guild.get_role(jailed_role_id)
     if jailed_role:
         try:
@@ -1672,8 +1452,8 @@ async def _resolve_expired_policy(
     policy: PolicyTicketRow,
 ) -> None:
     policy_id = policy["id"]
-    mod_role_ids = _get_mod_role_ids(ctx)
-    admin_role_ids = _get_admin_role_ids(ctx)
+    mod_role_ids = _get_mod_role_ids(ctx, guild.id)
+    admin_role_ids = _get_admin_role_ids(ctx, guild.id)
     all_role_ids = mod_role_ids | admin_role_ids
     eligible: set[int] = set()
     for m in guild.members:
@@ -1758,7 +1538,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
         desc_text = self.description.value or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{user.name[:16]}-{ts}"
-        mod_role_ids = _get_mod_role_ids(ctx)
+        mod_role_ids = _get_mod_role_ids(ctx, guild.id)
 
         overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),

@@ -293,6 +293,7 @@ class XpCog(commands.Cog):
                 "This command only works in a server.", ephemeral=True
             )
             return
+        cfg = ctx.guild_config(guild.id)
 
         if member.bot:
             await interaction.response.send_message(
@@ -312,23 +313,23 @@ class XpCog(commands.Cog):
                 conn,
                 guild.id,
                 member.id,
-                ctx.xp_settings.manual_grant_xp,
+                cfg.xp_settings.manual_grant_xp,
                 event_source=XP_SOURCE_GRANT,
                 event_timestamp=now_ts,
-                settings=ctx.xp_settings,
+                settings=cfg.xp_settings,
             )
 
         await handle_level_progress(
             member,
             award,
             "manual_grant",
-            level_5_role_id=ctx.level_5_role_id,
-            level_up_log_channel_id=ctx.level_up_log_channel_id,
-            level_5_log_channel_id=ctx.level_5_log_channel_id,
+            level_5_role_id=cfg.level_5_role_id,
+            level_up_log_channel_id=cfg.level_up_log_channel_id,
+            level_5_log_channel_id=cfg.level_5_log_channel_id,
         )
 
         await interaction.response.send_message(
-            f"{interaction.user.mention} granted {ctx.xp_settings.manual_grant_xp:.0f} XP to {member.mention}. "
+            f"{interaction.user.mention} granted {cfg.xp_settings.manual_grant_xp:.0f} XP to {member.mention}. "
             f"They now have {award.total_xp:.2f} XP and are level {award.new_level}.",
             ephemeral=False,
         )

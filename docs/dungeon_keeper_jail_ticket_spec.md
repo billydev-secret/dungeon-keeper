@@ -1,501 +1,178 @@
-# Dungeon Keeper — Jail & Ticket System Module Spec
+# Jail & Ticket System — Feature Spec
 
-   **Bot:** Dungeon Keeper (Discord Management Bot)
-**Stack:** Python 3.11+ / discord.py 2.x / aiosqlite / aiohttp (REST API)
+Two of the most emotionally charged moderator workflows — disciplining a member and answering a help request — share one system. Jail places a member into a private channel with their roles stripped while mods talk to them. Tickets open a private channel between a member and the mod team. Both flows produce a transcript on close and feed a unified `/modinfo` history view. A companion warning system creates a paper trail without auto-acting.
 
----
+## Commands
 
-## 1. Design Philosophy
+### Slash & context-menu
 
-This system manages two of the most emotionally charged interactions in a community: being disciplined and asking for help. Every design decision should serve two goals:
+| Command | Type | Permission | Purpose |
+|---|---|---|---|
+| `/setup` | Slash | Administrator | First-run interactive wizard for roles, categories, log channels |
+| `/config set <key> <value>` / `/config get <key>` / `/config list` | Slash | Administrator | Tweak individual settings after setup |
+| `/jail <user> [duration] [reason]` | Slash | Mod | Jail a member, optionally with a duration like `24h` or `7d` |
+| `/unjail <user> [reason]` | Slash | Mod | Release a jailed member |
+| `Jail User` | User context menu | Mod | Modal for duration + reason, then runs the jail flow |
+| `/ticket panel <channel>` | Slash | Mod | Post the persistent "Open Ticket" button in a channel |
+| `/ticket open [description]` | Slash | Everyone | Open a ticket directly from chat |
+| `Open Ticket About This Message` | Message context menu | Everyone | Open a ticket that links the source message |
+| `/ticket close [reason]` | Slash | Mod | Lock a ticket channel (still readable) |
+| `/ticket reopen` | Slash | Mod | Unlock a closed ticket |
+| `/ticket delete` | Slash | Mod | Permanently delete a closed ticket (generates transcript) |
+| `/ticket claim` | Slash | Mod | Subscribe to DM alerts on new activity in this ticket |
+| `/ticket escalate [reason]` | Slash | Mod | Bring admin roles into the ticket |
+| `/pull <user>` | Slash | Mod | Add a user into the current jail or ticket channel |
+| `/remove <user>` | Slash | Mod | Remove a previously pulled user |
+| `/warn <user> [reason]` | Slash | Mod | Record a warning and DM the member |
+| `/warnings <user>` | Slash | Mod | Show the user's full warning history |
+| `/revokewarn <user> <warning_id>` | Slash | Mod | Soft-delete a warning |
+| `/modinfo <user>` | Slash | Mod | Unified view: jail status, jail history, warnings, ticket history |
 
-1. **The member should feel heard, not processed.** A jailed user who feels dehumanized will leave or escalate. A member opening a ticket who feels ignored will stop trusting staff. Every touchpoint — the embed wording, the DM tone, the channel name — should communicate "we take you seriously."
+### Web dashboard
 
-2. **The mod should feel empowered, not burdened.** Moderation is volunteer labor. Every extra click, every ambiguous state, every "wait, who was handling this?" is friction that burns people out. The system should make the right action the easy action.
+The dashboard mirrors the moderator surface. Jail endpoints are read-only — releases happen in Discord.
 
-**Key UX principles:**
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/moderation/stats` | Counts, averages, top moderators |
+| `GET` | `/api/moderation/jails` | List jail records |
+| `GET` | `/api/moderation/tickets` | List tickets (filter by status) |
+| `GET` | `/api/moderation/tickets/{id}` | Single-ticket detail |
+| `POST` | `/api/moderation/tickets/{id}/claim` | Claim a ticket |
+| `POST` | `/api/moderation/tickets/{id}/close` | Close (lock the channel) |
+| `POST` | `/api/moderation/tickets/{id}/reopen` | Reopen a closed ticket |
+| `POST` | `/api/moderation/tickets/{id}/dismiss` | Dismiss with no action |
+| `POST` | `/api/moderation/tickets/{id}/escalate` | Escalate to senior mods |
+| `POST` | `/api/moderation/tickets/{id}/warn` | Issue a warning from the ticket |
+| `POST` | `/api/moderation/tickets/{id}/jail` | Jail the ticket subject |
+| `POST` | `/api/moderation/tickets/{id}/note` | Add an internal mod-only note |
+| `GET` | `/api/moderation/warnings` | List warnings |
+| `GET` | `/api/moderation/policy-tickets` | List escalated tickets |
+| `GET` | `/api/moderation/transcript` | Fetch a transcript |
+| `GET` | `/api/moderation/audit` | List audit log entries |
 
-- **No silent failures.** If something goes wrong (DMs blocked, role deleted, permissions missing), the mod sees a clear message — never a mystery.
-- **Reversibility over confirmation dialogs.** The two-step close → delete flow for tickets exists because "are you sure?" modals train people to click "yes" without reading. Instead, we let them undo.
-- **Context travels with the conversation.** Transcripts, `/modinfo`, and audit logs exist so no mod ever has to ask "what happened before I got here?"
-- **Human decisions stay human.** Warnings don't auto-jail. Threshold alerts notify admins but don't act. Revoking a warning is a conscious choice, not a timer.
+Discord and dashboard actions produce identical side-effects (role changes, channel ops, DMs, transcripts, audit entries).
 
----
+## Behaviour
 
-## 2. Setup & Configuration
+### First-run setup
 
-### 2.1 First-Run Setup Wizard
+`/setup` walks an admin through a short interactive wizard with role and channel pickers: mod roles, admin roles, jail category, ticket category, log channel, transcript channel (with a "same as log" shortcut), then a confirmation summary. The bot auto-creates a `@Jailed` role with server-wide Deny View Channel and Deny Send Messages overrides — that role must sit below the bot's top role. Two separate categories are used (jail and ticket); both deny `@everyone` view. A persistent "Open Ticket" button is published into the ticket panel channel by `/ticket panel`.
 
-**Command:** `/setup`  (Admin-only)
+### Jail flow
 
-On first use (or if core config is missing), the bot walks the admin through an interactive wizard using embeds and buttons/selects:
+Mod runs `/jail`, the right-click "Jail User" menu, or the dashboard. Rejects if the target is a bot, already jailed, or a mod. The flow snapshots every current role, strips them, assigns `@Jailed`, and creates a fresh private channel named `jail-{username}-{timestamp}` visible to the target and mod roles only. The `@Jailed` role itself is denied view on this channel so jailed users can't see each other's channels. The bot posts an intake embed in the channel and DMs the member: who jailed them, why, and how long the hold lasts (or "indefinite" if no duration was given). Tone is firm but neutral — "you've been placed in a moderation hold." Durations accept `30m`, `2h`, `1d`, `7d`, `1w`; no value means indefinite.
 
-1. **Mod roles** — "Which roles should have moderator access?" → Role select menu
-2. **Admin roles** — "Which roles are senior staff? (used for escalations and warning alerts)" → Role select menu
-3. **Jail category** — "Where should jail channels be created?" → Option to select existing category or let the bot create one
-4. **Ticket category** — "Where should ticket channels be created?" → Same as above
-5. **Log channel** — "Where should audit logs go?" → Channel select (uses existing mod-log)
-6. **Transcript channel** — "Where should transcripts be posted?" → Channel select, with a "Same as log channel" shortcut
-7. **Confirmation** — Summary of all choices with a "Looks good!" button
+A background task checks once a minute for expired jails and runs the unjail flow automatically with reason "Jail duration expired." A 24-hour jail set at 11 pm Friday actually ends at 11 pm Saturday even if no mod is online.
 
-The wizard creates the `@Jailed` role automatically with correct server-wide deny overrides. The bot also verifies it has the permissions it needs and warns the admin if anything is missing.
+If a jailed user leaves and rejoins, they're re-jailed automatically: roles re-stripped, `@Jailed` re-assigned, channel access restored, with a note posted in the jail channel that they returned.
 
-**After setup**, individual settings can be tweaked with `/config set <key> <value>`, `/config get <key>`, and `/config list`.
+### Unjail flow
 
-### 2.2 Config Keys
+Restores every snapshotted role (logging any that were deleted in the meantime), removes `@Jailed`, generates a transcript of the jail channel, posts the transcript file to the transcript log channel, DMs the transcript to the member, then deletes the jail channel. The member's DM tells them they've been released and reattaches the transcript so they have the conversation record.
 
-| Key | Description | Set by wizard? |
-|-----|-------------|:-:|
-| `mod_roles` | Roles that grant moderator access | ✓ |
-| `admin_roles` | Senior staff roles (escalation + warning alerts) | ✓ |
-| `jail_category_id` | Category for jail channels | ✓ |
-| `ticket_category_id` | Category for ticket channels | ✓ |
-| `log_channel_id` | Channel for audit log embeds | ✓ |
-| `transcript_channel_id` | Channel for transcript file posts | ✓ |
-| `jailed_role_id` | The @Jailed role ID | Auto |
-| `ticket_panel_channel_id` | Channel containing the ticket panel embed | Set by `/ticket panel` |
-| `ticket_panel_message_id` | Message ID of the panel embed | Auto |
-| `ticket_notify_on_create` | Whether to DM all mods with mod roles when a new ticket opens (default: true) | `/config` |
-| `warning_threshold` | Active warning count that triggers an admin alert (default: 3) | `/config` |
-| `api_port` | Port for REST API server (default: 8080) | `/config` |
-| `api_secret` | Shared secret for API authentication | `/config` |
+### Ticket flow
 
-### 2.3 Discord Structure
+A member opens a ticket via the persistent panel button, `/ticket open`, or the message context menu. The button opens a description modal; the slash command takes an optional description argument; the context menu both prompts for a description and embeds a jump link to the source message. A private channel named `ticket-{username}-{timestamp}` is created, visible to the creator, mod roles, and the bot. The bot posts a ticket embed with Opened By / Source / Description / Created At fields and a red "Close Ticket" button, DMs the creator confirming the ticket, and (when `ticket_notify_on_create` is on) DMs every mod with a jump link.
 
-**Roles:**
-- `@Jailed` — Server-wide Deny View Channel and Send Messages. Auto-created by setup. Must sit below the bot's highest role.
+No cap on concurrent open tickets per user.
 
-**Categories (separate):**
-- Jail Category — `@everyone` denied view.
-- Ticket Category — `@everyone` denied view.
+### Close, reopen, delete
 
-**Channels:**
-- Ticket Panel Channel — Where the bot posts the persistent "Open Ticket" button.
-- Log Channel — Existing mod-log, shared for all audit entries.
-- Transcript Log Channel — Where transcript files land. Can be the same as log channel.
+Tickets pass through three states: **Open → Closed → Deleted**. Close locks the channel — the creator can still read everything but can't post; the embed updates to a "🔒 Closed" status with the closing mod and reason; the Close button is replaced with green "🔓 Reopen" and red "🗑️ Delete" buttons. Reopen restores send permissions and swaps the buttons back. Delete is permanent and runs through a final confirm; it generates the transcript, posts it to the transcript channel, DMs it to the creator, then deletes the channel.
 
----
+The intermediate Closed state exists so that a "wait, one more thing" message after close doesn't require opening a new ticket — the mod just clicks Reopen.
 
-## 3. Jail System
+### Claim & escalate
 
-*A jailed member should understand what's happening, why, and what comes next. The jail channel is not a punishment box — it's a structured conversation space where resolution can happen.*
+`/ticket claim` subscribes the claiming mod to DM alerts whenever someone other than them posts in the ticket; alerts are coalesced with a 5-minute cooldown so a flurry of messages produces one DM. Claiming is advisory — it doesn't lock other mods out, it just signals ownership and routes alerts. Another mod can reassign with a confirmation prompt. The claimer's name lands on the ticket embed and the final transcript summary.
 
-### 3.1 Commands
+`/ticket escalate` adds admin roles to the channel's viewer list, swaps the embed status to "⚠️ Escalated", pings admin roles in-channel, and writes an audit entry. After escalation an admin can run `/ticket claim` to layer admin-level alerts on top of the original mod claim — both get DM'd on new activity. A ticket can be escalated only once.
 
-| Command | Parameters | Access |
-|---------|-----------|--------|
-| `/jail <user> [duration] [reason]` | `user`: Member (required), `duration`: e.g. "24h", "7d" (optional), `reason`: String (optional) | Mod-only |
-| `/unjail <user> [reason]` | `user`: Member (required), `reason`: String (optional) | Mod-only |
+### Pull & remove
 
-Also available as a **User Context Menu**: "Jail User" → opens a modal for duration and reason.
+`/pull <user>` and `/remove <user>` add or revoke per-user view + send overwrites inside a jail or ticket channel. Pulled users appear in the transcript's participant list and are not assigned `@Jailed` — they're observers, not subjects. The primary user (the jailed member or ticket creator) cannot be removed.
 
-**Duration format:** `30m`, `2h`, `1d`, `7d`, `1w`. No value = indefinite.
+### Transcripts
 
-### 3.2 Jail Flow
+Generated when a jail channel is closed via unjail or when a ticket is **deleted** (not just closed). Captures every message in order — author, content, embeds, attachment names + URLs, timestamps — plus participant list, duration, moderator, reason, and outcome. The file lands in three places: stored as JSON in the database (for the dashboard), posted to the transcript log channel with a summary embed, and DM'd to the affected member.
 
-**What the mod does:** Right-clicks a user (or types `/jail`), optionally sets a duration and reason.
+Transcripts are delivered as Markdown (`.md`) files. They're readable in any text editor without rendering, copy-paste cleanly, and survive archival in plain-text tools without losing structure.
 
-**What happens behind the scenes:**
+### Warnings
 
-1. Validate: target is not a bot, not already jailed, not a mod.
-2. Snapshot all the user's current roles and store them in the database.
-3. Strip all roles. Assign `@Jailed`.
-4. Create a private channel: `jail-{username}-{timestamp}` (e.g. `jail-ben-0410-1423`). Permissions:
-   - `@everyone`: Deny View, Deny Send
-   - `@Jailed` role: Deny View (isolates jailed users from each other)
-   - Target user: Allow View, Send, Read History, Attach Files
-   - Each mod role: Allow View, Send, Read History, Manage Messages
-   - Dungeon Keeper: Full access
-5. Post a jail embed in the channel. Write audit log entry.
+`/warn` records a warning, DMs the member with the reason and their current active warning count, and writes an audit embed. When a member's active warning count **reaches** the configured threshold (default 3) the bot posts a highlighted alert in the log channel that pings admin roles. **The threshold never auto-jails** — it escalates to humans, who decide what happens next. `/warnings <user>` shows active and revoked warnings with dates, reasons, and the issuing mod. `/revokewarn` is a deliberate manual soft-delete — no timed expiry.
 
-**What the member experiences:**
+### Modinfo
 
-- They receive a DM: an embed explaining they've been jailed, by whom, why, and for how long. The tone should be firm but not hostile — "You've been placed in a moderation hold" not "You have been JAILED."
-- They can see only their jail channel. They can speak there. The embed tells them a moderator will review their case.
-- *Psychology: the private channel signals "we want to talk to you" rather than "we're ignoring you." This reduces escalation.*
+`/modinfo <user>` produces one embed with current jail status, jail history, active warnings, total warnings issued, and ticket counts with the most recent ticket summary. It's the single tool that answers "what's the history with this person?" without an investigation across DMs.
 
-**What the mod sees:** An audit embed in the log channel confirming the action.
+### Auditing & DMs
 
-### 3.3 Unjail Flow
+Every state-changing action — jail, unjail, ticket open/close/reopen/delete, pull/remove, warn/revoke, claim, escalate, config change — writes an audit embed to the configured log channel and stores a record in the database. The member receives a DM at each major step (jailed, unjailed with transcript, ticket created/closed/reopened/deleted, warning issued). If a DM fails (member has DMs off), the bot posts a note in the relevant channel so the mod isn't left guessing.
 
-**What happens:**
+### Restart recovery
 
-1. Restore all stored roles. If any roles were deleted in the meantime, log which ones and continue.
-2. Remove `@Jailed`.
-3. Generate a transcript of the jail channel (see §7).
-4. Post transcript to the transcript log channel. DM transcript to the user.
-5. Delete the jail channel.
-6. Update DB record. Post audit embed.
+After a restart, persistent ticket panel buttons and per-ticket Close / Reopen / Delete buttons re-attach to their stored messages, the expiry sweep catches up on any jails that lapsed while the bot was offline, and channel IDs are validated — manually deleted channels mark their record closed.
 
-**What the member experiences:** A DM explaining they've been released, with the full transcript attached. Their roles are back. They can see the server again.
+## Permissions
 
-*Psychology: delivering the transcript signals transparency — "here's the record of what happened." It also protects mods from "you never told me that" disputes.*
+**Bot needs:** Manage Roles (to assign / strip / restore roles and create `@Jailed`), Manage Channels (jail and ticket channel creation, lock/unlock, permission overwrites), View Channels and Send Messages in the configured log channels, Read Message History and Embed Links for embeds, Attach Files for transcript delivery. The bot's top role must sit above `@Jailed` for role-strip to work.
 
-### 3.4 Auto-Expiry
+**User needs:**
+- Mod role (configured via `/setup` or `/config`): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/warnings`, `/revokewarn`, `/modinfo`, `/ticket panel`, and the dashboard moderation routes.
+- Admin role: `/setup`, `/config`, dashboard config writes. Admin roles are also the ones pinged on warning threshold and ticket escalation.
+- Everyone: `/ticket open`, the panel button, and the "Open Ticket About This Message" menu.
 
-A background task checks every 60 seconds for jails past their expiry. Expired jails run through the full unjail flow with reason "Jail duration expired."
+## User-visible errors
 
-*This exists so mods don't have to set reminders. A 24-hour jail at 11pm on Friday actually ends Saturday at 11pm, even if no mod is online.*
+| When | The user sees |
+|---|---|
+| Non-mod tries to close a ticket | "Only moderators can close tickets." |
+| Bot lacks a required permission | A descriptive message identifying the missing permission, before any state changes |
+| DM fails (recipient has DMs off) | Channel note: "(Couldn't DM {member} — they have DMs disabled.)" |
+| Jail target is a bot, a mod, or already jailed | "Can't jail that user: {reason}" |
+| Roles were deleted while a member was jailed | Restored roles are applied; the missing ones are noted in the audit entry |
+| Jail or ticket category is full (Discord's 50-channel cap) | "That category is full — please archive a channel or pick a new category." |
+| User tries to remove the primary user from their own ticket / jail | "You can't remove the {creator|jailed member} from their own channel." |
+| Action runs in a channel that isn't a jail or ticket | "This command only works inside a jail or ticket channel." |
+| `/ticket reopen` or `/ticket delete` on an open ticket | "This ticket isn't closed." |
+| `/ticket escalate` runs twice | "This ticket has already been escalated." |
+| `/revokewarn` warning_id not found | "I couldn't find that warning." |
 
-### 3.5 Rejoin Detection
+## Non-goals
 
-If a jailed user leaves and rejoins, the bot re-strips roles, re-assigns `@Jailed`, and re-grants access to their existing jail channel. A note is posted in the channel.
+- **No auto-jail.** Warning thresholds never trigger jail automatically — they ping admins.
+- **No auto-revoke for warnings.** Warnings only clear when a mod manually revokes them.
+- **No appeal system.** There's no member-facing "appeal my jail" flow; the jail channel itself is the conversation.
+- **No web-side jail release or ticket delete.** Both destructive actions happen only in Discord.
+- **No per-user ticket cap.** A member can open as many tickets as they want.
+- **No spectator visibility on tickets or jails.** Only the primary user, mods, pulled participants, and (after escalation) admins can see the channel.
 
-*This prevents the "leave and rejoin to escape jail" exploit. The member sees continuity — the conversation picks up where it left off.*
+## Configuration
 
----
+Setup wizard sets most keys; the rest are tweaked with `/config set`.
 
-## 4. Ticket System
+| Key | Purpose | Default |
+|---|---|---|
+| `mod_roles` | Roles granting moderator access | unset (set by wizard) |
+| `admin_roles` | Senior staff roles — receive escalation pings and warning threshold alerts | unset (set by wizard) |
+| `jail_category_id` | Category where jail channels are created | unset (set by wizard) |
+| `ticket_category_id` | Category where ticket channels are created | unset (set by wizard) |
+| `log_channel_id` | Channel for audit log embeds | unset (set by wizard) |
+| `transcript_channel_id` | Channel where transcript files are posted | unset (set by wizard) |
+| `jailed_role_id` | The `@Jailed` role | auto-created |
+| `ticket_panel_channel_id` / `ticket_panel_message_id` | Where the persistent ticket button lives | set by `/ticket panel` |
+| `ticket_notify_on_create` | DM all mods on every new ticket | on |
+| `warning_threshold` | Active-warning count that triggers an admin alert | 3 |
+| `api_port` / `api_secret` | Dashboard API port and shared secret | platform defaults |
 
-*A member opening a ticket is asking for help. The experience should feel like walking up to a front desk — acknowledged, directed, and taken seriously — not like shouting into a void.*
+## Stored data
 
-### 4.1 Ticket Panel
+The system keeps per-guild records of every jail, ticket, warning, audit action, and transcript. Jail records carry the snapshotted role list so an unjail can restore the member exactly as they were. Tickets track creator, opener source, current state, claim assignment, and (after escalation) the escalating mod and admin claimer. Warnings store the issuing mod, reason, and active/revoked status; revocation is soft so history stays intact for `/modinfo`. Transcripts are stored as JSON for the dashboard and also written as files in the transcript channel and the member's DMs.
 
-**Command:** `/ticket panel <channel>` (Mod-only)
+Audit entries cover every state change (jail/unjail, ticket lifecycle, pull/remove, warn/revoke, claim, escalate, config update) with actor, target, and contextual details. The audit log is the system of record for "what happened and who did it."
 
-Posts a persistent embed with a "📩 Open Ticket" button (green). The embed should explain what tickets are for and set expectations ("A moderator will respond as soon as possible").
+No DM content is persisted beyond what's already in the channel the DM was sent from; transcript files attached to DMs are the same files written to the transcript channel and database.
 
-### 4.2 Opening a Ticket
-
-| Trigger | Behavior |
-|---------|----------|
-| **Panel button** | Modal asks for a brief description → ticket created |
-| **Slash command** `/ticket open [description]` | Ticket created directly |
-| **Message context menu** "Open Ticket About This Message" | Modal asks for description; source message is linked in the ticket |
-
-**What happens:**
-
-1. Create a private channel: `ticket-{username}-{timestamp}`. Permissions mirror the jail channel pattern (creator + mod roles + bot).
-2. Post a ticket embed: Opened By, Source, Description, Created At. If from context menu, include a jump link to the source message. Include a "🔒 Close Ticket" button (red).
-3. DM the member confirming their ticket was created.
-4. **DM all users with configured mod roles** that a new ticket has been opened, with a jump link to the ticket channel. (Configurable via `ticket_notify_on_create`.)
-5. Write DB record. Post audit embed to log channel.
-
-*Psychology: the DM confirmation tells the member "your request was received." The mod DM notification means no ticket sits unseen. The jump link takes the mod directly to the conversation — zero friction to first response.*
-
-### 4.3 Ticket States
-
-Tickets have three states: **Open → Closed → Deleted.** This is the most important UX decision in the system.
-
-**Why not just close-and-delete?** Because mistakes happen. A mod closes a ticket thinking the issue is resolved, but the member replies "wait, one more thing." With immediate deletion, that message is gone and the mod has to ask the member to open a new ticket. With the intermediate state, the mod just clicks Reopen.
-
-### 4.4 Closing a Ticket
-
-**Trigger:** "Close Ticket" button OR `/ticket close [reason]`
-
-1. Mod-only. Non-mods get an ephemeral "Only moderators can close tickets."
-2. Confirmation modal with an optional reason field.
-3. **Lock the channel** — the ticket creator can still *see* the conversation but can no longer *send* messages. Pulled users also lose Send.
-4. Update the ticket embed: show "🔒 Closed" status, who closed it, reason, timestamp.
-5. Replace the Close button with two new buttons:
-   - "🔓 Reopen" (green)
-   - "🗑️ Delete" (red)
-6. Post a message: "This ticket has been closed by {moderator}."
-7. DM the member that their ticket was closed and that they can still view the channel.
-8. Update DB. Post audit embed.
-
-*The member can still read the conversation. This matters — it lets them reference what was discussed without having to search DMs for a transcript.*
-
-### 4.5 Reopening a Ticket
-
-**Trigger:** "Reopen" button OR `/ticket reopen`
-
-1. Restore Send permission for the creator (and any pulled users).
-2. Swap buttons back to "Close Ticket."
-3. Post a message: "This ticket has been reopened by {moderator}."
-4. DM the member that their ticket was reopened.
-5. Update DB. Log audit entry.
-
-### 4.6 Deleting a Ticket
-
-**Trigger:** "Delete" button OR `/ticket delete` (only available when ticket is closed)
-
-This is permanent. This is where the transcript is generated.
-
-1. Final confirmation with Confirm/Cancel buttons.
-2. Generate transcript (see §7). Store in DB.
-3. Post transcript file + summary to transcript log channel.
-4. DM transcript file to the ticket creator.
-5. Delete the channel.
-6. Update DB. Post audit embed.
-
-### 4.7 Ticket Commands Summary
-
-| Command | Parameters | Access |
-|---------|-----------|--------|
-| `/ticket panel <channel>` | `channel`: TextChannel | Mod-only |
-| `/ticket open [description]` | `description`: String (optional) | Everyone |
-| `/ticket close [reason]` | `reason`: String (optional). Inside a ticket channel. | Mod-only |
-| `/ticket reopen` | None. Inside a closed ticket channel. | Mod-only |
-| `/ticket delete` | None. Inside a closed ticket channel. | Mod-only |
-
-No limit on concurrent open tickets per user.
-
----
-
-## 5. Context Menu Commands
-
-| Menu Type | Name | Behavior |
-|-----------|------|----------|
-| User context menu | "Jail User" | Modal for duration + reason → jail flow |
-| Message context menu | "Open Ticket About This Message" | Modal for description → ticket with jump link to source message |
-
-*Context menus matter because they meet the mod where they already are. Spotting a problem in chat → right-click → act. No switching channels, no remembering command syntax.*
-
----
-
-## 6. Pull & Remove
-
-*Sometimes a jail conversation or ticket needs another person's input — a witness, another mod, or someone involved in the situation. Pull brings them in. Remove takes them out when the sensitive part of the conversation begins.*
-
-| Command | Parameters | Access |
-|---------|-----------|--------|
-| `/pull <user>` | `user`: Member (required) | Mod-only |
-| `/remove <user>` | `user`: Member (required) | Mod-only |
-
-Both must be run inside a jail or ticket channel.
-
-**Pull flow:** Grants the user View, Send, Read History, Attach Files on the channel. Posts a notification: "{user} has been added by {moderator}." They appear in the transcript's participant list.
-
-**Remove flow:** Revokes the user's permission overwrite. Posts a notification: "{user} has been removed by {moderator}." Cannot remove the primary user (the jailed member or the ticket creator).
-
-Pulled users are observers/participants — they do **not** get the `@Jailed` role or have roles stripped.
-
----
-
-## 7. Transcripts
-
-*Transcripts are the institutional memory of the moderation team. They exist so that any mod, at any future point, can understand exactly what happened — not a summary, not a retelling, but the actual conversation.*
-
-Transcripts are generated when a jail channel is closed (unjail) or when a ticket is **deleted** (not just closed).
-
-**What they capture:**
-- Metadata: type (jail/ticket), record ID, guild info, channel name, timestamps, participant list
-- Every message in chronological order: author, content, embeds, attachments (filename + URL), timestamp
-- Summary: message count, duration, moderator, reason, outcome
-
-**Where they go:**
-1. Stored in the database as JSON (for the web dashboard).
-2. Posted to the transcript log channel as a `.json` file with a summary embed.
-3. DM'd to the jailed user or ticket creator as a file attachment.
-
----
-
-## 8. Warning System
-
-*Warnings are a paper trail. They let the mod team build a shared picture of a member's behavior over time, so that when a difficult decision needs to be made, it's based on documented history — not gut feeling or whoever happens to be online.*
-
-### 8.1 Commands
-
-| Command | Parameters | Access |
-|---------|-----------|--------|
-| `/warn <user> [reason]` | `user`: Member (required), `reason`: String (optional) | Mod-only |
-| `/warnings <user>` | `user`: Member (required) | Mod-only |
-| `/revokewarn <user> <warning_id>` | `user`: Member (required), `warning_id`: Integer (required) | Mod-only |
-
-### 8.2 Warn Flow
-
-1. Create a warning record in the database.
-2. DM the member: moderator, reason, their current active warning count.
-3. Post warning audit embed to log channel.
-4. Count the user's active (non-revoked) warnings.
-5. If the count reaches the configured threshold (default: 3), post a **highlighted alert** in the log channel that pings admin roles. The alert includes the user, their warning history, and a note that the threshold has been reached.
-
-**This does not auto-jail.** It escalates to humans. The admins decide what to do next.
-
-*Psychology: automated consequences feel arbitrary to the person receiving them. A human reviewing the situation and making a call — even if the outcome is the same — preserves the sense that someone actually looked at what happened.*
-
-### 8.3 Warning Details
-
-- `/warnings <user>` shows all warnings (active and revoked) with status indicators, dates, reasons, and issuing moderator.
-- `/revokewarn` marks a warning as revoked (soft delete). The mod can provide a reason. *This is intentionally a manual action — if someone has genuinely changed, a mod recognizes that by revoking, not a timer.*
-- The threshold alert fires only when the count **reaches** the threshold, not on every warning above it.
-
----
-
-## 9. Mod Info
-
-*One command, full picture. No more asking around "has anyone dealt with this person before?"*
-
-| Command | Parameters | Access |
-|---------|-----------|--------|
-| `/modinfo <user>` | `user`: Member (required) | Mod-only |
-
-Displays a comprehensive embed for the target user:
-
-- **Jail status:** Active jail details or "Not currently jailed"
-- **Jail history:** Past jails with most recent shown (date, duration, reason, outcome)
-- **Active warnings:** List with dates, reasons, issuing moderators
-- **Warning history:** Total issued (active + revoked)
-- **Ticket history:** Open and closed ticket counts, most recent summary
-
-*This is the single most important mod tool in the system. It turns "who is this person?" into an immediate answer instead of a 10-minute investigation across DMs and memory.*
-
----
-
-## 10. Ticket Claiming
-
-*Claiming answers the question "whose job is this?" Without it, tickets get the bystander effect — everyone assumes someone else is handling it.*
-
-| Command | Parameters | Access |
-|---------|-----------|--------|
-| `/ticket claim` | None. Inside a ticket channel. | Mod-only |
-
-**What claiming does:** Subscribes the mod to DM notifications for new activity in the ticket. When someone other than the claimer posts a message (after a 5-minute cooldown to avoid spam), the claimer gets a DM with a jump link.
-
-**What claiming doesn't do:** It doesn't lock other mods out. Everyone can still see and respond. Claiming signals ownership and enables alerts — not exclusivity.
-
-- One mod claims at a time. Another mod can reassign with a confirmation prompt.
-- The claimer is recorded in the ticket embed and transcript summary.
-
----
-
-## 11. Ticket Escalation
-
-*Escalation exists because not every mod should have to handle every situation. Some issues need admin-level judgment — policy questions, sensitive interpersonal conflicts, edge cases. Escalation makes that handoff clean.*
-
-| Command | Parameters | Access |
-|---------|-----------|--------|
-| `/ticket escalate [reason]` | `reason`: String (optional). Inside a ticket channel. | Mod-only |
-
-**What happens:**
-
-1. Admin roles gain visibility into the ticket channel.
-2. The ticket embed updates to show "⚠️ Escalated" status.
-3. Admin roles are pinged in the ticket channel.
-4. Audit log entry.
-
-**Admin claim (second-level):** After escalation, an admin can run `/ticket claim`. This creates a dual-notification setup — **both** the original mod claimer and the admin get DM alerts. The ticket embed shows both names.
-
-- A ticket can only be escalated once.
-- Both mods and admins can close escalated tickets.
-
----
-
-## 12. Audit Logging
-
-*Every action is logged to both the database and the mod-log channel. This isn't surveillance — it's accountability and continuity. When a mod picks up a situation mid-stream, the log tells them exactly where things stand.*
-
-### Action Types
-
-| Action | Actor | Target | Extra Details |
-|--------|-------|--------|---------------|
-| `jail_create` | Moderator | User | reason, duration, channel ID |
-| `jail_release` | Moderator or Bot | User | reason, duration served |
-| `jail_expire` | Bot | User | original duration |
-| `ticket_open` | User | — | source, description |
-| `ticket_close` | Moderator | User (creator) | reason |
-| `ticket_reopen` | Moderator | User (creator) | ticket ID |
-| `ticket_delete` | Moderator | User (creator) | ticket ID, message count |
-| `channel_pull` | Moderator | Pulled user | channel type, record ID |
-| `channel_remove` | Moderator | Removed user | channel type, record ID |
-| `warning_issue` | Moderator | User | reason, warning count, threshold reached |
-| `warning_revoke` | Moderator | User | reason, remaining count |
-| `ticket_claim` | Moderator | — | ticket ID |
-| `ticket_escalate` | Moderator | — | ticket ID, escalation role |
-| `ticket_admin_claim` | Admin | — | ticket ID, original claimer |
-| `config_update` | Moderator | — | key, old value, new value |
-
-### Embed Colors
-
-| Context | Color | Hex |
-|---------|-------|-----|
-| Jail actions | Red | `0xE74C3C` |
-| Ticket actions | Blue | `0x3498DB` |
-| Success (unjail, release) | Green | `0x2ECC71` |
-| Audit/info | Gray | `0x95A5A6` |
-
-*(Placeholder — replace with TGM server palette)*
-
----
-
-## 13. DM Notifications
-
-*DMs are how the system communicates with members who may not be able to see the relevant channels. Every DM should be informative and warm — not robotic.*
-
-| Event | DM to Member |
-|-------|------------|
-| Jailed | Embed: moderator, reason, duration, server name. Tone: "You've been placed in a moderation hold." |
-| Unjailed | Embed: released by, reason, duration served + transcript attachment |
-| Ticket created | Confirmation with channel jump link |
-| Ticket closed | Notification that it's been closed, reason, and that they can still view the channel |
-| Ticket reopened | Notification that it's been reopened |
-| Ticket deleted | Summary embed + transcript attachment |
-| Warning issued | Embed: moderator, reason, current warning count |
-
-| Event | DM to Mod |
-|-------|-----------|
-| New ticket opened | Jump link to ticket channel (if `ticket_notify_on_create` is true) |
-| Activity in claimed ticket | Jump link to new message (5-minute cooldown between notifications) |
-
-All DMs wrapped in error handling. If a DM fails, post a note in the relevant channel so the mod knows the user didn't receive it.
-
----
-
-## 14. REST API
-
-An aiohttp server in the same process as the bot, authenticated via Bearer token (`api_secret`).
-
-### Endpoints
-
-| Method | Path | Description | Notes |
-|--------|------|-------------|-------|
-| `GET` | `/api/jails` | List jail records | Params: `guild_id` (required), `status`, `user_id`, `page`, `per_page` |
-| `GET` | `/api/jails/{jail_id}` | Get single jail | Includes stored roles |
-| `POST` | `/api/jails/{jail_id}/release` | Release a jailed user | Body: `reason`, `actor_id`. Triggers full unjail flow. |
-| `GET` | `/api/tickets` | List ticket records | Params: `guild_id` (required), `status` (open/closed/deleted/all), `user_id`, `page`, `per_page` |
-| `GET` | `/api/tickets/{ticket_id}` | Get single ticket | |
-| `POST` | `/api/tickets/{ticket_id}/close` | Close (lock channel) | Body: `reason`, `actor_id` |
-| `POST` | `/api/tickets/{ticket_id}/reopen` | Reopen | Body: `actor_id` |
-| `POST` | `/api/tickets/{ticket_id}/delete` | Delete (permanent) | Body: `reason`, `actor_id`. Triggers transcript + channel delete. |
-| `GET` | `/api/transcripts/{type}/{record_id}` | Get transcript | `type` is "jail" or "ticket" |
-| `GET` | `/api/audit` | List audit entries | Params: `guild_id`, `action`, `actor_id`, `target_id`, `after`, `before`, `page`, `per_page` |
-| `GET` | `/api/stats` | Dashboard stats | Params: `guild_id`, `period` (7d/30d/90d/all). Returns jail/ticket counts, averages, top moderators. |
-
-All `POST` endpoints trigger full Discord-side flows — role changes, permissions, channel operations, transcripts, DMs, audit logs.
-
----
-
-## 15. Bot Restart Recovery
-
-1. **Re-attach ticket panel button** using stored message ID.
-2. **Re-attach ticket channel buttons** — "Close" buttons on open tickets, "Reopen / Delete" buttons on closed tickets.
-3. **Catch up on expired jails** — expiry task queries by timestamp, so missed expirations process immediately.
-4. **Validate channels** — check all active jail/ticket channel IDs still exist. If manually deleted, mark record accordingly.
-
----
-
-## 16. Edge Cases
-
-| Scenario | Handling |
-|----------|----------|
-| User has DMs disabled | Continue flow, post note in channel so mod knows |
-| Roles deleted while user jailed | Restore only valid roles, log which were missing |
-| @Jailed role deleted | Re-create on next jail action |
-| Category full (50 channels) | Notify mod, suggest archiving |
-| User leaves while jailed | Re-jail on rejoin (§3.5) |
-| Channel manually deleted | Caught on restart, mark record closed |
-| Concurrent jail attempts | DB check + per-user lock |
-| Bot lacks permissions | Descriptive error to mod before attempting |
-
----
-
-## 17. Implementation Priority
-
-1. Database schema & migrations
-2. `/setup` wizard + `/config` commands
-3. Jail core — `/jail`, `/unjail`, role management, channel creation, `@Jailed` role
-4. Jail extras — context menu, auto-expiry, duration parsing, rejoin detection
-5. Transcript system — collection, JSON formatting, DB storage, file posting
-6. Ticket core — `/ticket open`, close/reopen/delete flows, panel embed + buttons
-7. Ticket extras — context menu, persistent button views
-8. `/pull` and `/remove`
-9. DM notifications — all member and mod DMs
-10. Audit logging — DB writes + log channel embeds
-11. Warning system — `/warn`, `/warnings`, `/revokewarn`, threshold alerts
-12. `/modinfo` — unified user history view
-13. Ticket claiming — `/ticket claim`, DM subscriptions
-14. Ticket escalation — `/ticket escalate`, admin claim
-15. Restart recovery — view re-registration, channel validation, expiry catchup
-16. REST API — all endpoints
-17. Testing & edge case hardening
+See also: [[dm-perms-spec]], [[whisper-spec]], [[confessions-spec]] for adjacent moderator surfaces that share the same `/api/moderation/` namespace.

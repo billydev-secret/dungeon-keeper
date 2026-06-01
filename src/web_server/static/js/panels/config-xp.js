@@ -29,7 +29,7 @@ export function mount(container) {
           <div class="field">
             <label>XP Grant Allowed User IDs</label>
             <input type="text" name="xp_grant_allowed_user_ids" value="${xp.xp_grant_allowed_user_ids.join(", ")}" />
-            <div class="field-hint">Comma-separated user IDs allowed to use /xp grant</div>
+            <div class="field-hint">Comma-separated user IDs allowed to use /xp_give</div>
           </div>
           <div class="field">
             <label>XP Excluded Channels</label>
@@ -114,7 +114,7 @@ export function mount(container) {
             <div class="field">
               <label>Manual Grant XP</label>
               <input type="number" name="manual_grant_xp" step="0.1" min="0" value="${xp.manual_grant_xp}" />
-              <div class="field-hint">XP given per /xp grant command (default 20)</div>
+              <div class="field-hint">XP given per /xp_give command (default 20)</div>
             </div>
             <div class="field">
               <label>Level Curve Factor</label>

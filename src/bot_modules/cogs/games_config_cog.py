@@ -3,7 +3,23 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, SUCCESS_COLOR, ERROR_COLOR
+
+from bot_modules.games_config.embeds import (
+    build_audit_channel_embed,
+    build_channel_allowed_embed,
+    build_channel_disallowed_embed,
+    build_channel_list_embed,
+    build_force_end_embed,
+    build_game_status_embed,
+    build_portal_grant_embed,
+    build_portal_list_embed,
+    build_portal_revoke_embed,
+)
+from bot_modules.games_config.logic import (
+    has_admin_permissions,
+    has_mod_or_admin_permissions,
+)
+from bot_modules.games.constants import ERROR_COLOR
 
 log = logging.getLogger(__name__)
 
@@ -12,7 +28,7 @@ def is_admin():
     async def predicate(interaction: discord.Interaction) -> bool:
         if not interaction.guild:
             return False
-        return interaction.user.guild_permissions.administrator
+        return has_admin_permissions(interaction.user.guild_permissions)
     return app_commands.check(predicate)
 
 
@@ -20,8 +36,7 @@ def is_mod_or_admin():
     async def predicate(interaction: discord.Interaction) -> bool:
         if not interaction.guild:
             return False
-        perms = interaction.user.guild_permissions
-        return perms.administrator or perms.manage_guild or perms.manage_channels
+        return has_mod_or_admin_permissions(interaction.user.guild_permissions)
     return app_commands.check(predicate)
 
 
@@ -44,11 +59,7 @@ class GamesConfigCog(commands.Cog):
                 "INSERT OR IGNORE INTO games_allowed_channels (channel_id, added_by) VALUES (?, ?)",
                 (interaction.channel_id, interaction.user.id),
             )
-            embed = discord.Embed(
-                title="✅ Channel Allowed",
-                description=f"{interaction.channel.mention} is now a game channel.",
-                color=SUCCESS_COLOR,
-            )
+            embed = build_channel_allowed_embed(interaction.channel.mention)
         except Exception as e:
             embed = discord.Embed(title="Error", description=str(e), color=ERROR_COLOR)
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -61,11 +72,7 @@ class GamesConfigCog(commands.Cog):
             "DELETE FROM games_allowed_channels WHERE channel_id = ?",
             (interaction.channel_id,),
         )
-        embed = discord.Embed(
-            title="✅ Channel Removed",
-            description=f"{interaction.channel.mention} is no longer a game channel.",
-            color=SUCCESS_COLOR,
-        )
+        embed = build_channel_disallowed_embed(interaction.channel.mention)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @games_group.command(name="list-channels", description="List all allowed game channels.")
@@ -73,19 +80,7 @@ class GamesConfigCog(commands.Cog):
     async def list_channels(self, interaction: discord.Interaction):
         log.info("%s used /games list-channels in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         rows = await self.db.fetchall("SELECT channel_id FROM games_allowed_channels")
-        if not rows:
-            desc = "No game channels configured yet. Use `/games allow-channel`."
-        else:
-            mentions = []
-            for row in rows:
-                ch = interaction.guild.get_channel(row[0])
-                mentions.append(ch.mention if ch else f"<#{row[0]}>")
-            desc = "\n".join(mentions)
-        embed = discord.Embed(
-            title="Game Channels",
-            description=desc,
-            color=GOLDEN_MEADOW_COLOR,
-        )
+        embed = build_channel_list_embed(rows, interaction.guild.get_channel)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @games_group.command(name="game-status", description="Show the active game in this channel.")
@@ -94,23 +89,7 @@ class GamesConfigCog(commands.Cog):
         log.info("%s used /games game-status in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         from bot_modules.games.utils.game_manager import get_active_game
         row = await get_active_game(self.db, interaction.channel_id)
-        if not row:
-            embed = discord.Embed(
-                title="No Active Game",
-                description="There's no game running in this channel.",
-                color=GOLDEN_MEADOW_COLOR,
-            )
-        else:
-            embed = discord.Embed(
-                title="Active Game",
-                description=(
-                    f"**Type:** {row['game_type']}\n"
-                    f"**State:** {row['state']}\n"
-                    f"**Host:** <@{row['host_id']}>\n"
-                    f"**Game ID:** `{row['game_id']}`"
-                ),
-                color=GOLDEN_MEADOW_COLOR,
-            )
+        embed = build_game_status_embed(row)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @games_group.command(name="game-end", description="Force-close the active game in this channel.")
@@ -138,11 +117,7 @@ class GamesConfigCog(commands.Cog):
         if row["game_id"] in self.bot.active_views:
             view = self.bot.active_views.pop(row["game_id"])
             view.stop()
-        embed = discord.Embed(
-            title="🛑 Game Force-Closed",
-            description=f"The **{row['game_type']}** game has been ended by an admin/mod.",
-            color=ERROR_COLOR,
-        )
+        embed = build_force_end_embed(row["game_type"])
         await interaction.followup.send(embed=embed)
 
     @games_group.command(name="audit-channel", description="Set or clear the audit log channel for anonymous submissions.")
@@ -156,21 +131,13 @@ class GamesConfigCog(commands.Cog):
                 "ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?, set_by = ?",
                 (interaction.guild_id, channel.id, interaction.user.id, channel.id, interaction.user.id),
             )
-            embed = discord.Embed(
-                title="✅ Audit Channel Set",
-                description=f"Anonymous submissions will be logged to {channel.mention}.",
-                color=SUCCESS_COLOR,
-            )
+            embed = build_audit_channel_embed(channel.id)
         else:
             await self.db.execute(
                 "DELETE FROM games_audit_channel WHERE guild_id = ?",
                 (interaction.guild_id,),
             )
-            embed = discord.Embed(
-                title="✅ Audit Channel Cleared",
-                description="Anonymous submission logging has been disabled.",
-                color=SUCCESS_COLOR,
-            )
+            embed = build_audit_channel_embed(None)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @games_group.command(name="portal-grant", description="Grant a user access to the web admin portal.")
@@ -182,11 +149,7 @@ class GamesConfigCog(commands.Cog):
             "INSERT OR REPLACE INTO games_portal_access (user_id, granted_by) VALUES (?, ?)",
             (user.id, interaction.user.id),
         )
-        embed = discord.Embed(
-            title="✅ Portal Access Granted",
-            description=f"{user.mention} can now sign in to the admin portal.",
-            color=SUCCESS_COLOR,
-        )
+        embed = build_portal_grant_embed(user.mention)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @games_group.command(name="portal-revoke", description="Revoke a user's web admin portal access.")
@@ -198,11 +161,7 @@ class GamesConfigCog(commands.Cog):
             "DELETE FROM games_portal_access WHERE user_id = ?",
             (user.id,),
         )
-        embed = discord.Embed(
-            title="✅ Portal Access Revoked",
-            description=f"{user.mention} can no longer sign in to the admin portal.",
-            color=SUCCESS_COLOR,
-        )
+        embed = build_portal_revoke_embed(user.mention)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @games_group.command(name="portal-list", description="List all users with web admin portal access.")
@@ -212,18 +171,7 @@ class GamesConfigCog(commands.Cog):
         rows = await self.db.fetchall(
             "SELECT user_id, granted_by, granted_at FROM games_portal_access ORDER BY granted_at DESC"
         )
-        if not rows:
-            desc = "No users have been granted portal access. Use `/games portal-grant`."
-        else:
-            lines = []
-            for row in rows:
-                lines.append(f"<@{row[0]}> — granted by <@{row[1]}>")
-            desc = "\n".join(lines)
-        embed = discord.Embed(
-            title="Portal Access List",
-            description=desc,
-            color=GOLDEN_MEADOW_COLOR,
-        )
+        embed = build_portal_list_embed(rows)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @allow_channel.error

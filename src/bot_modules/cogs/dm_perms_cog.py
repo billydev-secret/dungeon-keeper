@@ -12,7 +12,31 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.services.embeds import DM_ACCEPT, DM_DENY, DM_PENDING, DM_PRIMARY
+from bot_modules.dm_perms.embeds import (
+    build_acceptance_embed,
+    build_denial_embed_for_requester,
+    build_denial_embed_for_view,
+    build_dm_help_embed,
+    build_expired_embed,
+    build_guild_unavailable_embed,
+    build_mode_updated_embed,
+    build_request_dm_embed,
+    build_request_sent_embed,
+    build_revoked_embed,
+    build_stale_request_embed,
+)
+from bot_modules.dm_perms.logic import (
+    audit_line_accepted,
+    audit_line_asked,
+    audit_line_denied,
+    audit_line_expired,
+    audit_line_revoked,
+    clamp_reason,
+    classify_dm_request,
+    display_name_for,
+    dm_status_text,
+    pick_dm_roles_to_remove,
+)
 from bot_modules.services.dm_perms_service import (
     DM_ROLE_NAMES,
     add_consent_pair,
@@ -24,8 +48,8 @@ from bot_modules.services.dm_perms_service import (
     load_audit_channels,
     load_consent_pairs,
     load_panel_settings,
-    load_request_channels,
     load_request_by_message_id,
+    load_request_channels,
     load_requests,
     normalize_request_type,
     post_audit_event,
@@ -105,17 +129,9 @@ class AskConsentView(discord.ui.View):
 
         record = load_request_by_message_id(self.cog.ctx.db_path, message.id)
         if record is None:
-            stale_embed = discord.Embed(
-                title="⌛ Request no longer active",
-                description=(
-                    "This DM request has already been answered, expired, "
-                    "or was cancelled."
-                ),
-                color=DM_PENDING,
-            )
             try:
                 await interaction.response.edit_message(
-                    embed=stale_embed, view=None
+                    embed=build_stale_request_embed(), view=None
                 )
             except (discord.NotFound, discord.HTTPException):
                 pass
@@ -138,16 +154,9 @@ class AskConsentView(discord.ui.View):
             # Bot was removed from the guild after the request was sent.
             self.cog._drop_request_from_memory(guild_id, requester_id, target_id)
             remove_request(self.cog.ctx.db_path, guild_id, requester_id, target_id)
-            stale_embed = discord.Embed(
-                title="❌ Server unavailable",
-                description=(
-                    "The server this request belongs to is no longer reachable."
-                ),
-                color=DM_DENY,
-            )
             try:
                 await interaction.response.edit_message(
-                    embed=stale_embed, view=None
+                    embed=build_guild_unavailable_embed(), view=None
                 )
             except (discord.NotFound, discord.HTTPException):
                 pass
@@ -214,20 +223,14 @@ class AskConsentView(discord.ui.View):
         self.cog._drop_request_from_memory(guild.id, requester_id, target_id)
         remove_request(self.cog.ctx.db_path, guild.id, requester_id, target_id)
 
-        success_embed = discord.Embed(
-            title="✅ Connection accepted!",
-            color=DM_ACCEPT,
-        )
-        success_embed.description = (
-            f"**{requester.display_name}** ↔ **{target.display_name}**\n\n"
-            f"{requester.mention} and {target.mention} can now DM each other.\n\n"
-            "Either of you can undo this at any time with `/dm_revoke`."
-        )
-        success_embed.add_field(
-            name="Request Type", value=request_type_label(req_type), inline=True
-        )
-        success_embed.add_field(
-            name="Reason", value=_safe_field_text(reason), inline=False
+        type_label = request_type_label(req_type)
+        success_embed = build_acceptance_embed(
+            requester_display_name=requester.display_name,
+            target_display_name=target.display_name,
+            requester_mention=requester.mention,
+            target_mention=target.mention,
+            type_label=type_label,
+            reason=reason,
         )
 
         await interaction.response.edit_message(embed=success_embed, view=None)
@@ -241,8 +244,7 @@ class AskConsentView(discord.ui.View):
         )
         await self.cog._post_audit(
             guild,
-            f"DM request accepted: {requester.display_name} ↔ "
-            f"{target.display_name} ({request_type_label(req_type)})",
+            audit_line_accepted(requester.display_name, target.display_name, type_label),
         )
 
     async def _handle_deny(
@@ -257,17 +259,8 @@ class AskConsentView(discord.ui.View):
         req_type: str,
         reason: str,
     ) -> None:
-        deny_embed = discord.Embed(
-            title="❌ Request declined",
-            description="No worries — the request was turned down.",
-            color=DM_DENY,
-        )
-        deny_embed.add_field(
-            name="Request Type", value=request_type_label(req_type), inline=True
-        )
-        deny_embed.add_field(
-            name="Reason", value=_safe_field_text(reason), inline=False
-        )
+        type_label = request_type_label(req_type)
+        deny_embed = build_denial_embed_for_view(type_label=type_label, reason=reason)
 
         await interaction.response.edit_message(embed=deny_embed, view=None)
 
@@ -275,20 +268,12 @@ class AskConsentView(discord.ui.View):
         remove_request(self.cog.ctx.db_path, guild.id, requester_id, target_id)
 
         if requester:
-            req_embed = discord.Embed(
-                title="❌ Request declined",
-                description=(
-                    f"Your {request_type_label(req_type).lower()} request "
-                    f"to **{target.display_name if target else target_id}** "
-                    f"in **{guild.name}** was declined."
-                ),
-                color=DM_DENY,
-            )
-            req_embed.add_field(
-                name="Request Type", value=request_type_label(req_type), inline=True
-            )
-            req_embed.add_field(
-                name="Reason", value=_safe_field_text(reason), inline=False
+            target_name = target.display_name if target else str(target_id)
+            req_embed = build_denial_embed_for_requester(
+                target_display_name=target_name,
+                guild_name=guild.name,
+                type_label=type_label,
+                reason=reason,
             )
             await _safe_dm(requester, embed=req_embed)
 
@@ -297,12 +282,11 @@ class AskConsentView(discord.ui.View):
             actor_id=target_id, user_a_id=requester_id, user_b_id=target_id,
             notes=f"type={req_type}",
         )
-        requester_name = requester.display_name if requester else str(requester_id)
-        target_name = target.display_name if target else str(target_id)
+        requester_name = display_name_for(requester, requester_id)
+        target_name = display_name_for(target, target_id)
         await self.cog._post_audit(
             guild,
-            f"DM request denied: {requester_name} ➝ {target_name} "
-            f"({request_type_label(req_type)})",
+            audit_line_denied(requester_name, target_name, type_label),
         )
 
 
@@ -420,18 +404,6 @@ async def _safe_dm(user: discord.abc.Messageable, **kwargs: Any) -> Optional[dis
         return None
 
 
-def _safe_field_text(text: str | None) -> str:
-    """Escape markdown in user-supplied text before placing it into an embed.
-
-    DM request reasons come from a Discord modal — without escaping, a
-    requester could craft markdown links / formatting that the recipient
-    sees as if the bot itself authored them.
-    """
-    if not text:
-        return "—"
-    return discord.utils.escape_markdown(text)
-
-
 # ---------------------------------------------------------------------------
 # Cog
 # ---------------------------------------------------------------------------
@@ -509,9 +481,10 @@ class DmPermsCog(commands.Cog):
                 continue
             requester = guild.get_member(row["requester_id"])
             target = guild.get_member(row["target_id"])
-            requester_name = requester.display_name if requester else str(row["requester_id"])
-            target_name = target.display_name if target else str(row["target_id"])
+            requester_name = display_name_for(requester, row["requester_id"])
+            target_name = display_name_for(target, row["target_id"])
             req_type = row["request_type"]
+            type_label = request_type_label(req_type)
             write_audit_log(
                 self.ctx.db_path, gid, "request_expired",
                 user_a_id=row["requester_id"], user_b_id=row["target_id"],
@@ -519,18 +492,14 @@ class DmPermsCog(commands.Cog):
             )
             await self._post_audit(
                 guild,
-                f"DM request expired: {requester_name} ➝ {target_name} "
-                f"({request_type_label(req_type)})",
+                audit_line_expired(requester_name, target_name, type_label),
             )
             if requester:
-                exp_embed = discord.Embed(
-                    title="⌛ Request expired",
-                    description=(
-                        f"Your {request_type_label(req_type).lower()} request to "
-                        f"**{target_name}** in **{guild.name}** "
-                        f"expired after {REQUEST_TIMEOUT_LABEL} without a response."
-                    ),
-                    color=DM_PENDING,
+                exp_embed = build_expired_embed(
+                    target_display_name=target_name,
+                    guild_name=guild.name,
+                    type_label=type_label,
+                    request_timeout_label=REQUEST_TIMEOUT_LABEL,
                 )
                 await _safe_dm(requester, embed=exp_embed)
 
@@ -569,22 +538,20 @@ class DmPermsCog(commands.Cog):
         return self._panel_locks[guild_id]
 
     def _precheck_dm_request(self, guild: discord.Guild, requester: discord.Member, target: discord.Member | discord.User) -> Optional[str]:
-        if not isinstance(target, discord.Member):
-            return "I couldn't check that user's DM preference — they may not be in this server."
-        if target.id == requester.id:
-            return "You can't send a request to yourself!"
-        if target.bot:
-            return "Bots don't accept DM requests."
-        mode = resolve_mode(target)
-        if mode == "closed":
-            return f"{target.display_name} isn't accepting DM requests right now."
-        if mode == "open":
-            return f"{target.display_name} has their DMs open — no request needed, just message them!"
-        if self._is_mutual(guild.id, requester.id, target.id):
-            return "You two already have a connection — no need to request again."
-        if self._has_pending_request(guild.id, requester.id, target.id):
-            return "You already have a pending request to them — wait for them to respond."
-        return None
+        # ``classify_dm_request`` takes primitives, not discord objects, so it
+        # remains testable without spinning up Discord. The cog observes the
+        # facts here and the classifier picks the right message.
+        target_in_guild = isinstance(target, discord.Member)
+        target_mode = resolve_mode(target) if isinstance(target, discord.Member) else ""
+        return classify_dm_request(
+            target_in_guild=target_in_guild,
+            is_self=target.id == requester.id,
+            target_is_bot=target.bot,
+            target_mode=target_mode,
+            is_mutual=self._is_mutual(guild.id, requester.id, target.id),
+            has_pending=self._has_pending_request(guild.id, requester.id, target.id),
+            target_display_name=getattr(target, "display_name", str(target.id)),
+        )
 
     async def _submit_dm_request(
         self,
@@ -599,10 +566,7 @@ class DmPermsCog(commands.Cog):
         req_type = normalize_request_type(request_type or "dm")
         # Modal already enforces MAX_REASON_LENGTH; this clamp is defence-in-depth
         # for callers that bypass the modal flow.
-        if len(reason) > MAX_REASON_LENGTH:
-            reason_clean = reason[: MAX_REASON_LENGTH - 1] + "…"
-        else:
-            reason_clean = reason
+        reason_clean = clamp_reason(reason, MAX_REASON_LENGTH)
 
         error = self._precheck_dm_request(guild, requester, user)  # type: ignore[arg-type]
         if error:
@@ -631,18 +595,15 @@ class DmPermsCog(commands.Cog):
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        embed = discord.Embed(
-            title="📨 Someone wants to connect with you",
-            description=(
-                f"A member of **{guild.name}** would like to connect.\n\n"
-                f"This request expires in {REQUEST_TIMEOUT_LABEL}."
-            ),
-            color=DM_PRIMARY,
+        type_label = request_type_label(req_type)
+        embed = build_request_dm_embed(
+            guild_name=guild.name,
+            requester_display_name=requester.display_name,
+            requester_avatar_url=requester.display_avatar.url,
+            request_timeout_label=REQUEST_TIMEOUT_LABEL,
+            type_label=type_label,
+            reason=reason_clean,
         )
-        embed.set_author(name=requester.display_name, icon_url=requester.display_avatar.url)
-        embed.set_footer(text="You can revoke this permission at any time with /dm_revoke")
-        embed.add_field(name="Request Type", value=request_type_label(req_type), inline=True)
-        embed.add_field(name="Reason", value=_safe_field_text(reason_clean), inline=False)
 
         message = await _safe_dm(user, embed=embed, view=AskConsentView(self))
         if message is None:
@@ -663,17 +624,13 @@ class DmPermsCog(commands.Cog):
             req_type, reason_clean, message.id, None,
         )
 
-        sender_embed = discord.Embed(
-            title="📨 Request sent!",
-            description=(
-                f"Your {request_type_label(req_type).lower()} request to **{user.display_name}** "
-                f"in **{guild.name}** has been delivered.\n\nYou'll get a DM when they respond. "
-                f"The request expires in {REQUEST_TIMEOUT_LABEL}."
-            ),
-            color=DM_PRIMARY,
+        sender_embed = build_request_sent_embed(
+            target_display_name=user.display_name,
+            guild_name=guild.name,
+            request_timeout_label=REQUEST_TIMEOUT_LABEL,
+            type_label=type_label,
+            reason=reason_clean,
         )
-        sender_embed.add_field(name="Request Type", value=request_type_label(req_type), inline=True)
-        sender_embed.add_field(name="Reason", value=_safe_field_text(reason_clean), inline=False)
         await _safe_dm(requester, embed=sender_embed)
 
         write_audit_log(
@@ -683,8 +640,7 @@ class DmPermsCog(commands.Cog):
         )
         await self._post_audit(
             guild,
-            f"DM request asked: {requester.display_name} ➝ "
-            f"{user.display_name} ({request_type_label(req_type)})",
+            audit_line_asked(requester.display_name, user.display_name, type_label),
         )
         await interaction.followup.send(
             f"📨 Request sent to {user.display_name} via DM!", ephemeral=True
@@ -768,10 +724,9 @@ class DmPermsCog(commands.Cog):
         self, _before: discord.Member, after: discord.Member
     ) -> None:
         dm_roles = [r for r in after.roles if r.name in DM_ROLE_NAMES]
-        if len(dm_roles) <= 1:
+        to_remove = pick_dm_roles_to_remove(dm_roles)
+        if not to_remove:
             return
-        keep = max(dm_roles, key=lambda r: r.position)
-        to_remove = [r for r in dm_roles if r != keep]
         try:
             await after.remove_roles(*to_remove, reason="DM role dedup")
         except (discord.Forbidden, discord.HTTPException) as exc:
@@ -786,37 +741,8 @@ class DmPermsCog(commands.Cog):
     @app_commands.guild_only()
     async def dm_help(self, interaction: discord.Interaction) -> None:
         assert interaction.guild
-        embed = discord.Embed(
-            title="📬 DM Request System",
-            description="Control how users may request DM access with you.",
-            color=DM_PRIMARY,
-        )
-        if interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        embed.add_field(
-            name="Your DM Modes",
-            value="**OPEN** — Anyone may DM.\n**ASK** — You must approve requests.\n**CLOSED** — DM requests are blocked.",
-            inline=False,
-        )
-        embed.add_field(
-            name="Your Commands",
-            value=(
-                "`/dm_set_mode` — Set your DM preference\n"
-                "`/dm_revoke @user` — Revoke relationship\n"
-                "`/dm_status @user` — Check relationship status\n"
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="Moderator Tools",
-            value=(
-                "`/dm_request_panel_refresh` — Repost the request panel as the newest "
-                "message in its channel. Panels are set up via `/setup` and the web "
-                "dashboard."
-            ),
-            inline=False,
-        )
-        embed.set_footer(text="DM relationships are logged for audit transparency.")
+        icon_url = interaction.guild.icon.url if interaction.guild.icon else None
+        embed = build_dm_help_embed(icon_url)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="dm_set_mode", description="Set your DM request mode.")
@@ -835,12 +761,7 @@ class DmPermsCog(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send("I don't have permission to manage roles here.", ephemeral=True)
             return
-        embed = discord.Embed(
-            title="DM preference updated",
-            description=f"You're now set to **{mode.value.upper()}**.",
-            color=DM_PRIMARY,
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=build_mode_updated_embed(mode.value), ephemeral=True)
 
     @app_commands.command(name="dm_revoke", description="Remove DM permission relationship with another user.")
     @app_commands.guild_only()
@@ -869,23 +790,12 @@ class DmPermsCog(commands.Cog):
             )
             return
 
-        revoked_embed = discord.Embed(
-            title="🚫 Connection removed",
-            description=(
-                f"**{interaction.user.display_name}** ↔ **{user.display_name}**\n\n"
-                "The DM connection between you two has been removed."
-            ),
-            color=DM_DENY,
-        )
-        revoked_embed.add_field(
-            name="Request Type",
-            value=request_type_label(meta.get("type") if meta else None),
-            inline=True,
-        )
-        revoked_embed.add_field(
-            name="Reason",
-            value=_safe_field_text(meta.get("reason") if meta else None),
-            inline=False,
+        type_label = request_type_label(meta.get("type") if meta else None)
+        revoked_embed = build_revoked_embed(
+            requester_display_name=interaction.user.display_name,
+            target_display_name=user.display_name,
+            type_label=type_label,
+            reason=meta.get("reason") if meta else None,
         )
 
         if meta and meta.get("source_msg_id") and meta.get("source_channel_id"):
@@ -906,8 +816,11 @@ class DmPermsCog(commands.Cog):
         )
         await self._post_audit(
             interaction.guild,
-            f"DM permission revoked: {interaction.user.display_name} ↔ "
-            f"{user.display_name} (by {interaction.user.display_name})",
+            audit_line_revoked(
+                interaction.user.display_name,
+                user.display_name,
+                interaction.user.display_name,
+            ),
         )
         await interaction.response.send_message(
             f"Done — your connection with {user.mention} has been removed."
@@ -919,9 +832,9 @@ class DmPermsCog(commands.Cog):
     async def dm_status(self, interaction: discord.Interaction, user: discord.Member) -> None:
         assert interaction.guild and interaction.user
         mutual = self._is_mutual(interaction.guild.id, interaction.user.id, user.id)
-        result = "✅ You two are connected." if mutual else "❌ No connection yet."
         await interaction.response.send_message(
-            f"**DM status — you & {user.display_name}**\n\n{result}", ephemeral=True
+            f"**DM status — you & {user.display_name}**\n\n{dm_status_text(mutual)}",
+            ephemeral=True,
         )
 
     # ── Admin commands ────────────────────────────────────────────────────────

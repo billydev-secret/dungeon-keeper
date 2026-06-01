@@ -8,10 +8,10 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from web_server.helpers import resolve_names as _resolve_names
+from bot_modules.jail.apply import apply_jail
 from bot_modules.services.moderation import (
     claim_ticket,
     close_ticket,
-    create_jail,
     create_warning,
     escalate_ticket,
     fmt_duration,
@@ -647,52 +647,95 @@ async def ticket_jail(
     body: TicketJailBody,
     user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
+    """Apply a real moderation hold from the dashboard.
+
+    Routes through the canonical :func:`apply_jail` flow so the user actually
+    gets the Jailed role applied, a private jail channel created, and a DM
+    notification — same behavior as the ``/jail`` slash command. Returns 503
+    if the bot can't reach the live guild (without a live connection there's
+    no way to apply the role).
+    """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     reason = (body.reason or "").strip()
-    duration_s = parse_duration(body.duration or "")
-    if duration_s is None:
+
+    raw_duration = (body.duration or "").strip()
+    duration_s = parse_duration(raw_duration) if raw_duration else None
+    if raw_duration and duration_s is None:
         raise HTTPException(
             status_code=400,
             detail="Could not parse duration (use e.g. '30m', '24h', '7d')",
         )
 
-    def _q():
+    # Verify the ticket exists and resolve the subject before going to Discord.
+    def _ticket_lookup():
         with ctx.open_db() as conn:
             row = _fetch_ticket_row(conn, guild_id, ticket_id)
-            subject_id = int(row["user_id"])
-            jail_id = create_jail(
-                conn,
-                guild_id=guild_id,
-                user_id=subject_id,
-                moderator_id=user.user_id,
-                reason=reason,
-                stored_roles=[],
-                channel_id=0,
-                duration_seconds=duration_s,
-            )
-            write_audit(
-                conn,
-                guild_id=guild_id,
-                action="ticket_jail",
-                actor_id=user.user_id,
-                target_id=subject_id,
-                extra={
-                    "ticket_id": ticket_id,
-                    "jail_id": jail_id,
-                    "duration_seconds": duration_s,
-                    "reason": reason,
-                    "dashboard_only": True,
-                },
-            )
-            return {
-                "ok": True,
-                "ticket_id": ticket_id,
-                "status": row["status"],
-                "message": f"Jail #{jail_id} recorded ({fmt_duration(duration_s)})",
-            }
+            return int(row["user_id"]), row["status"]
 
-    return await run_query(_q)
+    subject_id, ticket_status = await run_query(_ticket_lookup)
+
+    # Resolve guild + members from the live bot cache. If the bot isn't
+    # connected we refuse — the dashboard must not silently no-op when an
+    # admin clicks "Jail user" expecting the role to apply.
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Bot is not connected to this guild — cannot apply jail.",
+        )
+
+    target = guild.get_member(subject_id)
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Target user is no longer a member of this guild.",
+        )
+
+    moderator = guild.get_member(int(user.user_id))
+    if moderator is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account isn't a member of this guild (cannot moderate).",
+        )
+
+    result = await apply_jail(
+        ctx,
+        guild,
+        target,
+        moderator,
+        reason=reason,
+        duration_seconds=duration_s,
+        source="dashboard",
+        source_extra={"ticket_id": ticket_id},
+    )
+
+    if not result.ok:
+        # Precondition rejections (bot/self/admin/mod/already_jailed) come
+        # back as 409 since they're a conflict with the target's current
+        # state. Permission failures are 500 because they're bot-config
+        # issues for the operator to fix.
+        client_errors = {
+            "bot_target",
+            "self_target",
+            "admin_target",
+            "mod_target",
+            "already_jailed",
+        }
+        status_code = 409 if result.error_kind in client_errors else 500
+        raise HTTPException(
+            status_code=status_code,
+            detail=result.error_message or "Could not apply jail.",
+        )
+
+    duration_text = fmt_duration(duration_s) if duration_s else "Indefinite"
+    return {
+        "ok": True,
+        "ticket_id": ticket_id,
+        "status": ticket_status,
+        "message": f"Jail #{result.jail_id} applied ({duration_text})",
+    }
 
 
 @router.post(

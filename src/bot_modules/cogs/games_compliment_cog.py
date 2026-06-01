@@ -4,7 +4,7 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, GAME_ICONS, HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     create_game,
@@ -16,21 +16,19 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     resolve_names,
 )
-from bot_modules.games.utils.derangement import random_derangement
+from bot_modules.games_compliment.embeds import (
+    build_lobby_embed,
+    build_pairings_embed,
+    format_pairing_line,
+)
+from bot_modules.games_compliment.logic import (
+    generate_pairings,
+    pairing_ids,
+    serialize_pairings,
+    toggle_participant,
+)
 
 log = logging.getLogger(__name__)
-
-
-def build_compliment_embed(host_name: str, participants: list[str]) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['compliment']} SPIN THE COMPLIMENT",
-        color=GOLDEN_MEADOW_COLOR,
-    )
-    embed.add_field(name="Host", value=host_name, inline=True)
-    pool_str = ", ".join(participants) if participants else "—"
-    embed.add_field(name=f"Pool ({len(participants)})", value=pool_str, inline=False)
-    embed.set_footer(text=f"{GAME_ICONS['compliment']} Spin the Compliment")
-    return embed
 
 
 class ComplimentView(discord.ui.View):
@@ -53,24 +51,18 @@ class ComplimentView(discord.ui.View):
     async def add_me(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         user_id = interaction.user.id
-        action_holder = {}
+        action_holder: dict[str, str] = {}
 
         def _toggle(payload):
-            participants = payload.setdefault("participants", [])
-            if user_id in participants:
-                participants.remove(user_id)
-                action_holder["action"] = "removed from"
-            else:
-                participants.append(user_id)
-                action_holder["action"] = "added to"
+            action_holder["action"] = toggle_participant(payload, user_id)
 
         payload = await modify_payload(self.db, self.game_id, _toggle)
         action = action_holder["action"]
         log.info("%s %s game %s in #%s", interaction.user.display_name, action.split()[0], self.game_id, interaction.channel.name if interaction.channel else "unknown")
 
-        names = await self._resolve_names(interaction.guild, payload.get("participants", []))
+        names = resolve_names(interaction.guild, payload.get("participants", []))
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
-        embed = build_compliment_embed(
+        embed = build_lobby_embed(
             host_member.display_name if host_member else "Host",
             names,
         )
@@ -95,29 +87,22 @@ class ComplimentView(discord.ui.View):
         await interaction.response.defer()
 
         # Generate pairings
-        pairings = random_derangement(participants)
+        pairings = generate_pairings(participants)
 
         # Build pairings embed
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['compliment']} COMPLIMENT PAIRINGS",
-            color=GOLDEN_MEADOW_COLOR,
-        )
-        lines = []
-        mentions = []
+        lines: list[str] = []
+        mention_lookup: dict[int, str] = {}
         for giver_id, receiver_id in pairings.items():
             giver = interaction.guild.get_member(giver_id) if interaction.guild else None
             receiver = interaction.guild.get_member(receiver_id) if interaction.guild else None
             giver_str = giver.mention if giver else str(giver_id)
             receiver_str = receiver.mention if receiver else str(receiver_id)
-            lines.append(f"{giver_str} → {receiver_str}")
-            if giver:
-                mentions.append(giver.mention)
-            if receiver:
-                mentions.append(receiver.mention)
-        embed.description = "\n".join(lines) + "\n\n💛 Reply to deliver your compliment!"
-        embed.set_footer(text=f"{GAME_ICONS['compliment']} Spin the Compliment")
-        # Ping all participants
-        unique_mentions = list(dict.fromkeys(mentions))  # dedupe, preserve order
+            lines.append(format_pairing_line(giver_str, receiver_str))
+            mention_lookup[giver_id] = giver_str
+            mention_lookup[receiver_id] = receiver_str
+        embed = build_pairings_embed(lines)
+        # Ping all participants (preserve order from pairings dict)
+        unique_mentions = [mention_lookup[uid] for uid in pairing_ids(pairings) if uid in mention_lookup]
 
         self.stop()
         for item in self.children:
@@ -140,7 +125,7 @@ class ComplimentView(discord.ui.View):
             self.db,
             self.game_id,
             player_count=len(participants),
-            payload={"pairings": {str(k): v for k, v in pairings.items()}},
+            payload={"pairings": serialize_pairings(pairings)},
         )
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]
@@ -172,9 +157,6 @@ class ComplimentView(discord.ui.View):
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["compliment"], ephemeral=True)
-
-    async def _resolve_names(self, guild, participants: list[int]) -> list[str]:
-        return resolve_names(guild, participants)
 
 
 class ComplimentCog(commands.Cog):
@@ -215,7 +197,7 @@ class ComplimentCog(commands.Cog):
         )
 
         log.info("Game %s (compliment) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-        embed = build_compliment_embed(interaction.user.display_name, [])
+        embed = build_lobby_embed(interaction.user.display_name, [])
         view = ComplimentView(game_id, interaction.user.id, self.db, self.bot)
         self.bot.active_views[game_id] = view
 

@@ -4,6 +4,10 @@ Mt. Rushmore Draft — game cog.
 A topic is chosen and players snake-draft their top 4 picks.  No duplicates
 across any player.  After 4 rounds everyone's board is revealed, and the room
 votes on the best Mt. Rushmore.
+
+Pure logic (snake order, duplicate checks, recap stats, vote tally) lives in
+``bot_modules.games_rushmore.logic``; embed/text builders live in
+``bot_modules.games_rushmore.embeds``. This cog is just the Discord glue.
 """
 
 import asyncio
@@ -15,7 +19,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_JOINING, PHASE_PLAYING, PHASE_RESULTS, PHASE_RECAP
+from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_RECAP
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
@@ -32,16 +36,32 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games.utils.question_source import get_rushmore_topic
 from bot_modules.games.utils.ai_client import generate_text
+from bot_modules.games_rushmore.logic import (
+    DRAFT_ROUNDS,
+    SKIPPED_MARKER,
+    clamp_settings,
+    compute_recap_stats,
+    eligible_voters,
+    find_who_picked,
+    generate_snake_order,
+    tally_votes,
+)
+from bot_modules.games_rushmore.embeds import (
+    build_draft_embed,
+    build_final_boards_embed,
+    build_join_embed,
+    build_recap_embed,
+    build_vote_embed,
+    build_winner_embed,
+)
 
 log = logging.getLogger(__name__)
-
-DRAFT_ROUNDS = 4
 
 # ── AI prompts ───────────────────────────────────────────────────────────────
 
 RUSHMORE_SYSTEM_PROMPT = (
     "You are generating fun, debatable 'Mt. Rushmore' draft topics for an adult "
-    "party game in the Golden Meadow Discord community. A Mt. Rushmore topic is "
+    "party game in this Discord community. A Mt. Rushmore topic is "
     "a category where players will draft their top 4 picks. The best topics are "
     "ones where there are many valid options and people will disagree on the best 4."
 )
@@ -54,255 +74,6 @@ RUSHMORE_USER_PROMPT = (
     "'Underrated Superpowers', 'Worst First Date Ideas'. "
     "Return only the topic — a short noun phrase, no preamble, no quotes."
 )
-
-
-# ── Snake draft helpers ──────────────────────────────────────────────────────
-
-def generate_snake_order(players: list[int], rounds: int = DRAFT_ROUNDS) -> list[list[int]]:
-    """Return list of [round_number, player_id] pairs in snake draft order."""
-    order = []
-    for r in range(rounds):
-        if r % 2 == 0:
-            order.extend([[r + 1, pid] for pid in players])
-        else:
-            order.extend([[r + 1, pid] for pid in reversed(players)])
-    return order
-
-
-def is_duplicate(pick: str, all_picks: list[str]) -> bool:
-    normalized = pick.strip().lower()
-    return normalized in [p.strip().lower() for p in all_picks]
-
-
-def find_who_picked(pick: str, boards: dict[str, list]) -> str | None:
-    """Return user_id string of who already picked this (case-insensitive)."""
-    norm = pick.strip().lower()
-    for uid_str, board in boards.items():
-        for p in board:
-            if p and p != "⏭️ Skipped" and p.strip().lower() == norm:
-                return uid_str
-    return None
-
-
-# ── Draft board rendering ────────────────────────────────────────────────────
-
-def render_draft_board(
-    players: list[tuple[int, str]],
-    boards: dict[str, list],
-    active_player_id: int | None,
-) -> str:
-    lines = []
-    max_name = max((len(n) for _, n in players), default=6)
-    max_name = min(max_name, 16)
-
-    for uid, name in players:
-        board = boards.get(str(uid), [None] * DRAFT_ROUNDS)
-        picks = []
-        for i, pick in enumerate(board):
-            if pick is None:
-                picks.append(f"{i+1}. —")
-            elif pick == "⏭️ Skipped":
-                picks.append(f"{i+1}. *Skipped*")
-            else:
-                display = pick if len(pick) <= 18 else pick[:15] + "..."
-                picks.append(f"{i+1}. {display}")
-
-        truncated_name = name if len(name) <= max_name else name[:max_name - 1] + "."
-        line = f"`{truncated_name:<{max_name}}` {' | '.join(picks)}"
-        if uid == active_player_id:
-            line += "  ← \U0001f3af"
-        lines.append(line)
-
-    return "**Draft Board:**\n" + "\n".join(lines)
-
-
-# ── Embed builders ───────────────────────────────────────────────────────────
-
-def _footer(host_name: str) -> str:
-    return f"{GAME_ICONS['rushmore']} Mt. Rushmore Draft • Hosted by {host_name}"
-
-
-def build_join_embed(host_name: str, player_names: list[str], topic: str | None = None) -> discord.Embed:
-    title = f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT"
-    desc = f"Hosted by: **{discord.utils.escape_markdown(host_name)}**"
-    if topic:
-        desc += f"\n\nBuild your Mt. Rushmore of **{discord.utils.escape_markdown(topic)}**!"
-    else:
-        desc += "\n\nJoin up — snake draft, 4 rounds, no duplicate picks."
-    embed = discord.Embed(title=title, description=desc, color=PHASE_JOINING)
-    pool_str = ", ".join(player_names) if player_names else "(nobody yet)"
-    embed.add_field(name=f"Players ({len(player_names)})", value=pool_str, inline=False)
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_draft_embed(
-    host_name: str,
-    topic: str,
-    players: list[tuple[int, str]],
-    boards: dict[str, list],
-    active_player_id: int | None,
-    active_player_name: str | None,
-    round_num: int,
-    timer_secs: int,
-) -> discord.Embed:
-    from bot_modules.games.utils.timer import format_deadline, now_plus
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['rushmore']} MT. RUSHMORE OF: {discord.utils.escape_markdown(topic)}",
-        color=PHASE_PLAYING,
-    )
-    embed.add_field(
-        name="Timer",
-        value=f"Round {round_num}/{DRAFT_ROUNDS} | {format_deadline(now_plus(timer_secs))}",
-        inline=False,
-    )
-    if active_player_name:
-        embed.add_field(
-            name="Now Picking",
-            value=f"\U0001f3af **{discord.utils.escape_markdown(active_player_name)}**'s turn!",
-            inline=False,
-        )
-    board_text = render_draft_board(players, boards, active_player_id)
-    embed.add_field(name="​", value=board_text, inline=False)
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_final_boards_embed(
-    host_name: str,
-    topic: str,
-    players: list[tuple[int, str]],
-    boards: dict[str, list],
-) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['rushmore']} MT. RUSHMORE OF: {discord.utils.escape_markdown(topic)} — FINAL BOARDS",
-        color=PHASE_RESULTS,
-    )
-    for uid, name in players:
-        board = boards.get(str(uid), [None] * DRAFT_ROUNDS)
-        lines = []
-        for i, pick in enumerate(board):
-            if pick is None:
-                lines.append(f"{i+1}. —")
-            elif pick == "⏭️ Skipped":
-                lines.append(f"{i+1}. *Skipped*")
-            else:
-                lines.append(f"{i+1}. {discord.utils.escape_markdown(pick)}")
-        esc_name = discord.utils.escape_markdown(name)
-        embed.add_field(
-            name=f"{GAME_ICONS['rushmore']} {esc_name}'s Mt. Rushmore",
-            value="\n".join(lines),
-            inline=True,
-        )
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_vote_embed(host_name: str, topic: str, timer_secs: int) -> discord.Embed:
-    from bot_modules.games.utils.timer import format_deadline, now_plus
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['rushmore']} VOTE — Best Mt. Rushmore of {discord.utils.escape_markdown(topic)}",
-        color=PHASE_PLAYING,
-    )
-    embed.add_field(name="Timer", value=format_deadline(now_plus(timer_secs)), inline=False)
-    embed.add_field(name="Vote", value="Who built the best Mt. Rushmore?", inline=False)
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_winner_embed(
-    host_name: str,
-    topic: str,
-    winner_names: list[str],
-    winner_votes: int,
-    winner_boards: list[list],
-    all_results: list[tuple[str, int]],
-) -> discord.Embed:
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['rushmore']} WINNER — Mt. Rushmore of {discord.utils.escape_markdown(topic)}",
-        color=PHASE_RESULTS,
-    )
-    winner_label = " & ".join(discord.utils.escape_markdown(n) for n in winner_names)
-    board_lines = []
-    for board in winner_boards:
-        for i, pick in enumerate(board):
-            if pick and pick != "⏭️ Skipped":
-                board_lines.append(f"{i+1}. {discord.utils.escape_markdown(pick)}")
-            else:
-                board_lines.append(f"{i+1}. —")
-        if len(winner_boards) > 1:
-            board_lines.append("")
-    embed.add_field(
-        name=f"\U0001f3c6 {winner_label} wins! — {winner_votes} vote{'s' if winner_votes != 1 else ''}",
-        value="\n".join(board_lines) or "—",
-        inline=False,
-    )
-    results_lines = []
-    for name, votes in all_results:
-        results_lines.append(f"**{discord.utils.escape_markdown(name)}** — {votes} vote{'s' if votes != 1 else ''}")
-    embed.add_field(name="Full Results", value="\n".join(results_lines) or "—", inline=False)
-    embed.set_footer(text=_footer(host_name))
-    return embed
-
-
-def build_recap_embed(
-    host_name: str,
-    topic: str,
-    player_count: int,
-    duration_secs: float,
-    winner_names: list[str],
-    winner_votes: int,
-    winner_boards: list[list],
-    stats: dict,
-) -> discord.Embed:
-    mins = int(duration_secs // 60)
-    secs = int(duration_secs % 60)
-    embed = discord.Embed(
-        title=f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT — GAME OVER",
-        color=PHASE_RECAP,
-    )
-    winner_label = " & ".join(discord.utils.escape_markdown(n) for n in winner_names)
-    board_lines = []
-    for board in winner_boards:
-        for i, pick in enumerate(board):
-            if pick and pick != "⏭️ Skipped":
-                board_lines.append(f"  {i+1}. {discord.utils.escape_markdown(pick)}")
-            else:
-                board_lines.append(f"  {i+1}. —")
-
-    summary = (
-        f"\U0001f4cb Topic: **{discord.utils.escape_markdown(topic)}**\n"
-        f"\U0001f465 Players: **{player_count}**\n"
-        f"⏱️ Draft duration: **{mins}m {secs}s**\n\n"
-        f"\U0001f3c6 Winner: **{winner_label}** — {winner_votes} vote{'s' if winner_votes != 1 else ''}\n"
-    )
-    summary += "\n".join(board_lines)
-    embed.add_field(name="Summary", value=summary, inline=False)
-
-    stat_lines = []
-    if stats.get("first_pick"):
-        fp = stats["first_pick"]
-        stat_lines.append(f"\U0001f947 First Overall Pick: **{discord.utils.escape_markdown(fp['pick'])}** ({discord.utils.escape_markdown(fp['player'])}, Round 1)")
-    if stats.get("skipped_count") is not None:
-        sc = stats["skipped_count"]
-        extra = f" ({', '.join(discord.utils.escape_markdown(n) for n in stats.get('skipped_names', []))})" if stats.get("skipped_names") else ""
-        stat_lines.append(f"⏭️ Skipped Picks: **{sc}**{extra}")
-    if stats.get("fastest"):
-        f = stats["fastest"]
-        stat_lines.append(f"⚡ Fastest Pick: **{discord.utils.escape_markdown(f['pick'])}** by {discord.utils.escape_markdown(f['player'])} ({f['time']:.1f}s)")
-    if stats.get("slowest"):
-        s = stats["slowest"]
-        stat_lines.append(f"\U0001f422 Slowest Pick: **{discord.utils.escape_markdown(s['pick'])}** by {discord.utils.escape_markdown(s['player'])} ({s['time']:.1f}s)")
-    if stats.get("unanimous"):
-        stat_lines.append(f"\U0001f3af Unanimous Vote: Yes — everyone voted for **{discord.utils.escape_markdown(winner_label)}**")
-    elif stats.get("vote_split"):
-        stat_lines.append(f"\U0001f3af Vote: {stats['vote_split']}-way split")
-
-    if stat_lines:
-        embed.add_field(name="\U0001f4ca Draft Stats", value="\n".join(stat_lines), inline=False)
-
-    embed.set_footer(text=_footer(host_name))
-    return embed
 
 
 # ── Modals ───────────────────────────────────────────────────────────────────
@@ -837,8 +608,7 @@ class RushmoreCog(commands.Cog):
             await interaction.response.send_message("Mt. Rushmore Draft is currently disabled on this server.", ephemeral=True)
             return
 
-        timer = max(10, min(timer, 120))
-        vote_timer = max(10, min(vote_timer, 60))
+        timer, vote_timer = clamp_settings(timer, vote_timer)
         settings = {"timer": timer, "source": source, "vote_timer": vote_timer}
 
         game_id = await create_game(
@@ -969,7 +739,7 @@ class RushmoreCog(commands.Cog):
                 if not draft_view._closed:
                     # Skipped
                     key = f"{pid}_{rnd}"
-                    draft_view.boards[str(pid)][rnd - 1] = "⏭️ Skipped"
+                    draft_view.boards[str(pid)][rnd - 1] = SKIPPED_MARKER
                     draft_view.skipped.append(key)
                     draft_view.pick_times[key] = None
                     try:
@@ -1029,12 +799,7 @@ class RushmoreCog(commands.Cog):
             pass
 
         # Determine eligible voters (players with at least 1 real pick)
-        eligible = []
-        for uid in draft_view.players:
-            board = draft_view.boards.get(str(uid), [])
-            has_pick = any(p and p != "⏭️ Skipped" for p in board)
-            if has_pick:
-                eligible.append(uid)
+        eligible = eligible_voters(draft_view.players, draft_view.boards)
 
         if len(eligible) <= 1:
             # Auto-win or no valid boards
@@ -1089,26 +854,13 @@ class RushmoreCog(commands.Cog):
             pass
 
         # Tally
-        tally: dict[int, int] = {}
-        for voter, target in vote_view.votes.items():
-            tally[target] = tally.get(target, 0) + 1
-
-        if tally:
-            max_votes = max(tally.values())
-            winner_uids = [uid for uid, v in tally.items() if v == max_votes]
-        else:
-            winner_uids = []
-            max_votes = 0
+        winner_uids, max_votes, results_by_uid = tally_votes(vote_view.votes, eligible)
 
         winner_names = [resolve_name(guild, uid) for uid in winner_uids]
         winner_boards_list = [draft_view.boards.get(str(uid), []) for uid in winner_uids]
 
-        # All results sorted by votes
-        all_results = []
-        for uid in eligible:
-            v = tally.get(uid, 0)
-            all_results.append((resolve_name(guild, uid), v))
-        all_results.sort(key=lambda x: x[1], reverse=True)
+        # Resolve names for the sorted results
+        all_results = [(resolve_name(guild, uid), v) for uid, v in results_by_uid]
 
         winner_embed = build_winner_embed(
             draft_view.host_name, draft_view.topic,
@@ -1134,60 +886,24 @@ class RushmoreCog(commands.Cog):
         game_id = draft_view.game_id
         duration = _time.time() - draft_view._draft_start
 
-        # Tally votes
+        # Recompute max_votes from the (possibly empty) vote tally
         tally: dict[int, int] = {}
-        for voter, target in votes.items():
+        for _voter, target in votes.items():
             tally[target] = tally.get(target, 0) + 1
         max_votes = max(tally.values()) if tally else 0
 
         winner_names = [resolve_name(guild, uid) for uid in winner_uids]
         winner_boards_list = [draft_view.boards.get(str(uid), []) for uid in winner_uids]
 
-        # Build stats
-        stats: dict = {}
-
-        # First overall pick
-        if draft_view.all_picks:
-            first_pick_rnd, first_pick_uid = draft_view.draft_order[0]
-            first_board = draft_view.boards.get(str(first_pick_uid), [])
-            if first_board and first_board[0] and first_board[0] != "⏭️ Skipped":
-                stats["first_pick"] = {
-                    "pick": first_board[0],
-                    "player": resolve_name(guild, first_pick_uid),
-                }
-
-        # Skipped count
-        stats["skipped_count"] = len(draft_view.skipped)
-        if draft_view.skipped:
-            skipped_uids = set()
-            for key in draft_view.skipped:
-                uid_str = key.rsplit("_", 1)[0]
-                skipped_uids.add(int(uid_str))
-            stats["skipped_names"] = [resolve_name(guild, uid) for uid in skipped_uids]
-
-        # Fastest / slowest pick
-        valid_times = {k: v for k, v in draft_view.pick_times.items() if v is not None}
-        if valid_times:
-            fastest_key = min(valid_times, key=valid_times.get)
-            slowest_key = max(valid_times, key=valid_times.get)
-
-            def _pick_info(key):
-                uid_str, rnd_str = key.rsplit("_", 1)
-                uid = int(uid_str)
-                rnd = int(rnd_str)
-                board = draft_view.boards.get(uid_str, [])
-                pick_text = board[rnd - 1] if rnd - 1 < len(board) else "?"
-                return {"pick": pick_text or "?", "player": resolve_name(guild, uid), "time": valid_times[key]}
-
-            stats["fastest"] = _pick_info(fastest_key)
-            stats["slowest"] = _pick_info(slowest_key)
-
-        # Unanimous vote?
-        unique_targets = set(tally.keys())
-        if len(unique_targets) == 1 and tally:
-            stats["unanimous"] = True
-        elif len(unique_targets) > 1:
-            stats["vote_split"] = len(unique_targets)
+        stats = compute_recap_stats(
+            draft_view.draft_order,
+            draft_view.boards,
+            draft_view.all_picks,
+            draft_view.pick_times,
+            draft_view.skipped,
+            votes,
+            name_resolver=lambda uid: resolve_name(guild, uid),
+        )
 
         recap_embed = build_recap_embed(
             draft_view.host_name, draft_view.topic, len(draft_view.players),

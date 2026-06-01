@@ -123,8 +123,6 @@ def _make_result_view(game_id=7, winner_id=1, loser_id=2):
         winner_id=winner_id,
         loser_id=loser_id,
         on_set_nick=AsyncMock(),
-        on_honor=AsyncMock(),
-        on_rematch=AsyncMock(),
     )
 
 
@@ -137,7 +135,7 @@ def _get_btn(view: ResultView, emoji_char: str) -> discord.ui.Button:
 
 async def test_result_set_nick_by_winner():
     on_set_nick = AsyncMock()
-    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=on_set_nick, on_honor=AsyncMock(), on_rematch=AsyncMock())
+    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=on_set_nick)
     interaction = fake_interaction(user=FakeUser(id=1))
     await _get_btn(view, "📝").callback(interaction)
     on_set_nick.assert_awaited_once_with(interaction, 7)
@@ -145,59 +143,29 @@ async def test_result_set_nick_by_winner():
 
 async def test_result_set_nick_by_wrong_user():
     on_set_nick = AsyncMock()
-    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=on_set_nick, on_honor=AsyncMock(), on_rematch=AsyncMock())
+    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=on_set_nick)
     interaction = fake_interaction(user=FakeUser(id=99))
     await _get_btn(view, "📝").callback(interaction)
     on_set_nick.assert_not_awaited()
     assert interaction.response.send_message.called
 
 
-async def test_result_honor_by_loser():
-    on_honor = AsyncMock()
-    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=AsyncMock(), on_honor=on_honor, on_rematch=AsyncMock())
-    interaction = fake_interaction(user=FakeUser(id=2))
-    await _get_btn(view, "🤝").callback(interaction)
-    on_honor.assert_awaited_once_with(interaction, 7)
-
-
-async def test_result_honor_by_winner_rejected():
-    on_honor = AsyncMock()
-    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=AsyncMock(), on_honor=on_honor, on_rematch=AsyncMock())
-    interaction = fake_interaction(user=FakeUser(id=1))
-    await _get_btn(view, "🤝").callback(interaction)
-    on_honor.assert_not_awaited()
-
-
-async def test_result_rematch_by_winner():
-    on_rematch = AsyncMock()
-    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=AsyncMock(), on_honor=AsyncMock(), on_rematch=on_rematch)
-    interaction = fake_interaction(user=FakeUser(id=1))
-    await _get_btn(view, "🔁").callback(interaction)
-    on_rematch.assert_awaited_once_with(interaction, 7)
-
-
-async def test_result_rematch_by_loser():
-    on_rematch = AsyncMock()
-    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=AsyncMock(), on_honor=AsyncMock(), on_rematch=on_rematch)
-    interaction = fake_interaction(user=FakeUser(id=2))
-    await _get_btn(view, "🔁").callback(interaction)
-    on_rematch.assert_awaited_once_with(interaction, 7)
-
-
-async def test_result_rematch_by_third_party_rejected():
-    on_rematch = AsyncMock()
-    view = ResultView(7, winner_id=1, loser_id=2, on_set_nick=AsyncMock(), on_honor=AsyncMock(), on_rematch=on_rematch)
-    interaction = fake_interaction(user=FakeUser(id=99))
-    await _get_btn(view, "🔁").callback(interaction)
-    on_rematch.assert_not_awaited()
-
-
-def test_result_custom_ids_encode_game_id():
+def test_result_view_has_only_name_button():
     view = _make_result_view(game_id=42)
     custom_ids = {b.custom_id for b in view.children if isinstance(b, discord.ui.Button)}
-    assert "set_nick:42" in custom_ids
-    assert "honor:42" in custom_ids
-    assert "rematch:42" in custom_ids
+    assert custom_ids == {"set_nick:42"}
+
+
+def test_result_view_disable_disables_button():
+    view = _make_result_view()
+    view.disable()
+    assert all(b.disabled for b in view.children if isinstance(b, discord.ui.Button))
+
+
+def test_result_view_button_label():
+    view = _make_result_view()
+    btn = next(b for b in view.children if isinstance(b, discord.ui.Button))
+    assert btn.label == "Name the loser"
 
 
 # ── NicknameModal ─────────────────────────────────────────────────────────────

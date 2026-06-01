@@ -1,11 +1,11 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, GAME_ICONS, HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
@@ -18,29 +18,37 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     ConfirmCloseView,
 )
-from bot_modules.games.utils.live_bar import build_bar
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.ai_client import generate_text
+from bot_modules.games_ama.embeds import (
+    build_answered_embed,
+    build_asker_dm_embed,
+    build_idle_ai_question_embed,
+    build_lobby_embed,
+    build_main_embed,
+    build_question_embed,
+    build_recap_embed,
+)
+from bot_modules.games_ama.logic import (
+    add_question,
+    bottom_bar_label,
+    build_question_entry,
+    compute_recap_stats,
+    first_content_line,
+    is_resolved_status,
+    mark_question_answered,
+    mark_question_approved,
+    mark_question_expired,
+    mark_question_message,
+    mark_question_passed,
+    mark_question_rejected,
+    parse_iso_ts,
+    recompute_totals,
+    should_expire,
+    utcnow_iso,
+)
 
 log = logging.getLogger(__name__)
-UNANSWERED_QUESTION_RETENTION = timedelta(days=7)
-_RESOLVED_QUESTION_STATUSES = {"answered", "passed", "rejected", "expired"}
-
-
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _parse_iso_ts(value) -> datetime | None:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 # ── Modals ───────────────────────────────────────────────────────────────────
@@ -83,18 +91,14 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             )
             return
 
-        q_entry = {
-            "asker_id": interaction.user.id,
-            "text": self.question.value,
-            "status": "pending",
-            "asked_at": _utcnow_iso(),
-            "hot_seat_id": self.hot_seat_id,
-        }
+        q_entry = build_question_entry(
+            asker_id=interaction.user.id,
+            text=self.question.value,
+            hot_seat_id=self.hot_seat_id,
+        )
 
         def _add_question(payload):
-            questions = payload.setdefault("questions", [])
-            questions.append(q_entry)
-            payload["total_questions"] = len(questions)
+            add_question(payload, q_entry)
 
         payload = await modify_payload(self.db, self.game_id, _add_question)
         q_idx = len(payload.get("questions", [])) - 1
@@ -108,11 +112,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             )
 
         if self.mode == "unfiltered":
-            embed = discord.Embed(
-                title=f"{GAME_ICONS['ama']} QUESTION",
-                description=f'"{discord.utils.escape_markdown(self.question.value)}"',
-                color=GOLDEN_MEADOW_COLOR,
-            )
+            embed = build_question_embed(self.question.value)
             hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
             question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, q_idx, interaction.user.id, self.ama_view, self.question.value)
             question_msg = await self.channel.send(
@@ -122,10 +122,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             )
 
             def _mark_posted(payload):
-                questions = payload.get("questions", [])
-                if q_idx < len(questions):
-                    questions[q_idx]["status"] = "approved"
-                    questions[q_idx]["question_message_id"] = question_msg.id
+                mark_question_approved(payload, q_idx, message_id=question_msg.id)
 
             await modify_payload(self.db, self.game_id, _mark_posted)
             await interaction.response.send_message("Your question has been posted anonymously!", ephemeral=True)
@@ -191,26 +188,18 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted reply modal in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
 
-        question_text = discord.utils.escape_markdown(self.question_text)
-        answer_text = discord.utils.escape_markdown(self.reply.value)
-        answered_embed = discord.Embed(
-            title=f"{GAME_ICONS['ama']} QUESTION + ANSWER",
-            description=f'**Q:** "{question_text}"\n\n**A:** "{answer_text}"',
-            color=GOLDEN_MEADOW_COLOR,
+        answered_embed = build_answered_embed(
+            self.question_text,
+            self.reply.value,
+            interaction.user.display_name,
         )
-        answered_embed.set_footer(text=f"— {interaction.user.display_name}")
         await interaction.response.edit_message(embed=answered_embed, view=None)
 
         # DM the anonymous asker so they know their question was answered
         try:
             asker = interaction.guild.get_member(self.asker_id) if interaction.guild else None
             if asker:
-                dm_embed = discord.Embed(
-                    description=(
-                        f"🔔 Your anonymous question in **{interaction.channel.mention}** got a reply!"
-                    ),
-                    color=GOLDEN_MEADOW_COLOR,
-                )
+                dm_embed = build_asker_dm_embed(interaction.channel.mention)
                 await asker.send(embed=dm_embed)
         except discord.Forbidden:
             pass  # DMs disabled
@@ -219,12 +208,11 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
 
         # Mark question as answered in payload — does NOT increment game tallies
         payload = await get_game_payload(self.db, self.game_id)
-        questions = payload.get("questions", [])
-        if self.question_idx < len(questions):
-            questions[self.question_idx]["status"] = "answered"
-            questions[self.question_idx]["answered_at"] = _utcnow_iso()
-            questions[self.question_idx].setdefault("question_message_id", interaction.message.id)
-        payload["total_answered"] = sum(1 for q in questions if q.get("status") == "answered")
+        mark_question_answered(
+            payload,
+            self.question_idx,
+            message_id=interaction.message.id,
+        )
         await update_game_payload(self.db, self.game_id, payload)
 
         # Update main game embed status bar
@@ -253,11 +241,7 @@ class ScreenedQuestionView(discord.ui.View):
         if interaction.user.id != self.ama_view.host_id:
             await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
             return
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['ama']} QUESTION",
-            description=f'"{discord.utils.escape_markdown(self.question_text)}"',
-            color=GOLDEN_MEADOW_COLOR,
-        )
+        embed = build_question_embed(self.question_text)
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
         question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, self.question_idx, self.asker_id, self.ama_view, self.question_text)
         question_msg = await self.channel.send(
@@ -270,12 +254,13 @@ class ScreenedQuestionView(discord.ui.View):
 
         # Update status in payload
         payload = await get_game_payload(self.db, self.game_id)
-        questions = payload.get("questions", [])
-        if self.question_idx < len(questions):
-            questions[self.question_idx]["status"] = "approved"
-            questions[self.question_idx]["question_message_id"] = question_msg.id
-            questions[self.question_idx].setdefault("asked_at", _utcnow_iso())
-            questions[self.question_idx].setdefault("hot_seat_id", self.hot_seat_id)
+        mark_question_approved(
+            payload,
+            self.question_idx,
+            message_id=question_msg.id,
+            hot_seat_id=self.hot_seat_id,
+            now_iso=utcnow_iso(),
+        )
         await update_game_payload(self.db, self.game_id, payload)
 
         # Advance turn counter now that the question is actually posted
@@ -291,9 +276,7 @@ class ScreenedQuestionView(discord.ui.View):
         await interaction.response.edit_message(content="❌ Question rejected.", view=None)
 
         payload = await get_game_payload(self.db, self.game_id)
-        questions = payload.get("questions", [])
-        if self.question_idx < len(questions):
-            questions[self.question_idx]["status"] = "rejected"
+        mark_question_rejected(payload, self.question_idx)
         await update_game_payload(self.db, self.game_id, payload)
 
 
@@ -331,12 +314,11 @@ class QuestionView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=None)
 
         payload = await get_game_payload(self.db, self.game_id)
-        questions = payload.get("questions", [])
-        if self.question_idx < len(questions):
-            questions[self.question_idx]["status"] = "passed"
-            questions[self.question_idx]["passed_at"] = _utcnow_iso()
-            questions[self.question_idx].setdefault("question_message_id", interaction.message.id)
-        payload["total_passed"] = payload.get("total_passed", 0) + 1
+        mark_question_passed(
+            payload,
+            self.question_idx,
+            message_id=interaction.message.id,
+        )
         await update_game_payload(self.db, self.game_id, payload)
 
         # Update main game embed status bar
@@ -372,53 +354,21 @@ class AMAView(discord.ui.View):
         return False
 
     def _build_embed(self, host_name: str, payload: dict | None = None) -> discord.Embed:
-        if self.hot_seat_id is None:
-            desc = "Who's taking the hot seat?"
-            hot_seat_str = "—"
-        else:
-            remaining = 4 - self.questions_this_turn
-            desc = f"Ask **{self._hot_seat_name}** anything — questions are anonymous.\n**{remaining}** question{'s' if remaining != 1 else ''} left this turn."
-            hot_seat_str = self._hot_seat_name
+        guild = self._game_msg.guild if self._game_msg else None
 
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
-            description=desc,
-            color=GOLDEN_MEADOW_COLOR,
+        def _name_resolver(uid: int) -> str:
+            m = guild.get_member(uid) if guild else None
+            return m.display_name if m else str(uid)
+
+        return build_main_embed(
+            host_name=host_name,
+            mode=self.mode,
+            hot_seat_name=self._hot_seat_name,
+            questions_this_turn=self.questions_this_turn,
+            queue=list(self.queue),
+            name_resolver=_name_resolver,
+            payload=payload,
         )
-        embed.add_field(name="Host", value=host_name, inline=True)
-        embed.add_field(name="Hot Seat", value=hot_seat_str, inline=True)
-        embed.add_field(name="Mode", value=self.mode, inline=True)
-
-        # ── Queue ────────────────────────────────────────────────────────
-        if self.queue:
-            guild = self._game_msg.guild if self._game_msg else None
-            queue_names = []
-            for uid in self.queue:
-                m = guild.get_member(uid) if guild else None
-                queue_names.append(m.display_name if m else str(uid))
-            embed.add_field(
-                name=f"📋 Queue ({len(self.queue)})",
-                value=" → ".join(queue_names),
-                inline=False,
-            )
-
-        # ── Status bar ───────────────────────────────────────────────────
-        if payload:
-            total_q = len(payload.get("questions", []))
-            answered = payload.get("total_answered", 0)
-            passed = payload.get("total_passed", 0)
-            bar, pct = build_bar(answered, total_q) if total_q else ("░" * 14, "0%")
-            embed.add_field(
-                name="📊 Progress",
-                value=(
-                    f"Questions: **{total_q}**  •  Answered: **{answered}**  •  Passed: **{passed}**\n"
-                    f"`{bar}` {pct} answered"
-                ),
-                inline=False,
-            )
-
-        embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
-        return embed
 
     async def refresh_status(self, channel):
         """Re-fetch payload and update the main game message with current stats."""
@@ -482,14 +432,6 @@ class AMAView(discord.ui.View):
 
         self._idle_ai_question_task = asyncio.create_task(_timeout())
 
-    @staticmethod
-    def _first_content_line(text: str) -> str | None:
-        for line in text.strip().splitlines():
-            line = line.strip().lstrip("-*0123456789. ").strip().strip('"').strip("'")
-            if line:
-                return line[:500]
-        return None
-
     async def _generate_idle_ai_question(self) -> str | None:
         hot_seat_name = self._hot_seat_name or "the hot seat player"
         system_prompt = (
@@ -504,7 +446,7 @@ class AMAView(discord.ui.View):
         text = await generate_text(system_prompt, user_prompt, max_tokens=80)
         if not text:
             return None
-        return self._first_content_line(text)
+        return first_content_line(text)
 
     async def _post_idle_ai_question(self, channel):
         if self._closed or self.hot_seat_id is None:
@@ -515,31 +457,23 @@ class AMAView(discord.ui.View):
             self._start_idle_question_timer(channel)
             return
 
-        q_entry = {
-            "asker_id": 0,
-            "text": question_text,
-            "status": "approved",
-            "source": "ai_idle",
-            "asked_at": _utcnow_iso(),
-            "hot_seat_id": self.hot_seat_id,
-        }
+        q_entry = build_question_entry(
+            asker_id=0,
+            text=question_text,
+            hot_seat_id=self.hot_seat_id,
+            status="approved",
+            source="ai_idle",
+        )
 
         def _add_question(payload):
-            questions = payload.setdefault("questions", [])
-            questions.append(q_entry)
-            payload["total_questions"] = len(questions)
+            add_question(payload, q_entry)
 
         payload = await modify_payload(self.db, self.game_id, _add_question)
         q_idx = len(payload.get("questions", [])) - 1
 
         hot_seat_member = channel.guild.get_member(self.hot_seat_id) if channel.guild else None
         question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, q_idx, 0, self, question_text)
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['ama']} QUESTION",
-            description=f'"{discord.utils.escape_markdown(question_text)}"',
-            color=GOLDEN_MEADOW_COLOR,
-        )
-        embed.set_footer(text="Auto-generated after 15 minutes with no player questions")
+        embed = build_idle_ai_question_embed(question_text)
         await channel.send("No player question arrived in 15 minutes, so here's an anonymous AI question.")
         question_msg = await channel.send(
             content=hot_seat_member.mention if hot_seat_member else None,
@@ -548,9 +482,7 @@ class AMAView(discord.ui.View):
         )
 
         def _mark_posted(payload):
-            questions = payload.get("questions", [])
-            if q_idx < len(questions):
-                questions[q_idx]["question_message_id"] = question_msg.id
+            mark_question_message(payload, q_idx, question_msg.id)
 
         await modify_payload(self.db, self.game_id, _mark_posted)
 
@@ -608,8 +540,7 @@ class AMAView(discord.ui.View):
         """Update bottom bar text with current hot seat and queue info."""
         if not getattr(self, '_bottom_msg', None):
             return
-        queue_str = f"  •  📋 {len(self.queue)} in queue" if self.queue else ""
-        label = f"🎙️ AMA: @{self._hot_seat_name}{queue_str}" if self._hot_seat_name else "🎙️ AMA"
+        label = bottom_bar_label(self._hot_seat_name, len(self.queue))
         try:
             await self._bottom_msg.edit(content=label)
         except Exception:
@@ -794,32 +725,11 @@ class AMAView(discord.ui.View):
             await cog.cleanup_ended_game(channel.id, self.game_id, channel=channel)
 
         payload = await get_game_payload(self.db, self.game_id)
-        questions = payload.get("questions", [])
-        total_q = len(questions)
-        total_passed = payload.get("total_passed", 0)
-        total_answered = payload.get("total_answered", 0)
-        rotations = payload.get("hot_seat_rotations", 0)
+        stats = compute_recap_stats(payload)
+        total_q = stats["total_q"]
+        unique_askers = stats["unique_askers"]
 
-        unique_askers = len({q["asker_id"] for q in questions if q.get("asker_id", 0) > 0})
-
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['ama']} ANONYMOUS AMA — GAME OVER",
-            description="Thanks for playing! Here's how the session went:",
-            color=GOLDEN_MEADOW_COLOR,
-        )
-        bar, pct = build_bar(total_answered, total_q) if total_q else ("░" * 14, "0%")
-        embed.add_field(
-            name="📊 Session Stats",
-            value=(
-                f"**{total_q}** questions asked by **{unique_askers}** people\n"
-                f"**{total_answered}** answered  •  **{total_passed}** passed\n"
-                f"`{bar}` {pct} answered"
-            ),
-            inline=False,
-        )
-        embed.add_field(name="🔄 Hot Seat Rotations", value=str(rotations), inline=True)
-        embed.add_field(name="🎙️ Mode", value=self.mode.title(), inline=True)
-        embed.set_footer(text=f"{GAME_ICONS['ama']} Thanks for playing Anonymous AMA!")
+        embed = build_recap_embed(self.mode, stats)
 
         self.stop()
         for item in self.children:
@@ -946,8 +856,7 @@ async def _resend_ama_bottom(bot, game_id: str, channel):
             pass
 
         hot_seat_name = getattr(ama_view, '_hot_seat_name', None)
-        queue_str = f"  •  📋 {len(ama_view.queue)} in queue" if ama_view.queue else ""
-        label = f"🎙️ AMA: @{hot_seat_name}{queue_str}" if hot_seat_name else "🎙️ AMA"
+        label = bottom_bar_label(hot_seat_name, len(ama_view.queue))
         new_msg = await channel.send(content=label, view=bottom_view)
         ama_view._bottom_msg = new_msg
         if hasattr(bottom_view, "message_id"):
@@ -974,10 +883,6 @@ class AMACog(commands.Cog):
         for task in self._resend_tasks.values():
             task.cancel()
         self._resend_tasks.clear()
-
-    @staticmethod
-    def _is_resolved_status(status: str | None) -> bool:
-        return (status or "").lower() in _RESOLVED_QUESTION_STATUSES
 
     async def _resolve_channel(self, channel_id: int):
         channel = self.bot.get_channel(channel_id)
@@ -1088,24 +993,23 @@ class AMACog(commands.Cog):
                     continue
 
                 status = (question.get("status") or "").lower()
-                if self._is_resolved_status(status):
+                if is_resolved_status(status):
                     await self._prune_question_message_view(channel, msg_id)
                     continue
 
-                asked_at = _parse_iso_ts(
+                asked_at = parse_iso_ts(
                     question.get("asked_at")
                     or question.get("created_at")
                     or question.get("posted_at")
                 )
-                if asked_at and (now - asked_at) > UNANSWERED_QUESTION_RETENTION:
+                if should_expire(asked_at, now):
                     pruned = await self._prune_question_message_view(
                         channel,
                         msg_id,
                         footer_text="Expired after 7 days without an answer",
                     )
                     if pruned:
-                        question["status"] = "expired"
-                        question["expired_at"] = _utcnow_iso()
+                        mark_question_expired(question)
                         changed = True
                         expired += 1
                     continue
@@ -1127,7 +1031,7 @@ class AMACog(commands.Cog):
                 recovered += 1
 
             if changed:
-                payload["total_answered"] = sum(1 for q in questions if q.get("status") == "answered")
+                recompute_totals(payload)
                 await update_game_payload(self.db, game_id, payload)
                 games_updated += 1
 
@@ -1161,15 +1065,15 @@ class AMACog(commands.Cog):
                     continue
 
                 status = (question.get("status") or "").lower()
-                if self._is_resolved_status(status):
+                if is_resolved_status(status):
                     continue
 
-                asked_at = _parse_iso_ts(
+                asked_at = parse_iso_ts(
                     question.get("asked_at")
                     or question.get("created_at")
                     or question.get("posted_at")
                 )
-                if not asked_at or (now - asked_at) <= UNANSWERED_QUESTION_RETENTION:
+                if not should_expire(asked_at, now):
                     continue
 
                 pruned = await self._prune_question_message_view(
@@ -1179,12 +1083,11 @@ class AMACog(commands.Cog):
                 )
                 if not pruned:
                     continue
-                question["status"] = "expired"
-                question["expired_at"] = _utcnow_iso()
+                mark_question_expired(question)
                 changed = True
 
             if changed:
-                payload["total_answered"] = sum(1 for q in questions if q.get("status") == "answered")
+                recompute_totals(payload)
                 await update_game_payload(self.db, game_id, payload)
 
     async def _question_maintenance_loop(self):
@@ -1277,15 +1180,7 @@ class AMACog(commands.Cog):
             },
         )
 
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
-            description="Who's taking the hot seat?",
-            color=GOLDEN_MEADOW_COLOR,
-        )
-        embed.add_field(name="Host", value=interaction.user.display_name, inline=True)
-        embed.add_field(name="Hot Seat", value="—", inline=True)
-        embed.add_field(name="Mode", value=mode, inline=True)
-        embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
+        embed = build_lobby_embed(interaction.user.display_name, mode)
 
         log.info("Game %s (ama) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         view = AMAView(game_id, interaction.user.id, mode, self.db, self.bot)

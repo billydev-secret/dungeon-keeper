@@ -373,7 +373,8 @@
         <li><a href="#policies">Policy Voting</a></li>
         <li class="section-header"><a href="#analytics">4. Analytics &amp; Watch</a></li>
         <li><a href="#watch">Watch List</a></li>
-        <li><a href="#activity">Activity Charts</a></li>
+        <li><a href="#activity">Activity Charts (web)</a></li>
+        <li class="section-header"><a href="#ai-tools">5. AI Moderation Tools</a></li>
         <li class="section-header"><a href="#community">6. Community &amp; XP</a></li>
         <li><a href="#xp">XP System</a></li>
         <li><a href="#roles">Role Grants</a></li>
@@ -390,25 +391,25 @@
         <li><a href="#dm-perms-cmds">DM Commands</a></li>
         <li class="section-header"><a href="#wellness">11. Wellness</a></li>
         <li><a href="#wellness-member">Member Commands</a></li>
-        <li><a href="#wellness-admin-section">Admin Commands</a></li>
+        <li><a href="#wellness-admin-section">Admin Overrides (web)</a></li>
         <li class="section-header"><a href="#self-service">12. Member Self-Service</a></li>
         <li><a href="#self-service-cmds">Personal Commands</a></li>
         <li><a href="#privacy">Data Erasure</a></li>
-        <li class="section-header"><a href="#network-analytics">13. Network Analytics</a></li>
-        <li><a href="#connection-graphs">Connection Graphs</a></li>
-        <li><a href="#interaction-scans">Backfill Scans</a></li>
-        <li class="section-header"><a href="#server-ops">14. Cleanup &amp; Tagging</a></li>
+        <li class="section-header"><a href="#network-analytics">13. Network Analytics (web)</a></li>
+        <li class="section-header"><a href="#server-ops">14. Cleanup &amp; Tagging (web)</a></li>
         <li><a href="#auto-delete">Auto-Delete</a></li>
         <li><a href="#prune">Inactivity Prune</a></li>
         <li><a href="#gender">Gender Tagging</a></li>
-        <li class="section-header"><a href="#special-events">15. Special Events</a></li>
-        <li><a href="#foolsday">April Fools' Shuffle</a></li>
-        <li><a href="#veil">Veil Image Game</a></li>
-        <li class="section-header"><a href="#setup">16. Setup &amp; Permissions</a></li>
+        <li class="section-header"><a href="#guess">15. Guess Who Image Game</a></li>
+        <li class="section-header"><a href="#whisper">16. Whisper</a></li>
+        <li class="section-header"><a href="#games">17. Games Night</a></li>
+        <li><a href="#games-modes">Game Modes</a></li>
+        <li><a href="#games-cmds">Player &amp; Admin</a></li>
+        <li class="section-header"><a href="#setup">18. Setup &amp; Permissions</a></li>
         <li><a href="#permissions">Permission Levels</a></li>
         <li><a href="#first-steps">First-Time Setup</a></li>
-        <li class="section-header"><a href="#config">17. Configuration</a></li>
-        <li class="section-header"><a href="#owner-tools">18. Developer / Owner Tools</a></li>
+        <li class="section-header"><a href="#config">19. Configuration (web)</a></li>
+        <li class="section-header"><a href="#owner-tools">20. Developer / Owner Tools</a></li>
         <li class="section-header"><a href="#quickref">Quick Reference</a></li>
       </ul>
     </nav>
@@ -431,8 +432,8 @@
       <div class="subtitle">Moderator Reference Guide</div>
       <div class="meta">
         <span>📅 May 2026</span>
-        <span>🔒 For mod team use</span>
-        <span>🤖 Discord Server Bot</span>
+        <span>🔒 Mod &amp; member reference</span>
+        <span>🤖 Discord Server Bot + Web Dashboard</span>
       </div>
     </div>
 
@@ -440,29 +441,33 @@
          1. FUNCTIONAL BLOCKS AT A GLANCE
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="functional-blocks"><span class="section-num">1</span> Functional Blocks at a Glance</h2>
-    <p>DungeonKeeper is an all-in-one server management bot. It handles moderation, ticketing, XP tracking, voice channels, analytics, and more — all through Discord slash commands.</p>
-    <p>The bot is split into ~30 cogs (functional blocks). This table is the bird's-eye view — each row links down to the section that documents the commands. New admins should jump straight to <a href="#setup">§16 Setup &amp; Permissions</a> first.</p>
+    <p>DungeonKeeper is an all-in-one server management bot. It handles moderation, ticketing, XP tracking, voice channels, analytics, games, and more — through a mix of Discord slash commands and an interactive web dashboard.</p>
+    <p>The bot is split into ~45 cogs (functional blocks). This table is the bird's-eye view — each row links down to the section that documents the commands. New admins should jump straight to <a href="#setup">§19 Setup &amp; Permissions</a> first.</p>
     <table class="qr-table">
       <thead><tr><th>Block</th><th>Section</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><strong>Moderation</strong></td><td><a href="#moderation">§2</a></td><td>Jail, warnings, purge, mod profile, right-click context menus.</td></tr>
         <tr><td><strong>Tickets, Policies &amp; Warnings</strong></td><td><a href="#tickets">§3</a></td><td>Private member↔mod ticket channels with transcripts; mod-team policy proposals with voting buttons; per-member warnings with revoke history.</td></tr>
-        <tr><td><strong>Activity &amp; Watch</strong></td><td><a href="#analytics">§4</a></td><td>Charts of message volume, drop-off detection, burst rankings, plus the silent watch list (forwards a member's messages to your DMs).</td></tr>
+        <tr><td><strong>Analytics &amp; Watch</strong></td><td><a href="#analytics">§4</a></td><td>Silent watch list (forwards a member's messages to your DMs). All engagement reports — message volume, drop-off, burst ranking, chilling effect, sentiment, retention — live on the dashboard.</td></tr>
+        <tr><td><strong>AI Moderation</strong></td><td><a href="#ai-tools">§5</a></td><td>LLM-assisted member reviews, channel scans, and free-form questions about message history.</td></tr>
         <tr><td><strong>Community &amp; XP</strong></td><td><a href="#community">§6</a></td><td>Earn XP by posting / replying / image-reacts / voice. Manual XP grants. Role grants (denizen, NSFW, etc). LOA system. Starboard.</td></tr>
         <tr><td><strong>Voice Channels</strong></td><td><a href="#voice">§7</a></td><td>Personal voice channels created on hub-join. Owner controls (lock/limit/invite/etc) and admin overrides.</td></tr>
         <tr><td><strong>Music</strong></td><td><a href="#music">§8</a></td><td>YouTube/Spotify playback through Lavalink. 24/7 mode with autoplay.</td></tr>
         <tr><td><strong>Confessions</strong></td><td><a href="#confessions">§9</a></td><td>Anonymous member submissions with mod-only emoji identifiers.</td></tr>
         <tr><td><strong>DM Permissions</strong></td><td><a href="#dm-perms">§10</a></td><td>Per-member DM-mode system (Open / Ask / Closed) with anonymous request flow.</td></tr>
-        <tr><td><strong>Wellness</strong></td><td><a href="#wellness">§11</a></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides for caps, blackouts, and exempt channels.</td></tr>
+        <tr><td><strong>Wellness</strong></td><td><a href="#wellness">§11</a></td><td>Opt-in healthy-Discord habits with several enforcement modes; admin overrides on the dashboard.</td></tr>
         <tr><td><strong>Self-Service</strong></td><td><a href="#self-service">§12</a></td><td>Help dropdown, support link, bot invite, todo list, birthday registration, GDPR-style self-erasure.</td></tr>
-<tr><td><strong>Cleanup &amp; Tagging</strong></td><td><a href="#server-ops">§14</a></td><td>Auto-delete schedules, inactivity pruning, gender tagging.</td></tr>
-        <tr><td><strong>Special Events</strong></td><td><a href="#special-events">§15</a></td><td>April Fools' nickname shuffle and the Veil NSFW image-guessing game.</td></tr>
-        <tr><td><strong>Setup &amp; Permissions</strong></td><td><a href="#setup">§16</a></td><td>Permission levels and first-time-setup checklist for new admins.</td></tr>
-        <tr><td><strong>Configuration</strong></td><td><a href="#config">§17</a></td><td>Settings panel covering all configurable knobs.</td></tr>
-        <tr><td><strong>Developer / Owner</strong></td><td><a href="#owner-tools">§18</a></td><td>Cog hot-reload, Spotify OAuth bootstrap. Bot-owner only.</td></tr>
+        <tr><td><strong>Network Analytics</strong></td><td><a href="#network-analytics">§13</a></td><td>Connection graphs, interaction heatmaps, invite trees — dashboard panels.</td></tr>
+        <tr><td><strong>Cleanup &amp; Tagging</strong></td><td><a href="#server-ops">§14</a></td><td>Auto-delete schedules, inactivity pruning, gender tagging — configured on the dashboard, services run in the background.</td></tr>
+        <tr><td><strong>Guess Who Image Game</strong></td><td><a href="#guess">§15</a></td><td>NSFW image-guessing game with cropped previews, written-name guessing, leaderboards, and anonymous text confessions.</td></tr>
+        <tr><td><strong>Whisper</strong></td><td><a href="#whisper">§17</a></td><td>Anonymous member↔member DM game with reply / share / report inbox.</td></tr>
+        <tr><td><strong>Games Night</strong></td><td><a href="#games">§18</a></td><td>WYR, NHIE, Truth-or-Dare, Compliment, Hot Takes, Fantasies, Mt. Rushmore, AMA, Story Builder, Risky Rolls, and more.</td></tr>
+        <tr><td><strong>Setup &amp; Permissions</strong></td><td><a href="#setup">§19</a></td><td>Permission levels and first-time-setup checklist for new admins.</td></tr>
+        <tr><td><strong>Configuration</strong></td><td><a href="#config">§20</a></td><td>Web dashboard panels covering every persistent setting.</td></tr>
+        <tr><td><strong>Developer / Owner</strong></td><td><a href="#owner-tools">§21</a></td><td>Cog hot-reload, Spotify OAuth bootstrap. Bot-owner only.</td></tr>
       </tbody>
     </table>
-    <p style="font-size:0.82rem;color:var(--muted);margin-top:0.75rem">✦ marks blocks that depend on optional configuration (sentiment analysis pipeline for some analytics).</p>
+    <p style="font-size:0.82rem;color:var(--muted);margin-top:0.75rem">Most configuration moved to the <a href="/">web dashboard</a> — Discord slash commands now focus on operational actions (jail, warn, ticket, play, game start, etc.) while persistent settings live in interactive panels.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          2. MODERATION CORE
@@ -682,7 +687,7 @@
     <div class="cmd-block">
       <span class="cmd-name">/watch add user:@user</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Starts forwarding the member's public messages to your DMs. Completely invisible to the member.</span>
+      <span class="cmd-desc">Starts forwarding the member's public messages to your DMs. Completely invisible to the member. With an AI key configured, only flagged messages are forwarded.</span>
     </div>
 
     <div class="cmd-block">
@@ -693,19 +698,54 @@
 
     <h3 id="activity">Activity &amp; Engagement Analytics</h3>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/activity resolution:day member:@user channel:#channel</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — requires Manage Guild</span></span>
-      <span class="cmd-desc">Bar chart of message volume or XP over time. Scope to a specific member, channel, or the whole server.</span>
-      <div class="cmd-params"><strong>resolution</strong> — hour / day / week / month / hour_of_day / day_of_week &nbsp;|&nbsp; <strong>mode</strong> — messages / xp.</div>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>All activity reports live in the <a href="/">web dashboard</a></strong>
+        <p>Message volume, Drop-off, Session Burst, Burst Ranking, Chilling Effect, Cohort Retention, Channel Health, DAU/MAU, Newcomer Funnel, Mod Workload, Sentiment, Composite Score, and Quality Score are all interactive panels with filters, sorting, and exports. The Discord <code>/activity</code> command has been retired in favor of the dashboard.</p>
+      </div>
     </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         5. AI MODERATION TOOLS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="ai-tools" class="section-break"><span class="section-num">5</span> AI Moderation Tools</h2>
+    <p>LLM-assisted investigation tools. The bot runs a local Ollama model to summarize messages, flag rule violations, and answer free-form questions about a member or channel's recent history. All <code>/ai</code> commands return an ephemeral reply only the invoking admin can see.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
-        <strong>Drop-off, Session Burst, Burst Ranking, Chilling Effect</strong>
-        <p>These engagement reports moved to the <a href="/">web dashboard</a>. <code>/activity</code> stays in Discord for quick spot-checks; everything else is interactive on the dashboard with filters, sorting, and exports.</p>
+        <strong>Requires the AI service running</strong>
+        <p>If the Ollama service is offline you'll get an availability error. The bot loads the model on cog startup; first use after restart can take a few seconds.</p>
       </div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ai review user:@user days:7</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
+      <span class="cmd-desc">AI scans a member's recent messages and flags rule violations or concerning patterns. Returns a written analysis with the message count and channels covered.</span>
+      <div class="cmd-params"><strong>days</strong> — 1–30, default 7.</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ai scan count:50</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
+      <span class="cmd-desc">Reviews the last N messages in the current channel or thread for rule violations. Useful for quickly triaging a heated thread without scrolling back manually.</span>
+      <div class="cmd-params"><strong>count</strong> — 10–200 messages, default 50.</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ai channel question:... minutes:60 channel:#channel</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
+      <span class="cmd-desc">Ask the AI a free-form question about what happened in a channel — e.g. "what was the argument about?", "who started the off-topic spiral?", "summarize the policy discussion".</span>
+      <div class="cmd-params"><strong>minutes</strong> — 1–1440 (24h), default 60. <strong>channel</strong> — defaults to the current channel.</div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/ai query user:@user question:... days:14</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
+      <span class="cmd-desc">Ask a targeted question about a single member's message history — e.g. "have they been hostile to anyone specifically?", "what topics do they engage with most?".</span>
+      <div class="cmd-params"><strong>days</strong> — 1–30, default 14.</div>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
@@ -734,13 +774,15 @@
     <div class="cmd-block">
       <span class="cmd-name">/grant role:denizen member:@user</span>
       <span class="cmd-perm">Configured per role</span>
-      <span class="cmd-desc">Grants a configured community role to a member. Role options and who can grant them are set in <code>/config roles</code>. The action is logged and optionally announced.</span>
+      <span class="cmd-desc">Grants a configured community role to a member. Role options and who can grant them are configured on the <strong>Roles</strong> dashboard panel. The action is logged and optionally announced.</span>
     </div>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/report promotion_review</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Messages</span></span>
-      <span class="cmd-desc">Lists members at Level 5 or above who haven't yet been granted the NSFW or next-tier role. Flags pruned members. Use during weekly check-ins.</span>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Promotion review now on the <a href="/">web dashboard</a></strong>
+        <p>The "members at Level 5+ without the next-tier role" report lives on the dashboard's reports section. The retired <code>/report promotion_review</code> slash command is gone; <code>/quality_leave</code> (below) remains in Discord.</p>
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -802,24 +844,15 @@
     </table>
 
     <h3 id="voice-admin">Admin Override Commands</h3>
+    <p>Configuration setters (hub channel, category, default name, control panel placement, name blocklist, saveable fields, numeric tunables, view-profile) now live on the <strong>Voice Master</strong> panel in the <a href="/">web dashboard</a>. The remaining slash commands handle live operational fixes:</p>
     <table>
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><code>/voice-admin set-hub &lt;channel&gt;</code></td><td>Set the hub channel members join to create a personal channel</td></tr>
-        <tr><td><code>/voice-admin set-category &lt;cat&gt;</code></td><td>Set where new voice channels are created</td></tr>
-        <tr><td><code>/voice-admin set-default-name &lt;template&gt;</code></td><td>Name template, e.g. <code>{user}'s Room</code></td></tr>
-        <tr><td><code>/voice-admin show</code></td><td>View full voice configuration</td></tr>
+        <tr><td><code>/voice-admin post-panel</code></td><td>Repost the global voice control panel buttons</td></tr>
+        <tr><td><code>/voice-admin post-inline-panel</code></td><td>Post the inline (in-channel) control panel rather than the global one</td></tr>
         <tr><td><code>/voice-admin force-delete &lt;channel&gt;</code></td><td>Admin-delete any personal channel</td></tr>
         <tr><td><code>/voice-admin force-transfer &lt;ch&gt; @user</code></td><td>Reassign ownership of any channel</td></tr>
         <tr><td><code>/voice-admin force-clear-profile @user</code></td><td>Wipe a user's saved channel settings</td></tr>
-        <tr><td><code>/voice-admin view-profile @user</code></td><td>Inspect a user's saved settings</td></tr>
-        <tr><td><code>/voice-admin name-blocklist add/remove/list</code></td><td>Block specific channel names</td></tr>
-        <tr><td><code>/voice-admin post-panel</code></td><td>Repost the voice control panel buttons</td></tr>
-        <tr><td><code>/voice-admin post-inline-panel</code></td><td>Post the inline (in-channel) control panel rather than the global one</td></tr>
-        <tr><td><code>/voice-admin set-control-channel &lt;ch&gt;</code></td><td>Set the dedicated channel where the control panel lives</td></tr>
-        <tr><td><code>/voice-admin set-int &lt;key&gt; &lt;n&gt;</code></td><td>Tune numeric settings (timeouts, defaults). Key autocompletes.</td></tr>
-        <tr><td><code>/voice-admin disable-saves</code></td><td>Stop persisting personal channel settings across sessions</td></tr>
-        <tr><td><code>/voice-admin saveable-fields</code></td><td>Configure which channel fields (name, limit, etc.) are saved per-user</td></tr>
       </tbody>
     </table>
 
@@ -947,32 +980,31 @@
       <span class="cmd-desc">Enables an away auto-reply. When someone @mentions an away member, the bot replies automatically with a default or custom message (max 500 chars).</span>
     </div>
 
-    <h3 id="wellness-admin-section">Admin Commands</h3>
-    <p>The <code>/wellness-admin</code> group is admin-only. Use it to create infrastructure, set server defaults, and override individual users' caps / blackouts / settings on their behalf.</p>
+    <h3 id="wellness-admin-section">Admin Overrides</h3>
+    <p>Server defaults, infrastructure setup, and per-member caps / blackouts / settings overrides are configured on the dashboard's Wellness Admin panels.</p>
 
     <div class="callout callout-tip">
       <span class="callout-icon">💡</span>
       <div class="callout-body">
-        <strong>Pro Tip: When to admin-override vs let the member self-manage</strong>
-        <p>Wellness is opt-in by design — most members should run <code>/wellness setup</code> themselves. Use admin overrides only when (a) the member has explicitly asked you to set something up they can't reach (e.g. accessibility, partnership setup), or (b) they're already enrolled and visibly struggling — in which case <code>/wellness-admin dashboard</code> first to see who's in slow mode, then <code>/wellness-admin cap add</code> or <code>blackout add</code> on their behalf. Don't impose caps on members who never opted in; that's a moderation problem, not a wellness one.</p>
+        <strong>When to admin-override vs let the member self-manage</strong>
+        <p>Wellness is opt-in by design — most members should run <code>/wellness setup</code> themselves. Use admin overrides only when (a) the member has explicitly asked you to set something up they can't reach (e.g. accessibility, partnership setup), or (b) they're already enrolled and visibly struggling — in which case check the dashboard's Wellness Home page first to see who's in slow mode, then add a cap or blackout on their behalf. Don't impose caps on members who never opted in; that's a moderation problem, not a wellness one.</p>
       </div>
     </div>
 
-    <table>
-      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
-      <tbody>
-        <tr><td><code>/wellness-admin setup [role_name] [channel_name] [crisis_resource_url]</code></td><td>First-time setup. Creates the wellness role and a private wellness channel.</td></tr>
-        <tr><td><code>/wellness-admin defaults [default_enforcement] [crisis_resource_url]</code></td><td>Set server-wide enforcement default (<em>gentle / cooldown / slow_mode / gradual</em>) and crisis-resource URL.</td></tr>
-        <tr><td><code>/wellness-admin dashboard</code></td><td>Server-wide stats embed: participants, slow-mode count, active caps &amp; blackouts, partnerships, top streaks.</td></tr>
-        <tr><td><code>/wellness-admin exempt add</code> / <code>remove</code> / <code>list</code></td><td>Mark channels exempt from cap counting (e.g. mod-only channels). Server-wide.</td></tr>
-        <tr><td><code>/wellness-admin cap add user:@m label scope:[global|channel|category|voice] window:[hourly|daily|weekly] limit:&lt;n&gt;</code></td><td>Create a message cap on a member's behalf. <code>channel</code>/<code>category</code> scopes require the corresponding argument. <code>exclude_exempt</code> defaults true.</td></tr>
-        <tr><td><code>/wellness-admin cap edit user:@m label new_limit:&lt;n&gt;</code></td><td>Change a cap's limit. Label autocompletes from that user's caps.</td></tr>
-        <tr><td><code>/wellness-admin cap remove user:@m label</code></td><td>Remove a cap.</td></tr>
-        <tr><td><code>/wellness-admin blackout add user:@m name start_time:HH:MM end_time:HH:MM days:&lt;list&gt;</code></td><td>Daily slow-mode blackout window. <strong>days</strong>: <code>all</code> / <code>weekdays</code> / <code>weekends</code> / <code>mon,wed,fri</code>.</td></tr>
-        <tr><td><code>/wellness-admin blackout remove user:@m name</code></td><td>Delete a blackout. Name autocompletes.</td></tr>
-        <tr><td><code>/wellness-admin settings user:@m [enforcement_level] [notifications_pref] [public_commitment] [daily_reset_hour]</code></td><td>Override one or more of a member's wellness settings. Each argument optional.</td></tr>
-      </tbody>
-    </table>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/">web dashboard</a></strong>
+        <p>The retired <code>/wellness-admin</code> slash group has been replaced by interactive dashboard panels:</p>
+        <ul>
+          <li><strong>Wellness Home</strong> — server-wide stats: participants, slow-mode count, active caps and blackouts, top streaks.</li>
+          <li><strong>Wellness Admin</strong> — server defaults (enforcement mode, crisis-resource URL), first-time setup (wellness role + private channel).</li>
+          <li><strong>Wellness Caps</strong> — per-member message caps with scope (global / channel / category / voice) and window (hourly / daily / weekly).</li>
+          <li><strong>Wellness Blackouts</strong> — daily slow-mode windows by member, with day-of-week selectors.</li>
+          <li><strong>Wellness Away / History / Partners</strong> — away auto-reply review, historical compliance, and accountability pairings.</li>
+        </ul>
+      </div>
+    </div>
 
     <!-- ══════════════════════════════════════════════════════════
          12. MEMBER SELF-SERVICE
@@ -1011,153 +1043,107 @@
          13. NETWORK ANALYTICS
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="network-analytics" class="section-break"><span class="section-num">13</span> Network Analytics</h2>
-    <p>Force-directed graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees. The first time you run these, also run an <code>/interaction_scan</code> backfill to populate history.</p>
+    <p>Force-directed graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees.</p>
 
-    <h3 id="connection-graphs">Connection Graphs</h3>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/connection_web [member:@user] [timescale:hour|day|week|month|all] [min_pct:1-100=5] [layers:1-5=2] [limit:5-60=40] [spread:0.5-5.0=1.0] [max_per_node:0-20=3]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Render the reply / mention network as a force-directed graph. With a <strong>member</strong>, focuses on them and expands outward by <strong>layers</strong>. <strong>min_pct</strong> hides low-volume edges; <strong>max_per_node</strong> caps the fan-out per person.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/interaction_heatmap [timescale:hour|day|week|month|all=all] [min_pct:1-100=5] [limit:5-60=30]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Adjacency-matrix heatmap — useful when you want to see clusters rather than a graph layout.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/invite_web [member:@user] [spread:0.5-5.0=1.0]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Network graph of who invited whom. Without a member, shows the full forest; with a member, shows their invite subtree.</span>
-    </div>
-
-    <h3 id="interaction-scans">Backfill Scans</h3>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/interaction_scan [days:0-3650=0] [reset:bool=false] [channel:#chan]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Backfill the interaction graph from message history. <strong>days=0</strong> means everything available. <strong>reset=true</strong> wipes existing interaction data first. Limit to a single <strong>channel</strong> for incremental backfills.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/member_events_scan [days:0-3650=0]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Backfill join / leave history from the configured leave-log channel. Required before invite-tree analysis is meaningful on older servers.</span>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Network analytics moved to the <a href="/">web dashboard</a></strong>
+        <p>The Connection Graph, Interaction Heatmap, and Invite Effectiveness reports — plus the interaction-history and member-events backfill scans — are now interactive panels on the dashboard with filters, timescale switching, and node-level drill-downs. The standalone <code>/connection_web</code>, <code>/interaction_heatmap</code>, <code>/invite_web</code>, <code>/interaction_scan</code>, and <code>/member_events_scan</code> slash commands have been retired.</p>
+      </div>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
          14. CLEANUP & TAGGING
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="server-ops" class="section-break"><span class="section-num">14</span> Cleanup &amp; Tagging</h2>
+    <p>Background services for ongoing housekeeping. The schedulers (auto-delete, inactivity prune) run continuously; their configuration UIs moved to the web dashboard.</p>
 
     <h3 id="auto-delete">Auto-Delete</h3>
     <p>Drop-in message cleanup. Schedule a channel to auto-delete posts older than a given age, on a recurring or one-shot basis. Pinned messages are never deleted.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/auto_delete del_age:30d run:once</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Delete messages in this channel older than <strong>del_age</strong>. <strong>run</strong> accepts <code>once</code> (run now), <code>off</code> (cancel any schedule), or an interval (<code>1d</code>, <code>12h</code>, <code>30m</code>) to enable a recurring schedule.</span>
-      <div class="cmd-params"><strong>del_age / run</strong> — accept human durations: <code>30d</code>, <code>2h</code>, <code>15m</code>, <code>1h30m</code>.</div>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/auto_delete_configs</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Open an interactive panel listing every auto-delete schedule in this server with Edit / Remove / Clean-up-missing buttons. Editing a rule lets you change the age and interval, or set the interval to <code>off</code> to delete the rule.</span>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/">web dashboard</a></strong>
+        <p>The Auto-Delete panel lists every rule with channel, age, schedule, and last-run timestamp. Add, edit, or remove rules and trigger a one-shot sweep from the panel. The background <code>auto_delete_loop</code> service runs on its own; the retired <code>/auto_delete</code> and <code>/auto_delete_configs</code> slash commands are no longer needed.</p>
+      </div>
     </div>
 
     <h3 id="prune">Inactivity Prune</h3>
     <p>Auto-removes a configured role from members who go inactive for X days. Runs daily at midnight UTC.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/inactivity_prune status</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Server</span></span>
-      <span class="cmd-desc">Show the configured role, threshold (days), and current exemption list.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/inactivity_prune exempt member:@user &nbsp;&nbsp; /inactivity_prune unexempt member:@user</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Add or remove a member's exemption from the daily prune.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/inactivity_prune run</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Trigger a prune pass now instead of waiting for the daily schedule. The prune rule itself is set in <code>/config prune</code>.</span>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/">web dashboard</a></strong>
+        <p>The Inactivity Prune panel surfaces the configured role, day threshold, exemptions, and an at-a-glance preview of who would be pruned next run. The retired <code>/inactivity_prune</code> slash group is no longer registered; the daily scheduler keeps running.</p>
+      </div>
     </div>
 
     <h3 id="gender">Gender Tagging</h3>
     <p>Tag members by gender to enable analytics breakdowns (e.g. NSFW-by-gender chart on the dashboard).</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/gender set member:@user gender:[Male|Female|Non-binary]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Set or change a member's gender tag.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/gender check member:@user &nbsp;&nbsp; /gender classify</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">View one member's tag, or step through every unclassified member one at a time with M / F / NB / Skip / Done buttons.</span>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/">web dashboard</a></strong>
+        <p>The Gender Admin panel lets you classify unclassified members one at a time (M / F / NB / Skip), edit existing tags, and see classification coverage. The retired <code>/gender set</code>, <code>/gender check</code>, and <code>/gender classify</code> slash commands are no longer needed.</p>
+      </div>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         15. SPECIAL EVENTS
+         15. GUESS WHO IMAGE GAME
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="special-events" class="section-break"><span class="section-num">15</span> Special Events</h2>
-
-    <h3 id="foolsday">April Fools' Nickname Shuffle</h3>
-    <p>One-day prank: scrambles the nicknames of recently-active members in a 1:1 derangement. Members can opt out, mods can repair if it goes sideways.</p>
+    <h2 id="guess" class="section-break"><span class="section-num">15</span> Guess Who Image Game</h2>
+    <p>NSFW image-guessing game. Submit a cropped picture; opted-in members try to identify whose body it is. The full image is revealed (spoilered) on the first correct guess. Includes written-name guessing, leaderboards, anonymous text confessions tied into the same channel, and a persistent submit/help prompt at the bottom of the configured channel.</p>
 
     <div class="cmd-block">
-      <span class="cmd-name">/foolsday action:[shuffle|restore]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Server</span></span>
-      <span class="cmd-desc">Shuffle nicknames among active members, or restore originals from the saved table.</span>
+      <span class="cmd-name">/guess submit image:&lt;attachment&gt;</span>
+      <span class="cmd-perm">Configured Guess role (or Everyone if unset)</span>
+      <span class="cmd-desc">Open the crop editor for a new NSFW submission. Use the up / down / left / right / zoom buttons to position the reveal, or hit Auto for a centered crop. Post publishes the round; the full image is revealed (spoilered) on the first correct guess.</span>
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/foolsday_exclude [user:@m] &nbsp;&nbsp; /foolsday_join [user:@m]</span>
-      <span class="cmd-perm"><span class="perm perm-all">Self only</span> / <span class="perm perm-mod">Mod</span> for others</span>
-      <span class="cmd-desc">Opt out of the shuffle, or join one already in progress (swaps your name with a random current participant). Without arguments, applies to yourself.</span>
+      <span class="cmd-name">/guess optin</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Join the Guess pool — grants the configured Guess role and adds you to the submitter / guesser autocomplete.</span>
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/foolsday_include user:@m &nbsp;&nbsp; /foolsday_exclusions</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Re-include a member previously excluded, or list everyone who's opted out.</span>
+      <span class="cmd-name">/guess confess text:...</span>
+      <span class="cmd-perm">Configured Guess role (or Everyone if unset)</span>
+      <span class="cmd-desc">Submit an anonymous text confession to the Guess channel. Preview first, then Post — sender identity is logged for mods but hidden from members.</span>
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/foolsday_samename [name:&lt;text&gt;]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Set every shuffled member's nickname to one shared name (custom or randomly picked from the saved pool).</span>
+      <span class="cmd-name">/guess leaderboard</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Show the top submitters and top guessers in this server.</span>
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/foolsday_repair</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Recovery tool: walk the audit log, identify the bot's first nickname change per member, and restore originals. Use when the saved-name table is corrupted.</span>
-    </div>
-
-    <h3 id="veil">Veil Image Game</h3>
-    <p>NSFW image-guessing game. Submit a cropped picture; opted-in members try to identify whose body it is. The full image is revealed (spoilered) on the first correct guess.</p>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/veil submit image:&lt;attachment&gt;</span>
-      <span class="cmd-perm">Configured Veil role (or Everyone if unset)</span>
-      <span class="cmd-desc">Submit an NSFW image. The bot validates dimensions, runs the crop pipeline, and shows you a preview with Re-roll / Post buttons. Posting publishes a public game message to the configured Veil channel.</span>
+      <span class="cmd-name">/guess round round_id:&lt;n&gt;</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
+      <span class="cmd-desc">Inspect a specific Guess round (mod-only): submitter, guesses, current state.</span>
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/veil setup channel:#nsfw [role:@role]</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Server</span></span>
-      <span class="cmd-desc">First-time setup. Set the Veil channel and (optionally) the role required to submit. Without a role, every NSFW-permitted member can submit.</span>
+      <span class="cmd-name">/guess delete round_id:&lt;n&gt;</span>
+      <span class="cmd-perm">Submitter or <span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Remove a Guess round you submitted, or any round if you're a mod.</span>
     </div>
 
-    <h3 id="whisper">Whisper Anonymous Messages</h3>
+    <div class="cmd-block">
+      <span class="cmd-name">/guess prompt &nbsp;&nbsp; /guess setup channel:#chan [role:@role]</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
+      <span class="cmd-desc">Re-post the persistent Submit / Help prompt at the bottom of the Guess channel, or run first-time setup to choose the channel and (optionally) submitter role.</span>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         17. WHISPER
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="whisper" class="section-break"><span class="section-num">16</span> Whisper Anonymous Messages</h2>
     <p>Anonymous message-guessing game. Send a secret message to an opted-in member via DM; they can try to guess who sent it, share it to the server feed, hide it for later, or reply anonymously.</p>
 
     <div class="cmd-block">
@@ -1193,9 +1179,78 @@
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         16. SETUP & PERMISSIONS
+         18. GAMES NIGHT
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="setup" class="section-break"><span class="section-num">16</span> Setup &amp; Permissions</h2>
+    <h2 id="games" class="section-break"><span class="section-num">17</span> Games Night</h2>
+    <p>A suite of group games for hangouts and game nights. Most are member-facing — anyone can start one in an allowed channel. Each game maintains its own session; only one game runs per channel at a time.</p>
+
+    <div class="callout callout-tip">
+      <span class="callout-icon">💡</span>
+      <div class="callout-body">
+        <strong>Consent &amp; channel allowlist</strong>
+        <p>Games can be limited to specific channels and individual members can adjust their consent settings (which game modes they want to be drawn into). Configure both from the dashboard or via <code>/games allow-channel</code> and <code>/consent</code> respectively.</p>
+      </div>
+    </div>
+
+    <h3 id="games-modes">Game Modes</h3>
+    <p>All <span class="perm perm-all">Everyone</span> in allowed channels.</p>
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>/wyr</code></td><td>Would You Rather — vote on either / or scenarios</td></tr>
+        <tr><td><code>/nhie</code></td><td>Never Have I Ever — react to admit / deny</td></tr>
+        <tr><td><code>/mfk</code></td><td>Marry, Fornicate, Kiss — pick from three members</td></tr>
+        <tr><td><code>/mlt</code></td><td>Most Likely To — vote who fits the prompt</td></tr>
+        <tr><td><code>/twotruths</code></td><td>Two Truths and a Lie</td></tr>
+        <tr><td><code>/traditional</code></td><td>Traditional Truth or Dare</td></tr>
+        <tr><td><code>/fantasies</code></td><td>Fantasies &amp; Dealbreakers — anonymous matching</td></tr>
+        <tr><td><code>/ama</code></td><td>Anonymous Ask Me Anything — open a question queue</td></tr>
+        <tr><td><code>/hottakes</code></td><td>Hot Takes / Unpopular Opinions debate</td></tr>
+        <tr><td><code>/story</code></td><td>Story Builder (Exquisite Corpse) — collaborative writing</td></tr>
+        <tr><td><code>/price</code></td><td>Name Your Price — bidding game</td></tr>
+        <tr><td><code>/rushmore</code></td><td>Mt. Rushmore Draft — pick your top 4 of a topic</td></tr>
+        <tr><td><code>/clapback</code></td><td>Clapback comedy head-to-head</td></tr>
+        <tr><td><code>/compliment</code></td><td>Spin the Compliment — random anonymous pairing</td></tr>
+        <tr><td><code>/risky start</code></td><td>Risky Rolls round — dice-based dare ladder</td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="games-cmds">Player &amp; Admin Commands</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/games-help &nbsp;&nbsp; /games-support</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Browse every game mode with a brief description, or get the support Discord link.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/consent</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Open your personal consent settings — control which game modes can pull you in and which prompt categories you opt out of.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/games allow-channel &nbsp;&nbsp; /games disallow-channel &nbsp;&nbsp; /games list-channels</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Add or remove the current channel from the games allowlist, or list every allowed channel.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/games game-status &nbsp;&nbsp; /games game-end</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Show the active game in the current channel, or force-close it if it's stuck.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/games audit-channel &nbsp;&nbsp; /games portal-grant &nbsp;&nbsp; /games portal-revoke &nbsp;&nbsp; /games portal-list</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Configure the audit log channel for anonymous submissions and manage which members have access to the games web admin portal.</span>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════
+         (legacy section anchor preserved) SETUP & PERMISSIONS
+    ═══════════════════════════════════════════════════════════ -->
+    <h2 id="setup" class="section-break"><span class="section-num">18</span> Setup &amp; Permissions</h2>
 
     <h3 id="permissions">Permission Levels</h3>
     <p>Most commands require one of these roles or Discord permissions:</p>
@@ -1227,54 +1282,62 @@
 
     <h3 id="first-steps">First-Time Setup (Admin)</h3>
     <ol class="steps">
-      <li>Run <code>/setup</code> — Phase 1 creates all required bot channels and categories (mod-log, join-leave-log, ticket panel, etc.); Phase 2 walks you through a 6-step wizard for mod/admin roles and jail/ticket categories.</li>
-      <li>Run <code>/config global</code> — set your mod role IDs, admin role IDs, mod notification channel, and server timezone.</li>
-      <li>Run <code>/config roles</code> — configure which roles can be granted with <code>/grant</code>.</li>
-      <li>Run <code>/config xp</code> — set the Level 5 role, XP announcement channels, and excluded channels.</li>
-      <li>Run <code>/config welcome</code> — customize join/leave messages.</li>
-      <li>Optionally run <code>/voice-admin set-hub</code> to enable personal voice channels.</li>
-      <li>Optionally run <code>/starboard channel</code> to enable the starboard.</li>
+      <li>Run <code>/setup</code> in Discord — Phase 1 creates all required bot channels and categories (mod-log, join-leave-log, ticket panel, etc.); Phase 2 walks you through a 6-step wizard for mod/admin roles and jail/ticket categories.</li>
+      <li>Open the <a href="/">web dashboard</a> and sign in via the Discord OAuth login.</li>
+      <li><strong>Global</strong> panel — set your mod role IDs, admin role IDs, mod notification channel, and server timezone offset.</li>
+      <li><strong>Roles</strong> panel — configure which community roles can be handed out with <code>/grant</code> and who can grant them.</li>
+      <li><strong>XP</strong> panel — set the Level-5 milestone role, XP announcement channels, and any channels excluded from XP.</li>
+      <li><strong>Welcome</strong> panel — customize the join / leave embeds and preview them against your own profile before publishing.</li>
+      <li><strong>Voice Master</strong> panel — set the hub channel and default category so members can create personal voice channels by joining the hub.</li>
+      <li><strong>Starboard</strong> panel — set the channel, threshold, and emoji to enable the highlight reposting feature.</li>
+      <li>Optionally enable <strong>Guess</strong>, <strong>Veil</strong>, <strong>Whisper</strong>, or <strong>Confessions</strong> from their dashboard panels.</li>
     </ol>
 
     <!-- ══════════════════════════════════════════════════════════
-         17. CONFIGURATION REFERENCE
+         20. CONFIGURATION REFERENCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">17</span> Configuration Reference</h2>
+    <h2 id="config" class="section-break"><span class="section-num">19</span> Configuration Reference</h2>
+    <p>Every persistent bot setting lives on the web dashboard. The retired <code>/config</code> slash command, <code>/welcome_preview</code>, and <code>/leave_preview</code> have all been replaced by interactive dashboard panels with live preview.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/config section:[global|welcome|roles|xp|prune|spoiler|booster]</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
-      <span class="cmd-desc">Opens the settings panel for the chosen section. All settings are persistent across restarts.</span>
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/">web dashboard</a></strong>
+        <p>Open the dashboard, sign in, and pick a config panel from the sidebar. Changes persist across restarts. The welcome / leave panels include a one-click preview that renders the embed against your own profile before publishing.</p>
+      </div>
     </div>
 
     <table>
-      <thead><tr><th>Section</th><th>What you configure</th></tr></thead>
+      <thead><tr><th>Panel</th><th>What you configure</th></tr></thead>
       <tbody>
-        <tr><td><code>global</code></td><td>Mod role IDs, admin role IDs, mod notification channel, server timezone offset, greeter role</td></tr>
-        <tr><td><code>welcome</code></td><td>Join/leave message templates, announcement channel, ping role</td></tr>
-        <tr><td><code>roles</code></td><td>Which roles can be granted with <code>/grant</code> and who has permission to grant them</td></tr>
-        <tr><td><code>xp</code></td><td>Level-5 milestone role, XP announcement channels, channels excluded from XP</td></tr>
-        <tr><td><code>prune</code></td><td>Inactivity pruning threshold and schedule</td></tr>
-        <tr><td><code>spoiler</code></td><td>Channels requiring image spoiler tags, roles exempt from spoiler enforcement</td></tr>
-        <tr><td><code>booster</code></td><td>Booster role button panel configuration</td></tr>
+        <tr><td><strong>Global</strong></td><td>Mod role IDs, admin role IDs, mod notification channel, server timezone offset, greeter role</td></tr>
+        <tr><td><strong>Welcome</strong></td><td>Join / leave message templates, announcement channel, ping role, live preview</td></tr>
+        <tr><td><strong>Roles</strong></td><td>Which roles can be granted with <code>/grant</code> and who has permission to grant them</td></tr>
+        <tr><td><strong>XP</strong></td><td>Level-5 milestone role, XP announcement channels, channels excluded from XP</td></tr>
+        <tr><td><strong>Prune</strong></td><td>Inactivity pruning threshold and schedule</td></tr>
+        <tr><td><strong>Spoiler</strong></td><td>Channels requiring image spoiler tags, roles exempt from spoiler enforcement</td></tr>
+        <tr><td><strong>Booster Roles</strong></td><td>Booster role button panel configuration</td></tr>
+        <tr><td><strong>Starboard</strong></td><td>Channel, threshold, emoji, channel exclusion list</td></tr>
+        <tr><td><strong>Confessions</strong></td><td>Channel, mod-log channel, panic mode</td></tr>
+        <tr><td><strong>DM Permissions</strong></td><td>Request panel channel, audit channel</td></tr>
+        <tr><td><strong>Auto-Delete</strong></td><td>Per-channel age + schedule rules</td></tr>
+        <tr><td><strong>Voice Master</strong></td><td>Hub channel, default category, name template, control panel placement, saveable fields</td></tr>
+        <tr><td><strong>Whisper / Guess / Veil / Risky Rolls</strong></td><td>Channels and opt-in roles for each game feature</td></tr>
+        <tr><td><strong>Moderation</strong></td><td>Jail category, ticket category, policy channels, warning thresholds</td></tr>
+        <tr><td><strong>Policy Tickets</strong></td><td>Mod-team voting channel and rules engine</td></tr>
       </tbody>
     </table>
 
-    <div class="cmd-block" id="welcome-leave">
-      <span class="cmd-name">/welcome_preview &nbsp;&nbsp; /leave_preview</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Preview the configured welcome or leave embed using your own profile. Run after editing <code>/config welcome</code> to verify formatting before real members trigger it.</span>
-    </div>
     <div class="cmd-block">
-      <span class="cmd-name">/starboard status</span>
+      <span class="cmd-name">/starboard channel|threshold|emoji|toggle|status|exclude|unexclude</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Show the current starboard channel, threshold, emoji, and exclusion list.</span>
+      <span class="cmd-desc">Starboard configuration also remains available as Discord slash commands for in-chat tuning. See <a href="#starboard">§6 Starboard</a> for the full subcommand list.</span>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
-         18. DEVELOPER / OWNER TOOLS
+         21. DEVELOPER / OWNER TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">18</span> Developer / Owner Tools</h2>
+    <h2 id="owner-tools" class="section-break"><span class="section-num">20</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">
@@ -1312,7 +1375,7 @@
         <tr><td><code>/confess</code></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mods see emoji ID mapping)</td></tr>
         <tr><td><code>/todo</code></td><td><span class="perm perm-all">Everyone</span></td><td>Add to the server's shared todo list</td></tr>
         <tr><td><code>/help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
-        <tr><td><code>/config</code></td><td><span class="perm perm-mod">Mod</span></td><td>Open settings panel (global / welcome / roles / xp / …)</td></tr>
+        <tr><td><code>/ai review</code> / <code>scan</code> / <code>channel</code> / <code>query</code></td><td><span class="perm perm-admin">Admin</span></td><td>LLM-assisted member/channel investigation</td></tr>
 
         <tr><td colspan="3" class="qr-section">Moderation</td></tr>
         <tr><td><code>/jail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to private jail channel</td></tr>
@@ -1335,23 +1398,20 @@
         <tr><td><code>/policy open</code></td><td><span class="perm perm-mod">Mod</span></td><td>Create a policy proposal with voting</td></tr>
         <tr><td><code>/policy list</code> / <code>vote</code> / <code>close</code></td><td><span class="perm perm-mod">Mod</span></td><td>View, vote on, or finalize a policy proposal</td></tr>
 
-        <tr><td colspan="3" class="qr-section">Analytics &amp; Watch ✦</td></tr>
+        <tr><td colspan="3" class="qr-section">Analytics &amp; Watch</td></tr>
         <tr><td><code>/watch add</code> / <code>remove</code> / <code>list</code></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
-        <tr><td><code>/activity</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bar chart of message volume over time</td></tr>
-        <tr><td colspan="3" style="opacity: 0.7;"><em>Drop-off, session burst, burst ranking, chilling effect, network/heatmap analytics live in the <a href="/">web dashboard</a>.</em></td></tr>
+        <tr><td colspan="3" style="opacity: 0.7;"><em>All activity, drop-off, retention, network, and engagement reports live in the <a href="/">web dashboard</a>.</em></td></tr>
 
-        <tr><td colspan="3" class="qr-section">Network Analytics</td></tr>
-        <tr><td><code>/connection_web</code></td><td><span class="perm perm-mod">Mod</span></td><td>Reply / mention force-directed graph</td></tr>
-        <tr><td><code>/interaction_heatmap</code></td><td><span class="perm perm-mod">Mod</span></td><td>Adjacency-matrix heatmap of interactions</td></tr>
-        <tr><td><code>/invite_web</code></td><td><span class="perm perm-mod">Mod</span></td><td>Invite-tree network graph</td></tr>
-        <tr><td><code>/interaction_scan</code></td><td><span class="perm perm-mod">Mod</span></td><td>Backfill interaction graph from history</td></tr>
-        <tr><td><code>/member_events_scan</code></td><td><span class="perm perm-mod">Mod</span></td><td>Backfill join / leave history</td></tr>
+        <tr><td colspan="3" class="qr-section">AI Moderation</td></tr>
+        <tr><td><code>/ai review</code></td><td><span class="perm perm-admin">Admin</span></td><td>Flag rule violations in a member's recent messages</td></tr>
+        <tr><td><code>/ai scan</code></td><td><span class="perm perm-admin">Admin</span></td><td>Scan the last N messages in the channel</td></tr>
+        <tr><td><code>/ai channel</code></td><td><span class="perm perm-admin">Admin</span></td><td>Free-form question about a channel's history</td></tr>
+        <tr><td><code>/ai query</code></td><td><span class="perm perm-admin">Admin</span></td><td>Free-form question about a member's history</td></tr>
 
         <tr><td colspan="3" class="qr-section">Community &amp; XP</td></tr>
         <tr><td><code>/xp_leaderboards</code></td><td><span class="perm perm-all">Everyone</span></td><td>XP rankings by time window</td></tr>
         <tr><td><code>/xp_give</code></td><td><span class="perm perm-mod">Mod</span></td><td>Award 20 XP to a member manually</td></tr>
         <tr><td><code>/grant</code></td><td>Configured</td><td>Give a community role to a member</td></tr>
-        <tr><td><code>/report promotion_review</code></td><td><span class="perm perm-mod">Mod</span></td><td>Members at Level 5 without next role</td></tr>
         <tr><td><code>/quality_leave</code></td><td><span class="perm perm-mod">Mod</span></td><td>Put member on Leave of Absence</td></tr>
         <tr><td><code>/starboard</code></td><td><span class="perm perm-mod">Mod</span></td><td>Channel / threshold / emoji / exclude / status / toggle</td></tr>
 
@@ -1380,6 +1440,8 @@
         <tr><td colspan="3" class="qr-section">Wellness</td></tr>
         <tr><td><code>/wellness setup</code></td><td><span class="perm perm-all">Everyone</span></td><td>Opt in — pick timezone &amp; enforcement style</td></tr>
         <tr><td><code>/wellness away on</code> / <code>off</code></td><td><span class="perm perm-all">Everyone</span></td><td>Toggle the auto-reply for @mentions</td></tr>
+        <tr><td colspan="3" style="opacity: 0.7;"><em>Wellness admin overrides (caps, blackouts, dashboards) live on the <a href="/">web dashboard</a>.</em></td></tr>
+
         <tr><td colspan="3" class="qr-section">Member Self-Service</td></tr>
         <tr><td><code>/help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
         <tr><td><code>/support</code></td><td><span class="perm perm-all">Everyone</span></td><td>Link to the support Discord</td></tr>
@@ -1390,25 +1452,32 @@
         <tr><td><code>/delete_user</code></td><td><span class="perm perm-mod">Mod</span></td><td>GDPR-style erasure of a target user's data</td></tr>
 
         <tr><td colspan="3" class="qr-section">Cleanup &amp; Tagging</td></tr>
-        <tr><td><code>/auto_delete</code></td><td><span class="perm perm-mod">Mod</span></td><td>Delete old messages once or on a schedule</td></tr>
-        <tr><td><code>/auto_delete_configs</code></td><td><span class="perm perm-mod">Mod</span></td><td>Manage existing auto-delete schedules</td></tr>
-        <tr><td><code>/inactivity_prune</code></td><td><span class="perm perm-mod">Mod</span></td><td>status / exempt / unexempt / run</td></tr>
-        <tr><td><code>/gender</code></td><td><span class="perm perm-mod">Mod</span></td><td>set / check / classify member gender tags</td></tr>
+        <tr><td colspan="3" style="opacity: 0.7;"><em>Auto-delete, inactivity prune, and gender tagging are now configured on the <a href="/">web dashboard</a>; background services run unchanged.</em></td></tr>
 
-        <tr><td colspan="3" class="qr-section">Special Events</td></tr>
-        <tr><td><code>/foolsday</code></td><td><span class="perm perm-mod">Mod</span></td><td>Shuffle / restore April Fools' nicknames</td></tr>
-        <tr><td><code>/foolsday_exclude</code> / <code>_join</code></td><td><span class="perm perm-all">Self</span> / <span class="perm perm-mod">Mod</span></td><td>Opt out of, or into, an active shuffle</td></tr>
-        <tr><td><code>/foolsday_repair</code></td><td><span class="perm perm-mod">Mod</span></td><td>Restore originals via audit-log walk</td></tr>
-        <tr><td><code>/veil submit</code></td><td>Veil role</td><td>Submit an NSFW image to the guessing game</td></tr>
+        <tr><td colspan="3" class="qr-section">Veil / Guess / Whisper</td></tr>
+        <tr><td><code>/veil submit</code></td><td>Veil role</td><td>Submit an NSFW image to the dropdown-guessing game</td></tr>
+        <tr><td><code>/guess submit</code></td><td>Guess role</td><td>Submit to the written-name guessing game</td></tr>
+        <tr><td><code>/guess optin</code> / <code>leaderboard</code> / <code>confess</code></td><td><span class="perm perm-all">Everyone</span></td><td>Join the pool, see the leaderboard, drop an anonymous text confession</td></tr>
+        <tr><td><code>/whisper send</code></td><td>Whisper role</td><td>Send an anonymous DM to another opted-in member</td></tr>
+        <tr><td><code>/whisper optin</code> / <code>optout</code> / <code>forget-me</code></td><td><span class="perm perm-all">Everyone</span></td><td>Manage your Whisper participation</td></tr>
+
+        <tr><td colspan="3" class="qr-section">Games Night</td></tr>
+        <tr><td><code>/wyr</code> · <code>/nhie</code> · <code>/mfk</code> · <code>/mlt</code> · <code>/twotruths</code></td><td><span class="perm perm-all">Everyone</span></td><td>Vote/react group games</td></tr>
+        <tr><td><code>/traditional</code> · <code>/fantasies</code> · <code>/hottakes</code> · <code>/ama</code></td><td><span class="perm perm-all">Everyone</span></td><td>Truth-or-Dare, dealbreakers, hot takes, anonymous AMA</td></tr>
+        <tr><td><code>/story</code> · <code>/price</code> · <code>/rushmore</code> · <code>/clapback</code> · <code>/compliment</code></td><td><span class="perm perm-all">Everyone</span></td><td>Collaborative writing, bidding, draft, comedy, anonymous pairing</td></tr>
+        <tr><td><code>/risky start</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a Risky Rolls round</td></tr>
+        <tr><td><code>/consent</code></td><td><span class="perm perm-all">Everyone</span></td><td>Configure your personal game consent settings</td></tr>
+        <tr><td><code>/games allow-channel</code> / <code>list-channels</code> / <code>game-end</code></td><td><span class="perm perm-admin">Admin</span></td><td>Channel allowlist and active-game control</td></tr>
+        <tr><td><code>/games-help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse every game mode</td></tr>
+
         <tr><td colspan="3" class="qr-section">Configuration</td></tr>
-        <tr><td><code>/config</code></td><td><span class="perm perm-mod">Mod</span></td><td>Open settings panel (global/welcome/roles/xp/…)</td></tr>
-        <tr><td><code>/welcome_preview</code> / <code>/leave_preview</code></td><td><span class="perm perm-mod">Mod</span></td><td>Preview welcome/leave embeds before publishing</td></tr>
-        <tr><td><code>/starboard status</code></td><td><span class="perm perm-mod">Mod</span></td><td>View current starboard config</td></tr>
+        <tr><td colspan="3" style="opacity: 0.7;"><em>Every persistent setting (global, welcome, roles, XP, prune, spoiler, booster, starboard, confessions, DMs, auto-delete, voice master, whisper, guess, veil, risky, moderation, policy tickets) is configured on the <a href="/">web dashboard</a>.</em></td></tr>
+        <tr><td><code>/starboard channel</code> / <code>threshold</code> / <code>emoji</code> / <code>toggle</code> / <code>status</code></td><td><span class="perm perm-mod">Mod</span></td><td>Starboard tuning, also available in Discord</td></tr>
       </tbody>
     </table>
 
     <p style="color:var(--muted);font-size:0.8rem;margin-top:2rem;text-align:center">
-      DungeonKeeper Moderator Reference Guide &nbsp;·&nbsp; May 2026
+      DungeonKeeper Reference Guide &nbsp;·&nbsp; May 2026
     </p>
 
   </main>

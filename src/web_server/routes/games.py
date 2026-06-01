@@ -1164,7 +1164,7 @@ async def get_all_game_configs(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
-    guild_id = ctx.guild_id if hasattr(ctx, "guild_id") else 0
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1195,7 +1195,7 @@ async def get_game_config(
         raise HTTPException(status_code=404, detail=f"Unknown game_type: {game_type}")
 
     ctx = get_ctx(request)
-    guild_id = ctx.guild_id if hasattr(ctx, "guild_id") else 0
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1225,7 +1225,7 @@ async def set_game_config(
         raise HTTPException(status_code=404, detail=f"Unknown game_type: {game_type}")
 
     ctx = get_ctx(request)
-    guild_id = ctx.guild_id if hasattr(ctx, "guild_id") else 0
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -1266,11 +1266,13 @@ async def get_audit_channel(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
             row = conn.execute(
-                "SELECT guild_id, channel_id FROM games_audit_channel LIMIT 1"
+                "SELECT guild_id, channel_id FROM games_audit_channel WHERE guild_id = ?",
+                (guild_id,),
             ).fetchone()
             if not row:
                 return None
@@ -1286,19 +1288,20 @@ async def set_audit_channel(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
             existing = conn.execute(
-                "SELECT guild_id FROM games_audit_channel LIMIT 1"
+                "SELECT 1 FROM games_audit_channel WHERE guild_id = ? LIMIT 1",
+                (guild_id,),
             ).fetchone()
             if existing:
                 conn.execute(
                     "UPDATE games_audit_channel SET channel_id = ? WHERE guild_id = ?",
-                    (body.channel_id, existing[0]),
+                    (body.channel_id, guild_id),
                 )
             else:
-                guild_id = ctx.guild_id if hasattr(ctx, "guild_id") else 0
                 conn.execute(
                     "INSERT INTO games_audit_channel (guild_id, channel_id) VALUES (?, ?)",
                     (guild_id, body.channel_id),

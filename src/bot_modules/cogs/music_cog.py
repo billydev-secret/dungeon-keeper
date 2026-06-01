@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import random
 import time
 from typing import TYPE_CHECKING, Literal
 
@@ -18,6 +17,17 @@ import wavelink
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.music.embeds import build_247_status_embed, build_queue_embed
+from bot_modules.music.logic import (
+    format_247_status_line,
+    format_247_toggle_message,
+    format_spotify_summary,
+    is_search_url,
+    paginate_queue,
+    should_idle_disconnect,
+    shuffled_autoplay_pool,
+    track_summary_from_object,
+)
 from bot_modules.services.lavalink_manager import LavalinkManager
 from bot_modules.services.music_now_playing import (
     NowPlayingView,
@@ -295,22 +305,15 @@ class MusicCog(commands.Cog):
             if added == 1:
                 first_summary = self._track_summary(wt, s_track)
 
-        if result.kind == "track":
-            return added, f"Queued: {first_summary}" if added else "No match found."
-
-        warn = ""
-        if result.truncated:
-            warn = f"\n(Playlist truncated to first {len(result.tracks)} tracks.)"
-        if result.kind == "artist":
-            return added, (
-                f"Queued **{added}** top track{'s' if added != 1 else ''} by "
-                f"**{result.name or 'Unknown'}**."
-            )
-        kind_label = "playlist" if result.kind == "playlist" else "album"
-        return added, (
-            f"Queued **{added}** track{'s' if added != 1 else ''} from "
-            f"{kind_label} **{result.name or 'Unknown'}**.{warn}"
+        summary = format_spotify_summary(
+            kind=result.kind,
+            name=result.name,
+            added=added,
+            truncated=result.truncated,
+            first_summary=first_summary,
+            page_size=len(result.tracks),
         )
+        return added, summary
 
     async def _enqueue_search(
         self, query: str, queue: GuildQueue, requester_id: int
@@ -318,7 +321,7 @@ class MusicCog(commands.Cog):
         # Pass URLs verbatim; for plain text, let wavelink add the source prefix
         # (defaults to ytmsearch:). Do NOT prepend ytsearch: ourselves -- the
         # doubled prefix returns garbage.
-        is_url = query.startswith(("http://", "https://"))
+        is_url = is_search_url(query)
         result = await wavelink.Playable.search(query) if is_url else \
             await wavelink.Playable.search(query, source=wavelink.TrackSource.YouTube)
         log.info("search %r -> %s", query, type(result).__name__)
@@ -361,14 +364,8 @@ class MusicCog(commands.Cog):
     def _track_summary(
         track: wavelink.Playable, spotify: SpotifyTrack | None = None
     ) -> str:
-        title = getattr(track, "title", "Unknown")
-        author = getattr(track, "author", None) or (
-            spotify.primary_artist if spotify else "?"
-        )
-        uri = getattr(track, "uri", None)
-        if uri:
-            return f"[{title} -- {author}](<{uri}>)"
-        return f"{title} -- {author}"
+        fallback = spotify.primary_artist if spotify else None
+        return track_summary_from_object(track, fallback_author=fallback)
 
     # ------------------------------------------------------------------
     # /skip /shuffle /loop /queue /pause /resume /stop /nowplaying /disconnect
@@ -429,28 +426,23 @@ class MusicCog(commands.Cog):
             await self._ephemeral(interaction, "Use in a server.")
             return
         queue = self._queue(guild.id)
-        per_page = 10
-        page = max(1, page)
-        start = (page - 1) * per_page
-        items = list(queue.tracks)[start : start + per_page]
-        total_pages = max(1, (len(queue.tracks) + per_page - 1) // per_page)
+        total = len(queue.tracks)
+        start, end, total_pages, normalized_page = paginate_queue(total, page)
+        items = list(queue.tracks)[start:end]
 
-        embed = discord.Embed(title="Music queue", color=0xC9A961)
-        if queue.current is not None:
-            embed.add_field(
-                name="Now playing",
-                value=self._track_summary(queue.current),
-                inline=False,
-            )
-        if items:
-            lines = [
-                f"`{start + i + 1:>2}.` {self._track_summary(t)}"
-                for i, t in enumerate(items)
-            ]
-            embed.add_field(name=f"Up next ({len(queue.tracks)} total)", value="\n".join(lines), inline=False)
-        else:
-            embed.add_field(name="Up next", value="(empty)", inline=False)
-        embed.set_footer(text=f"Page {page}/{total_pages} · loop: {queue.loop_mode.value}")
+        embed = build_queue_embed(
+            current_summary=(
+                self._track_summary(queue.current)
+                if queue.current is not None
+                else None
+            ),
+            item_summaries=[self._track_summary(t) for t in items],
+            start_index=start,
+            total_in_queue=total,
+            page=normalized_page,
+            total_pages=total_pages,
+            loop_mode_value=queue.loop_mode.value,
+        )
         await interaction.response.send_message(embed=embed)
 
     @app_commands.command(name="pause", description="Pause playback.")
@@ -591,16 +583,14 @@ class MusicCog(commands.Cog):
                     conn, guild.id, ch_id, autoplay_playlist, interaction.user.id
                 )
 
+        cleared_mentions: list[str] = []
+        join_error: str | None = None
         if enabled:
-            msg = f"24/7 enabled for {member.voice.channel.mention}."
-            if cleared:
-                names = []
-                for s in cleared:
-                    ch = guild.get_channel(s.voice_channel_id)
-                    names.append(ch.mention if ch else f"<#{s.voice_channel_id}>")
-                msg += f"\nDisabled previous 24/7 channel(s): {', '.join(names)}."
-            if autoplay_playlist:
-                msg += "\nAutoplay playlist saved."
+            for s in cleared:
+                ch = guild.get_channel(s.voice_channel_id)
+                cleared_mentions.append(
+                    ch.mention if ch else f"<#{s.voice_channel_id}>"
+                )
             # If we're not already in the channel, join it now.
             if guild.voice_client is None:
                 try:
@@ -608,9 +598,14 @@ class MusicCog(commands.Cog):
                     await player.set_volume(_DEFAULT_VOLUME)
                 except Exception as exc:
                     log.warning("24/7 join failed: %s", exc)
-                    msg += f"\n(Couldn't join right now: {exc})"
-        else:
-            msg = f"24/7 disabled for {member.voice.channel.mention}."
+                    join_error = str(exc)
+        msg = format_247_toggle_message(
+            enabled=enabled,
+            channel_mention=member.voice.channel.mention,
+            cleared_mentions=cleared_mentions,
+            autoplay_saved=bool(autoplay_playlist),
+            join_error=join_error,
+        )
         await interaction.response.send_message(msg)
 
     @app_commands.command(name="247_status", description="Show 24/7-enabled channels in this server.")
@@ -628,13 +623,10 @@ class MusicCog(commands.Cog):
         for s in entries:
             ch = guild.get_channel(s.voice_channel_id)
             mention = ch.mention if ch else f"<#{s.voice_channel_id}>"
-            ap = " (autoplay)" if s.autoplay_playlist_url else ""
-            lines.append(f"• {mention}{ap}")
-        embed = discord.Embed(
-            title="24/7 channels",
-            description="\n".join(lines),
-            color=0xC9A961,
-        )
+            lines.append(
+                format_247_status_line(mention, bool(s.autoplay_playlist_url))
+            )
+        embed = build_247_status_embed(lines)
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
@@ -739,8 +731,10 @@ class MusicCog(commands.Cog):
         if self._spotify is None:
             return 0
         result = await self._spotify.resolve(playlist_url)
-        candidates = list(result.tracks)
-        random.shuffle(candidates)
+        # Shuffle the full candidate pool; cap on _added_ tracks (not
+        # candidates), since some Spotify entries fail to mirror to YouTube
+        # and we want the queue refill to still land near the batch target.
+        candidates = shuffled_autoplay_pool(result.tracks)
         added = 0
         for s_track in candidates:
             if added >= _AUTOPLAY_QUEUE_BATCH:
@@ -876,10 +870,15 @@ class MusicCog(commands.Cog):
         player = self._player(guild)
         if player is None or player.channel is None:
             return
-        if not self._can_idle_disconnect(guild.id, player.channel.id):
-            return
-        humans_present = any(not m.bot for m in player.channel.members)
-        if humans_present and (player.playing or player.paused) and self._queue(guild.id).current is not None:
+        settings = self._get_settings(guild.id, player.channel.id)
+        queue = self._queue(guild.id)
+        if not should_idle_disconnect(
+            humans_present=any(not m.bot for m in player.channel.members),
+            playing=player.playing,
+            paused=player.paused,
+            has_current=queue.current is not None,
+            always_on=bool(settings and settings.always_on),
+        ):
             return
         log.info(
             "idle disconnect for guild=%s channel=%s", guild.id, player.channel.id
@@ -888,10 +887,6 @@ class MusicCog(commands.Cog):
             await player.disconnect()
         self._queues.pop(guild.id, None)
         self._idle_tasks.pop(guild.id, None)
-
-    def _can_idle_disconnect(self, guild_id: int, channel_id: int) -> bool:
-        settings = self._get_settings(guild_id, channel_id)
-        return not (settings and settings.always_on)
 
     def _channel_is_247(self, guild_id: int, channel_id: int) -> bool:
         settings = self._get_settings(guild_id, channel_id)

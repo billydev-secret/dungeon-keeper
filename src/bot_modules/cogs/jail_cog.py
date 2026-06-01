@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
-import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -13,11 +12,25 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.jail.embeds import (
+    build_adopted_policies_embed,
+    build_modinfo_embed,
+    build_policy_close_embed,
+    build_policy_list_embed,
+    build_policy_proposal_embed,
+    build_policy_vote_initial_embed,
+    build_ticket_open_embed,
+    build_ticket_panel_embed,
+    build_warning_audit_embed,
+    build_warning_revoke_audit_embed,
+    build_warning_threshold_embed,
+    build_warnings_list_embed,
+)
+from bot_modules.jail.logic import sanitize_channel_name
+
 from bot_modules.commands.jail_commands import (
     CLR_INFO,
-    CLR_JAIL,
     CLR_POLICY,
-    CLR_SUCCESS,
     CLR_TICKET,
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
@@ -43,7 +56,6 @@ from bot_modules.commands.jail_commands import (
     jail_expiry_loop,
     policy_vote_timeout_loop,
 )
-from bot_modules.services.embeds import MOD_WARNING as CLR_WARNING
 from bot_modules.services.moderation import (
     add_ticket_participant,
     claim_ticket,
@@ -70,30 +82,13 @@ from bot_modules.services.moderation import (
     start_policy_vote,
     write_audit,
 )
-from bot_modules.core.db_utils import get_config_value
+from bot_modules.core.db_utils import get_config_value, get_tz_offset_hours
 from bot_modules.services.activity_graphs import query_message_activity, render_activity_chart
 
 
-# ── Embed / display limits ────────────────────────────────────────────────
-# Discord-imposed maxima (kept here so they're discoverable and consistent).
-_EMBED_TITLE_MAX = 256
-_EMBED_FIELD_VALUE_MAX = 1024
-
-# Internal pagination / preview caps.
-_WARNINGS_PAGE_SIZE = 20
-_POLICIES_PAGE_SIZE = 25
-_POLICY_DESC_PREVIEW = 100
+# Discord caps the embed *title* at 256 chars; we trim our policy titles
+# below that so the "Policy Proposal #N: …" prefix still fits.
 _POLICY_TITLE_MAX = 200
-_MAX_ELIGIBLE_MENTIONS = 25  # embed-field cap of 1024 chars caps practical mention count
-
-# Channel-name validity: lowercase, digits, underscore, hyphen only.
-_CHANNEL_NAME_INVALID_RE = re.compile(r"[^a-z0-9_-]+")
-
-
-def _sanitize_channel_name(part: str) -> str:
-    """Reduce a freeform string to chars Discord accepts in channel names."""
-    cleaned = _CHANNEL_NAME_INVALID_RE.sub("-", part.lower()).strip("-")
-    return cleaned or "user"
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -133,8 +128,8 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
                 extra={"policy_id": self.policy_id, "vote_text": vote_text_val},
             )
 
-        mod_role_ids = _get_mod_role_ids(ctx)
-        admin_role_ids = _get_admin_role_ids(ctx)
+        mod_role_ids = _get_mod_role_ids(ctx, guild.id)
+        admin_role_ids = _get_admin_role_ids(ctx, guild.id)
         all_role_ids = mod_role_ids | admin_role_ids
         eligible: set[int] = set()
         for m in guild.members:
@@ -146,24 +141,11 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
             if all_role_ids & {r.id for r in m.roles}:
                 eligible.add(m.id)
 
-        embed = discord.Embed(
-            title=f"Policy Vote: {interaction.channel.name}",  # type: ignore[union-attr]
-            color=CLR_POLICY,
+        embed = build_policy_vote_initial_embed(
+            channel_name=interaction.channel.name,  # type: ignore[union-attr]
+            vote_text=vote_text_val,
+            eligible_ids=sorted(eligible),
         )
-        embed.add_field(name="📜 Policy Text", value=vote_text_val, inline=False)
-        embed.add_field(name="Votes Cast", value=f"0/{len(eligible)}", inline=True)
-        embed.add_field(name="Status", value="🗳️ Voting", inline=True)
-        embed.add_field(name="✅ Yes", value="—", inline=False)
-        embed.add_field(name="❌ No", value="—", inline=False)
-        embed.add_field(name="➖ Abstain", value="—", inline=False)
-        # Cap mentions so the embed-field value stays under Discord's 1024-char
-        # limit. Show "+N more" when the eligible roster exceeds the cap.
-        eligible_list = sorted(eligible)
-        shown = eligible_list[:_MAX_ELIGIBLE_MENTIONS]
-        awaiting_value = ", ".join(f"<@{uid}>" for uid in shown) or "—"
-        if len(eligible_list) > _MAX_ELIGIBLE_MENTIONS:
-            awaiting_value += f" *+{len(eligible_list) - _MAX_ELIGIBLE_MENTIONS} more*"
-        embed.add_field(name="⏳ Awaiting", value=awaiting_value, inline=False)
 
         view = discord.ui.View(timeout=None)
         view.add_item(PolicyVoteYesButton(self.policy_id))
@@ -249,28 +231,23 @@ class _WarnFromMessageModal(discord.ui.Modal, title="Warn User — Message Conte
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-        audit_embed = discord.Embed(
-            title="⚠️ Warning Issued",
-            description=(
-                f"{target.mention} warned by {member.mention}\n"
-                + (f"**Reason:** {reason_text}\n" if reason_text else "")
-                + (f"**Notes:** {notes_text}\n" if notes_text else "")
-                + f"**Active warnings:** {count}\n"
-                + f"[Jump to source message]({self.source_message.jump_url})"
-            ),
-            color=CLR_WARNING,
+        audit_embed = build_warning_audit_embed(
+            target_mention=target.mention,
+            moderator_mention=member.mention,
+            active_count=count,
+            reason=reason_text,
+            notes=notes_text,
+            source_jump_url=self.source_message.jump_url,
         )
         await _post_audit(ctx, guild, audit_embed)
 
         with ctx.open_db() as conn:
             threshold = int(get_config_value(conn, "warning_threshold", "3"))
         if count >= threshold and (count - 1) < threshold:
-            admin_ids = _get_admin_role_ids(ctx)
-            pings = " ".join(f"<@&{rid}>" for rid in admin_ids) if admin_ids else ""
-            alert = discord.Embed(
-                title="🚨 Warning Threshold Reached",
-                description=f"{target.mention} has reached **{count}** active warnings.\n{pings}",
-                color=CLR_JAIL,
+            alert = build_warning_threshold_embed(
+                target_mention=target.mention,
+                active_count=count,
+                admin_role_ids=sorted(_get_admin_role_ids(ctx, guild.id)),
             )
             await _post_audit(ctx, guild, alert)
 
@@ -453,14 +430,7 @@ class JailCog(commands.Cog):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
 
-        embed = discord.Embed(
-            title="📩 Support Tickets",
-            description=(
-                "Need help from the mod team? Click the button below to open a private ticket.\n\n"
-                "A moderator will respond as soon as possible."
-            ),
-            color=CLR_TICKET,
-        )
+        embed = build_ticket_panel_embed()
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
         msg = await channel.send(embed=embed, view=view)
@@ -495,8 +465,8 @@ class JailCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         desc_text = description or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
-        name = f"ticket-{_sanitize_channel_name(user.name)[:16]}-{ts}"
-        mod_role_ids = _get_mod_role_ids(ctx)
+        name = f"ticket-{sanitize_channel_name(user.name)[:16]}-{ts}"
+        mod_role_ids = _get_mod_role_ids(ctx, guild.id)
 
         overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -545,21 +515,10 @@ class JailCog(commands.Cog):
                 extra={"ticket_id": ticket_id, "description": desc_text},
             )
 
-        embed = discord.Embed(
-            title=f"Ticket #{ticket_id}",
+        embed = build_ticket_open_embed(
+            ticket_id=ticket_id,
             description=desc_text,
-            color=CLR_TICKET,
-            timestamp=datetime.now(timezone.utc),
-        )
-        embed.add_field(name="Opened by", value=user.mention, inline=True)
-        embed.add_field(name="Status", value="🟢 Open", inline=True)
-        # Inform the user up-front that closing this ticket will archive its
-        # contents. Consent matters — they should know before sharing details.
-        embed.set_footer(
-            text=(
-                "When this ticket is closed, the conversation is archived to "
-                "the moderator transcript channel."
-            )
+            opener_mention=user.mention,
         )
         view = discord.ui.View(timeout=None)
         view.add_item(TicketCloseButton(ticket_id))
@@ -833,7 +792,7 @@ class JailCog(commands.Cog):
         if not isinstance(channel, discord.TextChannel):
             return
 
-        admin_ids = _get_admin_role_ids(ctx)
+        admin_ids = _get_admin_role_ids(ctx, guild.id)
         pings: list[str] = []
         for rid in admin_ids:
             role = guild.get_role(rid)
@@ -910,11 +869,11 @@ class JailCog(commands.Cog):
 
         desc_text = description or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
-        safe_title = _sanitize_channel_name(title[:20])
+        safe_title = sanitize_channel_name(title[:20])
         name = f"policy-{safe_title}-{ts}"
 
-        mod_role_ids = _get_mod_role_ids(ctx)
-        admin_role_ids = _get_admin_role_ids(ctx)
+        mod_role_ids = _get_mod_role_ids(ctx, guild.id)
+        admin_role_ids = _get_admin_role_ids(ctx, guild.id)
         all_role_ids = mod_role_ids | admin_role_ids
 
         overwrites: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {
@@ -959,15 +918,12 @@ class JailCog(commands.Cog):
                 extra={"policy_id": policy_id, "title": title},
             )
 
-        embed = discord.Embed(
-            title=f"📋 Policy Proposal #{policy_id}: {title}",
+        embed = build_policy_proposal_embed(
+            policy_id=policy_id,
+            title=title,
             description=desc_text,
-            color=CLR_POLICY,
-            timestamp=datetime.now(timezone.utc),
+            proposer_mention=user.mention,
         )
-        embed.add_field(name="Proposed by", value=user.mention, inline=True)
-        embed.add_field(name="Status", value="💬 Open for Discussion", inline=True)
-        embed.set_footer(text="Use /policy vote to start the formal vote when ready.")
         await channel.send(embed=embed)
 
         role_mentions = []
@@ -1068,25 +1024,17 @@ class JailCog(commands.Cog):
 
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
-            close_embed = discord.Embed(
-                title="📋 Policy Proposal Closed",
-                description=f"**{policy['title']}** was closed by {member.mention}.",
-                color=CLR_INFO,
+            close_embed = build_policy_close_embed(
+                title=policy["title"],
+                moderator_mention=member.mention,
+                reason=reason_text,
             )
-            if reason_text:
-                close_embed.add_field(name="Reason", value=reason_text, inline=False)
             await interaction.response.send_message(embed=close_embed)
 
             with ctx.open_db() as conn:
                 adopted_policies = get_policies_by_ticket_id(conn, policy_id)
             if adopted_policies:
-                adopted_embed = discord.Embed(
-                    title="Adopted Policies from This Proposal", color=CLR_SUCCESS
-                )
-                for p in adopted_policies:
-                    adopted_embed.add_field(
-                        name=p["title"], value=p["description"][:1024], inline=False
-                    )
+                adopted_embed = build_adopted_policies_embed(adopted_policies)
                 await channel.send(embed=adopted_embed)
 
             creator = guild.get_member(policy["creator_id"]) or member
@@ -1157,21 +1105,7 @@ class JailCog(commands.Cog):
             )
             return
 
-        embed = discord.Embed(title="📋 Passed Policies", color=CLR_POLICY)
-        for p in policies_list[:_POLICIES_PAGE_SIZE]:
-            passed_ts = f"<t:{int(p['passed_at'])}:d>"
-            preview = p["description"][:_POLICY_DESC_PREVIEW]
-            ellipsis = "…" if len(p["description"]) > _POLICY_DESC_PREVIEW else ""
-            embed.add_field(
-                name=f"#{p['id']} — {p['title']}",
-                value=f"{preview}{ellipsis}\nPassed: {passed_ts}",
-                inline=False,
-            )
-        if len(policies_list) > _POLICIES_PAGE_SIZE:
-            embed.set_footer(
-                text=f"Showing {_POLICIES_PAGE_SIZE} of {len(policies_list)} policies."
-            )
-
+        embed = build_policy_list_embed(policies_list)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /pull ─────────────────────────────────────────────────────────────
@@ -1352,12 +1286,11 @@ class JailCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-        audit_embed = discord.Embed(
-            title="⚠️ Warning Issued",
-            description=f"{user.mention} warned by {member.mention}\n"
-            + (f"**Reason:** {reason_text}\n" if reason_text else "")
-            + f"**Active warnings:** {count}",
-            color=CLR_WARNING,
+        audit_embed = build_warning_audit_embed(
+            target_mention=user.mention,
+            moderator_mention=member.mention,
+            active_count=count,
+            reason=reason_text,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -1367,12 +1300,10 @@ class JailCog(commands.Cog):
         # the line — i.e. count was below threshold before, and is at or
         # above it now. Equality-only comparison would miss bulk additions.
         if count >= threshold and (count - 1) < threshold:
-            admin_ids = _get_admin_role_ids(ctx)
-            pings = " ".join(f"<@&{rid}>" for rid in admin_ids) if admin_ids else ""
-            alert = discord.Embed(
-                title="🚨 Warning Threshold Reached",
-                description=f"{user.mention} has reached **{count}** active warnings.\n{pings}",
-                color=CLR_JAIL,
+            alert = build_warning_threshold_embed(
+                target_mention=user.mention,
+                active_count=count,
+                admin_role_ids=sorted(_get_admin_role_ids(ctx, guild.id)),
             )
             await _post_audit(ctx, guild, alert)
 
@@ -1405,31 +1336,7 @@ class JailCog(commands.Cog):
             )
             return
 
-        lines: list[str] = []
-        for w in warns:
-            status = "~~Revoked~~" if w["revoked"] else "**Active**"
-            dt = _ts_str(w["created_at"])
-            line = f"#{w['id']} — {status} — {dt} — by <@{w['moderator_id']}>"
-            if w["reason"]:
-                line += f"\n  Reason: {w['reason']}"
-            if w["revoked"] and w["revoke_reason"]:
-                line += f"\n  Revoke reason: {w['revoke_reason']}"
-            lines.append(line)
-
-        shown_lines = lines[:_WARNINGS_PAGE_SIZE]
-        description = "\n\n".join(shown_lines)
-        if len(lines) > _WARNINGS_PAGE_SIZE:
-            description += (
-                f"\n\n*…and {len(lines) - _WARNINGS_PAGE_SIZE} more (older). "
-                "Inspect via the dashboard for the full list.*"
-            )
-        embed = discord.Embed(
-            title=f"Warnings for {user}",
-            description=description,
-            color=CLR_WARNING,
-        )
-        active = sum(1 for w in warns if not w["revoked"])
-        embed.set_footer(text=f"{active} active / {len(warns)} total")
+        embed = build_warnings_list_embed(str(user), warns, ts_formatter=_ts_str)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── /revokewarn ───────────────────────────────────────────────────────
@@ -1510,14 +1417,12 @@ class JailCog(commands.Cog):
             allowed_mentions=discord.AllowedMentions.none(),
         )
 
-        audit_embed = discord.Embed(
-            title="✅ Warning Revoked",
-            description=(
-                f"#{warning_id} for {user.mention} revoked by {member.mention}\n"
-                + (f"**Reason:** {reason_text}\n" if reason_text else "")
-                + f"**Active warnings:** {count}"
-            ),
-            color=CLR_SUCCESS,
+        audit_embed = build_warning_revoke_audit_embed(
+            warning_id=warning_id,
+            target_mention=user.mention,
+            moderator_mention=member.mention,
+            active_count=count,
+            reason=reason_text,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -1580,7 +1485,8 @@ class JailCog(commands.Cog):
                 ).fetchall()
 
                 labels, msg_counts, member_counts = query_message_activity(
-                    conn, guild.id, "day", user_id=user.id, utc_offset_hours=ctx.tz_offset_hours
+                    conn, guild.id, "day", user_id=user.id,
+                    utc_offset_hours=get_tz_offset_hours(conn, guild.id),
                 )
 
             return (
@@ -1605,79 +1511,23 @@ class JailCog(commands.Cog):
             show_members=False,
         )
 
-        embed = discord.Embed(title=f"Mod Info — {user}", color=CLR_INFO)
-        if user.display_avatar:
-            embed.set_thumbnail(url=user.display_avatar.url)
-
-        # ── Account ──────────────────────────────────────────────────────────
-        created_ts = int(user.created_at.timestamp())
-        age_days = (datetime.now(timezone.utc) - user.created_at).days
-        joined_ts = int(user.joined_at.timestamp()) if user.joined_at else None
-        acct_lines = f"Created: <t:{created_ts}:D> ({age_days}d ago)"
-        if joined_ts:
-            acct_lines += f"\nJoined: <t:{joined_ts}:D>"
-        embed.add_field(name="👤 Account", value=acct_lines, inline=True)
-
-        # ── XP / Level ───────────────────────────────────────────────────────
-        if xp_row:
-            xp_text = f"Level **{xp_row['level']}** · {xp_row['total_xp']:,.0f} XP"
-        else:
-            xp_text = "No XP recorded"
-        embed.add_field(name="⭐ Level", value=xp_text, inline=True)
-
-        # ── Watch list ───────────────────────────────────────────────────────
-        if watcher_count:
-            watch_text = f"👁 **{watcher_count} mod{'s' if watcher_count != 1 else ''} watching**"
-        else:
-            watch_text = "Not watched"
-        embed.add_field(name="🔍 Watch List", value=watch_text, inline=True)
-
-        # ── Jail ─────────────────────────────────────────────────────────────
-        if active_jail:
-            jail_text = f"**Currently jailed** since {_ts_str(active_jail['created_at'])}"
-            if active_jail["expires_at"]:
-                jail_text += f"\nExpires: {_ts_str(active_jail['expires_at'])}"
-            if active_jail["reason"]:
-                jail_text += f"\nReason: {active_jail['reason']}"
-        else:
-            jail_text = "Not currently jailed"
-        if len(jail_hist) > 1 or (len(jail_hist) == 1 and not active_jail):
-            past = [j for j in jail_hist if j["status"] != "active"]
-            jail_text += f"\n**Past jails:** {len(past)}"
-            if past:
-                recent = past[0]
-                jail_text += f"\n  Most recent: {_ts_str(recent['created_at'])} — {recent.get('release_reason', '')}"
-        embed.add_field(name="🔒 Jail", value=jail_text, inline=False)
-
-        # ── Warnings ─────────────────────────────────────────────────────────
-        active_warns = [w for w in warns if not w["revoked"]]
-        warn_text = f"**Active:** {len(active_warns)} / **Total:** {len(warns)}"
-        for w in active_warns[:3]:
-            warn_text += f"\n  #{w['id']} — {_ts_str(w['created_at'])} — {w['reason'] or 'no reason'}"
-        embed.add_field(name="⚠️ Warnings", value=warn_text, inline=False)
-
-        # ── Tickets ──────────────────────────────────────────────────────────
-        open_t = sum(1 for t in tickets if t["status"] == "open")
-        closed_t = sum(1 for t in tickets if t["status"] in ("closed", "deleted"))
-        ticket_text = f"**Open:** {open_t} / **Closed:** {closed_t}"
-        if tickets:
-            recent_ticket = tickets[0]
-            ticket_text += f"\n  Most recent: #{recent_ticket['id']} — {recent_ticket['status']} — {_ts_str(recent_ticket['created_at'])}"
-        embed.add_field(name="📩 Tickets", value=ticket_text, inline=False)
-
-        # ── Activity ─────────────────────────────────────────────────────────
-        total_30d = sum(msg_counts)
-        last_seen = _ts_str(last_ts) if last_ts else "Never"
-        ch_lines = "\n".join(
-            f"<#{row['channel_id']}> — {row['cnt']} msgs" for row in top_channels
-        ) or "No activity"
-        embed.add_field(
-            name=f"💬 Activity — {total_30d} msgs (30d)",
-            value=f"Last seen: {last_seen}\n{ch_lines}",
-            inline=False,
+        embed = build_modinfo_embed(
+            user_label=str(user),
+            user_avatar_url=user.display_avatar.url if user.display_avatar else None,
+            account_created=user.created_at,
+            account_age_days=(datetime.now(timezone.utc) - user.created_at).days,
+            joined_at=user.joined_at,
+            xp_row=xp_row,
+            watcher_count=watcher_count,
+            active_jail=active_jail,
+            jail_history=jail_hist,
+            warns=warns,
+            tickets=tickets,
+            last_seen_ts=last_ts,
+            top_channels=top_channels,
+            msgs_30d_total=sum(msg_counts),
+            ts_formatter=_ts_str,
         )
-
-        embed.set_image(url="attachment://modinfo_activity.png")
 
         await interaction.followup.send(
             embed=embed,

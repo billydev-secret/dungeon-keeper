@@ -37,15 +37,17 @@ async def get_ai_config(
     def _q():
         from bot_modules.core.db_utils import get_config_value
         with ctx.open_db() as conn:
-            mod_model = get_mod_model(conn)
-            wellness_model = get_wellness_model(conn)
+            mod_model = get_mod_model(conn, guild_id)
+            wellness_model = get_wellness_model(conn, guild_id)
             model_path = get_config_value(conn, "llm_model_path", "")
             hf_repo    = get_config_value(conn, "llm_hf_repo", "")
             hf_file    = get_config_value(conn, "llm_hf_file", "")
             prompts = []
             for p in list_prompts():
-                text, is_override = get_prompt_with_source(conn, p.key)
-                model, model_is_override = get_command_model_with_source(conn, p.key)
+                text, is_override = get_prompt_with_source(conn, p.key, guild_id)
+                model, model_is_override = get_command_model_with_source(
+                    conn, p.key, guild_id
+                )
                 prompts.append({
                     "key": p.key,
                     "label": p.label,
@@ -203,8 +205,8 @@ async def test_ai_prompt(
     ctx = get_ctx(request)
 
     with ctx.open_db() as conn:
-        system = get_prompt(conn, key)
-        model = get_command_model(conn, key)
+        system = get_prompt(conn, key, guild_id)
+        model = get_command_model(conn, key, guild_id)
 
     result = await ollama_client.chat(
         model=model,
@@ -259,8 +261,8 @@ async def messages_ai_query(
 
     def _q():
         with ctx.open_db() as conn:
-            system = get_prompt(conn, "ai_prompt_query_user")
-            model = get_command_model(conn, "ai_prompt_query_user")
+            system = get_prompt(conn, "ai_prompt_query_user", guild_id)
+            model = get_command_model(conn, "ai_prompt_query_user", guild_id)
 
             where = ["guild_id = ?", "ts >= ?", "content IS NOT NULL"]
             params: list = [guild_id, cutoff_ts]

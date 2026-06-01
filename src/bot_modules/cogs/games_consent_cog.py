@@ -3,7 +3,19 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, SUCCESS_COLOR, ERROR_COLOR
+
+from bot_modules.games_consent.logic import (
+    CONSENT_PROMPT_BODY,
+    CONSENT_PROMPT_COLOR,
+    CONSENT_PROMPT_FOOTER,
+    CONSENT_PROMPT_TITLE,
+    STATUS_FOOTER,
+    STATUS_TITLE,
+    format_status_description,
+    interpret_consent_status,
+    opt_in_summary,
+    opt_out_summary,
+)
 
 log = logging.getLogger(__name__)
 
@@ -24,11 +36,8 @@ class ConsentView(discord.ui.View):
             """,
             (interaction.user.id,),
         )
-        embed = discord.Embed(
-            title="✅ Preference Updated",
-            description="You've **opted in** — recorded as happy to participate fully.",
-            color=SUCCESS_COLOR,
-        )
+        title, body, color = opt_in_summary()
+        embed = discord.Embed(title=title, description=body, color=color)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="❌ Opt Out", style=discord.ButtonStyle.danger)
@@ -42,11 +51,8 @@ class ConsentView(discord.ui.View):
             """,
             (interaction.user.id,),
         )
-        embed = discord.Embed(
-            title="❌ Preference Updated",
-            description="You've **opted out** — recorded as preferring not to be included.",
-            color=ERROR_COLOR,
-        )
+        title, body, color = opt_out_summary()
+        embed = discord.Embed(title=title, description=body, color=color)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -62,16 +68,11 @@ class ConsentCog(commands.Cog):
     async def consent(self, interaction: discord.Interaction):
         log.info("%s used /consent in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         embed = discord.Embed(
-            title="🌸 Consent Settings",
-            description=(
-                "Record your participation preference for game nights.\n\n"
-                "**Opt in** — happy to be included, mentioned, and participate fully.\n"
-                "**Opt out** — prefer to observe or participate on your own terms.\n\n"
-                "You can change this at any time."
-            ),
-            color=GOLDEN_MEADOW_COLOR,
+            title=CONSENT_PROMPT_TITLE,
+            description=CONSENT_PROMPT_BODY,
+            color=CONSENT_PROMPT_COLOR,
         )
-        embed.set_footer(text="Golden Meadow Games")
+        embed.set_footer(text=CONSENT_PROMPT_FOOTER)
         await interaction.response.send_message(
             embed=embed, view=ConsentView(self.db), ephemeral=True
         )
@@ -86,20 +87,13 @@ class ConsentCog(commands.Cog):
             "SELECT tod_consent, updated_at FROM games_consent WHERE user_id = ?",
             (interaction.user.id,),
         )
-        if row and row[0]:
-            status = "✅ **Opted In**"
-            color = SUCCESS_COLOR
-        else:
-            status = "❌ **Opted Out** (or no record found)"
-            color = ERROR_COLOR
-
-        updated = row[1] if row else "Never"
+        label, color, updated = interpret_consent_status(row)
         embed = discord.Embed(
-            title="Consent Status",
-            description=f"Your current status: {status}\nLast updated: `{updated}`",
+            title=STATUS_TITLE,
+            description=format_status_description(label, updated),
             color=color,
         )
-        embed.set_footer(text="Use /consent to change your preference.")
+        embed.set_footer(text=STATUS_FOOTER)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

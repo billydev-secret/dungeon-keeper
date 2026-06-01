@@ -54,22 +54,22 @@ def _cfg(*, log_channel_id: int = LOG) -> WhisperConfig:
 
 
 def test_format_time_ago_seconds():
-    from bot_modules.cogs.whisper_cog import _format_time_ago
+    from bot_modules.whisper.logic import format_time_ago as _format_time_ago
     assert _format_time_ago(0, now=30) == "30s ago"
 
 
 def test_format_time_ago_minutes():
-    from bot_modules.cogs.whisper_cog import _format_time_ago
+    from bot_modules.whisper.logic import format_time_ago as _format_time_ago
     assert _format_time_ago(0, now=125) == "2m ago"
 
 
 def test_format_time_ago_hours():
-    from bot_modules.cogs.whisper_cog import _format_time_ago
+    from bot_modules.whisper.logic import format_time_ago as _format_time_ago
     assert _format_time_ago(0, now=3600 * 4) == "4h ago"
 
 
 def test_format_time_ago_days_plural_singular():
-    from bot_modules.cogs.whisper_cog import _format_time_ago
+    from bot_modules.whisper.logic import format_time_ago as _format_time_ago
     assert _format_time_ago(0, now=86400) == "1 day ago"
     assert _format_time_ago(0, now=86400 * 7) == "7 days ago"
 

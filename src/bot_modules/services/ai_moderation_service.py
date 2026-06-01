@@ -339,8 +339,8 @@ async def ai_review_user(
     from bot_modules.services.ai_config import get_command_model, get_prompt
 
     if model is None:
-        model = get_command_model(conn, "ai_prompt_review")
-    system = get_prompt(conn, "ai_prompt_review")
+        model = get_command_model(conn, "ai_prompt_review", guild.id)
+    system = get_prompt(conn, "ai_prompt_review", guild.id)
 
     lines, user_msg_count, channels_checked = _fetch_user_context_from_db(
         conn, guild, user, lookback_days=days
@@ -381,8 +381,8 @@ async def ai_scan_channel(
     from bot_modules.services.ai_config import get_command_model, get_prompt
 
     if model is None:
-        model = get_command_model(conn, "ai_prompt_scan")
-    system = get_prompt(conn, "ai_prompt_scan")
+        model = get_command_model(conn, "ai_prompt_scan", guild.id)
+    system = get_prompt(conn, "ai_prompt_scan", guild.id)
 
     rows = conn.execute(
         "SELECT message_id, author_id, content, reply_to_id, ts "
@@ -443,14 +443,15 @@ async def ai_check_watched_message(
     """
     from bot_modules.services.ai_config import DEFAULT_MOD_MODEL, get_command_model_from_path, get_prompt_from_path
 
+    guild_id = message.guild.id if message.guild else 0
     if model is None:
         model = (
-            get_command_model_from_path(db_path, "ai_prompt_watch_check")
+            get_command_model_from_path(db_path, "ai_prompt_watch_check", guild_id)
             if db_path
             else DEFAULT_MOD_MODEL
         )
     system = (
-        get_prompt_from_path(db_path, "ai_prompt_watch_check")
+        get_prompt_from_path(db_path, "ai_prompt_watch_check", guild_id)
         if db_path
         else _WATCH_CHECK_SYSTEM
     )
@@ -486,8 +487,8 @@ async def ai_query_channel(
     from bot_modules.services.ai_config import get_command_model, get_prompt
 
     if model is None:
-        model = get_command_model(conn, "ai_prompt_query_channel")
-    system = get_prompt(conn, "ai_prompt_query_channel")
+        model = get_command_model(conn, "ai_prompt_query_channel", guild.id)
+    system = get_prompt(conn, "ai_prompt_query_channel", guild.id)
 
     cutoff_ts = int(
         (datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp()
@@ -554,8 +555,8 @@ async def ai_query_user(
     from bot_modules.services.ai_config import get_command_model, get_prompt
 
     if model is None:
-        model = get_command_model(conn, "ai_prompt_query_user")
-    system = get_prompt(conn, "ai_prompt_query_user")
+        model = get_command_model(conn, "ai_prompt_query_user", guild.id)
+    system = get_prompt(conn, "ai_prompt_query_user", guild.id)
 
     lines, user_msg_count, _ = _fetch_user_context_from_db(
         conn, guild, user, lookback_days=days

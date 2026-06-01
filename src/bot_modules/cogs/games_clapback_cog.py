@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import random
 import re
 
 import discord
@@ -10,10 +9,6 @@ from discord import app_commands
 from bot_modules.games.constants import (
     GAME_ICONS,
     HOW_TO_PLAY,
-    CLAPBACK_COLOR,
-    CLAPBACK_VOTE_COLOR,
-    CLAPBACK_WIN_COLOR,
-    CLAPBACK_TIE_COLOR,
 )
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
@@ -30,143 +25,28 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games.utils.question_source import get_clapback_prompt, has_clapback_prompts
 from bot_modules.games.utils.ai_client import generate_text
+from bot_modules.games_clapback.logic import (
+    AI_SYSTEM_PROMPT,
+    AI_USER_PROMPT,
+    MAX_PLAYERS,
+    MIN_PLAYERS,
+    calculate_matchup_score,
+    clamp_config_values,
+    create_matchups,
+    shuffled_replay_config,
+)
+from bot_modules.games_clapback.embeds import (
+    build_lobby_embed,
+    build_recap_embed,
+    build_reveal_embed,
+    build_scoreboard_embed,
+    build_submit_embed,
+    build_vote_embed,
+)
 
 log = logging.getLogger(__name__)
 
 ICON = GAME_ICONS["clapback"]
-MIN_PLAYERS = 3
-MAX_PLAYERS = 16
-
-AI_SYSTEM_PROMPT = (
-    "You are generating prompts for a Clapback-style comedy party game in the "
-    "Golden Meadow Discord community. The prompt should be something players "
-    "can write a short, funny answer to."
-)
-AI_USER_PROMPT = (
-    "Generate a single comedy prompt. Good prompts are specific, unexpected, and "
-    "leave room for creative answers. Examples: 'A terrible name for a pet store', "
-    "'Something you'd never want to hear from your dentist', 'The worst superpower "
-    "to have on a first date'. Avoid prompts that are too broad ('something funny') "
-    "or too narrow (only one good answer). Return only the prompt text, no quotes, "
-    "no numbering."
-)
-
-
-# ── Matchup helpers ──────────────────────────────────────────────────────────
-
-
-def create_matchups(
-    answers: dict[str, str], last_bye_id: int | None = None,
-) -> tuple[list[dict], int | None]:
-    """Pair submitted answers for head-to-head voting.
-
-    Returns (matchups, bye_player_id).
-    Each answer appears in exactly one matchup.  If the count is odd the
-    player who had a bye least recently gets the bye.  Duplicate answers
-    are never paired against each other.
-    """
-    player_ids = list(answers.keys())
-    random.shuffle(player_ids)
-
-    bye_player: int | None = None
-
-    # Small games (3 players): round-robin every pair so each player
-    # competes twice and the round has real action.
-    if len(player_ids) == 3:
-        from itertools import combinations
-        pairs = []
-        for a, b in combinations(player_ids, 2):
-            pairs.append({"pair": [a, b], "votes": {}, "winner": None})
-        random.shuffle(pairs)
-        return pairs, None
-
-    if len(player_ids) % 2 == 1:
-        # Pick bye — prefer someone who hasn't had one recently
-        if last_bye_id and last_bye_id in player_ids:
-            # last_bye got it recently, pick anyone else
-            candidates = [p for p in player_ids if p != last_bye_id]
-            bye_player = candidates[-1]
-        else:
-            bye_player = player_ids[-1]
-        player_ids.remove(bye_player)
-
-    # Check for duplicate answers and avoid pairing them
-    answer_groups: dict[str, list[int]] = {}
-    for pid in player_ids:
-        norm = answers[str(pid)].strip().lower()
-        answer_groups.setdefault(norm, []).append(pid)
-
-    # Try to avoid same-answer pairings via simple retry
-    best_matchups = None
-    for _ in range(10):
-        random.shuffle(player_ids)
-        pairs = []
-        bad = False
-        for i in range(0, len(player_ids), 2):
-            a, b = player_ids[i], player_ids[i + 1]
-            if answers[str(a)].strip().lower() == answers[str(b)].strip().lower():
-                bad = True
-                break
-            pairs.append({
-                "pair": [a, b],
-                "votes": {},
-                "winner": None,
-            })
-        if not bad:
-            best_matchups = pairs
-            break
-        if best_matchups is None:
-            best_matchups = pairs
-    # If all attempts had duplicates (or produced no pairs), force-pair anyway
-    if not best_matchups and len(player_ids) >= 2:
-        best_matchups = [
-            {"pair": [player_ids[i], player_ids[i + 1]], "votes": {}, "winner": None}
-            for i in range(0, len(player_ids), 2)
-        ]
-
-    return best_matchups, bye_player
-
-
-def calculate_matchup_score(
-    votes: dict, player_a_id: int, player_b_id: int,
-) -> dict:
-    """Calculate scores for a single matchup."""
-    total_votes = len(votes)
-
-    if total_votes == 0:
-        return {
-            "winner": None,
-            "scores": {player_a_id: 50, player_b_id: 50},
-            "clapback": False,
-            "vote_counts": {player_a_id: 0, player_b_id: 0},
-        }
-
-    votes_for_a = sum(1 for v in votes.values() if str(v) == str(player_a_id))
-    votes_for_b = total_votes - votes_for_a
-
-    pct_a = round((votes_for_a / total_votes) * 100)
-    pct_b = 100 - pct_a
-
-    clapback = (votes_for_a == total_votes or votes_for_b == total_votes) and total_votes >= 2
-    bonus = 25 if clapback else 0
-
-    if votes_for_a > votes_for_b:
-        winner = player_a_id
-    elif votes_for_b > votes_for_a:
-        winner = player_b_id
-    else:
-        winner = None
-
-    scores = {
-        player_a_id: pct_a + (bonus if votes_for_a == total_votes else 0),
-        player_b_id: pct_b + (bonus if votes_for_b == total_votes else 0),
-    }
-    return {
-        "winner": winner,
-        "scores": scores,
-        "clapback": clapback,
-        "vote_counts": {player_a_id: votes_for_a, player_b_id: votes_for_b},
-    }
 
 
 # ── Prompt fetching ──────────────────────────────────────────────────────────
@@ -407,31 +287,15 @@ class ClapbackJoinView(discord.ui.View):
         players = payload.get("players", [])
         guild = interaction.guild
 
-        if len(players) <= 10:
-            names = [resolve_name(guild, uid) for uid in players]
-            player_str = ", ".join(names) if names else "(nobody yet)"
-        else:
-            names = [resolve_name(guild, uid) for uid in players[:10]]
-            player_str = ", ".join(names) + f" (+{len(players) - 10} more)"
-
         host_member = guild.get_member(self.host_id) if guild else None
         host_name = host_member.display_name if host_member else "Host"
 
-        embed = discord.Embed(
-            title=f"{ICON} CLAPBACK",
-            description=(
-                f"Hosted by: **{host_name}** | {self.config['rounds']} rounds\n\n"
-                "Join the battle of wits! Write the funniest answer\n"
-                "to each prompt, then vote head-to-head."
-            ),
-            color=CLAPBACK_COLOR,
+        embed = build_lobby_embed(
+            host_name=host_name,
+            config=self.config,
+            players=players,
+            name_resolver=lambda uid: resolve_name(guild, uid),
         )
-        embed.add_field(
-            name=f"Players ({len(players)})",
-            value=player_str,
-            inline=False,
-        )
-        embed.set_footer(text=f"{ICON} Clapback")
         await interaction.response.edit_message(embed=embed, view=self)
 
 
@@ -642,10 +506,7 @@ class ClapbackRecapView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(view=self)
 
-        shuffled = dict(self.config)
-        shuffled["rounds"] = random.randint(3, 8)
-        shuffled["timer"] = random.choice([60, 90, 120, 150, 180])
-        shuffled["vote_timer"] = random.choice([30, 40, 50, 60])
+        shuffled = shuffled_replay_config(self.config)
         await interaction.channel.send(
             f"🔀 **Shuffled settings:** {shuffled['rounds']} rounds, "
             f"{shuffled['timer']}s submit, {shuffled['vote_timer']}s vote"
@@ -712,9 +573,7 @@ class ClapbackCog(commands.Cog):
             return
 
         # Clamp values
-        rounds = min(max(rounds, 1), 15)
-        timer = min(max(timer, 15), 180)
-        vote_timer = min(max(vote_timer, 10), 60)
+        rounds, timer, vote_timer = clamp_config_values(rounds, timer, vote_timer)
 
         # Bank check
         effective_source = source
@@ -762,17 +621,13 @@ class ClapbackCog(commands.Cog):
         )
 
         host_name = interaction.user.display_name
-        embed = discord.Embed(
-            title=f"{ICON} CLAPBACK",
-            description=(
-                f"Hosted by: **{host_name}** | {config['rounds']} rounds\n\n"
-                "Join the battle of wits! Write the funniest answer\n"
-                "to each prompt, then vote head-to-head."
-            ),
-            color=CLAPBACK_COLOR,
+        guild = interaction.guild
+        embed = build_lobby_embed(
+            host_name=host_name,
+            config=config,
+            players=[],
+            name_resolver=lambda uid: resolve_name(guild, uid),
         )
-        embed.add_field(name="Players (0)", value="(nobody yet)", inline=False)
-        embed.set_footer(text=f"{ICON} Clapback")
 
         view = ClapbackJoinView(game_id, interaction.user.id, self.db, self.bot, self, config)
         self.bot.active_views[game_id] = view
@@ -898,14 +753,14 @@ class ClapbackCog(commands.Cog):
         timer_secs = config["timer"]
         deadline = now_plus(timer_secs)
 
-        embed = discord.Embed(
-            title=f"{ICON} CLAPBACK — Round {round_num}/{config['rounds']}",
-            description=f'**"{prompt}"**',
-            color=CLAPBACK_COLOR,
+        embed = build_submit_embed(
+            prompt=prompt,
+            round_num=round_num,
+            total_rounds=config["rounds"],
+            deadline_str=format_deadline(deadline),
+            answers_in=0,
+            total_players=len(players),
         )
-        embed.add_field(name="Timer", value=format_deadline(deadline), inline=True)
-        embed.add_field(name="Answers In", value=f"0/{len(players)}", inline=True)
-        embed.set_footer(text=f"{ICON} Clapback")
 
         view = ClapbackSubmitView(game_id, host_id, round_num, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
@@ -977,18 +832,15 @@ class ClapbackCog(commands.Cog):
         vote_timer = config["vote_timer"]
         deadline = now_plus(vote_timer)
 
-        embed = discord.Embed(
-            title=f"{ICON} HEAD TO HEAD — Round {round_num}, Matchup {matchup_index + 1}/{total_matchups}",
-            description=(
-                f"🅰️ *\"{discord.utils.escape_markdown(answer_a)}\"*\n\n"
-                f"          ⚔️ VS ⚔️\n\n"
-                f"🅱️ *\"{discord.utils.escape_markdown(answer_b)}\"*"
-            ),
-            color=CLAPBACK_VOTE_COLOR,
+        embed = build_vote_embed(
+            answer_a=answer_a,
+            answer_b=answer_b,
+            round_num=round_num,
+            matchup_index=matchup_index,
+            total_matchups=total_matchups,
+            deadline_str=format_deadline(deadline),
+            vote_count=0,
         )
-        embed.add_field(name="Timer", value=format_deadline(deadline), inline=True)
-        embed.add_field(name="Votes", value="0", inline=True)
-        embed.set_footer(text=f"{ICON} Clapback")
 
         view = ClapbackVoteView(
             game_id, host_id, matchup_index,
@@ -1055,81 +907,14 @@ class ClapbackCog(commands.Cog):
 
         # Build reveal embed
         guild = channel.guild if hasattr(channel, "guild") else None
-        vc = result["vote_counts"]
-        total_v = vc[player_a] + vc[player_b]
-
-        if result["clapback"]:
-            winner_id = result["winner"]
-            loser_id = player_b if winner_id == player_a else player_a
-            w_answer = answers.get(str(winner_id), "???")
-            l_answer = answers.get(str(loser_id), "???")
-            w_name = "???" if anonymous else resolve_name(guild, winner_id)
-            l_name = "???" if anonymous else resolve_name(guild, loser_id)
-            w_pts = result["scores"][winner_id]
-            l_pts = result["scores"][loser_id]
-
-            reveal = discord.Embed(
-                title="⚡ C L A P B A C K ⚡",
-                color=CLAPBACK_WIN_COLOR,
-            )
-            reveal.add_field(
-                name="🏆 Winner",
-                value=f'*"{discord.utils.escape_markdown(w_answer)}"* — {vc[winner_id]}/{total_v} votes (100%)\nby **{w_name}** (+{w_pts} pts!)',
-                inline=False,
-            )
-            reveal.add_field(
-                name="💀 Defeated",
-                value=f'*"{discord.utils.escape_markdown(l_answer)}"* — 0 votes (0%)\nby **{l_name}** (+{l_pts} pts)',
-                inline=False,
-            )
-            reveal.add_field(name="", value=f"**{w_name}** got a CLAPBACK! 🎉", inline=False)
-
-        elif result["winner"] is None:
-            # Tie
-            a_name = "???" if anonymous else resolve_name(guild, player_a)
-            b_name = "???" if anonymous else resolve_name(guild, player_b)
-            reveal = discord.Embed(
-                title=f"{ICON} MATCHUP RESULT — TIE!",
-                color=CLAPBACK_TIE_COLOR,
-            )
-            reveal.add_field(
-                name="🤝",
-                value=(
-                    f'*"{discord.utils.escape_markdown(answer_a)}"* — {vc[player_a]} votes (50%)\n'
-                    f'by **{a_name}** (+50 pts)\n\n'
-                    f'*"{discord.utils.escape_markdown(answer_b)}"* — {vc[player_b]} votes (50%)\n'
-                    f'by **{b_name}** (+50 pts)'
-                ),
-                inline=False,
-            )
-        else:
-            winner_id = result["winner"]
-            loser_id = player_b if winner_id == player_a else player_a
-            w_answer = answers.get(str(winner_id), "???")
-            l_answer = answers.get(str(loser_id), "???")
-            w_name = "???" if anonymous else resolve_name(guild, winner_id)
-            l_name = "???" if anonymous else resolve_name(guild, loser_id)
-            w_pts = result["scores"][winner_id]
-            l_pts = result["scores"][loser_id]
-            w_pct = round((vc[winner_id] / total_v) * 100) if total_v else 0
-            l_pct = 100 - w_pct
-
-            reveal = discord.Embed(
-                title=f"{ICON} MATCHUP RESULT",
-                color=CLAPBACK_WIN_COLOR,
-            )
-            reveal.add_field(
-                name="🏆 Winner",
-                value=f'*"{discord.utils.escape_markdown(w_answer)}"* — {vc[winner_id]} votes ({w_pct}%)\nby **{w_name}** (+{w_pts} pts)',
-                inline=False,
-            )
-            reveal.add_field(
-                name="💀",
-                value=f'*"{discord.utils.escape_markdown(l_answer)}"* — {vc[loser_id]} votes ({l_pct}%)\nby **{l_name}** (+{l_pts} pts)',
-                inline=False,
-            )
-
-        reveal.set_footer(text=f"{ICON} Clapback")
+        reveal = build_reveal_embed(
+            result=result,
+            answers=answers,
+            player_a=player_a,
+            player_b=player_b,
+            anonymous=anonymous,
+            name_resolver=lambda uid: resolve_name(guild, uid),
+        )
 
         # Edit message with reveal (buttons disabled)
         for item in view.children:
@@ -1142,6 +927,7 @@ class ClapbackCog(commands.Cog):
         await asyncio.sleep(4)  # Let players read the reveal
 
         # Build result record for round history
+        vc = result["vote_counts"]
         return {
             "player_a": player_a,
             "answer_a": answer_a,
@@ -1157,7 +943,7 @@ class ClapbackCog(commands.Cog):
     async def _round_summary(
         self, game_id, channel, payload, round_num, total_rounds, host_id, bye_player,
     ):
-        embed = await self._build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=False)
+        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=False)
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
         msg = await channel.send(embed=embed, view=view)
@@ -1181,95 +967,22 @@ class ClapbackCog(commands.Cog):
         return True
 
     async def _post_scoreboard(self, channel, payload, round_num, total_rounds, bye_player, final=False):
-        embed = await self._build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=final)
+        embed = build_scoreboard_embed(payload, round_num, total_rounds, bye_player, final=final)
         await channel.send(embed=embed)
-
-    async def _build_scoreboard_embed(self, payload, round_num, total_rounds, bye_player, final=False):
-        scores = payload.get("scores", {})
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-
-        medals = ["🥇", "🥈", "🥉"]
-        lines = []
-        for i, (pid, pts) in enumerate(sorted_scores):
-            prefix = medals[i] if i < 3 else f"{i + 1}."
-            # Can't resolve names here without guild, so just use pid
-            lines.append(f"{prefix} <@{pid}> — **{pts}** pts")
-
-        remaining = total_rounds - round_num
-        title = f"{ICON} ROUND {round_num} COMPLETE"
-        footer_line = f"{remaining} round(s) remaining!" if remaining > 0 else "Final round complete!"
-
-        embed = discord.Embed(title=title, color=CLAPBACK_COLOR)
-        embed.add_field(
-            name="📊 Scoreboard",
-            value="\n".join(lines) or "No scores yet",
-            inline=False,
-        )
-        if bye_player:
-            embed.add_field(
-                name="Bye", value=f"<@{bye_player}> had a bye this round (+50 pts)", inline=False,
-            )
-        embed.add_field(name="", value=footer_line, inline=False)
-        embed.set_footer(text=f"{ICON} Clapback")
-        return embed
 
     # ── Final recap ──────────────────────────────────────────────────────
 
     async def _post_recap(self, game_id, channel, payload, config):
-        scores = payload.get("scores", {})
-        clapbacks = payload.get("clapbacks", {})
-        round_history = payload.get("round_history", [])
         players = payload.get("players", [])
-        anonymous = config.get("anonymous", False)
         guild = channel.guild if hasattr(channel, "guild") else None
 
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        winner_id = int(sorted_scores[0][0]) if sorted_scores else None
-        winner_name = resolve_name(guild, winner_id) if winner_id else "Nobody"
-
-        rounds_played = len(round_history)
-
-        embed = discord.Embed(
-            title=f"{ICON} CLAPBACK — FINAL RESULTS",
-            description=f"{rounds_played} rounds | {len(players)} players",
-            color=CLAPBACK_WIN_COLOR,
-        )
-        embed.add_field(
-            name=f"🏆 WINNER: {winner_name}",
-            value=f"**{sorted_scores[0][1]}** pts" if sorted_scores else "—",
-            inline=False,
+        embed = build_recap_embed(
+            payload=payload,
+            config=config,
+            name_resolver=lambda uid: resolve_name(guild, uid),
         )
 
-        medals = ["🥇", "🥈", "🥉"]
-        lines = []
-        for i, (pid, pts) in enumerate(sorted_scores):
-            prefix = medals[i] if i < 3 else f"{i + 1}."
-            name = resolve_name(guild, int(pid))
-            ql_count = clapbacks.get(pid, 0)
-            ql_str = f" ({ql_count} CLAPBACK{'S' if ql_count != 1 else ''})" if ql_count else ""
-            lines.append(f"{prefix} **{name}** — {pts} pts{ql_str}")
-        embed.add_field(
-            name="📊 Final Scoreboard",
-            value="\n".join(lines) or "—",
-            inline=False,
-        )
-
-        # Best single answer (highest vote %)
-        best = _find_best_answer(round_history, guild, anonymous)
-        if best:
-            embed.add_field(name="⚡ Best Single Answer", value=best, inline=False)
-
-        # Closest matchup
-        closest = _find_closest_matchup(round_history, guild, anonymous)
-        if closest:
-            embed.add_field(name="🤣 Closest Matchup", value=closest, inline=False)
-
-        total_ql = sum(clapbacks.values())
-        if total_ql:
-            embed.add_field(name="⚡ Total CLAPBACKS", value=str(total_ql), inline=True)
-
-        embed.set_footer(text=f"{ICON} Clapback")
-
+        rounds_played = len(payload.get("round_history", []))
         host_id = payload.get("host_id") or (players[0] if players else 0)
         view = ClapbackRecapView(game_id, host_id, config, self.db, self.bot, self)
         await channel.send(embed=embed, view=view)
@@ -1331,76 +1044,6 @@ class ClapbackCog(commands.Cog):
         self._submit_events.pop(game_id, None)
         self._vote_events.pop(game_id, None)
         self._game_cancelled.discard(game_id)
-
-
-# ── Module-level helpers ─────────────────────────────────────────────────────
-
-
-def _find_best_answer(round_history: list, guild, anonymous: bool) -> str | None:
-    """Find the answer with the highest vote percentage (min 3 votes)."""
-    best_pct = -1
-    best_votes = 0
-    best_text = None
-    best_author = None
-    best_round = 0
-
-    for rh in round_history:
-        for m in rh.get("matchups", []):
-            total = m["votes_a"] + m["votes_b"]
-            if total < 3:
-                continue
-            pct_a = m["votes_a"] / total
-            pct_b = m["votes_b"] / total
-
-            if pct_a > best_pct or (pct_a == best_pct and m["votes_a"] > best_votes):
-                best_pct = pct_a
-                best_votes = m["votes_a"]
-                best_text = m["answer_a"]
-                best_author = m["player_a"]
-                best_round = rh["round"]
-
-            if pct_b > best_pct or (pct_b == best_pct and m["votes_b"] > best_votes):
-                best_pct = pct_b
-                best_votes = m["votes_b"]
-                best_text = m["answer_b"]
-                best_author = m["player_b"]
-                best_round = rh["round"]
-
-    if best_text is None:
-        return None
-
-    author_name = "???" if anonymous else resolve_name(guild, best_author)
-    return (
-        f'*"{best_text}"* by **{author_name}**\n'
-        f'Round {best_round} — {round(best_pct * 100)}% of votes'
-    )
-
-
-def _find_closest_matchup(round_history: list, guild, anonymous: bool) -> str | None:
-    """Find the matchup with the smallest vote margin."""
-    best_margin = float("inf")
-    best_total = 0
-    best = None
-
-    for rh in round_history:
-        for m in rh.get("matchups", []):
-            total = m["votes_a"] + m["votes_b"]
-            if total == 0:
-                continue
-            margin = abs(m["votes_a"] - m["votes_b"])
-            if margin < best_margin or (margin == best_margin and total > best_total):
-                best_margin = margin
-                best_total = total
-                best = (m, rh["round"])
-
-    if best is None:
-        return None
-
-    m, rnd = best
-    return (
-        f'*"{m["answer_a"]}"* vs *"{m["answer_b"]}"*\n'
-        f'{m["votes_a"]}–{m["votes_b"]} in Round {rnd}'
-    )
 
 
 async def setup(bot: commands.Bot):

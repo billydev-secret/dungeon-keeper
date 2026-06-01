@@ -6,6 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services import reports_data
 from bot_modules.services.member_quality_score import compute_quality_scores
 from bot_modules.services.message_store import get_known_channels_bulk
@@ -77,7 +78,8 @@ async def role_growth(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    tz = getattr(ctx, "tz_offset_hours", 0.0)
+    with ctx.open_db() as conn:
+        tz = get_tz_offset_hours(conn, guild_id)
     role_filter: set[str] | None = None
     if roles is not None:
         role_filter = {r.strip().lower() for r in roles.split(",") if r.strip()}
@@ -111,7 +113,8 @@ async def message_cadence(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     ch_id = int(channel_id) if channel_id else None
-    tz = getattr(ctx, "tz_offset_hours", 0.0)
+    with ctx.open_db() as conn:
+        tz = get_tz_offset_hours(conn, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
@@ -142,7 +145,8 @@ async def join_times(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    tz = getattr(ctx, "tz_offset_hours", 0.0)
+    with ctx.open_db() as conn:
+        tz = get_tz_offset_hours(conn, guild_id)
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
@@ -223,7 +227,8 @@ async def nsfw_gender(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    tz = getattr(ctx, "tz_offset_hours", 0.0)
+    with ctx.open_db() as conn:
+        tz = get_tz_offset_hours(conn, guild_id)
 
     if channel_id:
         target_ids = [int(channel_id)]
@@ -293,7 +298,8 @@ async def message_rate(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     days = max(1, min(365, days))
-    tz = getattr(ctx, "tz_offset_hours", 0.0)
+    with ctx.open_db() as conn:
+        tz = get_tz_offset_hours(conn, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
@@ -454,7 +460,8 @@ async def activity(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    tz = getattr(ctx, "tz_offset_hours", 0.0)
+    with ctx.open_db() as conn:
+        tz = get_tz_offset_hours(conn, guild_id)
     uid = int(user_id) if user_id else None
     cid = int(channel_id) if channel_id else None
 
@@ -649,7 +656,8 @@ async def voice_activity(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    tz = getattr(ctx, "tz_offset_hours", 0.0)
+    with ctx.open_db() as conn:
+        tz = get_tz_offset_hours(conn, guild_id)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
 
@@ -1629,7 +1637,7 @@ async def oldest_sfw(
 
     count = max(1, min(100, count))
 
-    nsfw_cfg = ctx.grant_roles.get("nsfw") if hasattr(ctx, "grant_roles") else None
+    nsfw_cfg = ctx.guild_config(guild_id).grant_roles.get("nsfw")
     nsfw_role_id = nsfw_cfg["role_id"] if nsfw_cfg else 0
     nsfw_role = guild.get_role(int(nsfw_role_id)) if nsfw_role_id else None
 

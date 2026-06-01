@@ -72,7 +72,7 @@ async def award_message_xp(
     bot: discord.Client,
     db_path: Path,
     xp_pair_states: dict[int, PairState],
-    excluded_channel_ids: set[int],
+    excluded_channel_ids: frozenset[int] | set[int],
     settings: XpSettings = DEFAULT_XP_SETTINGS,
 ) -> AwardResult | None:
     """Award XP for a text message."""
@@ -200,7 +200,7 @@ async def award_image_reaction_xp(
     payload: discord.RawReactionActionEvent,
     bot: discord.Client,
     db_path: Path,
-    excluded_channel_ids: set[int],
+    excluded_channel_ids: frozenset[int] | set[int],
     settings: XpSettings = DEFAULT_XP_SETTINGS,
 ) -> tuple[discord.Member, AwardResult] | None:
     """Award XP to image poster when their image receives a reaction."""

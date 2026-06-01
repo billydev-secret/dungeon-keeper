@@ -3,7 +3,7 @@ import logging
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_PLAYING, PHASE_RESULTS, PHASE_RECAP
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
@@ -16,50 +16,16 @@ from bot_modules.games.utils.game_manager import (
     is_game_expired,
     ConfirmCloseView,
 )
-from bot_modules.games.utils.live_bar import LiveBarUpdater, build_bar
+from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.question_source import get_wyr_question
+from bot_modules.games_wyr.embeds import build_closed_embed, build_wyr_embed
+from bot_modules.games_wyr.logic import (
+    next_button_label,
+    parse_question_input,
+    toggle_vote,
+)
 
 log = logging.getLogger(__name__)
-
-
-def build_wyr_embed(
-    host_name: str,
-    option_a: str,
-    option_b: str,
-    votes_a: list,
-    votes_b: list,
-    anonymous: bool,
-    round_num: int,
-    closed: bool = False,
-    revealed: bool = False,
-) -> discord.Embed:
-    total = len(votes_a) + len(votes_b)
-    bar_a, pct_a = build_bar(len(votes_a), total)
-    bar_b, pct_b = build_bar(len(votes_b), total)
-
-    title = f"{GAME_ICONS['wyr']} WOULD YOU RATHER"
-    if closed:
-        title += " — ROUND OVER"
-    embed = discord.Embed(title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING)
-    embed.add_field(name="Round", value=str(round_num), inline=False)
-    esc = discord.utils.escape_markdown
-    embed.add_field(name="🅰️", value=esc(option_a), inline=True)
-    embed.add_field(name="🅱️", value=esc(option_b), inline=True)
-    embed.add_field(name="​", value="​", inline=True)
-
-    a_label = f"🅰️ {bar_a} {pct_a} ({len(votes_a)})"
-    b_label = f"🅱️ {bar_b} {pct_b} ({len(votes_b)})"
-
-    if revealed:
-        a_names = ", ".join(f"<@{uid}>" for uid in votes_a) if votes_a else "—"
-        b_names = ", ".join(f"<@{uid}>" for uid in votes_b) if votes_b else "—"
-        a_label += f"\n{a_names}"
-        b_label += f"\n{b_names}"
-
-    embed.add_field(name="Votes", value=f"{a_label}\n{b_label}", inline=False)
-    anon_badge = "  •  👁 Anonymous" if anonymous else ""
-    embed.set_footer(text=f"{GAME_ICONS['wyr']} Would You Rather  •  Round {round_num}{anon_badge}")
-    return embed
 
 
 class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
@@ -93,7 +59,7 @@ class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
             return
         self._view.queued_questions.append((a, b))
         count = len(self._view.queued_questions)
-        self._view.next_btn.label = f"⏭️ Next ({count} queued)"
+        self._view.next_btn.label = next_button_label(count)
         try:
             await self._message.edit(view=self._view)
         except Exception:
@@ -160,12 +126,7 @@ class WYRRoundView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
-        uid = interaction.user.id
-        changed = uid in self.votes_b
-        if changed:
-            self.votes_b.remove(uid)
-        if uid not in self.votes_a:
-            self.votes_a.append(uid)
+        changed = toggle_vote(self.votes_a, self.votes_b, interaction.user.id, "a")
         msg = f"✅ Voted **🅰️ Option A**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
@@ -176,12 +137,7 @@ class WYRRoundView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
-        uid = interaction.user.id
-        changed = uid in self.votes_a
-        if changed:
-            self.votes_a.remove(uid)
-        if uid not in self.votes_b:
-            self.votes_b.append(uid)
+        changed = toggle_vote(self.votes_a, self.votes_b, interaction.user.id, "b")
         msg = f"✅ Voted **🅱️ Option B**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
         await self._updater.schedule_update(interaction.message, self._build_embed)
@@ -231,9 +187,16 @@ class WYRRoundView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             try:
-                embed = self._build_embed(closed=True)
-                embed.title = f"{GAME_ICONS['wyr']} WOULD YOU RATHER — CLOSED"
-                embed.colour = PHASE_RECAP
+                embed = build_closed_embed(
+                    host_name=self.host_name,
+                    option_a=self.option_a,
+                    option_b=self.option_b,
+                    votes_a=self.votes_a,
+                    votes_b=self.votes_b,
+                    anonymous=self.anonymous,
+                    round_num=self.round_num,
+                    revealed=self.revealed,
+                )
                 await game_msg.edit(embed=embed, view=self)
             except Exception:
                 pass
@@ -284,14 +247,13 @@ class WYRCog(commands.Cog):
 
         custom_question: tuple[str, str] | None = None
         if question.strip():
-            parts = question.split("|", 1)
-            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+            custom_question = parse_question_input(question)
+            if custom_question is None:
                 await interaction.response.send_message(
                     "❌ Question must have two options separated by `|`, e.g. `fly | be invisible`.",
                     ephemeral=True,
                 )
                 return
-            custom_question = (parts[0].strip(), parts[1].strip())
 
         game_id = await create_game(
             self.db,
@@ -419,8 +381,7 @@ class WYRCog(commands.Cog):
         )
         if carry_over_queue:
             view.queued_questions = carry_over_queue
-            count = len(carry_over_queue)
-            view.next_btn.label = f"⏭️ Next ({count} queued)"
+            view.next_btn.label = next_button_label(len(carry_over_queue))
         self.bot.active_views[game_id] = view
 
         embed = view._build_embed()

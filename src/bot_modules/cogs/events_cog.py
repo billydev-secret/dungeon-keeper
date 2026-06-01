@@ -61,11 +61,13 @@ def _discord_embed_to_dict(e: discord.Embed) -> dict:
     }
 
 
-def _message_mention_ids(ctx: AppContext, message: discord.Message) -> list[int]:
+def _message_mention_ids(
+    recorded_bot_user_ids: frozenset[int] | set[int], message: discord.Message
+) -> list[int]:
     return [
         user.id
         for user in message.mentions
-        if (not user.bot or user.id in ctx.recorded_bot_user_ids)
+        if (not user.bot or user.id in recorded_bot_user_ids)
         and user.id != message.author.id
     ]
 
@@ -117,7 +119,11 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                         msg_ts = msg.created_at.timestamp() if msg.created_at else time.time()
                         sentiment, emotion = score_text(msg.content)
                         mention_ids = (
-                            [] if msg.author.bot else _message_mention_ids(ctx, msg)
+                            []
+                            if msg.author.bot
+                            else _message_mention_ids(
+                                ctx.guild_config(g.id).recorded_bot_user_ids, msg
+                            )
                         )
                         reply_to_id = (
                             msg.reference.message_id
@@ -343,6 +349,7 @@ class EventsCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if not message.guild:
             return
+        cfg = self.ctx.guild_config(message.guild.id)
         is_bot_author = message.author.bot
 
         message_ts = (
@@ -417,7 +424,7 @@ class EventsCog(commands.Cog):
 
         archive_content = _archived_message_content(message)
         if not _counts_as_member_activity(message):
-            mention_ids = _message_mention_ids(self.ctx, message)
+            mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)
             with self.ctx.open_db() as conn:
                 if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
                     track_auto_delete_message(
@@ -461,12 +468,12 @@ class EventsCog(commands.Cog):
 
         spoiler_deleted = await enforce_spoiler_requirement(
             message,
-            spoiler_required_channels=self.ctx.spoiler_required_channels,
-            bypass_role_ids=self.ctx.bypass_role_ids,
+            spoiler_required_channels=cfg.spoiler_required_channels,
+            bypass_role_ids=cfg.bypass_role_ids,
             log=log,
         )
 
-        mention_ids = _message_mention_ids(self.ctx, message)
+        mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)
 
         if spoiler_deleted:
             return
@@ -551,7 +558,7 @@ class EventsCog(commands.Cog):
             ):
                 ref = message.reference.resolved
                 if (
-                    (not ref.author.bot or ref.author.id in self.ctx.recorded_bot_user_ids)
+                    (not ref.author.bot or ref.author.id in cfg.recorded_bot_user_ids)
                     and ref.author.id != message.author.id
                     and ref.author.id not in interaction_targets
                 ):
@@ -575,23 +582,26 @@ class EventsCog(commands.Cog):
             bot=self.bot,
             db_path=self.ctx.db_path,
             xp_pair_states=self.ctx.xp_pair_states,
-            excluded_channel_ids=self.ctx.xp_excluded_channel_ids,
-            settings=self.ctx.xp_settings,
+            excluded_channel_ids=cfg.xp_excluded_channel_ids,
+            settings=cfg.xp_settings,
         )
         if result is not None and isinstance(message.author, discord.Member):
             await handle_level_progress(
                 message.author,
                 result,
                 "text_message",
-                level_5_role_id=self.ctx.level_5_role_id,
-                level_up_log_channel_id=self.ctx.level_up_log_channel_id,
-                level_5_log_channel_id=self.ctx.level_5_log_channel_id,
-                settings=self.ctx.xp_settings,
+                level_5_role_id=cfg.level_5_role_id,
+                level_up_log_channel_id=cfg.level_up_log_channel_id,
+                level_5_log_channel_id=cfg.level_5_log_channel_id,
+                settings=cfg.xp_settings,
                 db_path=self.ctx.db_path,
             )
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        if payload.guild_id is None:
+            return  # DM reactions earn no XP and have no reaction-count tracking
+        cfg = self.ctx.guild_config(payload.guild_id)
         delay = 1
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 30
@@ -601,8 +611,8 @@ class EventsCog(commands.Cog):
                     payload,
                     bot=self.bot,
                     db_path=self.ctx.db_path,
-                    excluded_channel_ids=self.ctx.xp_excluded_channel_ids,
-                    settings=self.ctx.xp_settings,
+                    excluded_channel_ids=cfg.xp_excluded_channel_ids,
+                    settings=cfg.xp_settings,
                 )
                 break
             except discord.HTTPException as exc:
@@ -622,10 +632,10 @@ class EventsCog(commands.Cog):
                 member,
                 award,
                 "image_reaction",
-                level_5_role_id=self.ctx.level_5_role_id,
-                level_up_log_channel_id=self.ctx.level_up_log_channel_id,
-                level_5_log_channel_id=self.ctx.level_5_log_channel_id,
-                settings=self.ctx.xp_settings,
+                level_5_role_id=cfg.level_5_role_id,
+                level_up_log_channel_id=cfg.level_up_log_channel_id,
+                level_5_log_channel_id=cfg.level_5_log_channel_id,
+                settings=cfg.xp_settings,
                 db_path=self.ctx.db_path,
             )
 
@@ -738,18 +748,20 @@ class EventsCog(commands.Cog):
                 invite_code,
             )
 
-        if self.ctx.welcome_channel_id > 0:
-            channel = member.guild.get_channel(self.ctx.welcome_channel_id)
+        cfg = self.ctx.guild_config(member.guild.id)
+
+        if cfg.welcome_channel_id > 0:
+            channel = member.guild.get_channel(cfg.welcome_channel_id)
             if isinstance(channel, discord.TextChannel):
                 try:
                     ping = (
-                        f"<@&{self.ctx.welcome_ping_role_id}>"
-                        if self.ctx.welcome_ping_role_id > 0
+                        f"<@&{cfg.welcome_ping_role_id}>"
+                        if cfg.welcome_ping_role_id > 0
                         else None
                     )
                     await channel.send(
                         content=ping,
-                        embed=build_welcome_embed(member, self.ctx.welcome_message),
+                        embed=build_welcome_embed(member, cfg.welcome_message),
                     )
                 except discord.Forbidden:
                     log.warning(
@@ -758,13 +770,13 @@ class EventsCog(commands.Cog):
                     )
                     await self._dm_admin_permission_warning(
                         member.guild,
-                        f"Missing permission to send welcome messages in <#{self.ctx.welcome_channel_id}>.",
+                        f"Missing permission to send welcome messages in <#{cfg.welcome_channel_id}>.",
                     )
                 except discord.HTTPException as exc:
                     log.error("Failed to send welcome message: %s", exc)
 
-        if self.ctx.greeter_chat_channel_id > 0:
-            greeter_channel = member.guild.get_channel(self.ctx.greeter_chat_channel_id)
+        if cfg.greeter_chat_channel_id > 0:
+            greeter_channel = member.guild.get_channel(cfg.greeter_chat_channel_id)
             if isinstance(greeter_channel, discord.TextChannel):
                 try:
                     await greeter_channel.send(f"@here - {member.mention} has arrived")
@@ -783,20 +795,21 @@ class EventsCog(commands.Cog):
             mark_member_left(conn, member.guild.id, member.id)
             record_member_event(conn, member.guild.id, member.id, "leave", now)
 
-        if self.ctx.leave_channel_id <= 0:
+        cfg = self.ctx.guild_config(member.guild.id)
+        if cfg.leave_channel_id <= 0:
             return
-        channel = member.guild.get_channel(self.ctx.leave_channel_id)
+        channel = member.guild.get_channel(cfg.leave_channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
         try:
-            await channel.send(embed=build_leave_embed(member, self.ctx.leave_message))
+            await channel.send(embed=build_leave_embed(member, cfg.leave_message))
         except discord.Forbidden:
             log.warning(
                 "Missing permission to send leave message in #%s.", channel.name
             )
             await self._dm_admin_permission_warning(
                 member.guild,
-                f"Missing permission to send leave messages in <#{self.ctx.leave_channel_id}>.",
+                f"Missing permission to send leave messages in <#{cfg.leave_channel_id}>.",
             )
         except discord.HTTPException as exc:
             log.error("Failed to send leave message: %s", exc)

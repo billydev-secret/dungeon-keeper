@@ -65,6 +65,29 @@ from bot_modules.services.voice_master_service import (
     remove_member_from_all_lists,
     trusted_prune_loop,
 )
+from bot_modules.voice_master.embeds import (
+    build_admin_audit_mirror_embed,
+    build_profile_show_embed,
+)
+from bot_modules.voice_master.logic import (
+    build_force_clear_profile_summary,
+    build_force_delete_summary,
+    build_force_transfer_summary,
+    build_hub_join_notes,
+    build_skipped_payload,
+    classify_claim_attempt,
+    format_block_add_result,
+    format_blocked_list,
+    format_trust_add_result,
+    format_trusted_list,
+    hub_create_blocked_by_cooldown,
+    plan_initial_overwrites,
+    profile_reset_summary,
+    select_effective_bitrate,
+    select_effective_limit,
+    validate_block_add,
+    validate_trust_add,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -134,16 +157,24 @@ class VoiceMasterCog(commands.Cog):
         asyncio.create_task(self._reconcile_state())
 
     async def _reconcile_state(self) -> None:
-        """Resume tracked channels on startup; clean up empty/missing ones."""
+        """Resume tracked channels on startup across all guilds."""
         await self.bot.wait_until_ready()
-        guild = self.bot.get_guild(self.ctx.guild_id)
-        if guild is None:
-            log.warning("voice_master: bot not in configured guild %s", self.ctx.guild_id)
-            return
+        for guild in self.bot.guilds:
+            try:
+                await self._reconcile_guild(guild)
+            except Exception:
+                log.exception(
+                    "voice_master: reconcile failed for guild %s", guild.id
+                )
 
+    async def _reconcile_guild(self, guild: discord.Guild) -> None:
+        """Resume tracked channels for one guild; clean up empty/missing ones."""
         with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, self.ctx.guild_id)
-            tracked = list_active_channels(conn, self.ctx.guild_id)
+            cfg = load_voice_master_config(conn, guild.id)
+            tracked = list_active_channels(conn, guild.id)
+
+        if not cfg.hub_channel_id and not tracked:
+            return  # unconfigured and nothing tracked
 
         present_ids: set[int] = set()
         with_humans: set[int] = set()
@@ -206,8 +237,6 @@ class VoiceMasterCog(commands.Cog):
     async def on_guild_channel_delete(
         self, channel: discord.abc.GuildChannel
     ) -> None:
-        if channel.guild.id != self.ctx.guild_id:
-            return
         row = None
         with self.ctx.open_db() as conn:
             cfg = load_voice_master_config(conn, channel.guild.id)
@@ -254,9 +283,10 @@ class VoiceMasterCog(commands.Cog):
             )
 
     async def _notify_admins(self, guild: discord.Guild, content: str) -> None:
-        if self.ctx.mod_channel_id == 0:
+        mod_channel_id = self.ctx.guild_config(guild.id).mod_channel_id
+        if mod_channel_id == 0:
             return
-        ch = guild.get_channel(self.ctx.mod_channel_id)
+        ch = guild.get_channel(mod_channel_id)
         if isinstance(ch, discord.TextChannel):
             try:
                 await ch.send(content)
@@ -265,16 +295,12 @@ class VoiceMasterCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
-        if member.guild.id != self.ctx.guild_id:
-            return
         await self._cleanup_for_departed_member(member)
 
     @commands.Cog.listener()
     async def on_member_ban(
         self, guild: discord.Guild, user: discord.User | discord.Member
     ) -> None:
-        if guild.id != self.ctx.guild_id:
-            return
         # Synthesize a "departed" cleanup using the user id; we don't need a
         # full Member object for the DB operations.
         await self._cleanup_for_departed_user(guild, user.id)
@@ -360,11 +386,9 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if member.bot:
             return
-        if member.guild.id != self.ctx.guild_id:
-            return
 
         with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, self.ctx.guild_id)
+            cfg = load_voice_master_config(conn, member.guild.id)
         if cfg.hub_channel_id == 0:
             return  # feature unconfigured
 
@@ -495,7 +519,9 @@ class VoiceMasterCog(commands.Cog):
 
             now = time.time()
             last = self._last_create.get(member.id, 0.0)
-            if cfg.create_cooldown_s > 0 and (now - last) < cfg.create_cooldown_s:
+            if hub_create_blocked_by_cooldown(
+                now=now, last_create_at=last, cooldown_s=cfg.create_cooldown_s
+            ):
                 # Boot them out of the Hub silently — can't DM mid-event reliably.
                 with self._suppress_voice_errors():
                     await member.move_to(None, reason="Voice Master: create cooldown")
@@ -543,8 +569,14 @@ class VoiceMasterCog(commands.Cog):
             else:
                 target_cat = None
 
-            limit = profile.saved_limit if profile.saved_limit > 0 else cfg.default_user_limit
-            bitrate = profile.bitrate if profile.bitrate else cfg.default_bitrate
+            limit = select_effective_limit(
+                saved_limit=profile.saved_limit,
+                default_user_limit=cfg.default_user_limit,
+            )
+            bitrate = select_effective_bitrate(
+                saved_bitrate=profile.bitrate,
+                default_bitrate=cfg.default_bitrate,
+            )
 
             overwrites, skipped_targets = self._build_initial_overwrites(
                 guild=guild,
@@ -579,11 +611,10 @@ class VoiceMasterCog(commands.Cog):
                     owner_id=member.id,
                     now=now,
                 )
-                skipped_payload: list[str] = []
-                if name_fell_back:
-                    skipped_payload.append("name")
-                if skipped_targets:
-                    skipped_payload.append("missing_members")
+                skipped_payload = build_skipped_payload(
+                    name_fell_back=name_fell_back,
+                    missing_target_count=len(skipped_targets),
+                )
                 write_audit(
                     conn,
                     guild_id=guild.id,
@@ -613,18 +644,13 @@ class VoiceMasterCog(commands.Cog):
                 await post_inline_panel(channel, member)
 
             # DM the owner about anything we had to skip.
-            notes: list[str] = []
-            if name_fell_back:
-                notes.append(
-                    f"Saved name was blocked by an admin filter — using `{name}` instead."
-                )
-            if skipped_targets:
-                notes.append(
-                    f"{len(skipped_targets)} member(s) on your trust/block list "
-                    f"are no longer in this server and were skipped."
-                )
-            if notes:
-                await try_dm(member, content="\n".join(notes))
+            notes_text = build_hub_join_notes(
+                name_fell_back=name_fell_back,
+                fallback_name=name,
+                missing_target_count=len(skipped_targets),
+            )
+            if notes_text is not None:
+                await try_dm(member, content=notes_text)
 
             # Always arm the grace timer — if the move succeeded the channel
             # has the owner in it and the timer becomes a no-op; if it failed
@@ -647,30 +673,43 @@ class VoiceMasterCog(commands.Cog):
 
         Returns ``(overwrites, missing_member_ids)`` — missing members are
         ones in the trust/block list who are no longer in the server.
-        """
-        ow: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {}
-        everyone = guild.default_role
-        ow[everyone] = discord.PermissionOverwrite(
-            connect=False if profile.locked else None,
-            view_channel=False if profile.hidden else None,
-        )
-        # Owner gets explicit access so locks/hides don't bite them.
-        ow[owner] = discord.PermissionOverwrite(view_channel=True, connect=True)
 
-        missing: list[int] = []
-        for uid in trusted_ids:
-            m = guild.get_member(uid)
-            if m is None:
-                missing.append(uid)
+        The plan itself is computed by ``plan_initial_overwrites`` against
+        a snapshot of the current member roster; this wrapper resolves
+        each plan entry to a live ``discord.Role``/``discord.Member`` and
+        builds the matching ``PermissionOverwrite``. Lookups bypass any
+        plan entry that no longer resolves (rare race: member left between
+        the plan and the wrapper).
+        """
+        present_ids: set[int] = {m.id for m in guild.members}
+        # Trust/block ids that match the owner or @everyone are pruned by
+        # the plan implicitly because the cog never feeds them in here.
+        plan = plan_initial_overwrites(
+            owner_id=owner.id,
+            everyone_role_id=guild.default_role.id,
+            profile_locked=profile.locked,
+            profile_hidden=profile.hidden,
+            trusted_ids=trusted_ids,
+            blocked_ids=blocked_ids,
+            present_member_ids=present_ids,
+        )
+        ow: dict[discord.Role | discord.Member, discord.PermissionOverwrite] = {}
+        for entry in plan.entries:
+            key: discord.Role | discord.Member | None
+            if entry.target_kind == "everyone":
+                key = guild.default_role
+            elif entry.target_kind == "owner":
+                key = owner
+            else:
+                key = guild.get_member(entry.target_id)
+            if key is None:
+                # Member left between the snapshot and the resolve.
                 continue
-            ow[m] = discord.PermissionOverwrite(view_channel=True, connect=True)
-        for uid in blocked_ids:
-            m = guild.get_member(uid)
-            if m is None:
-                missing.append(uid)
-                continue
-            ow[m] = discord.PermissionOverwrite(connect=False)
-        return ow, missing
+            ow[key] = discord.PermissionOverwrite(
+                view_channel=entry.view_channel,
+                connect=entry.connect,
+            )
+        return ow, plan.missing_target_ids
 
     # Convenience suppress-context for ignored voice-related Discord errors.
     @staticmethod
@@ -833,35 +872,18 @@ class VoiceMasterCog(commands.Cog):
         if row is None:
             await _ephemeral(interaction, "This channel isn't managed by Voice Master.")
             return
-        if row.owner_id == member.id:
-            await _ephemeral(interaction, "You already own this channel.")
-            return
-        # Eligibility: owner must be gone-from-server, OR owner_left_at must be
-        # at least owner_grace_s ago.
         owner = member.guild.get_member(row.owner_id)
-        eligible = False
-        if owner is None:
-            eligible = True
-        elif row.owner_left_at is not None:
-            elapsed = time.time() - row.owner_left_at
-            if elapsed >= cfg.owner_grace_s:
-                eligible = True
-            else:
-                wait = int(cfg.owner_grace_s - elapsed)
-                await _ephemeral(
-                    interaction,
-                    f"The owner left {int(elapsed)}s ago — claim available in {wait}s.",
-                )
-                return
-        else:
-            await _ephemeral(
-                interaction,
-                "The owner is still active in or watching the channel.",
-            )
+        decision = classify_claim_attempt(
+            owner_present=owner is not None,
+            owner_left_at=row.owner_left_at,
+            now=time.time(),
+            owner_grace_s=cfg.owner_grace_s,
+            caller_is_owner=row.owner_id == member.id,
+        )
+        if not decision.eligible:
+            if decision.error_message is not None:
+                await _ephemeral(interaction, decision.error_message)
             return
-
-        if not eligible:
-            return  # defensive
 
         # Defer because set_permissions can take >3s under load.
         if not interaction.response.is_done():
@@ -901,11 +923,7 @@ class VoiceMasterCog(commands.Cog):
             return
         with self.ctx.open_db() as conn:
             ids = list_trusted(conn, interaction.guild.id, interaction.user.id)
-        if not ids:
-            await _ephemeral(interaction, "Your trust list is empty.")
-            return
-        rendered = ", ".join(f"<@{uid}>" for uid in ids)
-        await _ephemeral(interaction, f"Trusted ({len(ids)}): {rendered}")
+        await _ephemeral(interaction, format_trusted_list(ids))
 
     @voice_trusted.command(name="add", description="Add a member to your trust list.")
     @app_commands.describe(member="They'll auto-get access to every future channel of yours.")
@@ -914,19 +932,16 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if interaction.guild is None:
             return
-        if member.bot:
-            await _ephemeral(interaction, "Can't trust bots.")
-            return
-        if member.id == interaction.user.id:
-            await _ephemeral(interaction, "You're always trusted by yourself.")
-            return
         with self.ctx.open_db() as conn:
             cfg = load_voice_master_config(conn, interaction.guild.id)
-            if cfg.disable_saves or "trusted" not in cfg.saveable_fields:
-                await _ephemeral(
-                    interaction,
-                    "Saving the trust list is disabled by an admin on this server.",
-                )
+            err = validate_trust_add(
+                target_is_bot=member.bot,
+                target_is_self=member.id == interaction.user.id,
+                disable_saves=cfg.disable_saves,
+                saveable_fields=cfg.saveable_fields,
+            )
+            if err is not None:
+                await _ephemeral(interaction, err)
                 return
             added, evicted = add_trusted(
                 conn,
@@ -935,13 +950,14 @@ class VoiceMasterCog(commands.Cog):
                 member.id,
                 cap=cfg.trust_cap,
             )
-        if not added:
-            await _ephemeral(interaction, f"{member.mention} is already on your trust list.")
-            return
-        msg = f"Added {member.mention} to your trust list."
-        if evicted is not None:
-            msg += f" (Cap reached — removed <@{evicted}>.)"
-        await _ephemeral(interaction, msg)
+        await _ephemeral(
+            interaction,
+            format_trust_add_result(
+                target_mention=member.mention,
+                added=added,
+                evicted_id=evicted,
+            ),
+        )
 
     @voice_trusted.command(name="remove", description="Remove a member from your trust list.")
     async def trusted_remove(
@@ -964,11 +980,7 @@ class VoiceMasterCog(commands.Cog):
             return
         with self.ctx.open_db() as conn:
             ids = list_blocked(conn, interaction.guild.id, interaction.user.id)
-        if not ids:
-            await _ephemeral(interaction, "Your blocklist is empty.")
-            return
-        rendered = ", ".join(f"<@{uid}>" for uid in ids)
-        await _ephemeral(interaction, f"Blocked ({len(ids)}): {rendered}")
+        await _ephemeral(interaction, format_blocked_list(ids))
 
     @voice_blocked.command(name="add", description="Add a member to your blocklist.")
     @app_commands.describe(member="They'll be auto-denied access to every future channel of yours.")
@@ -977,19 +989,16 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if interaction.guild is None:
             return
-        if member.bot:
-            await _ephemeral(interaction, "Can't block bots.")
-            return
-        if member.id == interaction.user.id:
-            await _ephemeral(interaction, "Can't block yourself.")
-            return
         with self.ctx.open_db() as conn:
             cfg = load_voice_master_config(conn, interaction.guild.id)
-            if cfg.disable_saves or "blocked" not in cfg.saveable_fields:
-                await _ephemeral(
-                    interaction,
-                    "Saving the blocklist is disabled by an admin on this server.",
-                )
+            err = validate_block_add(
+                target_is_bot=member.bot,
+                target_is_self=member.id == interaction.user.id,
+                disable_saves=cfg.disable_saves,
+                saveable_fields=cfg.saveable_fields,
+            )
+            if err is not None:
+                await _ephemeral(interaction, err)
                 return
             added, evicted = add_blocked(
                 conn,
@@ -998,13 +1007,14 @@ class VoiceMasterCog(commands.Cog):
                 member.id,
                 cap=cfg.block_cap,
             )
-        if not added:
-            await _ephemeral(interaction, f"{member.mention} is already on your blocklist.")
-            return
-        msg = f"Added {member.mention} to your blocklist."
-        if evicted is not None:
-            msg += f" (Cap reached — removed <@{evicted}>.)"
-        await _ephemeral(interaction, msg)
+        await _ephemeral(
+            interaction,
+            format_block_add_result(
+                target_mention=member.mention,
+                added=added,
+                evicted_id=evicted,
+            ),
+        )
 
     @voice_blocked.command(name="remove", description="Remove a member from your blocklist.")
     async def blocked_remove(
@@ -1076,16 +1086,14 @@ class VoiceMasterCog(commands.Cog):
             profile = load_profile(conn, interaction.guild.id, interaction.user.id) or default_profile()
             trusted = list_trusted(conn, interaction.guild.id, interaction.user.id)
             blocked = list_blocked(conn, interaction.guild.id, interaction.user.id)
-        embed = discord.Embed(
-            title="Your Voice Master profile",
-            color=discord.Color.blurple(),
+        embed = build_profile_show_embed(
+            saved_name=profile.saved_name,
+            saved_limit=profile.saved_limit,
+            locked=profile.locked,
+            hidden=profile.hidden,
+            trusted_count=len(trusted),
+            blocked_count=len(blocked),
         )
-        embed.add_field(name="Saved name", value=profile.saved_name or "*(template default)*", inline=False)
-        embed.add_field(name="User limit", value=str(profile.saved_limit) if profile.saved_limit else "no cap", inline=True)
-        embed.add_field(name="Locked", value="yes" if profile.locked else "no", inline=True)
-        embed.add_field(name="Hidden", value="yes" if profile.hidden else "no", inline=True)
-        embed.add_field(name="Trusted (count)", value=str(len(trusted)), inline=True)
-        embed.add_field(name="Blocked (count)", value=str(len(blocked)), inline=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @voice_profile.command(name="reset", description="Reset your saved profile (or one specific field).")
@@ -1122,19 +1130,16 @@ class VoiceMasterCog(commands.Cog):
                     "DELETE FROM voice_master_blocked WHERE guild_id = ? AND owner_id = ?",
                     (gid, uid),
                 )
-                summary = "Saved profile, trust list, and blocklist cleared."
             elif target == "trusted":
                 conn.execute(
                     "DELETE FROM voice_master_trusted WHERE guild_id = ? AND owner_id = ?",
                     (gid, uid),
                 )
-                summary = "Trust list cleared."
             elif target == "blocked":
                 conn.execute(
                     "DELETE FROM voice_master_blocked WHERE guild_id = ? AND owner_id = ?",
                     (gid, uid),
                 )
-                summary = "Blocklist cleared."
             else:
                 profile = load_profile(conn, gid, uid) or default_profile()
                 if target == "name":
@@ -1158,7 +1163,7 @@ class VoiceMasterCog(commands.Cog):
                         locked=profile.locked, hidden=False, bitrate=profile.bitrate,
                     )
                 save_profile(conn, gid, uid, profile)
-                summary = f"`{target}` cleared from your saved profile."
+            summary = profile_reset_summary(target)
             write_audit(
                 conn,
                 guild_id=gid,
@@ -1199,8 +1204,11 @@ class VoiceMasterCog(commands.Cog):
         if not _admin_only(self.ctx, interaction):
             await interaction.response.send_message("Administrator only.", ephemeral=True)
             return
+        if interaction.guild is None:
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
         with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, self.ctx.guild_id)
+            cfg = load_voice_master_config(conn, interaction.guild.id)
         if not cfg.control_channel_id:
             await interaction.response.send_message(
                 "No control channel set. Run `/voice-admin set-control-channel` first.",
@@ -1234,10 +1242,13 @@ class VoiceMasterCog(commands.Cog):
         if not _admin_only(self.ctx, interaction):
             await interaction.response.send_message("Administrator only.", ephemeral=True)
             return
+        if interaction.guild is None:
+            await interaction.response.send_message("Server only.", ephemeral=True)
+            return
         with self.ctx.open_db() as conn:
             set_voice_master_config_value(
                 conn,
-                self.ctx.guild_id,
+                interaction.guild.id,
                 "voice_master_post_inline_panel",
                 "1" if enabled else "0",
             )
@@ -1252,17 +1263,20 @@ class VoiceMasterCog(commands.Cog):
         self, interaction: discord.Interaction, *, action: str, summary: str
     ) -> None:
         """Post a brief admin-action embed to the mod log channel."""
-        if interaction.guild is None or self.ctx.mod_channel_id == 0:
+        if interaction.guild is None:
             return
-        log_channel = interaction.guild.get_channel(self.ctx.mod_channel_id)
+        mod_channel_id = self.ctx.guild_config(interaction.guild.id).mod_channel_id
+        if mod_channel_id == 0:
+            return
+        log_channel = interaction.guild.get_channel(mod_channel_id)
         if not isinstance(log_channel, discord.TextChannel):
             return
-        embed = discord.Embed(
-            title=f"Voice Master · {action}",
-            description=summary,
-            color=discord.Color.orange(),
+        embed = build_admin_audit_mirror_embed(
+            action=action,
+            summary=summary,
+            actor_name=str(interaction.user),
+            actor_id=interaction.user.id,
         )
-        embed.set_footer(text=f"by {interaction.user} ({interaction.user.id})")
         try:
             await log_channel.send(embed=embed)
         except (discord.Forbidden, discord.HTTPException):
@@ -1308,7 +1322,11 @@ class VoiceMasterCog(commands.Cog):
         await self._post_admin_audit_mirror(
             interaction,
             action="force-delete",
-            summary=f"Deleted channel `{channel.name}` (id `{channel.id}`) owned by <@{row.owner_id}>.",
+            summary=build_force_delete_summary(
+                channel_name=channel.name,
+                channel_id=channel.id,
+                owner_id=row.owner_id,
+            ),
         )
         await interaction.followup.send(
             f"Deleted `{channel.name}`.", ephemeral=True
@@ -1367,9 +1385,11 @@ class VoiceMasterCog(commands.Cog):
         await self._post_admin_audit_mirror(
             interaction,
             action="force-transfer",
-            summary=(
-                f"Channel `{channel.name}` (id `{channel.id}`): "
-                f"<@{row.owner_id}> → {new_owner.mention}."
+            summary=build_force_transfer_summary(
+                channel_name=channel.name,
+                channel_id=channel.id,
+                old_owner_id=row.owner_id,
+                new_owner_mention=new_owner.mention,
             ),
         )
         await interaction.followup.send(
@@ -1388,7 +1408,7 @@ class VoiceMasterCog(commands.Cog):
             await interaction.response.send_message("Administrator only.", ephemeral=True)
             return
         await interaction.response.defer(ephemeral=True, thinking=False)
-        gid = self.ctx.guild_id
+        gid = member.guild.id
         with self.ctx.open_db() as conn:
             delete_profile(conn, gid, member.id)
             conn.execute(
@@ -1413,7 +1433,9 @@ class VoiceMasterCog(commands.Cog):
         await self._post_admin_audit_mirror(
             interaction,
             action="force-clear-profile",
-            summary=f"Cleared saved profile for {member.mention}.",
+            summary=build_force_clear_profile_summary(
+                target_mention=member.mention,
+            ),
         )
 
 

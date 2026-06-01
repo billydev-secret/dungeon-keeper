@@ -208,7 +208,9 @@ class MemberActivity:
 
 
 def is_channel_xp_eligible(
-    channel_id: int, parent_id: int | None, excluded_channel_ids: set[int]
+    channel_id: int,
+    parent_id: int | None,
+    excluded_channel_ids: frozenset[int] | set[int],
 ) -> bool:
     """Return True if the channel (or its parent thread) is not in the XP exclusion list."""
     if channel_id in excluded_channel_ids:

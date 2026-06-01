@@ -6,7 +6,7 @@ import logging
 import re
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
@@ -54,14 +54,38 @@ from bot_modules.services.whisper_service import (
     TransitionValidationError,
     evaluate_guess,
     is_configured,
-    is_locked,
     is_terminal_for_sender,
-    safe_codefence_content,
     validate_delete,
     validate_expose,
     validate_reply,
     validate_send,
     validate_share,
+)
+from bot_modules.whisper.embeds import (
+    build_inbox_embed,
+    build_reply_audit_embed,
+    build_reply_report_audit_embed,
+    build_report_audit_embed,
+    inbox_option_description,
+    inbox_option_label,
+)
+from bot_modules.whisper.logic import (
+    LAUNCHER_MESSAGE_BODY,
+    check_send_cooldown,
+    filter_whispers_by_message,
+    format_cooldown_message,
+    format_expose_dm_suffix,
+    format_hourly_cap_message,
+    format_reply_dm_body,
+    format_send_dm_body,
+    format_send_feed_announcement,
+    format_share_feed_message,
+    fuzzy_score_members,
+    inbox_action_buttons,
+    inbox_select_placeholder,
+    member_picker_placeholder,
+    prune_recent_target_sends,
+    recompute_inbox_after_delete,
 )
 
 if TYPE_CHECKING:
@@ -69,20 +93,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.whisper")
 
-
-
-def _format_time_ago(created_at: float, now: float | None = None) -> str:
-    import time as _t  # noqa: PLC0415
-    current = now if now is not None else _t.time()
-    delta = max(0, int(current - created_at))
-    if delta < 60:
-        return f"{delta}s ago"
-    if delta < 3600:
-        return f"{delta // 60}m ago"
-    if delta < 86400:
-        return f"{delta // 3600}h ago"
-    days = delta // 86400
-    return f"{days} day{'s' if days != 1 else ''} ago"
 
 
 _INBOX_PAGE_SIZE = 25  # max Discord dropdown options
@@ -410,9 +420,7 @@ class WhisperShareButton(
                         log.warning("Failed to delete original announcement on share")
                 try:
                     new_msg = await feed_channel.send(
-                        f"\U0001f4ec A fresh Whisper was shared. Someone sent "
-                        f"<@{whisper.target_id}> an anonymous message!\n"
-                        f"```{safe_codefence_content(whisper.message)}```",
+                        format_share_feed_message(whisper),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     await asyncio.to_thread(
@@ -573,7 +581,7 @@ class WhisperExposeButton(
                 dm_channel = await interaction.user.create_dm()
                 dm_msg = await dm_channel.fetch_message(whisper.dm_msg_id)
                 await dm_msg.edit(
-                    content=(dm_msg.content or "") + f"\n\n\U0001f4a5 Sender: {sender_label}",
+                    content=(dm_msg.content or "") + format_expose_dm_suffix(sender_label),
                     view=None,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -761,12 +769,12 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
 
         recipient = interaction.client.get_user(to_user_id) or await interaction.client.fetch_user(to_user_id)  # type: ignore[attr-defined]
         try:
-            preview = whisper.message
-            if len(preview) > 200:
-                preview = preview[:197] + "…"
             await recipient.send(
-                f"\U0001f4ec Anonymous reply on Whisper #{self.whisper_id} *(\"{safe_codefence_content(preview)}\")*:\n"
-                f"```{safe_codefence_content(content)}```",
+                format_reply_dm_body(
+                    whisper_id=self.whisper_id,
+                    whisper_message=whisper.message,
+                    reply_content=content,
+                ),
                 view=WhisperReplyDmView(self.bot, self.whisper_id, reply_id=reply_id),
             )
         except (discord.Forbidden, discord.HTTPException):
@@ -786,25 +794,11 @@ class WhisperReplyModal(discord.ui.Modal, title="Reply anonymously"):
                 if guild:
                     log_channel = guild.get_channel(cfg.log_channel_id)
                     if isinstance(log_channel, discord.TextChannel):
-                        emb = discord.Embed(
-                            title="Whisper Reply",
-                            description=safe_codefence_content(content),
-                            timestamp=discord.utils.utcnow(),
-                        )
-                        emb.add_field(
-                            name="From",
-                            value=f"<@{interaction.user.id}> (`{interaction.user.id}`)",
-                            inline=False,
-                        )
-                        emb.add_field(
-                            name="To",
-                            value=f"<@{to_user_id}> (`{to_user_id}`)",
-                            inline=False,
-                        )
-                        emb.add_field(
-                            name="Whisper ID",
-                            value=str(self.whisper_id),
-                            inline=False,
+                        emb = build_reply_audit_embed(
+                            whisper_id=self.whisper_id,
+                            from_user_id=interaction.user.id,
+                            to_user_id=to_user_id,
+                            content=content,
                         )
                         await log_channel.send(
                             embed=emb,
@@ -883,24 +877,7 @@ class WhisperReportModal(discord.ui.Modal, title="Report whisper"):
         if cfg.log_channel_id and interaction.guild is not None:
             log_channel = interaction.guild.get_channel(cfg.log_channel_id)
             if isinstance(log_channel, discord.TextChannel):
-                emb = discord.Embed(
-                    title="Whisper Reported",
-                    description=safe_codefence_content(whisper.message),
-                    color=discord.Color.red(),
-                    timestamp=discord.utils.utcnow(),
-                )
-                emb.add_field(
-                    name="Sender",
-                    value=f"<@{whisper.sender_id}> (`{whisper.sender_id}`)",
-                    inline=False,
-                )
-                emb.add_field(
-                    name="Reporter (Target)",
-                    value=f"<@{whisper.target_id}> (`{whisper.target_id}`)",
-                    inline=False,
-                )
-                emb.add_field(name="Reason", value=reason, inline=False)
-                emb.add_field(name="Whisper ID", value=str(whisper.id), inline=False)
+                emb = build_report_audit_embed(whisper=whisper, reason=reason)
                 try:
                     await log_channel.send(
                         embed=emb,
@@ -969,25 +946,11 @@ class WhisperReportReplyModal(discord.ui.Modal, title="Report reply"):
         if cfg.log_channel_id and interaction.guild is not None:
             log_channel = interaction.guild.get_channel(cfg.log_channel_id)
             if isinstance(log_channel, discord.TextChannel):
-                emb = discord.Embed(
-                    title="Whisper Reply Reported",
-                    description=safe_codefence_content(reply.content),
-                    color=discord.Color.red(),
-                    timestamp=discord.utils.utcnow(),
+                emb = build_reply_report_audit_embed(
+                    reply=reply,
+                    reporter_id=interaction.user.id,
+                    reason=reason,
                 )
-                emb.add_field(
-                    name="Sender (anonymous)",
-                    value=f"<@{reply.from_user_id}> (`{reply.from_user_id}`)",
-                    inline=False,
-                )
-                emb.add_field(
-                    name="Reporter (recipient)",
-                    value=f"<@{interaction.user.id}> (`{interaction.user.id}`)",
-                    inline=False,
-                )
-                emb.add_field(name="Reason", value=reason, inline=False)
-                emb.add_field(name="Reply ID", value=str(self.reply_id), inline=False)
-                emb.add_field(name="Whisper ID", value=str(reply.whisper_id), inline=False)
                 try:
                     await log_channel.send(
                         embed=emb,
@@ -1158,26 +1121,9 @@ class _WhisperFilterModal(discord.ui.Modal, title="Filter names"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         q = self.query.value.strip()
-        q_lower = q.lower()
-
-        def _score(m: discord.Member) -> int:
-            name = m.display_name.lower()
-            if name == q_lower:
-                return 4
-            if name.startswith(q_lower):
-                return 3
-            if q_lower in name:
-                return 2
-            it = iter(name)
-            if all(c in it for c in q_lower):
-                return 1
-            return 0
-
-        scored = sorted(
-            ((m, _score(m)) for m in self._parent._all_members),
-            key=lambda x: -x[1],
+        self._parent._display_members = fuzzy_score_members(
+            self._parent._all_members, q,
         )
-        self._parent._display_members = [m for m, s in scored if s > 0]
         self._parent._filter_query = q
         self._parent._page = 0
         self._parent._rebuild()
@@ -1252,16 +1198,13 @@ class WhisperGuessSelectView(discord.ui.View):
     def _rebuild(self) -> None:
         self.clear_items()
         page_count = self._page_count()
-
-        if self._filter_query:
-            n = len(self._display_members)
-            placeholder = f'🔍 "{self._filter_query}" — {n} match{"es" if n != 1 else ""}'
-            if page_count > 1:
-                placeholder += f" ({self._page + 1}/{page_count})"
-        elif page_count > 1:
-            placeholder = f"Pick the sender… ({self._page + 1}/{page_count})"
-        else:
-            placeholder = "Pick the sender…"
+        placeholder = member_picker_placeholder(
+            filter_query=self._filter_query,
+            display_count=len(self._display_members),
+            page=self._page,
+            page_count=page_count,
+            base="Pick the sender…",
+        )
 
         if self._display_members:
             self.add_item(WhisperGuessMemberSelect(
@@ -1355,9 +1298,7 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
             log.warning("Failed to delete original announcement on share")
     try:
         new_msg = await feed_channel.send(
-            f"\U0001f4ec A fresh Whisper was shared. Someone sent "
-            f"<@{whisper.target_id}> an anonymous message!\n"
-            f"```{safe_codefence_content(whisper.message)}```",
+            format_share_feed_message(whisper),
             allowed_mentions=discord.AllowedMentions.none(),
         )
         await asyncio.to_thread(
@@ -1374,27 +1315,6 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
 # ── Inbox dropdown view (received + sent) ────────────────────────────────────
 
 
-def _status_pill(w: Whisper) -> str:
-    if w.exposed:
-        return "Exposed"
-    if w.solved:
-        return "Solved"
-    if is_locked(w):
-        return "Locked"
-    if w.guesses_left == 0:
-        return "No guesses"
-    if w.state == STATE_SHARED:
-        return "Shared"
-    return "New"
-
-
-def _preview(text: str, n: int = 60) -> str:
-    preview = text.replace("\n", " ").strip()
-    if len(preview) > n:
-        preview = preview[: n - 1] + "…"
-    return preview
-
-
 class _WhisperInboxFilterModal(discord.ui.Modal, title="Filter whispers"):
     query: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Search by content",
@@ -1409,8 +1329,7 @@ class _WhisperInboxFilterModal(discord.ui.Modal, title="Filter whispers"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         q = str(self.query.value).strip()
-        q_lower = q.lower()
-        matches = [w for w in self._parent._all if q_lower in w.message.lower()]
+        matches = filter_whispers_by_message(self._parent._all, q)
         self._parent._filter_query = q
         self._parent._display = matches
         self._parent._page = 0
@@ -1469,50 +1388,12 @@ class WhisperInboxSelectView(discord.ui.View):
         start = self._page * _INBOX_PAGE_SIZE
         return self._display[start : start + _INBOX_PAGE_SIZE]
 
-    def _title(self) -> str:
-        return "Your Inbox" if self._mode == "received" else "Whispers You've Sent"
-
     def embed(self) -> discord.Embed:
-        emb = discord.Embed(
-            title=f"{self._title()} ({len(self._all)})",
-            color=discord.Color.blurple(),
+        return build_inbox_embed(
+            whispers=self._all,
+            selected=self._selected(),
+            mode=self._mode,
         )
-        selected = self._selected()
-        if not self._all:
-            emb.description = (
-                "*No whispers in your inbox.*"
-                if self._mode == "received"
-                else "*You haven't sent any active whispers in this server.*"
-            )
-            return emb
-        if selected is None:
-            emb.description = "*Pick a whisper from the dropdown.*"
-            return emb
-
-        status = _status_pill(selected)
-        time_ago = _format_time_ago(selected.created_at)
-        if self._mode == "received":
-            header = f"**Whisper #{selected.id}** · {status} · *{time_ago}*"
-        else:
-            header = (
-                f"**Whisper #{selected.id} → <@{selected.target_id}>** · "
-                f"{status} · *{time_ago}*"
-            )
-        emb.description = (
-            f"{header}\n```{safe_codefence_content(selected.message)}```"
-        )
-
-        if is_locked(selected):
-            emb.set_footer(text="Locked — too old to guess on now.")
-        elif selected.solved:
-            emb.set_footer(text="Solved.")
-        elif selected.guesses_left == 0:
-            emb.set_footer(text="Out of guesses — the sender stays anonymous.")
-        elif self._mode == "received":
-            emb.set_footer(text=f"{selected.guesses_left} guesses left.")
-        else:
-            emb.set_footer(text=f"{selected.guesses_left} guesses remain for the target.")
-        return emb
 
     # ── view building ──────────────────────────────────────────────────────
 
@@ -1543,25 +1424,19 @@ class WhisperInboxSelectView(discord.ui.View):
         else:
             options = [
                 discord.SelectOption(
-                    label=(
-                        f"#{w.id} · {_status_pill(w)} · "
-                        f"{_format_time_ago(w.created_at)}"
-                    )[:100],
+                    label=inbox_option_label(w)[:100],
                     value=str(w.id),
-                    description=_preview(w.message)[:100] or None,
+                    description=inbox_option_description(w),
                     default=(w.id == self._selected_id),
                 )
                 for w in page
             ]
-            placeholder = (
-                f'🔍 "{self._filter_query}" — {len(self._display)} match'
-                f'{"es" if len(self._display) != 1 else ""}'
-                if self._filter_query
-                else f"Pick a whisper… ({len(self._display)} total)"
+            placeholder = inbox_select_placeholder(
+                filter_query=self._filter_query,
+                display_count=len(self._display),
+                page=self._page,
+                page_count=self._page_count(),
             )
-            page_count = self._page_count()
-            if page_count > 1:
-                placeholder += f" ({self._page + 1}/{page_count})"
             sel: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
                 placeholder=placeholder[:150],
                 options=options,
@@ -1603,61 +1478,27 @@ class WhisperInboxSelectView(discord.ui.View):
             clear_btn.callback = self._on_clear_filter
             self.add_item(clear_btn)
 
-        # Row 2: contextual action buttons for selected whisper
+        # Row 2: contextual action buttons for selected whisper. The set of
+        # buttons (and their order) is computed by inbox_action_buttons —
+        # this loop just maps keys → Button widgets so the conditional
+        # matrix stays testable in pure-logic land.
         selected = self._selected()
         if selected is None:
             return
-        row = 2
-        if self._mode == "received":
-            if (
-                not selected.solved
-                and selected.guesses_left > 0
-                and not is_locked(selected)
-            ):
-                guess_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                    label="Guess",
-                    style=discord.ButtonStyle.primary,
-                    row=row,
-                )
-                guess_btn.callback = self._on_guess
-                self.add_item(guess_btn)
-            if selected.state == STATE_PENDING:
-                share_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                    label="Share",
-                    style=discord.ButtonStyle.success,
-                    row=row,
-                )
-                share_btn.callback = self._on_share
-                self.add_item(share_btn)
-            reply_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label="Reply",
-                style=discord.ButtonStyle.success,
-                row=row,
+        action_specs: dict[str, tuple[str, discord.ButtonStyle, Any]] = {
+            "guess": ("Guess", discord.ButtonStyle.primary, self._on_guess),
+            "share": ("Share", discord.ButtonStyle.success, self._on_share),
+            "reply": ("Reply", discord.ButtonStyle.success, self._on_reply),
+            "report": ("Report", discord.ButtonStyle.danger, self._on_report),
+            "delete": ("Delete", discord.ButtonStyle.secondary, self._on_delete),
+        }
+        for key in inbox_action_buttons(selected, mode=self._mode):
+            label, style, callback = action_specs[key]
+            btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label=label, style=style, row=2,
             )
-            reply_btn.callback = self._on_reply
-            self.add_item(reply_btn)
-            report_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label="Report",
-                style=discord.ButtonStyle.danger,
-                row=row,
-            )
-            report_btn.callback = self._on_report
-            self.add_item(report_btn)
-        else:
-            sent_reply_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label="Reply",
-                style=discord.ButtonStyle.success,
-                row=row,
-            )
-            sent_reply_btn.callback = self._on_reply
-            self.add_item(sent_reply_btn)
-        delete_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-            label="Delete",
-            style=discord.ButtonStyle.secondary,
-            row=row,
-        )
-        delete_btn.callback = self._on_delete
-        self.add_item(delete_btn)
+            btn.callback = callback
+            self.add_item(btn)
 
     # ── select / nav callbacks ─────────────────────────────────────────────
 
@@ -1721,15 +1562,15 @@ class WhisperInboxSelectView(discord.ui.View):
         await asyncio.to_thread(
             _do_soft_delete, self.bot.ctx.db_path, selected.id
         )
-        self._all = [w for w in self._all if w.id != selected.id]
-        self._display = [w for w in self._display if w.id != selected.id]
-        if self._display:
-            if self._page * _INBOX_PAGE_SIZE >= len(self._display):
-                self._page = max(0, self._page - 1)
-            page = self._page_slice()
-            self._selected_id = page[0].id if page else None
-        else:
-            self._selected_id = None
+        self._all, self._display, self._page, self._selected_id = (
+            recompute_inbox_after_delete(
+                all_whispers=self._all,
+                display_whispers=self._display,
+                deleted_id=selected.id,
+                page=self._page,
+                page_size=_INBOX_PAGE_SIZE,
+            )
+        )
         self._rebuild()
         await interaction.response.edit_message(embed=self.embed(), view=self)
 
@@ -1861,26 +1702,9 @@ class _WhisperSendFilterModal(discord.ui.Modal, title="Filter members"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         q = str(self.query.value).strip()
-        q_lower = q.lower()
-
-        def _score(m: discord.Member) -> int:
-            name = m.display_name.lower()
-            if name == q_lower:
-                return 4
-            if name.startswith(q_lower):
-                return 3
-            if q_lower in name:
-                return 2
-            it = iter(name)
-            if all(c in it for c in q_lower):
-                return 1
-            return 0
-
-        scored = sorted(
-            ((m, _score(m)) for m in self._parent._all_members),
-            key=lambda x: -x[1],
+        self._parent._display_members = fuzzy_score_members(
+            self._parent._all_members, q,
         )
-        self._parent._display_members = [m for m, s in scored if s > 0]
         self._parent._filter_query = q
         self._parent._page = 0
         self._parent._rebuild()
@@ -1926,19 +1750,13 @@ class WhisperSendTargetSelectView(discord.ui.View):
     def _rebuild(self) -> None:
         self.clear_items()
         page_count = self._page_count()
-
-        if self._filter_query:
-            n = len(self._display_members)
-            placeholder = (
-                f'🔍 "{self._filter_query}" — {n} match'
-                f'{"es" if n != 1 else ""}'
-            )
-            if page_count > 1:
-                placeholder += f" ({self._page + 1}/{page_count})"
-        elif page_count > 1:
-            placeholder = f"Pick recipient… ({self._page + 1}/{page_count})"
-        else:
-            placeholder = "Pick recipient…"
+        placeholder = member_picker_placeholder(
+            filter_query=self._filter_query,
+            display_count=len(self._display_members),
+            page=self._page,
+            page_count=page_count,
+            base="Pick recipient…",
+        )
 
         if self._display_members:
             self.add_item(
@@ -2277,7 +2095,7 @@ class WhisperCog(commands.Cog):
                     pass
             try:
                 sent = await channel.send(
-                    "**Whisper** — anonymous messages with a guessing game.",
+                    LAUNCHER_MESSAGE_BODY,
                     view=WhisperFeedView(self.bot),
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
@@ -2441,25 +2259,29 @@ class WhisperCog(commands.Cog):
 
         import time as _t  # noqa: PLC0415
         now = _t.time()
-        last = self._last_send_at.get(interaction.user.id, 0)
-        if now - last < SEND_COOLDOWN_SECONDS:
-            remaining = int(SEND_COOLDOWN_SECONDS - (now - last))
+        remaining = check_send_cooldown(
+            self._last_send_at.get(interaction.user.id),
+            now=now,
+            cooldown_seconds=SEND_COOLDOWN_SECONDS,
+        )
+        if remaining is not None:
             await interaction.response.send_message(
-                f"Slow down — wait {remaining}s before sending another whisper.",
-                ephemeral=True,
+                format_cooldown_message(remaining), ephemeral=True,
             )
             return
 
         rate_key = (interaction.guild.id, interaction.user.id, target.id)
-        recent = [t for t in self._target_sends.get(rate_key, []) if now - t < 3600]
+        recent = prune_recent_target_sends(
+            self._target_sends.get(rate_key, []), now=now,
+        )
         if len(recent) >= SEND_PER_TARGET_HOURLY_CAP:
             await interaction.response.send_message(
-                f"You've sent {SEND_PER_TARGET_HOURLY_CAP} whispers to that user in the last hour. Try again later.",
+                format_hourly_cap_message(SEND_PER_TARGET_HOURLY_CAP),
                 ephemeral=True,
             )
             return
         self._last_send_at[interaction.user.id] = now
-        self._target_sends[rate_key] = recent + [now]
+        self._target_sends[rate_key] = [*recent, now]
 
         if getattr(target, "is_timed_out", lambda: False)():
             await interaction.response.send_message(
@@ -2485,9 +2307,9 @@ class WhisperCog(commands.Cog):
 
         try:
             dm_msg = await target.send(
-                f"\U0001f4ec You got a Whisper from someone in **{interaction.guild.name}**.\n"
-                f"You have **3 guesses** to figure out who sent it — wrong guesses are gone forever.\n"
-                f"```{safe_codefence_content(message.strip())}```",
+                format_send_dm_body(
+                    guild_name=interaction.guild.name, message=message,
+                ),
                 view=WhisperDmView(self.bot, whisper_id),
             )
         except (discord.Forbidden, discord.HTTPException):
@@ -2499,7 +2321,7 @@ class WhisperCog(commands.Cog):
         feed_msg = None
         try:
             feed_msg = await feed_channel.send(
-                f"\U0001f4ec Someone sent {target.mention} an anonymous message.",
+                format_send_feed_announcement(target.mention),
                 allowed_mentions=discord.AllowedMentions(users=[target]),
             )
         except discord.HTTPException:

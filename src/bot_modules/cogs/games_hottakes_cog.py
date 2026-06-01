@@ -1,11 +1,9 @@
 import asyncio
 import logging
-import random
-import statistics
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_JOINING, PHASE_PLAYING, PHASE_RESULTS, PHASE_RECAP
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
@@ -18,14 +16,21 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     ConfirmCloseView,
 )
-from bot_modules.games.utils.live_bar import LiveBarUpdater, build_bar
+from bot_modules.games.utils.live_bar import LiveBarUpdater
+from bot_modules.games_hottakes.embeds import (
+    build_lobby_embed,
+    build_recap_embed,
+    build_vote_embed,
+)
+from bot_modules.games_hottakes.logic import (
+    VOTE_LABELS,
+    VOTE_VALUES,
+    add_take,
+    shuffle_takes,
+    tally_votes,
+)
 
 log = logging.getLogger(__name__)
-
-
-VOTE_LABELS = ["🧊 Strongly Disagree", "👎 Disagree", "😐 Meh", "👍 Agree", "🔥 Strongly Agree"]
-VOTE_VALUES = [1, 2, 3, 4, 5]  # temperature values
-VOTE_KEYS = ["cold", "disagree", "meh", "agree", "hot"]
 
 
 class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
@@ -47,12 +52,7 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
         log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Hot Take", interaction.channel.name if interaction.channel else "unknown")
 
         def _add_take(payload):
-            takes = payload.setdefault("takes", [])
-            takes.append({
-                "user_id": interaction.user.id,
-                "text": self.take.value,
-                "display_order": len(takes),
-            })
+            add_take(payload, interaction.user.id, self.take.value)
 
         payload = await modify_payload(self.db, self.game_id, _add_take)
 
@@ -123,11 +123,7 @@ class HotTakesSubmitView(discord.ui.View):
             await interaction.response.send_message("❌ No hot takes submitted yet!", ephemeral=True)
             return
 
-        shuffled = takes[:]
-        random.shuffle(shuffled)
-        for i, t in enumerate(shuffled):
-            t["display_order"] = i
-        payload["takes"] = shuffled
+        payload["takes"] = shuffle_takes(takes)
         await update_game_payload(self.db, self.game_id, payload)
 
         self.stop()
@@ -221,29 +217,13 @@ class HotTakeVoteView(discord.ui.View):
         return False
 
     def _build_embed(self, closed: bool = False) -> discord.Embed:
-        title = f"{GAME_ICONS['hottakes']} HOT TAKE #{self.take_num}"
-        if closed:
-            title += " — ROUND OVER"
-        embed = discord.Embed(title=title, color=PHASE_RESULTS if closed else PHASE_PLAYING)
-        embed.add_field(name="Take", value=discord.utils.escape_markdown(self.take_text), inline=False)
-
-        vote_counts = [0] * len(VOTE_LABELS)
-        for v in self.votes.values():
-            vote_counts[v] += 1
-        total = sum(vote_counts)
-
-        bars = []
-        for i, label in enumerate(VOTE_LABELS):
-            bar, pct = build_bar(vote_counts[i], total)
-            bars.append(f"{label}\n{bar} {pct} ({vote_counts[i]})")
-        embed.add_field(name="Votes", value="\n".join(bars), inline=False)
-        embed.add_field(
-            name="Progress",
-            value=f"Take {self.take_num}/{self.total_takes}",
-            inline=False,
+        return build_vote_embed(
+            take_text=self.take_text,
+            take_num=self.take_num,
+            total_takes=self.total_takes,
+            votes_by_user=self.votes,
+            closed=closed,
         )
-        embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes  •  👁 Anonymous")
-        return embed
 
     @discord.ui.button(label="🧊", style=discord.ButtonStyle.secondary, custom_id="ht_v0", row=0)
     async def vote_0(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -317,20 +297,14 @@ class HotTakeVoteView(discord.ui.View):
             # Flush in-memory votes for the current round into the payload
             payload = await get_game_payload(self.db, self.game_id)
             if self.votes:
-                vote_counts = [0] * len(VOTE_LABELS)
-                for v in self.votes.values():
-                    vote_counts[v] += 1
-                total = sum(vote_counts)
-                if total > 0:
-                    weighted_sum = sum(VOTE_VALUES[idx] * c for idx, c in enumerate(vote_counts))
-                    avg = weighted_sum / total
-                else:
-                    avg = 0.0
+                vote_counts, avg, _std = tally_votes(self.votes)
                 results = payload.get("results", [])
                 results.append({
                     "text": self.take_text,
                     "counts": vote_counts,
                     "avg": avg,
+                    # Preserve historical behavior: close-game path has always
+                    # recorded std=0.0 here regardless of voter count.
                     "std": 0.0,
                     "voters": list(self.votes.keys()),
                     "author": 0,
@@ -349,31 +323,9 @@ class HotTakeVoteView(discord.ui.View):
 
     async def _post_recap(self, channel, payload: dict):
         results = payload.get("results", [])
-        if not results:
+        embed = build_recap_embed(results)
+        if embed is None:
             return
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['hottakes']} HOT TAKES — FINAL RESULTS",
-            color=PHASE_RECAP,
-        )
-        if results:
-            hottest = max(results, key=lambda x: x.get("avg", 0))
-            coldest = min(results, key=lambda x: x.get("avg", 0))
-            embed.add_field(name="🔥 Hottest Take", value=f'"{hottest["text"]}" (avg {hottest["avg"]:.1f}/5)', inline=False)
-            embed.add_field(name="🧊 Coldest Take", value=f'"{coldest["text"]}" (avg {coldest["avg"]:.1f}/5)', inline=False)
-
-            if len(results) > 1:
-                midpoint = (VOTE_VALUES[0] + VOTE_VALUES[-1]) / 2
-                most_divisive = max(
-                    results,
-                    key=lambda x: (x.get("std", 0), abs(x.get("avg", 0) - midpoint)),
-                )
-                embed.add_field(name="⚡ Most Divisive", value=f'"{most_divisive["text"]}"', inline=False)
-
-        total_voters = set()
-        for r in results:
-            total_voters.update(r.get("voters", []))
-        embed.add_field(name="Total Takes", value=str(len(results)), inline=True)
-        embed.add_field(name="Total Voters", value=str(len(total_voters)), inline=True)
         await channel.send(embed=embed)
 
 
@@ -403,14 +355,7 @@ class HotTakesCog(commands.Cog):
             payload={"takes": [], "results": []},
         )
 
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['hottakes']} HOT TAKES",
-            description="Submit your spiciest take — all entries are anonymous.",
-            color=PHASE_JOINING,
-        )
-        embed.add_field(name="Host", value=interaction.user.display_name, inline=True)
-        embed.add_field(name="Submissions", value="0", inline=True)
-        embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes  •  👁 Anonymous")
+        embed = build_lobby_embed(interaction.user.display_name)
 
         log.info("Game %s (hottakes) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         view = HotTakesSubmitView(game_id, interaction.user.id, self.db, self.bot, self)
@@ -455,20 +400,8 @@ class HotTakesCog(commands.Cog):
                     return
                 view._closed = True
 
-                vote_counts = [0] * len(VOTE_LABELS)
+                vote_counts, avg, std = tally_votes(view.votes)
                 voters = list(view.votes.keys())
-                for v in view.votes.values():
-                    vote_counts[v] += 1
-
-                total = sum(vote_counts)
-                if total > 0:
-                    weighted_sum = sum(VOTE_VALUES[idx] * count for idx, count in enumerate(vote_counts))
-                    avg = weighted_sum / total
-                    values = [VOTE_VALUES[v] for v in view.votes.values()]
-                    std = statistics.stdev(values) if len(values) > 1 else 0.0
-                else:
-                    avg = 0.0
-                    std = 0.0
 
                 result_entry = {
                     "text": _take,
@@ -539,3 +472,16 @@ class HotTakesCog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(HotTakesCog(bot))
+
+
+# Re-export VOTE_VALUES so any tests / external callers that imported it
+# from this module continue to work.
+__all__ = [
+    "HotTakesCog",
+    "HotTakesSubmitView",
+    "HotTakeVoteView",
+    "SubmitHotTakeModal",
+    "VOTE_LABELS",
+    "VOTE_VALUES",
+    "setup",
+]

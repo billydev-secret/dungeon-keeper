@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from bot_modules.services.todo_service import create_todo
+from bot_modules.services.todo_service import TASK_MAX_LEN, create_todo
 from web_server.helpers import resolve_names as _resolve_names
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
@@ -16,8 +16,6 @@ from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_que
 router = APIRouter()
 
 _MOD = Depends(require_perms({"moderator"}))
-
-_MAX_TASK_LEN = 500
 
 
 class TodoCreateBody(BaseModel):
@@ -90,10 +88,10 @@ async def create_todo_endpoint(
     task = (body.task or "").strip()
     if not task:
         raise HTTPException(status_code=400, detail="Task cannot be empty.")
-    if len(task) > _MAX_TASK_LEN:
+    if len(task) > TASK_MAX_LEN:
         raise HTTPException(
             status_code=400,
-            detail=f"Task must be {_MAX_TASK_LEN} characters or fewer.",
+            detail=f"Task must be {TASK_MAX_LEN} characters or fewer.",
         )
 
     ctx = get_ctx(request)

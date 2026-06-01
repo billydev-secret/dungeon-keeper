@@ -76,9 +76,6 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
                         game.winner_id,
                         game.loser_id,
                         self._handle_set_nick,
-                        self._handle_honor,
-                        self._handle_rematch,
-                        mode="stakes" if game.stakes_text else "nick",
                     ),
                     message_id=game.result_message_id,
                 )
@@ -235,6 +232,21 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
                 )
         return None
 
+    async def _check_no_active_nick(
+        self,
+        guild: discord.Guild,
+        challenger: discord.Member,
+        target: discord.Member,
+    ) -> str | None:
+        for member in (challenger, target):
+            nick = await pdb.get_active_nick_for_user(self.db, guild.id, member.id)
+            if nick:
+                return (
+                    f"**{member.display_name}** is serving a Pressure Cooker sentence "
+                    f"and can't play again until it expires."
+                )
+        return None
+
     # ── Rate limit ────────────────────────────────────────────────────────────
 
     def _check_rate_limit(self, user_id: int) -> bool:
@@ -300,6 +312,11 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
         perm_error = await self._check_bot_can_nick(guild, challenger, user)  # type: ignore[arg-type]
         if perm_error:
             await interaction.response.send_message(perm_error, ephemeral=True)
+            return
+
+        nick_error = await self._check_no_active_nick(guild, challenger, user)  # type: ignore[arg-type]
+        if nick_error:
+            await interaction.response.send_message(nick_error, ephemeral=True)
             return
 
         existing = await pdb.get_active_game_for_pair(self.db, guild.id, challenger.id, user.id)
@@ -587,9 +604,6 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
                     game.winner_id,  # type: ignore[arg-type]
                     game.loser_id,  # type: ignore[arg-type]
                     self._handle_set_nick,
-                    self._handle_honor,
-                    self._handle_rematch,
-                    mode="stakes" if game.stakes_text else "nick",
                 )
                 assert game.winner_id is not None and game.loser_id is not None
                 winner_m = guild.get_member(game.winner_id)
@@ -695,7 +709,7 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
             )
             await pdb.set_game_state(self.db, game_id, "NICKED")
             embed = self._build_result_embed(game, guild, imposed_nick=cleaned_nick)
-            await interaction.response.edit_message(embed=embed)
+            await interaction.response.edit_message(embed=embed, view=self._disabled_result_view(game))
             await interaction.followup.send(
                 f"📋 Discord won't let me rename the server owner. "
                 f"**{loser.display_name}**, your sentence is: **{cleaned_nick}** — please apply it yourself.",
@@ -728,74 +742,17 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
         await pdb.set_game_state(self.db, game_id, "NICKED")
 
         embed = self._build_result_embed(game, guild, imposed_nick=cleaned_nick)
-        await interaction.response.edit_message(embed=embed)
+        await interaction.response.edit_message(embed=embed, view=self._disabled_result_view(game))
 
-    async def _handle_honor(self, interaction: discord.Interaction, game_id: int) -> None:
-        game = await pdb.get_game(self.db, game_id)
-        if not game:
-            await interaction.response.send_message("Game not found.", ephemeral=True)
-            return
-        await pdb.set_game_state(self.db, game_id, game.state, stakes_honored=1)
-        await interaction.response.send_message(
-            "✅ Acknowledged — you've accepted the stakes.", ephemeral=True
+    def _disabled_result_view(self, game: PressureGame) -> ResultView:
+        view = ResultView(
+            game.id,
+            game.winner_id,  # type: ignore[arg-type]
+            game.loser_id,  # type: ignore[arg-type]
+            self._handle_set_nick,
         )
-
-    async def _handle_rematch(self, interaction: discord.Interaction, game_id: int) -> None:
-        game = await pdb.get_game(self.db, game_id)
-        if not game:
-            await interaction.response.send_message("Game not found.", ephemeral=True)
-            return
-        if not interaction.guild:
-            return
-
-        guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-
-        if game.winner_id is None or game.loser_id is None:
-            await interaction.response.send_message(
-                "This game has no result yet.", ephemeral=True
-            )
-            return
-
-        # Swap roles for rematch
-        new_challenger_id = interaction.user.id
-        other_id: int = game.loser_id if interaction.user.id == game.winner_id else game.winner_id
-        new_target_id: int = other_id
-        new_challenger = guild.get_member(new_challenger_id)
-        new_target = guild.get_member(new_target_id)
-
-        if not new_target:
-            await interaction.response.send_message(
-                "The other player has left the server.", ephemeral=True
-            )
-            return
-
-        perm_error = await self._check_bot_can_nick(guild, new_challenger, new_target)  # type: ignore[arg-type]
-        if perm_error:
-            await interaction.response.send_message(perm_error, ephemeral=True)
-            return
-
-        new_game_id = await pdb.create_game(
-            self.db,
-            guild_id=guild.id,
-            channel_id=interaction.channel_id,  # type: ignore[arg-type]
-            challenger_id=new_challenger_id,
-            target_id=new_target_id,
-            stakes_text=game.stakes_text,
-        )
-        self._record_challenge(new_challenger_id)
-
-        embed = self._build_challenge_embed(new_challenger, new_target, game.stakes_text)  # type: ignore[arg-type]
-        view = ChallengeView(
-            game_id=new_game_id,
-            target_id=new_target_id,
-            on_accept=self._handle_accept,
-            on_decline=self._handle_decline,
-        )
-        await interaction.response.send_message(
-            content=new_target.mention, embed=embed, view=view
-        )
-        msg = await interaction.original_response()
-        await pdb.set_game_state(self.db, new_game_id, "PENDING", message_id=msg.id)
+        view.disable()
+        return view
 
     # ── Embed builders ────────────────────────────────────────────────────────
 
@@ -890,13 +847,19 @@ class PressureCookerCog(commands.Cog, name="PressureCookerCog"):
         if imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{loser_name}** is now known as **{imposed_nick}**",
+                value=(
+                    f"**{loser_name}** is now known as **{imposed_nick}** "
+                    f"for 24 hours."
+                ),
                 inline=False,
             )
         else:
             embed.add_field(
                 name="⏳ Awaiting Nickname",
-                value=f"{winner_name} has 5 minutes to set the nickname.",
+                value=(
+                    f"**{winner_name}**, press **Name the loser** within 5 minutes. "
+                    f"The nickname lasts 24 hours."
+                ),
                 inline=False,
             )
 

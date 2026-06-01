@@ -93,6 +93,38 @@ def _wire_interaction(ctx, *, user_id: int = OWNER) -> MagicMock:
     return inter
 
 
+# ── Multi-guild safety: unconfigured guild must not create/delete channels ──
+
+
+@pytest.mark.asyncio
+async def test_voice_state_update_noop_for_unconfigured_guild(ctx):
+    """A voice-state update in a guild with no Voice Master config must never
+    create a channel. Guards the ``cfg.hub_channel_id == 0`` early-return that
+    lets the cog run safely across all guilds after the home-gate removal.
+    """
+    from bot_modules.cogs.voice_master_cog import VoiceMasterCog
+
+    cog = VoiceMasterCog(MagicMock(), ctx)
+
+    guild = MagicMock()
+    guild.id = 7777  # not GUILD — and the DB is empty, so unconfigured
+    guild.create_voice_channel = AsyncMock()
+
+    member = MagicMock(spec=discord.Member)
+    member.bot = False
+    member.id = OWNER
+    member.guild = guild
+
+    hub = MagicMock()
+    hub.id = 12345
+    before = SimpleNamespace(channel=None)
+    after = SimpleNamespace(channel=hub)
+
+    await cog.on_voice_state_update(member, before, after)
+
+    guild.create_voice_channel.assert_not_called()
+
+
 # ── _resolve_owned_channel ─────────────────────────────────────────────────
 
 

@@ -16,6 +16,7 @@ from .formatters import (
     format_user_mentions,
     get_text_channel,
 )
+from .logic import build_main_prompt_state, build_one_rule_prompt_state
 from .models import (
     PendingQuestionState,
     PostedQuestionState,
@@ -156,48 +157,6 @@ async def _send_question_message(
     return True
 
 
-def _build_main_prompt_state(game_id: str, state: RiskyRollState, resolution) -> PendingQuestionState | None:
-    if state.highest_user is None:
-        return None
-    if resolution.result_type in (RoundResult.SIXTYNINE, RoundResult.SIXTYNINE_TIE):
-        return PendingQuestionState(
-            channel_id=state.channel_id,
-            guild_id=state.guild_id,
-            winner_id=state.highest_user,
-            participant_user_ids=set(state.rolls),
-            game_id=game_id,
-            prompt_kind=PromptKind.ROOM,
-        )
-    if state.lowest_user is None:
-        return None
-    targets = {state.lowest_user}
-    if state.second_lowest_user is not None:
-        targets.add(state.second_lowest_user)
-    return PendingQuestionState(
-        channel_id=state.channel_id,
-        guild_id=state.guild_id,
-        winner_id=state.highest_user,
-        participant_user_ids=targets,
-        game_id=game_id,
-        lowest_tie_user_ids=set(state.lowest_tie_user_ids),
-        prompt_kind=PromptKind.DIRECT,
-    )
-
-
-def _build_one_rule_prompt_state(game_id: str, state: RiskyRollState) -> PendingQuestionState | None:
-    if state.lowest_user is None or state.rolls.get(state.lowest_user) != 1 or state.highest_user is None:
-        return None
-    return PendingQuestionState(
-        channel_id=state.channel_id,
-        guild_id=state.guild_id,
-        winner_id=state.highest_user,
-        participant_user_ids={state.lowest_user},
-        game_id=f"{game_id}:1",
-        extra_questioner_id=state.second_highest_user,
-        prompt_kind=PromptKind.TWO_QUESTIONERS,
-    )
-
-
 async def _send_and_register_prompt(send_fn, game_id: str, prompt_state: PendingQuestionState):
     message = await send_fn(
         content=build_pending_prompt_content(prompt_state),
@@ -215,7 +174,7 @@ async def _send_and_register_prompt(send_fn, game_id: str, prompt_state: Pending
 
 
 async def _try_send_one_rule_prompt(send_fn, game_id: str, state: RiskyRollState) -> None:
-    one_rule_prompt = _build_one_rule_prompt_state(game_id, state)
+    one_rule_prompt = build_one_rule_prompt_state(game_id, state)
     if one_rule_prompt is None:
         return
     one_game_id = f"{game_id}:1"
@@ -235,7 +194,7 @@ async def _send_question_prompts_channel(
     state: RiskyRollState,
     resolution,
 ) -> None:
-    main_prompt = _build_main_prompt_state(game_id, state, resolution)
+    main_prompt = build_main_prompt_state(game_id, state, resolution.result_type)
     if main_prompt is None:
         log.warning("Auto-close: no prompt state built for game %s.", game_id)
         return
@@ -266,7 +225,7 @@ async def _send_question_prompts_followup(
     state: RiskyRollState,
     resolution,
 ) -> None:
-    main_prompt = _build_main_prompt_state(game_id, state, resolution)
+    main_prompt = build_main_prompt_state(game_id, state, resolution.result_type)
     if main_prompt is None:
         log.warning("Close: no prompt state built for game %s.", game_id)
         return

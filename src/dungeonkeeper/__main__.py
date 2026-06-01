@@ -233,19 +233,23 @@ def main() -> None:
     # Background tasks
     # ==============================
     async def _handle_level_progress_cb(member, award, source):
+        cfg = ctx.guild_config(member.guild.id)
         await handle_level_progress(
             member,
             award,
             source,
-            level_5_role_id=ctx.level_5_role_id,
-            level_up_log_channel_id=ctx.level_up_log_channel_id,
-            level_5_log_channel_id=ctx.level_5_log_channel_id,
-            settings=ctx.xp_settings,
+            level_5_role_id=cfg.level_5_role_id,
+            level_up_log_channel_id=cfg.level_up_log_channel_id,
+            level_5_log_channel_id=cfg.level_5_log_channel_id,
+            settings=cfg.xp_settings,
         )
 
     bot.startup_task_factories.append(
         lambda: voice_xp_loop(
-            bot, db_path, _handle_level_progress_cb, settings_getter=lambda: ctx.xp_settings
+            bot,
+            db_path,
+            _handle_level_progress_cb,
+            settings_for=lambda gid: ctx.guild_config(gid).xp_settings,
         )
     )
 

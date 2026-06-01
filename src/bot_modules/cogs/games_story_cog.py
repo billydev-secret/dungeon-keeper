@@ -1,11 +1,10 @@
 import asyncio
 import logging
-import random
 
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GOLDEN_MEADOW_COLOR, GAME_ICONS, HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     create_game,
@@ -18,6 +17,26 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     resolve_name,
     resolve_names,
+)
+from bot_modules.games_story.embeds import (
+    build_attribution_embed,
+    build_complete_story_embed,
+    build_lobby_embed,
+    build_turn_embed,
+)
+from bot_modules.games_story.logic import (
+    add_player,
+    append_sentence,
+    assemble_story_text,
+    build_attribution_lines,
+    build_context,
+    build_turn_order,
+    chunk_attribution_lines,
+    clamp_max_sentences,
+    pick_current_player,
+    remove_player,
+    resolve_starter,
+    should_end_after_skip,
 )
 
 log = logging.getLogger(__name__)
@@ -158,9 +177,7 @@ class StoryJoinView(discord.ui.View):
         uid = interaction.user.id
 
         def _add(payload):
-            players = payload.setdefault("players", [])
-            if uid not in players:
-                players.append(uid)
+            add_player(payload, uid)
 
         payload = await modify_payload(self.db, self.game_id, _add)
         log.info("%s joined game %s", interaction.user.display_name, self.game_id)
@@ -178,9 +195,7 @@ class StoryJoinView(discord.ui.View):
         uid = interaction.user.id
 
         def _remove(payload):
-            players = payload.setdefault("players", [])
-            if uid in players:
-                players.remove(uid)
+            remove_player(payload, uid)
 
         payload = await modify_payload(self.db, self.game_id, _remove)
         log.info("%s left game %s", interaction.user.display_name, self.game_id)
@@ -279,7 +294,7 @@ class StoryCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        max_sentences = min(max(max_sentences, 2), 30)
+        max_sentences = clamp_max_sentences(max_sentences)
 
         game_id = await create_game(
             self.db,
@@ -296,15 +311,11 @@ class StoryCog(commands.Cog):
             },
         )
 
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['story']} STORY BUILDER",
-            description="Join to contribute to the story!",
-            color=GOLDEN_MEADOW_COLOR,
+        embed = build_lobby_embed(
+            host_name=interaction.user.display_name,
+            visibility=visibility,
+            max_sentences=max_sentences,
         )
-        embed.add_field(name="Writers (0)", value="—", inline=False)
-        embed.add_field(name="Host", value=interaction.user.display_name, inline=True)
-        embed.add_field(name="Mode", value=f"{visibility} | {max_sentences} sentences", inline=True)
-        embed.set_footer(text=f"{GAME_ICONS['story']} Story Builder")
 
         log.info("Game %s (story) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         view = StoryJoinView(game_id, interaction.user.id, self.db, self.bot, self)
@@ -322,10 +333,7 @@ class StoryCog(commands.Cog):
         players = payload["players"]
         max_sentences = payload.get("max_sentences", 10)
         visibility = payload.get("visibility", "blind")
-        starter = payload.get("starter", "")
-
-        if not starter:
-            starter = "Once upon a time, in a place no one quite remembered..."
+        starter = resolve_starter(payload.get("starter", ""))
 
         sentences: list[dict] = [{"author_id": None, "text": starter}]
         payload["sentences"] = sentences
@@ -333,50 +341,41 @@ class StoryCog(commands.Cog):
 
         await channel.send(f"📖 **The story begins:**\n> *{starter}*")
 
-        turn_order = players[:]
-        random.shuffle(turn_order)
+        turn_order = build_turn_order(players)
 
         sentence_count = 1  # starter already counted
         turn_index = 0
         consecutive_skips = 0
+
+        def _name_for(pid: int) -> str:
+            if guild is None:
+                return str(pid)
+            m = guild.get_member(pid)
+            return m.display_name if m else str(pid)
 
         while sentence_count < max_sentences:
             # Check if game was closed
             if game_id not in self.bot.active_views:
                 break
 
-            current_player_id = turn_order[turn_index % len(turn_order)]
+            current_player_id = pick_current_player(turn_order, turn_index)
             current_member = guild.get_member(current_player_id) if guild else None
             player_name = current_member.display_name if current_member else str(current_player_id)
 
             # Build context for the modal
-            if visibility == "blind":
-                context_text = sentences[-1]["text"]
-            else:
-                context_text = " ".join(s["text"] for s in sentences)
+            context_text = build_context(sentences, visibility)
 
             # Single turn message: ping + buttons
             mention = current_member.mention if current_member else f"**{player_name}**"
             turn_view = StoryTurnView(game_id, host_id, current_player_id, context_text, self.db, self.bot)
 
-            turn_embed = discord.Embed(
-                title=f"{GAME_ICONS['story']} STORY IN PROGRESS",
-                color=GOLDEN_MEADOW_COLOR,
+            turn_embed = build_turn_embed(
+                sentence_count=sentence_count,
+                max_sentences=max_sentences,
+                current_player_id=current_player_id,
+                turn_order=turn_order,
+                name_resolver=_name_for,
             )
-            turn_embed.add_field(name="Progress", value=f"Sentence {sentence_count + 1}/{max_sentences}", inline=True)
-            turn_embed.add_field(name="Currently writing", value=f"**{player_name}** ✍️", inline=True)
-
-            # Show turn order with current writer highlighted
-            order_lines = []
-            for i, pid in enumerate(turn_order):
-                m = guild.get_member(pid) if guild else None
-                name = discord.utils.escape_markdown(m.display_name if m else str(pid))
-                if pid == current_player_id:
-                    order_lines.append(f"**▸ {name}** ✍️")
-                else:
-                    order_lines.append(f"  {name}")
-            turn_embed.add_field(name="Turn Order", value="\n".join(order_lines), inline=False)
-            turn_embed.set_footer(text=f"{GAME_ICONS['story']} Story Builder")
 
             timeout_min = _TURN_TIMEOUT // 60
             turn_msg = await channel.send(
@@ -408,15 +407,15 @@ class StoryCog(commands.Cog):
                 consecutive_skips += 1
                 turn_index += 1
                 # If every player in the rotation was skipped, end the story
-                if consecutive_skips >= len(turn_order):
+                if should_end_after_skip(consecutive_skips, len(turn_order)):
                     await channel.send("📖 All writers were skipped — ending the story.")
                     break
                 continue
 
             consecutive_skips = 0  # reset on successful submission
             new_sentence = turn_view._submitted_text
-            sentences.append({"author_id": current_player_id, "text": new_sentence})
-            payload["sentences"] = sentences
+            append_sentence(payload, current_player_id, new_sentence)
+            sentences = payload["sentences"]
             await update_game_payload(self.db, game_id, payload)
 
             await channel.send(f"> *{discord.utils.escape_markdown(new_sentence)}*", allowed_mentions=discord.AllowedMentions.none())
@@ -430,61 +429,22 @@ class StoryCog(commands.Cog):
         await self._reveal_story(channel, game_id, sentences, players, guild)
 
     async def _reveal_story(self, channel, game_id: str, sentences: list, players: list, guild):
-        esc = discord.utils.escape_markdown
-
-        # Build attributed lines
-        lines = []
-        for s in sentences:
-            if s["author_id"]:
-                name = esc(resolve_name(guild, s["author_id"]))
-            else:
-                name = "Narrator"
-            lines.append(f"**{name}:** *{esc(s['text'])}*")
+        def _name_for(author_id: int) -> str:
+            return resolve_name(guild, author_id)
 
         # Send the full story embed first
-        embed = discord.Embed(
-            title=f"{GAME_ICONS['story']} THE COMPLETE STORY",
-            color=GOLDEN_MEADOW_COLOR,
+        story_text = assemble_story_text(sentences)
+        complete_embed = build_complete_story_embed(
+            story_text=story_text,
+            player_count=len(players),
+            sentence_count=len(sentences),
         )
-        story_text = " ".join(esc(s["text"]) for s in sentences)
-        if len(story_text) > 4090:
-            story_text = story_text[:4087] + "…"
-        embed.description = f"*{story_text}*"
-        embed.add_field(
-            name="A Golden Meadow Original",
-            value=f"{len(players)} writers | {len(sentences)} sentences",
-            inline=False,
-        )
-        await channel.send(embed=embed)
+        await channel.send(embed=complete_embed)
 
         # Send attributed breakdown — split across messages if needed
-        attr_embed = discord.Embed(
-            title=f"{GAME_ICONS['story']} WHO WROTE WHAT",
-            color=GOLDEN_MEADOW_COLOR,
-        )
-        chunk = []
-        chunk_len = 0
-        field_num = 1
-        for line in lines:
-            # embed field value limit is 1024
-            if chunk_len + len(line) + 1 > 1024:
-                attr_embed.add_field(
-                    name=f"Sentences (pt. {field_num})" if field_num > 1 else "Sentences",
-                    value="\n".join(chunk),
-                    inline=False,
-                )
-                chunk = []
-                chunk_len = 0
-                field_num += 1
-            chunk.append(line)
-            chunk_len += len(line) + 1
-        if chunk:
-            attr_embed.add_field(
-                name=f"Sentences (pt. {field_num})" if field_num > 1 else "Sentences",
-                value="\n".join(chunk),
-                inline=False,
-            )
-        attr_embed.set_footer(text=f"{GAME_ICONS['story']} Story Builder")
+        lines = build_attribution_lines(sentences, _name_for)
+        chunks = chunk_attribution_lines(lines)
+        attr_embed = build_attribution_embed(chunks)
         await channel.send(embed=attr_embed)
 
         payload = await get_game_payload(self.db, game_id)

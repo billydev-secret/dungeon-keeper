@@ -6,6 +6,7 @@ import asyncio
 import logging
 import sqlite3
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import discord
@@ -49,9 +50,14 @@ async def process_voice_xp_tick(
     bot: discord.Client,
     db_path: Path,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    settings_for: Callable[[int], XpSettings] | None = None,
 ) -> dict[tuple[int, int], tuple[discord.Member, AwardResult]]:
     """
     Process one voice XP tick, awarding XP to qualifying members.
+
+    ``settings_for`` resolves per-guild XP settings (e.g.
+    ``lambda gid: ctx.guild_config(gid).xp_settings``); when omitted the static
+    ``settings`` snapshot is used for every guild.
 
     Returns a dict of (guild_id, member_id) -> (member, award_result) for level-up handling.
     """
@@ -61,12 +67,13 @@ async def process_voice_xp_tick(
 
     with open_db(db_path) as conn:
         for guild in bot.guilds:
+            g_settings = settings_for(guild.id) if settings_for is not None else settings
             for channel in guild.voice_channels:
                 human_members = [member for member in channel.members if not member.bot]
                 if not human_members:
                     continue
 
-                qualifies = is_qualifying_voice_channel(channel, settings)
+                qualifies = is_qualifying_voice_channel(channel, g_settings)
                 for member in human_members:
                     active_members.add((guild.id, member.id))
                     session = get_voice_session(conn, guild.id, member.id)
@@ -111,7 +118,7 @@ async def process_voice_xp_tick(
                         )
                         continue
 
-                    intervals_due = completed_voice_intervals(session, now_ts, settings)
+                    intervals_due = completed_voice_intervals(session, now_ts, g_settings)
                     if intervals_due <= 0:
                         continue
 
@@ -128,11 +135,11 @@ async def process_voice_xp_tick(
                         conn,
                         guild.id,
                         member.id,
-                        intervals_due * settings.voice_award_xp,
+                        intervals_due * g_settings.voice_award_xp,
                         event_source=XP_SOURCE_VOICE,
                         event_timestamp=now_ts,
                         channel_id=channel.id,
-                        settings=settings,
+                        settings=g_settings,
                     )
                     if award.awarded_xp > 0:
                         log.debug(
@@ -158,19 +165,23 @@ async def voice_xp_loop(
     handle_level_progress_callback,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
     settings_getter=None,
+    settings_for: Callable[[int], XpSettings] | None = None,
 ) -> None:
     """Background task that periodically awards voice XP.
 
-    Pass ``settings_getter`` as a zero-argument callable (e.g. ``lambda: ctx.xp_settings``)
-    so each tick picks up live config changes without restarting the loop.
-    If omitted, the static ``settings`` snapshot is used for every tick.
+    Pass ``settings_for`` as a per-guild resolver (e.g.
+    ``lambda gid: ctx.guild_config(gid).xp_settings``) so each guild uses its own
+    XP config. ``settings_getter`` (a zero-arg callable) and the static
+    ``settings`` snapshot remain supported as guild-agnostic fallbacks.
     """
     await bot.wait_until_ready()
 
     while not bot.is_closed():
         current_settings = settings_getter() if settings_getter is not None else settings
         try:
-            leveled_members = await process_voice_xp_tick(bot, db_path, current_settings)
+            leveled_members = await process_voice_xp_tick(
+                bot, db_path, current_settings, settings_for=settings_for
+            )
             if leveled_members:
                 log.info(
                     "Voice XP tick awarded XP to %d member(s): %s",
