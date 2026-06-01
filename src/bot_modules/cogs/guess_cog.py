@@ -688,32 +688,33 @@ class GameView(discord.ui.View):
 
     async def _guess_callback(self, interaction: discord.Interaction) -> None:
         assert interaction.guild and interaction.message
+        await interaction.response.defer(ephemeral=True)
         db_path = self.bot.ctx.db_path
         config = await asyncio.to_thread(_load_config, db_path, interaction.guild.id)
 
         round_row = await asyncio.to_thread(_do_load_round, db_path, self.round_id)
         if round_row and round_row.answer_optout:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "This round is no longer solvable — the answer opted out.",
                 ephemeral=True,
             )
             return
         if round_row and interaction.user.id == round_row.submitter_id:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You can't guess on your own round.", ephemeral=True
             )
             return
 
         guess_role = interaction.guild.get_role(config.guess_role_id)
         if guess_role is None:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "Guess role not found — ask an admin to configure it.", ephemeral=True
             )
             return
 
         guess_members = [m for m in guess_role.members if not m.bot]
         if not guess_members:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "No opted-in members to guess from.", ephemeral=True
             )
             return
@@ -723,7 +724,7 @@ class GameView(discord.ui.View):
             if round_row and round_row.round_type == "confession"
             else "Who is in this photo?"
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"Who do you think this is? *(prompt expires in {SELECT_TIMEOUT_SECONDS}s)*",
             view=GuessSelectView(
                 self.bot, self.round_id, guess_members, interaction.message,
