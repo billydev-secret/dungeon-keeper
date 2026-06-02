@@ -165,6 +165,8 @@ def main() -> None:
         "bot_modules.cogs.todo_cog",
         "bot_modules.cogs.ai_mod_cog",
         "bot_modules.cogs.watch_cog",
+        "bot_modules.cogs.rules_watch_cog",
+        "bot_modules.rules_watch.monitor",
         "bot_modules.cogs.wellness_cog",
         "bot_modules.cogs.xp_cog",
         "bot_modules.cogs.confessions_cog",
@@ -181,6 +183,7 @@ def main() -> None:
         "bot_modules.cogs.emoji_stealer_cog",
         "bot_modules.cogs.risky_roll_cog",
         "bot_modules.cogs.pressure_cooker",
+        "bot_modules.cogs.bios_cog",
         # ── Party Games (PoppyBot) ────────────────────────────────
         "bot_modules.cogs.games_session_cog",
         "bot_modules.cogs.games_consent_cog",
@@ -228,6 +231,10 @@ def main() -> None:
 
     # Register persistent wellness-partner request buttons so DM Accept/Decline survive restarts
     bot.add_dynamic_items(WellnessPartnerAcceptButton, WellnessPartnerDeclineButton)
+
+    # Register persistent Rules Watch label buttons for unlabeled events
+    from bot_modules.rules_watch.alert import register_persistent_views as _rw_register_views
+    _rw_register_views(bot, db_path)
 
     # ==============================
     # Background tasks

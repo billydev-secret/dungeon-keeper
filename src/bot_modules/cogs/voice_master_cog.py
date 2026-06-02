@@ -138,6 +138,8 @@ class VoiceMasterCog(commands.Cog):
         self._create_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         # channel_id → pending empty-grace cleanup task
         self._empty_timers: dict[int, asyncio.Task] = {}
+        # (guild_id, user_id) → pending self-disconnect task
+        self._sleepkick_tasks: dict[tuple[int, int], asyncio.Task] = {}
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -914,6 +916,69 @@ class VoiceMasterCog(commands.Cog):
                 extra={"channel_id": channel.id},
             )
         await _ephemeral(interaction, "You're the new owner of this channel.")
+
+    # ── Sleep-kick (self-disconnect timer) ─────────────────────────────
+
+    @voice.command(
+        name="sleepkick",
+        description="Disconnect yourself from voice after a set number of hours. Use 0 to cancel.",
+    )
+    @app_commands.describe(hours="Hours until you're disconnected (0–24). Use 0 to cancel a pending timer.")
+    async def voice_sleepkick(
+        self, interaction: discord.Interaction, hours: float
+    ) -> None:
+        if interaction.guild is None:
+            return
+        member = interaction.user
+        if not isinstance(member, discord.Member):
+            return
+        key = (interaction.guild.id, member.id)
+
+        existing = self._sleepkick_tasks.pop(key, None)
+        if existing is not None and not existing.done():
+            existing.cancel()
+
+        if hours == 0:
+            if existing is not None:
+                await _ephemeral(interaction, "Sleep-kick cancelled.")
+            else:
+                await _ephemeral(interaction, "No active sleep-kick to cancel.")
+            return
+
+        if not (0 < hours <= 24):
+            await _ephemeral(interaction, "Hours must be between 0 and 24.")
+            return
+
+        task = self.bot.loop.create_task(
+            self._sleepkick_fire(interaction.guild.id, member.id, int(hours * 3600))
+        )
+        self._sleepkick_tasks[key] = task
+
+        mins = int(hours * 60)
+        if mins < 60:
+            time_str = f"{mins}m"
+        elif hours == int(hours):
+            time_str = f"{int(hours)}h"
+        else:
+            time_str = f"{int(hours)}h {int((hours % 1) * 60)}m"
+        await _ephemeral(interaction, f"You'll be disconnected from voice in {time_str}.")
+
+    async def _sleepkick_fire(self, guild_id: int, user_id: int, delay_s: int) -> None:
+        try:
+            await asyncio.sleep(delay_s)
+        except asyncio.CancelledError:
+            return
+        self._sleepkick_tasks.pop((guild_id, user_id), None)
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        member = guild.get_member(user_id)
+        if member is None or member.voice is None or member.voice.channel is None:
+            return
+        try:
+            await member.move_to(None, reason="Voice Master: sleep-kick timer expired")
+        except (discord.Forbidden, discord.HTTPException):
+            log.warning("voice_master: sleepkick failed for member %d in guild %d", user_id, guild_id)
 
     # ── Trust / block list management ─────────────────────────────────
 

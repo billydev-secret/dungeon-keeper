@@ -71,5 +71,8 @@ ACTIVITY_DANGER  = COLOR_RED
 # Auto-delete operations (mass deletion is destructive — dark red)
 AUTO_DELETE_PRIMARY = 0x992D22
 
+# Bios — single ember accent, identical across every bio
+BIOS_PRIMARY = 0xC8763E
+
 # Generic / fallback
 GENERIC_PRIMARY = COLOR_GOLD

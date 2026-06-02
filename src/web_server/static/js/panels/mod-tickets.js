@@ -288,6 +288,13 @@ export function mount(container) {
         <div class="subtitle">Flagged messages, auto-mod hits, and member reports awaiting review.</div>
       </header>
 
+      <div class="mod-stats" data-stats>
+        <div class="mod-stat open"><div class="lbl">Open</div><div class="v">—</div><div class="sub">loading…</div></div>
+        <div class="mod-stat high"><div class="lbl">Unclaimed</div><div class="v">—</div><div class="sub"></div></div>
+        <div class="mod-stat claimed"><div class="lbl">Escalated</div><div class="v">—</div><div class="sub"></div></div>
+        <div class="mod-stat resolved"><div class="lbl">Claimed by me</div><div class="v">—</div><div class="sub"></div></div>
+      </div>
+
       <section class="mod-split">
         <div class="ticket-list-wrap">
           <div class="ticket-list-head">
@@ -311,6 +318,7 @@ export function mount(container) {
     </div>
   `;
 
+  const statsEl = container.querySelector("[data-stats]");
   const listEl = container.querySelector("[data-list]");
   const detailEl = container.querySelector("[data-detail]");
   const filterGroup = container.querySelector("[data-filter-group]");
@@ -347,6 +355,35 @@ export function mount(container) {
     setFilterBadge("mine", "Mine", mineCount);
   }
 
+  function renderStats() {
+    const open = state.tickets.filter((t) => t.status === "open");
+    const unclaimed = open.filter((t) => !t.claimer_id).length;
+    const escalated = open.filter((t) => t.escalated).length;
+    const me = window.__dk_user;
+    const mine = me ? open.filter((t) => t.claimer_id && String(t.claimer_id) === String(me.user_id)).length : 0;
+    statsEl.innerHTML = `
+      <div class="mod-stat open">
+        <div class="lbl">Open</div>
+        <div class="v">${open.length}</div>
+        <div class="sub">${open.length === 1 ? "ticket" : "tickets"}</div>
+      </div>
+      <div class="mod-stat high">
+        <div class="lbl">Unclaimed</div>
+        <div class="v">${unclaimed}</div>
+        <div class="sub">${unclaimed ? "need attention" : "all claimed"}</div>
+      </div>
+      <div class="mod-stat claimed">
+        <div class="lbl">Escalated</div>
+        <div class="v">${escalated}</div>
+        <div class="sub">${escalated ? "high priority" : "none"}</div>
+      </div>
+      <div class="mod-stat resolved">
+        <div class="lbl">Claimed by me</div>
+        <div class="v">${mine}</div>
+        <div class="sub">${mine ? "in progress" : "none"}</div>
+      </div>`;
+  }
+
   function render() {
     const source = currentTicketSource();
     const filtered = source.filter(FILTERS[state.filter]);
@@ -378,6 +415,7 @@ export function mount(container) {
       const data = await api("/api/moderation/tickets");
       state.tickets = data.tickets || [];
       state.closedTickets = null;
+      renderStats();
       if (state.filter === "closed") {
         await refreshClosed();
       } else {

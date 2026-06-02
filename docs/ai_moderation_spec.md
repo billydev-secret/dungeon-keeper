@@ -1,140 +1,230 @@
 # AI Moderation — Feature Spec
 
-LLM-assisted moderation backed by a local model. Two command groups share the same model and message-archive reader:
+LLM-assisted moderation backed by a local model. Three systems share the same model infrastructure and message archive:
 
-- **`/ai review | scan | channel | query`** — admin-only inspection commands. Reads the local message archive (no live Discord history fetch), assembles a tagged log with context around the target, runs it through the configured system prompt, and returns the analysis as an ephemeral reply.
-- **`/watch add | remove | list`** — mod-level subscription to a member's posts. Every public message from a watched user is evaluated by the LLM; only messages tagged as rule violations are DM'd to the watchers. When the LLM is unavailable, **every** public message is relayed unfiltered.
+- **`/ai review | scan | channel | query`** — on-demand inspection commands. Reads the local message archive, assembles a tagged log with context, runs it through the configured system prompt, and returns the analysis ephemerally.
+- **`/watch add | remove | list`** — opt-in per-user subscription. Every public message from a watched member is evaluated by the LLM; only messages tagged as rule violations are DM'd to the watcher. When the LLM is unavailable, every public message is relayed unfiltered.
+- **Rules Watch** — passive all-channel monitor. Every public message is pre-screened by cheap heuristics; those that pass are evaluated by a recall-leaning guard model and scored against layered context signals. Flags are routed to a human-reviewed priority queue. Every confirm or dismiss a moderator makes becomes a labeled training example.
 
 ## Commands
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/ai review user:<member> days:[1-30]=7` | Slash | Admin | Flag rule violations and concerning patterns in the member's recent messages |
-| `/ai scan count:[10-200]=50` | Slash | Admin | Scan the last N archived messages in the current text channel / thread |
+| `/ai review user:<member> days:[1-30]=7` | Slash | Admin | Flag violations and patterns in a member's recent messages |
+| `/ai scan count:[10-200]=50` | Slash | Admin | Scan the last N archived messages in the current channel / thread |
 | `/ai channel question:<text> minutes:[1-1440]=60 channel:[#channel]` | Slash | Admin | Free-form Q&A over a channel's recent archive window |
 | `/ai query user:<member> question:<text> days:[1-30]=14` | Slash | Admin | Free-form Q&A about one member's archive |
 | `/watch add user:<member>` | Slash | Mod | Subscribe yourself to that member's posts |
 | `/watch remove user:<member>` | Slash | Mod | Unsubscribe yourself |
 | `/watch list` | Slash | Mod | Show everyone you're currently watching |
-| AI config (read / write models / write prompts / clear prompt) | Web (dashboard) | Admin | Read or override the per-guild model and prompt for each command |
-| AI prompt test | Web (dashboard) | Admin | Run the current prompt + model against arbitrary test input |
-| Model status / source / reload | Web (dashboard) | Admin | Inspect or change the loaded model file |
-| Guild-wide message query | Web (dashboard) | Moderator | Free-form question against the local archive, with optional author / channel / day filters |
+| `/rules-watch enable` | Slash | Mod | Start passive monitoring of all public channels |
+| `/rules-watch disable` | Slash | Mod | Stop passive monitoring |
+| `/rules-watch set-channel #channel` | Slash | Mod | Set the channel where immediate alerts are posted |
+| `/rules-watch digest` | Slash | Mod | Post a summary of all unlabeled digest-tier events |
+| `/rules-watch stats` | Slash | Mod | Show event counts, false-positive rate, and signal firing rates |
+| `/rules-watch label <event_id> <verdict>` | Slash | Mod | Manually label a digest-tier event |
+| `/rules-watch status` | Slash | Mod | Show whether monitoring is active and the alert channel |
+| AI config (models / prompts / clear) | Web | Admin | Read or override the per-guild model and system prompt for each command |
+| AI prompt test | Web | Admin | Run the current prompt + model against arbitrary input |
+| Model status / source / reload | Web | Admin | Inspect or change the loaded model file |
+| Guild-wide message query | Web | Moderator | Free-form question against the local archive with optional filters |
+| Rules Watch alert queue | Web | Moderator | Review flagged events; Confirm / Dismiss with inline label buttons |
+| Rules Watch label stats | Web | Moderator | Label counts, false-positive rate, events by tier and rule |
 
-The `/ai` group's `Manage Server` default-permission is a Discord client-side hint only — the real gate is the bot's admin check.
+---
 
 ## Behaviour
 
 ### `/ai review`
-Loads the target's last N days of activity from the local message archive. For each channel where the target posted, the reader pulls a window of messages and tags each one:
+Loads the target's last N days of activity from the local message archive. For each channel where the target posted, a window of messages is fetched and each line is tagged:
 
 - `[TARGET]` — the target wrote it.
 - `[REPLY→TARGET]` — someone replied to the target.
 - `[TARGET REPLIED TO]` — the message the target replied to.
 - `[CONTEXT]` — surrounding messages (a symmetric four-message window around each target line).
 
-The total target-line count is capped (~200) so the context budget isn't blown out. Attachments and mentions are appended inline as ` [📎 ext]` and ` [@Name]` notes. The full tagged log goes to the LLM with the review system prompt; the response is replied ephemerally, split across multiple messages if it exceeds Discord's single-message cap.
-
-If the target has no archived activity in the window, the reply still posts: "No messages found for {name} in the last {N} days."
+The total target-line count is capped (~200). Attachments and mentions are appended inline as ` [📎 ext]` and ` [@Name]`. The tagged log goes to the LLM with the review system prompt; the response is replied ephemerally, split across multiple messages if needed.
 
 ### `/ai scan`
 Same reader shape but scoped to the current text channel or thread and the most recent N messages (oldest-first after fetching). Uses the scan system prompt.
 
 ### `/ai channel`
-Free-form question against a channel's recent archive window (in minutes rather than days). The user's question is prepended to the log as `Moderator question: …`. Uses the channel-query prompt.
+Free-form question against a channel's recent archive window (in minutes rather than days). The moderator's question is prepended to the log. Uses the channel-query prompt.
 
 ### `/ai query`
 Like `/ai review` but with a free-form question prepended. Uses the user-query prompt.
 
 ### `/watch add | remove | list`
-- **add** — rejects bots, self, and DM-context invocations. Multiple mods can independently watch the same member. The reply explicitly warns when the LLM is unavailable: every public post will be relayed unfiltered until the model comes back.
+- **add** — rejects bots, self, and DM-context invocations. Multiple mods can independently watch the same member. The reply explicitly warns when the LLM is unavailable.
 - **remove** — drops the (watched, watcher) pair.
-- **list** — shows every member the caller is currently watching, with departed-from-guild members rendered as bare ids.
+- **list** — shows every member the caller is currently watching; departed members appear as bare IDs.
 
-Add and remove take effect immediately — no restart or delay.
+On every public guild message from a watched member:
 
-### What watchers receive
-On every public guild message from a watched user:
+- **LLM available** — the message is evaluated by the watch-check prompt (400-character truncation, newlines collapsed, channel name and NSFW tag included). Only messages the model tags as a rule violation are DM'd. Any error during the check falls through to "treat as violation" — better to over-notify than silently drop a flag.
+- **LLM unavailable** — every public message is relayed unconditionally.
 
-- **If the LLM is available**: the message is evaluated against the watch-check prompt (truncated to 400 characters, with the channel name and any NSFW-designation tag). Only messages the model tags as a rule violation are DM'd to the watchers, with the model's reason quoted. Any error during this check falls through to "treat as violation" — better to over-notify than to silently drop a flag.
-- **If the LLM is unavailable**: every public message is relayed unconditionally. The `/watch add` reply explicitly warned the watcher about this fallback.
+The DM carries the message content, attachment URLs, an optional `⚠️ Rule concern: {reason}` line, and a footer with author, guild, channel, and jump URL. Watchers with closed DMs are silently dropped. The watch-check prompt has explicit high-threshold guidance because every public post from a watched member is evaluated — a chatty false-positive rate would spam DMs.
 
-The DM carries the message content (or "[no text content]" if empty), any attachment URLs, an optional `⚠️ Rule concern: {reason}` line, and a footer with the author, guild, channel, and jump URL. Watchers with closed DMs are silently dropped.
+### Rules Watch — passive monitor
 
-The watch-check prompt has explicit high-threshold guidance ("the vast majority of messages are completely normal and friendly … your threshold must be HIGH") because every public message a watched member sends gets evaluated — a chatty false-positive rate would spam DMs.
+Enabled per guild with `/rules-watch enable`. Fires on every public guild message from a non-bot user in any text channel or thread.
 
-### Web behaviour
-The dashboard's prompt editor offers a **test** action that runs the current prompt + model against arbitrary input so admins can preview behaviour before saving. The moderator-facing guild-wide query is the same archive reader exposed as a one-off question with optional author and channel filters and a 500-message cap.
+#### Pre-filter gate
+The LLM is only called when at least one cheap heuristic fires:
+- VADER compound score (already computed by the events listener) < −0.25
+- Message content contains a boundary-token keyword
+- A slur or identity attack is detected lexically
+- The author has sent 3+ consecutive directed messages to the same user with no reply
 
-### LLM lifetime
-Model loading is asynchronous and singleton: at most one model is loaded at a time. Phases are `idle → downloading → loading → ready` (or `error`). The model file is downloaded from HuggingFace on first start and cached locally; subsequent starts use the cache. Inference is serialised — concurrent commands queue behind each other rather than racing the model.
+This gate is hardcoded in the first implementation and will be tuned against historical data in a future pass (see §5a of `rules_watch_cog.md`).
+
+#### Guard model
+A recall-leaning conversation window prompt — the opposite disposition from the watch-check prompt. The guard model is *meant* to flag generously; false positives cost a moderator glance, false negatives cost a missed violation. It receives the last 8 messages in the channel (oldest first) and returns structured JSON:
+
+```json
+{"verdict": "flag", "rule": "2", "reason": "brief reason", "confidence": 0.87}
+```
+
+On any parse failure the result is treated as `ok`.
+
+#### Context signals
+When the guard flags a message, the scorer computes up to eight context signals before assigning a priority. Signals never suppress a flag — they can only move it up or down the queue.
+
+**Down-weights (multiplicative):**
+- Mutual interaction history — established, reciprocal rapport reduces priority
+- Active DM-consent pairing — deliberate bilateral consent act
+- Balanced reciprocity — roughly equal message exchange between author and target
+
+**Up-weights (additive):**
+- Slur or identity attack detected lexically
+- Boundary token in message (`stop`, `no`, `not interested`, recognized safewords)
+- DM-consent pairing recently revoked (within 72 h) followed by directed content
+- Persistence — consecutive directed messages to a target with no reply
+- Target withdrawal — target goes quiet or leaves after the flagged exchange
+- One-sided thread — low target-to-author message ratio with sustained persistence
+- DM tier mismatch — author's DM stance more open than the target's
+- New account — tenure under 7 days
+
+The floor for any flag is `priority_score = 1.0` regardless of down-weights — nothing is ever silently discarded.
+
+**Target identification** — in priority order: (1) reply chain, (2) first @mention, (3) most-mentioned non-author in recent window, (4) most recent reply target in channel history. If no target can be identified, context signals that depend on a target are zeroed and a penalty is applied to the confidence of those that aren't.
+
+#### Priority tiers
+
+| Tier | Condition | Action |
+|---|---|---|
+| `immediate` | priority_score ≥ 7 | Embed posted to the configured alert channel with Confirm / Dismiss buttons |
+| `digest` | priority_score 3–6.9 | Stored; surfaced by `/rules-watch digest` or the web queue |
+| `logged` | priority_score < 3 | Stored only; no notification |
+
+Every event is stored regardless of tier, so no information is lost.
+
+#### Withdrawal check
+For `immediate` and `digest` events with an identified target, a background task re-checks 30 minutes later whether the target has posted in that channel. Silence upgrades the `target_withdrew` flag. If the re-score escalates the tier to `immediate`, a brief follow-up note is posted to the alert channel.
+
+#### Label capture
+When a moderator clicks **✅ Confirmed violation** or **❌ False positive** on an alert embed, or runs `/rules-watch label`, or confirms/dismisses through the web dashboard:
+- A row is written to `rules_labels` with the verdict, the labeling moderator's ID, and a timestamp.
+- Corrected rule numbers can be supplied via the web dashboard.
+- The alert embed's buttons are disabled after labeling.
+
+These labels are the primary long-term output of the system. As confirmed and dismissed events accumulate, the label set describes *this* community's consent norms in a form no public dataset can provide.
+
+---
+
+## LLM lifetime
+
+Model loading is asynchronous and singleton: at most one model is loaded at a time. Phases are `idle → downloading → loading → ready` (or `error`). The model file is downloaded from HuggingFace on first start and cached locally. Inference is serialised — concurrent calls queue rather than race. Rules Watch guard calls share this queue with other AI commands.
+
+---
 
 ## Permissions
 
-- The bot needs **Read Message History** wherever the archive is populated (the archive is filled live by [[events-spec]] — no extra Discord API call happens at command time).
+- The bot needs **Read Message History** wherever the archive is populated.
 - `/ai *` requires the bot's **admin** check.
-- `/watch *` requires the bot's **mod** check; add and remove reject DMs.
+- `/watch *` and `/rules-watch *` require the bot's **mod** check; add/remove/enable reject DMs.
 - The DM relay needs each watcher to allow DMs from server members. Failures are logged and dropped.
-- All dashboard endpoints require **admin** except the guild-wide query, which is **moderator**.
+- Dashboard endpoints require **admin** except the guild-wide message query and the Rules Watch queue/stats, which require **moderator**.
+
+---
 
 ## User-visible errors
 
 | When | The user sees |
 |---|---|
 | Non-admin runs `/ai *` | "You don't have permission to use this command." |
-| Non-mod runs `/watch *` | "You don't have permission to use this command." |
+| Non-mod runs `/watch *` or `/rules-watch *` | "Permission denied." |
 | LLM not configured | "OLLAMA_BASE_URL is not set — AI features require a local Ollama instance." |
 | `/ai *` invoked in DMs | "This command only works in a server." |
-| `/ai scan` or `/ai channel` invoked in a voice / category / forum-root channel | "This command only works in text channels and threads." |
+| `/ai scan` / `/ai channel` in voice/category/forum channel | "This command only works in text channels and threads." |
 | `/watch add` on a bot | "You cannot watch bots." |
 | `/watch add` on self | "You cannot watch yourself." |
 | `/watch add | remove` in DMs | "This command must be used in a server." |
-| Archive returned no rows | "No messages found for {name} in the last {N} days." (or equivalent) |
+| Archive returned no rows | "No messages found for {name} in the last {N} days." |
 | LLM call returned an empty string | "No analysis returned." |
 | Dashboard guild-wide query, LLM not configured | "LLM is not configured." |
-| Dashboard guild-wide query, bot can't resolve the guild | "Guild not available" |
+| Dashboard guild-wide query, guild unavailable | "Guild not available" |
 | Dashboard prompt update, unknown key | "Unknown prompt key: {key}" |
-| Dashboard model reload, no source set | "No model source configured — set model path and HuggingFace details first." |
+| Dashboard model reload, no source set | "No model source configured." |
+| `/rules-watch label`, event not found | "Event #{id} not found." |
+| Dashboard label, event not found | 404 |
 
-The "OLLAMA_BASE_URL" wording is legacy — there is no such environment variable. The check is whether a model file or HuggingFace source has been configured.
+The "OLLAMA_BASE_URL" wording is legacy — the check is whether a model file or HuggingFace source has been configured.
+
+---
 
 ## Non-goals
 
-- **No live Discord history fetch.** Every command reads the local archive. A gap in the archive is a gap in `/ai` output; no extra API calls happen at command time.
-- **No multi-model serving.** Per-command "model" overrides change which model name the dashboard reads back; they do not swap weights at inference time. Exactly one model is loaded at a time.
-- **No streaming.** Each call is one blocking inference returning the whole completion.
-- **No prompt-injection mitigation** beyond a 400-character per-message truncation (newlines collapsed to spaces). Message content is passed verbatim into the user role.
-- **No public-channel auto-flagging.** The watch check is opt-in via `/watch`. Server-wide auto-moderation lives elsewhere ([[post-monitoring-spec]] for spoiler enforcement, [[wellness-guardian-spec]] for wellness-tagged users).
-- **No per-channel watch scoping.** A watch fires across every guild channel the watcher can read.
-- **No conversational memory.** Each call is one-shot; no follow-ups, no transcripts, no tool calling.
+- **No live Discord history fetch.** Every command reads the local archive. A gap in the archive is a gap in `/ai` output.
+- **No multi-model serving.** Per-command model overrides change which model name is requested; exactly one model is loaded at a time.
+- **No streaming.** Each inference call returns the whole completion.
+- **No prompt-injection mitigation** beyond 400-character per-message truncation.
+- **No DM inspection.** Rules Watch observes public chat only. The DM-consent registry contributes only as a relationship-confidence signal; it never implies reading private messages.
+- **No auto-action.** Rules Watch is alert-only. Nothing is kicked, banned, or muted automatically.
+- **No Rule 5 enforcement.** DM-consent violations are handled entirely by human-reviewed user reports. The pairing registry is used only to reduce false positives in public-chat scoring.
+- **No per-channel watch scoping.** A `/watch` subscription fires across every guild channel.
+- **No conversational memory.** Each AI call is one-shot; no follow-ups, no transcripts.
+
+---
 
 ## Configuration
 
 Per-guild keys an admin sets via the dashboard:
 
-- **Mod model / wellness model** — the default model for moderation commands and for the wellness encouragement prompt respectively.
-- **Per-command model override** — review, scan, user query, channel query, watch check, and wellness encouragement. Empty means fall through to the matching default above.
-- **Per-command system prompt** — same six keys. Empty means fall through to the hard-coded default.
+- **Mod model / wellness model** — default model for moderation and wellness commands.
+- **Per-command model override** — review, scan, user query, channel query, watch check, rules watch guard. Empty falls through to the mod model default.
+- **Per-command system prompt** — same keys. Empty falls through to the hard-coded default.
+- **`rules_watch_enabled`** — whether the passive monitor is running (set via `/rules-watch enable/disable`).
+- **`rules_watch_channel_id`** — Discord channel ID where `immediate`-tier alerts are posted (set via `/rules-watch set-channel`).
 
-`ai_config` readers all take the active guild id, so dashboard writes round-trip to dashboard reads (without this, edits silently disappeared because writes landed at the guild and reads landed at the global slot).
-
-Global-only (not per-guild) — admins set these once for the host:
+Global-only (host-level, not per-guild):
 
 - **Model file path** — the local GGUF file.
-- **HuggingFace repo + filename** — used to download the model on first start if the local file is missing.
+- **HuggingFace repo + filename** — used to download the model on first start if local file is missing.
 
-Runtime tuning (context length, GPU layers, threads, batch size) is read once at load time from environment variables — not user-tunable via the dashboard.
+Runtime tuning (context length, GPU layers, threads, batch size) is set once via environment variables — not user-tunable through the dashboard.
+
+---
 
 ## Stored data
 
-Per guild: the set of (watched, watcher) subscriptions — one row per pair, so multiple mods can independently watch the same member. There is no purge job; entries persist across watchers leaving the guild (they just stop receiving DMs).
+**Per guild:**
 
-Per guild, in the shared config table: the model defaults, the per-command model overrides, and the per-command prompt overrides. The wellness prompt and wellness model entries are co-owned with [[wellness-guardian-spec]] — the registry lives here, the consumer lives there.
+| Table | Contents |
+|---|---|
+| `watched_users` | (guild_id, watched_user_id, watcher_user_id) — one row per mod/member pair. Persists when watchers leave the guild. |
+| `rules_events` | One row per message that passed the pre-filter and was stored. Columns: all content signals (guard verdict, rule, reason, confidence; slur flag; VADER compound and trajectory), all context signals (mutual count, reciprocity, consent state, DM tier mismatch, thread reciprocity, persistence count, boundary-token flag, withdrawal flag, tenure), priority score, tier, human-readable reason, and the Discord message ID of any posted alert. |
+| `rules_labels` | One row per labeled event: is_violation (bool), corrected rule, labeling mod ID, timestamp, optional notes. |
 
-Globally, in the shared config table: the model path and HuggingFace source.
+**Per guild, in the shared config table:** model defaults, per-command model overrides, per-command prompt overrides, `rules_watch_enabled`, `rules_watch_channel_id`. The wellness prompt/model entries are co-owned with [[wellness-guardian-spec]].
 
-Read-only consumers: the message archive (and its attachment + mention children) populated by [[events-spec]]. The AI cluster never writes to those tables — every `/ai *` command and the dashboard's guild-wide query read from them.
+**Global, in the shared config table:** model file path and HuggingFace source.
 
-On disk: the model file itself, downloaded from HuggingFace on first start and persisted across restarts. The file is cache-grade — re-downloadable from the configured source.
+**Read-only consumers:** the message archive (messages, message_attachments, message_mentions, message_sentiment) populated by [[events-spec]]. The AI cluster never writes to those tables.
 
-In-memory only: the watched-users map (populated once at startup, hot-updated by `/watch add | remove`), and the loaded model singleton.
+**On disk:** the model file, downloaded from HuggingFace on first start and cached across restarts.
+
+**In-memory only:** the watched-users map (hot-updated by `/watch add | remove`); the loaded model singleton; the Rules Watch monitor's in-flight asyncio tasks.
+
+**Retention:** `rules_events` rows are retained indefinitely — the label set is the primary long-term output of Rules Watch and must not be purged. Message text in `window_json` follows the same retention as the messages archive (purged after the configurable archive window). Labels survive that purge because they reference events, not messages.
