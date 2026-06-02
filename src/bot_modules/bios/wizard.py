@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
@@ -30,11 +29,7 @@ from bot_modules.bios.logic import (
     draw_weighted,
     headline_value,
 )
-from bot_modules.bios.views import (
-    ChoiceButtonsView,
-    ChoiceSelectView,
-    StepControlsView,
-)
+from bot_modules.bios.views import CombinedStepView
 
 if TYPE_CHECKING:
     from bot_modules.cogs.bios_cog import BiosCog
@@ -45,7 +40,9 @@ log = logging.getLogger("dungeonkeeper.bios.wizard")
 # ── Step action types ─────────────────────────────────────────────────
 
 
-ActionKind = Literal["answer", "skip", "back", "cancel", "keep", "reroll", "timeout"]
+ActionKind = Literal[
+    "answer", "skip", "back", "cancel", "keep", "pick_question", "timeout"
+]
 
 
 @dataclass(frozen=True)
@@ -72,7 +69,6 @@ class WizardSession:
     _loop_task: asyncio.Task | None = None
     _action_q: asyncio.Queue[Action] = field(default_factory=asyncio.Queue)
     _idle_task: asyncio.Task | None = None
-    _rng: random.Random = field(default_factory=random.Random)
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
@@ -214,55 +210,33 @@ class WizardSession:
             await interaction.response.defer()
             self.push_action(Action(kind="answer", value=value))
 
-        controls = StepControlsView(
+        view = CombinedStepView(
             owner_id=self.member.id,
             on_skip=on_skip if not f.required else None,
             on_back=on_back if self.state.step_index > 0 else None,
             on_cancel=on_cancel,
             on_keep=on_keep if (self.state.mode == "edit" and prior) else None,
+            on_choice_pick=on_pick if (is_choice and f.choices) else None,
+            choice_options=list(f.choices) if (is_choice and f.choices) else None,
+            current_choice=prior,
         )
 
-        input_view: discord.ui.View | None = None
-        if is_choice and f.choices:
-            choices = list(f.choices)
-            if len(choices) <= 5:
-                input_view = ChoiceButtonsView(
-                    owner_id=self.member.id,
-                    choices=choices,
-                    on_pick=on_pick,
-                    current=prior,
-                )
-            else:
-                input_view = ChoiceSelectView(
-                    owner_id=self.member.id,
-                    choices=choices,
-                    on_pick=on_pick,
-                    current=prior,
-                )
-
         assert self.channel is not None
-        await self.channel.send(embed=prompt_embed, view=controls)
-        if input_view is not None:
-            await self.channel.send(view=input_view)
-        else:
+        await self.channel.send(embed=prompt_embed, view=view)
+        if not is_choice:
             # Text capture for short / paragraph
             text_capture_task = asyncio.create_task(self._capture_one_message(f.max_len))
 
-        while True:
-            try:
-                action = await self._action_q.get()
-            except asyncio.CancelledError:
-                if text_capture_task is not None:
-                    text_capture_task.cancel()
-                raise
-
-            # If a message-text answer arrives, ensure it's not for a choice field
-            if action.kind == "answer" and is_choice and input_view is None:
-                continue  # ignored; shouldn't happen
-
-            if text_capture_task is not None and not text_capture_task.done():
+        try:
+            action = await self._action_q.get()
+        except asyncio.CancelledError:
+            if text_capture_task is not None:
                 text_capture_task.cancel()
-            return action
+            raise
+
+        if text_capture_task is not None and not text_capture_task.done():
+            text_capture_task.cancel()
+        return action
 
     async def _render_question_step(self, slot: int, q: BioQuestion) -> Action:
         prior_answer = ""
@@ -286,26 +260,25 @@ class WizardSession:
             await interaction.response.defer()
             self.push_action(Action(kind="keep"))
 
-        async def on_reroll(interaction: discord.Interaction) -> None:
+        async def on_pick(interaction: discord.Interaction, qid: int) -> None:
             await interaction.response.defer()
-            self.push_action(Action(kind="reroll"))
+            self.push_action(Action(kind="pick_question", value=str(qid)))
 
-        reroll_note = await self._reroll_unavailable_note()
+        picker_options = await self._build_picker_options(slot)
 
-        controls = StepControlsView(
+        view = CombinedStepView(
             owner_id=self.member.id,
             on_skip=on_skip,
             on_back=on_back if self.state.step_index > 0 else None,
             on_cancel=on_cancel,
             on_keep=on_keep if (self.state.mode == "edit" and prior_answer) else None,
-            on_reroll=on_reroll,
-            reroll_note=reroll_note,
+            on_question_pick=on_pick if picker_options else None,
+            question_options=picker_options if picker_options else None,
+            current_question_id=q.id,
         )
 
         assert self.channel is not None
-        await self.channel.send(embed=prompt_embed, view=controls)
-        if reroll_note:
-            await self.channel.send(f"_{reroll_note}_")
+        await self.channel.send(embed=prompt_embed, view=view)
 
         capture_task = asyncio.create_task(self._capture_one_message(1024))
         try:
@@ -314,6 +287,34 @@ class WizardSession:
             if not capture_task.done():
                 capture_task.cancel()
         return action
+
+    async def _build_picker_options(self, slot: int) -> list[tuple[int, str]]:
+        """Return up to 25 (question_id, prompt) pairs for the picker —
+        always includes the current slot's question, plus other active
+        questions not currently assigned to other slots."""
+
+        def _load() -> list[BioQuestion]:
+            with self.cog.ctx.open_db() as conn:
+                return bios_db.list_active_questions(conn, self.member.guild.id)
+
+        pool = await asyncio.to_thread(_load)
+        current = self.state.slots[slot]
+        used_elsewhere = {
+            self.state.slots[i].id for i in range(len(self.state.slots)) if i != slot
+        }
+        seen: set[int] = set()
+        opts: list[tuple[int, str]] = []
+        if current.id != 0:
+            opts.append((current.id, current.prompt))
+            seen.add(current.id)
+        for cand in pool:
+            if cand.id in used_elsewhere or cand.id in seen:
+                continue
+            opts.append((cand.id, cand.prompt))
+            seen.add(cand.id)
+            if len(opts) >= 25:
+                break
+        return opts if len(opts) > 1 else []
 
     async def _reroll_unavailable_note(self) -> str | None:
         def _load() -> list[BioQuestion]:
@@ -399,26 +400,30 @@ class WizardSession:
                 self.state.step_index += 1
             elif action.kind == "back":
                 self.state.step_index = max(0, self.state.step_index - 1)
-            elif action.kind == "reroll":
-                await self._reroll_slot(slot)
-                # don't advance — re-render the same step with new question
+            elif action.kind == "pick_question":
+                try:
+                    picked_qid = int(action.value)
+                except (TypeError, ValueError):
+                    return
+                await self._swap_slot_to(slot, picked_qid)
+                # don't advance — re-render with the new question
 
-    async def _reroll_slot(self, slot: int) -> None:
-        def _load() -> list[BioQuestion]:
-            with self.cog.ctx.open_db() as conn:
-                return bios_db.list_active_questions(conn, self.member.guild.id)
-
-        pool = await asyncio.to_thread(_load)
-        excluded = {q.id for q in self.state.slots}
-        alternatives = [q for q in pool if q.id not in excluded]
-        if not alternatives:
+    async def _swap_slot_to(self, slot: int, qid: int) -> None:
+        """Replace the slot's question with the one the user picked."""
+        if self.state.slots[slot].id == qid:
             return
-        weights = [max(q.weight, 1) for q in alternatives]
-        new_q = self._rng.choices(alternatives, weights=weights, k=1)[0]
-        self.state.slots[slot] = new_q
-        self.snapshotted_question_texts[new_q.id] = new_q.prompt
-        # If we'd previously had an answer in this slot (edit mode),
-        # discard it — the question changed.
+
+        def _load() -> BioQuestion | None:
+            with self.cog.ctx.open_db() as conn:
+                return bios_db.get_question(conn, qid)
+
+        picked = await asyncio.to_thread(_load)
+        if picked is None:
+            return
+        self.state.slots[slot] = picked
+        self.snapshotted_question_texts[picked.id] = picked.prompt
+        # The question changed, so any stored answer for this slot
+        # belongs to a different question — drop it.
         self.state.slot_answers.pop(slot, None)
         self.prior_slot_answers.pop(slot, None)
 
@@ -612,7 +617,7 @@ class WizardSession:
             e.add_field(name="Current", value=prior_answer[:1024], inline=False)
         e.add_field(
             name="​",
-            value="*Use 🎲 Re-roll for a different question, or Skip to omit this one.*",
+            value="*Pick a different icebreaker from the dropdown below, or Skip to omit this one.*",
             inline=False,
         )
         e.set_footer(text=progress)

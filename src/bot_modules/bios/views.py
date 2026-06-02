@@ -260,10 +260,210 @@ class ChoiceSelectView(discord.ui.View):
         await self._on_pick(interaction, value)
 
 
+# ── Combined step view (one message per step) ────────────────────────
+
+
+class CombinedStepView(discord.ui.View):
+    """One View that holds the step's input control on row 0 and the
+    Skip/Back/Keep/Cancel buttons on row 1. Used so a single message
+    per step carries the prompt embed plus all interactive widgets — it
+    keeps the active prompt at the bottom of the channel as the user
+    works through the wizard.
+
+    All component callbacks are gated on ``owner_id``.
+    """
+
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        on_skip: ControlCallback | None,
+        on_back: ControlCallback | None,
+        on_cancel: ControlCallback,
+        on_keep: ControlCallback | None = None,
+        # Choice-field input (≤5 buttons OR a select for >5)
+        on_choice_pick: PickCallback | None = None,
+        choice_options: list[str] | None = None,
+        current_choice: str = "",
+        # Question-step picker (always a select)
+        on_question_pick: Callable[[discord.Interaction, int], Awaitable[None]] | None = None,
+        question_options: list[tuple[int, str]] | None = None,
+        current_question_id: int | None = None,
+        timeout: float = 900.0,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        self._owner_id = owner_id
+
+        # Row 0 — input control (choice picker OR question picker)
+        if on_choice_pick is not None and choice_options:
+            opts = list(choice_options)
+            if len(opts) <= 5:
+                for choice in opts[:5]:
+                    style = (
+                        discord.ButtonStyle.success
+                        if choice == current_choice
+                        else discord.ButtonStyle.primary
+                    )
+                    btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                        label=(choice[:75] or " "), style=style, row=0
+                    )
+                    btn.callback = self._wrap_pick(on_choice_pick, choice)  # type: ignore[assignment]
+                    self.add_item(btn)
+            else:
+                sel: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
+                    placeholder="Pick one…",
+                    options=[
+                        discord.SelectOption(
+                            label=c[:100] or " ",
+                            value=c[:100] or " ",
+                            default=(c == current_choice),
+                        )
+                        for c in opts[:25]
+                    ],
+                    min_values=1,
+                    max_values=1,
+                    row=0,
+                )
+
+                async def _on_choice_select(interaction: discord.Interaction) -> None:
+                    value = sel.values[0] if sel.values else ""
+                    sel.disabled = True
+                    await on_choice_pick(interaction, value)
+
+                sel.callback = _on_choice_select  # type: ignore[assignment]
+                self.add_item(sel)
+        elif on_question_pick is not None and question_options:
+            qopts = list(question_options)
+            current_qid = current_question_id if current_question_id is not None else 0
+            qsel: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
+                placeholder="Pick a different icebreaker…",
+                options=[
+                    discord.SelectOption(
+                        label=(prompt[:100] or "—"),
+                        value=str(qid),
+                        default=(qid == current_qid),
+                    )
+                    for (qid, prompt) in qopts[:25]
+                ],
+                min_values=1,
+                max_values=1,
+                row=0,
+            )
+
+            async def _on_question_select(interaction: discord.Interaction) -> None:
+                value = qsel.values[0] if qsel.values else ""
+                try:
+                    picked_id = int(value)
+                except (TypeError, ValueError):
+                    await interaction.response.defer()
+                    return
+                qsel.disabled = True
+                await on_question_pick(interaction, picked_id)
+
+            qsel.callback = _on_question_select  # type: ignore[assignment]
+            self.add_item(qsel)
+
+        # Row 1 — control buttons (Skip / Back / Keep / Cancel)
+        if on_skip is not None:
+            self._add_ctrl_btn("Skip", discord.ButtonStyle.secondary, on_skip)
+        if on_back is not None:
+            self._add_ctrl_btn("Back", discord.ButtonStyle.secondary, on_back)
+        if on_keep is not None:
+            self._add_ctrl_btn("Keep current", discord.ButtonStyle.success, on_keep)
+        self._add_ctrl_btn("Cancel", discord.ButtonStyle.danger, on_cancel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self._owner_id
+
+    def _add_ctrl_btn(
+        self, label: str, style: discord.ButtonStyle, cb: ControlCallback
+    ) -> None:
+        btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label=label, style=style, row=1
+        )
+        btn.callback = self._wrap_ctrl(cb)  # type: ignore[assignment]
+        self.add_item(btn)
+
+    def _wrap_ctrl(self, cb: ControlCallback) -> ControlCallback:
+        async def _inner(interaction: discord.Interaction) -> None:
+            for child in self.children:
+                if isinstance(child, (discord.ui.Button, discord.ui.Select)):
+                    child.disabled = True
+            await cb(interaction)
+        return _inner
+
+    def _wrap_pick(
+        self, on_pick: PickCallback, choice: str
+    ) -> ControlCallback:
+        async def _inner(interaction: discord.Interaction) -> None:
+            for child in self.children:
+                if isinstance(child, (discord.ui.Button, discord.ui.Select)):
+                    child.disabled = True
+            await on_pick(interaction, choice)
+        return _inner
+
+
+# ── Icebreaker question picker ────────────────────────────────────────
+
+
+class QuestionPickerView(discord.ui.View):
+    """Dropdown to pick the icebreaker question for a given slot.
+
+    Options are pairs of ``(question_id, prompt)``; ``current_id`` is
+    pre-selected. On pick, ``on_pick`` is awaited with the chosen
+    question id (as int).
+    """
+
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        options: list[tuple[int, str]],
+        on_pick: Callable[[discord.Interaction, int], Awaitable[None]],
+        current_id: int,
+        timeout: float = 900.0,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        self._owner_id = owner_id
+        self._on_pick = on_pick
+
+        select_options = [
+            discord.SelectOption(
+                label=(prompt[:100] or "—"),
+                value=str(qid),
+                default=(qid == current_id),
+            )
+            for (qid, prompt) in options[:25]
+        ]
+        self._select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
+            placeholder="Pick a different icebreaker…",
+            options=select_options,
+            min_values=1,
+            max_values=1,
+        )
+        self._select.callback = self._on_select  # type: ignore[assignment]
+        self.add_item(self._select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return interaction.user.id == self._owner_id
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        value = self._select.values[0] if self._select.values else ""
+        try:
+            qid = int(value)
+        except (TypeError, ValueError):
+            await interaction.response.defer()
+            return
+        self._select.disabled = True
+        await self._on_pick(interaction, qid)
+
+
 __all__ = [
     "PersistentTriggerView",
     "ResumeRestartView",
     "StepControlsView",
     "ChoiceButtonsView",
     "ChoiceSelectView",
+    "QuestionPickerView",
+    "CombinedStepView",
 ]

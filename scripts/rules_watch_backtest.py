@@ -298,6 +298,31 @@ def main():
         except Exception:
             pass
 
+    # Load guard model system prompt + model (needed for both seeds and real messages)
+    from bot_modules.services.ai_moderation_service import _RULES_WATCH_SYSTEM as GUARD_PROMPT
+
+    scorer_module = None
+    if args.scorer:
+        from bot_modules.rules_watch import scorer as scorer_module
+
+    model = _load_model(model_path)
+
+    # Resolve and run seeds first
+    seeds_path: Path | None = None
+    if args.seeds:
+        seeds_path = Path(args.seeds)
+    else:
+        default_seeds = Path(__file__).parent / "rules_watch_seeds.json"
+        if default_seeds.exists():
+            seeds_path = default_seeds
+
+    if seeds_path:
+        _run_seeds(model, GUARD_PROMPT, seeds_path)
+
+    if args.seeds_only:
+        conn.close()
+        return
+
     # Fetch candidate messages
     where_parts = [
         "m.ts >= ?", "m.ts <= ?",
@@ -335,32 +360,6 @@ def main():
         rows.sort(key=lambda r: r["ts"])
 
     print(f"Evaluating {len(rows)} messages…", file=sys.stderr)
-
-    # Load guard model system prompt
-    from bot_modules.services.ai_moderation_service import _RULES_WATCH_SYSTEM as GUARD_PROMPT
-
-    # Load scorer if requested
-    scorer_module = None
-    if args.scorer:
-        from bot_modules.rules_watch import scorer as scorer_module
-
-    model = _load_model(model_path)
-
-    # Resolve seeds file
-    seeds_path: Path | None = None
-    if args.seeds:
-        seeds_path = Path(args.seeds)
-    else:
-        default_seeds = Path(__file__).parent / "rules_watch_seeds.json"
-        if default_seeds.exists():
-            seeds_path = default_seeds
-
-    if seeds_path:
-        _run_seeds(model, GUARD_PROMPT, seeds_path)
-
-    if args.seeds_only:
-        conn.close()
-        return
 
     flagged = 0
     ok = 0
