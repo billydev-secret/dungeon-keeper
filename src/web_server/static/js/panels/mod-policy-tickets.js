@@ -28,39 +28,64 @@ export function mount(container) {
         <h2>Policy Tickets</h2>
         <div class="subtitle">Community policy proposals and votes</div>
       </header>
-      <div class="controls">
-        <label>Status
-          <select data-control="status">
-            <option value="">All</option>
-            <option value="open">Open</option>
-            <option value="voting">Voting</option>
-            <option value="closed">Closed</option>
-          </select>
-        </label>
+
+      <div class="mod-stats" data-stats>
+        <div class="mod-stat open"><div class="lbl">Open</div><div class="v">\u2014</div><div class="sub">loading\u2026</div></div>
+        <div class="mod-stat claimed"><div class="lbl">Voting</div><div class="v">\u2014</div><div class="sub"></div></div>
+        <div class="mod-stat resolved"><div class="lbl">Closed</div><div class="v">\u2014</div><div class="sub"></div></div>
+        <div class="mod-stat avg"><div class="lbl">Total</div><div class="v">\u2014</div><div class="sub"></div></div>
       </div>
-      <div class="mod-stats" data-stats></div>
+
+      <div class="ticket-list-head" style="margin-bottom:8px">
+        <h3>Queue</h3>
+        <div class="ctrl-group" role="tablist" data-filter-group>
+          <button class="active" data-filter="">All</button>
+          <button data-filter="open">Open</button>
+          <button data-filter="voting">Voting</button>
+          <button data-filter="closed">Closed</button>
+        </div>
+      </div>
+
       <div class="table-scroll" data-table-wrap>
         <div class="empty">Loading...</div>
       </div>
     </div>
   `;
 
-  const statusEl = container.querySelector('[data-control="status"]');
+  const filterGroup = container.querySelector("[data-filter-group]");
   const statsEl = container.querySelector("[data-stats]");
   const tableWrap = container.querySelector("[data-table-wrap]");
 
+  let currentFilter = "";
+
   async function refresh() {
     const params = {};
-    if (statusEl.value) params.status = statusEl.value;
+    if (currentFilter) params.status = currentFilter;
 
     try {
       const data = await api("/api/moderation/policy-tickets", params);
 
       statsEl.innerHTML = `
-        <div class="stat stat-info"><div class="stat-value">${data.open_count}</div><div class="stat-label">Open</div></div>
-        <div class="stat stat-warning"><div class="stat-value">${data.voting_count}</div><div class="stat-label">Voting</div></div>
-        <div class="stat"><div class="stat-value">${data.closed_count}</div><div class="stat-label">Closed</div></div>
-        <div class="stat"><div class="stat-value">${data.total_count}</div><div class="stat-label">Total</div></div>
+        <div class="mod-stat open">
+          <div class="lbl">Open</div>
+          <div class="v">${data.open_count}</div>
+          <div class="sub">${data.open_count === 1 ? "proposal" : "proposals"}</div>
+        </div>
+        <div class="mod-stat claimed">
+          <div class="lbl">Voting</div>
+          <div class="v">${data.voting_count}</div>
+          <div class="sub">${data.voting_count ? "in progress" : "none"}</div>
+        </div>
+        <div class="mod-stat resolved">
+          <div class="lbl">Closed</div>
+          <div class="v">${data.closed_count}</div>
+          <div class="sub"></div>
+        </div>
+        <div class="mod-stat avg">
+          <div class="lbl">Total</div>
+          <div class="v">${data.total_count}</div>
+          <div class="sub"></div>
+        </div>
       `;
 
       if (!data.policy_tickets.length) {
@@ -68,6 +93,7 @@ export function mount(container) {
         return;
       }
 
+      const timeHeader = currentFilter === "voting" ? "Vote Started" : currentFilter === "closed" ? "Vote Ended" : "Age";
       const rows = data.policy_tickets.map((t) => {
         const badge = STATUS_BADGE[t.status] || t.status;
         const timeCol = t.status === "voting"
@@ -93,7 +119,7 @@ export function mount(container) {
         <table class="data-table">
           <thead><tr>
             <th>Status</th><th>ID</th><th>Creator</th><th>Title</th>
-            <th>Description</th><th>Created</th><th>${statusEl.value === "voting" ? "Vote Started" : statusEl.value === "closed" ? "Vote Ended" : "Age"}</th>
+            <th>Description</th><th>Created</th><th>${timeHeader}</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
@@ -107,7 +133,14 @@ export function mount(container) {
     }
   }
 
-  statusEl.addEventListener("change", refresh);
+  filterGroup.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-filter]");
+    if (!btn) return;
+    filterGroup.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
+    currentFilter = btn.dataset.filter;
+    refresh();
+  });
+
   refresh();
 
   return { unmount() {} };

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 import discord
 
@@ -149,6 +151,93 @@ Additional inline markers you may see:
 
 Answer the moderator's question based solely on the provided log, referencing the server rules where \
 relevant. Be concise and cite specific users and messages as evidence."""
+
+_RULES_WATCH_SYSTEM = f"""\
+You are a recall-leaning moderation guard for an adult Discord community. Your job is to surface
+messages that may warrant human review — you flag generously and let moderators dismiss false
+positives. False negatives (missing a real problem) are much worse than false positives here.
+
+{_SERVER_RULES}
+
+You will receive a conversation window (multiple recent messages in a channel), oldest first.
+Each line is formatted as:
+  [HH:MM] author [↩ replying to other]: content
+
+Additional markers:
+  [📎 ext, ...]   — file attachments
+  [@Name, ...]    — mentions
+  [NSFW]          — the channel is designated for explicit content
+
+Evaluate the MOST RECENT message (the last one in the window) in the context of the whole window.
+Flag if:
+- The message contains a slur or identity attack (always a violation regardless of consent)
+- The message applies pressure, coercion, or threats
+- The message continues unwanted contact with someone who has expressed disinterest
+- There is escalating one-sided directed behavior in the window
+- The message violates channel designation (Rule 3)
+
+Respond with ONLY valid JSON, no markdown fences, in this exact format:
+{{"verdict": "flag", "rule": "2", "reason": "brief reason", "confidence": 0.85}}
+or
+{{"verdict": "ok", "rule": null, "reason": null, "confidence": 0.1}}
+
+"confidence" is your certainty that this is a genuine concern (0.0–1.0).
+"rule" is the primary rule implicated (as a string: "1", "2", "3", "4", "5", "6", or null).
+No other output."""
+
+
+class RulesWatchGuardResult(NamedTuple):
+    verdict: str          # 'flag' | 'ok'
+    rule: str | None      # '2', '3', etc.
+    reason: str | None
+    confidence: float
+
+
+async def ai_rules_watch_check(
+    window_text: str,
+    *,
+    channel_is_nsfw: bool = False,
+    model: str | None = None,
+    db_path: Path | None = None,
+    guild_id: int = 0,
+) -> RulesWatchGuardResult:
+    """Run the recall-leaning guard model over a conversation window.
+
+    Returns a structured result; falls back to ok on any parse failure.
+    """
+    from bot_modules.services.ai_config import DEFAULT_MOD_MODEL, get_command_model_from_path
+
+    if model is None:
+        model = (
+            get_command_model_from_path(db_path, "ai_prompt_rules_watch", guild_id)
+            if db_path
+            else DEFAULT_MOD_MODEL
+        )
+
+    nsfw_note = " [Channel is NSFW-designated — explicit content is permitted here]" if channel_is_nsfw else ""
+    user_content = f"{nsfw_note}\n{window_text}".strip()
+
+    raw = await ollama_client.chat(
+        model=model,
+        system=_RULES_WATCH_SYSTEM,
+        user_content=user_content,
+        max_tokens=256,
+        temperature=0.0,
+    )
+
+    try:
+        data = json.loads(raw or "{}")
+        verdict = str(data.get("verdict", "ok")).lower()
+        if verdict not in ("flag", "ok"):
+            verdict = "ok"
+        rule = str(data["rule"]) if data.get("rule") else None
+        reason = str(data["reason"]) if data.get("reason") else None
+        confidence = float(data.get("confidence", 0.0))
+        confidence = max(0.0, min(1.0, confidence))
+        return RulesWatchGuardResult(verdict=verdict, rule=rule, reason=reason, confidence=confidence)
+    except Exception:
+        log.debug("rules_watch guard: failed to parse LLM response: %r", raw)
+        return RulesWatchGuardResult(verdict="ok", rule=None, reason=None, confidence=0.0)
 
 
 @dataclass

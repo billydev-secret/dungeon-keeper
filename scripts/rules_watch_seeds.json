@@ -1,0 +1,246 @@
+[
+  {
+    "id": "r2-persistence-after-stop",
+    "rule": "2",
+    "severity": "medium",
+    "description": "Sustained directed messages after explicit stop signal",
+    "window": [
+      "[20:01] Alice: hey what are you up to tonight",
+      "[20:03] Bob: not much just chilling",
+      "[20:05] Alice: wanna come to voice?",
+      "[20:07] Bob: nah I'm good thanks",
+      "[20:09] Alice: come on it'll be fun",
+      "[20:11] Bob: I said no thanks, please stop asking",
+      "[20:13] Alice: ok ok sorry",
+      "[20:31] Alice: hey Bob you still around? voice is popping off",
+      "[20:33] Alice: Bob? voice is really fun rn you should join",
+      "[20:35] Alice: I know you said no earlier but I really think you'd like it"
+    ]
+  },
+  {
+    "id": "r2-coercion-subtle",
+    "rule": "2",
+    "severity": "medium",
+    "description": "Subtle pressure using guilt after someone set a boundary",
+    "window": [
+      "[14:10] Sam: hey can we talk privately?",
+      "[14:12] Jordan: I'd rather keep things in public chat if that's ok",
+      "[14:13] Sam: oh ok, I just feel like you've been avoiding me",
+      "[14:15] Jordan: I'm just busy, nothing personal",
+      "[14:16] Sam: right",
+      "[14:18] Sam: I thought we were close but I guess not",
+      "[14:20] Sam: it kind of hurts that you won't even talk to me",
+      "[14:22] Sam: I've been having a really hard time lately",
+      "[14:24] Sam: I just need someone to talk to and you keep shutting me out"
+    ]
+  },
+  {
+    "id": "r2-slur-direct",
+    "rule": "2",
+    "severity": "high",
+    "description": "Direct slur at another member",
+    "window": [
+      "[16:00] Alex: anyone catch the game last night",
+      "[16:01] Morgan: yeah it was wild",
+      "[16:02] Alex: what did you think Sam",
+      "[16:03] Sam: I don't really watch sports",
+      "[16:04] Alex: figures, you always were a f*ggot",
+      "[16:04] Morgan: whoa what the hell",
+      "[16:05] Sam: ???",
+      "[16:05] Alex: what I'm just saying"
+    ]
+  },
+  {
+    "id": "r2-boundary-then-escalation",
+    "rule": "2",
+    "severity": "high",
+    "description": "Explicit stop signal followed by escalating directed messages",
+    "window": [
+      "[21:00] River: hey you looked really good in that photo you posted",
+      "[21:02] Casey: thanks",
+      "[21:04] River: seriously though you're so attractive",
+      "[21:06] Casey: appreciate it but please don't",
+      "[21:07] River: don't what I'm just being honest",
+      "[21:09] Casey: I'd rather you didn't comment on my appearance, red",
+      "[21:11] River: that's kind of dramatic",
+      "[21:13] River: I'm just giving you a compliment most people would appreciate it",
+      "[21:15] River: you should be happy someone finds you attractive"
+    ]
+  },
+  {
+    "id": "r2-one-sided-fixation",
+    "rule": "2",
+    "severity": "medium",
+    "description": "One-sided repeated engagement with a member who only gives brief replies",
+    "window": [
+      "[10:00] Drew: morning Taylor 🌞",
+      "[10:15] Drew: how's your day going Taylor",
+      "[10:16] Taylor: fine",
+      "[10:40] Drew: you seem quiet today, everything ok?",
+      "[10:41] Taylor: yeah just busy",
+      "[11:05] Drew: thinking about you, hope work isn't too stressful",
+      "[11:30] Drew: Taylor you around?",
+      "[11:45] Drew: hey I saw your reaction on that post, made me smile",
+      "[12:00] Drew: I know you're probably busy but I just wanted to say hi"
+    ]
+  },
+  {
+    "id": "r2-threat-oblique",
+    "rule": "2",
+    "severity": "high",
+    "description": "Oblique threat after a disagreement",
+    "window": [
+      "[19:00] Chris: I think the new rules are fair honestly",
+      "[19:02] Jamie: I disagree, they're too restrictive",
+      "[19:03] Chris: that's fine, we can disagree",
+      "[19:05] Jamie: easy to say when you helped write them",
+      "[19:07] Chris: I had some input yeah, it was a group decision",
+      "[19:08] Jamie: you'd better hope nothing comes back to you then",
+      "[19:09] Chris: what does that mean",
+      "[19:10] Jamie: it means people have long memories"
+    ]
+  },
+  {
+    "id": "r2-revoked-consent-directed",
+    "rule": "2",
+    "severity": "medium",
+    "description": "Directed flirting at someone who recently revoked their DM consent pairing",
+    "window": [
+      "[15:00] Gen-chat] Alex: so how's everyone doing",
+      "[15:01] Riley: pretty good",
+      "[15:02] Alex: Riley you always seem so positive 😊",
+      "[15:03] Riley: haha thanks",
+      "[15:10] Alex: Riley you were so fun in voice last night",
+      "[15:12] Riley: it was fun yeah",
+      "[15:20] Alex: I miss talking to you like we used to",
+      "[15:22] Alex: I know things have been weird since, you know, but I still think about our conversations",
+      "[15:24] Alex: can we go back to how things were?"
+    ]
+  },
+  {
+    "id": "r3-explicit-sfw-channel",
+    "rule": "3",
+    "severity": "medium",
+    "description": "Graphic sexual description in a non-NSFW channel",
+    "window": [
+      "[12:00] #general] Taylor: anyone have good book recommendations",
+      "[12:02] Morgan: I've been reading a lot of mystery novels lately",
+      "[12:03] Taylor: ooh which ones",
+      "[12:04] Sam: I finished something really hot last night, she bent over and he came up behind her and—",
+      "[12:04] Morgan: uh",
+      "[12:05] Taylor: this is general chat"
+    ]
+  },
+  {
+    "id": "r2-new-member-escalating",
+    "rule": "2",
+    "severity": "medium",
+    "description": "New account with no prior interaction immediately directing intense personal attention",
+    "window": [
+      "[09:00] Newuser123 [joined 2 days ago]: hey everyone",
+      "[09:01] Jamie: hey welcome",
+      "[09:02] Newuser123: thanks, there are a lot of attractive people here",
+      "[09:03] Jamie: lol",
+      "[09:04] Newuser123: Jamie you especially, I saw your intro post",
+      "[09:06] Jamie: oh, thanks I guess",
+      "[09:08] Newuser123: seriously you're exactly my type, do you have a partner",
+      "[09:09] Newuser123: I'd love to get to know you better Jamie"
+    ]
+  },
+  {
+    "id": "r2-withdrawal-silence",
+    "rule": "2",
+    "severity": "medium",
+    "description": "Messages directed at someone who has gone completely silent after engaging",
+    "window": [
+      "[20:00] Dana: hey Quinn, you doing ok?",
+      "[20:01] Quinn: not really having a rough day",
+      "[20:02] Dana: want to talk about it?",
+      "[20:03] Quinn: not right now",
+      "[20:30] Dana: hey Quinn I've been thinking about what you said",
+      "[21:00] Dana: Quinn are you still here?",
+      "[21:30] Dana: Quinn I'm worried about you, talk to me",
+      "[22:00] Dana: I don't know why you're ignoring me",
+      "[22:30] Dana: Quinn please just let me know you're okay, I care about you a lot"
+    ]
+  },
+  {
+    "id": "r6-public-callout",
+    "rule": "6",
+    "severity": "medium",
+    "description": "Airing a mod complaint publicly instead of using tickets",
+    "window": [
+      "[17:00] #general] Alex: can I just say I think the moderation here has been really inconsistent",
+      "[17:01] Sam: what do you mean",
+      "[17:02] Alex: Riley got a warning for something I've seen other people do constantly with no action",
+      "[17:03] Riley: yeah I was pretty surprised",
+      "[17:04] Alex: @ModName I think you owe Riley an explanation, the rules seem to be applied differently for different people",
+      "[17:05] Sam: this might be better as a ticket",
+      "[17:06] Alex: no I want everyone to see this, it's not just Riley this is a pattern"
+    ]
+  },
+  {
+    "id": "r2-identity-attack-indirect",
+    "rule": "2",
+    "severity": "medium",
+    "description": "Indirect demeaning comment targeting someone's identity",
+    "window": [
+      "[11:00] Chris: I've been thinking about trying out they/them pronouns",
+      "[11:02] Sam: that's cool, let us know what feels right",
+      "[11:03] Alex: yeah do whatever makes you happy",
+      "[11:05] Jamie: honestly I don't get why everyone is so obsessed with this stuff lately",
+      "[11:06] Jamie: it used to just be men and women and nobody made a big deal out of it",
+      "[11:07] Chris: I mean it matters to me",
+      "[11:08] Jamie: sure but like do you have to make it everyone else's problem"
+    ]
+  },
+  {
+    "id": "r2-pressure-after-rejection",
+    "rule": "2",
+    "severity": "medium",
+    "description": "Continued pursuit after a clear rejection of romantic interest",
+    "window": [
+      "[16:00] Jordan: hey, I wanted to tell you I have feelings for you",
+      "[16:02] Blake: I appreciate you saying that but I don't feel the same way, I'm sorry",
+      "[16:03] Jordan: oh",
+      "[16:10] Jordan: can I ask why",
+      "[16:12] Blake: there's no why, I just don't. I hope we can still be friends",
+      "[16:14] Jordan: I think if you got to know me better you'd feel differently",
+      "[16:16] Jordan: have you even really thought about it",
+      "[16:18] Blake: I have, and my answer isn't going to change",
+      "[16:20] Jordan: so that's just it? you won't even try?"
+    ]
+  },
+  {
+    "id": "r2-ok-enthusiastic-flirting",
+    "rule": null,
+    "severity": "none",
+    "description": "Control: enthusiastic mutual flirting — should NOT be flagged",
+    "window": [
+      "[21:00] Alex: you were amazing in voice tonight 😍",
+      "[21:01] Sam: omg stop you're making me blush",
+      "[21:02] Alex: never, you deserve all the compliments",
+      "[21:03] Sam: ok ok fine you're pretty hot yourself",
+      "[21:04] Alex: 👀 yeah?",
+      "[21:05] Sam: don't get a big head about it",
+      "[21:06] Alex: too late, already unbearable 😂",
+      "[21:07] Sam: lmaooo ok fair"
+    ]
+  },
+  {
+    "id": "r2-ok-rough-banter",
+    "rule": null,
+    "severity": "none",
+    "description": "Control: rough mutual banter — should NOT be flagged",
+    "window": [
+      "[14:00] Jake: you absolute disaster human",
+      "[14:01] Morgan: excuse me I'm a delight",
+      "[14:02] Jake: delight is not the word I would choose",
+      "[14:03] Morgan: I'm going to fight you",
+      "[14:04] Jake: bring it, I'll destroy you",
+      "[14:05] Morgan: big talk from someone who burned toast this morning",
+      "[14:06] Jake: that was ONE time",
+      "[14:07] Morgan: it was three times this week"
+    ]
+  }
+]

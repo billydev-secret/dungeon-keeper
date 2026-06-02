@@ -114,13 +114,6 @@ export function mount(container) {
         <div class="subtitle">Server-wide tasks added via <code>/todo</code>.</div>
       </header>
 
-      <form class="todo-add" data-add-form style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-start;">
-        <input type="text" data-add-input maxlength="500" placeholder="Add a new task…"
-               style="flex:1;padding:8px 10px;border:1px solid var(--rule);border-radius:4px;background:var(--bg-rail);color:var(--ink);font-size:13px;font-family:inherit;" />
-        <button type="submit" class="act-btn" data-add-btn>Add</button>
-        <span data-add-status style="font-size:12px;align-self:center;"></span>
-      </form>
-
       <div class="mod-stats" data-stats>
         <div class="mod-stat open"><div class="lbl">Pending</div><div class="v">—</div></div>
         <div class="mod-stat resolved"><div class="lbl">Completed</div><div class="v">—</div></div>
@@ -144,6 +137,13 @@ export function mount(container) {
           <div class="empty">Loading…</div>
         </div>
       </section>
+
+      <form class="todo-add" data-add-form style="display:flex;gap:8px;margin-top:12px;align-items:flex-start;">
+        <input type="text" data-add-input maxlength="500" placeholder="Add a new task…"
+               style="flex:1;padding:8px 10px;border:1px solid var(--rule);border-radius:4px;background:var(--bg-rail);color:var(--ink);font-size:13px;font-family:inherit;" />
+        <button type="submit" class="act-btn" data-add-btn>Add</button>
+        <span data-add-status style="font-size:12px;align-self:center;"></span>
+      </form>
     </div>
   `;
 

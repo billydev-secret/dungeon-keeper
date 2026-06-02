@@ -198,6 +198,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     from web_server.routes import meta as meta_routes
     from web_server.routes import moderation as moderation_routes
     from web_server.routes import reports as reports_routes
+    from web_server.routes import rules_watch as rules_watch_routes
 
     app.include_router(home_routes.router, prefix="/api", tags=["home"])
     app.include_router(meta_routes.router, prefix="/api", tags=["meta"])
@@ -207,6 +208,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])
     app.include_router(moderation_routes.router, prefix="/api", tags=["moderation"])
     app.include_router(logs_routes.router, prefix="/api", tags=["logs"])
+    app.include_router(rules_watch_routes.router, prefix="/api", tags=["rules-watch"])
 
     from web_server.routes import todo as todo_routes
 
@@ -252,6 +254,11 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     from web_server.routes import quotes as quotes_routes
 
     app.include_router(quotes_routes.router, prefix="/api", tags=["quotes"])
+
+    # ── Bios ────────────────────────────────────────────────────────────
+    from web_server.routes import bios as bios_routes
+
+    app.include_router(bios_routes.router, prefix="/api/bios", tags=["bios"])
 
     # Install the log handler so records flow to the SSE stream
     logs_routes.install_log_handler()
