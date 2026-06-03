@@ -79,7 +79,7 @@ class ForceTransferPayload(BaseModel):
 @router.get("/voice-master/config")
 async def get_config(
     request: Request,
-    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ) -> dict[str, Any]:
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -235,7 +235,7 @@ async def remove_blocklist(
 @router.get("/voice-master/channels")
 async def list_channels(
     request: Request,
-    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ) -> dict[str, Any]:
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -397,7 +397,7 @@ async def force_transfer(
 async def get_profile(
     user_id: int,
     request: Request,
-    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ) -> dict[str, Any]:
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

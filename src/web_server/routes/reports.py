@@ -74,7 +74,7 @@ async def role_growth(
     request: Request,
     resolution: Literal["day", "week", "month"] = "week",
     roles: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -108,7 +108,7 @@ async def message_cadence(
         "hour", "day", "week", "month", "hour_of_day", "day_of_week"
     ] = "hour",
     channel_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -141,7 +141,7 @@ async def message_cadence(
 async def join_times(
     request: Request,
     resolution: Literal["hour_of_day", "day_of_week"] = "hour_of_day",
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -223,7 +223,7 @@ async def nsfw_gender(
     resolution: Literal["day", "week", "month"] = "week",
     media_only: bool = False,
     channel_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -293,7 +293,7 @@ async def message_rate(
     request: Request,
     days: int = 30,
     channel_id: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -326,7 +326,7 @@ async def message_rate(
 async def greeter_response(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -456,7 +456,7 @@ async def activity(
     channel_id: str | None = None,
     exclude_channel_ids: str | None = None,
     exclude_bots: bool = False,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -520,7 +520,7 @@ async def invite_effectiveness(
     request: Request,
     days: int | None = None,
     active_days: int = 30,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -564,7 +564,7 @@ async def interaction_graph(
     limit: int = 50,
     include_metrics: int = 0,
     resolution: float = 1.2,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -619,7 +619,7 @@ async def retention(
     request: Request,
     period_days: int = 3,
     min_previous: int = 5,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -652,7 +652,7 @@ async def retention(
 async def voice_activity(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -687,7 +687,7 @@ async def voice_activity(
 async def xp_leaderboard(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -715,7 +715,7 @@ async def xp_leaderboard(
 async def reaction_analytics(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -751,7 +751,7 @@ async def message_rate_drops(
     request: Request,
     period_days: int = 2,
     min_previous: int = 100,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -785,7 +785,7 @@ async def burst_ranking(
     request: Request,
     min_sessions: int = 3,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -818,7 +818,7 @@ async def burst_ranking(
 async def channel_comparison(
     request: Request,
     days: int = 1,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -889,7 +889,7 @@ async def quality_score(
     request: Request,
     days: int | None = None,
     min_active_days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -956,7 +956,7 @@ async def quality_score(
 async def time_to_level_5(
     request: Request,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     import statistics
     from collections import Counter
@@ -1055,7 +1055,7 @@ async def interaction_heatmap(
     resolution: Literal["day", "week"] = "week",
     days: int = 90,
     top_n: int = 20,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1101,7 +1101,7 @@ async def dropoff(
     channel_id: str | None = None,
     limit: int = 10,
     user_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     """Members who disengaged most over the last *period* vs the period before."""
     from bot_modules.services.activity_graphs import query_dropoff_profiles
@@ -1169,7 +1169,7 @@ async def dropoff(
 async def session_burst(
     request: Request,
     user_id: str,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     """Per-member session burst — server activity in 2-min bins around their session starts."""
     from bot_modules.services.activity_graphs import (
@@ -1236,7 +1236,7 @@ async def xp_level_review(
     request: Request,
     level: int,
     days: int | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     """Generalized version of /time-to-level-5 — works for any level (2–100)."""
     import statistics
@@ -1332,7 +1332,7 @@ async def chilling_effect(
     channel_id: str | None = None,
     entry_gap_minutes: int = 60,
     window_minutes: int = 30,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     """Identify members whose arrival in a channel correlates with others going quiet."""
     from datetime import datetime, timezone
@@ -1461,7 +1461,7 @@ def _activity_to_row(uid: int, display_name: str, activity, now_ts: float) -> di
 async def list_role(
     request: Request,
     role_id: str,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     import time as _time
 
@@ -1500,7 +1500,7 @@ async def inactive_role(
     request: Request,
     role_id: str,
     days: int = 7,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     import time as _time
 
@@ -1549,7 +1549,7 @@ async def inactive(
     request: Request,
     period_seconds: int = 7 * 86400,
     channel_id: str | None = None,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     import time as _time
 
@@ -1624,7 +1624,7 @@ async def inactive(
 async def oldest_sfw(
     request: Request,
     count: int = 10,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     import time as _time
 

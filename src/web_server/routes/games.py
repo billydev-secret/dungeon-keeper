@@ -1322,7 +1322,7 @@ class EditorRoleBody(BaseModel):
 @router.get("/config/editor-role")
 async def get_editor_role(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

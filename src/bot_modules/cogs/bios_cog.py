@@ -275,11 +275,11 @@ class BiosCog(commands.Cog):
                 except discord.HTTPException:
                     log.exception("Failed to delete bio msg for %d", member.id)
 
-            def _delete() -> None:
+            def _archive() -> None:
                 with self.ctx.open_db() as conn:
-                    bios_db.delete_user_bio(conn, member.guild.id, member.id)
+                    bios_db.archive_user_bio(conn, member.guild.id, member.id)
 
-            await asyncio.to_thread(_delete)
+            await asyncio.to_thread(_archive)
         except Exception:
             log.exception("on_member_remove bio cleanup failed for %d", member.id)
 

@@ -20,7 +20,7 @@ router = APIRouter()
 async def get_ai_config(
     request: Request,
     guild_id: int = Depends(get_active_guild_id),
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     from bot_modules.services import ollama_client
     from bot_modules.services.ai_config import (
@@ -318,7 +318,7 @@ async def messages_ai_query(
 
 @router.get("/config/ai/model-status")
 async def get_model_status(
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     from bot_modules.services import ollama_client
     return ollama_client.status()
