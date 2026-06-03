@@ -696,6 +696,10 @@ class EventsCog(commands.Cog):
     ) -> None:
         from bot_modules.bios.resurrect import resolve_member_bio_link
         from bot_modules.bios.trigger import resolve_bio_placeholders
+        from bot_modules.core.db_utils import get_config_value
+        from bot_modules.services.welcome_service import (
+            server_guide_mention_for,
+        )
 
         channel = member.guild.get_channel(cfg.welcome_channel_id)
         if not isinstance(channel, discord.TextChannel):
@@ -704,6 +708,14 @@ class EventsCog(commands.Cog):
             bio_link, bios_channel_mention = resolve_bio_placeholders(
                 conn, member.guild.id
             )
+            try:
+                server_guide_channel_id = int(
+                    get_config_value(
+                        conn, "server_guide_channel_id", "0", member.guild.id
+                    )
+                )
+            except (TypeError, ValueError):
+                server_guide_channel_id = 0
         try:
             member_bio_link = await resolve_member_bio_link(self.ctx, member)
         except Exception:
@@ -723,6 +735,9 @@ class EventsCog(commands.Cog):
                     bio_link=bio_link,
                     bios_channel_mention=bios_channel_mention,
                     member_bio_link=member_bio_link,
+                    server_guide_mention=server_guide_mention_for(
+                        server_guide_channel_id
+                    ),
                 ),
             )
         except discord.Forbidden:
@@ -840,12 +855,22 @@ class EventsCog(commands.Cog):
             return
         from bot_modules.bios import db as bios_db
         from bot_modules.bios.trigger import resolve_bio_placeholders
+        from bot_modules.core.db_utils import get_config_value
+        from bot_modules.services.welcome_service import server_guide_mention_for
 
         with self.ctx.open_db() as conn:
             bio_link, bios_channel_mention = resolve_bio_placeholders(
                 conn, member.guild.id
             )
             stored = bios_db.get_user_bio(conn, member.guild.id, member.id)
+            try:
+                server_guide_channel_id = int(
+                    get_config_value(
+                        conn, "server_guide_channel_id", "0", member.guild.id
+                    )
+                )
+            except (TypeError, ValueError):
+                server_guide_channel_id = 0
 
         # If the member has a still-live bio embed (BiosCog may or may
         # not have archived it yet — listener order is undefined), the
@@ -866,6 +891,9 @@ class EventsCog(commands.Cog):
                     bio_link=bio_link,
                     bios_channel_mention=bios_channel_mention,
                     member_bio_link=member_bio_link,
+                    server_guide_mention=server_guide_mention_for(
+                        server_guide_channel_id
+                    ),
                 )
             )
         except discord.Forbidden:

@@ -15,6 +15,10 @@ const PLACEHOLDERS = [
     token: "{member_bio_link}",
     description: "Jump URL to this member's own bio post. Empty for new members. For returning members whose bio was archived, the bot resurrects it automatically.",
   },
+  {
+    token: "{server_guide}",
+    description: "Clickable #mention of the configured server-guide channel. Empty if no server-guide channel is set below.",
+  },
 ];
 
 function chipsHtml(targetName) {
@@ -125,6 +129,11 @@ export function mount(container) {
             <select name="greeter_chat_channel_id">${channelSelect(channels, w.greeter_chat_channel_id)}</select>
           </div>
           <div class="field">
+            <label>Server Guide Channel</label>
+            <select name="server_guide_channel_id">${channelSelect(channels, w.server_guide_channel_id)}</select>
+            <div class="field-hint">Optional — the channel that introduces newcomers to your server. When set, the {server_guide} placeholder above resolves to a clickable #mention of this channel.</div>
+          </div>
+          <div class="field">
             <label>Join / Leave Log Channel</label>
             <select name="join_leave_log_channel_id">${channelSelect(channels, w.join_leave_log_channel_id)}</select>
             <div class="field-hint">Used by the Greeter Response report to time joins, greetings, and early departures.</div>
@@ -206,6 +215,7 @@ export function mount(container) {
           leave_message: fd.get("leave_message"),
           greeter_role_id: fd.get("greeter_role_id"),
           greeter_chat_channel_id: fd.get("greeter_chat_channel_id"),
+          server_guide_channel_id: fd.get("server_guide_channel_id"),
           join_leave_log_channel_id: fd.get("join_leave_log_channel_id"),
         });
         showStatus(status, true);

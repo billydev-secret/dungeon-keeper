@@ -391,6 +391,9 @@ async def get_config(
                     "greeter_chat_channel_id": str(
                         _int_val(conn, "greeter_chat_channel_id", guild_id=guild_id)
                     ),
+                    "server_guide_channel_id": str(
+                        _int_val(conn, "server_guide_channel_id", guild_id=guild_id)
+                    ),
                     "join_leave_log_channel_id": str(
                         _int_val(
                             conn,
@@ -604,6 +607,7 @@ class WelcomeConfigUpdate(BaseModel):
     leave_message: str | None = None
     greeter_role_id: str | None = None
     greeter_chat_channel_id: str | None = None
+    server_guide_channel_id: str | None = None
     join_leave_log_channel_id: str | None = None
 
 
@@ -626,6 +630,7 @@ async def update_welcome(
         "leave_message": "leave_message",
         "greeter_role_id": "greeter_role_id",
         "greeter_chat_channel_id": "greeter_chat_channel_id",
+        "server_guide_channel_id": "server_guide_channel_id",
         "join_leave_log_channel_id": "join_leave_log_channel_id",
     }
 
@@ -683,6 +688,7 @@ async def welcome_preview(
 
     from bot_modules.bios.resurrect import resolve_member_bio_link
     from bot_modules.bios.trigger import resolve_bio_placeholders
+    from bot_modules.services.welcome_service import server_guide_mention_for
 
     with ctx.open_db() as conn:
         welcome_msg = get_config_value(
@@ -692,6 +698,13 @@ async def welcome_preview(
             conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
         )
         bio_link, bios_channel_mention = resolve_bio_placeholders(conn, guild_id)
+        try:
+            server_guide_channel_id = int(
+                get_config_value(conn, "server_guide_channel_id", "0", guild_id)
+            )
+        except (TypeError, ValueError):
+            server_guide_channel_id = 0
+    server_guide_mention = server_guide_mention_for(server_guide_channel_id)
 
     try:
         member_bio_link = await resolve_member_bio_link(ctx, member)
@@ -704,6 +717,7 @@ async def welcome_preview(
         bio_link=bio_link,
         bios_channel_mention=bios_channel_mention,
         member_bio_link=member_bio_link,
+        server_guide_mention=server_guide_mention,
     )
     leave_embed = build_leave_embed(
         member,
@@ -711,6 +725,7 @@ async def welcome_preview(
         bio_link=bio_link,
         bios_channel_mention=bios_channel_mention,
         member_bio_link=member_bio_link,
+        server_guide_mention=server_guide_mention,
     )
 
     def _to_dict(e) -> dict:
