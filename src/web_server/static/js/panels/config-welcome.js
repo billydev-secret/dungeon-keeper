@@ -69,6 +69,8 @@ export function mount(container) {
     const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
     const w = config.welcome;
 
+    const trigger = w.welcome_trigger || "join";
+
     container.innerHTML = `
       <div class="panel">
         <header>
@@ -79,6 +81,19 @@ export function mount(container) {
           <div class="field">
             <label>Welcome Channel</label>
             <select name="welcome_channel_id">${channelSelect(channels, w.welcome_channel_id)}</select>
+          </div>
+          <div class="field">
+            <label>Welcome Trigger</label>
+            <select name="welcome_trigger">
+              <option value="join"${trigger === "join" ? " selected" : ""}>At join</option>
+              <option value="verified"${trigger === "verified" ? " selected" : ""}>After bio verified (unverified role removed + bio posted)</option>
+            </select>
+            <div class="field-hint">When to send the welcome message. "After bio verified" fires when the unverified role is removed AND the member has a completed bio.</div>
+          </div>
+          <div class="field" data-verified-only style="${trigger === "verified" ? "" : "display:none"}">
+            <label>Unverified Role</label>
+            <select name="unverified_role_id">${roleSelect(roles, w.unverified_role_id)}</select>
+            <div class="field-hint">Role that is removed by your verification process. The welcome fires when this role is stripped and the member has a bio.</div>
           </div>
           <div class="field">
             <label>Welcome Message</label>
@@ -129,6 +144,17 @@ export function mount(container) {
     const previewWrap = container.querySelector("[data-preview-wrap]");
     const previewBtn = container.querySelector('[data-action="preview"]');
 
+    // Show/hide the unverified role selector based on trigger selection.
+    const triggerSelect = form.querySelector("select[name='welcome_trigger']");
+    const verifiedOnlyFields = form.querySelectorAll("[data-verified-only]");
+    function syncVerifiedFields() {
+      const show = triggerSelect.value === "verified";
+      verifiedOnlyFields.forEach((el) => {
+        el.style.display = show ? "" : "none";
+      });
+    }
+    triggerSelect.addEventListener("change", syncVerifiedFields);
+
     // Wire placeholder chips → insert at cursor of the right textarea.
     container.querySelectorAll(".placeholder-strip .chip").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -174,6 +200,8 @@ export function mount(container) {
           welcome_channel_id: fd.get("welcome_channel_id"),
           welcome_message: fd.get("welcome_message"),
           welcome_ping_role_id: fd.get("welcome_ping_role_id"),
+          welcome_trigger: fd.get("welcome_trigger"),
+          unverified_role_id: fd.get("unverified_role_id"),
           leave_channel_id: fd.get("leave_channel_id"),
           leave_message: fd.get("leave_message"),
           greeter_role_id: fd.get("greeter_role_id"),

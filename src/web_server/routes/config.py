@@ -370,6 +370,12 @@ async def get_config(
                     "welcome_ping_role_id": str(
                         _int_val(conn, "welcome_ping_role_id", guild_id=guild_id)
                     ),
+                    "welcome_trigger": _str_val(
+                        conn, "welcome_trigger", "join", guild_id=guild_id
+                    ),
+                    "unverified_role_id": str(
+                        _int_val(conn, "unverified_role_id", guild_id=guild_id)
+                    ),
                     "leave_channel_id": str(
                         _int_val(conn, "leave_channel_id", guild_id=guild_id)
                     ),
@@ -592,6 +598,8 @@ class WelcomeConfigUpdate(BaseModel):
     welcome_channel_id: str | None = None
     welcome_message: str | None = None
     welcome_ping_role_id: str | None = None
+    welcome_trigger: str | None = None
+    unverified_role_id: str | None = None
     leave_channel_id: str | None = None
     leave_message: str | None = None
     greeter_role_id: str | None = None
@@ -612,6 +620,8 @@ async def update_welcome(
         "welcome_channel_id": "welcome_channel_id",
         "welcome_message": "welcome_message",
         "welcome_ping_role_id": "welcome_ping_role_id",
+        "welcome_trigger": "welcome_trigger",
+        "unverified_role_id": "unverified_role_id",
         "leave_channel_id": "leave_channel_id",
         "leave_message": "leave_message",
         "greeter_role_id": "greeter_role_id",
