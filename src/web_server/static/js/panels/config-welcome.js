@@ -1,6 +1,67 @@
 import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, apiPut, showStatus } from "../config-helpers.js";
 import { api, esc } from "../api.js";
 
+// Template placeholders accepted by the welcome / leave message
+// templates. Order is the order they appear in the chip strip.
+const PLACEHOLDERS = [
+  { token: "{member}",          description: "@-mention of the member" },
+  { token: "{member_name}",     description: "The member's display name" },
+  { token: "{member_id}",       description: "Numeric Discord user ID" },
+  { token: "{server}",          description: "Server name" },
+  { token: "{member_count}",    description: "Current member count" },
+  { token: "{bios_channel}",    description: "Clickable #mention of the bios channel" },
+  { token: "{bio_link}",        description: "Direct jump URL to the bios trigger button" },
+  {
+    token: "{member_bio_link}",
+    description: "Jump URL to this member's own bio post. Empty for new members. For returning members whose bio was archived, the bot resurrects it automatically.",
+  },
+];
+
+function chipsHtml(targetName) {
+  const chipStyle = "cursor:pointer; border:1px solid var(--rule, #444); background:var(--rule-soft, rgba(255,255,255,0.05)); font-family:var(--font-mono, monospace); font-size:12px; padding:3px 10px; border-radius:999px;";
+  const chips = PLACEHOLDERS.map((p) => `
+    <button type="button" class="chip placeholder-chip" data-insert="${esc(p.token)}" data-target="${esc(targetName)}" title="${esc(p.description)}" style="${chipStyle}">
+      ${esc(p.token)}
+    </button>
+  `).join("");
+  return `
+    <div class="placeholder-strip" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+      ${chips}
+    </div>
+  `;
+}
+
+function legendHtml() {
+  const rows = PLACEHOLDERS.map((p) => `
+    <tr>
+      <td><code>${esc(p.token)}</code></td>
+      <td>${esc(p.description)}</td>
+    </tr>
+  `).join("");
+  return `
+    <details style="margin-top:8px;">
+      <summary style="cursor:pointer;">Show placeholder reference</summary>
+      <table class="table" style="margin-top:8px;">
+        <thead><tr><th>Placeholder</th><th>What it inserts</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </details>
+  `;
+}
+
+function insertAtCursor(textarea, snippet) {
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? textarea.value.length;
+  const before = textarea.value.slice(0, start);
+  const after = textarea.value.slice(end);
+  textarea.value = `${before}${snippet}${after}`;
+  const caret = start + snippet.length;
+  textarea.focus();
+  textarea.setSelectionRange(caret, caret);
+  // Trigger an input event so any listeners (e.g. preview hooks) update.
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
 
@@ -21,8 +82,10 @@ export function mount(container) {
           </div>
           <div class="field">
             <label>Welcome Message</label>
-            <textarea name="welcome_message">${w.welcome_message}</textarea>
-            <div class="field-hint">Use {member} for mention, {member_name} for display name, {server} for server name, {member_count} for member count</div>
+            <textarea name="welcome_message" data-template>${esc(w.welcome_message || "")}</textarea>
+            <div class="field-hint">Tap a placeholder below to insert it at the cursor:</div>
+            ${chipsHtml("welcome_message")}
+            ${legendHtml()}
           </div>
           <div class="field">
             <label>Welcome Ping Role</label>
@@ -34,7 +97,9 @@ export function mount(container) {
           </div>
           <div class="field">
             <label>Leave Message</label>
-            <textarea name="leave_message">${w.leave_message}</textarea>
+            <textarea name="leave_message" data-template>${esc(w.leave_message || "")}</textarea>
+            <div class="field-hint">Tap a placeholder below to insert it at the cursor:</div>
+            ${chipsHtml("leave_message")}
           </div>
           <div class="field">
             <label>Greeter Role</label>
@@ -63,6 +128,16 @@ export function mount(container) {
     const status = container.querySelector("[data-status]");
     const previewWrap = container.querySelector("[data-preview-wrap]");
     const previewBtn = container.querySelector('[data-action="preview"]');
+
+    // Wire placeholder chips → insert at cursor of the right textarea.
+    container.querySelectorAll(".placeholder-strip .chip").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const targetName = btn.dataset.target;
+        const snippet = btn.dataset.insert;
+        const textarea = form.querySelector(`textarea[name="${targetName}"]`);
+        if (textarea) insertAtCursor(textarea, snippet);
+      });
+    });
 
     function renderEmbed(label, embed) {
       const colorHex = embed.color != null ? `#${embed.color.toString(16).padStart(6, "0")}` : "#5865F2";

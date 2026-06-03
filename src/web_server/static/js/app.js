@@ -14,7 +14,7 @@ const SECTIONS = [
     ],
   },
   {
-    id: "reports", label: "Reports", perms: ["admin"],
+    id: "reports", label: "Reports", perms: ["moderator"],
     groups: [
       { heading: "Moderation", items: [
         { id: "health-incidents",       label: "Incidents",          module: "./panels/health-incidents.js" },
@@ -81,11 +81,11 @@ const SECTIONS = [
     ],
   },
   {
-    id: "config", label: "Config", perms: ["admin"],
+    id: "config", label: "Config", perms: ["moderator"],
     items: [
-      { id: "mod-audit",      label: "Audit Log",   module: "./panels/mod-audit.js" },
-      { id: "mod-dm-audit",   label: "DM Audit",    module: "./panels/mod-dm-audit.js" },
-      { id: "quotes-audit",   label: "Quotes Audit", module: "./panels/quotes-audit.js" },
+      { id: "mod-audit",      label: "Audit Log",   module: "./panels/mod-audit.js", adminOnly: true },
+      { id: "mod-dm-audit",   label: "DM Audit",    module: "./panels/mod-dm-audit.js", adminOnly: true },
+      { id: "quotes-audit",   label: "Quotes Audit", module: "./panels/quotes-audit.js", adminOnly: true },
       { id: "config-global",     label: "Global",          module: "./panels/config-global.js" },
       { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js" },
       { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js" },
@@ -161,15 +161,15 @@ const SECTIONS = [
       ]},
       { heading: "Guess Who", items: [
         { id: "config-guess", label: "Config",     module: "./panels/config-guess.js" },
-        { id: "guess-audit",  label: "Audit Log",  module: "./panels/guess-audit.js" },
+        { id: "guess-audit",  label: "Audit Log",  module: "./panels/guess-audit.js", adminOnly: true },
       ]},
       { heading: "Whisper", items: [
         { id: "config-whisper",    label: "Config",     module: "./panels/config-whisper.js" },
-        { id: "mod-whisper-audit", label: "Audit Log",  module: "./panels/mod-whisper-audit.js" },
+        { id: "mod-whisper-audit", label: "Audit Log",  module: "./panels/mod-whisper-audit.js", adminOnly: true },
       ]},
       { heading: "Confessions", items: [
         { id: "config-confessions",  label: "Config",     module: "./panels/config-confessions.js" },
-        { id: "confessions-audit",   label: "Audit Log",  module: "./panels/mod-confessions-audit.js" },
+        { id: "confessions-audit",   label: "Audit Log",  module: "./panels/mod-confessions-audit.js", adminOnly: true },
       ]},
     ],
   },
@@ -243,7 +243,7 @@ function rebuildIndex() {
   visibleSections = SECTIONS.filter((sec) => {
     // Game host role: show Games section to admins OR configured role holders
     if (sec.gameHostRole) {
-      if (userPerms.has("admin")) return true;
+      if (userPerms.has("admin") || userPerms.has("moderator")) return true;
       const hostRoleId = window.__dk_user?.games_editor_role_id;
       return !!(hostRoleId && userRoleIds.has(hostRoleId));
     }
@@ -268,6 +268,17 @@ function rebuildIndex() {
           : sec
       )
       .filter((sec) => sec.id !== "config" || (sec.items && sec.items.length > 0));
+  }
+
+  if (!userPerms.has("admin")) {
+    visibleSections = visibleSections.map((sec) => {
+      const filterItem = (it) => !it.adminOnly;
+      const newItems = (sec.items || []).filter(filterItem);
+      const newGroups = sec.groups
+        ? sec.groups.map((g) => ({ ...g, items: g.items.filter(filterItem) })).filter((g) => g.items.length > 0)
+        : sec.groups;
+      return { ...sec, items: newItems, groups: newGroups };
+    });
   }
 
   ALL_PAGES = visibleSections.flatMap(allPages);

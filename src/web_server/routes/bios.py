@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from bot_modules.bios import db as bios_db
-from bot_modules.bios.views import PersistentTriggerView
+from bot_modules.bios.trigger import post_trigger_button as _post_trigger_button
 from bot_modules.core.db_utils import get_config_value, set_config_value
 from bot_modules.services.embeds import BIOS_PRIMARY
 from web_server.auth import AuthenticatedUser
@@ -99,7 +99,7 @@ class QuestionUpdateBody(BaseModel):
 @router.get("/config")
 async def get_bios_config(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -175,7 +175,7 @@ async def update_bios_config(
 @router.get("/fields")
 async def list_fields(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -350,7 +350,7 @@ async def reorder_fields(
 @router.get("/questions")
 async def list_questions(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -477,13 +477,5 @@ async def post_trigger_button(
             detail="Configured bios channel is no longer available.",
         )
 
-    embed = discord.Embed(
-        title="📝 Share your bio",
-        description=(
-            "Tap the button below to create or update your member bio. "
-            "I'll spin up a private wizard channel and walk you through it."
-        ),
-        color=BIOS_PRIMARY,
-    )
-    msg = await channel.send(embed=embed, view=PersistentTriggerView())
+    msg = await _post_trigger_button(ctx, channel, embed_color=BIOS_PRIMARY)
     return {"message_id": str(msg.id), "channel_id": str(channel.id)}

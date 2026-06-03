@@ -15,6 +15,7 @@ from bot_modules.bios.logic import (
     BioRenderPayload,
     FieldSnapshot,
     QuestionSnapshot,
+    WizardState,
     cap_field_values_for_embed,
     cap_question_answers_for_embed,
     draw_weighted,
@@ -221,6 +222,140 @@ def test_build_bio_embed_skips_empty_fields():
     )
     embed = build_bio_embed(payload)
     assert [f.name for f in embed.fields] == ["Name"]
+
+
+# ── WizardState transitions ───────────────────────────────────────────
+
+
+def test_wizard_state_field_phase():
+    fields = [_field(1, sort_order=0), _field(2, sort_order=1)]
+    s = WizardState(mode="new", fields=fields, target_questions=3)
+    assert s.step_kind() == "field"
+    s.step_index = 1
+    assert s.step_kind() == "field"
+    s.step_index = 2
+    assert s.step_kind() == "question_browse"
+
+
+def test_wizard_state_pending_question_routes_to_answer():
+    s = WizardState(mode="new", fields=[], target_questions=3)
+    s.pending_question = _q(1)
+    assert s.step_kind() == "question_answer"
+
+
+def test_wizard_state_done_at_target():
+    s = WizardState(mode="new", fields=[], target_questions=2)
+    s.question_answers = [(_q(1), "a")]
+    assert s.step_kind() == "question_browse"
+    s.question_answers.append((_q(2), "b"))
+    assert s.step_kind() == "done"
+
+
+def test_wizard_state_explicit_done_short_circuits():
+    s = WizardState(mode="new", fields=[], target_questions=5)
+    s.questions_complete = True
+    assert s.step_kind() == "done"
+
+
+def test_wizard_state_answered_question_ids():
+    s = WizardState(mode="new", fields=[], target_questions=3)
+    s.question_answers = [(_q(1), "a"), (_q(2), "b")]
+    assert s.answered_question_ids == {1, 2}
+
+
+def test_wizard_state_total_steps_progress_chip():
+    s = WizardState(
+        mode="new",
+        fields=[_field(1), _field(2), _field(3)],
+        target_questions=3,
+    )
+    assert s.total_steps == 6
+
+
+def test_wizard_state_back_within_fields_only():
+    """The browse view passes Back through `step_index`; the apply
+    logic should leave field walking intact when the user crosses back."""
+    s = WizardState(
+        mode="new", fields=[_field(1), _field(2)], target_questions=2
+    )
+    s.step_index = 2  # after fields
+    assert s.step_kind() == "question_browse"
+    # Simulate the "Back to fields" action effect:
+    s.step_index = len(s.fields) - 1
+    assert s.step_kind() == "field"
+
+
+# ── Resurrect: payload reconstruction from stored snapshot ──────────
+
+
+def test_build_payload_from_stored_orders_by_sort_order():
+    from bot_modules.bios.db import StoredBio
+    from bot_modules.bios.resurrect import build_payload_from_stored
+
+    stored = StoredBio(
+        user_id=1,
+        guild_id=2,
+        message_id=0,  # archived
+        channel_id=0,
+        created_at="2026-06-02T00:00:00",
+        updated_at="2026-06-02T00:00:00",
+        field_values={
+            10: ("Name", "Iris"),
+            11: ("Bio", "Hello world"),
+        },
+        answers={
+            0: (100, "Favorite tree?", "Oak"),
+            1: (101, "Pet peeve?", "Loud chewing"),
+        },
+    )
+    field_meta = {
+        # sort_order, field_type, is_headline
+        10: (0, "short", True),
+        11: (1, "paragraph", False),
+    }
+    payload = build_payload_from_stored(
+        stored,
+        member_display_name="Iris",
+        member_avatar_url="http://x/y.png",
+        field_meta=field_meta,
+        embed_color=0xC8763E,
+    )
+    assert payload.headline_value == "Iris"
+    assert [f.label for f in payload.fields] == ["Name", "Bio"]
+    assert payload.fields[0].field_type == "short"
+    assert payload.fields[1].field_type == "paragraph"
+    assert [q.question_text for q in payload.questions] == [
+        "Favorite tree?",
+        "Pet peeve?",
+    ]
+
+
+def test_build_payload_from_stored_falls_back_when_no_headline():
+    from bot_modules.bios.db import StoredBio
+    from bot_modules.bios.resurrect import build_payload_from_stored
+
+    stored = StoredBio(
+        user_id=1,
+        guild_id=2,
+        message_id=0,
+        channel_id=0,
+        created_at="2026-06-02T00:00:00",
+        updated_at="2026-06-02T00:00:00",
+        field_values={10: ("Name", "Iris")},
+        answers={},
+    )
+    payload = build_payload_from_stored(
+        stored,
+        member_display_name="Iris",
+        member_avatar_url="",
+        field_meta={10: (0, "short", False)},
+        embed_color=0,
+    )
+    # No headline flagged → fallback to first field by sort_order.
+    assert payload.headline_value == "Iris"
+
+
+# ── build_bio_embed integration ──────────────────────────────────────
 
 
 def test_build_bio_embed_question_uses_arrow_prefix():

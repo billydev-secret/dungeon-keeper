@@ -624,7 +624,7 @@ async def health_tiles(
 @router.get("/health/dau-mau")
 async def health_dau_mau(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -647,7 +647,7 @@ async def health_dau_mau(
 @router.get("/health/heatmap")
 async def health_heatmap(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -670,7 +670,7 @@ async def health_heatmap(
 @router.get("/health/channel-health")
 async def health_channel_health(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -695,7 +695,7 @@ async def health_channel_health(
 @router.get("/health/gini")
 async def health_gini(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -717,7 +717,7 @@ async def health_gini(
 @router.get("/health/social-graph")
 async def health_social_graph(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -749,7 +749,7 @@ async def health_social_graph(
 @router.get("/health/sentiment")
 async def health_sentiment(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -841,7 +841,7 @@ async def health_sentiment_feed(
 @router.get("/health/message-feed")
 async def health_message_feed(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
     sentiment_min: float = Query(-1.0, ge=-1.0, le=1.0),
     sentiment_max: float = Query(1.0, ge=-1.0, le=1.0),
     engagement_min: int = Query(0, ge=0),
@@ -984,7 +984,7 @@ async def health_message_feed(
 @router.get("/health/newcomer-funnel")
 async def health_newcomer_funnel(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1006,7 +1006,7 @@ async def health_newcomer_funnel(
 @router.get("/health/cohort-retention")
 async def health_cohort_retention(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1028,7 +1028,7 @@ async def health_cohort_retention(
 @router.get("/health/churn-risk")
 async def health_churn_risk(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1074,7 +1074,7 @@ async def health_mod_workload(
 async def health_mod_engagement(
     request: Request,
     days: int = Query(7, ge=1, le=365),
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1132,7 +1132,7 @@ async def health_incidents(
 @router.get("/health/composite-score")
 async def health_composite_score(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

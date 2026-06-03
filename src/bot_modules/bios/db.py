@@ -418,7 +418,9 @@ def upsert_bio(
 
 
 def delete_user_bio(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
-    """Remove the user's bio row and all their snapshotted values/answers."""
+    """Permanently remove the user's bio row and all their snapshotted
+    values/answers. Used by explicit admin deletion, NOT by member-leave
+    cleanup (which archives instead, see :func:`archive_user_bio`)."""
     conn.execute(
         "DELETE FROM bio_field_values WHERE user_id = ? AND guild_id = ?",
         (user_id, guild_id),
@@ -429,6 +431,20 @@ def delete_user_bio(conn: sqlite3.Connection, guild_id: int, user_id: int) -> No
     )
     conn.execute(
         "DELETE FROM bios WHERE user_id = ? AND guild_id = ?",
+        (user_id, guild_id),
+    )
+
+
+def archive_user_bio(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
+    """Mark the user's bio as archived (member has left).
+
+    Clears ``message_id`` / ``channel_id`` to 0 as a sentinel — the
+    Discord embed has been deleted, but the snapshotted values and
+    answers stay so the bio can be resurrected on rejoin.
+    """
+    conn.execute(
+        "UPDATE bios SET message_id = 0, channel_id = 0, "
+        "updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND guild_id = ?",
         (user_id, guild_id),
     )
 

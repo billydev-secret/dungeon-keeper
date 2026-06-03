@@ -753,6 +753,24 @@ class EventsCog(commands.Cog):
         if cfg.welcome_channel_id > 0:
             channel = member.guild.get_channel(cfg.welcome_channel_id)
             if isinstance(channel, discord.TextChannel):
+                from bot_modules.bios.resurrect import resolve_member_bio_link
+                from bot_modules.bios.trigger import resolve_bio_placeholders
+
+                with self.ctx.open_db() as conn:
+                    bio_link, bios_channel_mention = resolve_bio_placeholders(
+                        conn, member.guild.id
+                    )
+                # Resurrects an archived bio if the member is a returner;
+                # returns "" when they don't have one.
+                try:
+                    member_bio_link = await resolve_member_bio_link(
+                        self.ctx, member
+                    )
+                except Exception:
+                    log.exception(
+                        "Failed to resolve member bio link for %d", member.id
+                    )
+                    member_bio_link = ""
                 try:
                     ping = (
                         f"<@&{cfg.welcome_ping_role_id}>"
@@ -761,7 +779,13 @@ class EventsCog(commands.Cog):
                     )
                     await channel.send(
                         content=ping,
-                        embed=build_welcome_embed(member, cfg.welcome_message),
+                        embed=build_welcome_embed(
+                            member,
+                            cfg.welcome_message,
+                            bio_link=bio_link,
+                            bios_channel_mention=bios_channel_mention,
+                            member_bio_link=member_bio_link,
+                        ),
                     )
                 except discord.Forbidden:
                     log.warning(
@@ -801,8 +825,36 @@ class EventsCog(commands.Cog):
         channel = member.guild.get_channel(cfg.leave_channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
+        from bot_modules.bios import db as bios_db
+        from bot_modules.bios.trigger import resolve_bio_placeholders
+
+        with self.ctx.open_db() as conn:
+            bio_link, bios_channel_mention = resolve_bio_placeholders(
+                conn, member.guild.id
+            )
+            stored = bios_db.get_user_bio(conn, member.guild.id, member.id)
+
+        # If the member has a still-live bio embed (BiosCog may or may
+        # not have archived it yet — listener order is undefined), the
+        # snapshotted (channel_id, message_id) gives a working jump URL.
+        if stored is not None and stored.message_id != 0 and stored.channel_id != 0:
+            member_bio_link = (
+                f"https://discord.com/channels/{member.guild.id}/"
+                f"{stored.channel_id}/{stored.message_id}"
+            )
+        else:
+            member_bio_link = ""
+
         try:
-            await channel.send(embed=build_leave_embed(member, cfg.leave_message))
+            await channel.send(
+                embed=build_leave_embed(
+                    member,
+                    cfg.leave_message,
+                    bio_link=bio_link,
+                    bios_channel_mention=bios_channel_mention,
+                    member_bio_link=member_bio_link,
+                )
+            )
         except discord.Forbidden:
             log.warning(
                 "Missing permission to send leave message in #%s.", channel.name

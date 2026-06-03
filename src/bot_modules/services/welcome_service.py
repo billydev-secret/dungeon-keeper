@@ -10,11 +10,22 @@ DEFAULT_LEAVE_MESSAGE = "{member_name} has left the server."
 # Placeholders available in both welcome and leave templates
 PLACEHOLDER_HELP = (
     "`{member}` — mention  •  `{member_name}` — display name  •  "
-    "`{member_id}` — user ID  •  `{server}` — server name  •  `{member_count}` — member count"
+    "`{member_id}` — user ID  •  `{server}` — server name  •  "
+    "`{member_count}` — member count  •  `{bios_channel}` — bios channel mention  •  "
+    "`{bio_link}` — direct link to the bios trigger button  •  "
+    "`{member_bio_link}` — jump URL to this member's own bio post (empty if they have no bio; "
+    "auto-resurrects an archived bio for returning members)"
 )
 
 
-def _resolve(template: str, member: discord.Member) -> str:
+def _resolve(
+    template: str,
+    member: discord.Member,
+    *,
+    bio_link: str = "",
+    bios_channel_mention: str = "",
+    member_bio_link: str = "",
+) -> str:
     guild = member.guild
     return (
         template.replace("{member}", member.mention)
@@ -22,12 +33,28 @@ def _resolve(template: str, member: discord.Member) -> str:
         .replace("{member_id}", str(member.id))
         .replace("{server}", guild.name)
         .replace("{member_count}", str(guild.member_count or 0))
+        .replace("{bio_link}", bio_link)
+        .replace("{bios_channel}", bios_channel_mention)
+        .replace("{member_bio_link}", member_bio_link)
     )
 
 
-def build_welcome_embed(member: discord.Member, message_template: str) -> discord.Embed:
+def build_welcome_embed(
+    member: discord.Member,
+    message_template: str,
+    *,
+    bio_link: str = "",
+    bios_channel_mention: str = "",
+    member_bio_link: str = "",
+) -> discord.Embed:
     embed = discord.Embed(
-        description=_resolve(message_template, member),
+        description=_resolve(
+            message_template,
+            member,
+            bio_link=bio_link,
+            bios_channel_mention=bios_channel_mention,
+            member_bio_link=member_bio_link,
+        ),
         color=discord.Color.blurple(),
     )
     embed.set_author(
@@ -40,9 +67,22 @@ def build_welcome_embed(member: discord.Member, message_template: str) -> discor
     return embed
 
 
-def build_leave_embed(member: discord.Member, message_template: str) -> discord.Embed:
+def build_leave_embed(
+    member: discord.Member,
+    message_template: str,
+    *,
+    bio_link: str = "",
+    bios_channel_mention: str = "",
+    member_bio_link: str = "",
+) -> discord.Embed:
     embed = discord.Embed(
-        description=_resolve(message_template, member),
+        description=_resolve(
+            message_template,
+            member,
+            bio_link=bio_link,
+            bios_channel_mention=bios_channel_mention,
+            member_bio_link=member_bio_link,
+        ),
         color=discord.Color.dark_grey(),
     )
     embed.set_author(

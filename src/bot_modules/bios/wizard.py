@@ -26,10 +26,10 @@ from bot_modules.bios.logic import (
     FieldSnapshot,
     QuestionSnapshot,
     WizardState,
-    draw_weighted,
     headline_value,
 )
-from bot_modules.bios.views import CombinedStepView
+from bot_modules.bios.trigger import reposition_trigger_button
+from bot_modules.bios.views import BrowseQuestionsView, CombinedStepView
 
 if TYPE_CHECKING:
     from bot_modules.cogs.bios_cog import BiosCog
@@ -41,7 +41,16 @@ log = logging.getLogger("dungeonkeeper.bios.wizard")
 
 
 ActionKind = Literal[
-    "answer", "skip", "back", "cancel", "keep", "pick_question", "timeout"
+    "answer",
+    "skip",
+    "back",
+    "cancel",
+    "keep",
+    "pick_question",  # value = str(question_id), entered question_answer phase
+    "browse_prev",
+    "browse_next",
+    "browse_done",
+    "timeout",
 ]
 
 
@@ -50,6 +59,9 @@ class Action:
     kind: ActionKind
     value: str = ""  # for "answer" steps
     interaction: discord.Interaction | None = None
+
+
+PAGE_SIZE = 25  # Discord select-menu cap
 
 
 # ── Session ───────────────────────────────────────────────────────────
@@ -62,8 +74,6 @@ class WizardSession:
     config: BiosConfig
     state: WizardState
     prior_field_values: dict[int, str] = field(default_factory=dict)
-    prior_slot_answers: dict[int, tuple[int, str, str]] = field(default_factory=dict)
-    snapshotted_question_texts: dict[int, str] = field(default_factory=dict)
 
     channel: discord.TextChannel | None = None
     _loop_task: asyncio.Task | None = None
@@ -177,11 +187,11 @@ class WizardSession:
             f = self.state.current_field()
             assert f is not None
             return await self._render_field_step(f)
-        if kind == "question":
-            slot = self.state.current_slot_index()
-            assert slot is not None
-            q = self.state.slots[slot]
-            return await self._render_question_step(slot, q)
+        if kind == "question_browse":
+            return await self._render_question_browse_step()
+        if kind == "question_answer":
+            assert self.state.pending_question is not None
+            return await self._render_question_answer_step(self.state.pending_question)
         return Action(kind="cancel")
 
     async def _render_field_step(self, f: BioField) -> Action:
@@ -238,15 +248,66 @@ class WizardSession:
             text_capture_task.cancel()
         return action
 
-    async def _render_question_step(self, slot: int, q: BioQuestion) -> Action:
-        prior_answer = ""
-        if slot in self.prior_slot_answers:
-            _, _, prior_answer = self.prior_slot_answers[slot]
-        prompt_embed = self._build_question_prompt_embed(q, prior_answer)
+    async def _render_question_browse_step(self) -> Action:
+        """Show the paginated icebreaker pool. The user picks one to answer,
+        navigates Prev/Next, or clicks Done."""
 
-        async def on_skip(interaction: discord.Interaction) -> None:
+        def _load() -> list[BioQuestion]:
+            with self.cog.ctx.open_db() as conn:
+                return bios_db.list_active_questions(conn, self.member.guild.id)
+
+        pool = await asyncio.to_thread(_load)
+        answered_by_id = {q.id: ans for (q, ans) in self.state.question_answers}
+        # Show unanswered questions first, then already-answered ones
+        # (labeled so the user can re-pick to change their answer).
+        unanswered = [q for q in pool if q.id not in answered_by_id]
+        answered_pool = [q for q in pool if q.id in answered_by_id]
+        # Also include answered questions whose source row was retired
+        # (so they're not in `pool`) — the snapshot lives in question_answers.
+        retired_ids_in_pool = {q.id for q in pool}
+        for q, _ in self.state.question_answers:
+            if q.id not in retired_ids_in_pool:
+                answered_pool.append(q)
+        all_listed = unanswered + answered_pool
+
+        total_pages = max(1, (len(all_listed) + PAGE_SIZE - 1) // PAGE_SIZE)
+        page = max(0, min(self.state.browse_page, total_pages - 1))
+        self.state.browse_page = page
+        start = page * PAGE_SIZE
+        page_slice = all_listed[start : start + PAGE_SIZE]
+
+        # Label answered ones with their current answer so the user can
+        # spot them and re-pick to change.
+        page_options: list[tuple[int, str]] = []
+        for q in page_slice:
+            if q.id in answered_by_id:
+                preview = answered_by_id[q.id].replace("\n", " ")[:40]
+                label = f"✏️ {q.prompt} — already: {preview}"
+            else:
+                label = q.prompt
+            page_options.append((q.id, label))
+
+        embed = self._build_browse_embed(
+            page=page,
+            total_pages=total_pages,
+            unanswered_count=len(unanswered),
+        )
+
+        async def on_pick(interaction: discord.Interaction, qid: int) -> None:
             await interaction.response.defer()
-            self.push_action(Action(kind="skip"))
+            self.push_action(Action(kind="pick_question", value=str(qid)))
+
+        async def on_prev(interaction: discord.Interaction) -> None:
+            await interaction.response.defer()
+            self.push_action(Action(kind="browse_prev"))
+
+        async def on_next(interaction: discord.Interaction) -> None:
+            await interaction.response.defer()
+            self.push_action(Action(kind="browse_next"))
+
+        async def on_done(interaction: discord.Interaction) -> None:
+            await interaction.response.defer()
+            self.push_action(Action(kind="browse_done"))
 
         async def on_back(interaction: discord.Interaction) -> None:
             await interaction.response.defer()
@@ -256,25 +317,43 @@ class WizardSession:
             await interaction.response.defer()
             self.push_action(Action(kind="cancel"))
 
-        async def on_keep(interaction: discord.Interaction) -> None:
-            await interaction.response.defer()
-            self.push_action(Action(kind="keep"))
+        view = BrowseQuestionsView(
+            owner_id=self.member.id,
+            page_options=page_options,
+            on_pick=on_pick,
+            on_prev=on_prev,
+            on_next=on_next,
+            on_done=on_done,
+            on_back=on_back if self.state.fields else None,
+            on_cancel=on_cancel,
+            can_prev=page > 0,
+            can_next=page < total_pages - 1,
+            can_done=True,
+        )
 
-        async def on_pick(interaction: discord.Interaction, qid: int) -> None:
-            await interaction.response.defer()
-            self.push_action(Action(kind="pick_question", value=str(qid)))
+        assert self.channel is not None
+        await self.channel.send(embed=embed, view=view)
 
-        picker_options = await self._build_picker_options(slot)
+        return await self._action_q.get()
+
+    async def _render_question_answer_step(self, q: BioQuestion) -> Action:
+        """Render the prompt for the user's picked question and capture their text answer."""
+        prompt_embed = self._build_question_prompt_embed(q)
+
+        async def on_back(interaction: discord.Interaction) -> None:
+            await interaction.response.defer()
+            self.push_action(Action(kind="back"))
+
+        async def on_cancel(interaction: discord.Interaction) -> None:
+            await interaction.response.defer()
+            self.push_action(Action(kind="cancel"))
 
         view = CombinedStepView(
             owner_id=self.member.id,
-            on_skip=on_skip,
-            on_back=on_back if self.state.step_index > 0 else None,
+            on_skip=None,
+            on_back=on_back,
             on_cancel=on_cancel,
-            on_keep=on_keep if (self.state.mode == "edit" and prior_answer) else None,
-            on_question_pick=on_pick if picker_options else None,
-            question_options=picker_options if picker_options else None,
-            current_question_id=q.id,
+            on_keep=None,
         )
 
         assert self.channel is not None
@@ -287,46 +366,6 @@ class WizardSession:
             if not capture_task.done():
                 capture_task.cancel()
         return action
-
-    async def _build_picker_options(self, slot: int) -> list[tuple[int, str]]:
-        """Return up to 25 (question_id, prompt) pairs for the picker —
-        always includes the current slot's question, plus other active
-        questions not currently assigned to other slots."""
-
-        def _load() -> list[BioQuestion]:
-            with self.cog.ctx.open_db() as conn:
-                return bios_db.list_active_questions(conn, self.member.guild.id)
-
-        pool = await asyncio.to_thread(_load)
-        current = self.state.slots[slot]
-        used_elsewhere = {
-            self.state.slots[i].id for i in range(len(self.state.slots)) if i != slot
-        }
-        seen: set[int] = set()
-        opts: list[tuple[int, str]] = []
-        if current.id != 0:
-            opts.append((current.id, current.prompt))
-            seen.add(current.id)
-        for cand in pool:
-            if cand.id in used_elsewhere or cand.id in seen:
-                continue
-            opts.append((cand.id, cand.prompt))
-            seen.add(cand.id)
-            if len(opts) >= 25:
-                break
-        return opts if len(opts) > 1 else []
-
-    async def _reroll_unavailable_note(self) -> str | None:
-        def _load() -> list[BioQuestion]:
-            with self.cog.ctx.open_db() as conn:
-                return bios_db.list_active_questions(conn, self.member.guild.id)
-
-        pool = await asyncio.to_thread(_load)
-        excluded = {q.id for q in self.state.slots}
-        alternatives = [q for q in pool if q.id not in excluded]
-        if not alternatives:
-            return "No other questions available right now."
-        return None
 
     async def _capture_one_message(self, max_len: int) -> None:
         """Wait for one text message in the wizard channel from the owner.
@@ -382,50 +421,63 @@ class WizardSession:
                 self.state.step_index += 1
             elif action.kind == "back":
                 self.state.step_index = max(0, self.state.step_index - 1)
-        elif kind == "question":
-            slot = self.state.current_slot_index()
-            assert slot is not None
-            if action.kind == "answer":
-                self.state.slot_answers[slot] = action.value
-                self.state.slot_skipped.discard(slot)
-                self.state.step_index += 1
-            elif action.kind == "keep":
-                _, _, prior = self.prior_slot_answers.get(slot, (0, "", ""))
-                self.state.slot_answers[slot] = prior
-                self.state.slot_skipped.discard(slot)
-                self.state.step_index += 1
-            elif action.kind == "skip":
-                self.state.slot_answers.pop(slot, None)
-                self.state.slot_skipped.add(slot)
-                self.state.step_index += 1
+        elif kind == "question_browse":
+            if action.kind == "browse_prev":
+                self.state.browse_page = max(0, self.state.browse_page - 1)
+            elif action.kind == "browse_next":
+                self.state.browse_page += 1
+            elif action.kind == "browse_done":
+                self.state.questions_complete = True
             elif action.kind == "back":
-                self.state.step_index = max(0, self.state.step_index - 1)
+                # Back to the last field for editing.
+                if self.state.fields:
+                    self.state.step_index = len(self.state.fields) - 1
             elif action.kind == "pick_question":
                 try:
                     picked_qid = int(action.value)
                 except (TypeError, ValueError):
                     return
-                await self._swap_slot_to(slot, picked_qid)
-                # don't advance — re-render with the new question
+                picked = await self._load_question(picked_qid)
+                if picked is None:
+                    # Could be an answered-but-retired question; reconstruct
+                    # from the snapshot inside question_answers.
+                    for q, _ in self.state.question_answers:
+                        if q.id == picked_qid:
+                            picked = q
+                            break
+                if picked is not None:
+                    self.state.pending_question = picked
+        elif kind == "question_answer":
+            pending = self.state.pending_question
+            if pending is None:
+                return
+            if action.kind == "answer":
+                # If the user re-picked an already-answered question,
+                # update that entry in place; otherwise append.
+                existing_idx = next(
+                    (
+                        i
+                        for i, (q, _) in enumerate(self.state.question_answers)
+                        if q.id == pending.id
+                    ),
+                    None,
+                )
+                if existing_idx is not None:
+                    self.state.question_answers[existing_idx] = (pending, action.value)
+                else:
+                    self.state.question_answers.append((pending, action.value))
+                self.state.pending_question = None
+                self.state.browse_page = 0
+            elif action.kind == "back":
+                # Drop the pending question; return to browse without saving.
+                self.state.pending_question = None
 
-    async def _swap_slot_to(self, slot: int, qid: int) -> None:
-        """Replace the slot's question with the one the user picked."""
-        if self.state.slots[slot].id == qid:
-            return
-
+    async def _load_question(self, qid: int) -> BioQuestion | None:
         def _load() -> BioQuestion | None:
             with self.cog.ctx.open_db() as conn:
                 return bios_db.get_question(conn, qid)
 
-        picked = await asyncio.to_thread(_load)
-        if picked is None:
-            return
-        self.state.slots[slot] = picked
-        self.snapshotted_question_texts[picked.id] = picked.prompt
-        # The question changed, so any stored answer for this slot
-        # belongs to a different question — drop it.
-        self.state.slot_answers.pop(slot, None)
-        self.prior_slot_answers.pop(slot, None)
+        return await asyncio.to_thread(_load)
 
     # ── Timeout & completion ─────────────────────────────────────────
 
@@ -466,6 +518,7 @@ class WizardSession:
         )
 
         posted_msg: discord.Message | None = None
+        is_new_post = existing is None
         if existing is None:
             try:
                 posted_msg = await bios_channel.send(embed=embed)
@@ -479,8 +532,12 @@ class WizardSession:
                 await old_msg.edit(embed=embed)
                 posted_msg = old_msg
             except discord.NotFound:
+                # The original message was deleted — fall back to a fresh
+                # post at the bottom of the channel. That counts as a new
+                # post for trigger-button repositioning.
                 try:
                     posted_msg = await bios_channel.send(embed=embed)
+                    is_new_post = True
                 except discord.HTTPException:
                     log.exception("Failed to re-post bio for %d", self.member.id)
                     await self.cancel("post_failed")
@@ -517,6 +574,19 @@ class WizardSession:
         except discord.HTTPException:
             pass
 
+        # When a new bio embed was posted (or a 404-fallback turned an
+        # edit into a fresh post), the trigger button is now above the
+        # new embed. Move it back to the bottom so the next member can
+        # tap it without scrolling.
+        if is_new_post:
+            try:
+                await reposition_trigger_button(self.cog.ctx, bios_channel)
+            except Exception:
+                log.exception(
+                    "Failed to reposition trigger button in guild %d",
+                    guild.id,
+                )
+
         await asyncio.sleep(self.config.archive_grace_seconds)
         await self.cancel("complete")
 
@@ -543,14 +613,10 @@ class WizardSession:
                 continue
             field_rows.append((f.id, f.label, value))
         answer_rows: list[tuple[int, int, str, str]] = []
-        for slot, q in enumerate(self.state.slots):
-            if slot in self.state.slot_skipped:
-                continue
-            answer = self.state.slot_answers.get(slot, "")
+        for slot, (q, answer) in enumerate(self.state.question_answers):
             if not answer:
                 continue
-            qtext = self.snapshotted_question_texts.get(q.id) or q.prompt
-            answer_rows.append((slot, q.id, qtext, answer))
+            answer_rows.append((slot, q.id, q.prompt, answer))
         with self.cog.ctx.open_db() as conn:
             bios_db.upsert_bio(
                 conn,
@@ -566,23 +632,21 @@ class WizardSession:
 
     def _build_intro_embed(self) -> discord.Embed:
         mode_text = "Update your bio" if self.state.mode == "edit" else "Create your bio"
+        n_fields = len(self.state.fields)
+        n_q = self.state.target_questions
         e = discord.Embed(
             title=f"📝 {mode_text}",
             description=(
-                f"Hi {self.member.display_name}! I'll walk you through "
-                f"{len(self.state.fields)} profile field"
-                f"{'s' if len(self.state.fields) != 1 else ''} and "
-                f"{len(self.state.slots)} icebreaker question"
-                f"{'s' if len(self.state.slots) != 1 else ''}.\n\n"
+                f"Hi {self.member.display_name}! First I'll walk you through "
+                f"{n_fields} profile field{'s' if n_fields != 1 else ''}, "
+                f"then you'll pick up to {n_q} icebreaker question"
+                f"{'s' if n_q != 1 else ''} to answer.\n\n"
                 "Reply with your answer for text fields. Use the buttons to "
-                "**Skip**, go **Back**, **Cancel**, or "
-                f"{'**Keep** what you had before' if self.state.mode == 'edit' else 'pick from choices'}."
+                "**Skip**, go **Back**, or **Cancel**."
             ),
             color=self.config.embed_color,
         )
-        e.set_footer(
-            text="This channel disappears when you finish or cancel."
-        )
+        e.set_footer(text="This channel disappears when you finish or cancel.")
         return e
 
     def _build_field_prompt_embed(self, f: BioField, prior: str) -> discord.Embed:
@@ -604,23 +668,47 @@ class WizardSession:
         e.set_footer(text=progress)
         return e
 
-    def _build_question_prompt_embed(
-        self, q: BioQuestion, prior_answer: str
-    ) -> discord.Embed:
-        progress = f"Step {self.state.step_index + 1} / {self.state.total_steps}"
+    def _build_question_prompt_embed(self, q: BioQuestion) -> discord.Embed:
         e = discord.Embed(
             title=f"› {q.prompt}",
-            description="Reply with your answer.",
+            description="Reply with your answer, or use **Back** to pick a different question.",
             color=self.config.embed_color,
         )
-        if self.state.mode == "edit" and prior_answer:
-            e.add_field(name="Current", value=prior_answer[:1024], inline=False)
-        e.add_field(
-            name="​",
-            value="*Pick a different icebreaker from the dropdown below, or Skip to omit this one.*",
-            inline=False,
+        answered = len(self.state.question_answers)
+        e.set_footer(
+            text=f"Icebreaker {answered + 1} of up to {self.state.target_questions}"
         )
-        e.set_footer(text=progress)
+        return e
+
+    def _build_browse_embed(
+        self, *, page: int, total_pages: int, unanswered_count: int
+    ) -> discord.Embed:
+        answered = len(self.state.question_answers)
+        target = self.state.target_questions
+        if unanswered_count or answered:
+            desc = (
+                f"Pick a question to answer from the dropdown below. "
+                f"You can answer up to **{target}** ({answered} so far). "
+                "Already-answered questions are marked ✏️ — pick one to change your answer. "
+                "Click **Done** when you're happy with what you've answered."
+            )
+        else:
+            desc = "No questions configured for this server. Click **Done** to skip icebreakers."
+        e = discord.Embed(
+            title="🎲 Icebreakers",
+            description=desc,
+            color=self.config.embed_color,
+        )
+        if self.state.question_answers:
+            lines = []
+            for i, (q, ans) in enumerate(self.state.question_answers, start=1):
+                preview = ans.replace("\n", " ")[:80]
+                lines.append(f"**{i}.** › {q.prompt[:80]} — _{preview}_")
+            e.add_field(
+                name=f"Answered ({answered})", value="\n".join(lines)[:1024], inline=False
+            )
+        if total_pages > 1:
+            e.set_footer(text=f"Pool page {page + 1} of {total_pages}")
         return e
 
     def _build_render_payload(self) -> BioRenderPayload:
@@ -645,14 +733,10 @@ class WizardSession:
         title, _ = headline_value(self.state.fields, answers_by_id)
 
         q_snaps: list[QuestionSnapshot] = []
-        for slot, q in enumerate(self.state.slots):
-            if slot in self.state.slot_skipped:
-                q_snaps.append(QuestionSnapshot(question_text=q.prompt, answer="", skipped=True))
-                continue
-            ans = self.state.slot_answers.get(slot, "")
+        for q, ans in self.state.question_answers:
             q_snaps.append(
                 QuestionSnapshot(
-                    question_text=self.snapshotted_question_texts.get(q.id, q.prompt),
+                    question_text=q.prompt,
                     answer=ans,
                     skipped=not ans,
                 )
@@ -680,74 +764,44 @@ async def build_session(
     """Load template + question pool + prior bio, then construct a session."""
     guild_id = member.guild.id
 
-    def _load() -> tuple[
-        list[BioField],
-        list[BioQuestion],
-        bios_db.StoredBio | None,
-    ]:
+    def _load() -> tuple[list[BioField], bios_db.StoredBio | None]:
         with cog.ctx.open_db() as conn:
             tmpl = bios_db.get_template(conn, guild_id)
             fields: list[BioField] = []
             if tmpl is not None:
                 fields = bios_db.list_fields(conn, tmpl.id, active_only=True)
-            pool = bios_db.list_active_questions(conn, guild_id)
             existing = bios_db.get_user_bio(conn, guild_id, member.id)
-        return fields, pool, existing
+        return fields, existing
 
-    fields, pool, existing = await asyncio.to_thread(_load)
+    fields, existing = await asyncio.to_thread(_load)
 
     mode: Literal["new", "edit"] = "edit" if existing is not None else "new"
     prior_field_values: dict[int, str] = {}
-    prior_slot_answers: dict[int, tuple[int, str, str]] = {}
-    snapshotted: dict[int, str] = {}
+    prior_question_answers: list[tuple[BioQuestion, str]] = []
 
     if existing is not None:
         for fid, (_, value) in existing.field_values.items():
             prior_field_values[fid] = value
-        for slot, (qid, qtext, ans) in existing.answers.items():
-            prior_slot_answers[slot] = (qid, qtext, ans)
-            snapshotted[qid] = qtext
+        # Preserve answer order from stored slot indices.
+        for slot in sorted(existing.answers.keys()):
+            qid, qtext, ans = existing.answers[slot]
+            prior_question_answers.append(
+                (BioQuestion(id=qid, prompt=qtext, weight=1), ans)
+            )
 
-    # Question slot setup
-    if existing is not None and existing.answers:
-        # Preserve original slot indices: load the stored question into each
-        # slot it occupied, draw fresh for any gap (a previously-skipped slot),
-        # and respect the current configured size if it grew/shrunk.
-        max_stored = max(existing.answers.keys()) + 1
-        slot_count = max(max_stored, config.questions_per_bio)
-        slots = [
-            BioQuestion(id=0, prompt="", weight=1) for _ in range(slot_count)
-        ]
-        used_ids: set[int] = set()
-        for slot_idx, (qid, qtext, _) in existing.answers.items():
-            if slot_idx >= slot_count:
-                continue
-            slots[slot_idx] = BioQuestion(id=qid, prompt=qtext, weight=1)
-            used_ids.add(qid)
-        # Draw replacements for any gap (id=0 sentinel means "not filled").
-        for slot_idx, q in enumerate(slots):
-            if q.id != 0:
-                continue
-            remaining_pool = [p for p in pool if p.id not in used_ids]
-            fresh = draw_weighted(remaining_pool, 1)
-            if fresh:
-                slots[slot_idx] = fresh[0]
-                used_ids.add(fresh[0].id)
-                snapshotted[fresh[0].id] = fresh[0].prompt
-        # Strip any unfilled trailing slots (pool exhausted).
-        slots = [q for q in slots if q.id != 0]
-    else:
-        slots = draw_weighted(pool, config.questions_per_bio)
-        for q in slots:
-            snapshotted[q.id] = q.prompt
-
-    state = WizardState(mode=mode, fields=fields, slots=slots)
+    state = WizardState(
+        mode=mode,
+        fields=fields,
+        target_questions=max(1, config.questions_per_bio),
+        # Pre-fill answered questions in edit mode so the user sees their
+        # prior picks. They can still change them (the user can answer
+        # different questions and the new set replaces the old at save).
+        question_answers=list(prior_question_answers),
+    )
     return WizardSession(
         cog=cog,
         member=member,
         config=config,
         state=state,
         prior_field_values=prior_field_values,
-        prior_slot_answers=prior_slot_answers,
-        snapshotted_question_texts=snapshotted,
     )

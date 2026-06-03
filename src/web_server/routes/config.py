@@ -310,7 +310,7 @@ def _confessions_section(guild_id: int, bot, conn) -> dict:
 @router.get("/config")
 async def get_config(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -647,7 +647,7 @@ async def update_welcome(
 @router.get("/config/welcome/preview")
 async def welcome_preview(
     request: Request,
-    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     """Render welcome and leave embeds for the calling admin (used as a sample member)."""
     from bot_modules.services.welcome_service import (
@@ -671,6 +671,9 @@ async def welcome_preview(
     if member is None:
         raise HTTPException(503, "No member context available for preview")
 
+    from bot_modules.bios.resurrect import resolve_member_bio_link
+    from bot_modules.bios.trigger import resolve_bio_placeholders
+
     with ctx.open_db() as conn:
         welcome_msg = get_config_value(
             conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
@@ -678,9 +681,27 @@ async def welcome_preview(
         leave_msg = get_config_value(
             conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
         )
+        bio_link, bios_channel_mention = resolve_bio_placeholders(conn, guild_id)
 
-    welcome_embed = build_welcome_embed(member, welcome_msg)
-    leave_embed = build_leave_embed(member, leave_msg)
+    try:
+        member_bio_link = await resolve_member_bio_link(ctx, member)
+    except Exception:
+        member_bio_link = ""
+
+    welcome_embed = build_welcome_embed(
+        member,
+        welcome_msg,
+        bio_link=bio_link,
+        bios_channel_mention=bios_channel_mention,
+        member_bio_link=member_bio_link,
+    )
+    leave_embed = build_leave_embed(
+        member,
+        leave_msg,
+        bio_link=bio_link,
+        bios_channel_mention=bios_channel_mention,
+        member_bio_link=member_bio_link,
+    )
 
     def _to_dict(e) -> dict:
         return {
@@ -1705,7 +1726,7 @@ async def update_policy(
 async def birthday_calendar(
     request: Request,
     days: int = 90,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

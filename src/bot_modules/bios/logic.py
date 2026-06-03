@@ -207,62 +207,62 @@ def shrink_to_embed_total(
 
 
 @dataclass
-class WizardStepText:
-    """A field step that captures one text message (short or paragraph)."""
-
-    field: BioField
-    prior_value: str  # "" in new mode, current stored value in edit mode
-
-
-@dataclass
-class WizardStepChoice:
-    """A field step rendered as buttons (≤5 choices) or a select (>5)."""
-
-    field: BioField
-    prior_value: str
-
-
-@dataclass
-class WizardStepQuestion:
-    """An icebreaker slot. `question` may be replaced by re-roll."""
-
-    slot: int
-    question: BioQuestion
-    prior_answer: str  # "" in new mode, stored answer in edit mode
-
-
-@dataclass
 class WizardState:
-    """In-memory session state. Owned by WizardSession; mutated in place."""
+    """In-memory session state. Owned by WizardSession; mutated in place.
+
+    The wizard runs in two phases:
+      1. **Fields** — walks ``fields`` in order using ``step_index``
+         (0..len(fields)). User answers each profile field.
+      2. **Questions** — once fields are done, the user browses the
+         active icebreaker pool and picks questions to answer. Each
+         answered question is appended to ``question_answers`` in
+         pick-order. The phase ends when the user clicks "Done" or has
+         answered ``target_questions`` of them.
+
+    Between the two phases the user can also drop back into fields via
+    Back; ``step_index == len(fields)`` is the boundary.
+    """
 
     mode: Literal["new", "edit"]
     fields: list[BioField]
-    slots: list[BioQuestion]
-    step_index: int = 0
-    # Accumulated answers, keyed for stable lookup by both renderer and
-    # the persistence layer:
+    target_questions: int  # soft cap from config.questions_per_bio
+    step_index: int = 0  # 0..len(fields) for the field-walking phase
     field_values: dict[int, str] = field(default_factory=dict)
     field_skipped: set[int] = field(default_factory=set)
-    slot_answers: dict[int, str] = field(default_factory=dict)
-    slot_skipped: set[int] = field(default_factory=set)
 
-    @property
-    def total_steps(self) -> int:
-        return len(self.fields) + len(self.slots)
+    # Question phase — list of (question, answer) in pick order.
+    question_answers: list[tuple[BioQuestion, str]] = field(default_factory=list)
+    # When set, the user has picked a question and is answering it.
+    pending_question: BioQuestion | None = None
+    # True once the user explicitly clicks "Done with questions".
+    questions_complete: bool = False
+    # 0-indexed page within the active pool's paginated browse.
+    browse_page: int = 0
 
-    def step_kind(self) -> Literal["field", "question", "done"]:
+    def step_kind(
+        self,
+    ) -> Literal["field", "question_browse", "question_answer", "done"]:
         if self.step_index < len(self.fields):
             return "field"
-        if self.step_index < len(self.fields) + len(self.slots):
-            return "question"
-        return "done"
+        if self.pending_question is not None:
+            return "question_answer"
+        if (
+            self.questions_complete
+            or len(self.question_answers) >= self.target_questions
+        ):
+            return "done"
+        return "question_browse"
 
     def current_field(self) -> BioField | None:
         if self.step_index < len(self.fields):
             return self.fields[self.step_index]
         return None
 
-    def current_slot_index(self) -> int | None:
-        if len(self.fields) <= self.step_index < self.total_steps:
-            return self.step_index - len(self.fields)
-        return None
+    @property
+    def answered_question_ids(self) -> set[int]:
+        return {q.id for (q, _) in self.question_answers}
+
+    @property
+    def total_steps(self) -> int:
+        """Heuristic count for the progress chip — fields + soft target."""
+        return len(self.fields) + self.target_questions

@@ -25,7 +25,7 @@ router = APIRouter()
 @router.get("/list", response_model=GenderListResponse)
 async def list_classified(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -71,7 +71,7 @@ async def list_classified(
 @router.get("/unclassified", response_model=GenderUnclassifiedResponse)
 async def list_unclassified(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)

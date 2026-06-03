@@ -100,166 +100,6 @@ class ResumeRestartView(discord.ui.View):
         await self._on_restart(interaction)
 
 
-# ── Step controls (Skip / Back / Cancel / Keep / Re-roll) ─────────────
-
-
-class StepControlsView(discord.ui.View):
-    """Step controls rendered above every wizard prompt.
-
-    All buttons are gated on ``interaction.user == owner``. The wizard
-    owns step navigation logic and passes coroutine callbacks that this
-    view simply dispatches to.
-    """
-
-    def __init__(
-        self,
-        *,
-        owner_id: int,
-        on_skip: ControlCallback | None,
-        on_back: ControlCallback | None,
-        on_cancel: ControlCallback,
-        on_keep: ControlCallback | None = None,
-        on_reroll: ControlCallback | None = None,
-        reroll_note: str | None = None,
-        timeout: float = 900.0,
-    ) -> None:
-        super().__init__(timeout=timeout)
-        self._owner_id = owner_id
-
-        if on_skip is not None:
-            skip_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label="Skip", style=discord.ButtonStyle.secondary
-            )
-            skip_btn.callback = self._wrap(on_skip)  # type: ignore[assignment]
-            self.add_item(skip_btn)
-
-        if on_back is not None:
-            back_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label="Back", style=discord.ButtonStyle.secondary
-            )
-            back_btn.callback = self._wrap(on_back)  # type: ignore[assignment]
-            self.add_item(back_btn)
-
-        if on_keep is not None:
-            keep_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label="Keep current", style=discord.ButtonStyle.success
-            )
-            keep_btn.callback = self._wrap(on_keep)  # type: ignore[assignment]
-            self.add_item(keep_btn)
-
-        if on_reroll is not None:
-            reroll_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label="Re-roll question",
-                style=discord.ButtonStyle.secondary,
-                emoji="🎲",
-                disabled=reroll_note is not None,
-            )
-            reroll_btn.callback = self._wrap(on_reroll)  # type: ignore[assignment]
-            self.add_item(reroll_btn)
-
-        cancel_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-            label="Cancel", style=discord.ButtonStyle.danger
-        )
-        cancel_btn.callback = self._wrap(on_cancel)  # type: ignore[assignment]
-        self.add_item(cancel_btn)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self._owner_id
-
-    def _wrap(self, cb: ControlCallback) -> ControlCallback:
-        async def _inner(interaction: discord.Interaction) -> None:
-            for child in self.children:
-                if isinstance(child, discord.ui.Button):
-                    child.disabled = True
-            await cb(interaction)
-        return _inner
-
-
-# ── Choice input (buttons ≤5, select >5) ──────────────────────────────
-
-
-class ChoiceButtonsView(discord.ui.View):
-    """≤5 choice buttons for a `field_type='choice'` step."""
-
-    def __init__(
-        self,
-        *,
-        owner_id: int,
-        choices: list[str],
-        on_pick: PickCallback,
-        current: str = "",
-        timeout: float = 900.0,
-    ) -> None:
-        super().__init__(timeout=timeout)
-        self._owner_id = owner_id
-        for choice in choices[:5]:
-            style = (
-                discord.ButtonStyle.success
-                if choice == current
-                else discord.ButtonStyle.primary
-            )
-            btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-                label=(choice[:75] or " "), style=style
-            )
-            btn.callback = self._make_callback(on_pick, choice)  # type: ignore[assignment]
-            self.add_item(btn)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self._owner_id
-
-    def _make_callback(
-        self, on_pick: PickCallback, choice: str
-    ) -> ControlCallback:
-        async def _cb(interaction: discord.Interaction) -> None:
-            for child in self.children:
-                if isinstance(child, discord.ui.Button):
-                    child.disabled = True
-            await on_pick(interaction, choice)
-        return _cb
-
-
-class ChoiceSelectView(discord.ui.View):
-    """A select menu for >5 choices."""
-
-    def __init__(
-        self,
-        *,
-        owner_id: int,
-        choices: list[str],
-        on_pick: PickCallback,
-        current: str = "",
-        timeout: float = 900.0,
-    ) -> None:
-        super().__init__(timeout=timeout)
-        self._owner_id = owner_id
-        self._on_pick = on_pick
-
-        options = [
-            discord.SelectOption(
-                label=c[:100] or " ",
-                value=c[:100] or " ",
-                default=(c == current),
-            )
-            for c in choices[:25]
-        ]
-        self._select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
-            placeholder="Pick one…",
-            options=options,
-            min_values=1,
-            max_values=1,
-        )
-        self._select.callback = self._on_select  # type: ignore[assignment]
-        self.add_item(self._select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self._owner_id
-
-    async def _on_select(self, interaction: discord.Interaction) -> None:
-        value = self._select.values[0] if self._select.values else ""
-        self._select.disabled = True
-        await self._on_pick(interaction, value)
-
-
 # ── Combined step view (one message per step) ────────────────────────
 
 
@@ -403,67 +243,134 @@ class CombinedStepView(discord.ui.View):
         return _inner
 
 
-# ── Icebreaker question picker ────────────────────────────────────────
+# ── Paginated question browser ────────────────────────────────────────
 
 
-class QuestionPickerView(discord.ui.View):
-    """Dropdown to pick the icebreaker question for a given slot.
+class BrowseQuestionsView(discord.ui.View):
+    """Paginated dropdown of unanswered active questions.
 
-    Options are pairs of ``(question_id, prompt)``; ``current_id`` is
-    pre-selected. On pick, ``on_pick`` is awaited with the chosen
-    question id (as int).
+    Row 0: select menu (up to 25 options for the current page).
+    Row 1: ◀ Prev, ▶ Next, ✓ Done, Cancel.
+
+    Pager buttons are sent even when there's only one page so the user
+    has a consistent set of controls; they're disabled when there's
+    nowhere to go.
     """
 
     def __init__(
         self,
         *,
         owner_id: int,
-        options: list[tuple[int, str]],
+        page_options: list[tuple[int, str]],
         on_pick: Callable[[discord.Interaction, int], Awaitable[None]],
-        current_id: int,
+        on_prev: ControlCallback,
+        on_next: ControlCallback,
+        on_done: ControlCallback,
+        on_cancel: ControlCallback,
+        on_back: ControlCallback | None,
+        can_prev: bool,
+        can_next: bool,
+        can_done: bool,
         timeout: float = 900.0,
     ) -> None:
         super().__init__(timeout=timeout)
         self._owner_id = owner_id
         self._on_pick = on_pick
 
-        select_options = [
-            discord.SelectOption(
-                label=(prompt[:100] or "—"),
-                value=str(qid),
-                default=(qid == current_id),
+        if page_options:
+            sel: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
+                placeholder="Pick a question to answer…",
+                options=[
+                    discord.SelectOption(
+                        label=(prompt[:100] or "—"),
+                        value=str(qid),
+                    )
+                    for (qid, prompt) in page_options[:25]
+                ],
+                min_values=1,
+                max_values=1,
+                row=0,
             )
-            for (qid, prompt) in options[:25]
-        ]
-        self._select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
-            placeholder="Pick a different icebreaker…",
-            options=select_options,
-            min_values=1,
-            max_values=1,
+            sel.callback = self._on_select  # type: ignore[assignment]
+            self._select = sel
+            self.add_item(sel)
+        else:
+            self._select = None
+
+        prev_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="◀ Prev",
+            style=discord.ButtonStyle.secondary,
+            disabled=not can_prev,
+            row=1,
         )
-        self._select.callback = self._on_select  # type: ignore[assignment]
-        self.add_item(self._select)
+        prev_btn.callback = self._wrap(on_prev)  # type: ignore[assignment]
+        self.add_item(prev_btn)
+
+        next_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="Next ▶",
+            style=discord.ButtonStyle.secondary,
+            disabled=not can_next,
+            row=1,
+        )
+        next_btn.callback = self._wrap(on_next)  # type: ignore[assignment]
+        self.add_item(next_btn)
+
+        if on_back is not None:
+            back_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+                label="Back to fields",
+                style=discord.ButtonStyle.secondary,
+                row=1,
+            )
+            back_btn.callback = self._wrap(on_back)  # type: ignore[assignment]
+            self.add_item(back_btn)
+
+        done_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="✓ Done",
+            style=discord.ButtonStyle.success,
+            disabled=not can_done,
+            row=1,
+        )
+        done_btn.callback = self._wrap(on_done)  # type: ignore[assignment]
+        self.add_item(done_btn)
+
+        cancel_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
+            label="Cancel",
+            style=discord.ButtonStyle.danger,
+            row=1,
+        )
+        cancel_btn.callback = self._wrap(on_cancel)  # type: ignore[assignment]
+        self.add_item(cancel_btn)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         return interaction.user.id == self._owner_id
 
+    def _wrap(self, cb: ControlCallback) -> ControlCallback:
+        async def _inner(interaction: discord.Interaction) -> None:
+            for child in self.children:
+                if isinstance(child, (discord.ui.Button, discord.ui.Select)):
+                    child.disabled = True
+            await cb(interaction)
+        return _inner
+
     async def _on_select(self, interaction: discord.Interaction) -> None:
+        if self._select is None:
+            await interaction.response.defer()
+            return
         value = self._select.values[0] if self._select.values else ""
         try:
             qid = int(value)
         except (TypeError, ValueError):
             await interaction.response.defer()
             return
-        self._select.disabled = True
+        for child in self.children:
+            if isinstance(child, (discord.ui.Button, discord.ui.Select)):
+                child.disabled = True
         await self._on_pick(interaction, qid)
 
 
 __all__ = [
     "PersistentTriggerView",
     "ResumeRestartView",
-    "StepControlsView",
-    "ChoiceButtonsView",
-    "ChoiceSelectView",
-    "QuestionPickerView",
     "CombinedStepView",
+    "BrowseQuestionsView",
 ]
