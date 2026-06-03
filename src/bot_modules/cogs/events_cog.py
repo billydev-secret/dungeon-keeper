@@ -42,7 +42,7 @@ from bot_modules.core.utils import format_guild_for_log
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import AppContext, Bot, GuildConfig
 
 log = logging.getLogger("dungeonkeeper.events")
 
@@ -691,6 +691,51 @@ class EventsCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             pass
 
+    async def _send_welcome(
+        self, member: discord.Member, cfg: "GuildConfig"
+    ) -> None:
+        from bot_modules.bios.resurrect import resolve_member_bio_link
+        from bot_modules.bios.trigger import resolve_bio_placeholders
+
+        channel = member.guild.get_channel(cfg.welcome_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        with self.ctx.open_db() as conn:
+            bio_link, bios_channel_mention = resolve_bio_placeholders(
+                conn, member.guild.id
+            )
+        try:
+            member_bio_link = await resolve_member_bio_link(self.ctx, member)
+        except Exception:
+            log.exception("Failed to resolve member bio link for %d", member.id)
+            member_bio_link = ""
+        ping = (
+            f"<@&{cfg.welcome_ping_role_id}>"
+            if cfg.welcome_ping_role_id > 0
+            else None
+        )
+        try:
+            await channel.send(
+                content=ping,
+                embed=build_welcome_embed(
+                    member,
+                    cfg.welcome_message,
+                    bio_link=bio_link,
+                    bios_channel_mention=bios_channel_mention,
+                    member_bio_link=member_bio_link,
+                ),
+            )
+        except discord.Forbidden:
+            log.warning(
+                "Missing permission to send welcome message in #%s.", channel.name
+            )
+            await self._dm_admin_permission_warning(
+                member.guild,
+                f"Missing permission to send welcome messages in <#{cfg.welcome_channel_id}>.",
+            )
+        except discord.HTTPException as exc:
+            log.error("Failed to send welcome message: %s", exc)
+
     @commands.Cog.listener()
     async def on_member_update(
         self, before: discord.Member, after: discord.Member
@@ -711,6 +756,20 @@ class EventsCog(commands.Cog):
                     log_role_event(
                         conn, after.guild.id, after.id, role.name, "remove", ts=now
                     )
+
+        cfg = self.ctx.guild_config(after.guild.id)
+        if (
+            cfg.welcome_trigger == "verified"
+            and cfg.unverified_role_id > 0
+            and cfg.unverified_role_id in (before_ids - after_ids)
+            and cfg.welcome_channel_id > 0
+        ):
+            from bot_modules.bios import db as bios_db
+
+            with self.ctx.open_db() as conn:
+                has_bio = bios_db.get_user_bio(conn, after.guild.id, after.id) is not None
+            if has_bio:
+                await self._send_welcome(after, cfg)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
@@ -750,54 +809,8 @@ class EventsCog(commands.Cog):
 
         cfg = self.ctx.guild_config(member.guild.id)
 
-        if cfg.welcome_channel_id > 0:
-            channel = member.guild.get_channel(cfg.welcome_channel_id)
-            if isinstance(channel, discord.TextChannel):
-                from bot_modules.bios.resurrect import resolve_member_bio_link
-                from bot_modules.bios.trigger import resolve_bio_placeholders
-
-                with self.ctx.open_db() as conn:
-                    bio_link, bios_channel_mention = resolve_bio_placeholders(
-                        conn, member.guild.id
-                    )
-                # Resurrects an archived bio if the member is a returner;
-                # returns "" when they don't have one.
-                try:
-                    member_bio_link = await resolve_member_bio_link(
-                        self.ctx, member
-                    )
-                except Exception:
-                    log.exception(
-                        "Failed to resolve member bio link for %d", member.id
-                    )
-                    member_bio_link = ""
-                try:
-                    ping = (
-                        f"<@&{cfg.welcome_ping_role_id}>"
-                        if cfg.welcome_ping_role_id > 0
-                        else None
-                    )
-                    await channel.send(
-                        content=ping,
-                        embed=build_welcome_embed(
-                            member,
-                            cfg.welcome_message,
-                            bio_link=bio_link,
-                            bios_channel_mention=bios_channel_mention,
-                            member_bio_link=member_bio_link,
-                        ),
-                    )
-                except discord.Forbidden:
-                    log.warning(
-                        "Missing permission to send welcome message in #%s.",
-                        channel.name,
-                    )
-                    await self._dm_admin_permission_warning(
-                        member.guild,
-                        f"Missing permission to send welcome messages in <#{cfg.welcome_channel_id}>.",
-                    )
-                except discord.HTTPException as exc:
-                    log.error("Failed to send welcome message: %s", exc)
+        if cfg.welcome_channel_id > 0 and cfg.welcome_trigger == "join":
+            await self._send_welcome(member, cfg)
 
         if cfg.greeter_chat_channel_id > 0:
             greeter_channel = member.guild.get_channel(cfg.greeter_chat_channel_id)

@@ -438,6 +438,8 @@ class _StubGuildConfig:
         welcome_channel_id: int = 0,
         welcome_message: str = "",
         welcome_ping_role_id: int = 0,
+        welcome_trigger: str = "join",
+        unverified_role_id: int = 0,
         greeter_chat_channel_id: int = 0,
         leave_channel_id: int = 0,
         leave_message: str = "",
@@ -453,6 +455,8 @@ class _StubGuildConfig:
         self.welcome_channel_id = welcome_channel_id
         self.welcome_message = welcome_message
         self.welcome_ping_role_id = welcome_ping_role_id
+        self.welcome_trigger = welcome_trigger
+        self.unverified_role_id = unverified_role_id
         self.greeter_chat_channel_id = greeter_chat_channel_id
         self.leave_channel_id = leave_channel_id
         self.leave_message = leave_message
