@@ -1261,7 +1261,8 @@ async def _do_unjail(
     if not jail:
         return f"{target} is not currently jailed."
 
-    # Restore roles
+    # Restore roles — use remove/add rather than edit(roles=...) so that any
+    # managed roles the member holds are left in place instead of causing 403.
     stored = json.loads(jail["stored_roles"])
     available_role_ids = {r.id for r in guild.roles}
     restorable_ids, missing = compute_roles_to_restore(stored, available_role_ids)
@@ -1269,8 +1270,14 @@ async def _do_unjail(
         r for r in (guild.get_role(rid) for rid in restorable_ids) if r is not None
     ]
 
+    jailed_role_id = _get_config(ctx, "jailed_role_id", guild_id=guild.id)
+    jailed_role = guild.get_role(jailed_role_id)
+
     try:
-        await target.edit(roles=roles_to_add, reason=f"Unjailed: {reason}")
+        if jailed_role:
+            await target.remove_roles(jailed_role, reason=f"Unjailed: {reason}")
+        if roles_to_add:
+            await target.add_roles(*roles_to_add, reason=f"Unjailed: {reason}")
     except discord.Forbidden:
         return "Could not restore roles — missing permissions."
 
