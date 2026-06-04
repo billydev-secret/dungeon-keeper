@@ -203,22 +203,39 @@ async def apply_jail(
                 pass
 
     # ── Step 2: snapshot + strip roles ──────────────────────────────
+    # Exclude managed roles from the snapshot — they're controlled by
+    # integrations and can't be restored by the bot anyway.
     stored_roles = compute_roles_to_snapshot(
-        [r.id for r in target.roles],
+        [r.id for r in target.roles if not r.managed],
         default_role_id=guild.default_role.id,
         jailed_role_id=jailed_role.id,
     )
 
+    # Use remove_roles + add_roles instead of edit(roles=[...]) so that any
+    # integration-managed roles on the member (e.g. Nitro Booster, bot roles)
+    # are left in place rather than causing a blanket 403 Forbidden.
+    removable = [
+        r for r in target.roles
+        if not r.managed and r.id != guild.default_role.id
+    ]
     try:
-        await target.edit(roles=[jailed_role], reason=f"Jailed by {moderator}")
+        await target.remove_roles(*removable, reason=f"Jailed by {moderator}")
+        await target.add_roles(jailed_role, reason=f"Jailed by {moderator}")
     except discord.Forbidden:
+        bot_top = guild.me.top_role
+        target_top = target.top_role
+        if guild.owner_id == target.id:
+            detail = f"{target} is the server owner — Discord prevents role edits on the owner."
+        else:
+            detail = (
+                f"Bot top role: **{bot_top.name}** (pos {bot_top.position}) | "
+                f"Jailed role: **{jailed_role.name}** (pos {jailed_role.position}) | "
+                f"{target.display_name} top role: **{target_top.name}** (pos {target_top.position})"
+            )
         return JailOutcome(
             ok=False,
             error_kind="no_member_perms",
-            error_message=(
-                "Missing permission to manage this user's roles — "
-                "is the Jailed role above mine, or is the user above me?"
-            ),
+            error_message=f"Missing permission to manage this user's roles.\n{detail}",
         )
 
     # ── Step 3: create private jail channel ─────────────────────────
