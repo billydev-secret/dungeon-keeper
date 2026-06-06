@@ -147,7 +147,7 @@ async def get_stats(db: GamesDb, guild_id: int, user_id: int) -> dict:
         FROM quickdraw_games
         WHERE guild_id = ?2
           AND (challenger_id = ?1 OR target_id = ?1)
-          AND state IN ('RESOLVED', 'NICKED', 'NO_NICK_SET', 'EXPIRED')
+          AND state IN ('RESOLVED', 'NICKED', 'NO_NICK_SET', 'RESOLVED_NO_NICK', 'EXPIRED')
         """,
         (user_id, guild_id),
     )

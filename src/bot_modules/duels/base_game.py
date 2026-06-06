@@ -1,4 +1,12 @@
-"""BaseDuel — shared lifecycle for all nickname-duel games."""
+"""BaseGame — shared lifecycle for all nickname-stake games (2..N players).
+
+`BaseDuel` (the fixed 2-player special case) and the N-player group games both
+subclass this. Everything here is roster-count-agnostic: lifecycle, the background
+expiry/auto-revert sweep, the nickname-stake flow (one winner names one loser), rate
+limiting, and the abstract DB/game hooks. Pairwise-specific behaviour (the single
+opponent accept/decline challenge) lives in `BaseDuel`; lobby/elimination behaviour for
+N>2 is added by `lobby.py` helpers and the group cogs.
+"""
 from __future__ import annotations
 
 import asyncio
@@ -11,12 +19,12 @@ from typing import Any
 import discord
 from discord.ext import commands, tasks
 
-from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_YELLOW
 
 from . import db as duels_db
-from .filters import validate_nickname, validate_stakes
+from .filters import validate_nickname
 from .modals import NicknameModal
-from .views import ChallengeView, ResultView
+from .views import ResultView
 
 log = logging.getLogger("dungeonkeeper.duels")
 
@@ -24,8 +32,8 @@ _RATE_LIMIT_WINDOW = 3600
 _RATE_LIMIT_MAX = 3
 
 
-class BaseDuel(commands.Cog):
-    """Abstract base for all nickname-duel games.
+class BaseGame(commands.Cog):
+    """Abstract base for all nickname-stake games (2..N players).
 
     Subclasses must define:
       GAME_KEY            str  e.g. 'pressure'
@@ -92,6 +100,8 @@ class BaseDuel(commands.Cog):
             for game in games:
                 if game.state == "PENDING":
                     await self._expire_pending(game)
+                elif game.state == "LOBBY":
+                    await self._expire_lobby(game)
                 elif game.state == "ACTIVE":
                     await self._expire_active(game)
                 elif game.state == "RESOLVED":
@@ -115,6 +125,20 @@ class BaseDuel(commands.Cog):
             embed=discord.Embed(
                 title="⏱️ Challenge Expired",
                 description="No response in time.",
+                color=COLOR_YELLOW,
+            ),
+            view=None,
+        )
+
+    async def _expire_lobby(self, game: Any) -> None:
+        await self._db_set_state(game.id, "EXPIRED_LOBBY")
+        self._game_locks.pop(game.id, None)
+        await self._edit_message_silent(
+            game.channel_id,
+            game.message_id,
+            embed=discord.Embed(
+                title="⏱️ Lobby Expired",
+                description="Not enough players started in time.",
                 color=COLOR_YELLOW,
             ),
             view=None,
@@ -208,16 +232,15 @@ class BaseDuel(commands.Cog):
     async def _check_bot_can_nick(
         self,
         guild: discord.Guild,
-        challenger: discord.Member,
-        target: discord.Member,
+        members: list[discord.Member],
     ) -> str | None:
         me = guild.me
         if not me.guild_permissions.manage_nicknames:
             return "I need the **Manage Nicknames** permission to enforce this game."
-        for member in (challenger, target):
+        for member in members:
             if member.id != guild.owner_id and me.top_role <= member.top_role:
                 return (
-                    "My highest role must be above both players' roles to rename the loser. "
+                    "My highest role must be above all players' roles to rename the loser. "
                     "Ask an admin to fix my role position."
                 )
         return None
@@ -225,10 +248,9 @@ class BaseDuel(commands.Cog):
     async def _check_no_active_nick(
         self,
         guild: discord.Guild,
-        challenger: discord.Member,
-        target: discord.Member,
+        members: list[discord.Member],
     ) -> str | None:
-        for member in (challenger, target):
+        for member in members:
             nick = await duels_db.get_active_nick_for_user(self.db, guild.id, member.id)
             if nick:
                 return (
@@ -249,230 +271,7 @@ class BaseDuel(commands.Cog):
     def _record_challenge(self, user_id: int) -> None:
         self._challenge_rate[user_id].append(time.time())
 
-    # ── Shared challenge entrypoint ───────────────────────────────────────────
-
-    async def _base_challenge(
-        self,
-        interaction: discord.Interaction,
-        target: discord.Member,
-        stakes_text: str | None,
-    ) -> None:
-        """Run all pre-game checks and create a challenge embed. Called by subclass command."""
-        if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
-
-        challenger = interaction.user  # type: ignore[assignment]
-        guild: discord.Guild = interaction.guild
-
-        if target.id == challenger.id:
-            await interaction.response.send_message(
-                "You can't challenge yourself.", ephemeral=True
-            )
-            return
-        if target.bot:
-            await interaction.response.send_message(
-                "You can't challenge a bot.", ephemeral=True
-            )
-            return
-
-        cfg = await duels_db.get_config(self.db, guild.id, self.GAME_KEY)
-        allowlist: list[int] = json.loads(cfg.get("channel_allowlist") or "[]")
-        if allowlist and interaction.channel_id not in allowlist:
-            await interaction.response.send_message(
-                f"{self.GAME_DISPLAY_NAME} isn't allowed in this channel.", ephemeral=True
-            )
-            return
-
-        if self._check_rate_limit(challenger.id):
-            await interaction.response.send_message(
-                f"You've issued too many challenges recently. "
-                f"Maximum {_RATE_LIMIT_MAX} per hour.",
-                ephemeral=True,
-            )
-            return
-
-        # Nickname-mode preflight only applies when no custom stakes are set;
-        # custom-stakes games never rename anyone, so they don't need the
-        # Manage Nicknames permission or a clear nickname slate.
-        if stakes_text is None:
-            perm_error = await self._check_bot_can_nick(guild, challenger, target)  # type: ignore[arg-type]
-            if perm_error:
-                await interaction.response.send_message(perm_error, ephemeral=True)
-                return
-
-            nick_error = await self._check_no_active_nick(guild, challenger, target)  # type: ignore[arg-type]
-            if nick_error:
-                await interaction.response.send_message(nick_error, ephemeral=True)
-                return
-
-        existing = await self._db_get_active_game_for_pair(guild.id, challenger.id, target.id)
-        if existing:
-            await interaction.response.send_message(
-                "You two already have a game in progress.", ephemeral=True
-            )
-            return
-
-        if stakes_text:
-            stakes_result = validate_stakes(
-                stakes_text,
-                max_length=cfg["max_stakes_length"],
-                denylist=json.loads(cfg.get("nick_denylist") or "[]"),
-            )
-            if not stakes_result.ok:
-                await interaction.response.send_message(
-                    f"Stakes rejected: {stakes_result.reason}", ephemeral=True
-                )
-                return
-            stakes_text = stakes_result.value or None
-
-        game_id = await self._db_create_game(
-            guild_id=guild.id,
-            channel_id=interaction.channel_id,  # type: ignore[arg-type]
-            challenger_id=challenger.id,
-            target_id=target.id,
-            stakes_text=stakes_text,
-        )
-        self._record_challenge(challenger.id)
-
-        embed = self._build_challenge_embed(challenger, target, stakes_text)  # type: ignore[arg-type]
-        view = ChallengeView(
-            game_id=game_id,
-            target_id=target.id,
-            on_accept=self._handle_accept,
-            on_decline=self._handle_decline,
-        )
-        await interaction.response.send_message(
-            content=target.mention, embed=embed, view=view
-        )
-        msg = await interaction.original_response()
-        await self._db_set_state(game_id, "PENDING", message_id=msg.id)
-
-    def _build_challenge_embed(
-        self,
-        challenger: discord.Member,
-        target: discord.Member,
-        stakes: str | None,
-    ) -> discord.Embed:
-        stakes_text = stakes or "Loser surrenders their nickname for 24 hours."
-        embed = discord.Embed(
-            title=f"⚔️ {self.GAME_DISPLAY_NAME.upper()} CHALLENGE",
-            color=COLOR_GOLD,
-        )
-        embed.add_field(
-            name="Challenge",
-            value=f"{challenger.mention} has challenged {target.mention}!",
-            inline=False,
-        )
-        embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
-        embed.set_footer(text="⏱️ 60 seconds to respond.")
-        return embed
-
-    # ── View callbacks ────────────────────────────────────────────────────────
-
-    async def _handle_accept(self, interaction: discord.Interaction, game_id: int) -> None:
-        game = await self._db_get_game(game_id)
-        if not game or game.state != "PENDING":
-            await interaction.response.send_message(
-                "This challenge is no longer active.", ephemeral=True
-            )
-            return
-
-        await self._db_set_state(game_id, "ACTIVE")
-        await self.on_game_start(game)
-
-        # Re-fetch after on_game_start (subclass may have set additional fields)
-        game = await self._db_get_game(game_id)
-        if not game:
-            return
-
-        guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-        view = self.build_game_view(game.id)
-        embed = self.render_game_state(game, guild)
-        self.bot.add_view(view, message_id=game.message_id)
-        await interaction.response.edit_message(embed=embed, view=view)
-
-    async def _handle_decline(self, interaction: discord.Interaction, game_id: int) -> None:
-        game = await self._db_get_game(game_id)
-        if not game or game.state != "PENDING":
-            await interaction.response.send_message(
-                "This challenge is no longer active.", ephemeral=True
-            )
-            return
-        await self._db_set_state(game_id, "DECLINED")
-        embed = discord.Embed(
-            title="❌ Challenge Declined",
-            description=f"{interaction.user.mention} declined the challenge.",
-            color=COLOR_YELLOW,
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
-
-    async def _handle_game_button(self, interaction: discord.Interaction, game_id: int) -> None:
-        """Entry point for all in-game button presses. Subclass builds_game_view passes this."""
-        await interaction.response.defer()
-        async with self._get_lock(game_id):
-            game = await self._db_get_game(game_id)
-            if not game:
-                await interaction.followup.send("Game not found.", ephemeral=True)
-                return
-            if game.state != "ACTIVE":
-                await interaction.followup.send("This game is no longer active.", ephemeral=True)
-                return
-
-            status, loser_id = await self.handle_interaction(interaction, game)
-
-            if status == "rejected":
-                return
-
-            if status == "done":
-                assert loser_id is not None
-                winner_id = (
-                    game.challenger_id if loser_id != game.challenger_id else game.target_id
-                )
-                await self._post_result(interaction, game, winner_id, loser_id)
-            else:  # "continue"
-                guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-                embed = self.render_game_state(game, guild)
-                await interaction.edit_original_response(embed=embed)
-
-    async def _post_result(
-        self,
-        interaction: discord.Interaction,
-        game: Any,
-        winner_id: int,
-        loser_id: int,
-    ) -> None:
-        guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-
-        # Two modes: nickname (no custom stakes → winner renames the loser) and
-        # custom stakes (loser owes the agreed-upon stakes, no bot enforcement).
-        nick_mode = game.stakes_text is None
-
-        result_embed = self.render_result_state(game, guild)
-
-        winner_m = guild.get_member(winner_id)
-        loser_m = guild.get_member(loser_id)
-        ping_content = " ".join(m.mention for m in (winner_m, loser_m) if m)
-
-        if nick_mode:
-            result_view = ResultView(game.id, winner_id, loser_id, self._handle_set_nick)
-            result_msg = await interaction.followup.send(
-                content=ping_content, embed=result_embed, view=result_view
-            )
-            self.bot.add_view(result_view, message_id=result_msg.id)  # type: ignore[union-attr]
-            await self._db_set_state(game.id, "RESOLVED", result_message_id=result_msg.id)  # type: ignore[union-attr]
-        else:
-            # Custom stakes: announce only — no rename button, no expiry sweep.
-            result_msg = await interaction.followup.send(
-                content=ping_content, embed=result_embed
-            )
-            await self._db_set_state(
-                game.id, "RESOLVED_NO_NICK", result_message_id=result_msg.id  # type: ignore[union-attr]
-            )
-        await self.on_game_resolved(game.id)
-        self._game_locks.pop(game.id, None)
+    # ── Nickname-stake flow (one winner names one loser) ──────────────────────
 
     async def _handle_set_nick(self, interaction: discord.Interaction, game_id: int) -> None:
         game = await self._db_get_game(game_id)
@@ -538,7 +337,7 @@ class BaseDuel(commands.Cog):
             return
 
         challenger_member = guild.get_member(game.challenger_id)  # type: ignore[arg-type]
-        perm_error = await self._check_bot_can_nick(guild, challenger_member or loser, loser)  # type: ignore[arg-type]
+        perm_error = await self._check_bot_can_nick(guild, [challenger_member or loser, loser])  # type: ignore[list-item]
         if perm_error:
             await interaction.response.send_message(perm_error, ephemeral=True)
             return
@@ -615,7 +414,7 @@ class BaseDuel(commands.Cog):
     # ── Timer hooks (no-op stubs — override in timer-based games) ─────────────
 
     async def on_game_start(self, game: Any) -> None:
-        """Called when a challenge is accepted, before the game embed is posted."""
+        """Called when a challenge is accepted / lobby starts, before the game embed posts."""
 
     async def on_game_resume(self, game: Any) -> None:
         """Called on cog_load for each ACTIVE game — restart timer if needed."""
@@ -673,15 +472,18 @@ class BaseDuel(commands.Cog):
         raise NotImplementedError
 
     def build_game_view(self, game_id: int) -> discord.ui.View:
-        """Return a fresh View whose buttons call self._handle_game_button."""
+        """Return a fresh View whose buttons call the game's button handler."""
         raise NotImplementedError
 
     async def handle_interaction(
         self, interaction: discord.Interaction, game: Any
     ) -> tuple[str, int | None]:
         """Process a button press. Return one of:
-          ("rejected", None)  — invalid press, already sent ephemeral feedback
-          ("continue", None)  — valid press, game continues; BaseDuel re-renders
-          ("done", loser_id)  — game over; handle_interaction updated game embed
+          ("rejected", None)        — invalid press, already sent ephemeral feedback
+          ("continue", None)        — valid press, game continues; base re-renders
+          ("eliminate", player_id)  — (group games) player_id is out this round
+          ("done", id)              — game over; for duels id is loser_id (pairwise
+                                      winner mapping in BaseDuel), for group games id
+                                      is winner_id
         """
         raise NotImplementedError

@@ -117,10 +117,6 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
             else:
                 style_pts = {}
 
-            await duels_db.set_cooldown(
-                self.db, game.guild_id, self.GAME_KEY, game.challenger_id, game.target_id
-            )
-
             game.winner_id = winner_id
             game.loser_id = loser_id
             game.pass_log = new_log
@@ -311,7 +307,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
-        else:
+        elif game.stakes_text is None:
             embed.add_field(
                 name="⏳ Awaiting Nickname",
                 value=(

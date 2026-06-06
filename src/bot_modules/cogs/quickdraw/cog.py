@@ -291,6 +291,9 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         else:
             title = "⚡ Quickdraw!"
             desc = f"**{winner_name}** drew first!"
+            if game.resolved_at is not None:
+                reaction = game.resolved_at - game.fired_at
+                desc += f"\n⏱️ Reaction time: **{reaction:.3f}s**"
 
         embed = discord.Embed(title=title, description=desc, color=COLOR_RED)
         embed.add_field(name="🏆 Winner", value=winner_name, inline=True)
@@ -305,7 +308,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                 value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
-        else:
+        elif game.stakes_text is None:
             embed.add_field(
                 name="⏳ Awaiting Nickname",
                 value=(
@@ -375,6 +378,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             game.winner_id = winner_id
             game.loser_id = loser_id
             game.qd_state = "COMPLETE"
+            game.resolved_at = now
             # game.fired_at is already set (by _fire_draw) → signals clean draw
 
             guild = interaction.guild  # type: ignore[assignment]
