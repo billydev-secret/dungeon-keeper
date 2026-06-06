@@ -51,6 +51,7 @@ async def quote_audit_log(
                     "posted_message_id": str(r["posted_message_id"]),
                     "theme": r["theme"],
                     "font": r["font"],
+                    "border": r["border"] if "border" in r.keys() else "",
                 }
                 for r in rows
             ]

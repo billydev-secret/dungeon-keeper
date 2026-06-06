@@ -1,0 +1,1 @@
+ALTER TABLE quote_audit_log ADD COLUMN border TEXT NOT NULL DEFAULT '';

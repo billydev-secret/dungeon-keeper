@@ -17,7 +17,6 @@ from pathlib import Path
 _ASSETS = Path("assets") / "fonts"
 _INTER = _ASSETS / "Inter-Regular.ttf"
 _LORA = _ASSETS / "Lora-Regular.ttf"
-_BORDER = Path("assets") / "border.png"
 
 try:
     from pilmoji import Pilmoji as _Pilmoji
@@ -86,6 +85,36 @@ THEMES: dict[str, QuoteTheme] = {
 FONT_STYLES: dict[str, Path] = {
     "inter": _INTER,
     "lora": _LORA,
+}
+
+
+# ── Border definition ───────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class BorderStyle:
+    name: str
+    path: Path
+    # Flip horizontally so a bottom-left floral corner lands bottom-right (away
+    # from the left-side pfp). Only needed for sources drawn in the left corner.
+    flip: bool
+    # Luminance-key transparency: source has an opaque (black) background that
+    # must be keyed out. False when the PNG already carries a real alpha channel.
+    luma_key: bool
+
+
+BORDERS: dict[str, BorderStyle] = {
+    "golden_poppy": BorderStyle(
+        name="Golden Poppy",
+        path=Path("assets") / "border.png",
+        flip=True,
+        luma_key=True,
+    ),
+    "midnight_frame": BorderStyle(
+        name="Midnight Frame",
+        path=Path("assets") / "midnightbordertransparent.png",
+        flip=False,
+        luma_key=False,
+    ),
 }
 
 
@@ -273,6 +302,7 @@ def render_quote_card(
     avatar_bytes: bytes,
     theme: QuoteTheme,
     font_style: str = "inter",
+    border_style: "BorderStyle | None" = None,
     width: int = 900,
     height: int = 500,
     custom_emojis: "dict[str, bytes] | None" = None,
@@ -423,12 +453,16 @@ def render_quote_card(
     out.putalpha(card_mask)
 
     # Border overlay — composited after transparency so it shows over the full card area
-    if _BORDER.exists():
-        border = Image.open(_BORDER).convert("RGBA")
-        border = border.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    if border_style is None:
+        border_style = BORDERS["golden_poppy"]
+    if border_style.path.exists():
+        border = Image.open(border_style.path).convert("RGBA")
+        if border_style.flip:
+            border = border.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         border = border.resize((width, height), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
-        lum = border.convert("RGB").convert("L")
-        border.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))  # type: ignore[arg-type]
+        if border_style.luma_key:
+            lum = border.convert("RGB").convert("L")
+            border.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))  # type: ignore[arg-type]
         out.alpha_composite(border)
 
     buf = io.BytesIO()

@@ -23,7 +23,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.services.quote_renderer import FONT_STYLES, THEMES, render_quote_card
+from bot_modules.services.quote_renderer import BORDERS, FONT_STYLES, THEMES, render_quote_card
 from bot_modules.services.starboard_service import get_starboard_config
 
 if TYPE_CHECKING:
@@ -51,6 +51,7 @@ class QuoteStyleView(discord.ui.View):
         self.message = message
         self._theme_key = "golden_meadow"
         self._font_key = "inter"
+        self._border_key = "golden_poppy"
 
         theme_select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
             placeholder="Theme",
@@ -84,10 +85,24 @@ class QuoteStyleView(discord.ui.View):
         self._font_select = font_select
         self.add_item(font_select)
 
+        border_select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
+            placeholder="Border",
+            options=[
+                discord.SelectOption(label=b.name, value=k, default=(k == self._border_key))
+                for k, b in BORDERS.items()
+            ],
+            min_values=1,
+            max_values=1,
+            row=2,
+        )
+        border_select.callback = self._on_border
+        self._border_select = border_select
+        self.add_item(border_select)
+
         generate_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label="Generate",
             style=discord.ButtonStyle.primary,
-            row=2,
+            row=3,
         )
         generate_btn.callback = self._on_generate
         self.add_item(generate_btn)
@@ -95,7 +110,7 @@ class QuoteStyleView(discord.ui.View):
         cancel_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label="Cancel",
             style=discord.ButtonStyle.secondary,
-            row=2,
+            row=3,
         )
         cancel_btn.callback = self._on_cancel
         self.add_item(cancel_btn)
@@ -108,6 +123,10 @@ class QuoteStyleView(discord.ui.View):
         self._font_key = self._font_select.values[0]
         await interaction.response.defer()
 
+    async def _on_border(self, interaction: discord.Interaction) -> None:
+        self._border_key = self._border_select.values[0]
+        await interaction.response.defer()
+
     async def _on_cancel(self, interaction: discord.Interaction) -> None:
         self.stop()
         await interaction.response.edit_message(content="Cancelled.", view=None)
@@ -117,6 +136,7 @@ class QuoteStyleView(discord.ui.View):
 
         theme = THEMES[self._theme_key]
         font_style = self._font_key
+        border_style = BORDERS[self._border_key]
         msg = self.message
 
         try:
@@ -157,6 +177,7 @@ class QuoteStyleView(discord.ui.View):
                 avatar_bytes=avatar_bytes,
                 theme=theme,
                 font_style=font_style,
+                border_style=border_style,
                 custom_emojis=custom_emojis or None,
             )
         except Exception:
@@ -176,6 +197,7 @@ class QuoteStyleView(discord.ui.View):
             quoted_message_id=msg.id,
             theme_key=self._theme_key,
             font_key=self._font_key,
+            border_key=self._border_key,
         )
         self.stop()
         await interaction.edit_original_response(
@@ -201,6 +223,7 @@ class QuotePreviewView(discord.ui.View):
         quoted_message_id: int = 0,
         theme_key: str = "",
         font_key: str = "",
+        border_key: str = "",
     ) -> None:
         super().__init__(timeout=_PREVIEW_TIMEOUT)
         self.bot = bot
@@ -211,6 +234,7 @@ class QuotePreviewView(discord.ui.View):
         self.quoted_message_id = quoted_message_id
         self.theme_key = theme_key
         self.font_key = font_key
+        self.border_key = border_key
 
         post_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
             label="Post",
@@ -255,8 +279,8 @@ class QuotePreviewView(discord.ui.View):
                         """
                         INSERT INTO quote_audit_log
                             (ts, guild_id, channel_id, quoter_id, quoted_user_id,
-                             quoted_message_id, posted_message_id, theme, font)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             quoted_message_id, posted_message_id, theme, font, border)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             time.time(),
@@ -268,6 +292,7 @@ class QuotePreviewView(discord.ui.View):
                             posted_msg.id,
                             self.theme_key,
                             self.font_key,
+                            self.border_key,
                         ),
                     )
             except Exception:
