@@ -23,6 +23,7 @@ class QuickdrawGame:
     fired_at: float | None = None
     last_action_at: float | None = None
     resolved_at: float | None = None
+    loser_fired_at: float | None = None
     created_at: float = field(default_factory=time.time)
 
 
@@ -44,5 +45,6 @@ def game_from_row(row) -> QuickdrawGame:
         fired_at=row["fired_at"],
         last_action_at=row["last_action_at"],
         resolved_at=row["resolved_at"],
+        loser_fired_at=row["loser_fired_at"],
         created_at=row["created_at"] or time.time(),
     )

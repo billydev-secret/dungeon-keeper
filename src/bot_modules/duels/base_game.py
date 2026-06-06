@@ -19,10 +19,11 @@ from typing import Any
 import discord
 from discord.ext import commands, tasks
 
-from bot_modules.services.embeds import COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
-from .filters import validate_nickname
+from .filters import validate_nickname, validate_stakes
+from .lobby import LobbyView
 from .modals import NicknameModal
 from .views import ResultView
 
@@ -79,12 +80,21 @@ class BaseGame(commands.Cog):
                     message_id=game.result_message_id,
                 )
 
+        lobby = await self._db_fetch_lobby_games()
+        for game in lobby:
+            if game.message_id:
+                self.bot.add_view(
+                    self._build_lobby_view(game.id, game.host_id),
+                    message_id=game.message_id,
+                )
+
         self._expire_loop.start()
         log.info(
-            "%s loaded: %d active, %d resolved",
+            "%s loaded: %d active, %d resolved, %d lobby",
             self.GAME_DISPLAY_NAME,
             len(active),
             len(resolved),
+            len(lobby),
         )
 
     async def cog_unload(self) -> None:
@@ -411,6 +421,399 @@ class BaseGame(commands.Cog):
         view.disable()
         return view
 
+    # ── Lobby flow (N-player games) ───────────────────────────────────────────
+
+    def _build_lobby_view(self, game_id: int, host_id: int) -> LobbyView:
+        return LobbyView(
+            game_id,
+            host_id,
+            on_join=self._handle_lobby_join,
+            on_leave=self._handle_lobby_leave,
+            on_start=self._handle_lobby_start,
+            on_cancel=self._handle_lobby_cancel,
+        )
+
+    def _render_lobby(
+        self, game: Any, guild: discord.Guild, min_players: int, max_players: int
+    ) -> discord.Embed:
+        names = []
+        for uid in game.roster:
+            m = guild.get_member(uid)
+            names.append(m.display_name if m else str(uid))
+        host = guild.get_member(game.host_id)
+        host_name = host.display_name if host else str(game.host_id)
+        embed = discord.Embed(
+            title=f"🎮 {self.GAME_DISPLAY_NAME.upper()} — LOBBY",
+            description="Press **✋ Join** to get in. Host presses **▶️ Start** when ready.",
+            color=COLOR_GOLD,
+        )
+        embed.add_field(
+            name=f"👥 Players ({len(game.roster)}/{max_players})",
+            value="\n".join(f"• {n}" for n in names) or "—",
+            inline=False,
+        )
+        stakes = game.stakes_text or "Last one standing wins; the final loser surrenders their nickname for 24h."
+        embed.add_field(name="📋 Stakes", value=stakes, inline=False)
+        embed.set_footer(text=f"Host: {host_name} • Need {min_players}+ players to start.")
+        return embed
+
+    async def _base_lobby(
+        self, interaction: discord.Interaction, stakes_text: str | None
+    ) -> None:
+        """Open a join lobby for an N-player game. Called by a subclass /start command."""
+        if not interaction.guild:
+            await interaction.response.send_message(
+                "This command only works in a server.", ephemeral=True
+            )
+            return
+
+        host = interaction.user  # type: ignore[assignment]
+        guild: discord.Guild = interaction.guild
+
+        cfg = await duels_db.get_config(self.db, guild.id, self.GAME_KEY)
+        allowlist: list[int] = json.loads(cfg.get("channel_allowlist") or "[]")
+        if allowlist and interaction.channel_id not in allowlist:
+            await interaction.response.send_message(
+                f"{self.GAME_DISPLAY_NAME} isn't allowed in this channel.", ephemeral=True
+            )
+            return
+
+        if self._check_rate_limit(host.id):
+            await interaction.response.send_message(
+                f"You've started too many games recently. Maximum {_RATE_LIMIT_MAX} per hour.",
+                ephemeral=True,
+            )
+            return
+
+        # Nickname-mode preflight only applies when no custom stakes are set.
+        if stakes_text is None:
+            err = await self._check_bot_can_nick(guild, [host])  # type: ignore[list-item]
+            if err:
+                await interaction.response.send_message(err, ephemeral=True)
+                return
+            err = await self._check_no_active_nick(guild, [host])  # type: ignore[list-item]
+            if err:
+                await interaction.response.send_message(err, ephemeral=True)
+                return
+            cd = await duels_db.check_group_cooldown(
+                self.db, guild.id, self.GAME_KEY, host.id, cfg["cooldown_hours"]
+            )
+            if cd is not None:
+                hours, mins = int(cd // 3600), int((cd % 3600) // 60)
+                await interaction.response.send_message(
+                    f"You need to wait **{hours}h {mins}m** before playing again.",
+                    ephemeral=True,
+                )
+                return
+
+        if stakes_text:
+            stakes_result = validate_stakes(
+                stakes_text,
+                max_length=cfg["max_stakes_length"],
+                denylist=json.loads(cfg.get("nick_denylist") or "[]"),
+            )
+            if not stakes_result.ok:
+                await interaction.response.send_message(
+                    f"Stakes rejected: {stakes_result.reason}", ephemeral=True
+                )
+                return
+            stakes_text = stakes_result.value or None
+
+        min_players, max_players, _timeout = await self.get_lobby_params(guild.id)
+        game_id = await self._db_create_lobby(
+            guild_id=guild.id,
+            channel_id=interaction.channel_id,  # type: ignore[arg-type]
+            host_id=host.id,
+            stakes_text=stakes_text,
+        )
+        self._record_challenge(host.id)
+
+        game = await self._db_get_game(game_id)
+        embed = self._render_lobby(game, guild, min_players, max_players)
+        view = self._build_lobby_view(game_id, host.id)
+        await interaction.response.send_message(embed=embed, view=view)
+        msg = await interaction.original_response()
+        self.bot.add_view(view, message_id=msg.id)
+        await self._db_set_state(game_id, "LOBBY", message_id=msg.id, last_action_at=time.time())
+
+    async def _handle_lobby_join(self, interaction: discord.Interaction, game_id: int) -> None:
+        async with self._get_lock(game_id):
+            game = await self._db_get_game(game_id)
+            if not game or game.state != "LOBBY":
+                await interaction.response.send_message(
+                    "This lobby is no longer open.", ephemeral=True
+                )
+                return
+            uid = interaction.user.id
+            if uid in game.roster:
+                await interaction.response.send_message("You're already in.", ephemeral=True)
+                return
+            guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+            min_players, max_players, _ = await self.get_lobby_params(game.guild_id)
+            if len(game.roster) >= max_players:
+                await interaction.response.send_message(
+                    f"The lobby is full ({max_players}).", ephemeral=True
+                )
+                return
+
+            member = guild.get_member(uid)
+            if game.stakes_text is None and member is not None:
+                err = await self._check_bot_can_nick(guild, [member]) or \
+                    await self._check_no_active_nick(guild, [member])
+                if err:
+                    await interaction.response.send_message(err, ephemeral=True)
+                    return
+                cfg = await duels_db.get_config(self.db, game.guild_id, self.GAME_KEY)
+                cd = await duels_db.check_group_cooldown(
+                    self.db, game.guild_id, self.GAME_KEY, uid, cfg["cooldown_hours"]
+                )
+                if cd is not None:
+                    await interaction.response.send_message(
+                        "You're on cooldown for this game.", ephemeral=True
+                    )
+                    return
+
+            new_roster = list(game.roster) + [uid]
+            await self._db_set_state(
+                game_id, "LOBBY", roster=json.dumps(new_roster), last_action_at=time.time()
+            )
+            game.roster = new_roster
+            embed = self._render_lobby(game, guild, min_players, max_players)
+            await interaction.response.edit_message(
+                embed=embed, view=self._build_lobby_view(game_id, game.host_id)
+            )
+
+    async def _handle_lobby_leave(self, interaction: discord.Interaction, game_id: int) -> None:
+        async with self._get_lock(game_id):
+            game = await self._db_get_game(game_id)
+            if not game or game.state != "LOBBY":
+                await interaction.response.send_message(
+                    "This lobby is no longer open.", ephemeral=True
+                )
+                return
+            uid = interaction.user.id
+            if uid == game.host_id:
+                await interaction.response.send_message(
+                    "The host can't leave — use **🚫 Cancel** to close the lobby.",
+                    ephemeral=True,
+                )
+                return
+            if uid not in game.roster:
+                await interaction.response.send_message("You're not in this lobby.", ephemeral=True)
+                return
+            guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+            min_players, max_players, _ = await self.get_lobby_params(game.guild_id)
+            new_roster = [u for u in game.roster if u != uid]
+            await self._db_set_state(
+                game_id, "LOBBY", roster=json.dumps(new_roster), last_action_at=time.time()
+            )
+            game.roster = new_roster
+            embed = self._render_lobby(game, guild, min_players, max_players)
+            await interaction.response.edit_message(
+                embed=embed, view=self._build_lobby_view(game_id, game.host_id)
+            )
+
+    async def _handle_lobby_cancel(self, interaction: discord.Interaction, game_id: int) -> None:
+        async with self._get_lock(game_id):
+            game = await self._db_get_game(game_id)
+            if not game or game.state != "LOBBY":
+                await interaction.response.send_message(
+                    "This lobby is no longer open.", ephemeral=True
+                )
+                return
+            if interaction.user.id != game.host_id:
+                await interaction.response.send_message(
+                    "Only the host can cancel the lobby.", ephemeral=True
+                )
+                return
+            await self._db_set_state(game_id, "EXPIRED_LOBBY")
+            self._game_locks.pop(game_id, None)
+            await interaction.response.edit_message(
+                embed=discord.Embed(
+                    title="🚫 Lobby Cancelled",
+                    description=f"{interaction.user.mention} closed the lobby.",
+                    color=COLOR_YELLOW,
+                ),
+                view=None,
+            )
+
+    async def _handle_lobby_start(self, interaction: discord.Interaction, game_id: int) -> None:
+        async with self._get_lock(game_id):
+            game = await self._db_get_game(game_id)
+            if not game or game.state != "LOBBY":
+                await interaction.response.send_message(
+                    "This lobby is no longer open.", ephemeral=True
+                )
+                return
+            if interaction.user.id != game.host_id:
+                await interaction.response.send_message(
+                    "Only the host can start the game.", ephemeral=True
+                )
+                return
+            min_players, _max_players, _ = await self.get_lobby_params(game.guild_id)
+            if len(game.roster) < min_players:
+                await interaction.response.send_message(
+                    f"You need at least **{min_players}** players to start "
+                    f"(currently {len(game.roster)}).",
+                    ephemeral=True,
+                )
+                return
+
+            guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+            if game.stakes_text is None:
+                members = [m for m in (guild.get_member(u) for u in game.roster) if m]
+                err = await self._check_bot_can_nick(guild, members) or \
+                    await self._check_no_active_nick(guild, members)
+                if err:
+                    await interaction.response.send_message(err, ephemeral=True)
+                    return
+
+            await self._db_set_state(
+                game_id, "ACTIVE",
+                alive=json.dumps(list(game.roster)),
+                last_action_at=time.time(),
+            )
+            game = await self._db_get_game(game_id)
+            if not game:
+                return
+            await self.on_game_start(game)
+            game = await self._db_get_game(game_id)
+            if not game:
+                return
+            view = self.build_game_view(game.id)
+            embed = self.render_game_state(game, guild)
+            self.bot.add_view(view, message_id=game.message_id)
+            await interaction.response.edit_message(embed=embed, view=view)
+
+    # ── Group resolution (timer-driven, posts to channel like duel _explode) ──
+
+    async def _post_group_result(self, game: Any, winner_id: int, loser_id: int) -> None:
+        """Finalize an N-player game. Caller holds the per-game lock.
+
+        Honors the same two stake modes as duels: nickname (winner names the final
+        loser) when no custom stakes were set, otherwise an announce-only result.
+        """
+        now = time.time()
+        game.winner_id = winner_id
+        game.loser_id = loser_id
+        guild = self.bot.get_guild(game.guild_id)
+
+        for uid in game.roster:
+            await duels_db.set_group_cooldown(self.db, game.guild_id, self.GAME_KEY, uid)
+
+        nick_mode = game.stakes_text is None
+
+        if guild and game.message_id:
+            disabled = self.build_game_view(game.id)
+            disable = getattr(disabled, "disable", None)
+            if callable(disable):
+                disable()
+            await self._edit_message_silent(
+                game.channel_id, game.message_id, self.render_game_state(game, guild), disabled
+            )
+
+        result_message_id = None
+        channel = self.bot.get_channel(game.channel_id)
+        if channel and guild:
+            result_embed = self.render_result_state(game, guild)
+            winner_m = guild.get_member(winner_id)
+            loser_m = guild.get_member(loser_id)
+            ping = " ".join(m.mention for m in (winner_m, loser_m) if m)
+            try:
+                if nick_mode:
+                    rv = ResultView(game.id, winner_id, loser_id, self._handle_set_nick)
+                    msg = await channel.send(content=ping, embed=result_embed, view=rv)  # type: ignore[union-attr]
+                    self.bot.add_view(rv, message_id=msg.id)
+                else:
+                    msg = await channel.send(content=ping, embed=result_embed)  # type: ignore[union-attr]
+                result_message_id = msg.id
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        state = "RESOLVED" if nick_mode else "RESOLVED_NO_NICK"
+        await self._db_set_state(
+            game.id, state,
+            winner_id=winner_id,
+            loser_id=loser_id,
+            result_message_id=result_message_id,
+            resolved_at=now,
+            last_action_at=now,
+        )
+        await self.on_game_resolved(game.id)
+
+    # ── Group button entrypoint + elimination ────────────────────────────────
+
+    async def _handle_group_button(
+        self, interaction: discord.Interaction, game_id: int
+    ) -> None:
+        """Entry point for in-game button presses on N-player games.
+
+        handle_interaction returns:
+          ("rejected", None)        — invalid press, ephemeral already sent
+          ("continue", None)        — re-render the live embed
+          ("eliminate", player_id)  — player is out; base removes them & checks terminal
+          ("done", winner_id)       — terminal; base resolves with that winner
+        """
+        await interaction.response.defer()
+        async with self._get_lock(game_id):
+            game = await self._db_get_game(game_id)
+            if not game:
+                await interaction.followup.send("Game not found.", ephemeral=True)
+                return
+            if game.state != "ACTIVE":
+                await interaction.followup.send(
+                    "This game is no longer active.", ephemeral=True
+                )
+                return
+
+            status, pid = await self.handle_interaction(interaction, game)
+
+            if status == "rejected":
+                return
+            if status == "continue":
+                guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+                await interaction.edit_original_response(embed=self.render_game_state(game, guild))
+                return
+            if status == "eliminate":
+                assert pid is not None
+                await self._group_eliminate(game, pid, interaction=interaction)
+                return
+            if status == "done":
+                assert pid is not None  # winner_id
+                loser = game.elimination_order[-1] if game.elimination_order else pid
+                await self._post_group_result(game, pid, loser)
+
+    async def _group_eliminate(
+        self,
+        game: Any,
+        player_id: int,
+        *,
+        interaction: discord.Interaction | None = None,
+    ) -> None:
+        """Remove player_id from `alive`, append to `elimination_order`, and resolve
+        the game if only one player remains (loser = last eliminated). Caller holds
+        the per-game lock."""
+        now = time.time()
+        new_alive = [u for u in game.alive if u != player_id]
+        new_elim = list(game.elimination_order) + [player_id]
+        game.alive = new_alive
+        game.elimination_order = new_elim
+        await self._db_set_state(
+            game.id, "ACTIVE",
+            alive=json.dumps(new_alive),
+            elimination_order=json.dumps(new_elim),
+            last_action_at=now,
+        )
+        if len(new_alive) <= 1:
+            winner = new_alive[0] if new_alive else player_id
+            await self._post_group_result(game, winner, player_id)
+        elif interaction is not None:
+            guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+            try:
+                await interaction.edit_original_response(embed=self.render_game_state(game, guild))
+            except discord.HTTPException:
+                pass
+
     # ── Timer hooks (no-op stubs — override in timer-based games) ─────────────
 
     async def on_game_start(self, game: Any) -> None:
@@ -457,6 +860,22 @@ class BaseGame(commands.Cog):
         raise NotImplementedError
 
     async def _db_fetch_sweepable(self, now: float) -> list:
+        raise NotImplementedError
+
+    # ── Lobby hooks (N-player games implement; duels leave as defaults) ───────
+
+    async def _db_create_lobby(
+        self, guild_id: int, channel_id: int, host_id: int, stakes_text: str | None
+    ) -> int:
+        """Create a LOBBY-state game with roster=[host_id]. Returns its id."""
+        raise NotImplementedError
+
+    async def _db_fetch_lobby_games(self) -> list:
+        """Return open LOBBY games to re-attach views on cog_load. Duels: none."""
+        return []
+
+    async def get_lobby_params(self, guild_id: int) -> tuple[int, int, float]:
+        """Return (min_players, max_players, lobby_timeout) for this guild."""
         raise NotImplementedError
 
     # ── Abstract game hooks (subclass must implement) ─────────────────────────

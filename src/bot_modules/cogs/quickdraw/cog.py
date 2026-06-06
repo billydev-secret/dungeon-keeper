@@ -129,33 +129,63 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         self._timers[game_id] = task
 
     async def _fire_void(self, game_id: int) -> None:
-        """Both players failed to fire in time — no nickname consequence."""
+        """Draw window expired. Void if nobody fired; if the winner fired but the
+        opponent never did, resolve winner-only (no loser reaction time)."""
         async with self._get_lock(game_id):
             game = await qdb.get_game(self.db, game_id)
-            if not game or game.state != "ACTIVE" or game.qd_state != "DRAW":
+            if not game or game.state != "ACTIVE":
                 return
 
-            await qdb.set_game_state(self.db, game_id, "VOID")
-
             guild = self.bot.get_guild(game.guild_id)
-            void_embed = discord.Embed(
-                title="🌵 Nobody Drew",
-                description=(
-                    "Both players took too long to fire. "
-                    "Round voided — no nickname penalty."
-                ),
-                color=COLOR_YELLOW,
-            )
-            if guild:
-                p1 = guild.get_member(game.challenger_id)
-                p2 = guild.get_member(game.target_id)
-                p1_name = p1.display_name if p1 else str(game.challenger_id)
-                p2_name = p2.display_name if p2 else str(game.target_id)
-                void_embed.description = (
-                    f"**{p1_name}** vs **{p2_name}** — nobody fired in time. "
-                    "Round voided — no nickname penalty."
+
+            if game.qd_state == "DRAW":
+                # Nobody fired in time — void, no consequence.
+                await qdb.set_game_state(self.db, game_id, "VOID")
+                void_embed = discord.Embed(
+                    title="🌵 Nobody Drew",
+                    description=(
+                        "Both players took too long to fire. "
+                        "Round voided — no nickname penalty."
+                    ),
+                    color=COLOR_YELLOW,
                 )
-            await self._edit_message_silent(game.channel_id, game.message_id, void_embed, None)
+                if guild:
+                    p1 = guild.get_member(game.challenger_id)
+                    p2 = guild.get_member(game.target_id)
+                    p1_name = p1.display_name if p1 else str(game.challenger_id)
+                    p2_name = p2.display_name if p2 else str(game.target_id)
+                    void_embed.description = (
+                        f"**{p1_name}** vs **{p2_name}** — nobody fired in time. "
+                        "Round voided — no nickname penalty."
+                    )
+                await self._edit_message_silent(
+                    game.channel_id, game.message_id, void_embed, None
+                )
+
+            elif game.qd_state == "WINNER_FIRED":
+                # Winner drew; the opponent never fired. Resolve with no loser
+                # time (loser_fired_at stays NULL → result shows "didn't draw").
+                await qdb.set_game_state(
+                    self.db, game_id, "ACTIVE",
+                    qd_state="COMPLETE",
+                    last_action_at=time.time(),
+                )
+                game.qd_state = "COMPLETE"
+                if guild:
+                    dview = self.build_game_view(game_id)
+                    dview.disable()
+                    await self._edit_message_silent(
+                        game.channel_id, game.message_id,
+                        self.render_game_state(game, guild), dview,
+                    )
+                channel = self.bot.get_channel(game.channel_id)
+                if channel is not None:
+                    await self._finalize_result(
+                        game, game.winner_id, game.loser_id,  # type: ignore[arg-type]
+                        send=channel.send,  # type: ignore[union-attr]
+                    )
+            else:
+                return
 
         self._cancel_timer(game_id)
         self._game_locks.pop(game_id, None)
@@ -206,6 +236,11 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                 self._timers[game.id] = task
                 await self._send_restart_notice(game)
 
+        elif game.qd_state == "WINNER_FIRED":
+            # Restarted after the winner fired but before the opponent did. The
+            # blind-reaction window can't be resumed fairly — resolve winner-only.
+            asyncio.create_task(self._fire_void(game.id))
+
     async def on_game_resolved(self, game_id: int) -> None:
         self._cancel_timer(game_id)
 
@@ -229,7 +264,10 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         p1_name = p1.display_name if p1 else str(game.challenger_id)
         p2_name = p2.display_name if p2 else str(game.target_id)
 
-        if game.qd_state == "DRAW":
+        if game.qd_state in ("DRAW", "WINNER_FIRED"):
+            # WINNER_FIRED renders identically to DRAW: the first shooter has
+            # already fired, but we don't reveal that — the opponent must stay
+            # blind so their click is a genuine reaction we can time.
             embed = discord.Embed(
                 title="🔫 DRAW!!!",
                 description=(
@@ -285,19 +323,36 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         winner_name = winner.display_name if winner else str(game.winner_id)
         loser_name = loser.display_name if loser else str(game.loser_id)
 
+        winner_field = winner_name
+        loser_field = loser_name
         if game.fired_at is None:
             title = "💀 False Start!"
             desc = f"**{loser_name}** fired before the draw signal and lost."
         else:
             title = "⚡ Quickdraw!"
             desc = f"**{winner_name}** drew first!"
-            if game.resolved_at is not None:
-                reaction = game.resolved_at - game.fired_at
-                desc += f"\n⏱️ Reaction time: **{reaction:.3f}s**"
+            w_react = (
+                game.resolved_at - game.fired_at
+                if game.resolved_at is not None
+                else None
+            )
+            l_react = (
+                game.loser_fired_at - game.fired_at
+                if game.loser_fired_at is not None
+                else None
+            )
+            if w_react is not None:
+                winner_field = f"{winner_name} — **{w_react:.3f}s**"
+            if l_react is not None:
+                loser_field = f"{loser_name} — **{l_react:.3f}s**"
+                if w_react is not None:
+                    desc += f"\n⚡ Won by **{l_react - w_react:.3f}s**"
+            else:
+                loser_field = f"{loser_name} — *didn't draw*"
 
         embed = discord.Embed(title=title, description=desc, color=COLOR_RED)
-        embed.add_field(name="🏆 Winner", value=winner_name, inline=True)
-        embed.add_field(name="💀 Loser", value=loser_name, inline=True)
+        embed.add_field(name="🏆 Winner", value=winner_field, inline=True)
+        embed.add_field(name="💀 Loser", value=loser_field, inline=True)
 
         stakes_text = game.stakes_text or "24-hour nickname surrender."
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
@@ -361,7 +416,9 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             return ("done", loser_id)
 
         if game.qd_state == "DRAW":
-            # Clean draw — first to click wins
+            # First to click wins — but the round isn't over. Record the winner
+            # and move to WINNER_FIRED so the opponent can still fire and log
+            # their own reaction time for the result delta.
             winner_id = player_id
             loser_id = (
                 game.challenger_id if player_id == game.target_id else game.target_id
@@ -369,7 +426,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             now = time.time()
             await qdb.set_game_state(
                 self.db, game.id, "ACTIVE",
-                qd_state="COMPLETE",
+                qd_state="WINNER_FIRED",
                 winner_id=winner_id,
                 loser_id=loser_id,
                 resolved_at=now,
@@ -377,19 +434,46 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             )
             game.winner_id = winner_id
             game.loser_id = loser_id
-            game.qd_state = "COMPLETE"
+            game.qd_state = "WINNER_FIRED"
             game.resolved_at = now
             # game.fired_at is already set (by _fire_draw) → signals clean draw
 
-            guild = interaction.guild  # type: ignore[assignment]
+            reaction = now - game.fired_at if game.fired_at is not None else 0.0
+            await interaction.followup.send(
+                f"🔫 You drew in **{reaction:.3f}s**! "
+                "Hang on — seeing if they can beat it...",
+                ephemeral=True,
+            )
+            # "continue" keeps the FIRE button live (blind) for the opponent.
+            return ("continue", None)
+
+        if game.qd_state == "WINNER_FIRED":
+            if player_id == game.winner_id:
+                await interaction.followup.send(
+                    "You already drew — waiting on your opponent.", ephemeral=True
+                )
+                return ("rejected", None)
+
+            # Opponent fired second: record their reaction time and resolve.
+            now = time.time()
+            await qdb.set_game_state(
+                self.db, game.id, "ACTIVE",
+                qd_state="COMPLETE",
+                loser_fired_at=now,
+                last_action_at=now,
+            )
+            game.qd_state = "COMPLETE"
+            game.loser_fired_at = now
+
+            guild: discord.Guild = interaction.guild  # type: ignore[assignment]
             view = self.build_game_view(game.id)
             view.disable()
             await interaction.edit_original_response(
                 embed=self.render_game_state(game, guild), view=view
             )
-            return ("done", loser_id)
+            return ("done", game.loser_id)
 
-        # qd_state == "COMPLETE" — someone already fired
+        # qd_state == "COMPLETE" — round already fully resolved
         await interaction.followup.send("Too slow — this round is already over.", ephemeral=True)
         return ("rejected", None)
 

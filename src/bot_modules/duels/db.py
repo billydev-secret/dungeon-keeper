@@ -134,3 +134,43 @@ async def set_cooldown(
         """,
         (guild_id, game_type, lo, hi, time.time()),
     )
+
+
+# ── Group cooldowns (per-player, for N-player BaseGame games) ──────────────────
+
+async def check_group_cooldown(
+    db: GamesDb,
+    guild_id: int,
+    game_type: str,
+    player_id: int,
+    cooldown_hours: int,
+) -> float | None:
+    """Return seconds remaining on this player's group cooldown, or None if clear."""
+    if cooldown_hours <= 0:
+        return None
+    row = await db.fetchone(
+        """
+        SELECT last_game_at FROM duel_group_cooldowns
+        WHERE guild_id = ? AND game_type = ? AND player_id = ?
+        """,
+        (guild_id, game_type, player_id),
+    )
+    if not row:
+        return None
+    elapsed = time.time() - row["last_game_at"]
+    remaining = cooldown_hours * 3600 - elapsed
+    return remaining if remaining > 0 else None
+
+
+async def set_group_cooldown(
+    db: GamesDb, guild_id: int, game_type: str, player_id: int
+) -> None:
+    await db.execute(
+        """
+        INSERT INTO duel_group_cooldowns (guild_id, game_type, player_id, last_game_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(guild_id, game_type, player_id)
+        DO UPDATE SET last_game_at = excluded.last_game_at
+        """,
+        (guild_id, game_type, player_id, time.time()),
+    )
