@@ -1,7 +1,7 @@
 """Unit tests for pressure_cooker/filters.py — pure logic, no Discord."""
 from __future__ import annotations
 
-from bot_modules.cogs.pressure_cooker.filters import (
+from bot_modules.duels.filters import (
     validate_nickname,
     validate_stakes,
 )

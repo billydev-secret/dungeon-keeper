@@ -324,6 +324,8 @@ class GuildConfig:
     xp_settings: XpSettings
     # role-grant definitions (member self-assignable roles)
     grant_roles: dict[str, GrantRoleConfig]
+    # roles automatically applied to every new member on join
+    auto_role_ids: frozenset[int]
 
     @classmethod
     def load(
@@ -394,6 +396,7 @@ class GuildConfig:
             # home's tuning. Do not "fix" this to strict.
             xp_settings=load_xp_settings(conn, guild_id),
             grant_roles=get_grant_roles(conn, guild_id),
+            auto_role_ids=_ids("auto_role_ids"),
         )
 
     def member_is_mod(self, member: discord.Member) -> bool:

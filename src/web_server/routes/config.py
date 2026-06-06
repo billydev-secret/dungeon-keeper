@@ -447,6 +447,12 @@ async def get_config(
                         )
                     ],
                 },
+                "auto_role": {
+                    "auto_role_ids": [
+                        str(i)
+                        for i in _id_set_list(conn, "auto_role_ids", guild_id)
+                    ],
+                },
                 "moderation": {
                     "jailed_role_id": str(
                         _int_val(conn, "jailed_role_id", guild_id=guild_id)
@@ -1216,6 +1222,32 @@ async def update_spoiler(
 
     result = await run_query(_q)
     # on_message reads spoiler channels via ctx.guild_config(gid); refresh it.
+    ctx.invalidate_guild_config(guild_id)
+    return result
+
+
+class AutoRoleConfigUpdate(BaseModel):
+    auto_role_ids: list[str] | None = None
+
+
+@router.put("/config/auto-role")
+async def update_auto_role(
+    request: Request,
+    body: AutoRoleConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.auto_role_ids is not None:
+                clear_config_id_bucket(conn, "auto_role_ids", guild_id)
+                for rid in body.auto_role_ids:
+                    add_config_id(conn, "auto_role_ids", int(rid), guild_id)
+        return {"ok": True}
+
+    result = await run_query(_q)
     ctx.invalidate_guild_config(guild_id)
     return result
 

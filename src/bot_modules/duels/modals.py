@@ -1,4 +1,4 @@
-"""Discord modals for Pressure Cooker."""
+"""Discord modals shared across all duel game types."""
 from __future__ import annotations
 
 import logging
@@ -6,7 +6,7 @@ from typing import Awaitable, Callable
 
 import discord
 
-log = logging.getLogger("dungeonkeeper.pressure")
+log = logging.getLogger("dungeonkeeper.duels")
 
 
 class NicknameModal(discord.ui.Modal, title="Set the Loser's Nickname"):

@@ -4,46 +4,27 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from bot_modules.duels import db as duels_db
+
 from .game import PressureGame, game_from_row, pumps_to_json
 
 if TYPE_CHECKING:
     from bot_modules.services.games_db import GamesDb
 
+_GAME_TYPE = "pressure"
+
 _NON_TERMINAL = (
     "PENDING", "ACCEPTED", "ACTIVE", "RESOLVED",
 )
 
-# ── Config ────────────────────────────────────────────────────────────────────
-
-_CONFIG_DEFAULTS: dict = {
-    "cooldown_hours": 48,
-    "sentence_hours": 24,
-    "allow_early_revert": 0,
-    "channel_allowlist": "[]",
-    "nick_denylist": "[]",
-    "max_nick_length": 32,
-    "max_stakes_length": 200,
-}
-
+# ── Config (shim → duels/db) ──────────────────────────────────────────────────
 
 async def get_config(db: GamesDb, guild_id: int) -> dict:
-    row = await db.fetchone(
-        "SELECT * FROM pressure_config WHERE guild_id = ?", (guild_id,)
-    )
-    if row:
-        return dict(row)
-    return {"guild_id": guild_id, **_CONFIG_DEFAULTS}
+    return await duels_db.get_config(db, guild_id, _GAME_TYPE)
 
 
 async def upsert_config(db: GamesDb, guild_id: int, **fields) -> None:
-    await db.execute(
-        "INSERT OR IGNORE INTO pressure_config (guild_id) VALUES (?)", (guild_id,)
-    )
-    for key, value in fields.items():
-        await db.execute(
-            f"UPDATE pressure_config SET {key} = ? WHERE guild_id = ?",
-            (value, guild_id),
-        )
+    await duels_db.upsert_config(db, guild_id, _GAME_TYPE, **fields)
 
 
 # ── Games ─────────────────────────────────────────────────────────────────────
@@ -148,9 +129,6 @@ async def fetch_resolved_games(db: GamesDb) -> list[PressureGame]:
 
 
 async def fetch_sweepable_games(db: GamesDb, now: float) -> list[PressureGame]:
-    """
-    PENDING games older than 60s, ACTIVE games idle >300s, RESOLVED games >300s.
-    """
     rows = await db.fetchall(
         """
         SELECT * FROM pressure_games
@@ -178,7 +156,7 @@ async def get_pending_game_for_target(
     return game_from_row(row) if row else None
 
 
-# ── Nicks ─────────────────────────────────────────────────────────────────────
+# ── Nicks (shim → duels/db) ───────────────────────────────────────────────────
 
 async def apply_nick(
     db: GamesDb,
@@ -190,75 +168,45 @@ async def apply_nick(
     imposed_nick: str,
     sentence_hours: int,
 ) -> int:
-    now = time.time()
-    expires_at = now + sentence_hours * 3600
-    return await db.lastrowid(
-        """
-        INSERT INTO pressure_nicks
-            (game_id, guild_id, loser_id, winner_id, original_nick,
-             imposed_nick, applied_at, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (game_id, guild_id, loser_id, winner_id, original_nick, imposed_nick, now, expires_at),
+    return await duels_db.apply_nick(
+        db,
+        game_id=game_id,
+        game_type=_GAME_TYPE,
+        guild_id=guild_id,
+        loser_id=loser_id,
+        winner_id=winner_id,
+        original_nick=original_nick,
+        imposed_nick=imposed_nick,
+        sentence_hours=sentence_hours,
     )
 
 
 async def fetch_expired_nicks(db: GamesDb, now: float) -> list[dict]:
-    rows = await db.fetchall(
-        "SELECT * FROM pressure_nicks WHERE reverted_at IS NULL AND expires_at <= ?",
-        (now,),
-    )
-    return [dict(r) for r in rows]
+    return await duels_db.fetch_expired_nicks(db, now)
 
 
 async def get_active_nick_for_user(
     db: GamesDb, guild_id: int, user_id: int
 ) -> dict | None:
-    row = await db.fetchone(
-        """
-        SELECT * FROM pressure_nicks
-        WHERE guild_id = ? AND loser_id = ? AND reverted_at IS NULL
-        ORDER BY applied_at DESC LIMIT 1
-        """,
-        (guild_id, user_id),
-    )
-    return dict(row) if row else None
+    return await duels_db.get_active_nick_for_user(db, guild_id, user_id)
 
 
 async def mark_nick_reverted(db: GamesDb, nick_id: int, reason: str) -> None:
-    await db.execute(
-        "UPDATE pressure_nicks SET reverted_at = ?, revert_reason = ? WHERE id = ?",
-        (time.time(), reason, nick_id),
-    )
+    await duels_db.mark_nick_reverted(db, nick_id, reason)
 
 
-# ── Cooldowns ─────────────────────────────────────────────────────────────────
+# ── Cooldowns (shim → duels/db) ───────────────────────────────────────────────
 
 async def check_cooldown(
     db: GamesDb, guild_id: int, user_a: int, user_b: int, cooldown_hours: int
 ) -> float | None:
-    lo, hi = min(user_a, user_b), max(user_a, user_b)
-    row = await db.fetchone(
-        "SELECT last_game_at FROM pressure_cooldowns WHERE guild_id=? AND player_a=? AND player_b=?",
-        (guild_id, lo, hi),
+    return await duels_db.check_cooldown(
+        db, guild_id, _GAME_TYPE, user_a, user_b, cooldown_hours
     )
-    if not row:
-        return None
-    elapsed = time.time() - row["last_game_at"]
-    remaining = cooldown_hours * 3600 - elapsed
-    return remaining if remaining > 0 else None
 
 
 async def set_cooldown(db: GamesDb, guild_id: int, user_a: int, user_b: int) -> None:
-    lo, hi = min(user_a, user_b), max(user_a, user_b)
-    await db.execute(
-        """
-        INSERT INTO pressure_cooldowns (guild_id, player_a, player_b, last_game_at)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(guild_id, player_a, player_b) DO UPDATE SET last_game_at = excluded.last_game_at
-        """,
-        (guild_id, lo, hi, time.time()),
-    )
+    await duels_db.set_cooldown(db, guild_id, _GAME_TYPE, user_a, user_b)
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────
