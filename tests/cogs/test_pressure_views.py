@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock
 
 import discord
 
-from bot_modules.cogs.pressure_cooker.views import ChallengeView, GameView, ResultView, gauge_bar
-from bot_modules.cogs.pressure_cooker.modals import NicknameModal
+from bot_modules.duels.views import ChallengeView, ResultView
+from bot_modules.duels.modals import NicknameModal
+from bot_modules.cogs.pressure_cooker.views import GameView, gauge_bar
 from tests.fakes import FakeUser, fake_interaction
 
 

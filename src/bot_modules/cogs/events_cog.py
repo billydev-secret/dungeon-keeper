@@ -788,7 +788,7 @@ class EventsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:
-        await check_jail_rejoin(self.ctx, member)
+        is_jailed = await check_jail_rejoin(self.ctx, member)
 
         with self.ctx.open_db() as conn:
             now = time.time()
@@ -839,6 +839,35 @@ class EventsCog(commands.Cog):
                     )
                 except discord.HTTPException as exc:
                     log.error("Failed to send greeter chat ping: %s", exc)
+
+        if cfg.auto_role_ids and not member.bot and not is_jailed:
+            me = member.guild.me
+            assignable = [
+                r
+                for rid in cfg.auto_role_ids
+                if (r := member.guild.get_role(rid)) is not None
+                and not r.managed
+                and r < me.top_role
+            ]
+            skipped = cfg.auto_role_ids - {r.id for r in assignable}
+            if skipped:
+                log.warning(
+                    "auto_role: skipping unassignable role ids %s for %s in guild %s",
+                    skipped,
+                    member,
+                    member.guild.id,
+                )
+            if assignable:
+                try:
+                    await member.add_roles(*assignable, reason="auto-role on join")
+                except discord.Forbidden:
+                    log.warning(
+                        "auto_role: missing permission to assign roles to %s in guild %s",
+                        member,
+                        member.guild.id,
+                    )
+                except discord.HTTPException as exc:
+                    log.error("auto_role: failed to assign roles to %s: %s", member, exc)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:

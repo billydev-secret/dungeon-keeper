@@ -1,7 +1,7 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
 
-const _moduleVer = "?v=21";
+const _moduleVer = "?v=22";
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -95,6 +95,7 @@ const SECTIONS = [
       { id: "config-policy-tickets", label: "Policy Tickets",  module: "./panels/config-policy-tickets.js" },
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js" },
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
+      { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js" },
       { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js" },
       { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js" },
       { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js" },
