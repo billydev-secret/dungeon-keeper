@@ -77,12 +77,6 @@ CREATE TABLE IF NOT EXISTS games_audit_channel (
     set_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS games_portal_access (
-    user_id     INTEGER PRIMARY KEY,
-    granted_by  INTEGER NOT NULL,
-    granted_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
 -- LegitLibs
 
 CREATE TABLE IF NOT EXISTS legitlibs_blank_axes (

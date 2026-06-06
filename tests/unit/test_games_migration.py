@@ -13,7 +13,6 @@ EXPECTED_TABLES = [
     "games_session_tracker",
     "games_timer_defaults",
     "games_audit_channel",
-    "games_portal_access",
     "legitlibs_blank_axes",
     "legitlibs_blank_prompts",
     "legitlibs_templates",
