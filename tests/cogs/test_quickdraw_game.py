@@ -72,6 +72,7 @@ def _make_row(**kwargs) -> _FakeRow:
         "fired_at": 1000.0,
         "last_action_at": None,
         "resolved_at": None,
+        "loser_fired_at": None,
         "created_at": 900.0,
     }
     defaults.update(kwargs)
