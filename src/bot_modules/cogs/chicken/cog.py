@@ -20,7 +20,7 @@ from .views import ChickenView
 
 log = logging.getLogger("dungeonkeeper.chicken")
 
-_TICK_INTERVAL = 3.0
+_TICK_INTERVAL = 2.0
 _BAR_WIDTH = 16
 
 
@@ -104,10 +104,11 @@ class ChickenCog(BaseGame, name="ChickenCog"):
                         return
                     guild = self.bot.get_guild(game.guild_id)
                     if guild and game.message_id:
-                        await self._edit_message_silent(
+                        # Embed-only edit: never re-send the view mid-climb, or an
+                        # in-flight BAIL click can be invalidated ("interaction failed").
+                        await self._edit_embed_silent(
                             game.channel_id, game.message_id,
                             self.render_game_state(game, guild),
-                            self.build_game_view(game_id),
                         )
         except asyncio.CancelledError:
             return

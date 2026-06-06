@@ -25,9 +25,6 @@ from bot_modules.games_config.embeds import (
     build_channel_list_embed,
     build_force_end_embed,
     build_game_status_embed,
-    build_portal_grant_embed,
-    build_portal_list_embed,
-    build_portal_revoke_embed,
 )
 from bot_modules.games_config.logic import (
     audit_channel_change,
@@ -35,7 +32,6 @@ from bot_modules.games_config.logic import (
     describe_active_game,
     describe_force_end,
     format_allowed_channels,
-    format_portal_access_list,
     has_admin_permissions,
     has_mod_or_admin_permissions,
 )
@@ -82,37 +78,6 @@ def test_format_allowed_channels_preserves_row_order():
     rows = [(3,), (1,), (2,)]
     text = format_allowed_channels(rows, resolver=lambda _id: None)
     assert text == "<#3>\n<#1>\n<#2>"
-
-
-# ── format_portal_access_list ────────────────────────────────────────
-
-
-def test_format_portal_access_list_empty_returns_hint():
-    text = format_portal_access_list([])
-    assert "No users" in text
-    assert "/games portal-grant" in text
-
-
-def test_format_portal_access_list_renders_user_mentions_with_grantor():
-    rows = [
-        (101, 999, "2026-01-01"),
-        (102, 888, "2026-01-02"),
-    ]
-    text = format_portal_access_list(rows)
-    assert "<@101>" in text
-    assert "granted by <@999>" in text
-    assert "<@102>" in text
-    assert "granted by <@888>" in text
-
-
-def test_format_portal_access_list_preserves_row_order():
-    """Rows come in pre-sorted by ``granted_at DESC`` — we don't re-sort."""
-    rows = [(3, 1, "2026"), (1, 2, "2025"), (2, 3, "2024")]
-    text = format_portal_access_list(rows)
-    lines = text.split("\n")
-    assert lines[0].startswith("<@3>")
-    assert lines[1].startswith("<@1>")
-    assert lines[2].startswith("<@2>")
 
 
 # ── describe_active_game ─────────────────────────────────────────────
@@ -291,33 +256,6 @@ def test_build_audit_channel_embed_clear_uses_disabled_language():
     assert "disabled" in embed.description.lower()
 
 
-def test_build_portal_grant_embed_carries_user_mention():
-    embed = build_portal_grant_embed("<@123>")
-    assert "<@123>" in embed.description
-    assert "Granted" in embed.title
-    assert embed.color.value == SUCCESS_COLOR
-
-
-def test_build_portal_revoke_embed_carries_user_mention():
-    embed = build_portal_revoke_embed("<@456>")
-    assert "<@456>" in embed.description
-    assert "Revoked" in embed.title
-    assert embed.color.value == SUCCESS_COLOR
-
-
-def test_build_portal_list_embed_renders_description_via_logic():
-    rows = [(101, 999, "2026-01-01")]
-    embed = build_portal_list_embed(rows)
-    assert "<@101>" in embed.description
-    assert "<@999>" in embed.description
-    assert embed.color.value == BRAND_COLOR
-
-
-def test_build_portal_list_embed_empty_shows_hint():
-    embed = build_portal_list_embed([])
-    assert "No users" in embed.description
-
-
 # ── sanity: builders return real discord.Embed objects ────────────────
 
 
@@ -330,9 +268,6 @@ def test_all_builders_return_discord_embed():
         build_game_status_embed(None),
         build_force_end_embed("x"),
         build_audit_channel_embed(None),
-        build_portal_grant_embed("<@1>"),
-        build_portal_revoke_embed("<@1>"),
-        build_portal_list_embed([]),
     ]
     for embed in builders:
         assert isinstance(embed, discord.Embed)

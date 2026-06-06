@@ -11,9 +11,6 @@ from bot_modules.games_config.embeds import (
     build_channel_list_embed,
     build_force_end_embed,
     build_game_status_embed,
-    build_portal_grant_embed,
-    build_portal_list_embed,
-    build_portal_revoke_embed,
 )
 from bot_modules.games_config.logic import (
     has_admin_permissions,
@@ -140,47 +137,10 @@ class GamesConfigCog(commands.Cog):
             embed = build_audit_channel_embed(None)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @games_group.command(name="portal-grant", description="Grant a user access to the web admin portal.")
-    @is_admin()
-    @app_commands.describe(user="The user to grant portal access to.")
-    async def portal_grant(self, interaction: discord.Interaction, user: discord.User):
-        log.info("%s used /games portal-grant for %s", interaction.user.display_name, user.display_name)
-        await self.db.execute(
-            "INSERT OR REPLACE INTO games_portal_access (user_id, granted_by) VALUES (?, ?)",
-            (user.id, interaction.user.id),
-        )
-        embed = build_portal_grant_embed(user.mention)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @games_group.command(name="portal-revoke", description="Revoke a user's web admin portal access.")
-    @is_admin()
-    @app_commands.describe(user="The user to revoke portal access from.")
-    async def portal_revoke(self, interaction: discord.Interaction, user: discord.User):
-        log.info("%s used /games portal-revoke for %s", interaction.user.display_name, user.display_name)
-        await self.db.execute(
-            "DELETE FROM games_portal_access WHERE user_id = ?",
-            (user.id,),
-        )
-        embed = build_portal_revoke_embed(user.mention)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @games_group.command(name="portal-list", description="List all users with web admin portal access.")
-    @is_admin()
-    async def portal_list(self, interaction: discord.Interaction):
-        log.info("%s used /games portal-list", interaction.user.display_name)
-        rows = await self.db.fetchall(
-            "SELECT user_id, granted_by, granted_at FROM games_portal_access ORDER BY granted_at DESC"
-        )
-        embed = build_portal_list_embed(rows)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
     @allow_channel.error
     @disallow_channel.error
     @list_channels.error
     @audit_channel.error
-    @portal_grant.error
-    @portal_revoke.error
-    @portal_list.error
     async def admin_error(self, interaction: discord.Interaction, error):
         if isinstance(error, app_commands.CheckFailure):
             log.error("Permission denied for %s on admin command in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")

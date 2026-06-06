@@ -28,7 +28,6 @@ from .logic import (
     describe_active_game,
     describe_force_end,
     format_allowed_channels,
-    format_portal_access_list,
 )
 
 
@@ -93,31 +92,4 @@ def build_audit_channel_embed(channel_id: int | None) -> discord.Embed:
         title=title,
         description=description,
         color=SUCCESS_COLOR,
-    )
-
-
-def build_portal_grant_embed(user_mention: str) -> discord.Embed:
-    """Embed shown after ``/games portal-grant`` succeeds."""
-    return discord.Embed(
-        title="✅ Portal Access Granted",
-        description=f"{user_mention} can now sign in to the admin portal.",
-        color=SUCCESS_COLOR,
-    )
-
-
-def build_portal_revoke_embed(user_mention: str) -> discord.Embed:
-    """Embed shown after ``/games portal-revoke`` succeeds."""
-    return discord.Embed(
-        title="✅ Portal Access Revoked",
-        description=f"{user_mention} can no longer sign in to the admin portal.",
-        color=SUCCESS_COLOR,
-    )
-
-
-def build_portal_list_embed(rows: Sequence[Sequence[Any]]) -> discord.Embed:
-    """Embed shown for ``/games portal-list``."""
-    return discord.Embed(
-        title="Portal Access List",
-        description=format_portal_access_list(rows),
-        color=BRAND_COLOR,
     )

@@ -1,8 +1,8 @@
 """Pure decision logic for the games-config admin cog.
 
 The cog handles per-server settings for the games cluster: which channels
-allow games, where audit logs go, who has web portal access, plus
-read-only views into the active game in a channel. The Discord glue
+allow games, where audit logs go, plus read-only views into the active
+game in a channel. The Discord glue
 (interaction objects, permission checks, db calls) lives in the cog;
 this module is the row-and-string transforms it delegates to so they
 can be tested without spinning up Discord.
@@ -52,18 +52,6 @@ def format_allowed_channels(
         else:
             mentions.append(f"<#{channel_id}>")
     return "\n".join(mentions)
-
-
-def format_portal_access_list(rows: Sequence[Sequence[Any]]) -> str:
-    """Render the ``/games portal-list`` body.
-
-    Each row is ``(user_id, granted_by, granted_at)`` — the third
-    column is unused in the rendered text but kept in the SELECT so
-    the ORDER BY clause is valid. Empty input returns the hint.
-    """
-    if not rows:
-        return "No users have been granted portal access. Use `/games portal-grant`."
-    return "\n".join(f"<@{row[0]}> — granted by <@{row[1]}>" for row in rows)
 
 
 def describe_active_game(row: Mapping[str, Any] | None) -> tuple[str, str]:

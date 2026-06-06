@@ -237,6 +237,30 @@ class BaseGame(commands.Cog):
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             pass
 
+    async def _edit_embed_silent(
+        self,
+        channel_id: int,
+        message_id: int | None,
+        embed: discord.Embed,
+    ) -> None:
+        """Edit only the embed, leaving the message's components untouched.
+
+        Used by high-frequency updates (e.g. Chicken's meter ticker). Re-sending the
+        view on every edit re-renders the action row, which can make an in-flight button
+        click fail ("interaction failed") before it reaches the bot — so we never touch
+        components here.
+        """
+        if not message_id:
+            return
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            return
+        try:
+            msg = await channel.fetch_message(message_id)  # type: ignore[union-attr]
+            await msg.edit(embed=embed)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            pass
+
     # ── Permission preflight ──────────────────────────────────────────────────
 
     async def _check_bot_can_nick(
