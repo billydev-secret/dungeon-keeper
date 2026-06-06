@@ -141,7 +141,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
                 value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
-        else:
+        elif game.stakes_text is None:
             embed.add_field(
                 name="⏳ Awaiting Nickname",
                 value=(
