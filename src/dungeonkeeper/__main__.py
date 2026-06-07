@@ -180,6 +180,7 @@ def main() -> None:
         "bot_modules.cogs.guess_cog",
         "bot_modules.cogs.quote_cog",
         "bot_modules.cogs.whisper_cog",
+        "bot_modules.cogs.needle_cog",
         "bot_modules.cogs.emoji_stealer_cog",
         "bot_modules.cogs.risky_roll_cog",
         "bot_modules.cogs.pressure_cooker",

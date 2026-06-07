@@ -13,6 +13,7 @@ from discord.ext import commands
 
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
+from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
 
 from . import db as mcdb
@@ -481,4 +482,9 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(MusicalChairsCog(bot))
+    cog = MusicalChairsCog(bot)
+    await bot.add_cog(cog)
+    for name in ("stats", "config"):
+        cog.musicalchairs.remove_command(name)
+    bot.tree.remove_command("musicalchairs")
+    games.add_command(cog.musicalchairs)

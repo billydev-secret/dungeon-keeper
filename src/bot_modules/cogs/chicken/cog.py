@@ -12,6 +12,7 @@ from discord.ext import commands
 
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
+from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
 
 from . import db as chdb
@@ -455,4 +456,9 @@ class ChickenCog(BaseGame, name="ChickenCog"):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(ChickenCog(bot))
+    cog = ChickenCog(bot)
+    await bot.add_cog(cog)
+    for name in ("stats", "config"):
+        cog.chicken.remove_command(name)
+    bot.tree.remove_command("chicken")
+    games.add_command(cog.chicken)

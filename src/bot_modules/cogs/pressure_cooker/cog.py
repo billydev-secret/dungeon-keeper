@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.duels.base_duel import BaseDuel
+from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_GOLD, COLOR_RED, COLOR_YELLOW
 
 from . import db as pdb
@@ -363,4 +364,9 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(PressureCookerDuel(bot))
+    cog = PressureCookerDuel(bot)
+    await bot.add_cog(cog)
+    for name in ("cancel", "revert", "stats", "config"):
+        cog.pressure.remove_command(name)
+    bot.tree.remove_command("pressure")
+    games.add_command(cog.pressure)

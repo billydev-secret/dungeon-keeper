@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.command_groups import play
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
@@ -339,10 +340,10 @@ class HotTakesCog(commands.Cog):
 
     @app_commands.command(name="hottakes", description="Start a Hot Takes / Unpopular Opinions game!")
     async def hottakes(self, interaction: discord.Interaction):
-        log.info("%s used /hottakes in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play hottakes in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/config allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it with `/games config allow-channel`.",
                 ephemeral=True,
             )
             return
@@ -471,7 +472,10 @@ class HotTakesCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(HotTakesCog(bot))
+    cog = HotTakesCog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("hottakes")
+    play.add_command(cog.hottakes)
 
 
 # Re-export VOTE_VALUES so any tests / external callers that imported it

@@ -21,6 +21,7 @@ from discord.ext import commands
 from discord import app_commands
 
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_RECAP
+from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
@@ -565,7 +566,7 @@ class PriceCog(commands.Cog):
         source: str = "host",
     ):
         log.info(
-            "%s used /price in #%s",
+            "%s used /games play price in #%s",
             interaction.user.display_name,
             interaction.channel.name if interaction.channel else "unknown",
         )
@@ -1037,4 +1038,7 @@ class PriceCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(PriceCog(bot))
+    cog = PriceCog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("price")
+    play.add_command(cog.price_cmd)

@@ -63,6 +63,12 @@ from bot_modules.services.starboard_service import (
 )
 from bot_modules.services.guess_repo import get_guess_config as _get_guess_config
 from bot_modules.services.whisper_repo import get_whisper_config as _get_whisper_config
+from bot_modules.cogs.needle_cog import (
+    _delete_channel as _needle_delete_channel,
+    _get_global_config as _needle_get_global_config,
+    _list_channels as _needle_list_channels,
+    _upsert_channel as _needle_upsert_channel,
+)
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
@@ -244,6 +250,33 @@ def _guess_section(conn, guild_id: int) -> dict:
         "guess_cooldown_seconds": gc.guess_cooldown_seconds,
         "min_image_dimension_px": gc.min_image_dimension_px,
         "max_image_size_mb": gc.max_image_size_mb,
+    }
+
+
+def _needle_section(conn, guild_id: int) -> dict:
+    channels = _needle_list_channels(conn, guild_id)
+    gcfg = _needle_get_global_config(conn, guild_id)
+    return {
+        "channels": [
+            {
+                "channel_id": str(c.channel_id),
+                "title_type": c.title_type,
+                "custom_title": c.custom_title,
+                "include_bots": c.include_bots,
+                "slowmode": c.slowmode,
+                "delete_behavior": c.delete_behavior,
+                "reply_type": c.reply_type,
+                "custom_reply": c.custom_reply,
+                "status_reactions": c.status_reactions,
+                "archive_immediately": c.archive_immediately,
+                "default_reactions": c.default_reactions,
+            }
+            for c in channels
+        ],
+        "emoji_unanswered": gcfg.emoji_unanswered,
+        "emoji_archived": gcfg.emoji_archived,
+        "emoji_locked": gcfg.emoji_locked,
+        "default_reply": gcfg.default_reply,
     }
 
 
@@ -533,6 +566,7 @@ async def get_config(
                 "bot_identity": _bot_identity_section(prune_guild),
                 "guess": _guess_section(conn, guild_id),
                 "whisper": _whisper_section(conn, guild_id),
+                "needle": _needle_section(conn, guild_id),
                 "risky": _risky_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
             }
@@ -2002,3 +2036,115 @@ async def update_bot_identity(
         "nick": guild.me.nick or "",
         "avatar_url": str(guild.me.display_avatar.url),
     }
+
+
+# ── Needle (auto-thread) config ──────────────────────────────────────────────
+
+
+_NEEDLE_VALID_TITLE_TYPES   = {"first_fifty", "first_line", "user_date", "custom"}
+_NEEDLE_VALID_DELETE_BEHAVIORS = {"archive_if_empty", "archive", "delete", "nothing"}
+_NEEDLE_VALID_REPLY_TYPES   = {"default", "custom", "none"}
+
+
+class NeedleChannelUpdate(BaseModel):
+    title_type:          str  = "first_fifty"
+    custom_title:        str  = ""
+    include_bots:        bool = False
+    slowmode:            int  = 0
+    delete_behavior:     str  = "archive_if_empty"
+    reply_type:          str  = "default"
+    custom_reply:        str  = ""
+    status_reactions:    bool = False
+    archive_immediately: bool = False
+    default_reactions:   str  = ""
+
+
+class NeedleGlobalUpdate(BaseModel):
+    emoji_unanswered: str | None = None
+    emoji_archived:   str | None = None
+    emoji_locked:     str | None = None
+    default_reply:    str | None = None
+
+
+@router.put("/config/needle/settings")
+async def update_needle_settings(
+    request: Request,
+    body: NeedleGlobalUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.emoji_unanswered is not None:
+                set_config_value(conn, "needle_emoji_unanswered", body.emoji_unanswered, guild_id)
+            if body.emoji_archived is not None:
+                set_config_value(conn, "needle_emoji_archived", body.emoji_archived, guild_id)
+            if body.emoji_locked is not None:
+                set_config_value(conn, "needle_emoji_locked", body.emoji_locked, guild_id)
+            if body.default_reply is not None:
+                set_config_value(conn, "needle_default_reply", body.default_reply, guild_id)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.put("/config/needle/{channel_id}")
+async def upsert_needle_channel(
+    channel_id: str,
+    request: Request,
+    body: NeedleChannelUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    if body.title_type not in _NEEDLE_VALID_TITLE_TYPES:
+        raise HTTPException(400, f"title_type must be one of {sorted(_NEEDLE_VALID_TITLE_TYPES)}")
+    if body.delete_behavior not in _NEEDLE_VALID_DELETE_BEHAVIORS:
+        raise HTTPException(400, f"delete_behavior must be one of {sorted(_NEEDLE_VALID_DELETE_BEHAVIORS)}")
+    if body.reply_type not in _NEEDLE_VALID_REPLY_TYPES:
+        raise HTTPException(400, f"reply_type must be one of {sorted(_NEEDLE_VALID_REPLY_TYPES)}")
+    if body.slowmode < 0 or body.slowmode > 21600:
+        raise HTTPException(400, "slowmode must be between 0 and 21600 seconds")
+
+    def _q():
+        with ctx.open_db() as conn:
+            _needle_upsert_channel(
+                conn,
+                guild_id=guild_id,
+                channel_id=int(channel_id),
+                title_type=body.title_type,  # type: ignore[arg-type]
+                custom_title=body.custom_title,
+                include_bots=body.include_bots,
+                slowmode=body.slowmode,
+                delete_behavior=body.delete_behavior,
+                reply_type=body.reply_type,
+                custom_reply=body.custom_reply,
+                status_reactions=body.status_reactions,
+                archive_immediately=body.archive_immediately,
+                default_reactions=body.default_reactions,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/needle/{channel_id}")
+async def remove_needle_channel(
+    channel_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            removed = _needle_delete_channel(conn, guild_id, int(channel_id))
+        if not removed:
+            raise HTTPException(404, "Channel not configured for auto-threading")
+        return {"ok": True}
+
+    return await run_query(_q)

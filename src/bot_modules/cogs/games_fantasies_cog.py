@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.command_groups import play
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
@@ -324,10 +325,10 @@ class FantasiesCog(commands.Cog):
 
     @app_commands.command(name="fantasies", description="Start a Fantasies & Dealbreakers game!")
     async def fantasies(self, interaction: discord.Interaction):
-        log.info("%s used /fantasies in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play fantasies in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/games allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it with `/games config allow-channel`.",
                 ephemeral=True,
             )
             return
@@ -456,4 +457,7 @@ class FantasiesCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(FantasiesCog(bot))
+    cog = FantasiesCog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("fantasies")
+    play.add_command(cog.fantasies)

@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     check_allowed_channel,
@@ -225,10 +226,10 @@ class TraditionalCog(commands.Cog):
 
     @app_commands.command(name="traditional", description="Start a Traditional Truth or Dare game!")
     async def traditional(self, interaction: discord.Interaction):
-        log.info("%s used /traditional in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play traditional in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/config allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it with `/games config allow-channel`.",
                 ephemeral=True,
             )
             return
@@ -255,4 +256,7 @@ class TraditionalCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(TraditionalCog(bot))
+    cog = TraditionalCog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("traditional")
+    play.add_command(cog.traditional)

@@ -16,6 +16,7 @@ from bot_modules.games_config.logic import (
     has_admin_permissions,
     has_mod_or_admin_permissions,
 )
+from bot_modules.games.command_groups import games
 from bot_modules.games.constants import ERROR_COLOR
 
 log = logging.getLogger(__name__)
@@ -45,12 +46,15 @@ class GamesConfigCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    games_group = app_commands.Group(name="games", description="Bot configuration commands (admin only).")
+    config_group = app_commands.Group(
+        name="config",
+        description="Bot configuration commands (admin only).",
+    )
 
-    @games_group.command(name="allow-channel", description="Add the current channel to allowed game channels.")
+    @config_group.command(name="allow-channel", description="Add the current channel to allowed game channels.")
     @is_admin()
     async def allow_channel(self, interaction: discord.Interaction):
-        log.info("%s used /games allow-channel in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games config allow-channel in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         try:
             await self.db.execute(
                 "INSERT OR IGNORE INTO games_allowed_channels (channel_id, added_by) VALUES (?, ?)",
@@ -61,10 +65,10 @@ class GamesConfigCog(commands.Cog):
             embed = discord.Embed(title="Error", description=str(e), color=ERROR_COLOR)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @games_group.command(name="disallow-channel", description="Remove the current channel from game channels.")
+    @config_group.command(name="disallow-channel", description="Remove the current channel from game channels.")
     @is_admin()
     async def disallow_channel(self, interaction: discord.Interaction):
-        log.info("%s used /games disallow-channel in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games config disallow-channel in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         await self.db.execute(
             "DELETE FROM games_allowed_channels WHERE channel_id = ?",
             (interaction.channel_id,),
@@ -72,27 +76,27 @@ class GamesConfigCog(commands.Cog):
         embed = build_channel_disallowed_embed(interaction.channel.mention)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @games_group.command(name="list-channels", description="List all allowed game channels.")
+    @config_group.command(name="list-channels", description="List all allowed game channels.")
     @is_admin()
     async def list_channels(self, interaction: discord.Interaction):
-        log.info("%s used /games list-channels in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games config list-channels in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         rows = await self.db.fetchall("SELECT channel_id FROM games_allowed_channels")
         embed = build_channel_list_embed(rows, interaction.guild.get_channel)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @games_group.command(name="game-status", description="Show the active game in this channel.")
+    @config_group.command(name="game-status", description="Show the active game in this channel.")
     @is_mod_or_admin()
     async def game_status(self, interaction: discord.Interaction):
-        log.info("%s used /games game-status in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games config game-status in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         from bot_modules.games.utils.game_manager import get_active_game
         row = await get_active_game(self.db, interaction.channel_id)
         embed = build_game_status_embed(row)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @games_group.command(name="game-end", description="Force-close the active game in this channel.")
+    @config_group.command(name="game-end", description="Force-close the active game in this channel.")
     @is_mod_or_admin()
     async def game_end(self, interaction: discord.Interaction):
-        log.info("%s used /games game-end in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games config game-end in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         from bot_modules.games.utils.game_manager import get_active_game, end_game
         await interaction.response.defer(ephemeral=True)
         row = await get_active_game(self.db, interaction.channel_id)
@@ -117,11 +121,11 @@ class GamesConfigCog(commands.Cog):
         embed = build_force_end_embed(row["game_type"])
         await interaction.followup.send(embed=embed)
 
-    @games_group.command(name="audit-channel", description="Set or clear the audit log channel for anonymous submissions.")
+    @config_group.command(name="audit-channel", description="Set or clear the audit log channel for anonymous submissions.")
     @is_admin()
     @app_commands.describe(channel="The channel to send audit logs to. Leave blank to clear.")
     async def audit_channel(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
-        log.info("%s used /games audit-channel in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games config audit-channel in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if channel:
             await self.db.execute(
                 "INSERT INTO games_audit_channel (guild_id, channel_id, set_by) VALUES (?, ?, ?) "
@@ -167,4 +171,8 @@ class GamesConfigCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(GamesConfigCog(bot))
+    cog = GamesConfigCog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("config")
+    games.add_command(cog.config_group)
+    bot.tree.add_command(games)
