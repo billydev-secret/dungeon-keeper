@@ -28,6 +28,12 @@ from bot_modules.services.auto_delete_service import (
     remove_auto_delete_rule,
     upsert_auto_delete_rule,
 )
+from bot_modules.services.auto_react_service import (
+    list_auto_react_rules_for_guild_with_conn,
+    parse_emojis,
+    remove_auto_react_rule,
+    upsert_auto_react_rule,
+)
 from bot_modules.services.booster_roles import (
     delete_booster_role,
     get_booster_panel_refs,
@@ -309,6 +315,20 @@ def _policy_section(conn, guild_id: int) -> dict:
     }
 
 
+# ── Auto-react config helper ──────────────────────────────────────────
+
+
+def _auto_react_section(conn, guild_id: int) -> list:
+    return [
+        {
+            "channel_id": str(r["channel_id"]),
+            "emojis": parse_emojis(r["emojis"]),
+            "enabled": bool(r["enabled"]),
+        }
+        for r in list_auto_react_rules_for_guild_with_conn(conn, guild_id)
+    ]
+
+
 # ── Confessions config helper ─────────────────────────────────────────
 
 
@@ -569,6 +589,7 @@ async def get_config(
                 "needle": _needle_section(conn, guild_id),
                 "risky": _risky_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
+                "auto_react": _auto_react_section(conn, guild_id),
             }
 
     return await run_query(_q)
@@ -1440,6 +1461,53 @@ async def remove_auto_delete(
 
     def _q():
         remove_auto_delete_rule(ctx.db_path, guild_id, int(channel_id))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── Auto-react config ────────────────────────────────────────────────
+
+
+class AutoReactRuleUpdate(BaseModel):
+    emojis: list[str]
+    enabled: bool = True
+
+
+@router.put("/config/auto-react/{channel_id}")
+async def update_auto_react(
+    channel_id: str,
+    request: Request,
+    body: AutoReactRuleUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        upsert_auto_react_rule(
+            ctx.db_path,
+            guild_id,
+            int(channel_id),
+            body.emojis,
+            body.enabled,
+        )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/auto-react/{channel_id}")
+async def remove_auto_react(
+    channel_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        remove_auto_react_rule(ctx.db_path, guild_id, int(channel_id))
         return {"ok": True}
 
     return await run_query(_q)
