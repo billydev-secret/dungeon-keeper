@@ -430,6 +430,9 @@ class WhisperShareButton(
                         channel_msg_id=new_msg.id,
                         dm_msg_id=whisper.dm_msg_id or 0,
                     )
+                    cog = self.bot.get_cog("WhisperCog")
+                    if isinstance(cog, WhisperCog):
+                        asyncio.create_task(cog.refresh_whisper_launcher(whisper.guild_id))
                 except discord.HTTPException:
                     log.warning("Failed to post share announcement to feed")
 
@@ -1308,6 +1311,9 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
             channel_msg_id=new_msg.id,
             dm_msg_id=whisper.dm_msg_id or 0,
         )
+        cog = bot.get_cog("WhisperCog")
+        if isinstance(cog, WhisperCog):
+            asyncio.create_task(cog.refresh_whisper_launcher(whisper.guild_id))
     except discord.HTTPException:
         log.warning("Failed to post share announcement to feed")
 
@@ -2324,6 +2330,7 @@ class WhisperCog(commands.Cog):
                 format_send_feed_announcement(target.mention),
                 allowed_mentions=discord.AllowedMentions(users=[target]),
             )
+            asyncio.create_task(self.refresh_whisper_launcher(interaction.guild.id))
         except discord.HTTPException:
             log.warning("Failed to post whisper announcement to feed channel")
 

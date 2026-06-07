@@ -18,7 +18,7 @@ class SessionCog(commands.Cog):
         return self.bot.games_db
 
     @app_commands.command(
-        name="session-recap",
+        name="recap",
         description="Show a recap of the current game night session.",
     )
     async def session_recap(self, interaction: discord.Interaction):

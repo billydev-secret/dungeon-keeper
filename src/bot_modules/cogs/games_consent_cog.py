@@ -66,7 +66,7 @@ class ConsentCog(commands.Cog):
 
     @app_commands.command(name="consent", description="Manage your consent settings for game nights.")
     async def consent(self, interaction: discord.Interaction):
-        log.info("%s used /consent in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games consent in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         embed = discord.Embed(
             title=CONSENT_PROMPT_TITLE,
             description=CONSENT_PROMPT_BODY,
@@ -82,7 +82,7 @@ class ConsentCog(commands.Cog):
         description="Check your current consent status.",
     )
     async def consent_status(self, interaction: discord.Interaction):
-        log.info("%s used /consent-status in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games consent-status in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         row = await self.db.fetchone(
             "SELECT tod_consent, updated_at FROM games_consent WHERE user_id = ?",
             (interaction.user.id,),

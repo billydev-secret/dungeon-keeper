@@ -20,6 +20,7 @@ from discord.ext import commands
 from discord import app_commands
 
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_RECAP
+from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
@@ -594,13 +595,13 @@ class RushmoreCog(commands.Cog):
         vote_timer: int = 30,
     ):
         log.info(
-            "%s used /rushmore in #%s",
+            "%s used /games play rushmore in #%s",
             interaction.user.display_name,
             interaction.channel.name if interaction.channel else "unknown",
         )
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/games allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it with `/games config allow-channel`.",
                 ephemeral=True,
             )
             return
@@ -930,4 +931,7 @@ class RushmoreCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(RushmoreCog(bot))
+    cog = RushmoreCog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("rushmore")
+    play.add_command(cog.rushmore_cmd)

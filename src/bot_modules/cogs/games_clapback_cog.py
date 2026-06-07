@@ -25,6 +25,7 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games.utils.question_source import get_clapback_prompt, has_clapback_prompts
 from bot_modules.games.utils.ai_client import generate_text
+from bot_modules.games.command_groups import play
 from bot_modules.games_clapback.logic import (
     AI_SYSTEM_PROMPT,
     AI_USER_PROMPT,
@@ -556,7 +557,7 @@ class ClapbackCog(commands.Cog):
         anonymous: bool = False,
     ):
         log.info(
-            "%s used /clapback in #%s",
+            "%s used /games play clapback in #%s",
             interaction.user.display_name,
             interaction.channel.name if interaction.channel else "unknown",
         )
@@ -564,7 +565,7 @@ class ClapbackCog(commands.Cog):
         # Pre-flight checks
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/games allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it with `/games config allow-channel`.",
                 ephemeral=True,
             )
             return
@@ -1047,4 +1048,7 @@ class ClapbackCog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(ClapbackCog(bot))
+    cog = ClapbackCog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("clapback")
+    play.add_command(cog.clapback)

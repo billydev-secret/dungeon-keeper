@@ -12,6 +12,7 @@ from discord.ext import commands
 
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_duel import BaseDuel
+from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
 from . import db as qdb
@@ -652,4 +653,9 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
 
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(QuickdrawDuel(bot))
+    cog = QuickdrawDuel(bot)
+    await bot.add_cog(cog)
+    for name in ("cancel", "revert", "stats", "config"):
+        cog.quickdraw.remove_command(name)
+    bot.tree.remove_command("quickdraw")
+    games.add_command(cog.quickdraw)

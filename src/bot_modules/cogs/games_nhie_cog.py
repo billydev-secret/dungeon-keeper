@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY
+from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
@@ -239,10 +240,10 @@ class NHIECog(commands.Cog):
         question: str = "",
         lives: int = DEFAULT_LIVES,
     ):
-        log.info("%s used /nhie in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play nhie in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/config allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it with `/games config allow-channel`.",
                 ephemeral=True,
             )
             return
@@ -454,4 +455,7 @@ class NHIECog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(NHIECog(bot))
+    cog = NHIECog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("nhie")
+    play.add_command(cog.nhie)

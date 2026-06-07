@@ -15,6 +15,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     ConfirmCloseView,
 )
+from bot_modules.games.command_groups import play
 from bot_modules.games_ffa.embeds import build_ffa_embed
 from bot_modules.games_ffa.logic import add_anon_reply
 
@@ -162,10 +163,10 @@ class FFACog(commands.Cog):
         interaction: discord.Interaction,
         question: str,
     ):
-        log.info("%s used /ffa in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play ffa in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/config allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it with `/games config allow-channel`.",
                 ephemeral=True,
             )
             return
@@ -192,4 +193,7 @@ class FFACog(commands.Cog):
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(FFACog(bot))
+    cog = FFACog(bot)
+    await bot.add_cog(cog)
+    bot.tree.remove_command("ffa")
+    play.add_command(cog.ffa)
