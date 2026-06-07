@@ -12,20 +12,18 @@ from typing import Any
 import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
-from bot_modules.games_traditional.logic import CAT_LABELS, summarize_asked_by_category
+from bot_modules.games_traditional.logic import CATEGORIES, CAT_LABELS, summarize_asked_by_category
 
 _RESULTS_GREY = 0x808080
 
 
 def build_tod_embed(
-    host_name: str, payload: dict[str, Any], closed: bool = False
+    host_name: str,
+    payload: dict[str, Any],
+    closed: bool = False,
+    names: dict[str, str] | None = None,
 ) -> discord.Embed:
-    """Build the main lobby embed shown alongside the host/player buttons.
-
-    ``closed`` flips the title suffix to ``— GAME OVER``; the rest of the
-    rendering is unchanged so the game message can be edited in place
-    once the round ends.
-    """
+    """Build the main lobby embed shown alongside the host/player buttons."""
     title = f"{GAME_ICONS['traditional']} TRUTH OR DARE"
     if closed:
         title += " — GAME OVER"
@@ -37,6 +35,16 @@ def build_tod_embed(
 
     asked: dict[str, str] = payload.get("asked", {})
     embed.add_field(name="Questions Asked", value=str(len(asked)), inline=True)
+
+    prefs: dict[str, list[str]] = payload.get("prefs", {})
+    for cat in CATEGORIES:
+        members_in_cat = [
+            (names.get(uid, uid) if names else uid)
+            for uid, cats in prefs.items()
+            if cat in cats
+        ]
+        value = "\n".join(members_in_cat) if members_in_cat else "—"
+        embed.add_field(name=CAT_LABELS[cat], value=value, inline=True)
 
     embed.set_footer(text=f"{GAME_ICONS['traditional']} Truth or Dare")
     return embed
