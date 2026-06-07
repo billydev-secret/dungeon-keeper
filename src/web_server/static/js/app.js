@@ -79,13 +79,20 @@ const SECTIONS = [
       { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch.js" },
       { id: "message-search", label: "Message Review",  module: "./panels/message-search.js" },
     ],
+    groups: [
+      { heading: "Audit Logs", items: [
+        { id: "mod-audit",         label: "Audit Log",        module: "./panels/mod-audit.js", adminOnly: true },
+        { id: "mod-dm-audit",      label: "DM Audit",         module: "./panels/mod-dm-audit.js", adminOnly: true },
+        { id: "quotes-audit",      label: "Quotes Audit",     module: "./panels/quotes-audit.js", adminOnly: true },
+        { id: "guess-audit",       label: "Guess Who Audit",  module: "./panels/guess-audit.js", adminOnly: true },
+        { id: "mod-whisper-audit", label: "Whisper Audit",    module: "./panels/mod-whisper-audit.js", adminOnly: true },
+        { id: "confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js", adminOnly: true },
+      ]},
+    ],
   },
   {
     id: "config", label: "Config", perms: ["moderator"],
     items: [
-      { id: "mod-audit",      label: "Audit Log",   module: "./panels/mod-audit.js", adminOnly: true },
-      { id: "mod-dm-audit",   label: "DM Audit",    module: "./panels/mod-dm-audit.js", adminOnly: true },
-      { id: "quotes-audit",   label: "Quotes Audit", module: "./panels/quotes-audit.js", adminOnly: true },
       { id: "config-global",     label: "Global",          module: "./panels/config-global.js" },
       { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js" },
       { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js" },
@@ -163,15 +170,12 @@ const SECTIONS = [
       ]},
       { heading: "Guess Who", items: [
         { id: "config-guess", label: "Config",     module: "./panels/config-guess.js" },
-        { id: "guess-audit",  label: "Audit Log",  module: "./panels/guess-audit.js", adminOnly: true },
       ]},
       { heading: "Whisper", items: [
         { id: "config-whisper",    label: "Config",     module: "./panels/config-whisper.js" },
-        { id: "mod-whisper-audit", label: "Audit Log",  module: "./panels/mod-whisper-audit.js", adminOnly: true },
       ]},
       { heading: "Confessions", items: [
         { id: "config-confessions",  label: "Config",     module: "./panels/config-confessions.js" },
-        { id: "confessions-audit",   label: "Audit Log",  module: "./panels/mod-confessions-audit.js", adminOnly: true },
       ]},
     ],
   },
