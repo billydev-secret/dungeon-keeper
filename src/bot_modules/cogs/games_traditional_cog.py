@@ -64,7 +64,7 @@ class AskQuestionModal(discord.ui.Modal):
 
         await self.channel.send(format_question_post(self.cat, mention, self.question.value))
 
-        await interaction.response.send_message("Question posted!", ephemeral=True)
+        await interaction.response.defer()
 
 
 class TraditionalHostView(discord.ui.View):
