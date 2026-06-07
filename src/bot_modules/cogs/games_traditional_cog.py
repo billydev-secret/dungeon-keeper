@@ -66,6 +66,10 @@ class AskQuestionModal(discord.ui.Modal):
 
         await interaction.response.defer()
 
+        view = self.bot.active_views.get(self.game_id)
+        if view:
+            await view.refresh_embed(interaction.guild, payload)
+
 
 class TraditionalHostView(discord.ui.View):
     """Main embed view — host controls + player preference toggles."""
@@ -91,15 +95,29 @@ class TraditionalHostView(discord.ui.View):
     async def _save_payload(self, payload: dict):
         await update_game_payload(self.db, self.game_id, payload)
 
-    async def _update_embed(self, interaction: discord.Interaction, payload: dict):
-        host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
+    def _resolve_names(self, guild: discord.Guild | None, payload: dict) -> dict[str, str]:
+        if not guild:
+            return {}
+        names: dict[str, str] = {}
+        for uid in payload.get("prefs", {}):
+            member = guild.get_member(int(uid))
+            if member:
+                names[uid] = member.display_name
+        return names
+
+    async def refresh_embed(self, guild: discord.Guild | None, payload: dict):
+        host_member = guild.get_member(self.host_id) if guild else None
         host_name = host_member.display_name if host_member else "Host"
-        embed = build_tod_embed(host_name, payload)
+        names = self._resolve_names(guild, payload)
+        embed = build_tod_embed(host_name, payload, names=names)
         if hasattr(self, '_message') and self._message:
             try:
                 await self._message.edit(embed=embed, view=self)
             except Exception:
                 pass
+
+    async def _update_embed(self, interaction: discord.Interaction, payload: dict):
+        await self.refresh_embed(interaction.guild, payload)
 
     # --- Player preference toggles (row 0) ---
 
