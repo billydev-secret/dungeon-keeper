@@ -26,6 +26,7 @@ class BioField:
     is_headline: bool
     sort_order: int
     max_len: int
+    hint: str = ""  # admin-authored example/helper shown in the wizard prompt
 
 
 @dataclass(frozen=True)

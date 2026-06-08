@@ -54,6 +54,7 @@ class FieldCreateBody(BaseModel):
     required: bool = False
     is_headline: bool = False
     max_len: int = Field(default=1024, ge=1, le=4096)
+    hint: str = Field(default="", max_length=256)
 
     @field_validator("choices")
     @classmethod
@@ -69,6 +70,7 @@ class FieldUpdateBody(BaseModel):
     is_headline: bool | None = None
     max_len: int | None = Field(default=None, ge=1, le=4096)
     active: bool | None = None
+    hint: str | None = Field(default=None, max_length=256)
 
     @field_validator("choices")
     @classmethod
@@ -227,6 +229,7 @@ async def create_field(
                 required=body.required,
                 is_headline=body.is_headline,
                 max_len=body.max_len,
+                hint=body.hint,
             )
             bios_db.bump_template_version(conn, tmpl.id)
         return {"id": field_id, "ok": True}
@@ -283,6 +286,7 @@ async def update_field(
                 is_headline=body.is_headline,
                 max_len=body.max_len,
                 active=body.active,
+                hint=body.hint,
             )
             bios_db.bump_template_version(conn, tmpl.id)
         return {"ok": True}

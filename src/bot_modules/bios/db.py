@@ -73,13 +73,14 @@ def _row_to_field(row: sqlite3.Row) -> BioField:
         is_headline=bool(row["is_headline"]),
         sort_order=row["sort_order"],
         max_len=row["max_len"],
+        hint=row["hint"] or "",
     )
 
 
 def list_fields(
     conn: sqlite3.Connection, template_id: int, *, active_only: bool = True
 ) -> list[BioField]:
-    sql = "SELECT id, label, field_type, choices, required, is_headline, sort_order, max_len FROM bio_fields WHERE template_id = ?"
+    sql = "SELECT id, label, field_type, choices, required, is_headline, sort_order, max_len, hint FROM bio_fields WHERE template_id = ?"
     if active_only:
         sql += " AND active = 1"
     sql += " ORDER BY sort_order, id"
@@ -90,7 +91,7 @@ def list_fields(
 def list_fields_admin(conn: sqlite3.Connection, template_id: int) -> list[dict]:
     """Admin view (includes inactive + the `active` flag and `key`)."""
     rows = conn.execute(
-        "SELECT id, key, label, field_type, choices, required, is_headline, sort_order, active, max_len "
+        "SELECT id, key, label, field_type, choices, required, is_headline, sort_order, active, max_len, hint "
         "FROM bio_fields WHERE template_id = ? ORDER BY sort_order, id",
         (template_id,),
     ).fetchall()
@@ -112,6 +113,7 @@ def list_fields_admin(conn: sqlite3.Connection, template_id: int) -> list[dict]:
                 "sort_order": r["sort_order"],
                 "active": bool(r["active"]),
                 "max_len": r["max_len"],
+                "hint": r["hint"] or "",
             }
         )
     return out
@@ -136,6 +138,7 @@ def create_field(
     is_headline: bool,
     max_len: int,
     key: str = "",
+    hint: str = "",
 ) -> int:
     sort_order = _next_sort_order(conn, template_id)
     if is_headline:
@@ -144,8 +147,8 @@ def create_field(
             (template_id,),
         )
     cur = conn.execute(
-        "INSERT INTO bio_fields (template_id, key, label, field_type, choices, required, is_headline, sort_order, active, max_len) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+        "INSERT INTO bio_fields (template_id, key, label, field_type, choices, required, is_headline, sort_order, active, max_len, hint) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
         (
             template_id,
             key,
@@ -156,6 +159,7 @@ def create_field(
             int(bool(is_headline)),
             sort_order,
             int(max_len),
+            hint,
         ),
     )
     return int(cur.lastrowid or 0)
@@ -173,12 +177,16 @@ def update_field(
     is_headline: bool | None = None,
     max_len: int | None = None,
     active: bool | None = None,
+    hint: str | None = None,
 ) -> None:
     sets: list[str] = []
     args: list = []
     if label is not None:
         sets.append("label = ?")
         args.append(label)
+    if hint is not None:
+        sets.append("hint = ?")
+        args.append(hint)
     if field_type is not None:
         sets.append("field_type = ?")
         args.append(field_type)

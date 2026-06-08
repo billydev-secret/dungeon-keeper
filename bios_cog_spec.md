@@ -57,6 +57,7 @@ The profile fields belonging to a template, rendered in order.
 | `sort_order` | INTEGER | render + wizard order |
 | `active` | INTEGER | 0/1; soft-retire, never hard-delete |
 | `max_len` | INTEGER | per-field char cap, default 1024 |
+| `hint` | TEXT | optional example/helper shown under the wizard prompt (default `''`) |
 
 ### 3.3 `bio_questions`
 The rotating icebreaker pool. Guild-scoped, independent of templates.
@@ -146,6 +147,8 @@ Walk the active field list in `sort_order`. Behavior per `field_type`:
 - **`short` / `paragraph`** — post the field label as a prompt; capture the user's next message in the channel via `wait_for("message", check=...)` scoped to this channel + this author.
 - **`choice`** — post the field label with a selection control: **buttons if ≤5 choices, a select menu otherwise**. Capture via the component interaction.
 
+The prompt carries warm, type-aware guidance (not a bare "reply with…" line) and, when the field's `hint` is set, an italicised **💡 For example** line beneath it so members aren't left guessing what to write. Optional fields phrase Skip reassuringly rather than as a terse "(optional)".
+
 Per-step controls (rendered as buttons on the prompt):
 - **Skip** — offered only when the field is not `required`. A required field will not advance until answered.
 - **Back** — return to the previous step to re-answer.
@@ -232,7 +235,7 @@ Slots into the existing self-hosted DK dashboard (Discord OAuth, admin-gated). T
 ### 10.1 Field / template editor
 - List the active template's fields with an `active` toggle.
 - Add / edit / **soft-retire** fields — set `active = 0`, never hard-delete, to preserve referential integrity for already-posted bios.
-- Editable per field: `label`, `field_type`, `choices` (choice type only), `required`, `max_len`, `is_headline`, `sort_order`.
+- Editable per field: `label`, `field_type`, `choices` (choice type only), `required`, `max_len`, `is_headline`, `sort_order`, `hint`.
 - Reorder fields via drag → updates `sort_order`.
 - Editing the field set creates/updates the active **template version**.
 - Enforce exactly one `is_headline` field; warn if zero.
