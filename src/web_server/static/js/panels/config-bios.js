@@ -292,7 +292,7 @@ async function renderFieldsTab(pane) {
   function openEditor(field) {
     const editor = pane.querySelector("[data-editor]");
     const isNew = field === null;
-    const f = field || { label: "", field_type: "short", choices: [], required: false, is_headline: false, max_len: 1024, active: true };
+    const f = field || { label: "", field_type: "short", choices: [], required: false, is_headline: false, max_len: 1024, active: true, hint: "" };
     const choicesText = (f.choices || []).join("\n");
     editor.innerHTML = `
       <div class="panel" style="margin-top:1rem; padding:1rem; border:1px solid var(--border, #333);">
@@ -302,6 +302,11 @@ async function renderFieldsTab(pane) {
             <label>Label</label>
             <input type="text" name="label" required value="${esc(f.label)}" maxlength="128" style="width:100%;" />
             <div class="field-hint">What the wizard shows as the prompt — e.g. "Pronouns", "How you found The Golden Meadow".</div>
+          </div>
+          <div class="field">
+            <label>Example / hint <span style="opacity:0.6;">(optional)</span></label>
+            <input type="text" name="hint" value="${esc(f.hint || "")}" maxlength="256" style="width:100%;" placeholder='e.g. "Hollow Knight, or that one indie nobody''s heard of"' />
+            <div class="field-hint">Shown under the prompt to help members know what to write. Leave blank for none.</div>
           </div>
           <div class="field">
             <label>Type</label>
@@ -369,6 +374,7 @@ async function renderFieldsTab(pane) {
         required: fd.get("required") === "on",
         is_headline: fd.get("is_headline") === "on",
         max_len: parseInt(fd.get("max_len"), 10) || 1024,
+        hint: String(fd.get("hint") || "").trim(),
       };
       if (!isNew) body.active = fd.get("active") === "on";
       try {

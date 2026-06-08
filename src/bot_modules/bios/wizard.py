@@ -657,14 +657,23 @@ class WizardSession:
         )
         if self.state.mode == "edit" and prior:
             e.add_field(name="Current", value=prior[:1024], inline=False)
+        # Warm, type-aware guidance instead of a bare "reply with..." line.
         if f.field_type == "paragraph":
-            e.description = "Reply with a longer answer."
+            e.description = "Take a few sentences — no need to be polished, just be you."
         elif f.field_type == "choice":
-            e.description = "Pick one below."
+            e.description = "Pick whichever fits best below — you can change it later."
         else:
-            e.description = "Reply with a short answer."
+            e.description = "A word or a short phrase is perfect."
+        # Admin-authored example, if one is set — the biggest unblocker for
+        # members who aren't sure what to write.
+        if f.hint:
+            e.add_field(name="💡 For example", value=f.hint[:256], inline=False)
         if not f.required:
-            e.add_field(name="​", value="*(optional — Skip is allowed)*", inline=False)
+            e.add_field(
+                name="​",
+                value="*Totally optional — tap **Skip** if you'd rather not.*",
+                inline=False,
+            )
         e.set_footer(text=progress)
         return e
 
