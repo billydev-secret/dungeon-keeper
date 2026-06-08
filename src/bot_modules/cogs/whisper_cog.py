@@ -1056,22 +1056,6 @@ class WhisperDmView(discord.ui.View):
         return v
 
 
-# ── Public announcement view (in-channel Guess) ──────────────────────────────
-class WhisperAnnounceView(discord.ui.View):
-    """View on the public "someone sent X an anonymous message" announcement.
-
-    A single target-gated Guess button so the recipient can guess in-channel
-    with the native avatar picker. The button is a DynamicItem (already
-    registered in ``cog_load``), so clicks keep routing after a restart.
-    """
-
-    def __init__(self, bot: Bot, whisper_id: int) -> None:
-        super().__init__(timeout=None)
-        self.bot = bot
-        self.whisper_id = whisper_id
-        self.add_item(WhisperGuessButton(bot, whisper_id))
-
-
 # ── Guess outcome helper + select view ──────────────────────────────────────
 
 async def _handle_guess_outcome(
@@ -2412,7 +2396,6 @@ class WhisperCog(commands.Cog):
         try:
             feed_msg = await feed_channel.send(
                 format_send_feed_announcement(target.mention),
-                view=WhisperAnnounceView(self.bot, whisper_id),
                 allowed_mentions=discord.AllowedMentions(users=[target]),
             )
             asyncio.create_task(self.refresh_whisper_launcher(interaction.guild.id))
