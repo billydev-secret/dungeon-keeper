@@ -140,21 +140,10 @@ def filter_whispers_by_message(
 
 
 # ── Share-feed message body ──────────────────────────────────────────────────
-
-
-def format_share_feed_message(whisper: Whisper) -> str:
-    """The exact channel-send body posted when a whisper is shared.
-
-    The cog builds this string in two places (``WhisperShareButton.callback``
-    and ``_share_side_effects``); centralizing avoids drift if the wording
-    or emoji changes.
-    """
-    body = safe_codefence_content(whisper.message)
-    return (
-        f"\U0001f4ec A fresh Whisper was shared. Someone sent "
-        f"<@{whisper.target_id}> an anonymous message!\n"
-        f"```{body}```"
-    )
+#
+# The shared-whisper feed post is now a styled embed built by
+# ``bot_modules.whisper.embeds.build_share_feed_embed`` — there is no longer a
+# plain-text body builder here.
 
 
 def format_expose_dm_suffix(sender_label: str) -> str:

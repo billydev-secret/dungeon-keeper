@@ -4,47 +4,98 @@ Discord moderation, community, voice, and analytics bot.
 
 ## Features
 
+> Each entry below is written as a short, advertising-ready blurb. Slash commands and
+> the web dashboard panels that drive each feature are listed in
+> [Slash Commands](#slash-commands) and the dashboard sections further down.
+
 ### Moderation & safety
-- **Jail** — send a member to a private channel with role stripping and restoration on release (`/jail`, `/unjail`); pull/remove others into the jail or ticket conversation.
-- **Tickets** — panel-button-driven private support tickets with `/ticket panel`, claim, escalate, close, reopen, and message context-menu opening.
-- **Warnings** — `/warn`, `/warnings`, `/revokewarn`, plus `/modinfo` for a full per-member mod profile (jail history, warnings, tickets).
-- **Policies** — collaborative policy proposals with open/vote/close/list flow.
-- **Purge** — bulk-delete by count and/or cutoff time.
-- **Privacy** — members can erase all their own data with `/delete_me`; mods can purge a user with `/delete_user`.
+- **Jail** — Send a member to a private intake channel with their roles stripped and automatically restored on release. Pull witnesses in or remove them, and every action lands in a unified `/modinfo` history and audit log.
+- **Tickets** — Panel-button-driven private support channels members open for help, or mods open for a quiet word. Claim, escalate, close, reopen, and generate a full transcript on close — all from persistent buttons that survive restarts.
+- **Warnings** — Document infractions with `/warn`, review them with `/warnings`, and undo with `/revokewarn`, with configurable escalation to admins at a threshold. `/modinfo` rolls jail history, warnings, and tickets into one per-member profile.
+- **AI Moderation** — On-demand AI review of a user, a channel, or a free-form question, backed by a guard model that understands your community's consent norms. Every confirmed or dismissed flag becomes a labeled example that tunes future judgments to your server.
+- **Rules Watch** — A passive, recall-leaning AI monitor that pre-screens public chat with cheap heuristics, then weighs suspicious messages against context signals like mutual history, reciprocity, and stated boundaries. Flags route to a human-reviewed priority queue with one-click confirm/dismiss buttons that grow a server-specific training set.
+- **Spoiler guard** — Images posted in spoiler-required channels without a spoiler flag are removed with a friendly, self-deleting reminder. Bypass roles keep trusted members exempt, and the check never blocks the rest of the message pipeline.
+- **Policies** — Collaborative policy proposals with an open / vote / close / list flow so rule changes are decided in the open. Keeps your moderation team aligned without leaving Discord.
+- **Purge & Privacy** — Bulk-delete messages by count and/or cutoff time with `/purge`. Members can erase all of their own data with `/delete_me`, and mods can fully purge a user with `/delete_user`.
 
 ### XP & analytics
-- **XP system** — earn XP from text, voice, replies, and image posts; configurable level milestones grant roles; channel exclusions; history backfill; level-up + level-5 announcements.
-- **Leaderboards** — `/xp_leaderboards` by source and time window with your own rank.
-- **Activity graphs** — message/XP-over-time charts, drop-off, session burst, and burst-ranking analytics live in the web dashboard.
-- **Reports** — member/role/engagement reports live in the web dashboard; `/quality_leave add/remove/list` tracks members on leave of absence.
-- **Optional web dashboard** — opt-in LAN dashboard (`DASHBOARD_ENABLED=1`) with cached metrics: DAU/MAU, heatmap, channel health, Gini, social graph, sentiment, newcomer funnel, cohort retention, churn risk, mod workload, incidents, NSFW gender distribution, and more. Cache is pre-warmed every hour and refreshed every 15 min.
+- **XP & leveling** — Earn XP from text, replies, voice participation, and reactions on your image posts, with anti-grind multipliers keeping rewards fair. Configurable level milestones grant roles, and level-up and level-5 announcements celebrate progress.
+- **Leaderboards** — `/xp_leaderboards` ranks top earners by source and time window and shows you exactly where you stand. The dashboard adds time-to-level histograms and per-source breakdowns.
+- **Web analytics dashboard** — An opt-in LAN dashboard (`DASHBOARD_ENABLED=1`) with 25+ cached, read-only panels covering engagement, retention, community structure, growth, anomalies, and quality. Caches pre-warm hourly and refresh every 15 minutes so big servers load instantly.
+  - *Engagement & retention:* DAU/MAU stickiness, cohort retention curves, newcomer activation funnel, churn-risk early-warning scores.
+  - *Activity patterns:* 7×24 message heatmap, message-rate trends, join-time distribution, voice stats, activity timeline.
+  - *Community structure:* force-directed interaction graph, animated interaction heatmap, participation Gini/Lorenz, channel-health comparison.
+  - *Growth & onboarding:* invite effectiveness, role growth, time-to-level, greeter response latency.
+  - *Anomalies & at-risk:* message-rate drops, burst ranking, drop-off, session burst, chilling-effect detection.
+  - *Quality & demographics:* per-member quality score, NSFW gender activity, oldest SFW members, reaction analytics.
+- **Reports** — Member, role, and engagement reports live in the dashboard, and `/quality_leave add/remove/list` tracks members on an approved leave of absence so they aren't flagged as inactive.
 
-### Voice
-- **Voice Master** — click a hub channel to spawn your own voice channel; lock/unlock, hide/unhide, rename, user-limit, invite, kick, transfer, claim, owner. Persistent per-user profiles with trust list, block list, and knock-to-join. Hub/category/template/name-blocklist configuration is managed from the web dashboard.
-- **Music** — YouTube and Spotify playback via Lavalink: `/play`, `/skip`, `/shuffle`, `/loop`, `/queue`, `/pause`, `/resume`, `/stop`, `/nowplaying`, `/disconnect`. Mod-only `/247` keeps the bot in a voice channel indefinitely.
+### Voice & music
+- **Voice Master** — Join a hub channel to instantly spawn your own voice room, then lock, hide, rename, set a limit, invite, kick, transfer, or claim it. Per-user profiles persist trust lists, block lists, and knock-to-join across sessions, all configurable from the dashboard.
+- **Music** — YouTube and Spotify playback via Lavalink with a persistent now-playing card and queue: `/play`, `/skip`, `/shuffle`, `/loop`, `/queue`, `/pause`, `/resume`, `/stop`, `/nowplaying`, `/disconnect`. Mod-only `/247` keeps the bot parked in a channel and auto-queues from a playlist when idle.
+
+### Party games
+A 16-game social suite that shares session windows, anonymous audit logging, per-guild
+enable/disable, channel allowlists, and an AI question-bank fallback.
+- **Free For All** — A host poses a question and everyone answers, in chat or through a name-hiding popup modal. Lurk anonymously or jump in as yourself.
+- **Would You Rather** — Multi-round voting where each prompt splits the room between two options. Queue your own scenarios or let the bot generate them, then reveal who picked what.
+- **Never Have I Ever** — Confess or claim innocence as each statement is read aloud. Play with lives for elimination stakes or set lives to zero for casual voting.
+- **Most Likely To** — The room votes on who best fits each prompt and the winner takes a crown. Most crowns after all rounds wins — and yes, you can vote for yourself.
+- **Marry / Fornicate / Kiss** — Get three random names from the player pool and sort them into the three categories. Rename the categories to anything you like for a custom spin.
+- **Two Truths & a Lie** — Submit two truths and a lie, then watch the room vote on which is fake. Earn points for fooling others and for catching their lies.
+- **Truth or Dare** — Classic Truth or Dare with opt-in SFW/NSFW Truth and Dare pools. Turn weighting keeps everyone involved by favoring whoever's been asked least.
+- **Spin the Compliment** — Everyone is matched to one other person and gives them a genuine compliment. Pairings post publicly for a warm moment in the middle of the chaos.
+- **Hot Takes** — Submit spicy anonymous opinions, then rate each one on a 5-step 🧊-to-🔥 temperature scale. The average heat for every take is revealed at the end.
+- **Story Builder** — Write a story together one sentence at a time on alternating turns. Choose blind mode (see only the previous line) for chaos or full visibility for coherence.
+- **Anonymous AMA** — One player takes the hot seat and fields anonymous questions from the room. Run it unfiltered or host-screened, with DM pings when a questioner gets a reply.
+- **Fantasies & Dealbreakers** — Anonymously submit what you'd love or hate, then vote "Same" or "Not for me" on each entry. The host runs as many rounds as the vibe can sustain.
+- **Name Your Price** — Name the secret price it would take you to do a given scenario. Prices reveal low-to-high, then the room votes Most Reasonable and Most Unhinged.
+- **Mt. Rushmore Draft** — Snake-draft your top four picks for a topic, with no duplicates allowed once a pick is gone. Everyone reveals their board and the room votes on the best lineup.
+- **Clapback** — A prompt drops and everyone writes their funniest anonymous one-liner. Answers go head-to-head for votes, and sweeping every vote earns a "CLAPBACK!" bonus.
+- **LegitLibs** — Mad-Libs–style template fill with reveals in parallel (Quiplash) or round-robin (Classic) mode. Four heat tiers run from Flirty to Unhinged.
+
+### Head-to-head & group games
+High-stakes games with server-authoritative hidden state, per-pair cooldowns, audit
+logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
+- **Pressure Cooker** — A 1v1 duel where each press adds 1–15 to a shared gauge. Whoever pushes it past 100 loses — and the winner renames them for 24 hours.
+- **Quickdraw** — A hidden timer counts down to "DRAW!" and the first to hit FIRE wins. Draw early and you instantly lose; if nobody fires in time it's a clean void.
+- **Hot Potato** — A bomb with a hidden fuse passes between players (1v1 or group free-for-all), with a 2-second anti-ping-pong lock. Whoever's holding at detonation is out.
+- **Chicken** — A shared meter climbs toward 100 while everyone decides when to bail. In a duel the first to bail loses; in a group, everyone still holding at the crash goes down together.
+- **Musical Chairs** — 3+ players, one fewer chair each round, and music that plays for a hidden duration before you scramble to SIT. Sit too early and you false-start; last one standing wins.
+
+### Engagement & content
+- **Whisper** — Send an anonymous message to an opted-in member who gets three guesses to name the sender. Share publicly, reply back, or reveal yourself once you're guessed.
+- **Confessions** — Post an anonymous confession via `/confess` to a channel or forum thread, each with anonymous-reply buttons. Replies use either a stable per-thread identity or a fresh ephemeral one, and everything mirrors to a mod-only log.
+- **Starboard** — Reactions with a configured emoji repost high-engagement messages to a dedicated board once they cross a threshold. Self-stars don't count and an NSFW guard keeps age-gated content out of SFW channels.
+- **Quote** — Right-click any message to render it as a styled quote card over the author's avatar, with theme and font pickers. Post it publicly and the bot auto-reacts so great quotes can reach the starboard themselves.
+- **Auto-react** — Automatically drop chosen emoji on images and embeds in configured channels. A frictionless nudge that gets visual content the engagement it deserves.
+- **Needle (auto-thread)** — Automatically spawn a thread from each new message in designated channels, with custom thread names, welcome messages, and status-reaction tracking. Keeps Q&A and discussion channels tidy at a glance.
+- **Bios** — Members build rich, multi-field profiles through an interactive wizard. Finished bios live as persistent cards in a dedicated channel so the community can get to know each other.
+- **Emoji Stealer** — Right-click a message or paste an image URL to upload it as a custom emoji to one of your servers. Build out your emoji library without ever leaving Discord.
+- **Bump Tracker** — Track cooldowns for listing sites like DISBOARD and get pinged the moment each is ready to bump again, with a live status widget. Essential for servers that grow through listing traffic.
+- **Risky Rolls** — Everyone rolls 1–100; the highest unique roll asks a question and the lowest answers. Special rolls unlock variants — 69 opens a room question, 100 lets the winner pick, and 1 triggers two questioners.
+- **Guess** — Consenting members submit an NSFW image that the bot auto-crops with face-excluding AI detection, and the community guesses the submitter from a tight crop. All-time leaderboards track submitters, guessers, accuracy, and the hardest crops.
 
 ### Onboarding & community
-- **Role grants** — `/grant role:<key> member:<@user>` with per-role permission allowlist (e.g. greeters can grant Denizen, mods can grant NSFW/Veteran).
-- **Welcome / leave** — configurable templates, edited and previewed from the web dashboard.
-- **Booster role buttons** — persistent click-to-claim buttons that survive restarts.
-- **Birthday** — `/birthday set` records a member's birthday.
-- **Confessions** — anonymous `/confess` modal posting to a configured channel.
-- **DM requests** — `/dmrequest` notifies mods; full opt-in DM permission system (`/dm_set_mode`, `/dm_status`, `/dm_revoke`, `/dm_help`, `/dm_request_panel_refresh`).
-- **Starboard** — configurable channel, emoji, threshold, exclusion list, and on/off toggle.
-- **Server todo** — `/todo` adds tasks to a shared list.
-- **Watch list** — `/watch add` forwards a member's public posts to your DMs.
+- **Role grants** — `/grant role:<key> member:<@user>` hands out community roles through a per-role permission allowlist (e.g. greeters can grant Denizen, mods can grant NSFW/Veteran). Self-serve role-giving without handing out Manage Roles.
+- **Welcome / leave** — Configurable join and leave messages, edited and previewed live from the dashboard. Make a strong first impression without redeploying.
+- **Booster role buttons** — Persistent click-to-claim buttons for booster perks that survive restarts. Set them up once and they keep working.
+- **Birthday** — Members record their birthday with `/birthday set`, and the bot posts a daily celebration in a configured channel. The message template is customizable and the dashboard previews the next 90 days.
+- **DM permissions** — A full opt-in DM consent system: members pick Open/Ask/Closed modes, requests route through a panel and DM buttons, and acceptance records a bidirectional consent pair. Either side can revoke at any time with mutual notification.
+- **Server todo** — Add tasks to a shared list with `/todo` or the "Add to Todo" message context menu. Mods curate, complete, and filter the list from the dashboard.
+- **Watch list** — `/watch add @user` quietly forwards a member's public posts to your DMs. A lightweight tool for keeping an eye on a situation without a heavy moderation footprint.
 
 ### Wellness
-- **Wellness Guardian** — opt-in via `/wellness setup` (timezone + enforcement mode: gentle / cooldown / slow-mode / gradual). Background tick + active-list + weekly-report loops. Per-user `/away on` and `/away off` auto-reply when mentioned.
+- **Wellness Guardian** — A self-managed boundary tool: opt in, set message and voice caps, schedule blackout windows, and pair with an accountability partner. When you hit a limit the bot applies gentle friction (nudges, cooldowns, slow mode) instead of lockouts, and DMs you a supportive weekly summary.
 
 ### Setup & utilities
-- **`/setup`** — first-time bot setup. Phase 1: creates all bot channels and categories. Phase 2: 6-step wizard for mod/admin roles, jail/ticket categories, and log/transcript channels.
-- **`/help`** — contextual command reference, scoped to your permissions.
-- **`/invite`** / **`/support`** — bot invite link and support server link.
-- **`/reload_cog`** / **`/spotify_authorize`** — owner-only dev commands.
+- **`/setup`** — First-time setup in two phases: provision every bot channel and category, then walk a wizard for mod/admin roles, jail/ticket categories, and log/transcript channels. Get a server fully wired in minutes.
+- **`/help`** — A contextual command reference that only shows the sections your permissions unlock. Newcomers and mods each see exactly what's relevant to them.
+- **`/invite` / `/support`** — Quick links to invite the bot and reach the support server.
+- **Owner tools** — `/reload_cog` hot-reloads an extension and `/spotify_authorize` runs the one-time Spotify auth flow.
 
 ### Background services
-- DB backup loop, voice-XP loop, sentiment-score backfill, health-metrics batch (15 min), reports cache warmer (hourly).
+- DB backup loop, voice-XP loop, sentiment-score backfill, message archive, health-metrics batch (15 min), and reports cache warmer (hourly) keep analytics fresh and data durable without manual intervention.
 
 ## Quick Start
 
@@ -139,6 +190,33 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/wellness setup` — Opt in (timezone + enforcement style)
 - `/wellness away on` / `/wellness away off` — Toggle your away auto-reply
 
+**Party Games**
+- `/games play <game>` — Start a party game in an allowed channel. Games: `ffa`, `wyr`, `nhie`, `mlt`, `mfk`, `twotruths`, `traditional` (Truth or Dare), `compliment`, `hottakes`, `story`, `ama`, `fantasies`, `price`, `rushmore`, `clapback`, `legitlibs`
+- `/games recap` — Recap of the current game-night session
+- `/games consent` — Manage your consent settings for game nights
+- `/games help` / `/games support` — Game list and support link
+- `/games config allow-channel` / `disallow-channel` / `list-channels` — Manage allowed game channels (admin)
+- `/games config audit-channel` — Set/clear the anonymous-submission audit log (admin)
+- `/games config game-status` / `game-end` — Inspect or force-close the active game (mod)
+
+**Head-to-Head & Group Games**
+- `/pressure challenge @user` — Pressure Cooker duel (loser renamed 24h); also `cancel`, `stats`, `revert`, `config`
+- `/quickdraw challenge @user` — Quickdraw duel; also `cancel`, `stats`, `revert`, `config`
+- `/hotpotato challenge @user` — Hot Potato duel; also `cancel`, `stats`, `config`
+- `/hotpotatogroup start` — Hot Potato group free-for-all; also `stats`, `config`
+- `/musicalchairs start` — Musical Chairs, 3+ players; also `stats`, `config`
+- `/chicken start` — Chicken, duel or group; also `stats`, `config`
+
+**Content & Engagement**
+- `/whisper send @user <message>` — Send an anonymous whisper (recipient gets three guesses); also `optin`, `optout`, `sent`, `forget-me`
+- `/bio` — Create or update your profile bio (wizard)
+- `/risky start` — Open a Risky Rolls round in this channel
+- `/guess submit` — Submit an image to start a Guess round; also `optin`, `confess`, `leaderboard`, `prompt`, `round` (mod), `delete`, `setup` (mod)
+- `/steal_emoji <url> <name>` — Add a custom emoji from an image URL; also a **Steal Emoji** message context-menu
+- **Quote** — message context-menu that renders a styled quote card over the author's avatar
+- `/needle add/remove/list` — Manage auto-thread channels (mod)
+- `/bump setup/add/remove/disable/status/log` — Manage listing-site bump reminders (mod)
+
 **Voice (your channel)**
 - `/voice lock` / `/voice unlock` — Lock or unlock your channel
 - `/voice hide` / `/voice unhide` — Hide or reveal your channel
@@ -176,6 +254,13 @@ Most settings are configured through the web dashboard after the bot is running 
 **Watch List** (mod)
 - `/watch add @user` / `/watch remove @user` / `/watch list`
 
+**AI Moderation** (mod)
+- `/ai review @user` — AI review of a member's recent activity
+- `/ai channel` — AI scan of the current channel
+- `/ai scan` — Run an AI moderation sweep
+- `/ai query <question>` — Ask a free-form moderation question
+- *Rules Watch (passive monitoring), prompt testing, and model management live in the web dashboard.*
+
 **Jail & Tickets** (mod)
 - `/setup` — First-time jail/ticket/mod setup
 - `/jail @user [reason]` / `/unjail @user`
@@ -193,7 +278,7 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Configuration** (mod)
 - `/setup` — First-time bot setup: provision channels + walk through role/category config
-- *All other settings (welcome/leave, role grants, XP logging, inactivity prune, spoiler guard, booster roles, AI, channels) are managed from the web dashboard.*
+- *All other settings (welcome/leave, role grants, XP logging, spoiler guard, booster roles, AI moderation & rules watch, auto-react, needle auto-thread, bump tracker, voice master, games content, channels) are managed from the web dashboard.*
 
 **Utility** (mod)
 - `/purge [count] [after]` — Delete messages by count and/or cutoff time
