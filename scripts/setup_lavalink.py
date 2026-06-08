@@ -26,8 +26,8 @@ from bot_modules.services.lavalink_manager import find_java  # noqa: E402
 # (E2EE voice) protocol that Discord now mandates, so voice WebSockets
 # get closed with code 4017 and no audio ever reaches Discord.
 LAVALINK_VERSION = "4.2.2"
-LAVASRC_VERSION = "4.2.0"
-YOUTUBE_PLUGIN_VERSION = "1.18.0"
+LAVASRC_VERSION = "4.8.3"
+YOUTUBE_PLUGIN_VERSION = "1.18.1"
 
 LAVALINK_URL = (
     f"https://github.com/lavalink-devs/Lavalink/releases/download/"
