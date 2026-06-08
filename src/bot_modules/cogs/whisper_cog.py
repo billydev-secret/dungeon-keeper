@@ -66,6 +66,7 @@ from bot_modules.whisper.embeds import (
     build_reply_audit_embed,
     build_reply_report_audit_embed,
     build_report_audit_embed,
+    build_share_feed_embed,
     inbox_option_description,
     inbox_option_label,
 )
@@ -79,7 +80,6 @@ from bot_modules.whisper.logic import (
     format_reply_dm_body,
     format_send_dm_body,
     format_send_feed_announcement,
-    format_share_feed_message,
     fuzzy_score_members,
     inbox_action_buttons,
     inbox_select_placeholder,
@@ -320,6 +320,17 @@ class WhisperGuessButton(
             await interaction.response.send_message(ERROR_GUESS_NO_ATTEMPTS, ephemeral=True)
             return
 
+        # In a guild interaction, use the native avatar/presence picker.
+        # Auto-populated user selects can't resolve guild members from a DM,
+        # so DM clicks fall through to the string-based picker below.
+        if interaction.guild is not None:
+            await interaction.response.send_message(
+                "Guess who sent the Whisper!",
+                ephemeral=True,
+                view=WhisperGuessUserSelectView(self.bot, self.whisper_id),
+            )
+            return
+
         guild = interaction.guild or self.bot.get_guild(whisper.guild_id)
         if guild is None:
             await interaction.response.send_message(
@@ -420,7 +431,7 @@ class WhisperShareButton(
                         log.warning("Failed to delete original announcement on share")
                 try:
                     new_msg = await feed_channel.send(
-                        format_share_feed_message(whisper),
+                        embed=build_share_feed_embed(whisper),
                         allowed_mentions=discord.AllowedMentions.none(),
                     )
                     await asyncio.to_thread(
@@ -1045,6 +1056,22 @@ class WhisperDmView(discord.ui.View):
         return v
 
 
+# ── Public announcement view (in-channel Guess) ──────────────────────────────
+class WhisperAnnounceView(discord.ui.View):
+    """View on the public "someone sent X an anonymous message" announcement.
+
+    A single target-gated Guess button so the recipient can guess in-channel
+    with the native avatar picker. The button is a DynamicItem (already
+    registered in ``cog_load``), so clicks keep routing after a restart.
+    """
+
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.whisper_id = whisper_id
+        self.add_item(WhisperGuessButton(bot, whisper_id))
+
+
 # ── Guess outcome helper + select view ──────────────────────────────────────
 
 async def _handle_guess_outcome(
@@ -1105,6 +1132,63 @@ async def _handle_guess_outcome(
             content=f"Wrong! {outcome.attempts_remaining} guesses left.",
             view=None,
         )
+
+
+# ── Native avatar guess picker (guild-context only) ──────────────────────────
+
+
+class WhisperGuessUserSelect(discord.ui.UserSelect):  # type: ignore[type-arg]
+    """Native member picker (avatars + presence dots) for the guess flow.
+
+    Auto-populated user selects only resolve guild members inside a *guild*
+    interaction, so this is used from in-guild surfaces (the feed announcement
+    Guess button, the inbox). The DM Guess button falls back to the paginated
+    string picker below. Because the native picker isn't limited to the opt-in
+    pool, the selection is validated before any guess attempt is consumed.
+    """
+
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__(
+            placeholder="Pick the sender…", min_values=1, max_values=1
+        )
+        self.bot = bot
+        self.whisper_id = whisper_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guessed = self.values[0]
+        whisper = await asyncio.to_thread(
+            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
+        )
+        if whisper is None:
+            await interaction.response.edit_message(
+                content="Whisper not found.", view=None
+            )
+            return
+        if whisper.solved:
+            await interaction.response.edit_message(
+                content=ERROR_GUESS_ALREADY_SOLVED, view=None
+            )
+            return
+        if whisper.guesses_left <= 0:
+            await interaction.response.edit_message(
+                content=ERROR_GUESS_NO_ATTEMPTS, view=None
+            )
+            return
+        # A stray pick (bot) must not burn an attempt — bail before evaluating.
+        if getattr(guessed, "bot", False):
+            await interaction.response.edit_message(
+                content="That's a bot — pick a real member.", view=None
+            )
+            return
+        await _handle_guess_outcome(interaction, self.bot, whisper, guessed.id)
+
+
+class WhisperGuessUserSelectView(discord.ui.View):
+    def __init__(self, bot: Bot, whisper_id: int) -> None:
+        super().__init__(timeout=120)
+        self.bot = bot
+        self.whisper_id = whisper_id
+        self.add_item(WhisperGuessUserSelect(bot, whisper_id))
 
 
 _GUESS_PAGE_SIZE = 25
@@ -1301,7 +1385,7 @@ async def _share_side_effects(bot: Bot, whisper: Whisper) -> None:
             log.warning("Failed to delete original announcement on share")
     try:
         new_msg = await feed_channel.send(
-            format_share_feed_message(whisper),
+            embed=build_share_feed_embed(whisper),
             allowed_mentions=discord.AllowedMentions.none(),
         )
         await asyncio.to_thread(
@@ -2328,6 +2412,7 @@ class WhisperCog(commands.Cog):
         try:
             feed_msg = await feed_channel.send(
                 format_send_feed_announcement(target.mention),
+                view=WhisperAnnounceView(self.bot, whisper_id),
                 allowed_mentions=discord.AllowedMentions(users=[target]),
             )
             asyncio.create_task(self.refresh_whisper_launcher(interaction.guild.id))

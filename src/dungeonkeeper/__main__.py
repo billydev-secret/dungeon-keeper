@@ -182,6 +182,7 @@ def main() -> None:
         "bot_modules.cogs.whisper_cog",
         "bot_modules.cogs.needle_cog",
         "bot_modules.cogs.auto_react_cog",
+        "bot_modules.cogs.bump_tracker_cog",
         "bot_modules.cogs.emoji_stealer_cog",
         "bot_modules.cogs.risky_roll_cog",
         "bot_modules.cogs.pressure_cooker",

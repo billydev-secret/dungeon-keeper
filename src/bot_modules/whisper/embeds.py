@@ -134,6 +134,30 @@ def build_reply_report_audit_embed(
     return embed
 
 
+# ── Shared-whisper feed embed ────────────────────────────────────────────────
+
+
+def build_share_feed_embed(whisper: Whisper) -> discord.Embed:
+    """The public "a fresh whisper was shared" feed post, as a styled embed.
+
+    Replaces the old plain-text + code-fence body with an embed (accent bar,
+    bold heading, message rendered as a clean quote). The body is
+    markdown-escaped rather than code-fenced so it reads like an ordinary
+    quote while still preventing anonymous content from injecting headers,
+    blockquotes, links, or other formatting into the public feed.
+    """
+    safe = discord.utils.escape_markdown(whisper.message)
+    embed = discord.Embed(
+        title="\U0001f4ec A fresh Whisper was shared",
+        description=(
+            f"Someone sent <@{whisper.target_id}> an anonymous message!\n\n"
+            f"“{safe}”"
+        ),
+        color=discord.Color.blurple(),
+    )
+    return embed
+
+
 # ── Inbox embed ──────────────────────────────────────────────────────────────
 
 

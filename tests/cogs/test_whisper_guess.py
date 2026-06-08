@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import discord
 import pytest
@@ -100,10 +100,40 @@ async def test_guess_button_no_guild_rejected():
 
 
 @pytest.mark.asyncio
-async def test_guess_button_role_not_configured_rejected():
+async def test_guess_button_guild_context_uses_user_select():
+    """In a guild interaction the native avatar picker (UserSelect) is shown
+    instead of the string-based picker."""
+    from bot_modules.cogs.whisper_cog import (
+        WhisperGuessUserSelect,
+        WhisperGuessUserSelectView,
+    )
     button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
     interaction.guild = MagicMock()
+    interaction.response.send_message = AsyncMock()
+
+    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()):
+        await button.callback(interaction)
+
+    _, kwargs = interaction.response.send_message.call_args
+    assert kwargs.get("ephemeral") is True
+    view = kwargs["view"]
+    assert isinstance(view, WhisperGuessUserSelectView)
+    assert any(isinstance(c, WhisperGuessUserSelect) for c in view.children)
+
+
+# The string-based picker (with role/member lookup + pagination) is the DM
+# fallback now — auto-populated user selects can't resolve guild members from a
+# DM. These tests run in DM context (interaction.guild is None; the guild is
+# resolved server-side via bot.get_guild).
+
+
+@pytest.mark.asyncio
+async def test_guess_button_role_not_configured_rejected():
+    button = _make_guess_button()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.guild = None
+    button.bot.get_guild = MagicMock(return_value=MagicMock())
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
@@ -119,8 +149,10 @@ async def test_guess_button_role_not_configured_rejected():
 async def test_guess_button_role_missing_rejected():
     button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.guild = MagicMock()
-    interaction.guild.get_role = MagicMock(return_value=None)
+    interaction.guild = None
+    guild = MagicMock()
+    guild.get_role = MagicMock(return_value=None)
+    button.bot.get_guild = MagicMock(return_value=guild)
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
@@ -136,10 +168,12 @@ async def test_guess_button_role_missing_rejected():
 async def test_guess_button_empty_member_list_rejected():
     button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.guild = MagicMock()
+    interaction.guild = None
+    guild = MagicMock()
     role = MagicMock()
     role.members = [FakeMember(id=TARGET)]  # only the target themselves
-    interaction.guild.get_role = MagicMock(return_value=role)
+    guild.get_role = MagicMock(return_value=role)
+    button.bot.get_guild = MagicMock(return_value=guild)
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
@@ -151,17 +185,19 @@ async def test_guess_button_empty_member_list_rejected():
     assert "no other" in args[0].lower()
 
 
-# ── Button-level: happy path ──────────────────────────────────────────────────
+# ── Button-level: happy path (DM string picker) ───────────────────────────────
 
 @pytest.mark.asyncio
 async def test_guess_button_small_list_sends_select_no_pagination():
     from bot_modules.cogs.whisper_cog import WhisperGuessSelectView, WhisperGuessMemberSelect
     button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.guild = MagicMock()
+    interaction.guild = None
+    guild = MagicMock()
     role = MagicMock()
     role.members = _make_members(5)
-    interaction.guild.get_role = MagicMock(return_value=role)
+    guild.get_role = MagicMock(return_value=role)
+    button.bot.get_guild = MagicMock(return_value=guild)
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
@@ -185,10 +221,12 @@ async def test_guess_button_large_list_sends_select_with_pagination():
     from bot_modules.cogs.whisper_cog import WhisperGuessSelectView
     button = _make_guess_button()
     interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.guild = MagicMock()
+    interaction.guild = None
+    guild = MagicMock()
     role = MagicMock()
     role.members = _make_members(30)
-    interaction.guild.get_role = MagicMock(return_value=role)
+    guild.get_role = MagicMock(return_value=role)
+    button.bot.get_guild = MagicMock(return_value=guild)
     interaction.response.send_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
@@ -201,6 +239,58 @@ async def test_guess_button_large_list_sends_select_with_pagination():
     buttons = [c for c in view.children if isinstance(c, discord.ui.Button)]
     # prev + next pagination buttons + filter button
     assert len(buttons) == 3
+
+
+# ── Native avatar picker (UserSelect) callback ───────────────────────────────
+
+def _make_user_select(whisper_id: int = 42):
+    from bot_modules.cogs.whisper_cog import WhisperGuessUserSelect
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    return WhisperGuessUserSelect(bot, whisper_id)
+
+
+@pytest.mark.asyncio
+async def test_user_select_rejects_bot_without_consuming_guess():
+    sel = _make_user_select()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.edit_message = AsyncMock()
+    picked_bot = FakeMember(id=4242, bot=True)
+
+    with patch.object(type(sel), "values", new_callable=PropertyMock,
+                      return_value=[picked_bot]), \
+         patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._do_record_guess") as rec:
+        await sel.callback(interaction)
+
+    rec.assert_not_called()  # a stray bot pick must not burn an attempt
+    edit_kwargs = interaction.response.edit_message.call_args.kwargs
+    assert edit_kwargs["view"] is None
+    assert "bot" in edit_kwargs["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_user_select_correct_records_and_posts_to_feed():
+    sel = _make_user_select()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.guild = MagicMock()
+    feed_channel = MagicMock(spec=discord.TextChannel)
+    feed_channel.send = AsyncMock()
+    interaction.guild.get_channel = MagicMock(return_value=feed_channel)
+    interaction.response.edit_message = AsyncMock()
+    cfg_mock = MagicMock(channel_id=FEED)
+
+    with patch.object(type(sel), "values", new_callable=PropertyMock,
+                      return_value=[FakeMember(id=SENDER)]), \
+         patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg_mock), \
+         patch("bot_modules.cogs.whisper_cog._do_record_guess") as rec:
+        await sel.callback(interaction)
+
+    rec.assert_called_once_with(":memory:", whisper_id=42, guessed_id=SENDER, correct=True)
+    feed_channel.send.assert_awaited_once()
+    edit_kwargs = interaction.response.edit_message.call_args.kwargs
+    assert edit_kwargs["view"] is None
 
 
 # ── Navigation ────────────────────────────────────────────────────────────────

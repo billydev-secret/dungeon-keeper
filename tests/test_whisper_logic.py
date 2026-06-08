@@ -27,6 +27,7 @@ from bot_modules.whisper.embeds import (
     build_reply_audit_embed,
     build_reply_report_audit_embed,
     build_report_audit_embed,
+    build_share_feed_embed,
     inbox_option_description,
     inbox_option_label,
 )
@@ -40,7 +41,6 @@ from bot_modules.whisper.logic import (
     format_reply_dm_body,
     format_send_dm_body,
     format_send_feed_announcement,
-    format_share_feed_message,
     format_time_ago,
     fuzzy_score_members,
     inbox_action_buttons,
@@ -266,23 +266,25 @@ def test_filter_whispers_no_match_empty():
     assert filter_whispers_by_message(ws, "zzz") == []
 
 
-# ── format_share_feed_message ─────────────────────────────────────────
+# ── build_share_feed_embed ────────────────────────────────────────────
 
 
-def test_format_share_feed_message_includes_target_mention():
+def test_build_share_feed_embed_mentions_target_and_message():
     w = _whisper(target_id=42, message="secret")
-    body = format_share_feed_message(w)
-    assert "<@42>" in body
-    assert "```secret```" in body
+    emb = build_share_feed_embed(w)
+    assert "fresh Whisper was shared" in (emb.title or "")
+    assert "<@42>" in (emb.description or "")
+    assert "secret" in (emb.description or "")
 
 
-def test_format_share_feed_message_escapes_codefence():
-    w = _whisper(message="boom ``` evil")
-    body = format_share_feed_message(w)
-    # Triple backticks inside the message get homoglyphed so they can't
-    # close the outer codefence.
-    assert body.count("```") == 2
-    assert "ʼʼʼ" in body
+def test_build_share_feed_embed_escapes_markdown():
+    # Headers / formatting in anonymous content must not render in the
+    # public feed — escape_markdown backslash-escapes them.
+    w = _whisper(message="# big *bold*")
+    emb = build_share_feed_embed(w)
+    desc = emb.description or ""
+    assert "\\# big" in desc
+    assert "\\*bold\\*" in desc
 
 
 # ── format_expose_dm_suffix ────────────────────────────────────────────

@@ -16,6 +16,7 @@ from bot_modules.core.db_utils import (
     get_config_value,
     get_grant_permissions,
     get_grant_roles,
+    open_db,
     remove_grant_permission,
     set_config_value,
     upsert_grant_role,
@@ -74,6 +75,15 @@ from bot_modules.cogs.needle_cog import (
     _get_global_config as _needle_get_global_config,
     _list_channels as _needle_list_channels,
     _upsert_channel as _needle_upsert_channel,
+)
+from bot_modules.cogs.bump_tracker_cog import (
+    _add_site as _bump_add_site,
+    _get_config as _bump_get_config,
+    _get_all_logs as _bump_get_all_logs,
+    _list_sites as _bump_list_sites,
+    _log_bump as _bump_log_bump,
+    _remove_site as _bump_remove_site,
+    _upsert_config as _bump_upsert_config,
 )
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
@@ -327,6 +337,41 @@ def _auto_react_section(conn, guild_id: int) -> list:
         }
         for r in list_auto_react_rules_for_guild_with_conn(conn, guild_id)
     ]
+
+
+def _bump_tracker_section(conn, guild_id: int) -> dict:
+    import time as _time
+    cfg = _bump_get_config(conn, guild_id)
+    logs = _bump_get_all_logs(conn, guild_id)
+    now = _time.time()
+    sites = []
+    for r in logs:
+        bumped_at = r["bumped_at"]
+        cooldown = r["cooldown_seconds"]
+        if bumped_at is None:
+            ready = True
+            seconds_remaining = 0
+        else:
+            elapsed = now - bumped_at
+            ready = elapsed >= cooldown
+            seconds_remaining = max(0, int(cooldown - elapsed))
+        sites.append({
+            "site_name": r["site_name"],
+            "cooldown_seconds": cooldown,
+            "bumped_at": bumped_at,
+            "ready": ready,
+            "seconds_remaining": seconds_remaining,
+            "notified": bool(r["notified"]) if r["notified"] is not None else False,
+        })
+    if cfg is None:
+        return {"configured": False, "enabled": False, "channel_id": None, "role_id": None, "sites": sites}
+    return {
+        "configured": True,
+        "enabled": bool(cfg["enabled"]),
+        "channel_id": str(cfg["channel_id"]) if cfg["channel_id"] else None,
+        "role_id": str(cfg["role_id"]) if cfg["role_id"] else None,
+        "sites": sites,
+    }
 
 
 # ── Confessions config helper ─────────────────────────────────────────
@@ -590,6 +635,7 @@ async def get_config(
                 "risky": _risky_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
                 "auto_react": _auto_react_section(conn, guild_id),
+                "bump_tracker": _bump_tracker_section(conn, guild_id),
             }
 
     return await run_query(_q)
@@ -1508,6 +1554,97 @@ async def remove_auto_react(
 
     def _q():
         remove_auto_react_rule(ctx.db_path, guild_id, int(channel_id))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+# ── Bump tracker config ──────────────────────────────────────────────
+
+
+class BumpTrackerConfigUpdate(BaseModel):
+    channel_id: str | None = None
+    role_id: str | None = None
+    enabled: bool | None = None
+
+
+class BumpTrackerSiteUpdate(BaseModel):
+    cooldown_hours: float
+
+
+@router.put("/config/bump-tracker")
+async def update_bump_tracker(
+    request: Request,
+    body: BumpTrackerConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            _bump_upsert_config(
+                conn,
+                guild_id,
+                channel_id=int(body.channel_id) if body.channel_id else None,
+                role_id=int(body.role_id) if body.role_id else None,
+                enabled=body.enabled,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.put("/config/bump-tracker/sites/{site_name}")
+async def update_bump_tracker_site(
+    site_name: str,
+    request: Request,
+    body: BumpTrackerSiteUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            _bump_add_site(conn, guild_id, site_name, int(body.cooldown_hours * 3600))
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/bump-tracker/sites/{site_name}")
+async def delete_bump_tracker_site(
+    site_name: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            _bump_remove_site(conn, guild_id, site_name)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.post("/config/bump-tracker/sites/{site_name}/log")
+async def log_bump_tracker_bump(
+    site_name: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            sites = [r["site_name"] for r in _bump_list_sites(conn, guild_id)]
+            if site_name not in sites:
+                raise HTTPException(status_code=404, detail="Site not found")
+            _bump_log_bump(conn, guild_id, site_name)
         return {"ok": True}
 
     return await run_query(_q)
