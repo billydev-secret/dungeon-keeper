@@ -22,6 +22,11 @@ from bot_modules.core.db_utils import (
     set_config_value,
     upsert_grant_role,
 )
+from bot_modules.services.message_store import (
+    SUPPORTED_STORAGE_LEVELS,
+    STORAGE_LEVEL_NONE,
+    purge_guild_message_content,
+)
 from bot_modules.services.auto_delete_service import (
     format_duration_seconds as _fmt_dur,
 )
@@ -460,6 +465,16 @@ async def get_config(
                         conn, "booster_swatch_dir", guild_id=guild_id
                     ),
                 },
+                "privacy": {
+                    # "none" (default) keeps only derivations (XP/sentiment/
+                    # interactions); "all" archives raw message content.
+                    "message_storage_level": _str_val(
+                        conn,
+                        "message_storage_level",
+                        STORAGE_LEVEL_NONE,
+                        guild_id=guild_id,
+                    ),
+                },
                 "welcome": {
                     "welcome_channel_id": str(
                         _int_val(conn, "welcome_channel_id", guild_id=guild_id)
@@ -705,6 +720,50 @@ async def update_global(
     result = await run_query(_q)
     # tz_offset_hours, mod_channel_id, bypass_role_ids, recorded_bot_user_ids are
     # read per-guild (guild_config snapshot or fresh tz read); refresh the cache.
+    ctx.invalidate_guild_config(guild_id)
+    return result
+
+
+class PrivacyConfigUpdate(BaseModel):
+    message_storage_level: str | None = None
+
+
+@router.put("/config/privacy")
+async def update_privacy(
+    request: Request,
+    body: PrivacyConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Set the message-content storage level for the active guild.
+
+    Switching to ``none`` immediately purges this guild's already-stored
+    message content (text/attachments/embeds) while leaving every derivation
+    (XP, sentiment scores, interactions, member activity) intact.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    level = body.message_storage_level
+    if level is None:
+        return {"ok": True, "purged": 0}
+    if level not in SUPPORTED_STORAGE_LEVELS:
+        raise HTTPException(
+            400,
+            f"Unsupported storage level {level!r}; "
+            f"expected one of {sorted(SUPPORTED_STORAGE_LEVELS)}",
+        )
+
+    def _q():
+        with ctx.open_db() as conn:
+            set_config_value(conn, "message_storage_level", level, guild_id)
+            purged = 0
+            if level == STORAGE_LEVEL_NONE:
+                purged = purge_guild_message_content(conn, guild_id)
+        return {"ok": True, "purged": purged}
+
+    result = await run_query(_q)
+    # on_message reads the level via ctx.guild_config(gid); refresh the snapshot
+    # so the next message respects the new level without a restart.
     ctx.invalidate_guild_config(guild_id)
     return result
 

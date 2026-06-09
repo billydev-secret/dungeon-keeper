@@ -182,6 +182,7 @@ def test_guild_config_member_is_mod_matches_mod_or_admin_role():
         spoiler_required_channels=frozenset(),
         bypass_role_ids=frozenset(),
         recorded_bot_user_ids=frozenset(),
+        message_storage_level="none",
         xp_excluded_channel_ids=frozenset(),
         xp_grant_allowed_user_ids=frozenset(),
         level_5_role_id=0,
@@ -189,6 +190,7 @@ def test_guild_config_member_is_mod_matches_mod_or_admin_role():
         level_up_log_channel_id=0,
         xp_settings=DEFAULT_XP_SETTINGS,
         grant_roles={},
+        auto_role_ids=frozenset(),
     )
 
     def _member_with_role_ids(*role_ids: int) -> MagicMock:

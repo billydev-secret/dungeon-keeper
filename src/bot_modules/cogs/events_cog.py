@@ -115,15 +115,15 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                 if not msgs:
                     return
                 with ctx.open_db() as conn:
+                    gcfg = ctx.guild_config(g.id)
+                    retain = gcfg.retains_content
                     for msg in msgs:
                         msg_ts = msg.created_at.timestamp() if msg.created_at else time.time()
                         sentiment, emotion = score_text(msg.content)
                         mention_ids = (
                             []
                             if msg.author.bot
-                            else _message_mention_ids(
-                                ctx.guild_config(g.id).recorded_bot_user_ids, msg
-                            )
+                            else _message_mention_ids(gcfg.recorded_bot_user_ids, msg)
                         )
                         reply_to_id = (
                             msg.reference.message_id
@@ -147,11 +147,16 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                             content=_archived_message_content(msg),
                             reply_to_id=reply_to_id,
                             ts=int(msg_ts),
-                            attachment_urls=[a.url for a in msg.attachments],
+                            attachment_urls=[a.url for a in msg.attachments]
+                            if retain
+                            else [],
                             mention_ids=mention_ids,
                             sentiment=sentiment,
                             emotion=emotion,
-                            embeds=[_discord_embed_to_dict(e) for e in msg.embeds],
+                            embeds=[_discord_embed_to_dict(e) for e in msg.embeds]
+                            if retain
+                            else (),
+                            retain_content=retain,
                         )
                         for reaction in msg.reactions:
                             set_reaction_count(
@@ -351,6 +356,10 @@ class EventsCog(commands.Cog):
             return
         cfg = self.ctx.guild_config(message.guild.id)
         is_bot_author = message.author.bot
+        # At storage level "none" (the default) content/media are dropped, so
+        # skip building the attachment/embed payloads that store_message would
+        # discard. Derivations (sentiment/mentions/XP) are still computed below.
+        retain = cfg.retains_content
 
         message_ts = (
             message.created_at.timestamp() if message.created_at else time.time()
@@ -359,7 +368,7 @@ class EventsCog(commands.Cog):
         reply_to_id: int | None = None
         if message.reference and message.reference.message_id:
             reply_to_id = message.reference.message_id
-        attachment_urls = [a.url for a in message.attachments]
+        attachment_urls = [a.url for a in message.attachments] if retain else []
 
         if is_bot_author:
             sentiment, emotion = await asyncio.to_thread(score_text, message.content)
@@ -385,7 +394,10 @@ class EventsCog(commands.Cog):
                     mention_ids=[],
                     sentiment=sentiment,
                     emotion=emotion,
-                    embeds=[_discord_embed_to_dict(e) for e in message.embeds],
+                    embeds=[_discord_embed_to_dict(e) for e in message.embeds]
+                    if retain
+                    else (),
+                    retain_content=retain,
                 )
                 if sentiment is not None:
                     conn.execute(
@@ -445,7 +457,10 @@ class EventsCog(commands.Cog):
                     ts=int(message_ts),
                     attachment_urls=attachment_urls,
                     mention_ids=mention_ids,
-                    embeds=[_discord_embed_to_dict(e) for e in message.embeds],
+                    embeds=[_discord_embed_to_dict(e) for e in message.embeds]
+                    if retain
+                    else (),
+                    retain_content=retain,
                 )
                 upsert_known_user(
                     conn,
@@ -514,7 +529,10 @@ class EventsCog(commands.Cog):
                 mention_ids=mention_ids,
                 sentiment=sentiment,
                 emotion=emotion,
-                embeds=[_discord_embed_to_dict(e) for e in message.embeds],
+                embeds=[_discord_embed_to_dict(e) for e in message.embeds]
+                if retain
+                else (),
+                retain_content=retain,
             )
 
             if sentiment is not None:

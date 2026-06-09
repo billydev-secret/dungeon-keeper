@@ -6,6 +6,7 @@ export function mount(container) {
   (async () => {
     const [config, channels, categories, roles] = await Promise.all([loadConfig(), loadChannels(), loadCategories(), loadRoles()]);
     const m = config.moderation;
+    let currentStorage = (config.privacy && config.privacy.message_storage_level) || "none";
 
     container.innerHTML = `
       <div class="panel">
@@ -61,6 +62,14 @@ export function mount(container) {
             <input type="number" name="warning_threshold" min="1" max="99" value="${m.warning_threshold}" />
             <div class="field-hint">Number of active warnings before auto-action</div>
           </div>
+          <div class="field">
+            <label>Message Content Storage</label>
+            <select name="message_storage_level">
+              <option value="none" ${currentStorage === "none" ? "selected" : ""}>None — don't store message text (default)</option>
+              <option value="all" ${currentStorage === "all" ? "selected" : ""}>All — archive full message content</option>
+            </select>
+            <div class="field-hint">Whether message text, attachments, and embeds are kept. XP, sentiment, and activity stats are always retained either way. Switching to <strong>None</strong> permanently erases this server's already-stored message content.</div>
+          </div>
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
         </form>
       </div>
@@ -88,7 +97,19 @@ export function mount(container) {
           ticket_notify_on_create: fd.get("ticket_notify_on_create"),
           warning_threshold: parseInt(fd.get("warning_threshold")) || 3,
         });
-        showStatus(status, true);
+        // Storage level uses a dedicated endpoint (switching to "none" purges
+        // existing content). Only call it when the value actually changed so a
+        // routine moderation save doesn't re-trigger the purge.
+        const newStorage = fd.get("message_storage_level");
+        let note = "";
+        if (newStorage !== currentStorage) {
+          const res = await apiPut("/api/config/privacy", { message_storage_level: newStorage });
+          if (newStorage === "none" && res && res.purged > 0) {
+            note = ` — erased ${res.purged} stored message${res.purged === 1 ? "" : "s"}`;
+          }
+          currentStorage = newStorage;
+        }
+        showStatus(status, true, "Saved" + note);
       } catch (err) {
         showStatus(status, false, err.message);
       }
