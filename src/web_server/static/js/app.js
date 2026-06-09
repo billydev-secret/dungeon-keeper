@@ -408,6 +408,14 @@ function parseHash() {
 
 // ── Render nav ──────────────────────────────────────────────────────
 
+// Return a copy of the items, sorted alphabetically by label (case-insensitive).
+// Copies rather than mutating so the source SECTIONS order is preserved.
+function byLabel(items) {
+  return [...(items || [])].sort((a, b) =>
+    (a.label || "").localeCompare(b.label || "", undefined, { sensitivity: "base" })
+  );
+}
+
 function makeNavItem(item, activeId, { isSubitem = false } = {}) {
   const btn = document.createElement("button");
   btn.className = "nav-item" + (isSubitem ? " is-subitem" : "");
@@ -465,8 +473,8 @@ function renderNav(activeId) {
 
     const children = [];
 
-    // Top-level items (rendered before any subgroup)
-    for (const item of sec.items || []) {
+    // Top-level items (rendered before any subgroup), alphabetized by label
+    for (const item of byLabel(sec.items)) {
       const el = makeNavItem(item, activeId);
       sidebarItemsEl.appendChild(el);
       children.push(el);
@@ -495,7 +503,7 @@ function renderNav(activeId) {
 
         sidebarItemsEl.appendChild(subLabel);
         children.push(subLabel);
-        for (const item of g.items) {
+        for (const item of byLabel(g.items)) {
           const el = makeNavItem(item, activeId, { isSubitem: true });
           if (!subgroupActive) el.classList.add("subgroup-hidden");
           sidebarItemsEl.appendChild(el);
