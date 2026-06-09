@@ -81,16 +81,44 @@ def _upsert_config(
 
 
 def _add_site(
-    conn: sqlite3.Connection, guild_id: int, site_name: str, cooldown_seconds: int
+    conn: sqlite3.Connection,
+    guild_id: int,
+    site_name: str,
+    cooldown_seconds: int,
+    *,
+    detector_bot_id: int = 0,
+    detector_pattern: str = "",
 ) -> None:
     conn.execute(
         """
-        INSERT INTO bump_tracker_sites (guild_id, site_name, cooldown_seconds)
-        VALUES (?, ?, ?)
-        ON CONFLICT (guild_id, site_name) DO UPDATE SET cooldown_seconds = excluded.cooldown_seconds
+        INSERT INTO bump_tracker_sites
+            (guild_id, site_name, cooldown_seconds, detector_bot_id, detector_pattern)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (guild_id, site_name) DO UPDATE SET
+            cooldown_seconds = excluded.cooldown_seconds,
+            detector_bot_id  = excluded.detector_bot_id,
+            detector_pattern = excluded.detector_pattern
         """,
-        (guild_id, site_name, cooldown_seconds),
+        (guild_id, site_name, cooldown_seconds, detector_bot_id, detector_pattern),
     )
+
+
+def _set_detector(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    site_name: str,
+    detector_bot_id: int,
+    detector_pattern: str,
+) -> bool:
+    cur = conn.execute(
+        """
+        UPDATE bump_tracker_sites
+        SET detector_bot_id = ?, detector_pattern = ?
+        WHERE guild_id = ? AND site_name = ?
+        """,
+        (detector_bot_id, detector_pattern, guild_id, site_name),
+    )
+    return cur.rowcount > 0
 
 
 def _remove_site(conn: sqlite3.Connection, guild_id: int, site_name: str) -> bool:
@@ -107,7 +135,24 @@ def _remove_site(conn: sqlite3.Connection, guild_id: int, site_name: str) -> boo
 
 def _list_sites(conn: sqlite3.Connection, guild_id: int) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT site_name, cooldown_seconds FROM bump_tracker_sites WHERE guild_id = ? ORDER BY site_name",
+        """
+        SELECT site_name, cooldown_seconds, detector_bot_id, detector_pattern
+        FROM bump_tracker_sites WHERE guild_id = ? ORDER BY site_name
+        """,
+        (guild_id,),
+    ).fetchall()
+
+
+def _get_sites_with_detectors(
+    conn: sqlite3.Connection, guild_id: int
+) -> list[sqlite3.Row]:
+    """Return sites that have a detector bot configured."""
+    return conn.execute(
+        """
+        SELECT site_name, detector_bot_id, detector_pattern
+        FROM bump_tracker_sites
+        WHERE guild_id = ? AND detector_bot_id != 0
+        """,
         (guild_id,),
     ).fetchall()
 
@@ -297,29 +342,25 @@ async def _refresh_widget(
         return
 
     embed = _build_widget_embed(statuses)
-    new_id: int | None = None
 
+    # Delete the old widget (silently) so the new one appears at the bottom.
     if widget_message_id:
         try:
-            msg = await channel.fetch_message(widget_message_id)
-            await msg.edit(embed=embed)
-            last_widget_update[guild_id] = time.time()
-            return
-        except discord.NotFound:
+            old = await channel.fetch_message(widget_message_id)
+            await old.delete()
+        except (discord.NotFound, discord.HTTPException):
             pass
-        except discord.HTTPException as exc:
-            log.warning("bump_tracker: failed to edit widget in %d: %s", channel_id, exc)
-            return
 
     try:
         msg = await channel.send(embed=embed)
-        new_id = msg.id
-        last_widget_update[guild_id] = time.time()
     except discord.HTTPException as exc:
         log.warning("bump_tracker: failed to post widget in %d: %s", channel_id, exc)
         return
 
-    if new_id:
+    last_widget_update[guild_id] = time.time()
+
+    new_id = msg.id
+    if new_id != widget_message_id:
         def _save_id():
             with open_db(db_path) as conn:
                 _upsert_config(conn, guild_id, widget_message_id=new_id)
@@ -554,6 +595,121 @@ class BumpTrackerCog(commands.Cog):
 
         await asyncio.to_thread(_q)
         await interaction.response.send_message("Bump tracker disabled.", ephemeral=True)
+
+    # ── /bump set-detector ────────────────────────────────────────────────
+
+    @bump.command(
+        name="set-detector",
+        description="Configure auto-detection for a site by watching its bot's confirmation message.",
+    )
+    @app_commands.describe(
+        name="Site to configure detection for.",
+        bot_id="User ID of the bot that posts the bump confirmation (e.g. 302050872383242240 for DISBOARD).",
+        pattern='Text to match in the bot\'s message (e.g. "Bump done"). Leave blank to match any message from that bot.',
+    )
+    @app_commands.autocomplete(name=_site_autocomplete)
+    async def bump_set_detector(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        bot_id: str,
+        pattern: str = "",
+    ) -> None:
+        assert interaction.guild is not None
+        guild_id = interaction.guild.id
+
+        try:
+            bot_id_int = int(bot_id)
+        except ValueError:
+            await interaction.response.send_message(
+                "Bot ID must be a numeric Discord user ID.", ephemeral=True
+            )
+            return
+
+        def _q():
+            with open_db(self.ctx.db_path) as conn:
+                return _set_detector(conn, guild_id, name, bot_id_int, pattern.strip())
+
+        updated = await asyncio.to_thread(_q)
+        if not updated:
+            await interaction.response.send_message(
+                f"No site named **{name}** found.", ephemeral=True
+            )
+            return
+
+        if pattern.strip():
+            await interaction.response.send_message(
+                f"Detection set for **{name}**: watching bot `{bot_id_int}` for `{pattern.strip()}`.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"Detection set for **{name}**: watching bot `{bot_id_int}` (any message).",
+                ephemeral=True,
+            )
+
+    # ── on_message — auto-detect bumps ───────────────────────────────────
+
+    @commands.Cog.listener("on_message")
+    async def _on_message(self, message: discord.Message) -> None:
+        if not message.author.bot:
+            return
+        if not message.guild:
+            return
+
+        guild_id = message.guild.id
+
+        def _load():
+            with open_db(self.ctx.db_path) as conn:
+                cfg = _get_config(conn, guild_id)
+                if cfg is None or not cfg["enabled"] or not cfg["channel_id"]:
+                    return None, []
+                if message.channel.id != cfg["channel_id"]:
+                    return None, []
+                sites = _get_sites_with_detectors(conn, guild_id)
+                return cfg, sites
+
+        cfg, detector_sites = await asyncio.to_thread(_load)
+        if cfg is None or not detector_sites:
+            return
+
+        matched_site: str | None = None
+        for site in detector_sites:
+            if message.author.id != site["detector_bot_id"]:
+                continue
+            pattern = site["detector_pattern"]
+            if pattern:
+                content = message.content or ""
+                embed_text = " ".join(
+                    e.description or "" for e in message.embeds if e.description
+                )
+                if pattern.lower() not in content.lower() and pattern.lower() not in embed_text.lower():
+                    continue
+            matched_site = site["site_name"]
+            break
+
+        if matched_site is None:
+            return
+
+        def _do_log():
+            with open_db(self.ctx.db_path) as conn:
+                _log_bump(conn, guild_id, matched_site)  # type: ignore[arg-type]
+                logs = _get_all_logs(conn, guild_id)
+                return logs
+
+        log_rows = await asyncio.to_thread(_do_log)
+        log.info("bump_tracker: auto-detected bump for %r in guild %d", matched_site, guild_id)
+
+        statuses = [
+            _SiteStatus(
+                name=r["site_name"],
+                cooldown_seconds=r["cooldown_seconds"],
+                bumped_at=r["bumped_at"],
+                notified=r["notified"] if r["notified"] is not None else 0,
+            )
+            for r in log_rows
+        ]
+        await _refresh_widget(self.bot, self.ctx.db_path, dict(cfg), statuses, {})
 
 
 async def setup(bot: Bot) -> None:

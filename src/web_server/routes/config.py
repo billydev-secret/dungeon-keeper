@@ -93,6 +93,7 @@ from bot_modules.cogs.bump_tracker_cog import (
     _list_sites as _bump_list_sites,
     _log_bump as _bump_log_bump,
     _remove_site as _bump_remove_site,
+    _set_detector as _bump_set_detector,
     _upsert_config as _bump_upsert_config,
 )
 
@@ -352,8 +353,18 @@ def _auto_react_section(conn, guild_id: int) -> list:
 def _bump_tracker_section(conn, guild_id: int) -> dict:
     import time as _time
     cfg = _bump_get_config(conn, guild_id)
+    site_rows = _bump_list_sites(conn, guild_id)
     logs = _bump_get_all_logs(conn, guild_id)
     now = _time.time()
+
+    detector_by_name = {
+        r["site_name"]: {
+            "detector_bot_id": str(r["detector_bot_id"]) if r["detector_bot_id"] else None,
+            "detector_pattern": r["detector_pattern"] or "",
+        }
+        for r in site_rows
+    }
+
     sites = []
     for r in logs:
         bumped_at = r["bumped_at"]
@@ -365,6 +376,7 @@ def _bump_tracker_section(conn, guild_id: int) -> dict:
             elapsed = now - bumped_at
             ready = elapsed >= cooldown
             seconds_remaining = max(0, int(cooldown - elapsed))
+        det = detector_by_name.get(r["site_name"], {})
         sites.append({
             "site_name": r["site_name"],
             "cooldown_seconds": cooldown,
@@ -372,6 +384,8 @@ def _bump_tracker_section(conn, guild_id: int) -> dict:
             "ready": ready,
             "seconds_remaining": seconds_remaining,
             "notified": bool(r["notified"]) if r["notified"] is not None else False,
+            "detector_bot_id": det.get("detector_bot_id"),
+            "detector_pattern": det.get("detector_pattern", ""),
         })
     if cfg is None:
         return {"configured": False, "enabled": False, "channel_id": None, "role_id": None, "sites": sites}
@@ -1721,6 +1735,13 @@ class BumpTrackerConfigUpdate(BaseModel):
 
 class BumpTrackerSiteUpdate(BaseModel):
     cooldown_hours: float
+    detector_bot_id: str | None = None
+    detector_pattern: str = ""
+
+
+class BumpTrackerDetectorUpdate(BaseModel):
+    detector_bot_id: str
+    detector_pattern: str = ""
 
 
 @router.put("/config/bump-tracker")
@@ -1758,7 +1779,36 @@ async def update_bump_tracker_site(
 
     def _q():
         with open_db(ctx.db_path) as conn:
-            _bump_add_site(conn, guild_id, site_name, int(body.cooldown_hours * 3600))
+            _bump_add_site(
+                conn,
+                guild_id,
+                site_name,
+                int(body.cooldown_hours * 3600),
+                detector_bot_id=int(body.detector_bot_id) if body.detector_bot_id else 0,
+                detector_pattern=body.detector_pattern,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.put("/config/bump-tracker/sites/{site_name}/detector")
+async def update_bump_tracker_detector(
+    site_name: str,
+    request: Request,
+    body: BumpTrackerDetectorUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with open_db(ctx.db_path) as conn:
+            updated = _bump_set_detector(
+                conn, guild_id, site_name, int(body.detector_bot_id), body.detector_pattern
+            )
+            if not updated:
+                raise HTTPException(status_code=404, detail="Site not found")
         return {"ok": True}
 
     return await run_query(_q)
