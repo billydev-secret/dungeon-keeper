@@ -154,7 +154,6 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
         return None
     await update_game_message(db, game_id, msg.id)
     cog.bot.active_views[game_id] = join_view
-    return game_id
 
     # ── Fill phase ──────────────────────────────────────────────────────────
     async def _run_fill_phase(start_interaction: discord.Interaction, payload: dict):
@@ -327,3 +326,6 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             await end_game(db, game_id, player_count=len(player_ids), round_count=1)
             cog.bot.active_views.pop(game_id, None)
             cog._game_canceled.discard(game_id)
+
+    # Lobby is live; the round advances via button presses (defined above).
+    return game_id

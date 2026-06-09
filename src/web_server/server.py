@@ -250,6 +250,12 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(games_routes.router, prefix="/api/games", tags=["games"])
 
+    from web_server.routes import scheduled_games as scheduled_games_routes
+
+    app.include_router(
+        scheduled_games_routes.router, prefix="/api/games/schedule", tags=["games"]
+    )
+
     # ── Quotes ──────────────────────────────────────────────────────────
     from web_server.routes import quotes as quotes_routes
 

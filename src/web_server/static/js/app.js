@@ -132,6 +132,7 @@ const SECTIONS = [
     id: "games", label: "Games", perms: ["admin"], gameHostRole: true,
     items: [
       { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js" },
+      { id: "games-scheduling",   label: "Scheduling",        module: "./panels/games-scheduling.js" },
       { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
       { id: "games-config",       label: "Config",            module: "./panels/games-config.js" },
     ],
