@@ -23,6 +23,7 @@ from bot_modules.emoji_stealer.logic import (
     extract_emojis_from_text,
     format_steal_all_summary,
     is_https_url,
+    looks_like_image,
     sanitize_emoji_name,
     validate_emoji_name,
 )
@@ -44,9 +45,19 @@ def _eligible_guilds(bot: Bot) -> list[discord.Guild]:
     return [g for g in bot.guilds if g.me and g.me.guild_permissions.manage_expressions]
 
 
+_NOT_AN_IMAGE_MSG = (
+    "That doesn't look like an image — give me a direct image URL "
+    "(ending in .png, .gif, or .webp), not a webpage or message link."
+)
+
+
 async def _upload(
     guild: discord.Guild, name: str, data: bytes
 ) -> discord.Emoji:
+    if not looks_like_image(data):
+        # Raise before discord.py does, which would throw a bare ValueError
+        # the callers' except blocks don't catch.
+        raise ValueError(_NOT_AN_IMAGE_MSG)
     return await guild.create_custom_emoji(
         name=sanitize_emoji_name(name), image=compress_gif_for_emoji(data)
     )
@@ -118,6 +129,9 @@ class _GuildPickView(discord.ui.View):
             return
         except httpx.HTTPError as exc:
             await interaction.edit_original_response(content=f"Couldn't download the image: {exc}")
+            return
+        except ValueError as exc:
+            await interaction.edit_original_response(content=str(exc))
             return
         await interaction.edit_original_response(
             content=f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!"
@@ -223,6 +237,9 @@ class _StealView(discord.ui.View):
         except httpx.HTTPError as exc:
             await interaction.edit_original_response(content=f"Couldn't download the emoji: {exc}")
             return
+        except ValueError as exc:
+            await interaction.edit_original_response(content=str(exc))
+            return
         await interaction.edit_original_response(
             content=f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!"
         )
@@ -249,6 +266,8 @@ class _StealView(discord.ui.View):
             except discord.HTTPException as exc:
                 failed.append((name, exc.text or str(exc)))
             except httpx.HTTPError as exc:
+                failed.append((name, str(exc)))
+            except ValueError as exc:
                 failed.append((name, str(exc)))
 
         await interaction.edit_original_response(
@@ -317,6 +336,9 @@ class EmojiStealerCog(commands.Cog):
             except httpx.HTTPError as exc:
                 await interaction.followup.send(f"Couldn't download the emoji: {exc}", ephemeral=True)
                 return
+            except ValueError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
+                return
             await interaction.followup.send(
                 f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!", ephemeral=True
             )
@@ -383,6 +405,9 @@ class EmojiStealerCog(commands.Cog):
                 return
             except httpx.HTTPError as exc:
                 await interaction.followup.send(f"Couldn't download the image: {exc}", ephemeral=True)
+                return
+            except ValueError as exc:
+                await interaction.followup.send(str(exc), ephemeral=True)
                 return
             await interaction.followup.send(
                 f"Added {new_emoji} `:{new_emoji.name}:` to **{guild.name}**!", ephemeral=True

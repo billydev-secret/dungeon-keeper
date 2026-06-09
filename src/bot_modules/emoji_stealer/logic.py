@@ -32,6 +32,28 @@ def sanitize_emoji_name(name: str) -> str:
     return name if len(name) >= 2 else name + "_e"
 
 
+def looks_like_image(data: bytes) -> bool:
+    """Return True if ``data`` begins with PNG, JPEG, GIF, or WEBP magic bytes.
+
+    Mirrors the image types Discord accepts for custom emoji, so the cog can
+    reject non-image payloads (an HTML error page, or a message-link body
+    served as 200 OK) with a friendly message before handing them to
+    discord.py — which would otherwise raise a bare ``ValueError`` that the
+    cog's exception handlers don't catch.
+    """
+    if len(data) < 12:
+        return False
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if data.startswith(b"\xff\xd8\xff"):
+        return True
+    if data[:3] == b"GIF":
+        return True
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return True
+    return False
+
+
 def is_https_url(url: str) -> bool:
     """Return True if ``url`` starts with ``https://`` (case-insensitive).
 
