@@ -296,22 +296,32 @@ async def _process_due(bot, games_db, row, now: float) -> None:
             log.warning("Scheduled game %s: announce failed in channel %s", sched_id, channel_id)
 
     try:
-        await launcher(
+        gid = await launcher(
             channel=channel,
             host_id=row["created_by"],
             host_name=host_name,
             guild_id=guild_id,
             options=options,
         )
-        await games_db.execute(
-            "UPDATE games_scheduled SET last_status='launched' WHERE id=?", (sched_id,)
-        )
-        log.info("Scheduled game %s launched: %s in channel %s", sched_id, game_type, channel_id)
     except Exception:
         log.exception("Scheduled game %s: launcher %s raised", sched_id, game_type)
         await games_db.execute(
             "UPDATE games_scheduled SET last_status='error' WHERE id=?", (sched_id,)
         )
+        return
+
+    # Launchers return None on failure (e.g. missing send perms, caught internally),
+    # so a falsy result is a real failure — don't mislabel it as launched.
+    if gid:
+        await games_db.execute(
+            "UPDATE games_scheduled SET last_status='launched' WHERE id=?", (sched_id,)
+        )
+        log.info("Scheduled game %s launched: %s in channel %s", sched_id, game_type, channel_id)
+    else:
+        await games_db.execute(
+            "UPDATE games_scheduled SET last_status='error' WHERE id=?", (sched_id,)
+        )
+        log.warning("Scheduled game %s: launcher %s returned no game (likely no perms)", sched_id, game_type)
 
 
 async def scheduled_games_loop(bot) -> None:

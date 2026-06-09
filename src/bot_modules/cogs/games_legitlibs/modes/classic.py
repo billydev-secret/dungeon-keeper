@@ -209,7 +209,6 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         return None
     await update_game_message(db, game_id, msg.id)
     cog.bot.active_views[game_id] = join_view
-    return game_id
 
     # ── Round 1 fill phase ──────────────────────────────────────────────────
     async def _run_fill_phase(payload: dict):
@@ -606,3 +605,6 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                            round_count=1)
             cog.bot.active_views.pop(game_id, None)
             cog._game_canceled.discard(game_id)
+
+    # Lobby is live; the round advances via button presses (defined above).
+    return game_id
