@@ -17,6 +17,7 @@ from bot_modules.core.safety import check_bot_identity, check_db_path, check_gui
 from bot_modules.services.watch_service import load_watched_users
 from bot_modules.core.db_utils import migrate_grant_roles, open_db
 from bot_modules.services.auto_delete_service import auto_delete_loop
+from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.booster_roles import BoosterRoleDynamicButton
 from bot_modules.services.inactivity_prune_service import inactivity_prune_loop
 from bot_modules.services.voice_xp_service import voice_xp_loop
@@ -153,6 +154,9 @@ def main() -> None:
     bot.ctx = ctx
     bot.games_db = GamesDb(db_path)  # type: ignore[attr-defined]
     bot.active_views: dict = {}  # type: ignore[attr-defined]
+    # Registry of interaction-free game launchers, keyed by game_type. Each party
+    # game cog registers its launch() here in setup(); the scheduler calls them.
+    bot.game_launchers: dict = {}  # type: ignore[attr-defined]
     bot.extension_names = [
         "bot_modules.cogs.events_cog",
         "bot_modules.cogs.role_grant_cog",
@@ -269,6 +273,8 @@ def main() -> None:
     )
 
     bot.startup_task_factories.append(lambda: auto_delete_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: scheduled_games_loop(bot))
 
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
 

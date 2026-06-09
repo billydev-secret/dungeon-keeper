@@ -519,12 +519,18 @@ class RushmoreRecapView(discord.ui.View):
         except Exception:
             pass
         self.stop()
-        await self.cog.start_rushmore(
-            interaction,
-            topic=None,
-            timer=self._settings.get("timer", 30),
-            source=self._settings.get("source", "host"),
-            vote_timer=self._settings.get("vote_timer", 30),
+        await interaction.response.defer()
+        await self.cog.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={
+                "topic": "",
+                "timer": self._settings.get("timer", 30),
+                "source": self._settings.get("source", "host"),
+                "vote_timer": self._settings.get("vote_timer", 30),
+            },
         )
 
     @discord.ui.button(label="\U0001f504 Hand Off", style=discord.ButtonStyle.secondary, custom_id="rushmore_hand_off")
@@ -584,16 +590,6 @@ class RushmoreCog(commands.Cog):
         source: str = "host",
         vote_timer: int = 30,
     ):
-        await self.start_rushmore(interaction, topic or None, timer, source, vote_timer)
-
-    async def start_rushmore(
-        self,
-        interaction: discord.Interaction,
-        topic: str | None = None,
-        timer: int = 30,
-        source: str = "host",
-        vote_timer: int = 30,
-    ):
         log.info(
             "%s used /games play rushmore in #%s",
             interaction.user.display_name,
@@ -609,30 +605,68 @@ class RushmoreCog(commands.Cog):
             await interaction.response.send_message("Mt. Rushmore Draft is currently disabled on this server.", ephemeral=True)
             return
 
-        timer, vote_timer = clamp_settings(timer, vote_timer)
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={"topic": topic, "timer": timer, "source": source, "vote_timer": vote_timer},
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        topic = options.get("topic") or None
+        source = options.get("source", "host")
+        timer, vote_timer = clamp_settings(
+            int(options.get("timer", 30)), int(options.get("vote_timer", 30))
+        )
         settings = {"timer": timer, "source": source, "vote_timer": vote_timer}
 
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "rushmore",
             state="joining",
             payload={"settings": settings, "players": [], "topic": topic},
         )
-        log.info("Game %s (rushmore) created by %s", game_id, interaction.user.display_name)
+        log.info("Game %s (rushmore) created by host %s", game_id, host_id)
 
         join_view = RushmoreJoinView(
-            game_id, interaction.user.id, interaction.user.display_name,
+            game_id, host_id, host_name,
             topic, source, self.db, self.bot, self,
         )
-        embed = build_join_embed(interaction.user.display_name, [], topic)
-        await interaction.response.send_message(embed=embed, view=join_view)
-        msg = await interaction.original_response()
+        embed = build_join_embed(host_name, [], topic)
+        try:
+            msg = await channel.send(embed=embed, view=join_view)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("rushmore launch lacked send perms in channel %s", channel.id)
+            return None
         join_view._msg = msg
         self.bot.active_views[game_id] = join_view
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        await update_session(self.db, channel.id, game_id, [host_id])
+        return game_id
 
     # ── Draft execution ──────────────────────────────────────────────
 
@@ -935,3 +969,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("rushmore")
     play.add_command(cog.rushmore_cmd)
+    bot.game_launchers["rushmore"] = cog.launch

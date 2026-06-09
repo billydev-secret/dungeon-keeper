@@ -57,6 +57,105 @@ GAME_NAMES = {
     'pressure': 'Pressure Cooker',
 }
 
+# ── Scheduling registry ─────────────────────────────────────────────────────
+# Party games that can be auto-launched by the scheduler (web dashboard).
+# PvP / duel / lobby-challenge games (e.g. 'pressure', Quickdraw, Chicken,
+# Hot Potato, Musical Chairs) are intentionally excluded — they need a live
+# challenge/opponent flow. Adding a game here REQUIRES registering a launcher
+# in its cog setup() (see bot.game_launchers); the startup coverage check warns
+# on drift.
+SCHEDULABLE_GAME_TYPES = [
+    'ffa', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
+    'hottakes', 'story', 'ama', 'fantasies', 'price', 'rushmore', 'clapback',
+    'legitlibs',
+]
+
+# Per-game option fields the scheduler/web UI can collect. Each field:
+#   name    — key in the options dict passed to launch()
+#   label   — UI label
+#   type    — 'str' | 'int' | 'bool' | 'choice'
+#   default — default value when omitted
+#   (int)   — optional 'min'/'max'
+#   (choice)— 'choices': list of {'value', 'label'}
+# Games with no setup options have an empty list. Mirrors each cog's slash params.
+SCHEDULE_OPTION_SCHEMA = {
+    'ffa': [
+        {'name': 'question', 'label': 'Opening question', 'type': 'str', 'default': ''},
+    ],
+    'traditional': [],
+    'compliment': [],
+    'mfk': [
+        {'name': 'options', 'label': 'Custom categories (comma-separated, optional)',
+         'type': 'str', 'default': ''},
+    ],
+    'wyr': [
+        {'name': 'question', 'label': "Opening question ('option A | option B', optional)",
+         'type': 'str', 'default': ''},
+    ],
+    'nhie': [
+        {'name': 'question', 'label': 'Opening statement (optional)', 'type': 'str', 'default': ''},
+        {'name': 'lives', 'label': 'Lives (0 = no elimination)', 'type': 'int',
+         'default': 3, 'min': 0, 'max': 10},
+    ],
+    'mlt': [
+        {'name': 'question', 'label': 'Opening prompt (optional)', 'type': 'str', 'default': ''},
+    ],
+    'ttl': [
+        {'name': 'prompt', 'label': 'Theme/prompt (optional)', 'type': 'str', 'default': ''},
+    ],
+    'hottakes': [],
+    'story': [
+        {'name': 'max_sentences', 'label': 'Max sentences', 'type': 'int',
+         'default': 10, 'min': 1, 'max': 30},
+        {'name': 'visibility', 'label': 'Visibility', 'type': 'choice', 'default': 'blind',
+         'choices': [{'value': 'blind', 'label': 'Blind (prev sentence only)'},
+                     {'value': 'full', 'label': 'Full (whole story)'}]},
+        {'name': 'starter', 'label': 'Starter sentence (optional)', 'type': 'str', 'default': ''},
+    ],
+    'ama': [
+        {'name': 'mode', 'label': 'Mode', 'type': 'choice', 'default': 'unfiltered',
+         'choices': [{'value': 'unfiltered', 'label': 'Unfiltered (post immediately)'},
+                     {'value': 'screened', 'label': 'Screened (host approves)'}]},
+    ],
+    'fantasies': [],
+    'price': [
+        {'name': 'rounds', 'label': 'Rounds', 'type': 'int', 'default': 5, 'min': 1, 'max': 20},
+        {'name': 'timer', 'label': 'Submission seconds/round', 'type': 'int', 'default': 30},
+        {'name': 'vote_timer', 'label': 'Voting seconds/round', 'type': 'int', 'default': 20},
+        {'name': 'source', 'label': 'Scenario source', 'type': 'choice', 'default': 'host',
+         'choices': [{'value': 'host', 'label': 'Host writes'},
+                     {'value': 'players', 'label': 'Players submit'},
+                     {'value': 'ai', 'label': 'AI generated'},
+                     {'value': 'bank', 'label': 'Question bank'}]},
+    ],
+    'rushmore': [
+        {'name': 'topic', 'label': 'Topic (optional)', 'type': 'str', 'default': ''},
+        {'name': 'timer', 'label': 'Pick seconds', 'type': 'int', 'default': 30},
+        {'name': 'vote_timer', 'label': 'Voting seconds', 'type': 'int', 'default': 30},
+        {'name': 'source', 'label': 'Topic source', 'type': 'choice', 'default': 'host',
+         'choices': [{'value': 'host', 'label': 'Host writes'},
+                     {'value': 'ai', 'label': 'AI generated'},
+                     {'value': 'bank', 'label': 'Question bank'}]},
+    ],
+    'clapback': [
+        {'name': 'rounds', 'label': 'Rounds', 'type': 'int', 'default': 5, 'min': 1, 'max': 15},
+        {'name': 'timer', 'label': 'Answer seconds', 'type': 'int', 'default': 120, 'min': 15, 'max': 180},
+        {'name': 'vote_timer', 'label': 'Vote seconds/matchup', 'type': 'int', 'default': 40, 'min': 10, 'max': 60},
+        {'name': 'source', 'label': 'Prompt source', 'type': 'choice', 'default': 'ai',
+         'choices': [{'value': 'ai', 'label': 'AI generated'},
+                     {'value': 'bank', 'label': 'Question bank'},
+                     {'value': 'both', 'label': 'Both'}]},
+        {'name': 'anonymous', 'label': 'Hide authors until recap', 'type': 'bool', 'default': False},
+    ],
+    'legitlibs': [
+        {'name': 'mode', 'label': 'Mode', 'type': 'choice', 'default': 'classic',
+         'choices': [{'value': 'classic', 'label': 'Classic (sequential fill)'},
+                     {'value': 'quiplash', 'label': 'Quiplash (all fill, all revealed)'},
+                     {'value': 'hotseat', 'label': 'Hot Seat (author picks best)'}]},
+        {'name': 'tier', 'label': 'Heat tier (1-4)', 'type': 'int', 'default': 2, 'min': 1, 'max': 4},
+    ],
+}
+
 HOW_TO_PLAY = {
     'ffa': (
         "🎤 **Free For All**\n"

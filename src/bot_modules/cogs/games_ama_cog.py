@@ -1165,10 +1165,40 @@ class AMACog(commands.Cog):
         if not await check_game_enabled(self.db, "ama", interaction.guild_id or 0):
             await interaction.response.send_message("Anonymous AMA is currently disabled on this server.", ephemeral=True)
             return
+
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={"mode": mode},
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        mode = options.get("mode", "unfiltered")
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "ama",
             state="open",
             payload={
@@ -1181,25 +1211,34 @@ class AMACog(commands.Cog):
             },
         )
 
-        embed = build_lobby_embed(interaction.user.display_name, mode)
+        embed = build_lobby_embed(host_name, mode)
 
-        log.info("Game %s (ama) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-        view = AMAView(game_id, interaction.user.id, mode, self.db, self.bot)
+        log.info("Game %s (ama) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
+        view = AMAView(game_id, host_id, mode, self.db, self.bot)
         self.bot.active_views[game_id] = view
 
-        await interaction.response.send_message(embed=embed, view=view)
-        msg = await interaction.original_response()
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("ama launch lacked send perms in channel %s", channel.id)
+            return None
         view._game_msg = msg
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        await update_session(self.db, channel.id, game_id, [host_id])
 
-        # Send the persistent bottom bar
-        bottom_view = AMABottomView(game_id, self.db, view, msg.jump_url)
-        bottom_msg = await interaction.channel.send(content="🎙️ AMA", view=bottom_view)
-        view._bottom_msg = bottom_msg
-        bottom_view.message_id = bottom_msg.id
-        self.bot.active_views[f"{game_id}_bottom"] = bottom_view
-        self._active_channels[interaction.channel_id] = game_id
+        # Send the persistent bottom bar (best-effort — the game is already live).
+        try:
+            bottom_view = AMABottomView(game_id, self.db, view, msg.jump_url)
+            bottom_msg = await channel.send(content="🎙️ AMA", view=bottom_view)
+            view._bottom_msg = bottom_msg
+            bottom_view.message_id = bottom_msg.id
+            self.bot.active_views[f"{game_id}_bottom"] = bottom_view
+        except Exception:
+            log.warning("ama launch: failed to post bottom bar in channel %s", channel.id)
+        self._active_channels[channel.id] = game_id
+        return game_id
 
 
 async def setup(bot: commands.Bot):
@@ -1207,3 +1246,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("ama")
     play.add_command(cog.ama)
+    bot.game_launchers["ama"] = cog.launch

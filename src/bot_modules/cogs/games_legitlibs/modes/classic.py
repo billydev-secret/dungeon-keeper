@@ -54,41 +54,37 @@ RESCUE_TIMEOUT = 120 # seconds — round 2 fill
 POLL_INTERVAL = 15   # seconds — counter refresh cadence
 
 
-async def run_classic(cog, interaction: discord.Interaction, tier: int,
-                      template_id: str | None, tag: str | None):
-    """Entry point for a Classic-mode LegitLibs round."""
+async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
+                      tier: int, template_id: str | None, tag: str | None) -> str | None:
+    """Entry point for a Classic-mode LegitLibs round (interaction-free)."""
     db = cog.db
-    channel = interaction.channel
-    guild = interaction.guild
-    host = interaction.user
 
     # Enforce per-channel tier cap
     max_tier = await get_channel_max_tier(db, channel.id)
     tier, clamped = cl_clamp_tier(tier, max_tier)
     if clamped:
-        await interaction.followup.send(
-            f"This channel's tier cap is {max_tier} ({HEAT_LABELS[max_tier]}). "
-            f"Using tier {max_tier} instead.",
-            ephemeral=True,
+        log.info(
+            "legitlibs classic: tier clamped to %s (%s) in channel %s",
+            max_tier, HEAT_LABELS[max_tier], channel.id,
         )
 
     # Pick a template
     prompts = await get_prompts(db)
     template = await pick_template(db, guild.id, tier, tag=tag, template_id=template_id)
     if not template:
-        await interaction.followup.send(
-            "No published templates found for that tier/tag. Ask a mod to add some!",
-            ephemeral=True,
+        log.info(
+            "legitlibs classic: no published templates for tier %s tag %r in channel %s",
+            tier, tag, channel.id,
         )
-        return
+        return None
 
     blanks = template["blanks"]
 
     # Create game record
     game_id = await create_game(
-        db, channel.id, host.id, "legitlibs",
+        db, channel.id, host_id, "legitlibs",
         state="joining",
-        payload=cl_build_initial_payload(host.id, tier, template),
+        payload=cl_build_initial_payload(host_id, tier, template),
     )
     cog._game_canceled.discard(game_id)
 
@@ -102,7 +98,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
 
     # ── Join phase ──────────────────────────────────────────────────────────
     join_embed = build_join_embed(
-        host.display_name, template["title"], tier, "classic",
+        host_name, template["title"], tier, "classic",
         1, template["player_min"],
     )
 
@@ -125,7 +121,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             await action_interaction.response.send_message("✅ You joined!", ephemeral=True)
 
             new_embed = build_join_embed(
-                host.display_name, template["title"], tier, "classic",
+                host_name, template["title"], tier, "classic",
                 len(payload["players"]), template["player_min"],
             )
             try:
@@ -135,7 +131,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
 
         elif action == "leave":
             uid = action_interaction.user.id
-            if uid == host.id:
+            if uid == host_id:
                 await action_interaction.response.send_message(
                     "You're the host! If you leave, the game will be cancelled. "
                     "Use **✕ Cancel** instead.", ephemeral=True,
@@ -151,7 +147,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             await action_interaction.response.send_message("You've left.", ephemeral=True)
 
             new_embed = build_join_embed(
-                host.display_name, template["title"], tier, "classic",
+                host_name, template["title"], tier, "classic",
                 len(payload["players"]), template["player_min"],
             )
             try:
@@ -202,11 +198,18 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
         except Exception:
             await action_interaction.response.defer()
 
-    join_view = JoinView(game_id, host.id, db, cog.bot,
+    join_view = JoinView(game_id, host_id, db, cog.bot,
                          handle_join_action, handle_join_cancel)
-    msg = await interaction.followup.send(embed=join_embed, view=join_view)
+    try:
+        msg = await channel.send(embed=join_embed, view=join_view)
+    except discord.Forbidden:
+        await end_game(db, game_id)
+        cog.bot.active_views.pop(game_id, None)
+        log.warning("legitlibs launch lacked send perms in channel %s", channel.id)
+        return None
     await update_game_message(db, game_id, msg.id)
     cog.bot.active_views[game_id] = join_view
+    return game_id
 
     # ── Round 1 fill phase ──────────────────────────────────────────────────
     async def _run_fill_phase(payload: dict):
@@ -219,13 +222,13 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
         deadline = fill_deadline
 
         fill_embed = build_classic_fill_embed(
-            host.display_name, template["title"], tier,
+            host_name, template["title"], tier,
             len(player_ids),
             players_done_count(assignments, payload.get("fills", {}), player_ids),
             deadline,
         )
         fill_view = ClassicFillView(
-            game_id, host.id, db, cog.bot,
+            game_id, host_id, db, cog.bot,
             _handle_round1_submit, _handle_fill_cancel,
         )
         cog.bot.active_views[game_id] = fill_view
@@ -249,7 +252,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             cur_fills = cur_payload.get("fills", {})
             done = players_done_count(assignments, cur_fills, player_ids)
             new_embed = build_classic_fill_embed(
-                host.display_name, template["title"], tier,
+                host_name, template["title"], tier,
                 len(player_ids), done, deadline,
             )
             try:
@@ -340,7 +343,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
                     cur_player_ids,
                 )
                 new_embed = build_classic_fill_embed(
-                    host.display_name, template["title"], tier,
+                    host_name, template["title"], tier,
                     len(cur_player_ids), done, fill_deadline,
                 )
                 try:
@@ -388,7 +391,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             template["title"], tier, len(unfilled), [], deadline,
         )
         rescue_view = ClassicRescueView(
-            game_id, host.id, db, cog.bot,
+            game_id, host_id, db, cog.bot,
             _handle_volunteer, _handle_rescue_cancel,
         )
         cog.bot.active_views[game_id] = rescue_view
@@ -489,7 +492,7 @@ async def run_classic(cog, interaction: discord.Interaction, tier: int,
             deadline,
         )
         rescue_fill_view = ClassicRescueFillView(
-            game_id, host.id, db, cog.bot,
+            game_id, host_id, db, cog.bot,
             _handle_rescue_submit, _handle_rescue_cancel,
         )
         cog.bot.active_views[game_id] = rescue_fill_view

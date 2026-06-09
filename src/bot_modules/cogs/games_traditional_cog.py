@@ -252,25 +252,59 @@ class TraditionalCog(commands.Cog):
             )
             return
 
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={},
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "traditional",
             state="joining",
         )
 
-        embed = build_lobby_embed(interaction.user.display_name)
+        embed = build_lobby_embed(host_name)
 
-        log.info("Game %s (traditional) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-        host_view = TraditionalHostView(game_id, interaction.user.id, self.db, self.bot)
+        log.info("Game %s (traditional) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
+        host_view = TraditionalHostView(game_id, host_id, self.db, self.bot)
         self.bot.active_views[game_id] = host_view
 
-        await interaction.response.send_message(embed=embed, view=host_view)
-        msg = await interaction.original_response()
+        try:
+            msg = await channel.send(embed=embed, view=host_view)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("traditional launch lacked send perms in channel %s", channel.id)
+            return None
         host_view._message = msg
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        await update_session(self.db, channel.id, game_id, [host_id])
+        return game_id
 
 
 async def setup(bot: commands.Bot):
@@ -278,3 +312,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("traditional")
     play.add_command(cog.traditional)
+    bot.game_launchers["traditional"] = cog.launch

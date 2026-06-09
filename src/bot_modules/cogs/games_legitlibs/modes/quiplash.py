@@ -42,45 +42,42 @@ FILL_TIMEOUT = 300  # seconds players have to submit
 _GAME_ICONS_LL = GAME_ICONS["legitlibs"]
 
 
-async def run_quiplash(cog, interaction: discord.Interaction, tier: int, template_id: str | None, tag: str | None):
-    """Entry point for a Quiplash-mode LegitLibs round."""
+async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
+                       tier: int, template_id: str | None, tag: str | None) -> str | None:
+    """Entry point for a Quiplash-mode LegitLibs round (interaction-free)."""
     db = cog.db
-    channel = interaction.channel
-    guild = interaction.guild
-    host = interaction.user
 
     # Enforce per-channel tier cap
     max_tier = await get_channel_max_tier(db, channel.id)
     tier, clamped = ql_clamp_tier(tier, max_tier)
     if clamped:
-        await interaction.followup.send(
-            f"This channel's tier cap is {max_tier} ({HEAT_LABELS[max_tier]}). "
-            f"Using tier {max_tier} instead.",
-            ephemeral=True,
+        log.info(
+            "legitlibs quiplash: tier clamped to %s (%s) in channel %s",
+            max_tier, HEAT_LABELS[max_tier], channel.id,
         )
 
     # Pick a template
     prompts = await get_prompts(db)
     template = await pick_template(db, guild.id, tier, tag=tag, template_id=template_id)
     if not template:
-        await interaction.followup.send(
-            "No published templates found for that tier/tag. Ask a mod to add some!",
-            ephemeral=True,
+        log.info(
+            "legitlibs quiplash: no published templates for tier %s tag %r in channel %s",
+            tier, tag, channel.id,
         )
-        return
+        return None
 
     blanks = template["blanks"]
 
     # Create game record
     game_id = await create_game(
-        db, channel.id, host.id, "legitlibs",
+        db, channel.id, host_id, "legitlibs",
         state="joining",
-        payload=ql_build_initial_payload(host.id, tier, template),
+        payload=ql_build_initial_payload(host_id, tier, template),
     )
     cog._game_canceled.discard(game_id)
 
     # ── Join phase ──────────────────────────────────────────────────────────
-    join_embed = build_join_embed(host.display_name, template["title"], tier, "quiplash", 1, template["player_min"])
+    join_embed = build_join_embed(host_name, template["title"], tier, "quiplash", 1, template["player_min"])
 
     async def handle_join_action(action_interaction: discord.Interaction, action: str):
         payload = await get_game_payload(db, game_id)
@@ -99,7 +96,7 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
             await action_interaction.response.send_message("✅ You joined!", ephemeral=True)
 
             new_embed = build_join_embed(
-                host.display_name, template["title"], tier, "quiplash",
+                host_name, template["title"], tier, "quiplash",
                 len(payload["players"]), template["player_min"],
             )
             try:
@@ -147,10 +144,17 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
         except Exception:
             await action_interaction.response.defer()
 
-    join_view = JoinView(game_id, host.id, db, cog.bot, handle_join_action, handle_cancel)
-    msg = await interaction.followup.send(embed=join_embed, view=join_view)
+    join_view = JoinView(game_id, host_id, db, cog.bot, handle_join_action, handle_cancel)
+    try:
+        msg = await channel.send(embed=join_embed, view=join_view)
+    except discord.Forbidden:
+        await end_game(db, game_id)
+        cog.bot.active_views.pop(game_id, None)
+        log.warning("legitlibs launch lacked send perms in channel %s", channel.id)
+        return None
     await update_game_message(db, game_id, msg.id)
     cog.bot.active_views[game_id] = join_view
+    return game_id
 
     # ── Fill phase ──────────────────────────────────────────────────────────
     async def _run_fill_phase(start_interaction: discord.Interaction, payload: dict):
@@ -166,11 +170,11 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
         redacted = render_redacted_body(template["body"], blanks)
 
         fill_embed = build_fill_embed(
-            host.display_name, template["title"], tier,
+            host_name, template["title"], tier,
             len(player_ids), 0, deadline,
             redacted_body=redacted,
         )
-        fill_view = QuiplashFillView(game_id, host.id, db, cog.bot, _handle_submit_press, _handle_fill_cancel)
+        fill_view = QuiplashFillView(game_id, host_id, db, cog.bot, _handle_submit_press, _handle_fill_cancel)
         cog.bot.active_views[game_id] = fill_view
 
         fill_msg = await channel.send(embed=fill_embed, view=fill_view)
@@ -192,7 +196,7 @@ async def run_quiplash(cog, interaction: discord.Interaction, tier: int, templat
 
             submitted = ql_submitted_count(cur_payload, player_ids)
             new_embed = build_fill_embed(
-                host.display_name, template["title"], tier,
+                host_name, template["title"], tier,
                 len(player_ids), submitted, deadline,
                 redacted_body=redacted,
             )
