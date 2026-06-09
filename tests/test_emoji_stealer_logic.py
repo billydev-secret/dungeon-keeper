@@ -21,6 +21,7 @@ from bot_modules.emoji_stealer.logic import (
     extract_emojis_from_text,
     format_steal_all_summary,
     is_https_url,
+    looks_like_image,
     sanitize_emoji_name,
     validate_emoji_name,
 )
@@ -83,6 +84,30 @@ def test_is_https_url_accepts_https(url):
 ])
 def test_is_https_url_rejects_non_https(url):
     assert is_https_url(url) is False
+
+
+# ── looks_like_image ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("data", [
+    b"\x89PNG\r\n\x1a\n" + b"\x00" * 16,          # PNG
+    b"\xff\xd8\xff\xe0" + b"\x00" * 16,            # JPEG
+    b"GIF89a" + b"\x00" * 16,                      # GIF
+    b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 8,     # WEBP
+])
+def test_looks_like_image_accepts_real_image_magic(data):
+    assert looks_like_image(data) is True
+
+
+@pytest.mark.parametrize("data", [
+    b"<!DOCTYPE html><html>...",                   # the bug: an HTML page served as 200
+    b"not an image at all, just text bytes here",
+    b"",
+    b"GI",                                         # too short to classify
+    b"RIFF\x00\x00\x00\x00AVI ",                   # RIFF container, but not WEBP
+])
+def test_looks_like_image_rejects_non_images(data):
+    assert looks_like_image(data) is False
 
 
 # ── validate_emoji_name ──────────────────────────────────────────────
