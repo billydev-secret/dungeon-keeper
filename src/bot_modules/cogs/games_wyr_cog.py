@@ -246,41 +246,22 @@ class WYRCog(commands.Cog):
             await interaction.response.send_message("Would You Rather is currently disabled on this server.", ephemeral=True)
             return
 
-        custom_question: tuple[str, str] | None = None
-        if question.strip():
-            custom_question = parse_question_input(question)
-            if custom_question is None:
-                await interaction.response.send_message(
-                    "❌ Question must have two options separated by `|`, e.g. `fly | be invisible`.",
-                    ephemeral=True,
-                )
-                return
-
-        game_id = await create_game(
-            self.db,
-            interaction.channel_id,
-            interaction.user.id,
-            "wyr",
-            state="playing",
-            payload={"anonymous": True, "rounds": {}},
-        )
-        log.info("Game %s (wyr) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        if question.strip() and parse_question_input(question) is None:
+            await interaction.response.send_message(
+                "❌ Question must have two options separated by `|`, e.g. `fly | be invisible`.",
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.defer()
-        try:
-            await self._run_round(
-                interaction=interaction,
-                game_id=game_id,
-                host_id=interaction.user.id,
-                host_name=interaction.user.display_name,
-                round_num=1,
-                channel=interaction.channel,
-                custom_question=custom_question,
-            )
-        except discord.Forbidden:
-            await end_game(self.db, game_id)
-            if game_id in self.bot.active_views:
-                del self.bot.active_views[game_id]
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={"question": question},
+        )
+        if game_id is None:
             try:
                 await interaction.followup.send(
                     "I don't have access to send messages in that channel. "
@@ -289,8 +270,51 @@ class WYRCog(commands.Cog):
                 )
             except Exception:
                 pass
-            return
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        question = (options.get("question") or "").strip()
+        custom_question: tuple[str, str] | None = None
+        if question:
+            custom_question = parse_question_input(question)
+            if custom_question is None:
+                log.warning("WYR launch: invalid question %r ignored", question)
+
+        game_id = await create_game(
+            self.db,
+            channel.id,
+            host_id,
+            "wyr",
+            state="playing",
+            payload={"anonymous": True, "rounds": {}},
+        )
+        log.info("Game %s (wyr) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
+
+        try:
+            await self._run_round(
+                interaction=None,
+                game_id=game_id,
+                host_id=host_id,
+                host_name=host_name,
+                round_num=1,
+                channel=channel,
+                custom_question=custom_question,
+            )
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("WYR launch lacked send perms in channel %s", channel.id)
+            return None
+        await update_session(self.db, channel.id, game_id, [host_id])
+        return game_id
 
     async def _run_round(
         self,
@@ -389,18 +413,11 @@ class WYRCog(commands.Cog):
         try:
             msg = await channel.send(embed=embed, view=view)
         except discord.Forbidden:
+            # Clean up and let the caller (slash wrapper / scheduler) report the failure.
             await end_game(self.db, game_id)
             if game_id in self.bot.active_views:
                 del self.bot.active_views[game_id]
-            try:
-                await interaction.followup.send(
-                    "❌ I don't have permission to send messages in that channel. "
-                    "Please grant me **Send Messages** and **Embed Links** permissions.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
-            return
+            raise
         await update_game_message(self.db, game_id, msg.id)
 
 
@@ -409,3 +426,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("wyr")
     play.add_command(cog.wyr)
+    bot.game_launchers["wyr"] = cog.launch

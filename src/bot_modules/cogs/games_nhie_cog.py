@@ -251,33 +251,67 @@ class NHIECog(commands.Cog):
             await interaction.response.send_message("Never Have I Ever is currently disabled on this server.", ephemeral=True)
             return
 
-        lives = max(0, min(lives, 10))
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={"question": question, "lives": lives},
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        question = (options.get("question") or "").strip()
+        lives = max(0, min(int(options.get("lives", DEFAULT_LIVES)), 10))
+        guild = getattr(channel, "guild", None)
 
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "nhie",
             state="playing",
             payload={"rounds": {}, "guilt_scores": {}, "lives": {}, "eliminated": [], "max_lives": lives},
         )
-        log.info("Game %s (nhie) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("Game %s (nhie) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        await interaction.response.defer()
-        await self._run_round(
-            interaction=interaction,
-            game_id=game_id,
-            host_id=interaction.user.id,
-            host_name=interaction.user.display_name,
-            round_num=1,
-            channel=interaction.channel,
-            guild=interaction.guild,
-            custom_statement=question.strip() or None,
-            max_lives=lives,
-        )
-        msg = await interaction.original_response()
-        await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        try:
+            await self._run_round(
+                interaction=None,
+                game_id=game_id,
+                host_id=host_id,
+                host_name=host_name,
+                round_num=1,
+                channel=channel,
+                guild=guild,
+                custom_statement=question or None,
+                max_lives=lives,
+            )
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("nhie launch lacked send perms in channel %s", channel.id)
+            return None
+        await update_session(self.db, channel.id, game_id, [host_id])
+        return game_id
 
     async def _run_round(
         self,
@@ -439,18 +473,11 @@ class NHIECog(commands.Cog):
         try:
             msg = await channel.send(embed=embed, view=view)
         except discord.Forbidden:
+            # Clean up and let the caller (slash wrapper / scheduler) report the failure.
             await end_game(self.db, game_id)
             if game_id in self.bot.active_views:
                 del self.bot.active_views[game_id]
-            try:
-                await interaction.followup.send(
-                    "❌ I don't have permission to send messages in that channel. "
-                    "Please grant me **Send Messages** and **Embed Links** permissions.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
-            return
+            raise
         await update_game_message(self.db, game_id, msg.id)
 
 
@@ -459,3 +486,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("nhie")
     play.add_command(cog.nhie)
+    bot.game_launchers["nhie"] = cog.launch

@@ -171,25 +171,61 @@ class FFACog(commands.Cog):
             )
             return
 
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={"question": question},
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        question = options.get("question", "") or ""
+
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "ffa",
             state="open",
             payload={"question": question},
         )
 
-        log.info("Game %s (ffa) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("Game %s (ffa) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         embed = build_ffa_embed(question)
-        view = FFAView(game_id, interaction.user.id, question, self.db, self.bot)
+        view = FFAView(game_id, host_id, question, self.db, self.bot)
         self.bot.active_views[game_id] = view
 
-        await interaction.response.send_message(embed=embed, view=view)
-        msg = await interaction.original_response()
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("ffa launch lacked send perms in channel %s", channel.id)
+            return None
         view._game_msg = msg
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        await update_session(self.db, channel.id, game_id, [host_id])
+        return game_id
 
 
 async def setup(bot: commands.Bot):
@@ -197,3 +233,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("ffa")
     play.add_command(cog.ffa)
+    bot.game_launchers["ffa"] = cog.launch

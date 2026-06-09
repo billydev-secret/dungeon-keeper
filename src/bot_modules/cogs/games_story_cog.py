@@ -295,12 +295,49 @@ class StoryCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        max_sentences = clamp_max_sentences(max_sentences)
+
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={
+                "max_sentences": max_sentences,
+                "visibility": visibility,
+                "starter": starter,
+            },
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        max_sentences = clamp_max_sentences(options.get("max_sentences", 10))
+        visibility = options.get("visibility", "blind")
+        if visibility not in ("blind", "full"):
+            visibility = "blind"
+        starter = options.get("starter", "")
 
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "story",
             state="joining",
             payload={
@@ -313,19 +350,25 @@ class StoryCog(commands.Cog):
         )
 
         embed = build_lobby_embed(
-            host_name=interaction.user.display_name,
+            host_name=host_name,
             visibility=visibility,
             max_sentences=max_sentences,
         )
 
-        log.info("Game %s (story) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-        view = StoryJoinView(game_id, interaction.user.id, self.db, self.bot, self)
+        log.info("Game %s (story) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
+        view = StoryJoinView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
 
-        await interaction.response.send_message(embed=embed, view=view)
-        msg = await interaction.original_response()
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("story launch lacked send perms in channel %s", channel.id)
+            return None
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        await update_session(self.db, channel.id, game_id, [host_id])
+        return game_id
 
     async def _run_story(self, interaction, game_id: str, payload: dict, channel):
         guild = channel.guild if hasattr(channel, "guild") else None
@@ -465,3 +508,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("story")
     play.add_command(cog.story)
+    bot.game_launchers["story"] = cog.launch

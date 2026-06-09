@@ -84,14 +84,37 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
 
         await interaction.response.defer()
 
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={"mode": mode, "tier": tier, "template_id": template_id, "tag": tag},
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "Couldn't start LegitLibs — no published templates for that tier/tag, "
+                    "or I'm missing permission to post here.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(self, *, channel, host_id, host_name, guild_id, options) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        mode = options.get("mode", "classic")
+        tier = int(options.get("tier", 2))
+        template_id = options.get("template_id") or None
+        tag = options.get("tag") or None
+        guild = getattr(channel, "guild", None)
         if mode == "quiplash":
-            await run_quiplash(self, interaction, tier, template_id, tag)
-        elif mode == "classic":
-            await run_classic(self, interaction, tier, template_id, tag)
-        elif mode == "hotseat":
-            await interaction.followup.send("Hot Seat mode coming soon!", ephemeral=True)
-        else:
-            await interaction.followup.send("Unknown mode.", ephemeral=True)
+            return await run_quiplash(self, channel=channel, guild=guild, host_id=host_id, host_name=host_name, tier=tier, template_id=template_id, tag=tag)
+        if mode == "classic":
+            return await run_classic(self, channel=channel, guild=guild, host_id=host_id, host_name=host_name, tier=tier, template_id=template_id, tag=tag)
+        # hotseat not implemented
+        log.info("legitlibs launch: mode %r not available", mode)
+        return None
 
 
 
@@ -100,3 +123,4 @@ async def setup(bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("legitlibs")
     play.add_command(cog.legitlibs)
+    bot.game_launchers["legitlibs"] = cog.launch

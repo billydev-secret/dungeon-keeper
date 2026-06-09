@@ -330,10 +330,40 @@ class TTLCog(commands.Cog):
                 ephemeral=True,
             )
             return
+
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={"prompt": prompt},
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        prompt = options.get("prompt")
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "ttl",
             state="joining",
             payload={"submissions": {}, "submission_count": 0, "submitter_names": {}, "scores": {}, "prompt": prompt},
@@ -341,14 +371,20 @@ class TTLCog(commands.Cog):
 
         embed = build_lobby_embed(prompt=prompt)
 
-        log.info("Game %s (ttl) created by %s in #%s", game_id, interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-        view = TTLSubmitView(game_id, interaction.user.id, self.db, self.bot, self, prompt=prompt)
+        log.info("Game %s (ttl) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
+        view = TTLSubmitView(game_id, host_id, self.db, self.bot, self, prompt=prompt)
         self.bot.active_views[game_id] = view
 
-        await interaction.response.send_message(embed=embed, view=view)
-        msg = await interaction.original_response()
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("ttl launch lacked send perms in channel %s", channel.id)
+            return None
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        await update_session(self.db, channel.id, game_id, [host_id])
+        return game_id
 
     async def _run_guessing(
         self,
@@ -493,3 +529,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("twotruths")
     play.add_command(cog.twotruths)
+    bot.game_launchers["ttl"] = cog.launch

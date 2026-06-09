@@ -1,5 +1,13 @@
 import { loadConfig, loadRoles, loadChannels, channelSelect, roleSelect, apiPut, apiDelete, showStatus } from "../config-helpers.js";
 
+function _esc(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
 
@@ -56,11 +64,31 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
       </header>
       <div data-roles>${boosterRoles.length ? boosterRoles.map(roleCard).join("") : '<div class="empty">No booster roles configured.</div>'}</div>
 
+      <div class="section-label">Swatch Folder</div>
+      <form class="form card" data-upload-form>
+        <div class="field-hint" style="margin-bottom:10px;">
+          Upload swatch images for this server. Name each file
+          <code>ColorName_HEX1_HEX2.png</code> (e.g. <code>Ruby_ff0000_8b0000.png</code>)
+          — the two hex codes become the role's gradient. Files are stored in a
+          folder unique to this server.
+        </div>
+        <div data-swatch-active class="field-hint" style="margin-bottom:10px;"></div>
+        <div data-swatch-list style="margin-bottom:12px;"><div class="empty">Loading swatches…</div></div>
+        <div class="field">
+          <label>Add images</label>
+          <input type="file" name="files" accept="image/png,image/jpeg,image/gif,image/webp" multiple data-swatch-input />
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button type="submit" class="btn btn-primary" data-upload-btn>Upload</button>
+          <span data-upload-status></span>
+        </div>
+      </form>
+
       <div class="section-label">Sync Swatches</div>
       <form class="form card" data-sync-form>
         <div class="field-hint" style="margin-bottom:10px;">
-          Scans the configured swatch directory and creates/updates/removes
-          booster roles (with gradient colors) to match the files on disk.
+          Scans the swatch folder and creates/updates/removes booster roles
+          (with gradient colors) to match the uploaded files.
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           <button type="submit" class="btn btn-primary" data-sync-btn>Sync Swatches</button>
@@ -179,6 +207,104 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
       );
     } catch (err) {
       showStatus(addStatus, false, err.message);
+    }
+  });
+
+  // ── Managed swatch uploads ──────────────────────────────────────────
+  const swatchList = container.querySelector("[data-swatch-list]");
+  const swatchActive = container.querySelector("[data-swatch-active]");
+
+  function renderSwatchList(data) {
+    const files = data.files || [];
+    if (!files.length) {
+      swatchList.innerHTML = `<div class="empty">No swatches uploaded yet.</div>`;
+    } else {
+      swatchList.innerHTML = files
+        .map((f) => {
+          const chip = f.valid
+            ? `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:linear-gradient(135deg,#${_esc(f.hex1)},#${_esc(f.hex2)});flex:none;"></span>`
+            : `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:repeating-linear-gradient(45deg,#555,#555 4px,#333 4px,#333 8px);flex:none;"></span>`;
+          const meta = f.valid
+            ? `<span>${_esc(f.label)}</span>`
+            : `<span style="color:var(--danger,#e55)">⚠ rename to ColorName_HEX1_HEX2.ext — won't sync</span>`;
+          return `
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border,#2a2a2a);">
+              ${chip}
+              <span style="flex:none;font-family:monospace;opacity:.85;">${_esc(f.name)}</span>
+              ${meta}
+              <button type="button" class="btn btn-danger" style="margin-left:auto;padding:2px 8px;" data-swatch-del="${_esc(f.name)}">Delete</button>
+            </div>`;
+        })
+        .join("");
+    }
+    if (data.using_managed) {
+      swatchActive.textContent = "";
+    } else {
+      swatchActive.innerHTML = `<strong>Sync currently scans an external folder:</strong> <code>${_esc(data.active_dir)}</code>. Upload at least one validly named swatch to switch syncing to this server's uploaded set.`;
+    }
+    // Delete handlers
+    swatchList.querySelectorAll("[data-swatch-del]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const name = btn.dataset.swatchDel;
+        if (!confirm(`Delete swatch "${name}"?`)) return;
+        try {
+          const fresh = await apiDelete(
+            `/api/config/booster-roles/swatches/${encodeURIComponent(name)}`,
+          );
+          renderSwatchList(fresh);
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    });
+  }
+
+  async function loadSwatches() {
+    try {
+      const res = await fetch("/api/config/booster-roles/swatches", {
+        credentials: "same-origin",
+      });
+      if (!res.ok) throw new Error(res.statusText);
+      renderSwatchList(await res.json());
+    } catch (err) {
+      swatchList.innerHTML = `<div class="error">${_esc(err.message)}</div>`;
+    }
+  }
+
+  loadSwatches();
+
+  const uploadForm = container.querySelector("[data-upload-form]");
+  const uploadBtn = container.querySelector("[data-upload-btn]");
+  const uploadStatus = container.querySelector("[data-upload-status]");
+  const swatchInput = container.querySelector("[data-swatch-input]");
+  uploadForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!swatchInput.files.length) {
+      showStatus(uploadStatus, false, "Pick a file");
+      return;
+    }
+    const fd = new FormData();
+    for (const file of swatchInput.files) fd.append("files", file);
+    uploadBtn.disabled = true;
+    showStatus(uploadStatus, true, "Uploading…");
+    try {
+      const res = await fetch("/api/config/booster-roles/swatches", {
+        method: "POST",
+        credentials: "same-origin",
+        body: fd,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || res.statusText);
+      }
+      const data = await res.json();
+      renderSwatchList(data);
+      swatchInput.value = "";
+      showStatus(uploadStatus, true, `Uploaded ${data.saved?.length || 0}`);
+    } catch (err) {
+      showStatus(uploadStatus, false, err.message);
+    } finally {
+      uploadBtn.disabled = false;
     }
   });
 

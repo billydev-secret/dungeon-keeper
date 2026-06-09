@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from datetime import date
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -36,10 +37,14 @@ from bot_modules.services.auto_react_service import (
     upsert_auto_react_rule,
 )
 from bot_modules.services.booster_roles import (
+    _IMAGE_EXTS,
     delete_booster_role,
     get_booster_panel_refs,
     get_booster_roles,
+    get_guild_swatch_dir,
     post_or_update_booster_panel,
+    resolve_swatch_directory,
+    swatch_file_info,
     sync_swatches,
     upsert_booster_role,
 )
@@ -1463,6 +1468,93 @@ async def sync_booster_swatches(
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     return {"ok": True, "created": created, "removed": removed}
+
+
+# ── Managed swatch uploads (per-guild folder) ────────────────────────
+
+_MAX_SWATCH_BYTES = 8 * 1024 * 1024
+
+
+def _safe_swatch_name(filename: str | None) -> str:
+    """Reject path traversal / unsupported types; return a bare filename."""
+    name = os.path.basename(filename or "")
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        raise HTTPException(400, "Invalid filename")
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in _IMAGE_EXTS:
+        raise HTTPException(400, f"Unsupported file type: {ext or '(none)'}")
+    return name
+
+
+def _swatch_listing(db_path, guild_id: int) -> dict:
+    managed = get_guild_swatch_dir(db_path, guild_id)
+    active = resolve_swatch_directory(db_path, guild_id)
+    return {
+        "ok": True,
+        "files": swatch_file_info(managed),
+        "managed_dir": str(managed),
+        "active_dir": active,
+        "using_managed": active == str(managed),
+    }
+
+
+@router.get("/config/booster-roles/swatches")
+async def list_booster_swatches(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """List uploaded swatch files in this guild's managed folder."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    return _swatch_listing(ctx.db_path, guild_id)
+
+
+@router.post("/config/booster-roles/swatches")
+async def upload_booster_swatches(
+    request: Request,
+    files: list[UploadFile] = File(...),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Save one or more uploaded swatch images into the managed folder."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    managed = get_guild_swatch_dir(ctx.db_path, guild_id)
+
+    saved: list[str] = []
+    for upload in files:
+        name = _safe_swatch_name(upload.filename)
+        content = await upload.read()
+        if not content:
+            continue
+        if len(content) > _MAX_SWATCH_BYTES:
+            raise HTTPException(400, f"{name} exceeds the 8 MB limit")
+        target = managed / name
+        if target.resolve().parent != managed.resolve():
+            raise HTTPException(400, "Invalid filename")
+        target.write_bytes(content)
+        saved.append(name)
+
+    return {**_swatch_listing(ctx.db_path, guild_id), "saved": saved}
+
+
+@router.delete("/config/booster-roles/swatches/{filename}")
+async def delete_booster_swatch(
+    filename: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Delete a single uploaded swatch from the managed folder."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    name = _safe_swatch_name(filename)
+    managed = get_guild_swatch_dir(ctx.db_path, guild_id)
+    target = managed / name
+    if target.resolve().parent != managed.resolve():
+        raise HTTPException(400, "Invalid filename")
+    if not target.is_file():
+        raise HTTPException(404, "File not found")
+    target.unlink()
+    return _swatch_listing(ctx.db_path, guild_id)
 
 
 # ── Auto-delete schedules ────────────────────────────────────────────

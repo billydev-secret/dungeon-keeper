@@ -492,12 +492,18 @@ class PriceRecapView(discord.ui.View):
         except Exception:
             pass
         self.stop()
-        await self.cog.start_price(
-            interaction,
-            rounds=self._settings.get("rounds", 5),
-            timer=self._settings.get("timer", 30),
-            vote_timer=self._settings.get("vote_timer", 20),
-            source=self._settings.get("source", "host"),
+        await interaction.response.defer()
+        await self.cog.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={
+                "rounds": self._settings.get("rounds", 5),
+                "timer": self._settings.get("timer", 30),
+                "vote_timer": self._settings.get("vote_timer", 20),
+                "source": self._settings.get("source", "host"),
+            },
         )
 
     @discord.ui.button(label="🔄 Hand Off", style=discord.ButtonStyle.secondary, custom_id="price_hand_off")
@@ -555,16 +561,6 @@ class PriceCog(commands.Cog):
         vote_timer: int = 20,
         source: str = "host",
     ):
-        await self.start_price(interaction, rounds, timer, vote_timer, source=source)
-
-    async def start_price(
-        self,
-        interaction: discord.Interaction,
-        rounds: int = 5,
-        timer: int = 30,
-        vote_timer: int = 20,
-        source: str = "host",
-    ):
         log.info(
             "%s used /games play price in #%s",
             interaction.user.display_name,
@@ -580,9 +576,39 @@ class PriceCog(commands.Cog):
             await interaction.response.send_message("Name Your Price is currently disabled on this server.", ephemeral=True)
             return
 
-        rounds = max(1, min(rounds, 20))
-        timer = max(10, min(timer, 120))
-        vote_timer = max(10, min(vote_timer, 60))
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={"rounds": rounds, "timer": timer, "vote_timer": vote_timer, "source": source},
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        rounds = max(1, min(int(options.get("rounds", 5)), 20))
+        timer = max(10, min(int(options.get("timer", 30)), 120))
+        vote_timer = max(10, min(int(options.get("vote_timer", 20)), 60))
+        source = options.get("source", "host")
+        guild = getattr(channel, "guild", None)
 
         settings = {
             "rounds": rounds,
@@ -593,8 +619,8 @@ class PriceCog(commands.Cog):
 
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "price",
             state="playing",
             payload={
@@ -604,30 +630,31 @@ class PriceCog(commands.Cog):
                 "scores": {"reasonable_wins": {}, "unhinged_wins": {}},
             },
         )
-        log.info(
-            "Game %s (price) created by %s in #%s",
-            game_id,
-            interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
-        )
+        log.info("Game %s (price) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        embed = build_start_embed(interaction.user.display_name, 1, rounds)
-        await interaction.response.send_message(embed=embed)
-        msg = await interaction.original_response()
+        embed = build_start_embed(host_name, 1, rounds)
+        try:
+            msg = await channel.send(embed=embed)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("price launch lacked send perms in channel %s", channel.id)
+            return None
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        await update_session(self.db, channel.id, game_id, [host_id])
 
         # Start the first round
         asyncio.create_task(self._run_round(
             game_id=game_id,
-            host_id=interaction.user.id,
-            host_name=interaction.user.display_name,
-            channel=interaction.channel,
-            guild=interaction.guild,
+            host_id=host_id,
+            host_name=host_name,
+            channel=channel,
+            guild=guild,
             round_num=1,
             settings=settings,
             msg=msg,
         ))
+        return game_id
 
     # ── Round loop ───────────────────────────────────────────────────
 
@@ -1042,3 +1069,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("price")
     play.add_command(cog.price_cmd)
+    bot.game_launchers["price"] = cog.launch

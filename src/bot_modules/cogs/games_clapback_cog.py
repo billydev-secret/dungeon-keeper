@@ -494,7 +494,13 @@ class ClapbackRecapView(discord.ui.View):
         for item in self.children:
             item.disabled = True
         await interaction.response.edit_message(view=self)
-        await self.cog._start_new_game(interaction, self.config)
+        await self.cog._start_new_game(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild=interaction.guild,
+            config=self.config,
+        )
 
     @discord.ui.button(label="🔀 Play Again (Shuffled)", style=discord.ButtonStyle.secondary, custom_id="ql_replay_shuffle")
     async def play_again_shuffled(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -512,7 +518,13 @@ class ClapbackRecapView(discord.ui.View):
             f"🔀 **Shuffled settings:** {shuffled['rounds']} rounds, "
             f"{shuffled['timer']}s submit, {shuffled['vote_timer']}s vote"
         )
-        await self.cog._start_new_game(interaction, shuffled)
+        await self.cog._start_new_game(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild=interaction.guild,
+            config=shuffled,
+        )
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
@@ -573,56 +585,86 @@ class ClapbackCog(commands.Cog):
             await interaction.response.send_message("Clapback is currently disabled on this server.", ephemeral=True)
             return
 
-        # Clamp values
-        rounds, timer, vote_timer = clamp_config_values(rounds, timer, vote_timer)
+        # Hard bank-error pre-check (nice ephemeral message; launch falls back silently).
+        if source == "bank" and not await has_clapback_prompts(self.db):
+            await interaction.response.send_message(
+                "No prompts in the bank for Clapback. "
+                "Add some with `/bank add clapback` or use `source:ai`.",
+                ephemeral=True,
+            )
+            return
 
-        # Bank check
-        effective_source = source
-        if source in ("bank", "both"):
-            has_bank = await has_clapback_prompts(self.db)
-            if not has_bank:
-                if source == "bank":
-                    await interaction.response.send_message(
-                        "No prompts in the bank for Clapback. "
-                        "Add some with `/bank add clapback` or use `source:ai`.",
-                        ephemeral=True,
-                    )
-                    return
-                else:
-                    effective_source = "ai"
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options={
+                "rounds": rounds, "timer": timer, "vote_timer": vote_timer,
+                "source": source, "anonymous": anonymous,
+            },
+        )
+        if game_id is None:
+            try:
+                await interaction.followup.send(
+                    "I don't have access to send messages in that channel. "
+                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
 
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        rounds, timer, vote_timer = clamp_config_values(
+            int(options.get("rounds", 5)),
+            int(options.get("timer", 120)),
+            int(options.get("vote_timer", 40)),
+        )
+        source = options.get("source", "both")
+        # Bank fallback: if the bank is empty, fall back to AI (no user to prompt headless).
+        if source in ("bank", "both") and not await has_clapback_prompts(self.db):
+            source = "ai"
         config = {
             "rounds": rounds,
             "timer": timer,
             "vote_timer": vote_timer,
-            "source": effective_source,
-            "anonymous": anonymous,
+            "source": source,
+            "anonymous": bool(options.get("anonymous", False)),
         }
-
-        await self._start_new_game(interaction, config, from_command=True)
+        return await self._start_new_game(
+            channel=channel, host_id=host_id, host_name=host_name,
+            guild=getattr(channel, "guild", None), config=config,
+        )
 
     async def _start_new_game(
         self,
-        interaction: discord.Interaction,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild,
         config: dict,
-        from_command: bool = False,
-    ):
+    ) -> str | None:
         game_id = await create_game(
             self.db,
-            interaction.channel_id,
-            interaction.user.id,
+            channel.id,
+            host_id,
             "clapback",
             state="joining",
             payload={"config": config, "players": []},
         )
-        log.info(
-            "Game %s (clapback) created by %s in #%s",
-            game_id, interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
-        )
+        log.info("Game %s (clapback) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        host_name = interaction.user.display_name
-        guild = interaction.guild
         embed = build_lobby_embed(
             host_name=host_name,
             config=config,
@@ -630,17 +672,20 @@ class ClapbackCog(commands.Cog):
             name_resolver=lambda uid: resolve_name(guild, uid),
         )
 
-        view = ClapbackJoinView(game_id, interaction.user.id, self.db, self.bot, self, config)
+        view = ClapbackJoinView(game_id, host_id, self.db, self.bot, self, config)
         self.bot.active_views[game_id] = view
 
-        if from_command:
-            await interaction.response.send_message(embed=embed, view=view)
-            msg = await interaction.original_response()
-        else:
-            msg = await interaction.channel.send(embed=embed, view=view)
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            self.bot.active_views.pop(game_id, None)
+            log.warning("clapback launch lacked send perms in channel %s", channel.id)
+            return None
 
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, interaction.channel_id, game_id, [interaction.user.id])
+        await update_session(self.db, channel.id, game_id, [host_id])
+        return game_id
 
     # ── Game loop ────────────────────────────────────────────────────────
 
@@ -1052,3 +1097,4 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("clapback")
     play.add_command(cog.clapback)
+    bot.game_launchers["clapback"] = cog.launch

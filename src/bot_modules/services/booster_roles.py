@@ -396,6 +396,74 @@ def get_swatch_directory(db_path: Path) -> str:
         return get_config_value(conn, "booster_swatch_dir", "")
 
 
+def get_guild_swatch_dir(db_path: Path, guild_id: int) -> Path:
+    """Return (and create) the managed per-guild swatch upload folder.
+
+    Lives next to the database under ``swatches/<guild_id>/`` so each server
+    keeps its own isolated set of uploaded swatch images.
+    """
+    directory = db_path.parent / "swatches" / str(guild_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def count_valid_swatches(directory: str) -> int:
+    """Count files in ``directory`` whose names parse as valid swatches."""
+    if not directory or not os.path.isdir(directory):
+        return 0
+    total = 0
+    for entry in os.listdir(directory):
+        if os.path.splitext(entry)[1].lower() not in _IMAGE_EXTS:
+            continue
+        if _parse_swatch_filename(entry) is not None:
+            total += 1
+    return total
+
+
+def swatch_file_info(directory: Path) -> list[dict]:
+    """List image files in ``directory`` with parsed swatch metadata.
+
+    Each entry is ``{name, valid, label, hex1, hex2}``. ``valid`` is False for
+    image files whose names don't match ``ColorName_HEX1_HEX2.ext`` — those are
+    skipped by Sync, so the UI surfaces them as needing a rename.
+    """
+    if not directory.is_dir():
+        return []
+    out: list[dict] = []
+    for entry in sorted(os.listdir(directory)):
+        if os.path.splitext(entry)[1].lower() not in _IMAGE_EXTS:
+            continue
+        parsed = _parse_swatch_filename(entry)
+        if parsed is not None:
+            label, hex1, hex2 = parsed
+            out.append(
+                {"name": entry, "valid": True, "label": label, "hex1": hex1, "hex2": hex2}
+            )
+        else:
+            out.append(
+                {"name": entry, "valid": False, "label": None, "hex1": None, "hex2": None}
+            )
+    return out
+
+
+def resolve_swatch_directory(db_path: Path, guild_id: int) -> str:
+    """Pick the directory that Sync will scan for this guild.
+
+    The managed per-guild upload folder wins as soon as it holds at least one
+    validly named swatch; otherwise fall back to the configured
+    ``booster_swatch_dir`` override (legacy host-path deployments). When neither
+    has content, the (empty) managed folder is returned so the caller's
+    zero-swatch guard can abort safely.
+    """
+    managed = get_guild_swatch_dir(db_path, guild_id)
+    if count_valid_swatches(str(managed)) > 0:
+        return str(managed)
+    configured = get_swatch_directory(db_path)
+    if configured and os.path.isdir(configured):
+        return configured
+    return str(managed)
+
+
 async def sync_swatches(
     db_path: Path,
     guild: discord.Guild,
@@ -404,7 +472,7 @@ async def sync_swatches(
 
     Returns (created_labels, removed_labels).
     """
-    swatch_dir = get_swatch_directory(db_path)
+    swatch_dir = resolve_swatch_directory(db_path, guild.id)
     if not swatch_dir or not os.path.isdir(swatch_dir):
         raise ValueError(f"Swatch directory not configured or missing: `{swatch_dir}`")
 
@@ -427,6 +495,14 @@ async def sync_swatches(
             hex2,
             os.path.join(swatch_dir, entry),
             _hex_sort_key(hex1, hex2),
+        )
+
+    # Guard: never let an empty/all-invalid folder reach the removal loop below,
+    # which would delete every existing booster role.
+    if not found:
+        raise ValueError(
+            f"No valid swatch files found in `{swatch_dir}`. Upload images named "
+            "`ColorName_HEX1_HEX2.png` before syncing."
         )
 
     with open_db(db_path) as conn:
