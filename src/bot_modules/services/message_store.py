@@ -13,6 +13,43 @@ import json
 import sqlite3
 from collections.abc import Sequence
 
+# ── Per-guild message-content storage levels ──────────────────────────
+# Stored in the ``config`` table under STORAGE_LEVEL_KEY, scoped per guild.
+# Only NONE (default) and ALL are wired up; AUTOMOD and DELETE_CACHE are
+# reserved for a later partial-retention pass and are not yet accepted by
+# the config API.
+STORAGE_LEVEL_KEY = "message_storage_level"
+STORAGE_LEVEL_NONE = "none"
+STORAGE_LEVEL_ALL = "all"
+STORAGE_LEVEL_AUTOMOD = "automod"  # reserved — not implemented
+STORAGE_LEVEL_DELETE_CACHE = "delete_cache"  # reserved — not implemented
+# Levels the config API currently accepts.
+SUPPORTED_STORAGE_LEVELS = frozenset({STORAGE_LEVEL_NONE, STORAGE_LEVEL_ALL})
+
+
+def guild_retains_content(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    allow_legacy_fallback: bool = True,
+) -> bool:
+    """True if this guild's storage level keeps raw message content.
+
+    Defaults to False (level ``none``) for any guild that hasn't opted in,
+    so derivations (XP, sentiment, interactions) are kept but the message
+    text/attachments/embeds are dropped at ingest.
+    """
+    from bot_modules.core.db_utils import get_config_value
+
+    level = get_config_value(
+        conn,
+        STORAGE_LEVEL_KEY,
+        STORAGE_LEVEL_NONE,
+        guild_id,
+        allow_legacy_fallback=allow_legacy_fallback,
+    )
+    return level == STORAGE_LEVEL_ALL
+
 
 def _flatten_embeds(embeds: list[dict]) -> str | None:
     """Flatten embed dicts into a single searchable text string."""
@@ -335,6 +372,7 @@ def store_message(
     sentiment: float | None = None,
     emotion: str | None = None,
     embeds: Sequence[dict] = (),
+    retain_content: bool = True,
 ) -> None:
     """Store a message and its related data. Silently skips if already stored.
 
@@ -342,7 +380,18 @@ def store_message(
     author, footer, fields (list of {name, value, inline}).  When ``content``
     is None and embeds are present, the flattened embed text is used as content
     so embed-only bot messages remain searchable.
+
+    When ``retain_content`` is False (guild storage level ``none``), the raw
+    message text, attachment URLs, and embeds are dropped — only the row
+    skeleton (ids/ts), derivations (sentiment/emotion), and @-mention edges
+    are persisted, leaving a content-less record that still reconstructs a
+    Discord deep link.
     """
+    if not retain_content:
+        content = None
+        attachment_urls = []
+        embeds = ()
+
     # Use flattened embed text as searchable content for embed-only messages.
     if content is None and embeds:
         content = _flatten_embeds(list(embeds))
@@ -469,6 +518,35 @@ def adjust_reaction_count(
         "DELETE FROM message_reactions WHERE message_id = ? AND emoji = ? AND count = 0",
         (message_id, emoji),
     )
+
+
+def purge_guild_message_content(conn: sqlite3.Connection, guild_id: int) -> int:
+    """Erase stored message *content* for a guild, keeping derivations.
+
+    Nulls ``messages.content`` and removes attachment URLs and embed text for
+    every message in the guild. Deliberately leaves the message rows, sentiment
+    scores, @-mention edges, and all derived tables (XP, interactions, member
+    activity, the processed-message ledger) intact — wiping those would corrupt
+    XP back-calculation and analytics.
+
+    Invoked once when a guild is switched to storage level ``none``. Returns the
+    number of message rows whose content was cleared.
+    """
+    id_subq = "SELECT message_id FROM messages WHERE guild_id = ?"
+    conn.execute(
+        f"DELETE FROM message_attachments WHERE message_id IN ({id_subq})",
+        (guild_id,),
+    )
+    conn.execute(
+        f"DELETE FROM message_embeds WHERE message_id IN ({id_subq})",
+        (guild_id,),
+    )
+    cur = conn.execute(
+        "UPDATE messages SET content = NULL "
+        "WHERE guild_id = ? AND content IS NOT NULL",
+        (guild_id,),
+    )
+    return max(cur.rowcount, 0)
 
 
 def delete_message(conn: sqlite3.Connection, message_id: int) -> None:

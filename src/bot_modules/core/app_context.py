@@ -315,6 +315,9 @@ class GuildConfig:
     spoiler_required_channels: frozenset[int]
     bypass_role_ids: frozenset[int]
     recorded_bot_user_ids: frozenset[int]
+    # message-content storage level: "none" (default — keep derivations only)
+    # or "all" (full content archive). See bot_modules.services.message_store.
+    message_storage_level: str
     # XP / leveling
     xp_excluded_channel_ids: frozenset[int]
     xp_grant_allowed_user_ids: frozenset[int]
@@ -384,6 +387,7 @@ class GuildConfig:
             spoiler_required_channels=_ids("spoiler_required_channels"),
             bypass_role_ids=_ids("bypass_role_ids"),
             recorded_bot_user_ids=_ids("recorded_bot_user_ids"),
+            message_storage_level=_val("message_storage_level", "none"),
             xp_excluded_channel_ids=_ids("xp_excluded_channel_ids"),
             xp_grant_allowed_user_ids=_ids("xp_grant_allowed_user_ids"),
             level_5_role_id=_int("xp_level_5_role_id"),
@@ -411,6 +415,15 @@ class GuildConfig:
     def member_is_admin(self, member: discord.Member) -> bool:
         """True if the member holds a configured admin role."""
         return bool(self.admin_role_ids & {r.id for r in member.roles})
+
+    @property
+    def retains_content(self) -> bool:
+        """True if this guild archives raw message content (storage level "all").
+
+        The single home for the level→retain predicate; ingest call sites read
+        this instead of comparing the level string themselves.
+        """
+        return self.message_storage_level == "all"
 
 
 @dataclass

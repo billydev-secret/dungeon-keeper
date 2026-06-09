@@ -451,6 +451,8 @@ class _StubGuildConfig:
         level_5_log_channel_id: int = 0,
         level_up_log_channel_id: int = 0,
         xp_settings: Any = DEFAULT_XP_SETTINGS,
+        message_storage_level: str = "none",
+        auto_role_ids: Any = None,
     ):
         self.welcome_channel_id = welcome_channel_id
         self.welcome_message = welcome_message
@@ -476,6 +478,14 @@ class _StubGuildConfig:
         self.level_5_log_channel_id = level_5_log_channel_id
         self.level_up_log_channel_id = level_up_log_channel_id
         self.xp_settings = xp_settings
+        self.message_storage_level = message_storage_level
+        self.auto_role_ids = (
+            frozenset() if auto_role_ids is None else frozenset(auto_role_ids)
+        )
+
+    @property
+    def retains_content(self) -> bool:
+        return self.message_storage_level == "all"
 
 
 def _make_member(*, guild_id: int = 1, member_id: int = 100, is_bot: bool = False) -> MagicMock:

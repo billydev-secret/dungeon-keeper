@@ -17,6 +17,7 @@ import discord
 
 from bot_modules.services.interaction_graph import clear_interaction_data, record_interactions
 from bot_modules.services.message_store import (
+    guild_retains_content,
     set_reaction_count,
     store_message,
 )
@@ -390,6 +391,7 @@ async def backfill_interactions_async(
         if reset:
             clear_interaction_data(conn, guild.id)
 
+        retain_content = guild_retains_content(conn, guild.id)
         for ch in channels:
             if me and not ch.permissions_for(me).read_message_history:
                 continue
@@ -423,9 +425,14 @@ async def backfill_interactions_async(
                         content=_archived_message_content(message),
                         reply_to_id=reply_to_id,
                         ts=msg_ts,
-                        attachment_urls=[a.url for a in message.attachments],
+                        attachment_urls=[a.url for a in message.attachments]
+                        if retain_content
+                        else [],
                         mention_ids=mention_ids,
-                        embeds=[_embed_to_dict(e) for e in message.embeds],
+                        embeds=[_embed_to_dict(e) for e in message.embeds]
+                        if retain_content
+                        else (),
+                        retain_content=retain_content,
                     )
 
                     for reaction in message.reactions:

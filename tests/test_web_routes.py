@@ -275,6 +275,81 @@ def test_update_global_persists_fields_and_updates_context(ctx, make_client):
     assert ctx.recorded_bot_user_ids == {9}
 
 
+def _seed_message(ctx, message_id: int, content: str) -> None:
+    from bot_modules.services.message_store import init_message_tables, store_message
+
+    with open_db(ctx.db_path) as conn:
+        init_message_tables(conn)
+        store_message(
+            conn,
+            message_id=message_id,
+            guild_id=ctx.guild_id,
+            channel_id=10,
+            author_id=50,
+            content=content,
+            reply_to_id=None,
+            ts=1,
+            attachment_urls=["https://cdn.example/a.png"],
+            mention_ids=[7],
+            sentiment=0.4,
+            emotion="joy",
+            embeds=[{"title": "t"}],
+            retain_content=True,
+        )
+
+
+def test_update_privacy_switch_to_none_purges_existing_content(ctx, make_client):
+    _seed_message(ctx, 1, "secret")
+    with open_db(ctx.db_path) as conn:
+        set_config_value(conn, "message_storage_level", "all", ctx.guild_id)
+
+    client = make_client()
+    response = client.put(
+        "/api/config/privacy", json={"message_storage_level": "none"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "purged": 1}
+    with open_db(ctx.db_path) as conn:
+        assert (
+            get_config_value(conn, "message_storage_level", "", ctx.guild_id)
+            == "none"
+        )
+        row = conn.execute(
+            "SELECT content, sentiment FROM messages WHERE message_id = 1"
+        ).fetchone()
+        assert row["content"] is None  # content purged
+        assert row["sentiment"] == 0.4  # derivation kept
+
+
+def test_update_privacy_to_all_persists_without_purge(ctx, make_client):
+    _seed_message(ctx, 2, "keep me")
+
+    client = make_client()
+    response = client.put(
+        "/api/config/privacy", json={"message_storage_level": "all"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "purged": 0}
+    with open_db(ctx.db_path) as conn:
+        assert (
+            get_config_value(conn, "message_storage_level", "", ctx.guild_id) == "all"
+        )
+        row = conn.execute(
+            "SELECT content FROM messages WHERE message_id = 2"
+        ).fetchone()
+        assert row["content"] == "keep me"
+
+
+def test_update_privacy_rejects_unsupported_level(ctx, make_client):
+    client = make_client()
+    response = client.put(
+        "/api/config/privacy", json={"message_storage_level": "automod"}
+    )
+    assert response.status_code == 400
+
+
 def test_update_welcome_persists_and_updates_live_context(ctx, make_client):
     client = make_client()
 
