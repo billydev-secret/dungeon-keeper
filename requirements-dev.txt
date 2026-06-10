@@ -13,3 +13,4 @@ pre-commit>=3.8.0
 invoke>=2.2.0
 aiosqlite>=0.19
 pyright>=1.1
+PyYAML>=6.0

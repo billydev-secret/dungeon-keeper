@@ -90,14 +90,14 @@ export function mount(container) {
             <label>Welcome Trigger</label>
             <select name="welcome_trigger">
               <option value="join"${trigger === "join" ? " selected" : ""}>At join</option>
-              <option value="verified"${trigger === "verified" ? " selected" : ""}>After bio verified (unverified role removed + bio posted)</option>
+              <option value="verified"${trigger === "verified" ? " selected" : ""}>After verification (unverified role removed)</option>
             </select>
-            <div class="field-hint">When to send the welcome message. "After bio verified" fires when the unverified role is removed AND the member has a completed bio.</div>
+            <div class="field-hint">When to send the welcome message. "After verification" fires when the unverified role below is removed — e.g. once DoubleCounter finishes its scan and lifts the gate. No bio is required.</div>
           </div>
           <div class="field" data-verified-only style="${trigger === "verified" ? "" : "display:none"}">
             <label>Unverified Role</label>
             <select name="unverified_role_id">${roleSelect(roles, w.unverified_role_id)}</select>
-            <div class="field-hint">Role that is removed by your verification process. The welcome fires when this role is stripped and the member has a bio.</div>
+            <div class="field-hint">Role that is removed by your verification process (e.g. DoubleCounter). The welcome fires the moment this role is stripped.</div>
           </div>
           <div class="field">
             <label>Welcome Message</label>

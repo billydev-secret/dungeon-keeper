@@ -791,18 +791,16 @@ class EventsCog(commands.Cog):
                     )
 
         cfg = self.ctx.guild_config(after.guild.id)
+        # Welcome fires the moment the unverified role is stripped (e.g. once
+        # DoubleCounter finishes its alt scan and lifts the gate). No bio is
+        # required — {member_bio_link} simply resolves to "" when absent.
         if (
             cfg.welcome_trigger == "verified"
             and cfg.unverified_role_id > 0
             and cfg.unverified_role_id in (before_ids - after_ids)
             and cfg.welcome_channel_id > 0
         ):
-            from bot_modules.bios import db as bios_db
-
-            with self.ctx.open_db() as conn:
-                has_bio = bios_db.get_user_bio(conn, after.guild.id, after.id) is not None
-            if has_bio:
-                await self._send_welcome(after, cfg)
+            await self._send_welcome(after, cfg)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:

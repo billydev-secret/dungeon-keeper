@@ -640,6 +640,70 @@ async def test_on_member_join_sends_greeter_ping():
     greeter_channel.send.assert_awaited_once_with("@here - <@500> has arrived")
 
 
+def _role(role_id: int, name: str) -> MagicMock:
+    role = MagicMock()
+    role.id = role_id
+    role.name = name
+    return role
+
+
+async def test_on_member_update_verified_fires_without_bio():
+    """Stripping the unverified role fires the welcome with no bio required.
+
+    Regression guard: DoubleCounter lifts the gate by removing the unverified
+    role; the welcome must fire on that alone, independent of any bio.
+    """
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(
+            welcome_channel_id=42,
+            welcome_trigger="verified",
+            unverified_role_id=555,
+        ),
+    )
+    cog = EventsCog(bot, ctx)
+    cog._send_welcome = AsyncMock()
+
+    member_role = _role(900, "Member")
+    before = _make_member(guild_id=7)
+    before.roles = [_role(555, "Unverified"), member_role]
+    after = _make_member(guild_id=7)
+    after.roles = [member_role]  # unverified role stripped
+
+    with patch("bot_modules.cogs.events_cog.log_role_event"):
+        await cog.on_member_update(before, after)
+
+    cog._send_welcome.assert_awaited_once()
+    assert cog._send_welcome.call_args.args[0] is after
+
+
+async def test_on_member_update_verified_skips_when_unverified_role_kept():
+    """No welcome while the unverified role is still present."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(
+            welcome_channel_id=42,
+            welcome_trigger="verified",
+            unverified_role_id=555,
+        ),
+    )
+    cog = EventsCog(bot, ctx)
+    cog._send_welcome = AsyncMock()
+
+    unverified = _role(555, "Unverified")
+    before = _make_member(guild_id=7)
+    before.roles = [unverified]
+    after = _make_member(guild_id=7)
+    after.roles = [unverified, _role(900, "Member")]  # gained a role, gate intact
+
+    with patch("bot_modules.cogs.events_cog.log_role_event"):
+        await cog.on_member_update(before, after)
+
+    cog._send_welcome.assert_not_awaited()
+
+
 async def test_on_member_remove_uses_per_guild_leave_channel():
     """Leave channel comes from cfg, not ctx flat fields."""
     bot = _make_bot()
