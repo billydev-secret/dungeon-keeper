@@ -400,4 +400,4 @@ class RiskyRollCog(commands.Cog):
 async def setup(bot: Bot) -> None:
     cog = RiskyRollCog(bot, bot.ctx)
     await bot.add_cog(cog)
-    bot.game_launchers["risky_roll"] = cog.launch
+    bot.game_launchers["risky_roll"] = cog.launch  # type: ignore[attr-defined]
