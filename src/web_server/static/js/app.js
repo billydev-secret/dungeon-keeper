@@ -1,7 +1,20 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
+import { HELP_GROUPS } from "./panels/help-sections.js";
 
-const _moduleVer = "?v=22";
+const _moduleVer = "?v=23";
+
+// The Help nav is generated from help-sections.js (single source shared with
+// the help panel) so nav entries can't drift from the manual's sections.
+const _helpNavItem = ({ page, label }) => ({ id: page, label, module: "./panels/help.js" });
+const HELP_NAV_SECTION = {
+  id: "help", label: "Help", perms: [],
+  items: HELP_GROUPS.filter((g) => !g.heading).flatMap((g) => g.items.map(_helpNavItem)),
+  groups: HELP_GROUPS.filter((g) => g.heading).map((g) => ({
+    heading: g.heading,
+    items: g.items.map(_helpNavItem),
+  })),
+};
 
 // ── Section definitions ─────────────────────────────────────────────
 
@@ -180,44 +193,7 @@ const SECTIONS = [
       ]},
     ],
   },
-  {
-    id: "help", label: "Help", perms: [],
-    items: [
-      { id: "help-overview", label: "Overview", module: "./panels/help.js" },
-    ],
-    groups: [
-      { heading: "Moderation", items: [
-        { id: "help-moderation", label: "Moderation Core",              module: "./panels/help.js" },
-        { id: "help-tickets",    label: "Tickets, Policies & Warnings", module: "./panels/help.js" },
-        { id: "help-analytics",  label: "Activity & Watch",             module: "./panels/help.js" },
-      ]},
-      { heading: "Jail", items: [
-        { id: "help-jail",       label: "Jail & Release",               module: "./panels/help.js" },
-      ]},
-      { heading: "Voice", items: [
-        { id: "help-voice",      label: "Voice Channels",               module: "./panels/help.js" },
-        { id: "help-music",      label: "Music & TTS",                  module: "./panels/help.js" },
-      ]},
-      { heading: "Community Games", items: [
-        { id: "help-guess",       label: "Guess Who",                   module: "./panels/help.js" },
-        { id: "help-whisper",     label: "Whisper",                     module: "./panels/help.js" },
-        { id: "help-confessions", label: "Confessions",                 module: "./panels/help.js" },
-      ]},
-      { heading: "Community Tools", items: [
-        { id: "help-community",  label: "Community & XP",               module: "./panels/help.js" },
-        { id: "help-wellness",   label: "Wellness",                     module: "./panels/help.js" },
-        { id: "help-events",     label: "Special Events",               module: "./panels/help.js" },
-      ]},
-      { heading: "Self-Service", items: [
-        { id: "help-self",       label: "Member Self-Service",          module: "./panels/help.js" },
-      ]},
-      { heading: "Owner", items: [
-        { id: "help-setup",      label: "Setup & Permissions",          module: "./panels/help.js" },
-        { id: "help-config",     label: "Configuration",                module: "./panels/help.js" },
-        { id: "help-cleanup",    label: "Cleanup & Tagging",            module: "./panels/help.js" },
-      ]},
-    ],
-  },
+  HELP_NAV_SECTION,
   {
     id: "dev", label: "Dev", perms: ["admin"],
     items: [
