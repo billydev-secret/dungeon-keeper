@@ -262,6 +262,76 @@ class RiskyRollCog(commands.Cog):
                             pass
                 raise
 
+    async def launch(
+        self,
+        *,
+        channel,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict,
+    ) -> str | None:
+        """Interaction-free launch for the scheduler. Returns game_id, or None."""
+        me = channel.guild.me
+        perms = channel.permissions_for(me)
+        if not (perms.send_messages and perms.embed_links):
+            log.warning("risky_roll launch: missing perms in channel %s", channel.id)
+            return None
+
+        auto_close_players = options.get("auto_close_players", 25)
+        auto_close_minutes = options.get("auto_close_minutes", 120)
+
+        async with rr_state.get_channel_lock(channel.id):
+            active_in_channel = sum(
+                1 for s in rr_state.active_games.values()
+                if s.channel_id == channel.id
+            )
+            if active_in_channel >= 1:
+                log.warning(
+                    "risky_roll launch: channel %s already has an active round", channel.id
+                )
+                return None
+
+            normalized_players, normalized_minutes = normalize_auto_close_options(
+                auto_close_players, auto_close_minutes
+            )
+            state = RiskyRollState(
+                channel_id=channel.id,
+                guild_id=guild_id,
+                opener_id=host_id,
+                auto_close_players=normalized_players,
+                auto_close_minutes=normalized_minutes,
+                skip_min_game_time=True,
+            )
+            rr_state.active_games[state.game_id] = state
+
+            view = RiskyRollView(state.game_id)
+            try:
+                msg = await channel.send(
+                    embed=build_embed(state),
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.Forbidden:
+                rr_state.active_games.pop(state.game_id, None)
+                log.warning("risky_roll launch: Forbidden in channel %s", channel.id)
+                return None
+            except Exception:
+                rr_state.active_games.pop(state.game_id, None)
+                log.exception("risky_roll launch: failed to send in channel %s", channel.id)
+                return None
+
+            state.message_id = msg.id
+            if rr_state.store is not None:
+                await rr_state.store.save_round(state)
+
+            if state.auto_close_minutes:
+                rr_state.auto_close_tasks[state.game_id] = asyncio.create_task(
+                    schedule_auto_close(self.bot, state.game_id, state.auto_close_minutes * 60)
+                )
+
+        return state.game_id
+
     # ------------------------------------------------------------------
     # Admin commands
     # ------------------------------------------------------------------
@@ -328,4 +398,6 @@ class RiskyRollCog(commands.Cog):
 
 
 async def setup(bot: Bot) -> None:
-    await bot.add_cog(RiskyRollCog(bot, bot.ctx))
+    cog = RiskyRollCog(bot, bot.ctx)
+    await bot.add_cog(cog)
+    bot.game_launchers["risky_roll"] = cog.launch

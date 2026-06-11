@@ -34,6 +34,7 @@ GAME_ICONS = {
     'clapback': '⚔️',
     'legitlibs': '📝',
     'pressure': '♨️',
+    'risky_roll': '🎰',
 }
 
 GAME_NAMES = {
@@ -55,6 +56,7 @@ GAME_NAMES = {
     'clapback': 'Clapback',
     'legitlibs': 'LegitLibs',
     'pressure': 'Pressure Cooker',
+    'risky_roll': 'Risky Rolls',
 }
 
 # ── Scheduling registry ─────────────────────────────────────────────────────
@@ -67,7 +69,7 @@ GAME_NAMES = {
 SCHEDULABLE_GAME_TYPES = [
     'ffa', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
     'hottakes', 'story', 'ama', 'fantasies', 'price', 'rushmore', 'clapback',
-    'legitlibs',
+    'legitlibs', 'risky_roll',
 ]
 
 # Per-game option fields the scheduler/web UI can collect. Each field:
@@ -153,6 +155,12 @@ SCHEDULE_OPTION_SCHEMA = {
                      {'value': 'quiplash', 'label': 'Quiplash (all fill, all revealed)'},
                      {'value': 'hotseat', 'label': 'Hot Seat (author picks best)'}]},
         {'name': 'tier', 'label': 'Heat tier (1-4)', 'type': 'int', 'default': 2, 'min': 1, 'max': 4},
+    ],
+    'risky_roll': [
+        {'name': 'auto_close_players', 'label': 'Auto-close after N players roll', 'type': 'int',
+         'default': 25, 'min': 2, 'max': 100},
+        {'name': 'auto_close_minutes', 'label': 'Auto-close after N minutes', 'type': 'int',
+         'default': 120, 'min': 1, 'max': 1440},
     ],
 }
 
