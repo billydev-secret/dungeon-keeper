@@ -1,0 +1,243 @@
+# Server Install & Deployment Guide
+
+A step-by-step guide for installing **dungeon-keeper (dk)** on a Linux server for
+production use. For a quick local dev setup on Windows, see the Quick Start in
+[README.md](README.md).
+
+> **One thing that trips everyone up:** `pyproject.toml` declares **no runtime
+> dependencies**. Running `pip install -e .` alone installs the package but
+> **none** of its libraries. The real dependency list lives in
+> `requirements.txt` — you must `pip install -r requirements.txt` first.
+
+---
+
+## 1. Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| **Python 3.10.x** | Tested on 3.10.11. Pin to 3.10 — `mediapipe`, `nudenet` (onnxruntime), and `llama-cpp-python` ship native wheels with Python-version ceilings; the newest Python is exactly where `pip install` tends to explode. |
+| **git** | To clone the repo. |
+| **build toolchain** | `build-essential` (gcc/g++/make) as a fallback if a native wheel isn't available for your platform. |
+| **Java 17+** | **Optional** — only for the music cog (Lavalink). Skip if you don't need music. |
+
+On Debian/Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install -y python3.10 python3.10-venv python3.10-dev git build-essential
+# Optional, music only:
+sudo apt install -y openjdk-17-jre-headless
+```
+
+---
+
+## 2. Clone and create a virtualenv
+
+```bash
+git clone https://github.com/billydev-secret/dungeon-keeper.git
+cd dungeon-keeper
+
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+---
+
+## 3. Install dependencies
+
+```bash
+# Runtime libraries (REQUIRED — pyproject declares none):
+pip install -r requirements.txt
+
+# Then install the package itself (provides `python -m dungeonkeeper`):
+pip install -e .
+```
+
+If a native package (`mediapipe`, `nudenet`/`onnxruntime`, `llama-cpp-python`)
+fails to find a wheel, confirm you're on Python 3.10 and that `build-essential`
+is installed, then retry.
+
+> For development/testing tooling (ruff, mypy, pytest, etc.) use
+> `pip install -r requirements-dev.txt` instead.
+
+---
+
+## 4. Create the Discord application
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+   → **New Application**.
+2. **Bot** tab → **Add Bot** → copy the **token** (this is `DISCORD_TOKEN_PROD`).
+3. Under **Privileged Gateway Intents**, enable **all three** — the bot requires
+   them and will fail to start correctly without them:
+   - ✅ **Presence Intent**
+   - ✅ **Server Members Intent**
+   - ✅ **Message Content Intent**
+4. **Invite the bot.** Once it's running you can just use the `/invite` command,
+   which generates a link with the exact least-privilege permission set the bot
+   needs. For the first install, use **OAuth2 → URL Generator** with scopes
+   `bot` + `applications.commands` and tick these permissions (the same set
+   `/invite` requests):
+   - Manage Roles, Manage Channels, Manage Nicknames, Manage Messages
+   - Manage Threads, Create Public Threads, Send Messages in Threads
+   - Move Members, Connect, Speak _(Voice Master + music)_
+   - View Channels, Send Messages, Embed Links, Attach Files,
+     Read Message History, Add Reactions, Use External Emojis
+
+   Administrator also works but is **not required** — the bot never bans, kicks,
+   or times members out (jail is role/channel-overwrite based), so grant the
+   scoped set above rather than Administrator. Open the generated URL and invite
+   the bot to your server.
+5. Get your **guild (server) ID**: Discord → User Settings → Advanced → enable
+   Developer Mode, then right-click your server → **Copy Server ID**.
+
+---
+
+## 5. Configure `.env`
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` for production. Minimum required:
+
+```ini
+BOT_ENV=prod
+
+DISCORD_TOKEN_PROD=your_prod_bot_token_here
+GUILD_ID_PROD=123456789012345678
+DB_PATH_PROD=dungeonkeeper.db
+AUDIT_CHANNEL_PROD=          # channel ID for audit logs (optional but recommended)
+
+# Strongly recommended safety guard — the bot exits on startup if the
+# connected bot user ID doesn't match (prevents running with the wrong token):
+EXPECTED_BOT_ID_PROD=your_bot_user_id
+```
+
+Leave the dev, dashboard, music, and beta-tools blocks commented out unless you
+need them (see sections 8–9).
+
+---
+
+## 6. First run
+
+Database migrations apply **automatically** on startup — there is no separate
+migrate step. Just run:
+
+```bash
+python -m dungeonkeeper
+```
+
+On first boot the bot applies all migrations, syncs slash commands globally
+(production mode), and connects. In your server, run **`/setup`** to provision
+channels/categories and walk through role/category configuration.
+
+Stop with `Ctrl+C`. The SQLite database is written to `DB_PATH_PROD`
+(`dungeonkeeper.db` by default) in the working directory.
+
+---
+
+## 7. Run as a service (systemd)
+
+Create `/etc/systemd/system/dungeonkeeper.service` (adjust `User` and paths):
+
+```ini
+[Unit]
+Description=dungeon-keeper Discord bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dk
+WorkingDirectory=/home/dk/dungeon-keeper
+ExecStart=/home/dk/dungeon-keeper/.venv/bin/python -m dungeonkeeper
+Restart=on-failure
+RestartSec=5
+# .env is loaded automatically by the app; no EnvironmentFile needed.
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now dungeonkeeper
+sudo systemctl status dungeonkeeper
+journalctl -u dungeonkeeper -f      # live logs
+```
+
+---
+
+## 8. Optional — Music (Lavalink + Spotify)
+
+The music cog runs Lavalink as a child process and requires **Java 17+**.
+
+1. Download Lavalink + plugins (one-time, idempotent):
+   ```bash
+   python scripts/setup_lavalink.py
+   ```
+2. Create a Spotify app at <https://developer.spotify.com/dashboard>
+   (Client Credentials flow — no redirect URI). Copy the Client ID and Secret.
+3. Uncomment and fill the music block in `.env`:
+   ```ini
+   SPOTIFY_CLIENT_ID=...
+   SPOTIFY_CLIENT_SECRET=...
+   LAVALINK_PASSWORD=<random>
+   LAVALINK_HOST=127.0.0.1
+   LAVALINK_PORT=2333
+   LAVALINK_HEAP_MB=512
+   ```
+
+Lavalink starts automatically when the cog loads. If it fails, the rest of the
+bot keeps running and music commands report "Music is currently unavailable."
+
+---
+
+## 9. Optional — Web dashboard
+
+An opt-in, read-only LAN analytics dashboard. Uncomment in `.env`:
+
+```ini
+DASHBOARD_ENABLED=1
+DASHBOARD_HOST=0.0.0.0
+DASHBOARD_PORT=8080
+```
+
+Without OAuth it runs in **open LAN mode** (no login). To require Discord login
+and expose it publicly, also set `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+`SESSION_SECRET` (`python -c "import secrets; print(secrets.token_urlsafe(32))"`),
+and `DASHBOARD_BASE_URL`, add the `/callback` redirect URI in the Developer
+Portal, and front it with a reverse proxy (nginx/Caddy) terminating TLS.
+
+> **Do not expose the open-LAN dashboard to the internet** — it has no auth.
+
+---
+
+## 10. Backups & maintenance
+
+- **Database** — everything lives in the single SQLite file at `DB_PATH_PROD`.
+  A background DB-backup loop runs in-process, but you should also snapshot the
+  file on a schedule (`sqlite3 dungeonkeeper.db ".backup backup.db"` or stop the
+  service and copy the file).
+- **Updating:**
+  ```bash
+  sudo systemctl stop dungeonkeeper
+  git pull
+  source .venv/bin/activate
+  pip install -r requirements.txt && pip install -e .
+  sudo systemctl start dungeonkeeper   # migrations re-apply automatically
+  ```
+- **Logs** — `journalctl -u dungeonkeeper`.
+
+---
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| `ModuleNotFoundError` for discord/fastapi/etc. on a fresh install | You ran only `pip install -e .`. Run `pip install -r requirements.txt` first. |
+| Bot connects but sees no message content / can't read members | Privileged intents not enabled in the Developer Portal (section 4, step 3). |
+| Bot exits immediately on startup citing wrong bot ID | `EXPECTED_BOT_ID_PROD` doesn't match the token's bot user — fix the token or the ID. |
+| `pip install` fails building mediapipe / onnxruntime / llama-cpp-python | Use Python 3.10 and install `build-essential`, then retry. |
+| Music commands say "currently unavailable" | Java 17+ missing, or `setup_lavalink.py` not run, or Lavalink env vars unset (section 8). |

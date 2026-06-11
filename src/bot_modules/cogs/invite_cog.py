@@ -23,14 +23,20 @@ class InviteCog(commands.Cog):
         description="Get a link to invite this bot to your server.",
     )
     async def invite(self, interaction: discord.Interaction) -> None:
+        # Least-privilege set: every permission here maps to an API call the bot
+        # actually makes. The bot never bans/kicks/timeouts (jail is role- and
+        # channel-overwrite based), so those mod perms are deliberately absent.
         perms = discord.Permissions(
-            manage_roles=True,
-            manage_channels=True,
-            manage_nicknames=True,
-            kick_members=True,
-            ban_members=True,
-            moderate_members=True,
-            manage_messages=True,
+            manage_roles=True,  # jail, xp, whisper, guess, wellness, dm_perms, booster
+            manage_channels=True,  # jail/setup channels, Voice Master temp channels
+            manage_nicknames=True,  # duels, pressure_cooker, quickdraw
+            manage_messages=True,  # purge, auto-delete, post monitoring, pins
+            move_members=True,  # Voice Master move/disconnect
+            connect=True,  # music cog joins voice
+            speak=True,  # music cog streams audio
+            create_public_threads=True,  # confessions, needle, risky_roll
+            send_messages_in_threads=True,
+            manage_threads=True,  # needle deletes resolved threads
             read_messages=True,
             send_messages=True,
             embed_links=True,
