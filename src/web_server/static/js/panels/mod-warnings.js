@@ -93,7 +93,7 @@ export function mount(container) {
     <div class="panel">
       <header>
         <h2>Warnings</h2>
-        <div class="subtitle">Active and expired warnings for server members.</div>
+        <div class="subtitle">Active and revoked warnings for server members.</div>
       </header>
 
       <div class="mod-stats" data-stats></div>

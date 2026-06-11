@@ -1,4 +1,5 @@
 import { loadConfig, loadChannels, channelSelect, channelName, apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -185,7 +186,7 @@ function render(container, needle, channels) {
   container.innerHTML = `
     <div class="panel">
       <header>
-        <h2>Auto-Thread (Needle)</h2>
+        <h2>Auto-Thread</h2>
         <div class="subtitle">Automatically create a thread on every message in designated channels</div>
       </header>
 
@@ -316,13 +317,13 @@ function wireExistingCards(container, cfgs) {
 function wireRemove(container, channels) {
   container.querySelectorAll("[data-needle-remove]").forEach(btn => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Remove auto-threading from this channel?")) return;
+      if (!(await confirmDialog("Remove auto-threading from this channel?", { danger: true, confirmLabel: "Remove" }))) return;
       try {
         await apiDelete(`/api/config/needle/${btn.dataset.needleRemove}`);
         const fresh = await loadConfig();
         render(container, fresh.needle || {}, channels);
       } catch (err) {
-        alert(err.message);
+        toast(err.message, "error");
       }
     });
   });

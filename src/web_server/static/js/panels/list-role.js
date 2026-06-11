@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { loadRoles, roleSelect } from "../config-helpers.js";
 import { renderSortableTable } from "../table.js";
 
@@ -35,7 +36,7 @@ export function mount(container, initialParams) {
     statusEl.textContent = "Loading…";
     history.replaceState(null, "", `#/list-role?role_id=${encodeURIComponent(roleEl.value)}`);
     try {
-      const data = await api("/api/reports/list-role", { role_id: roleEl.value });
+      const data = await withLoading(tableWrap, api("/api/reports/list-role", { role_id: roleEl.value }));
       statusEl.textContent = `${data.role_name} — ${data.total} members`;
       renderSortableTable(tableWrap, {
         columns: [

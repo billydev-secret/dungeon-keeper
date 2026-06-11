@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -9,11 +10,7 @@ export function mount(container, initialParams) {
         <h2>Reaction Analytics</h2>
         <div class="subtitle">Top emoji, biggest givers, and most-reacted members</div>
       </header>
-      <div class="controls">
-        <label>Days (empty = all time)
-          <input type="number" data-control="days" min="1" max="3650" value="${initialParams.days || 1}" placeholder="all" />
-        </label>
-      </div>
+      <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div class="chart-wrap"><canvas data-chart-emoji></canvas></div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;">
@@ -23,7 +20,9 @@ export function mount(container, initialParams) {
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || 1, allowAll: true, label: "Range" });
+  container.querySelector(".controls").appendChild(rangeEl);
+  const daysEl = rangeEl.querySelector("select");
   const statsEl = container.querySelector("[data-stats]");
   const giversWrap = container.querySelector("[data-givers]");
   const receiversWrap = container.querySelector("[data-receivers]");
@@ -39,7 +38,7 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/reaction-analytics?${qs}`);
 
     try {
-      const data = await api("/api/reports/reaction-analytics", params);
+      const data = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/reaction-analytics", params));
       if (chart) { chart.destroy(); chart = null; }
 
       statsEl.textContent = `Total reactions: ${data.total_reactions.toLocaleString()}`;

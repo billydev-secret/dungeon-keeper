@@ -108,7 +108,7 @@ export function multiIdList(ids, nameMap) {
 }
 
 export async function saveSection(section, body) {
-  return api(`/api/config/${section}`, null, { method: "PUT", body });
+  return apiPut(`/api/config/${section}`, body);
 }
 
 // Patched api() that supports PUT with JSON body
@@ -143,7 +143,10 @@ export async function apiDelete(path) {
 export function showStatus(el, ok, msg) {
   el.className = `save-status ${ok ? "save-ok" : "save-err"}`;
   el.textContent = msg || (ok ? "Saved" : "Error");
-  if (ok) setTimeout(() => { el.textContent = ""; }, 3000);
+  // Errors linger longer than successes, but both clear — a stale "Error"
+  // next to a button outlives its usefulness once the user moves on.
+  clearTimeout(el._statusTimer);
+  el._statusTimer = setTimeout(() => { el.textContent = ""; }, ok ? 3000 : 8000);
 }
 
 export function buildField(labelText, control, hint) {

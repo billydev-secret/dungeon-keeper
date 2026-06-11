@@ -90,11 +90,8 @@ export function mount(container) {
       }
       charts.push(makeBarChart(tlCanvas, {
         labels: dayLabels,
-        datasets: [{
-          label: "Incidents",
-          data: d.timeline,
-          backgroundColor: d.timeline.map(v => v > 0 ? "#E6B84C" : "rgba(148,155,164,0.3)"),
-        }],
+        data: d.timeline,
+        color: d.timeline.map(v => v > 0 ? "#E6B84C" : "rgba(148,155,164,0.3)"),
         title: "Daily Incidents",
         yLabel: "Count",
       }));

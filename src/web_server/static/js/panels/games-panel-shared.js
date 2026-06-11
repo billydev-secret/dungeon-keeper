@@ -1,5 +1,6 @@
 ﻿import { api, apiPost, esc } from "../api.js";
 import { apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
@@ -154,24 +155,6 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
           });
         });
 
-        el.addEventListener("click", async (e) => {
-          const btn = e.target.closest('[data-action="save-q"],[data-action="del-q"]');
-          if (!btn) return;
-          const qid = btn.dataset.qid;
-          if (btn.dataset.action === "save-q") {
-            const row = el.querySelector('tr[data-qid="' + qid + '"]');
-            const newText = row.querySelector("textarea") && row.querySelector("textarea").value.trim();
-            const newCat = row.querySelector("select") && row.querySelector("select").value;
-            if (!newText) return;
-            try { await apiPut("/api/games/bank/" + qid, { question_text: newText, category: newCat }); loadBank(); }
-            catch (err) { alert("Save failed: " + err.message); }
-          } else if (btn.dataset.action === "del-q") {
-            if (!confirm("Delete this question?")) return;
-            try { await apiDelete("/api/games/bank/" + qid); loadBank(); }
-            catch (err) { alert("Delete failed: " + err.message); }
-          }
-        });
-
         const pag = region("bank-pagination");
         const totalPages = data.total_pages || 1;
         const count = data.total || 0;
@@ -191,6 +174,27 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         el.innerHTML = '<div class="empty">Error: ' + esc(err.message) + "</div>";
       }
     }
+
+    // Delegated save/delete handler — attached once; loadBank() only replaces
+    // the list's innerHTML, so re-attaching there would stack handlers.
+    region("bank-list").addEventListener("click", async (e) => {
+      const btn = e.target.closest('[data-action="save-q"],[data-action="del-q"]');
+      if (!btn) return;
+      const qid = btn.dataset.qid;
+      const list = region("bank-list");
+      if (btn.dataset.action === "save-q") {
+        const row = list.querySelector('tr[data-qid="' + qid + '"]');
+        const newText = row.querySelector("textarea") && row.querySelector("textarea").value.trim();
+        const newCat = row.querySelector("select") && row.querySelector("select").value;
+        if (!newText) return;
+        try { await apiPut("/api/games/bank/" + qid, { question_text: newText, category: newCat }); loadBank(); }
+        catch (err) { toast("Save failed: " + err.message, "error"); }
+      } else if (btn.dataset.action === "del-q") {
+        if (!(await confirmDialog("Delete this question?", { danger: true, confirmLabel: "Delete" }))) return;
+        try { await apiDelete("/api/games/bank/" + qid); loadBank(); }
+        catch (err) { toast("Delete failed: " + err.message, "error"); }
+      }
+    });
 
     ctrl("filter-cat").addEventListener("change", () => { currentCat = ctrl("filter-cat").value; currentPage = 1; loadBank(); });
     ctrl("search").addEventListener("keydown", e => {

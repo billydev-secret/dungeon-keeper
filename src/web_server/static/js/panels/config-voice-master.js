@@ -1,4 +1,5 @@
 import { showStatus, buildField } from "../config-helpers.js";
+import { toast } from "../ui.js";
 
 async function apiGet(path) {
   const res = await fetch(path, { credentials: "same-origin" });
@@ -253,7 +254,7 @@ export function mount(container) {
             await apiDel("/api/voice-master/name-blocklist/" + encodeURIComponent(p));
             li.remove();
           } catch (err) {
-            alert("Remove failed: " + err.message);
+            toast("Remove failed: " + err.message, "error");
           }
         });
         li.appendChild(del);
@@ -272,7 +273,7 @@ export function mount(container) {
         const fresh = await apiGet("/api/voice-master/config");
         renderList(fresh.name_blocklist || []);
       } catch (err) {
-        alert("Add failed: " + err.message);
+        toast("Add failed: " + err.message, "error");
       }
     });
   })();

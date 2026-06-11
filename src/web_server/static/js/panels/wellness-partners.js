@@ -1,4 +1,5 @@
 import { wGet, wPost, wDelete, esc } from "../wellness-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading partners...</div></div>`;
@@ -60,9 +61,9 @@ export function mount(container) {
     // Dissolve
     container.querySelectorAll("[data-dissolve]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        if (!confirm("Dissolve this partnership?")) return;
+        if (!(await confirmDialog("Dissolve this partnership?", { danger: true, confirmLabel: "Dissolve" }))) return;
         try { await wDelete(`/api/wellness/partners/${btn.dataset.dissolve}`); load(); }
-        catch (e) { alert(e.message); }
+        catch (e) { toast(e.message, "error"); }
       });
     });
 
@@ -74,6 +75,7 @@ export function mount(container) {
       st.textContent = "";
       try {
         await wPost("/api/wellness/partners/request", { user_id: new FormData(form).get("user_id") });
+        toast("Partner request sent");
         load();
       } catch (err) {
         st.className = "save-status save-err";

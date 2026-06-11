@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -45,7 +46,7 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/xp-level-review?level=${level}${daysEl.value ? `&days=${daysEl.value}` : ""}`);
     statusEl.textContent = "Loading…";
     try {
-      const data = await api("/api/reports/xp-level-review", params);
+      const data = await withLoading(chartWrap, api("/api/reports/xp-level-review", params));
       if (!data.count) {
         statusEl.textContent = `No members have reached level ${level} (${Math.round(data.xp_required)} XP required).`;
         chartWrap.textContent = ""; tableWrap.textContent = "";

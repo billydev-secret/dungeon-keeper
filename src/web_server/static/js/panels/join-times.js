@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 
 const RESOLUTIONS = [
@@ -30,10 +31,10 @@ export function mount(container, initialParams) {
 
   async function refresh() {
     history.replaceState(null, "", `#/join-times?resolution=${resEl.value}`);
+    const wrap = container.querySelector(".chart-wrap");
     try {
-      const data = await api("/api/reports/join-times", { resolution: resEl.value });
+      const data = await withLoading(wrap, api("/api/reports/join-times", { resolution: resEl.value }));
       if (chart) { chart.destroy(); chart = null; }
-      const wrap = container.querySelector(".chart-wrap");
       wrap.innerHTML = '<canvas data-chart></canvas>';
       chart = makeBarChart(container.querySelector("[data-chart]"), {
         labels: data.labels,

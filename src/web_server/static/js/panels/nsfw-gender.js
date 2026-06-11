@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { makeStackedBarChart, makeLineChart } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 
@@ -80,11 +81,11 @@ export function mount(container, initialParams) {
     if (chanEl.value) qs.set("channel_id", chanEl.value);
     history.replaceState(null, "", `#/nsfw-gender?${qs}`);
 
+    const wrap = container.querySelector(".chart-wrap");
     try {
-      const data = await api("/api/reports/nsfw-gender", params);
+      const data = await withLoading(wrap, api("/api/reports/nsfw-gender", params));
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
-      const wrap = container.querySelector(".chart-wrap");
       if (!data.series.length) {
         wrap.innerHTML = `<div class="empty">No posting data for this period.</div>`;
         sliderWrap.innerHTML = "";

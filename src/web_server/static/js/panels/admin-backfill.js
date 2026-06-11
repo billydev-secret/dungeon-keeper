@@ -1,4 +1,5 @@
 import { apiPost, esc } from "../api.js";
+import { confirmDialog } from "../ui.js";
 
 export function mount(container) {
   const html = `
@@ -47,43 +48,57 @@ export function mount(container) {
   container.innerHTML = html;
 
   function statusEl(name) { return container.querySelector(`[data-status="${name}"]`); }
+  function actionBtn(name) { return container.querySelector(`[data-action="${name}"]`); }
 
   async function runRoles() {
     const s = statusEl("roles");
+    const btn = actionBtn("roles");
+    btn.disabled = true;
     s.textContent = "Running…";
     try {
       const r = await apiPost("/api/admin/backfill-roles", {});
       s.textContent = r.message || "Done.";
     } catch (err) {
       s.textContent = `Error: ${err.message}`;
+    } finally {
+      btn.disabled = false;
     }
   }
 
   async function runXp() {
     const s = statusEl("xp");
+    const btn = actionBtn("xp");
     const days = parseInt(container.querySelector('[data-control="xp-days"]').value) || 0;
+    btn.disabled = true;
     s.textContent = "Starting…";
     try {
       const r = await apiPost("/api/admin/backfill-xp", { days });
       s.textContent = r.message || "Started.";
     } catch (err) {
       s.textContent = `Error: ${err.message}`;
+    } finally {
+      btn.disabled = false;
     }
   }
 
   async function runInteractions() {
     const s = statusEl("interactions");
+    const btn = actionBtn("interactions");
     const days = parseInt(container.querySelector('[data-control="int-days"]').value) || 0;
     const reset = container.querySelector('[data-control="int-reset"]').checked;
     const channelId = container.querySelector('[data-control="int-channel"]').value.trim();
+    if (reset && !(await confirmDialog("Reset existing interaction data before backfilling? The current interaction graph will be deleted.", { danger: true, confirmLabel: "Reset & Run" }))) return;
     let qs = `reset=${reset ? "true" : "false"}`;
     if (channelId) qs += `&channel_id=${encodeURIComponent(channelId)}`;
+    btn.disabled = true;
     s.textContent = "Starting…";
     try {
       const r = await apiPost(`/api/admin/backfill-interactions?${qs}`, { days });
       s.textContent = r.message || "Started.";
     } catch (err) {
       s.textContent = `Error: ${err.message}`;
+    } finally {
+      btn.disabled = false;
     }
   }
 

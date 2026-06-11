@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -6,13 +7,10 @@ export function mount(container, initialParams) {
   container.innerHTML = `
     <div class="panel">
       <header>
-        <h2>Member Retention</h2>
+        <h2>Activity Drops</h2>
         <div class="subtitle">Members who slowed down or stopped posting</div>
       </header>
       <div class="controls">
-        <label>Period (days)
-          <input type="number" data-control="period_days" min="1" max="365" value="${initialParams.period_days || 3}" />
-        </label>
         <label>Min previous msgs
           <input type="number" data-control="min_previous" min="1" max="100" value="${initialParams.min_previous || 5}" />
         </label>
@@ -27,7 +25,9 @@ export function mount(container, initialParams) {
     </div>
   `;
 
-  const periodEl = container.querySelector('[data-control="period_days"]');
+  const rangeEl = rangePicker({ value: initialParams.period_days || 3, allowAll: false, label: "Period" });
+  container.querySelector(".controls").prepend(rangeEl);
+  const periodEl = rangeEl.querySelector("select");
   const minEl = container.querySelector('[data-control="min_previous"]');
   const normalizeEl = container.querySelector('[data-control="normalize"]');
   const statsEl = container.querySelector("[data-stats]");
@@ -91,14 +91,14 @@ export function mount(container, initialParams) {
 
   async function refresh() {
     const params = {
-      period_days: parseInt(periodEl.value) || 30,
+      period_days: parseInt(periodEl.value) || 3,
       min_previous: parseInt(minEl.value) || 5,
     };
     const qs = new URLSearchParams(params);
     history.replaceState(null, "", `#/retention?${qs}`);
 
     try {
-      cachedData = await api("/api/reports/retention", params);
+      cachedData = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/retention", params));
       render(cachedData);
     } catch (err) {
       statsEl.textContent = "";

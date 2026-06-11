@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeHorizontalBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -9,18 +10,16 @@ export function mount(container, initialParams) {
         <h2>Interaction Graph</h2>
         <div class="subtitle">Who talks to whom — top pairs and most connected members</div>
       </header>
-      <div class="controls">
-        <label>Days (empty = all time)
-          <input type="number" data-control="days" min="1" max="3650" value="${initialParams.days || 2}" placeholder="all" />
-        </label>
-      </div>
+      <div class="controls"></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
       <div data-pairs style="margin-top:12px; max-height:350px; overflow-y:auto;"></div>
       <div data-nodes style="margin-top:12px; max-height:350px; overflow-y:auto;"></div>
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || 2, allowAll: true, label: "Range" });
+  container.querySelector(".controls").appendChild(rangeEl);
+  const daysEl = rangeEl.querySelector("select");
   let pairsWrap = container.querySelector("[data-pairs]");
   const nodesWrap = container.querySelector("[data-nodes]");
   let chart = null;
@@ -102,10 +101,10 @@ export function mount(container, initialParams) {
     if (params.days) qs.set("days", params.days);
     history.replaceState(null, "", `#/interaction-graph?${qs}`);
 
+    const wrap = container.querySelector(".chart-wrap");
     try {
-      const data = await api("/api/reports/interaction-graph", params);
+      const data = await withLoading(wrap, api("/api/reports/interaction-graph", params));
 
-      const wrap = container.querySelector(".chart-wrap");
       if (!data.top_pairs.length) {
         if (chart) { chart.destroy(); chart = null; }
         wrap.innerHTML = `<div class="empty">No interaction data.</div>`;

@@ -1,22 +1,4 @@
-import { api, apiPost, esc } from "../api.js";
-
-function fmtTs(ts) {
-  if (!ts) return "—";
-  const d = new Date(ts * 1000);
-  return (
-    d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
-    " " +
-    d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-  );
-}
-
-function fmtAge(ts) {
-  const s = Math.round(Date.now() / 1000 - ts);
-  if (s < 60) return s + "s";
-  if (s < 3600) return Math.floor(s / 60) + "m";
-  if (s < 86400) return Math.floor(s / 3600) + "h";
-  return Math.floor(s / 86400) + "d";
-}
+import { api, apiPost, esc, fmtTs, fmtAge } from "../api.js";
 
 function renderList(todos, activeId) {
   if (!todos.length) {
@@ -25,7 +7,7 @@ function renderList(todos, activeId) {
   return todos
     .map((t) => {
       const cls = (t.completed_at ? "low" : "med") + (t.id === activeId ? " active" : "");
-      const age = fmtAge(t.created_at) + " ago";
+      const age = fmtAge(Date.now() / 1000 - t.created_at) + " ago";
       const preview = t.task.length > 80 ? t.task.slice(0, 77) + "…" : t.task;
       const chip = t.completed_at
         ? '<span class="t-chip closed" style="margin-left:4px">Done</span>'
@@ -82,7 +64,7 @@ function renderDetail(t, completing) {
     : "";
   return `
     <div class="td-head">
-      <div class="td-crumb">#${esc(t.id)} &nbsp;&middot;&nbsp; added ${esc(fmtAge(t.created_at))} ago</div>
+      <div class="td-crumb">#${esc(t.id)} &nbsp;&middot;&nbsp; added ${esc(fmtAge(Date.now() / 1000 - t.created_at))} ago</div>
       <h3 class="td-title" style="word-break:break-word">${esc(t.task)}</h3>
       <div class="td-meta">
         <span class="pair"><span class="k">Added by</span><b>${esc(t.added_by_name || t.added_by)}</b></span>

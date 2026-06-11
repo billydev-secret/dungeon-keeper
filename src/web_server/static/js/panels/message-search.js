@@ -1,4 +1,4 @@
-import { api, esc } from "../api.js";
+import { api, esc, fmtTs } from "../api.js";
 
 /**
  * Build a filterable select widget: a text input that filters a dropdown list.
@@ -474,7 +474,7 @@ export function mount(container) {
     }
 
     const html = data.messages.map((m) => {
-      const time = new Date(m.ts * 1000).toLocaleString();
+      const time = fmtTs(m.ts);
       const author = m.author_name || m.author_id;
       const channel = m.channel_name ? `#${m.channel_name}` : m.channel_id;
 

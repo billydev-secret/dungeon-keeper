@@ -3,6 +3,7 @@ import {
   apiPut, apiDelete, showStatus,
   loadChannels, loadRoles, channelSelect, roleSelect,
 } from "../config-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
@@ -380,7 +381,7 @@ async function handleRowAction(root, btn, rows) {
       return;
     }
     if (act === "delete") {
-      if (!confirm("Delete this schedule?")) return;
+      if (!(await confirmDialog("Delete this schedule?", { danger: true, confirmLabel: "Delete" }))) return;
       await apiDelete(`/api/games/schedule/${id}`);
     } else if (act === "pause") {
       await apiPost(`/api/games/schedule/${id}/pause`, {});
@@ -391,6 +392,6 @@ async function handleRowAction(root, btn, rows) {
     }
     await refreshList(root);
   } catch (e) {
-    alert(e.message);
+    toast(e.message, "error");
   }
 }

@@ -9,15 +9,19 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from web_server.helpers import resolve_names as _resolve_names
 from bot_modules.jail.apply import apply_jail
+from bot_modules.commands.jail_commands import _do_unjail
 from bot_modules.services.moderation import (
     claim_ticket,
     close_ticket,
     create_warning,
     escalate_ticket,
     fmt_duration,
+    get_active_warning_count,
     get_transcript,
     parse_duration,
+    release_jail,
     reopen_ticket,
+    revoke_warning,
     write_audit,
 )
 from web_server.auth import AuthenticatedUser
@@ -29,6 +33,7 @@ from web_server.schemas import (
     JailsResponse,
     ModerationStatsResponse,
     PolicyTicketsResponse,
+    SimpleActionResult,
     TicketActionResult,
     TicketDetailSchema,
     TicketJailBody,
@@ -152,6 +157,89 @@ async def list_jails(
         ("moderator_id", "moderator_name"),
     )
     return result
+
+
+@router.post("/moderation/jails/{jail_id}/release", response_model=SimpleActionResult)
+async def jail_release_route(
+    request: Request,
+    jail_id: int,
+    body: TicketReasonBody,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Release a jail from the dashboard.
+
+    Routes through the canonical :func:`_do_unjail` flow (role restore,
+    transcript, channel cleanup, DM, audit) — same behavior as the
+    ``/unjail`` slash command. If the member has already left the guild,
+    the DB record is released directly since there is no role to remove.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    reason = (body.reason or "").strip()
+
+    def _lookup():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM jails WHERE id = ? AND guild_id = ?",
+                (jail_id, guild_id),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Jail not found")
+            return dict(row)
+
+    jail = await run_query(_lookup)
+    if jail["status"] != "active":
+        raise HTTPException(status_code=409, detail="Jail is not active")
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Bot is not connected to this guild — cannot release jail.",
+        )
+    moderator = guild.get_member(int(user.user_id))
+    if moderator is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Your account isn't a member of this guild (cannot moderate).",
+        )
+
+    target = guild.get_member(int(jail["user_id"]))
+    if target is not None:
+        message = await _do_unjail(ctx, guild, target, reason=reason, actor=moderator)
+
+        def _status_now():
+            with ctx.open_db() as conn:
+                r = conn.execute(
+                    "SELECT status FROM jails WHERE id = ?", (jail_id,)
+                ).fetchone()
+                return r["status"] if r else "missing"
+
+        if await run_query(_status_now) != "released":
+            # _do_unjail reports failures as a status string, not an exception.
+            raise HTTPException(status_code=409, detail=message)
+        return {"ok": True, "message": message}
+
+    # Member left the guild — there's no role to remove; close out the record.
+    def _release_record():
+        with ctx.open_db() as conn:
+            release_jail(
+                conn,
+                jail_id,
+                reason=reason or "Released from dashboard (user left guild)",
+            )
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="jail_release",
+                actor_id=user.user_id,
+                target_id=int(jail["user_id"]),
+                extra={"jail_id": jail_id, "reason": reason, "note": "user_left_guild"},
+            )
+
+    await run_query(_release_record)
+    return {"ok": True, "message": "User has left the server — jail record marked released."}
 
 
 # ── Tickets ───────────────────────────────────────────────────────────────
@@ -839,6 +927,52 @@ async def list_warnings(
 
 
 # ── Policy Tickets ────────────────────────────────────────────────────────
+
+
+@router.post("/moderation/warnings/{warning_id}/revoke", response_model=SimpleActionResult)
+async def warning_revoke_route(
+    request: Request,
+    warning_id: int,
+    body: TicketReasonBody,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Revoke a warning from the dashboard — mirrors the /revokewarn command."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    reason = (body.reason or "").strip()
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM warnings WHERE id = ? AND guild_id = ?",
+                (warning_id, guild_id),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Warning not found")
+            if row["revoked"]:
+                raise HTTPException(status_code=409, detail="Warning is already revoked")
+            if not revoke_warning(
+                conn, warning_id, revoked_by=user.user_id, reason=reason
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Couldn't revoke — it may have just been revoked by someone else.",
+                )
+            count = get_active_warning_count(conn, guild_id, int(row["user_id"]))
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="warning_revoke",
+                actor_id=user.user_id,
+                target_id=int(row["user_id"]),
+                extra={"warning_id": warning_id, "reason": reason, "count": count},
+            )
+            return {
+                "ok": True,
+                "message": f"Warning #{warning_id} revoked — {count} active warning(s) remain.",
+            }
+
+    return await run_query(_q)
 
 
 @router.get("/moderation/policy-tickets", response_model=PolicyTicketsResponse)

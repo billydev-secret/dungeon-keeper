@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { loadRoles, roleSelect } from "../config-helpers.js";
 import { renderSortableTable } from "../table.js";
 
@@ -13,9 +14,6 @@ export function mount(container, initialParams) {
         <label>Role
           <select data-control="role"><option value="0">Loading…</option></select>
         </label>
-        <label>Days
-          <input type="number" data-control="days" min="1" max="365" value="${initialParams.days || 7}" />
-        </label>
       </div>
       <div data-status></div>
       <div data-table-wrap style="margin-top:12px; max-height:500px; overflow-y:auto;"></div>
@@ -24,7 +22,9 @@ export function mount(container, initialParams) {
   container.innerHTML = html;
 
   const roleEl = container.querySelector('[data-control="role"]');
-  const daysEl = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || 7, allowAll: false, label: "Days" });
+  container.querySelector(".controls").appendChild(rangeEl);
+  const daysEl = rangeEl.querySelector("select");
   const statusEl = container.querySelector('[data-status]');
   const tableWrap = container.querySelector('[data-table-wrap]');
 
@@ -40,7 +40,7 @@ export function mount(container, initialParams) {
     statusEl.textContent = "Loading…";
     history.replaceState(null, "", `#/inactive-role?role_id=${encodeURIComponent(roleEl.value)}&days=${days}`);
     try {
-      const data = await api("/api/reports/inactive-role", { role_id: roleEl.value, days });
+      const data = await withLoading(tableWrap, api("/api/reports/inactive-role", { role_id: roleEl.value, days }));
       const pct = data.total ? ((data.inactive_count / data.total) * 100).toFixed(1) : 0;
       statusEl.textContent = `${data.role_name} — ${data.inactive_count}/${data.total} inactive (${pct}%) over ${data.days}d. Tracking coverage: ${data.tracking_coverage}/${data.total}.`;
       renderSortableTable(tableWrap, {

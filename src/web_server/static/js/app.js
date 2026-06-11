@@ -43,7 +43,7 @@ const SECTIONS = [
         { id: "health-composite-score", label: "Health Score",       module: "./panels/health-composite-score.js" },
         { id: "activity",             label: "Activity",             module: "./panels/activity.js" },
         { id: "role-growth",          label: "Role Growth",          module: "./panels/role-growth.js" },
-        { id: "channel-comparison",   label: "Channels",              module: "./panels/channel-comparison.js" },
+        { id: "channel-comparison",   label: "Channel Comparison",    module: "./panels/channel-comparison.js" },
       ]},
       { heading: "Messages", items: [
         { id: "message-cadence",      label: "Message Cadence",      module: "./panels/message-cadence.js" },
@@ -54,7 +54,7 @@ const SECTIONS = [
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js" },
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
         { id: "health-churn-risk",      label: "Churn Risk",         module: "./panels/health-churn-risk.js" },
-        { id: "retention",            label: "Retention",             module: "./panels/retention.js" },
+        { id: "retention",            label: "Activity Drops",        module: "./panels/retention.js" },
         { id: "interaction-graph",    label: "Interactions",          module: "./panels/interaction-graph.js" },
         { id: "interaction-heatmap",  label: "Interaction Heatmap",   module: "./panels/interaction-heatmap.js" },
         { id: "connection-graph",     label: "Connection Graph",      module: "./panels/connection-graph.js" },
@@ -90,7 +90,7 @@ const SECTIONS = [
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js" },
       { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/mod-policy-tickets.js" },
       { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch.js" },
-      { id: "message-search", label: "Message Review",  module: "./panels/message-search.js" },
+      { id: "message-search", label: "Message Search",  module: "./panels/message-search.js" },
     ],
     groups: [
       { heading: "Audit Logs", items: [
@@ -112,7 +112,7 @@ const SECTIONS = [
       { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js" },
       { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js" },
       { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js" },
-      { id: "config-policy-tickets", label: "Policy Tickets",  module: "./panels/config-policy-tickets.js" },
+      { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js" },
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js" },
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
       { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js" },
@@ -151,18 +151,17 @@ const SECTIONS = [
     ],
     groups: [
       { heading: "Risky Roller", items: [
-        { id: "games-risky-roller",  label: "Sessions",  module: "./panels/games-risky-roller.js" },
         { id: "config-risky-rolls",  label: "Config",    module: "./panels/config-risky-rolls.js" },
       ]},
-      { heading: "WYR", items: [
+      { heading: "Would You Rather", items: [
         { id: "games-wyr",        label: "Questions",  module: "./panels/games-wyr.js" },
         { id: "games-wyr-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "wyr" },
       ]},
-      { heading: "NHIE", items: [
+      { heading: "Never Have I Ever", items: [
         { id: "games-nhie",        label: "Questions",  module: "./panels/games-nhie.js" },
         { id: "games-nhie-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "nhie" },
       ]},
-      { heading: "MLT", items: [
+      { heading: "Most Likely To", items: [
         { id: "games-mlt",        label: "Questions",  module: "./panels/games-mlt.js" },
         { id: "games-mlt-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "mlt" },
       ]},
@@ -342,9 +341,12 @@ if (mobileMenuBtnEl) {
 if (navFilterEl) {
   navFilterEl.addEventListener("input", () => {
     const q = navFilterEl.value.trim().toLowerCase();
+    // While a query is active, matches must show through collapsed groups
+    sidebarItemsEl.classList.toggle("filtering", !!q);
     const items = sidebarItemsEl.querySelectorAll(".nav-item");
     items.forEach((it) => {
-      const txt = it.querySelector(".lbl")?.textContent.toLowerCase() || "";
+      const txt = it.dataset.search ||
+        it.querySelector(".lbl")?.textContent.toLowerCase() || "";
       it.classList.toggle("filtered-out", !!q && !txt.includes(q));
     });
     // Hide empty subgroups / groups
@@ -425,6 +427,7 @@ function renderNav(activeId) {
   for (const sec of visibleSections) {
     if (sec.direct) {
       const el = makeNavItem(sec.items[0], activeId);
+      el.dataset.search = `${sec.label} ${sec.items[0].label}`.toLowerCase();
       el.classList.add("nav-direct");
       sidebarItemsEl.appendChild(el);
       continue;
@@ -452,6 +455,7 @@ function renderNav(activeId) {
     // Top-level items (rendered before any subgroup), alphabetized by label
     for (const item of byLabel(sec.items)) {
       const el = makeNavItem(item, activeId);
+      el.dataset.search = `${sec.label} ${item.label}`.toLowerCase();
       sidebarItemsEl.appendChild(el);
       children.push(el);
     }
@@ -481,6 +485,7 @@ function renderNav(activeId) {
         children.push(subLabel);
         for (const item of byLabel(g.items)) {
           const el = makeNavItem(item, activeId, { isSubitem: true });
+          el.dataset.search = `${sec.label} ${g.heading} ${item.label}`.toLowerCase();
           if (!subgroupActive) el.classList.add("subgroup-hidden");
           sidebarItemsEl.appendChild(el);
           children.push(el);

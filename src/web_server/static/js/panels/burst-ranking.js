@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { makeHorizontalBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -42,11 +43,11 @@ export function mount(container, initialParams) {
     const qs = new URLSearchParams(params);
     history.replaceState(null, "", `#/burst-ranking?${qs}`);
 
+    const wrap = container.querySelector(".chart-wrap");
     try {
-      const data = await api("/api/reports/burst-ranking", params);
+      const data = await withLoading(wrap, api("/api/reports/burst-ranking", params));
       if (chart) { chart.destroy(); chart = null; }
 
-      const wrap = container.querySelector(".chart-wrap");
       const top = data.entries.slice(0, 20);
       if (!top.length) {
         wrap.innerHTML = `<div class="empty">No burst data (need users with enough sessions).</div>`;

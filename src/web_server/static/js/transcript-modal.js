@@ -1,4 +1,4 @@
-import { api } from "./api.js";
+import { api, fmtTs } from "./api.js";
 
 let backdrop = null;
 let modal = null;
@@ -9,14 +9,6 @@ function esc(s) {
   const d = document.createElement("div");
   d.textContent = s;
   return d.innerHTML;
-}
-
-function fmtTs(iso) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (isNaN(d)) return esc(iso);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) +
-    " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
 
 const TYPE_LABELS = {

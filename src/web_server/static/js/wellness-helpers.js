@@ -31,13 +31,11 @@ export function wPost(path, body) { return _mutate("POST", path, body); }
 export function wPut(path, body) { return _mutate("PUT", path, body); }
 export function wDelete(path) { return _mutate("DELETE", path); }
 
+import { esc as _esc } from "./api.js";
+
+/** Like api.js esc(), but null/undefined render as "" (legacy behavior). */
 export function esc(s) {
-  if (!s) return "";
-  const d = document.createElement("div"); d.textContent = s; return d.innerHTML;
+  return s == null ? "" : _esc(s);
 }
 
-export function showStatus(el, ok, msg) {
-  el.className = `save-status ${ok ? "save-ok" : "save-err"}`;
-  el.textContent = msg || (ok ? "Saved" : "Error");
-  if (ok) setTimeout(() => { el.textContent = ""; }, 3000);
-}
+export { showStatus } from "./config-helpers.js";

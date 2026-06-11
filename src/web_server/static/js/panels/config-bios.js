@@ -1,4 +1,5 @@
 import { api, apiPost, esc } from "../api.js";
+import { toast, confirmDialog } from "../ui.js";
 import {
   apiDelete,
   apiPut,
@@ -249,7 +250,7 @@ async function renderFieldsTab(pane) {
       const retireBtn = row.querySelector("[data-retire]");
       if (retireBtn) {
         retireBtn.addEventListener("click", async () => {
-          if (!confirm("Retire this field? Old bios keep their stored values; new and edited bios won't include it.")) return;
+          if (!(await confirmDialog("Retire this field? Old bios keep their stored values; new and edited bios won't include it.", { danger: true, confirmLabel: "Retire" }))) return;
           try {
             await apiDelete(`/api/bios/fields/${id}`);
             await refresh();
@@ -285,7 +286,7 @@ async function renderFieldsTab(pane) {
       await apiPost("/api/bios/fields/reorder", { ordered_ids: ids });
       await refresh();
     } catch (err) {
-      alert(`Reorder failed: ${err.message}`);
+      toast(`Reorder failed: ${err.message}`, "error");
     }
   }
 
@@ -477,7 +478,7 @@ async function renderQuestionsTab(pane) {
         }
       });
       row.querySelector("[data-retire]").addEventListener("click", async () => {
-        if (!confirm("Retire this question? Its existing answers stay intact in posted bios.")) return;
+        if (!(await confirmDialog("Retire this question? Its existing answers stay intact in posted bios.", { danger: true, confirmLabel: "Retire" }))) return;
         try {
           await apiDelete(`/api/bios/questions/${id}`);
           await refresh();

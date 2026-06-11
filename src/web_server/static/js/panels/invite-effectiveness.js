@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 
 export function mount(container, initialParams) {
@@ -9,9 +10,6 @@ export function mount(container, initialParams) {
         <div class="subtitle">Which inviters bring members that stick around</div>
       </header>
       <div class="controls">
-        <label>Days (empty = all time)
-          <input type="number" data-control="days" min="1" max="3650" value="${initialParams.days || ""}" placeholder="all" />
-        </label>
         <label>Active window (days)
           <input type="number" data-control="active_days" min="1" max="365" value="${initialParams.active_days || 30}" />
         </label>
@@ -22,7 +20,9 @@ export function mount(container, initialParams) {
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || "", allowAll: true, label: "Range" });
+  container.querySelector(".controls").prepend(rangeEl);
+  const daysEl = rangeEl.querySelector("select");
   const activeEl = container.querySelector('[data-control="active_days"]');
   const statsEl = container.querySelector("[data-stats]");
   const tableWrap = container.querySelector("[data-table-wrap]");
@@ -127,7 +127,7 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/invite-effectiveness?${qs}`);
 
     try {
-      const data = await api("/api/reports/invite-effectiveness", params);
+      const data = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/invite-effectiveness", params));
       if (chart) { chart.destroy(); chart = null; }
 
       statsEl.textContent = data.total_invites

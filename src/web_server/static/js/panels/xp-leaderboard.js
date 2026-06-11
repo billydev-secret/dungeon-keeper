@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { makeBarChart, makeDoughnutChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -56,7 +57,7 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/xp-leaderboard${daysEl.value ? "?days=" + daysEl.value : ""}`);
 
     try {
-      const data = await api("/api/reports/xp-leaderboard", params);
+      const data = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/xp-leaderboard", params));
       if (chartLevels) { chartLevels.destroy(); chartLevels = null; }
       if (chartSources) { chartSources.destroy(); chartSources = null; }
       if (chartHistogram) { chartHistogram.destroy(); chartHistogram = null; }

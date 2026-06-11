@@ -1,5 +1,5 @@
 import { loadConfig, loadChannels, apiPut, apiDelete, showStatus, buildField } from "../config-helpers.js";
-import { api, esc } from "../api.js";
+import { api, apiPost, esc } from "../api.js";
 
 function buildSelect(name, channels, selectedId, allowNone) {
   const sel = document.createElement("select");
@@ -221,10 +221,7 @@ export function mount(container) {
       const uid = bfInput.value.trim();
       if (!uid) return;
       try {
-        await fetch("/api/config/confessions/block/" + encodeURIComponent(uid), {
-          method: "PUT",
-          credentials: "same-origin",
-        });
+        await apiPut("/api/config/confessions/block/" + encodeURIComponent(uid), {});
         blockForm.reset();
         await refreshBlocked(blockedList);
         showStatus(bfStatus, true, "Blocked");
@@ -290,12 +287,7 @@ export function mount(container) {
       if (!channelId || channelId === "0") return;
       pbBtn.disabled = true;
       try {
-        await fetch("/api/config/confessions/post-button", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ channel_id: channelId }),
-        });
+        await apiPost("/api/config/confessions/post-button", { channel_id: channelId });
         showStatus(pbStatus, true, "Button posted");
         setTimeout(() => mount(container), 1500);
       } catch (err) {

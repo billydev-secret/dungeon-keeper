@@ -1,4 +1,5 @@
 import { wGet, wPost, wPut, wDelete, esc } from "../wellness-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading blackouts...</div></div>`;
@@ -82,25 +83,28 @@ export function mount(container) {
     // Toggle
     container.querySelectorAll("[data-toggle-bo]").forEach(cb => {
       cb.addEventListener("change", async () => {
-        try { await wPut(`/api/wellness/blackouts/${cb.dataset.toggleBo}/toggle`, { enabled: cb.checked }); }
-        catch (e) { alert(e.message); cb.checked = !cb.checked; }
+        try {
+          await wPut(`/api/wellness/blackouts/${cb.dataset.toggleBo}/toggle`, { enabled: cb.checked });
+          toast(cb.checked ? "Blackout enabled" : "Blackout disabled");
+        }
+        catch (e) { toast(e.message, "error"); cb.checked = !cb.checked; }
       });
     });
 
     // Delete
     container.querySelectorAll("[data-del-bo]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        if (!confirm("Remove this blackout?")) return;
+        if (!(await confirmDialog("Remove this blackout?", { danger: true, confirmLabel: "Remove" }))) return;
         try { await wDelete(`/api/wellness/blackouts/${btn.dataset.delBo}`); load(); }
-        catch (e) { alert(e.message); }
+        catch (e) { toast(e.message, "error"); }
       });
     });
 
     // Templates
     container.querySelectorAll("[data-tpl]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        try { await wPost("/api/wellness/blackouts", { template: btn.dataset.tpl }); load(); }
-        catch (e) { alert(e.message); }
+        try { await wPost("/api/wellness/blackouts", { template: btn.dataset.tpl }); toast("Blackout added"); load(); }
+        catch (e) { toast(e.message, "error"); }
       });
     });
 
@@ -114,8 +118,9 @@ export function mount(container) {
         await wPost("/api/wellness/blackouts", {
           name: fd.get("name"), start: fd.get("start"), end: fd.get("end"), days,
         });
+        toast("Blackout added");
         load();
-      } catch (err) { alert(err.message); }
+      } catch (err) { toast(err.message, "error"); }
     });
   }
 

@@ -1,4 +1,5 @@
 import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelect, roleName, apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
@@ -217,13 +218,13 @@ function render(container, grants, channels, roles) {
   // Remove role handlers
   container.querySelectorAll("[data-remove-role]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm(`Remove grant role "${btn.dataset.removeRole}"? This cannot be undone.`)) return;
+      if (!(await confirmDialog(`Remove grant role "${btn.dataset.removeRole}"? This cannot be undone.`, { danger: true, confirmLabel: "Remove" }))) return;
       try {
         await apiDelete(`/api/config/roles/${btn.dataset.removeRole}`);
         const fresh = await loadConfig();
         render(container, fresh.roles, channels, roles);
       } catch (err) {
-        alert(err.message);
+        toast(err.message, "error");
       }
     });
   });

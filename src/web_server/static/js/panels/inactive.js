@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { loadChannels, channelSelect } from "../config-helpers.js";
 import { renderSortableTable } from "../table.js";
 
@@ -52,7 +53,7 @@ export function mount(container, initialParams) {
     if (channelEl.value && channelEl.value !== "0") params.channel_id = channelEl.value;
     statusEl.textContent = "Loading…";
     try {
-      const data = await api("/api/reports/inactive", params);
+      const data = await withLoading(tableWrap, api("/api/reports/inactive", params));
       statusEl.textContent = `${data.total} members inactive over the last ${data.period_label}${data.channel_id ? ` in selected channel` : ""}.`;
       renderSortableTable(tableWrap, {
         columns: [

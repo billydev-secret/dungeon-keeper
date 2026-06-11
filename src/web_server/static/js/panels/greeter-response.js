@@ -1,4 +1,5 @@
-import { api, esc } from "../api.js";
+import { api, esc, fmtTs, fmtAge } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -9,38 +10,19 @@ export function mount(container, initialParams) {
         <h2>Greeter Response</h2>
         <div class="subtitle">Join-to-greeting timing from the join / leave log and greeter chat</div>
       </header>
-      <div class="controls">
-        <label>Days (empty = all time)
-          <input type="number" data-control="days" min="1" max="3650" value="${initialParams.days || 10}" placeholder="all" />
-        </label>
-      </div>
+      <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
       <div data-table-wrap style="margin-top:12px; max-height:350px; overflow-y:auto;"></div>
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || 10, allowAll: true, label: "Range" });
+  container.querySelector(".controls").appendChild(rangeEl);
+  const daysEl = rangeEl.querySelector("select");
   const statsEl = container.querySelector("[data-stats]");
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chart = null;
-
-  function fmtDur(s) {
-    if (s < 60) return `${Math.round(s)}s`;
-    if (s < 3600) return `${Math.round(s / 60)}m`;
-    return `${(s / 3600).toFixed(1)}h`;
-  }
-
-  function fmtDateTime(ts) {
-    if (!ts) return "—";
-    return new Date(ts * 1000).toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
 
   function statusLabel(status) {
     if (status === "left_before_greeting") return "Left before greeting";
@@ -56,12 +38,12 @@ export function mount(container, initialParams) {
     renderSortableTable(tableWrap, {
       columns: [
         { key: "user_name", label: "Member", format: (v, r) => r.user_name || r.user_id },
-        { key: "joined_at", label: "Joined", format: (v) => fmtDateTime(v) },
+        { key: "joined_at", label: "Joined", format: (v) => fmtTs(v) },
         { key: "status", label: "Status", format: (v) => statusLabel(v) },
-        { key: "wait_seconds", label: "Wait", format: (v) => v == null ? "—" : fmtDur(v) },
-        { key: "greeted_at", label: "Greeted", format: (v) => fmtDateTime(v) },
+        { key: "wait_seconds", label: "Wait", format: (v) => v == null ? "—" : fmtAge(v) },
+        { key: "greeted_at", label: "Greeted", format: (v) => fmtTs(v) },
         { key: "greeter_name", label: "Greeted By", format: (v, r) => r.greeter_name || r.greeter_id || "—" },
-        { key: "left_at", label: "Left", format: (v) => fmtDateTime(v) },
+        { key: "left_at", label: "Left", format: (v) => fmtTs(v) },
       ],
       data: entries,
       defaultSort: "joined_at",
@@ -77,7 +59,7 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/greeter-response?${qs}`);
 
     try {
-      const data = await api("/api/reports/greeter-response", params);
+      const data = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/greeter-response", params));
       if (chart) {
         chart.destroy();
         chart = null;
@@ -85,7 +67,7 @@ export function mount(container, initialParams) {
 
       if (data.count) {
         const pct = data.total_joins ? Math.round(data.count / data.total_joins * 100) : 0;
-        statsEl.textContent = `Median: ${fmtDur(data.median_seconds)}  ·  Mean: ${fmtDur(data.mean_seconds)}  ·  ${data.count} of ${data.total_joins} greeted (${pct}%)  ·  ${data.left_before_greeting_count || 0} left before greeting  ·  ${data.awaiting_greeting_count || 0} still waiting`;
+        statsEl.textContent = `Median: ${fmtAge(data.median_seconds)}  ·  Mean: ${fmtAge(data.mean_seconds)}  ·  ${data.count} of ${data.total_joins} greeted (${pct}%)  ·  ${data.left_before_greeting_count || 0} left before greeting  ·  ${data.awaiting_greeting_count || 0} still waiting`;
       } else {
         statsEl.textContent = `${data.left_before_greeting_count || 0} left before greeting  ·  ${data.awaiting_greeting_count || 0} still waiting`;
       }

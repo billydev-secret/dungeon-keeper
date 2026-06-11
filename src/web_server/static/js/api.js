@@ -1,10 +1,36 @@
 // Tiny fetch wrapper. All endpoints are same-origin JSON.
 
-/** Escape a string for safe insertion into innerHTML. */
+/** Escape a string for safe insertion into innerHTML, including attributes. */
 export function esc(s) {
-  const d = document.createElement("div");
-  d.textContent = String(s);
-  return d.innerHTML;
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+/**
+ * Canonical timestamp formatter: "Jun 10, 3:42 PM", with the year added
+ * when it isn't the current year. Accepts unix seconds, ISO strings, or Date.
+ */
+export function fmtTs(ts) {
+  if (!ts) return "—";
+  const d = ts instanceof Date ? ts : new Date(typeof ts === "number" ? ts * 1000 : ts);
+  if (isNaN(d.getTime())) return "—";
+  const opts = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleString(undefined, opts);
+}
+
+/** Compact age/duration from seconds: "5d 4h", "3h 12m", "45m", "30s". */
+export function fmtAge(seconds) {
+  if (seconds == null || !isFinite(seconds)) return "—";
+  const s = Math.max(0, Math.floor(seconds));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
 }
 
 export async function api(path, params) {

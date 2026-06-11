@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart, makeHorizontalBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -9,11 +10,7 @@ export function mount(container, initialParams) {
         <h2>Voice Activity</h2>
         <div class="subtitle">Voice channel usage — top users and peak hours</div>
       </header>
-      <div class="controls">
-        <label>Days (empty = all time)
-          <input type="number" data-control="days" min="1" max="3650" value="${initialParams.days || 7}" placeholder="all" />
-        </label>
-      </div>
+      <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div class="chart-wrap"><canvas data-chart-hour></canvas></div>
       <div class="chart-wrap" style="margin-top:12px;"><canvas data-chart-users></canvas></div>
@@ -21,7 +18,9 @@ export function mount(container, initialParams) {
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || 7, allowAll: true, label: "Range" });
+  container.querySelector(".controls").appendChild(rangeEl);
+  const daysEl = rangeEl.querySelector("select");
   const statsEl = container.querySelector("[data-stats]");
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chartHour = null;
@@ -42,7 +41,7 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/voice-activity?${qs}`);
 
     try {
-      const data = await api("/api/reports/voice-activity", params);
+      const data = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/voice-activity", params));
       if (chartHour) { chartHour.destroy(); chartHour = null; }
       if (chartUsers) { chartUsers.destroy(); chartUsers = null; }
 

@@ -1,5 +1,6 @@
 import { loadConfig, loadRoles, roleSelect, apiPut, apiDelete, showStatus } from "../config-helpers.js";
 import { api, esc } from "../api.js";
+import { toast } from "../ui.js";
 
 function fmtTs(ts) {
   if (!ts) return "never";
@@ -164,7 +165,7 @@ export function mount(container) {
             exemptions = exemptions.filter((e) => String(e.id) !== String(uid));
             renderExemptions();
           } catch (err) {
-            alert(err.message);
+            toast(err.message, "error");
           }
         });
       });
@@ -179,7 +180,7 @@ export function mount(container) {
         exemptions.sort((a, b) => a.name.localeCompare(b.name));
         renderExemptions();
       } catch (err) {
-        alert(err.message);
+        toast(err.message, "error");
       }
     }
 

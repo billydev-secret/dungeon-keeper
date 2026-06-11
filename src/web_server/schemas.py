@@ -538,6 +538,11 @@ class TicketActionResult(BaseModel):
     message: str = ""
 
 
+class SimpleActionResult(BaseModel):
+    ok: bool = True
+    message: str = ""
+
+
 # ── Moderation: Warnings ─────────────────────────────────────────────────
 
 

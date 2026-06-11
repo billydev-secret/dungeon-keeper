@@ -1,5 +1,6 @@
 import { api, apiPost, esc } from "../api.js";
 import { apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
@@ -279,7 +280,7 @@ export function mount(container) {
       const btn = blanksSection.querySelector('[data-action="ai-prep"]');
       if (!bodyEl) return;
       const rawText = bodyEl.value.trim();
-      if (!rawText) { alert("Paste some text into the Body field first."); return; }
+      if (!rawText) { toast("Paste some text into the Body field first.", "info"); return; }
       const tier = parseInt(tierEl?.value) || 2;
       const origLabel = btn.textContent;
       btn.disabled = true; btn.textContent = "Working…";
@@ -291,7 +292,7 @@ export function mount(container) {
         syncBlanksEmpty(blanksSection);
         renderStoryPreview(formEl);
       } catch (err) {
-        alert(`AI prep failed: ${err.message}`);
+        toast(`AI prep failed: ${err.message}`, "error");
       } finally {
         btn.disabled = false; btn.textContent = origLabel;
       }
@@ -301,7 +302,7 @@ export function mount(container) {
       const bodyEl = formEl.querySelector(".template-body");
       if (!bodyEl) return;
       const unique = [...new Set([...bodyEl.value.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]))];
-      if (!unique.length) { alert("No {blank_id} placeholders found in body."); return; }
+      if (!unique.length) { toast("No {blank_id} placeholders found in body.", "info"); return; }
       const tbody = blanksSection.querySelector(".blanks-tbody");
       const existing = new Set([...tbody.querySelectorAll(".blank-id")].map((i) => i.value.trim()));
       for (const id of unique) {
@@ -426,11 +427,11 @@ export function mount(container) {
 
     listEl.querySelectorAll('[data-action="del-template"]').forEach((btn) => {
       btn.addEventListener("click", async () => {
-        if (!confirm(`Delete template #${btn.dataset.tid}?`)) return;
+        if (!(await confirmDialog(`Delete template #${btn.dataset.tid}?`, { danger: true, confirmLabel: "Delete" }))) return;
         try {
           await apiDelete(`/api/games/legitlibs/templates/${btn.dataset.tid}`);
           loadList();
-        } catch (err) { alert(`Delete failed: ${err.message}`); }
+        } catch (err) { toast(`Delete failed: ${err.message}`, "error"); }
       });
     });
 
@@ -439,7 +440,7 @@ export function mount(container) {
         try {
           await apiPut(`/api/games/legitlibs/templates/${btn.dataset.tid}`, { status: "published" });
           loadList();
-        } catch (err) { alert(`Publish failed: ${err.message}`); }
+        } catch (err) { toast(`Publish failed: ${err.message}`, "error"); }
       });
     });
 
@@ -448,7 +449,7 @@ export function mount(container) {
         try {
           await apiPut(`/api/games/legitlibs/templates/${btn.dataset.tid}`, { status: "draft" });
           loadList();
-        } catch (err) { alert(`Unpublish failed: ${err.message}`); }
+        } catch (err) { toast(`Unpublish failed: ${err.message}`, "error"); }
       });
     });
 
@@ -457,7 +458,7 @@ export function mount(container) {
         try {
           const t = await api(`/api/games/legitlibs/templates/${btn.dataset.tid}`);
           openEditForm(t, btn.closest(".ll-card"));
-        } catch (err) { alert(`Load failed: ${err.message}`); }
+        } catch (err) { toast(`Load failed: ${err.message}`, "error"); }
       });
     });
   }

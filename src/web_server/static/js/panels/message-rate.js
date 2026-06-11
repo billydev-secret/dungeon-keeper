@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 
@@ -10,9 +11,6 @@ export function mount(container, initialParams) {
         <div class="subtitle">Average message volume in 10-minute windows throughout the day</div>
       </header>
       <div class="controls">
-        <label>Days to average
-          <input type="number" data-control="days" min="1" max="365" value="${initialParams.days || 30}" />
-        </label>
         <label>Channel
           <select data-control="channel"><option value="">All channels</option></select>
         </label>
@@ -22,7 +20,9 @@ export function mount(container, initialParams) {
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || 30, allowAll: false, label: "Days to average" });
+  container.querySelector(".controls").prepend(rangeEl);
+  const daysEl = rangeEl.querySelector("select");
   const chanEl = container.querySelector('[data-control="channel"]');
   let chart = null;
   let slider = null;
@@ -52,15 +52,15 @@ export function mount(container, initialParams) {
   }
 
   async function refresh() {
-    const days = Math.max(1, Math.min(365, parseInt(daysEl.value) || 7));
+    const days = Math.max(1, Math.min(365, parseInt(daysEl.value) || 30));
     const params = { days };
     if (chanEl.value) params.channel_id = chanEl.value;
     history.replaceState(null, "", `#/message-rate?${new URLSearchParams(params)}`);
+    const wrap = container.querySelector(".chart-wrap");
     try {
-      const data = await api("/api/reports/message-rate", params);
+      const data = await withLoading(wrap, api("/api/reports/message-rate", params));
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
-      const wrap = container.querySelector(".chart-wrap");
       if (!data.avg_per_day.some((v) => v > 0)) {
         wrap.innerHTML = `<div class="empty">No message activity for the selected window.</div>`;
         sliderWrap.innerHTML = "";

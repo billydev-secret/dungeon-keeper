@@ -1,4 +1,5 @@
 import { wGet, wPost, wPut, wDelete, esc, showStatus } from "../wellness-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading caps…</div></div>`;
@@ -360,9 +361,9 @@ export function mount(container) {
 
     container.querySelectorAll("[data-del-cap]").forEach(btn => {
       btn.addEventListener("click", async () => {
-        if (!confirm("Remove this cap?")) return;
+        if (!(await confirmDialog("Remove this cap?", { danger: true, confirmLabel: "Remove" }))) return;
         try { await wDelete(`/api/wellness/caps/${btn.dataset.delCap}`); load(); }
-        catch (e) { alert(e.message); }
+        catch (e) { toast(e.message, "error"); }
       });
     });
 
@@ -379,6 +380,7 @@ export function mount(container) {
           limit: parseInt(fd.get("limit"), 10),
           exclude_exempt: form.querySelector("[name=exclude_exempt]").checked,
         });
+        toast("Cap added");
         load();
       } catch (err) { showStatus(addSt, false, err.message); }
     });

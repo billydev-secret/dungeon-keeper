@@ -396,6 +396,12 @@ a { text-decoration: none; }
 .nav-subgroup.filtered-out { display: none; }
 .nav-group.filtered-empty { display: none; }
 
+/* While a filter query is active, matches override collapsed-group hiding
+   so the filter can reveal items anywhere in the nav. */
+.nav-scroll.filtering .nav-item.group-hidden:not(.filtered-out),
+.nav-scroll.filtering .nav-item.subgroup-hidden:not(.filtered-out) { display: flex; }
+.nav-scroll.filtering .nav-subgroup.group-hidden:not(.filtered-out) { display: flex; }
+
 /* ── User bar ─────────────────────────────────────────────────────── */
 
 .user-bar {
@@ -3202,4 +3208,93 @@ textarea.field-input { resize: vertical; }
   .mod-split { grid-template-columns: 1fr; }
   .ticket-list-wrap,
   .ticket-detail { max-height: none; }
+}
+
+/* ── Shared primitives: toasts + confirm dialog (js/ui.js) ─────────── */
+
+.toast-wrap {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 1200; /* above transcript modal (1001) */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  max-width: 360px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--ink-bright);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--green);
+  border-radius: var(--r-sm);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast-error { border-left-color: var(--red); }
+.toast-info { border-left-color: var(--blurple); }
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.confirm-box {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: var(--r);
+  padding: 18px 20px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.confirm-box h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: var(--ink-bright);
+}
+.confirm-box p {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--ink-dim);
+  white-space: pre-line;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ── Refresh-in-flight state (js/report-helpers.js withLoading) ────── */
+
+.is-loading {
+  position: relative;
+  pointer-events: none;
+}
+.is-loading > * { opacity: 0.45; transition: opacity 0.15s ease; }
+.is-loading::after {
+  content: "";
+  position: absolute;
+  top: calc(50% - 11px);
+  left: calc(50% - 11px);
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--rule);
+  border-top-color: var(--gold-solid);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
 }

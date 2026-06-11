@@ -1,4 +1,5 @@
 import { loadConfig, loadRoles, loadChannels, channelSelect, roleSelect, apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 function _esc(str) {
   return String(str ?? "")
@@ -165,7 +166,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
   // Remove handlers
   container.querySelectorAll("[data-remove]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm(`Remove booster role "${btn.dataset.remove}"?`)) return;
+      if (!(await confirmDialog(`Remove booster role "${btn.dataset.remove}"?`, { danger: true, confirmLabel: "Remove" }))) return;
       try {
         await apiDelete(`/api/config/booster-roles/${btn.dataset.remove}`);
         const fresh = await loadConfig();
@@ -177,7 +178,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
           channels,
         );
       } catch (err) {
-        alert(err.message);
+        toast(err.message, "error");
       }
     });
   });
@@ -246,14 +247,14 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     swatchList.querySelectorAll("[data-swatch-del]").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const name = btn.dataset.swatchDel;
-        if (!confirm(`Delete swatch "${name}"?`)) return;
+        if (!(await confirmDialog(`Delete swatch "${name}"?`, { danger: true, confirmLabel: "Delete" }))) return;
         try {
           const fresh = await apiDelete(
             `/api/config/booster-roles/swatches/${encodeURIComponent(name)}`,
           );
           renderSwatchList(fresh);
         } catch (err) {
-          alert(err.message);
+          toast(err.message, "error");
         }
       });
     });
@@ -359,6 +360,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
       showStatus(repostStatus, false, "Pick a channel");
       return;
     }
+    if (!(await confirmDialog("Repost the booster panel? The previously posted panel messages will be deleted.", { danger: true, confirmLabel: "Repost" }))) return;
     repostBtn.disabled = true;
     try {
       const res = await fetch("/api/config/booster-roles/post-panel", {

@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 
@@ -240,12 +241,12 @@ export function mount(container, initialParams) {
     qs.set("exclude_bots", excludeBotsEl.checked ? "1" : "0");
     history.replaceState(null, "", `#/activity?${qs}`);
 
+    const wrap = container.querySelector(".chart-wrap");
     try {
-      const data = await api("/api/reports/activity", params);
+      const data = await withLoading(wrap, api("/api/reports/activity", params));
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
 
-      const wrap = container.querySelector(".chart-wrap");
       if (!data.labels.length || !data.counts.some((c) => c > 0)) {
         wrap.innerHTML = `<div class="empty">No ${data.mode} activity for this period.</div>`;
         sliderWrap.innerHTML = "";

@@ -1,4 +1,5 @@
-import { api, apiPost, esc } from "../api.js";
+import { api, apiPost, esc, fmtTs } from "../api.js";
+import { toast } from "../ui.js";
 
 const TIER_BADGE = {
   immediate: '<span class="badge badge-danger">Immediate</span>',
@@ -11,13 +12,6 @@ const LABEL_BADGE = {
   false: '<span class="badge badge-ok">False Positive</span>',
   null:  '<span class="badge badge-dim">Unlabeled</span>',
 };
-
-function fmtTs(ts) {
-  if (!ts) return "—";
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) +
-    " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
 
 function chip(label, val, highlight = false) {
   const cls = highlight ? "sig-chip sig-chip--hi" : "sig-chip";
@@ -255,6 +249,7 @@ export function mount(container) {
           bindDetailActions(ev);
           renderList();
         } catch (err) {
+          toast(err.message, "error");
           btn.textContent = "Error — try again";
         }
       });

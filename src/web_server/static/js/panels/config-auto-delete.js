@@ -1,4 +1,5 @@
 import { loadConfig, loadChannels, channelSelect, channelName, apiPut, apiDelete, showStatus } from "../config-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 const UNITS = [
   { label: "Minutes", seconds: 60 },
@@ -124,13 +125,13 @@ function render(container, rules, channels) {
   // Remove handlers
   container.querySelectorAll("[data-remove]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Remove this auto-delete schedule?")) return;
+      if (!(await confirmDialog("Remove this auto-delete schedule?", { danger: true, confirmLabel: "Remove" }))) return;
       try {
         await apiDelete(`/api/config/auto-delete/${btn.dataset.remove}`);
         const fresh = await loadConfig();
         render(container, fresh.auto_delete || [], channels);
       } catch (err) {
-        alert(err.message);
+        toast(err.message, "error");
       }
     });
   });

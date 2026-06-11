@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeHorizontalBarChart } from "../charts.js";
 import { renderSortableTable } from "../table.js";
 
@@ -25,9 +26,6 @@ export function mount(container, initialParams) {
         <div class="subtitle">Channel activity rankings and trends</div>
       </header>
       <div class="controls">
-        <label>Days
-          <input type="number" data-control="days" min="1" max="365" value="${initialParams.days || 1}" />
-        </label>
         <label>Metric
           <select data-control="metric">${metricOptions}</select>
         </label>
@@ -37,24 +35,25 @@ export function mount(container, initialParams) {
     </div>
   `;
 
-  const daysEl   = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || 1, allowAll: false, label: "Days" });
+  container.querySelector(".controls").prepend(rangeEl);
+  const daysEl   = rangeEl.querySelector("select");
   const metricEl = container.querySelector('[data-control="metric"]');
   const tableWrap = container.querySelector("[data-table-wrap]");
   let chart = null;
 
   async function refresh() {
-    const days   = parseInt(daysEl.value) || 30;
+    const days   = parseInt(daysEl.value) || 1;
     const metric = metricEl.value;
     const metricDef = METRICS.find((m) => m.value === metric) || METRICS[0];
 
     const qs = new URLSearchParams({ days, metric });
     history.replaceState(null, "", `#/channel-comparison?${qs}`);
 
+    const wrap = container.querySelector(".chart-wrap");
     try {
-      const data = await api("/api/reports/channel-comparison", { days });
+      const data = await withLoading(wrap, api("/api/reports/channel-comparison", { days }));
       if (chart) { chart.destroy(); chart = null; }
-
-      const wrap = container.querySelector(".chart-wrap");
 
       // Sort by selected metric (nulls last)
       const sorted = [...data.channels].sort((a, b) => {

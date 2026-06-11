@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { renderSortableTable } from "../table.js";
 
 const COMPONENT_COLORS = {
@@ -92,7 +93,7 @@ export function mount(container, initialParams) {
   statusEl.value = initialParams.status ?? "Active";
 
   async function refresh() {
-    const days = parseInt(daysEl.value) || 90;
+    const days = parseInt(daysEl.value) || 30;
     const minDays = parseInt(minDaysEl.value) || 7;
     const statusFilter = statusEl.value;
     const qs = new URLSearchParams({ days, min_days: minDays });
@@ -100,7 +101,7 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/quality-score?${qs}`);
 
     try {
-      const data = await api("/api/reports/quality-score", { days, min_active_days: minDays });
+      const data = await withLoading(container.querySelector("[data-top-chart]"), api("/api/reports/quality-score", { days, min_active_days: minDays }));
       if (topChart) { topChart.destroy(); topChart = null; }
       if (bottomChart) { bottomChart.destroy(); bottomChart = null; }
 

@@ -1,5 +1,6 @@
 import { apiPut, showStatus } from "../config-helpers.js";
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
+import { confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading AI config…</div></div>`;
@@ -12,8 +13,6 @@ export function mount(container) {
       container.innerHTML = `<div class="panel"><div class="error">Failed to load AI config: ${esc(err.message)}</div></div>`;
       return;
     }
-
-    const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
     const phaseLabel = { ready: "Ready", downloading: "Downloading…", loading: "Loading model…", error: "Error", idle: "Not started" };
     const phaseClass = { ready: "chip-success", downloading: "chip-warning", loading: "chip-warning", error: "chip-danger", idle: "chip-neutral" };
@@ -310,6 +309,7 @@ export function mount(container) {
         }
 
         if (action === "reset") {
+          if (!(await confirmDialog("Reset this prompt to the default text? Any custom prompt will be discarded.", { danger: true, confirmLabel: "Reset" }))) return;
           try {
             const res = await fetch(`/api/config/ai/prompts/${key}`, {
               method: "DELETE",

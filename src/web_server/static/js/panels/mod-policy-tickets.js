@@ -1,4 +1,4 @@
-import { api, esc } from "../api.js";
+import { api, esc, fmtTs, fmtAge } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
 
 const STATUS_BADGE = {
@@ -6,20 +6,6 @@ const STATUS_BADGE = {
   voting: '<span class="badge badge-warning">Voting</span>',
   closed: '<span class="badge badge-dim">Closed</span>',
 };
-
-function fmtTs(ts) {
-  if (!ts) return "\u2014";
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
-         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-function fmtAge(ts) {
-  const s = Math.round(Date.now() / 1000 - ts);
-  if (s < 3600) return Math.floor(s / 60) + "m";
-  if (s < 86400) return Math.floor(s / 3600) + "h";
-  return Math.floor(s / 86400) + "d";
-}
 
 export function mount(container) {
   container.innerHTML = `
@@ -100,7 +86,7 @@ export function mount(container) {
           ? fmtTs(t.vote_started_at)
           : t.status === "closed"
             ? fmtTs(t.vote_ended_at)
-            : fmtAge(t.created_at) + " ago";
+            : fmtAge(Date.now() / 1000 - t.created_at) + " ago";
 
         return `
           <tr class="clickable-row" data-record-type="policy_ticket" data-record-id="${t.id}">

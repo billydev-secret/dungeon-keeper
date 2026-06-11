@@ -1,4 +1,5 @@
 import { wGet, wPost, wDelete, esc, showStatus } from "../wellness-helpers.js";
+import { toast } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading wellness admin...</div></div>`;
@@ -132,7 +133,7 @@ export function mount(container) {
           btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="chip chip-warning">Paused</span>';
           btn.textContent = "Done";
           btn.disabled = true;
-        } catch (e) { alert(e.message); }
+        } catch (e) { toast(e.message, "error"); }
       });
     });
     container.querySelectorAll("[data-resume-uid]").forEach(btn => {
@@ -142,7 +143,7 @@ export function mount(container) {
           btn.closest("tr").querySelector("td:nth-child(4)").innerHTML = '<span class="chip chip-success">Active</span>';
           btn.textContent = "Done";
           btn.disabled = true;
-        } catch (e) { alert(e.message); }
+        } catch (e) { toast(e.message, "error"); }
       });
     });
 
@@ -152,7 +153,7 @@ export function mount(container) {
         try {
           await wDelete(`/api/wellness/admin/exempt/${btn.dataset.unexempt}`);
           btn.closest(".w-row").remove();
-        } catch (e) { alert(e.message); }
+        } catch (e) { toast(e.message, "error"); }
       });
     });
 
@@ -163,8 +164,12 @@ export function mount(container) {
         e.preventDefault();
         const cid = new FormData(exForm).get("channel_id");
         if (!cid) return;
-        try { await wPost("/api/wellness/admin/exempt", { channel_id: cid }); location.reload(); }
-        catch (err) { alert(err.message); }
+        try {
+          await wPost("/api/wellness/admin/exempt", { channel_id: cid });
+          toast("Exempt channel added");
+          mount(container);
+        }
+        catch (err) { toast(err.message, "error"); }
       });
     }
   })();

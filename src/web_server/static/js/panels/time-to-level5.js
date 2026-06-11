@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { rangePicker, withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 
 export function mount(container, initialParams) {
@@ -8,18 +9,16 @@ export function mount(container, initialParams) {
         <h2>Time to Level 5</h2>
         <div class="subtitle">How long members take to reach level 5</div>
       </header>
-      <div class="controls">
-        <label>Days (empty = all time)
-          <input type="number" data-control="days" min="1" max="3650" value="${initialParams.days || ""}" placeholder="all" />
-        </label>
-      </div>
+      <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div class="chart-wrap"><canvas data-chart></canvas></div>
       <div data-members style="margin-top:16px;"></div>
     </div>
   `;
 
-  const daysEl = container.querySelector('[data-control="days"]');
+  const rangeEl = rangePicker({ value: initialParams.days || "", allowAll: true, label: "Range" });
+  container.querySelector(".controls").appendChild(rangeEl);
+  const daysEl = rangeEl.querySelector("select");
   const statsEl = container.querySelector("[data-stats]");
   const membersEl = container.querySelector("[data-members]");
   let chart = null;
@@ -33,7 +32,7 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/time-to-level5?${qs}`);
 
     try {
-      const data = await api("/api/reports/time-to-level-5", params);
+      const data = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/time-to-level-5", params));
       if (chart) { chart.destroy(); chart = null; }
 
       statsEl.textContent = data.count

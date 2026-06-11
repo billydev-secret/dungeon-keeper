@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { makeLineChart } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 
@@ -134,7 +135,7 @@ export function mount(container, initialParams) {
     const params = { resolution: resolutionEl.value };
     if (selected.size) params.roles = [...selected].join(",");
     try {
-      const data = await api("/api/reports/role-growth", params);
+      const data = await withLoading(container.querySelector(".chart-wrap"), api("/api/reports/role-growth", params));
       if (chart) { chart.destroy(); chart = null; }
       if (slider) { slider.destroy(); slider = null; }
       if (!data.series.length) {

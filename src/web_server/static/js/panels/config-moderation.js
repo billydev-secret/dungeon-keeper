@@ -1,4 +1,5 @@
 import { loadConfig, loadChannels, loadCategories, loadRoles, channelSelect, categorySelect, roleSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
+import { confirmDialog } from "../ui.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
@@ -85,6 +86,15 @@ export function mount(container) {
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
+      // Switching storage to "none" permanently purges stored content —
+      // never let a routine Save do that without an explicit confirmation.
+      if (fd.get("message_storage_level") === "none" && currentStorage !== "none") {
+        const ok = await confirmDialog(
+          "Switching Message Content Storage to \"None\" permanently erases all of this server's already-stored message content.\nThis cannot be undone.",
+          { title: "Erase stored messages?", confirmLabel: "Erase & Save", danger: true }
+        );
+        if (!ok) return;
+      }
       try {
         await apiPut("/api/config/moderation", {
           jailed_role_id: fd.get("jailed_role_id"),

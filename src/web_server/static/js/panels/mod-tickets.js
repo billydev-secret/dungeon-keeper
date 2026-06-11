@@ -1,5 +1,6 @@
-import { api, apiPost, esc } from "../api.js";
+import { api, apiPost, esc, fmtTs, fmtAge } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
+import { toast, promptDialog, confirmDialog } from "../ui.js";
 
 const AVATAR_COLORS = ["#c07aa1", "#5865f2", "#23a55a", "#e6b84c", "#f23f43", "#7F8F3A"];
 
@@ -13,21 +14,6 @@ function avatarColor(key) {
 function initial(name) {
   const s = String(name || "?").trim();
   return (s[0] || "?").toUpperCase();
-}
-
-function fmtTs(ts) {
-  if (!ts) return "—";
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
-         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-}
-
-function fmtAge(ts) {
-  const s = Math.round(Date.now() / 1000 - ts);
-  if (s < 60) return s + "s";
-  if (s < 3600) return Math.floor(s / 60) + "m";
-  if (s < 86400) return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
-  return Math.floor(s / 86400) + "d";
 }
 
 function fmtJoinDate(ts) {
@@ -81,7 +67,9 @@ function renderList(tickets, activeId) {
     const who = t.claimer_name
       ? `claimed by <b style="color:var(--ink-dim)">${esc(t.claimer_name)}</b>`
       : `by <b style="color:var(--ink-dim)">${esc(reporter)}</b>`;
-    const age = t.status === "open" ? fmtAge(t.created_at) + " ago" : fmtAge(t.closed_at || t.created_at);
+    const age = t.status === "open"
+      ? fmtAge(Date.now() / 1000 - t.created_at) + " ago"
+      : fmtAge(Date.now() / 1000 - (t.closed_at || t.created_at));
     const channelChip = t.channel_name
       ? `<span class="ch">#${esc(t.channel_name)}</span><span class="dot">·</span>`
       : "";
@@ -210,8 +198,8 @@ function renderDetail(t, detail) {
 
   const reporter = t.user_name || t.user_id || "unknown";
   const when = t.status === "open"
-    ? `opened ${fmtAge(t.created_at)} ago`
-    : `closed ${fmtAge(t.closed_at || t.created_at)} ago`;
+    ? `opened ${fmtAge(Date.now() / 1000 - t.created_at)} ago`
+    : `closed ${fmtAge(Date.now() / 1000 - (t.closed_at || t.created_at))} ago`;
   const crumb = `#T-${esc(t.id)} &nbsp;·&nbsp; ${esc(when)}${t.escalated ? " &nbsp;·&nbsp; escalated" : ""}`;
 
   const channelName = t.channel_name || (detail && detail.channel_name) || "";
@@ -284,8 +272,8 @@ export function mount(container) {
   container.innerHTML = `
     <div class="panel">
       <header>
-        <h2>Active <em>tickets</em></h2>
-        <div class="subtitle">Flagged messages, auto-mod hits, and member reports awaiting review.</div>
+        <h2>Tickets</h2>
+        <div class="subtitle">Flagged messages, auto-mod hits, and member reports.</div>
       </header>
 
       <div class="mod-stats" data-stats>
@@ -458,58 +446,72 @@ export function mount(container) {
     render();
   });
 
+  // Runs one ticket action. Returns a success message, or undefined if the
+  // user cancelled (promptDialog/confirmDialog resolve null/false on cancel).
   async function runAction(action, t) {
     const id = t.id;
     const base = `/api/moderation/tickets/${encodeURIComponent(id)}`;
     if (action === "claim") {
+      if (!(await confirmDialog(`Claim ticket #${id}?`, { confirmLabel: "Claim" }))) return;
       await apiPost(`${base}/claim`);
-      return;
+      return "Ticket claimed";
     }
     if (action === "reopen") {
+      if (!(await confirmDialog(`Reopen ticket #${id}?`, { confirmLabel: "Reopen" }))) return;
       await apiPost(`${base}/reopen`);
-      return;
+      return "Ticket reopened";
     }
     if (action === "warn") {
-      const reason = window.prompt("Reason for warning?");
+      const reason = await promptDialog("Reason for warning?", {
+        title: "Warn member", confirmLabel: "Warn", required: true, danger: true,
+      });
       if (reason === null) return;
-      const trimmed = reason.trim();
-      if (!trimmed) { window.alert("A reason is required."); return; }
-      await apiPost(`${base}/warn`, { reason: trimmed });
-      return;
+      await apiPost(`${base}/warn`, { reason });
+      return "Warning issued";
     }
     if (action === "jail") {
-      const reason = window.prompt("Reason for 24h jail? (blank = no reason)");
+      const reason = await promptDialog("Reason for 24h jail? (blank = no reason)", {
+        title: "Jail member", confirmLabel: "Jail", danger: true,
+      });
       if (reason === null) return;
-      await apiPost(`${base}/jail`, { duration: "24h", reason: reason.trim() });
-      return;
+      await apiPost(`${base}/jail`, { duration: "24h", reason });
+      return "Member jailed for 24h";
     }
     if (action === "jail-custom") {
-      const duration = window.prompt("Jail duration? (e.g. 30m, 2h, 7d)", "24h");
-      if (duration === null || !duration.trim()) return;
-      const reason = window.prompt("Reason?");
+      const duration = await promptDialog("Jail duration? (e.g. 30m, 2h, 7d)", {
+        title: "Jail member", confirmLabel: "Next", value: "24h", required: true, danger: true,
+      });
+      if (duration === null) return;
+      const reason = await promptDialog("Reason? (blank = no reason)", {
+        title: "Jail member", confirmLabel: "Jail", danger: true,
+      });
       if (reason === null) return;
-      await apiPost(`${base}/jail`, { duration: duration.trim(), reason: reason.trim() });
-      return;
+      await apiPost(`${base}/jail`, { duration, reason });
+      return `Member jailed for ${duration}`;
     }
     if (action === "note") {
-      const body = window.prompt("Note body?");
+      const body = await promptDialog("Note body?", {
+        title: "Add note", confirmLabel: "Add note", required: true,
+      });
       if (body === null) return;
-      const trimmed = body.trim();
-      if (!trimmed) { window.alert("Note body is required."); return; }
-      await apiPost(`${base}/note`, { body: trimmed });
-      return;
+      await apiPost(`${base}/note`, { body });
+      return "Note added";
     }
     if (action === "dismiss") {
-      const reason = window.prompt("Dismissal reason? (optional)", "");
+      const reason = await promptDialog("Dismissal reason? (optional)", {
+        title: "Dismiss ticket", confirmLabel: "Dismiss",
+      });
       if (reason === null) return;
-      await apiPost(`${base}/dismiss`, { reason: reason.trim() });
-      return;
+      await apiPost(`${base}/dismiss`, { reason });
+      return "Ticket dismissed";
     }
     if (action === "close") {
-      const reason = window.prompt("Reason for closing?");
+      const reason = await promptDialog("Reason for closing? (optional)", {
+        title: "Close ticket", confirmLabel: "Close",
+      });
       if (reason === null) return;
-      await apiPost(`${base}/close`, { reason: reason.trim() });
-      return;
+      await apiPost(`${base}/close`, { reason });
+      return "Ticket closed";
     }
     throw new Error(`Unknown action: ${action}`);
   }
@@ -530,12 +532,15 @@ export function mount(container) {
 
     btn.disabled = true;
     try {
-      await runAction(action, t);
-      state.detailCache.delete(t.id);
-      await refresh();
+      const msg = await runAction(action, t);
+      if (msg) {
+        toast(msg);
+        state.detailCache.delete(t.id);
+        await refresh();
+      }
     } catch (err) {
       console.error(`Ticket action "${action}" failed:`, err);
-      window.alert(`Action failed: ${err.message}`);
+      toast(err.message, "error");
     } finally {
       btn.disabled = false;
     }

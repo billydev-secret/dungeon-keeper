@@ -34,7 +34,7 @@ export function mount(container) {
 
     const hdr = document.createElement("header");
     const h2 = document.createElement("h2");
-    h2.textContent = "Risky Rolls";
+    h2.textContent = "Risky Roller";
     const sub = document.createElement("div");
     sub.className = "subtitle";
     sub.textContent = "Dice game settings";

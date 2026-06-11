@@ -1,4 +1,5 @@
 import { api, esc } from "../api.js";
+import { withLoading } from "../report-helpers.js";
 import { renderSortableTable } from "../table.js";
 
 export function mount(container, initialParams) {
@@ -26,7 +27,7 @@ export function mount(container, initialParams) {
   async function refresh() {
     statusEl.textContent = "Loading…";
     try {
-      const data = await api("/api/reports/oldest-sfw", { count: parseInt(countEl.value) || 10 });
+      const data = await withLoading(tableWrap, api("/api/reports/oldest-sfw", { count: parseInt(countEl.value) || 10 }));
       const roleLabel = data.nsfw_role_name || "(NSFW role not configured)";
       statusEl.textContent = `${data.members.length} of ${data.sfw_total} SFW members shown (no @${roleLabel}).`;
       renderSortableTable(tableWrap, {
