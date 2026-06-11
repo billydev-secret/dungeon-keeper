@@ -1,8 +1,8 @@
 // Dashboard boot + hash-based panel router.
 import { api, esc } from "./api.js";
-import { HELP_GROUPS } from "./panels/help-sections.js";
+import { HELP_GROUPS } from "./panels/help-sections.js?v=24";
 
-const _moduleVer = "?v=23";
+const _moduleVer = "?v=24";
 
 // The Help nav is generated from help-sections.js (single source shared with
 // the help panel) so nav entries can't drift from the manual's sections.

@@ -3,12 +3,14 @@
 // The page→anchor mapping lives in help-sections.js (shared with app.js's
 // nav so the sidebar can't drift from the manual).
 
-import { HELP_PAGES } from "./help-sections.js";
+import { HELP_PAGES } from "./help-sections.js?v=24";
 
 let _manualPromise = null;
 function loadManual() {
   if (_manualPromise) return _manualPromise;
-  _manualPromise = fetch("/static/manual.html", { credentials: "same-origin" })
+  // cache: "no-cache" forces revalidation (ETag/304) so a browser-cached
+  // manual can't go stale against the versioned JS that parses it.
+  _manualPromise = fetch("/static/manual.html", { credentials: "same-origin", cache: "no-cache" })
     .then((r) => r.text())
     .then((html) => new DOMParser().parseFromString(html, "text/html"))
     .catch((err) => {
@@ -23,7 +25,7 @@ function injectStylesheet() {
   const link = document.createElement("link");
   link.id = "dk-help-panel-css";
   link.rel = "stylesheet";
-  link.href = "/static/help-panel.css";
+  link.href = "/static/help-panel.css?v=24";
   document.head.appendChild(link);
 }
 
