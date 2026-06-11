@@ -1474,7 +1474,7 @@
         <tr><td><strong><a href="/#/config-auto-role">Auto-Role</a></strong></td><td>Roles applied automatically on join</td></tr>
         <tr><td><strong><a href="/#/config-auto-delete">Auto-Delete</a></strong></td><td>Per-channel age + schedule rules</td></tr>
         <tr><td><strong><a href="/#/config-needle">Auto-Thread</a></strong></td><td>Channels with automatic thread creation</td></tr>
-        <tr><td><strong><a href="/#/config-starboard">Starboard</a></strong></td><td>Channel, threshold, emoji, channel exclusion list</td></tr>
+        <tr><td><strong><a href="/#/config-starboard">Starboard</a></strong></td><td>Channel, threshold, emoji, channel exclusion list (also tunable in Discord — see <a href="#starboard">Starboard</a>)</td></tr>
         <tr><td><strong><a href="/#/config-voice-master">Voice Master</a></strong></td><td>Hub channel, default category, name template, control panel placement, saveable fields</td></tr>
         <tr><td><strong><a href="/#/config-birthday">Birthdays</a></strong> / <a href="/#/birthday-calendar">Calendar</a></td><td>Announcement channel and time; browsable birthday calendar</td></tr>
         <tr><td><strong><a href="/#/config-bios">Bios</a></strong></td><td>Member bio display settings</td></tr>
@@ -1487,12 +1487,6 @@
         <tr><td><strong><a href="/#/admin-backfill">Backfill Jobs</a></strong></td><td>Historical interaction / member-event scans</td></tr>
       </tbody>
     </table>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/starboard channel|threshold|emoji|toggle|status|exclude|unexclude</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Starboard configuration also remains available as Discord slash commands for in-chat tuning. See <a href="#starboard">Starboard</a> for the full subcommand list.</span>
-    </div>
 
     <!-- ══════════════════════════════════════════════════════════
          21. DEVELOPER / OWNER TOOLS
@@ -1516,133 +1510,31 @@
          QUICK REFERENCE
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="quickref" class="section-break">Quick Reference</h2>
-    <p>The 80/20 first, then the full dump grouped by feature area.</p>
+    <p>The handful of commands that cover most days — each links to its full documentation. For everything else, use the search box in the sidebar, or type <code>/help</code> in Discord for the complete in-app command list.</p>
 
     <table class="qr-table">
       <thead><tr><th>Command</th><th>Permission</th><th>Description</th></tr></thead>
       <tbody>
-        <tr><td colspan="3" class="qr-section">Most-Used (the 80/20)</td></tr>
-        <tr><td><code>/jail</code> / <code>/unjail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to jail / release with restored roles</td></tr>
-        <tr><td><code>/warn</code> / <code>/warnings</code> / <code>/revokewarn</code></td><td><span class="perm perm-mod">Mod</span></td><td>Issue / list / revoke warnings</td></tr>
-        <tr><td><code>/modinfo</code></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member (jail, warnings, tickets, age)</td></tr>
-        <tr><td><code>/purge</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
-        <tr><td><code>/ticket open</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private support ticket</td></tr>
-        <tr><td><code>/ticket claim</code> / <code>close</code></td><td><span class="perm perm-mod">Mod</span></td><td>Daily ticket lifecycle</td></tr>
-        <tr><td><code>/watch add</code></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
-        <tr><td><code>/voice lock</code> / <code>rename</code> / <code>limit</code></td><td>Channel owner</td><td>Personal voice channel controls</td></tr>
-        <tr><td><code>/play</code></td><td><span class="perm perm-all">Everyone</span></td><td>Music — YouTube / Spotify / search</td></tr>
-        <tr><td><code>/games play &lt;mode&gt;</code></td><td><span class="perm perm-all">Everyone</span></td><td>Start a party game (16 modes — see <a href="#games">Games Night</a>)</td></tr>
-        <tr><td><code>/confess</code></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mods see emoji ID mapping)</td></tr>
-        <tr><td><code>/todo</code></td><td><span class="perm perm-all">Everyone</span></td><td>Add to the server's shared todo list</td></tr>
-        <tr><td><code>/help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
-        <tr><td><code>/ai review</code> / <code>scan</code> / <code>channel</code> / <code>query</code></td><td><span class="perm perm-admin">Admin</span></td><td>LLM-assisted member/channel investigation</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Moderation</td></tr>
-        <tr><td><code>/jail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to private jail channel</td></tr>
-        <tr><td><code>/unjail</code></td><td><span class="perm perm-mod">Mod</span></td><td>Release member, restore roles, save transcript</td></tr>
-        <tr><td><code>/warn</code></td><td><span class="perm perm-mod">Mod</span></td><td>Issue private warning</td></tr>
-        <tr><td><code>/warnings</code></td><td><span class="perm perm-mod">Mod</span></td><td>View member warning history</td></tr>
-        <tr><td><code>/revokewarn</code></td><td><span class="perm perm-mod">Mod</span></td><td>Revoke a warning by ID (stays in history, stops counting)</td></tr>
-        <tr><td><code>/modinfo</code></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member</td></tr>
-        <tr><td><code>/purge</code></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Tickets, Policies &amp; Warnings</td></tr>
-        <tr><td><code>/ticket panel</code></td><td><span class="perm perm-mod">Mod</span></td><td>Re-post the persistent ticket-open button</td></tr>
-        <tr><td><code>/ticket open</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open private support ticket</td></tr>
-        <tr><td><code>/ticket claim</code></td><td><span class="perm perm-mod">Mod</span></td><td>Claim ticket, get DM pings</td></tr>
-        <tr><td><code>/ticket escalate</code></td><td><span class="perm perm-mod">Mod</span></td><td>Ping admins into ticket</td></tr>
-        <tr><td><code>/ticket close</code></td><td><span class="perm perm-mod">Mod</span></td><td>Lock ticket with reopen/delete buttons</td></tr>
-        <tr><td><code>/ticket reopen</code></td><td><span class="perm perm-mod">Mod</span></td><td>Re-open a closed ticket</td></tr>
-        <tr><td><code>/ticket delete</code></td><td><span class="perm perm-mod">Mod</span></td><td>Permanently delete (transcript saved)</td></tr>
-        <tr><td><code>/pull</code> / <code>/remove</code></td><td><span class="perm perm-mod">Mod</span></td><td>Add or remove member from ticket/jail</td></tr>
-        <tr><td><code>/policy open</code></td><td><span class="perm perm-mod">Mod</span></td><td>Create a policy proposal with voting</td></tr>
-        <tr><td><code>/policy list</code> / <code>vote</code> / <code>close</code></td><td><span class="perm perm-mod">Mod</span></td><td>View, vote on, or finalize a policy proposal</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Analytics &amp; Watch</td></tr>
-        <tr><td><code>/watch add</code> / <code>remove</code> / <code>list</code></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
-        <tr><td colspan="3" style="opacity: 0.7;"><em>All activity, drop-off, retention, network, and engagement reports live in the <a href="/">web dashboard</a>.</em></td></tr>
-
-        <tr><td colspan="3" class="qr-section">AI Moderation</td></tr>
-        <tr><td><code>/ai review</code></td><td><span class="perm perm-admin">Admin</span></td><td>Flag rule violations in a member's recent messages</td></tr>
-        <tr><td><code>/ai scan</code></td><td><span class="perm perm-admin">Admin</span></td><td>Scan the last N messages in the channel</td></tr>
-        <tr><td><code>/ai channel</code></td><td><span class="perm perm-admin">Admin</span></td><td>Free-form question about a channel's history</td></tr>
-        <tr><td><code>/ai query</code></td><td><span class="perm perm-admin">Admin</span></td><td>Free-form question about a member's history</td></tr>
-        <tr><td><code>/rules-watch enable</code> / <code>disable</code> / <code>status</code></td><td><span class="perm perm-admin">Admin</span></td><td>Toggle the passive AI rule monitor</td></tr>
-        <tr><td><code>/rules-watch set-channel</code> / <code>digest</code> / <code>label</code> / <code>stats</code></td><td><span class="perm perm-admin">Admin</span></td><td>Alert channel, batch review, event labeling, signal stats</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Community &amp; XP</td></tr>
-        <tr><td><code>/xp_leaderboards</code></td><td><span class="perm perm-all">Everyone</span></td><td>XP rankings by time window</td></tr>
-        <tr><td><code>/xp_give</code></td><td><span class="perm perm-mod">Mod</span></td><td>Award 20 XP to a member manually</td></tr>
-        <tr><td><code>/grant</code></td><td>Configured</td><td>Give a community role to a member</td></tr>
-        <tr><td><code>/quality_leave</code></td><td><span class="perm perm-mod">Mod</span></td><td>Put member on Leave of Absence</td></tr>
-        <tr><td><code>/starboard</code></td><td><span class="perm perm-mod">Mod</span></td><td>Channel / threshold / emoji / exclude / status / toggle</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Voice Channels</td></tr>
-        <tr><td><code>/voice lock/unlock/hide</code></td><td>Channel owner</td><td>Restrict / open / hide personal channel</td></tr>
-        <tr><td><code>/voice rename</code> / <code>limit</code></td><td>Channel owner</td><td>Rename or set capacity</td></tr>
-        <tr><td><code>/voice invite/kick</code></td><td>Channel owner</td><td>Allow or remove members</td></tr>
-        <tr><td><code>/voice trusted</code> / <code>blocked</code></td><td>Channel owner</td><td>Manage trust / block lists</td></tr>
-        <tr><td><code>/voice owner</code></td><td>In-VC</td><td>Show who owns the channel you're in</td></tr>
-        <tr><td colspan="3" class="qr-section">Music</td></tr>
-        <tr><td><code>/play</code></td><td><span class="perm perm-all">Everyone</span></td><td>YouTube / Spotify / search query</td></tr>
-        <tr><td><code>/skip</code> / <code>pause</code> / <code>resume</code> / <code>stop</code></td><td><span class="perm perm-all">In VC</span></td><td>Standard playback controls</td></tr>
-        <tr><td><code>/queue</code> / <code>nowplaying</code></td><td><span class="perm perm-all">Everyone</span></td><td>View queue or repost the now-playing controls</td></tr>
-        <tr><td><code>/shuffle</code> / <code>loop</code></td><td><span class="perm perm-all">In VC</span></td><td>Shuffle queue or set loop mode</td></tr>
-        <tr><td><code>/disconnect</code></td><td><span class="perm perm-all">In VC</span></td><td>Force-disconnect from voice</td></tr>
-        <tr><td><code>/247</code></td><td><span class="perm perm-mod">Mod</span></td><td>Toggle 24/7 mode + Spotify autoplay</td></tr>
-        <tr><td><code>/247_status</code></td><td><span class="perm perm-all">Everyone</span></td><td>List 24/7 channels in this server</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Confessions &amp; DM Permissions</td></tr>
-        <tr><td><code>/confess</code></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mod-only emoji ID mapping)</td></tr>
-        <tr><td><code>/dm_help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Overview of the DM permission system</td></tr>
-        <tr><td><code>/dm_set_mode</code></td><td><span class="perm perm-all">Everyone</span></td><td>Set your DM mode (open / ask / closed)</td></tr>
-        <tr><td><code>/dm_revoke</code> / <code>/dm_status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Remove or check a DM connection</td></tr>
-        <tr><td><code>/dm_request_panel_refresh</code></td><td><span class="perm perm-mod">Mod</span></td><td>Re-post the DM request button panel</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Wellness</td></tr>
-        <tr><td><code>/wellness setup</code></td><td><span class="perm perm-all">Everyone</span></td><td>Opt in — pick timezone &amp; enforcement style</td></tr>
-        <tr><td><code>/away on</code> / <code>off</code></td><td><span class="perm perm-all">Everyone</span></td><td>Toggle the auto-reply for @mentions</td></tr>
-        <tr><td colspan="3" style="opacity: 0.7;"><em>Wellness admin overrides (caps, blackouts, dashboards) live on the <a href="/">web dashboard</a>.</em></td></tr>
-
-        <tr><td colspan="3" class="qr-section">Member Self-Service</td></tr>
-        <tr><td><code>/help</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
-        <tr><td><code>/support</code></td><td><span class="perm perm-all">Everyone</span></td><td>Link to the support Discord</td></tr>
-        <tr><td><code>/invite</code></td><td><span class="perm perm-all">Everyone</span></td><td>Bot OAuth invite URL</td></tr>
-        <tr><td><code>/todo</code></td><td><span class="perm perm-all">Everyone</span></td><td>Add to the server's shared todo list</td></tr>
-        <tr><td><code>/bio</code></td><td><span class="perm perm-all">Everyone</span></td><td>Create or update your member bio</td></tr>
-        <tr><td><code>/birthday set</code> / <code>remove</code></td><td><span class="perm perm-all">Everyone</span></td><td>Register or remove your birthday</td></tr>
-        <tr><td><code>/delete_me</code></td><td><span class="perm perm-all">Everyone</span></td><td>GDPR-style erasure of your data</td></tr>
-        <tr><td><code>/delete_user</code></td><td><span class="perm perm-mod">Mod</span></td><td>GDPR-style erasure of a target user's data</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Server Upkeep</td></tr>
-        <tr><td><code>/needle add</code> / <code>remove</code> / <code>list</code></td><td><span class="perm perm-mod">Mod</span></td><td>Auto-threading per channel</td></tr>
-        <tr><td><code>/close</code> / <code>/title</code></td><td>Thread owner</td><td>Archive or rename the current thread</td></tr>
-        <tr><td><code>/bump setup</code> / <code>add</code> / <code>log</code> / <code>status</code></td><td><span class="perm perm-mod">Mod</span> (status: everyone)</td><td>Listing-site bump reminders and cooldown status</td></tr>
-        <tr><td colspan="3" style="opacity: 0.7;"><em>Auto-delete, inactivity prune, and gender tagging are configured on the <a href="/">web dashboard</a>; background services run unchanged.</em></td></tr>
-
-        <tr><td colspan="3" class="qr-section">Guess / Whisper</td></tr>
-        <tr><td><code>/guess submit</code></td><td>Guess role</td><td>Submit a cropped NSFW image — guessers pick from a member list</td></tr>
-        <tr><td><code>/guess optin</code> / <code>leaderboard</code> / <code>confess</code></td><td><span class="perm perm-all">Everyone</span></td><td>Join the pool, see the leaderboard, drop an anonymous text confession</td></tr>
-        <tr><td><code>/whisper send</code></td><td>Whisper role</td><td>Send an anonymous DM to another opted-in member</td></tr>
-        <tr><td><code>/whisper optin</code> / <code>optout</code> / <code>sent</code> / <code>forget-me</code></td><td><span class="perm perm-all">Everyone</span></td><td>Manage your Whisper participation and history</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Games Night</td></tr>
-        <tr><td><code>/games play wyr</code> · <code>nhie</code> · <code>mlt</code> · <code>mfk</code> · <code>twotruths</code> · <code>traditional</code></td><td><span class="perm perm-all">Everyone</span></td><td>Vote / react party games &amp; Truth-or-Dare</td></tr>
-        <tr><td><code>/games play fantasies</code> · <code>ama</code> · <code>hottakes</code> · <code>ffa</code> · <code>compliment</code></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous-submission games</td></tr>
-        <tr><td><code>/games play story</code> · <code>price</code> · <code>rushmore</code> · <code>clapback</code> · <code>legitlibs</code></td><td><span class="perm perm-all">Everyone</span></td><td>Collaborative writing, bidding, drafting, comedy</td></tr>
-        <tr><td><code>/games hotpotato</code> / <code>quickdraw</code> / <code>pressure</code> <code>challenge</code></td><td><span class="perm perm-all">Everyone</span></td><td>1-v-1 duels</td></tr>
-        <tr><td><code>/games musicalchairs</code> / <code>chicken</code> / <code>hotpotatogroup</code> <code>start</code></td><td><span class="perm perm-all">Everyone</span></td><td>Group elimination games</td></tr>
-        <tr><td><code>/risky start</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a Risky Rolls round</td></tr>
-        <tr><td><code>/consent</code> / <code>/consent-status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Game consent settings and status</td></tr>
-        <tr><td><code>/recap</code></td><td><span class="perm perm-all">Everyone</span></td><td>Recap the current game-night session</td></tr>
-        <tr><td><code>/games help</code> / <code>support</code></td><td><span class="perm perm-all">Everyone</span></td><td>Browse every game mode / support link</td></tr>
-        <tr><td><code>/games config allow-channel</code> / <code>list-channels</code> / <code>game-end</code></td><td><span class="perm perm-admin">Admin</span></td><td>Channel allowlist and active-game control</td></tr>
-
-        <tr><td colspan="3" class="qr-section">Configuration</td></tr>
-        <tr><td colspan="3" style="opacity: 0.7;"><em>Every persistent setting (global, welcome, roles, XP, prune, spoiler, booster, starboard, confessions, DMs, auto-delete, auto-thread, voice master, whisper, guess, risky, moderation, policy tickets, wellness, birthdays, bios) is configured on the <a href="/">web dashboard</a>.</em></td></tr>
-        <tr><td><code>/starboard channel</code> / <code>threshold</code> / <code>emoji</code> / <code>toggle</code> / <code>status</code></td><td><span class="perm perm-mod">Mod</span></td><td>Starboard tuning, also available in Discord</td></tr>
+        <tr><td><a href="#jail"><code>/jail</code> / <code>/unjail</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to jail / release with restored roles</td></tr>
+        <tr><td><a href="#warnings"><code>/warn</code> / <code>/warnings</code> / <code>/revokewarn</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Issue / list / revoke warnings</td></tr>
+        <tr><td><a href="#modinfo"><code>/modinfo</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member (jail, warnings, tickets, age)</td></tr>
+        <tr><td><a href="#purge"><code>/purge</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
+        <tr><td><a href="#ticket-cmds"><code>/ticket open</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private support ticket</td></tr>
+        <tr><td><a href="#ticket-cmds"><code>/ticket claim</code> / <code>close</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Daily ticket lifecycle</td></tr>
+        <tr><td><a href="#watch"><code>/watch add</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
+        <tr><td><a href="#voice-user"><code>/voice lock</code> / <code>rename</code> / <code>limit</code></a></td><td>Channel owner</td><td>Personal voice channel controls</td></tr>
+        <tr><td><a href="#music-cmds"><code>/play</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Music — YouTube / Spotify / search</td></tr>
+        <tr><td><a href="#games"><code>/games play &lt;mode&gt;</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Start a party game (16 modes)</td></tr>
+        <tr><td><a href="#confess"><code>/confess</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mods see emoji ID mapping)</td></tr>
+        <tr><td><a href="#self-service-cmds"><code>/todo</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Add to the server's shared todo list</td></tr>
+        <tr><td><a href="#self-service-cmds"><code>/help</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>
+        <tr><td><a href="#ai-tools"><code>/ai review</code> / <code>scan</code> / <code>channel</code> / <code>query</code></a></td><td><span class="perm perm-admin">Admin</span></td><td>AI-assisted member/channel investigation</td></tr>
       </tbody>
     </table>
+
+    <!-- The per-feature command dump that used to live here was removed:
+         every command is documented exactly once, in its feature section,
+         and reachable via the sidebar search. -->
 
     <p style="color:var(--muted);font-size:0.8rem;margin-top:2rem;text-align:center">
       DungeonKeeper Reference Guide
