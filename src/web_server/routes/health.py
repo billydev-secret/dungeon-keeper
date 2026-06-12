@@ -19,7 +19,6 @@ from bot_modules.services.health_metrics import (
     compute_dau_mau,
     compute_gini,
     compute_heatmap,
-    compute_incidents,
     compute_mod_engagement,
     compute_mod_workload,
     compute_newcomer_funnel,
@@ -242,18 +241,6 @@ async def health_tiles(
                             "total_actions_7d": cached["total_actions_7d"],
                             "mod_actions": own,
                         }
-
-                if _want("incidents"):
-                    cached = get_cached(conn, guild_id, "incidents")
-                    if cached is None:
-                        cached = compute_incidents(conn, guild_id)
-                        set_cached(conn, guild_id, "incidents", cached)
-                    tiles["incidents"] = {
-                        "active_count": cached["active_count"],
-                        "badge": cached["badge"],
-                        "categories": cached["categories"],
-                        "timeline": cached["timeline"],
-                    }
 
                 if _want("sentiment_feed"):
                     feed_rows = conn.execute(
@@ -1095,35 +1082,6 @@ async def health_mod_engagement(
             names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for m in data["mods"]:
                 m["user_name"] = names.get(int(m["user_id"]), "")
-            return data
-
-    return await run_query(_q)
-
-
-@router.get("/health/incidents")
-async def health_incidents(
-    request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-
-    def _q():
-        with ctx.open_db() as conn:
-            data = compute_incidents(conn, guild_id)
-            ch_ids = {
-                int(i["channel_id"]) for i in data["incident_log"] if i["channel_id"]
-            }
-            ch_names = (
-                _resolve_channel_names(conn, guild, guild_id, ch_ids)
-                if ch_ids
-                else {}
-            )
-            for i in data["incident_log"]:
-                if i["channel_id"]:
-                    i["channel_name"] = ch_names.get(int(i["channel_id"]), "")
             return data
 
     return await run_query(_q)

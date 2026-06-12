@@ -378,28 +378,6 @@ CREATE TABLE IF NOT EXISTS message_sentiment (
     computed_at REAL    NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS incident_events (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    guild_id     INTEGER NOT NULL,
-    event_type   TEXT    NOT NULL,
-    severity     TEXT    NOT NULL,
-    channel_id   INTEGER,
-    details_json TEXT    NOT NULL DEFAULT '{}',
-    detected_at  REAL    NOT NULL,
-    resolved_at  REAL,
-    resolved_by  INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS message_velocity_baseline (
-    guild_id    INTEGER NOT NULL,
-    hour_of_day INTEGER NOT NULL,
-    day_of_week INTEGER NOT NULL,
-    mean_rate   REAL    NOT NULL,
-    stddev_rate REAL    NOT NULL,
-    updated_at  REAL    NOT NULL,
-    PRIMARY KEY (guild_id, hour_of_day, day_of_week)
-);
-
 -- ── services/member_quality_score.py ─────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS quality_score_leaves (

@@ -30,7 +30,6 @@ const SECTIONS = [
     id: "reports", label: "Reports", perms: ["moderator"],
     groups: [
       { heading: "Moderation", items: [
-        { id: "health-incidents",       label: "Incidents",          module: "./panels/health-incidents.js" },
         { id: "health-sentiment",       label: "Sentiment & Tone",  module: "./panels/health-sentiment.js" },
         { id: "health-sentiment-feed",  label: "Sentiment Feed",    module: "./panels/health-sentiment-feed.js" },
         { id: "health-message-feed",   label: "Message Feed",       module: "./panels/health-message-feed.js" },

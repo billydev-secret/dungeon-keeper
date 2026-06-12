@@ -20,7 +20,6 @@ from bot_modules.services.auto_delete_service import (
     track_auto_delete_message,
 )
 from bot_modules.services.discord_scan import collect_messageable_channels
-from bot_modules.services.incident_detection import check_join_raid, velocity_tracker
 from bot_modules.services.interaction_graph import record_interactions
 from bot_modules.services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from bot_modules.services.message_store import (
@@ -429,9 +428,6 @@ class EventsCog(commands.Cog):
                     channel_name=getattr(message.channel, "name", str(message.channel.id)),
                     ts=message_ts,
                 )
-                velocity_tracker.record_message(
-                    conn, message.guild.id, message.channel.id, ts=message_ts
-                )
             return
 
         archive_content = _archived_message_content(message)
@@ -590,10 +586,6 @@ class EventsCog(commands.Cog):
                     ts=int(message_ts),
                     message_id=message.id,
                 )
-
-            velocity_tracker.record_message(
-                conn, message.guild.id, message.channel.id, ts=message_ts
-            )
 
         result = await award_message_xp(
             message,
@@ -819,9 +811,6 @@ class EventsCog(commands.Cog):
                 current_member=True,
             )
             record_member_event(conn, member.guild.id, member.id, "join", now)
-            check_join_raid(
-                conn, member.guild.id, member.id, member.created_at.timestamp(), now
-            )
 
         try:
             inviter_id, invite_code = await detect_inviter(member.guild)

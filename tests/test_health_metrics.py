@@ -532,40 +532,6 @@ def test_compute_mod_workload_counts_audit_and_messages(db_conn):
     assert out["escalation_rate"] == 100.0
 
 
-# ── compute_incidents ────────────────────────────────────────────────
-
-
-def test_compute_incidents_empty_returns_clear_badge(db_conn):
-    out = hm.compute_incidents(db_conn, GUILD, now=1_700_000_000.0)
-    assert out["active_count"] == 0
-    assert out["badge"] == "clear"
-    assert len(out["timeline"]) == 7
-
-
-def test_compute_incidents_active_count_and_log(db_conn):
-    now = 1_700_000_000.0
-    db_conn.execute(
-        "INSERT INTO incident_events "
-        "(guild_id, event_type, severity, channel_id, details_json, detected_at, resolved_at)"
-        " VALUES (?, 'spam_burst', 'high', 100, '{}', ?, NULL)",
-        (GUILD, now - 3600),
-    )
-    db_conn.execute(
-        "INSERT INTO incident_events "
-        "(guild_id, event_type, severity, channel_id, details_json, detected_at, resolved_at)"
-        " VALUES (?, 'sentiment_drop', 'low', 100, '{}', ?, ?)",
-        (GUILD, now - 7200, now - 3600),
-    )
-    db_conn.commit()
-    out = hm.compute_incidents(db_conn, GUILD, now=now)
-    assert out["active_count"] == 1
-    assert out["badge"] == "active"
-    assert len(out["incident_log"]) == 2
-    # The resolved incident should report a duration_min
-    durations = [r["duration_min"] for r in out["incident_log"]]
-    assert any(d is not None for d in durations)
-
-
 # ── compute_composite_health ─────────────────────────────────────────
 
 

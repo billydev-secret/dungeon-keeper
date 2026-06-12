@@ -30,7 +30,6 @@ const WIDGETS = [
   { id: "health-cohort-retention", label: "Cohort Retention",    category: "Health", perms: ["admin"], source: "health", tileKey: "cohort_retention", wide: false, nav: "health-cohort-retention",needsNames: false },
   { id: "health-churn-risk",       label: "Churn Risk",          category: "Health", perms: ["admin"], source: "health", tileKey: "churn_risk",       wide: false, nav: "health-churn-risk",      needsNames: false },
   { id: "health-mod-workload",     label: "Mod Workload",        category: "Health", perms: ["admin"], source: "health", tileKey: "mod_workload",     wide: false, nav: "health-mod-workload",    needsNames: true  },
-  { id: "health-incidents",        label: "Incidents",           category: "Health", perms: ["admin"], source: "health", tileKey: "incidents",        wide: false, nav: "health-incidents",       needsNames: false },
   { id: "health-sentiment-feed",  label: "Sentiment Feed",      category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment-feed", needsNames: true,  maxRows: 4 },
   { id: "health-message-feed",   label: "Message Feed",         category: "Health", perms: ["admin"], source: "health", tileKey: "message_feed",    wide: true,  nav: "health-message-feed",  needsNames: true,  maxRows: 4 },
 ];
@@ -46,8 +45,6 @@ export const ALL_WIDGETS = WIDGETS;
 export const DEFAULT_HOME = [
   "home-messages", "home-nsfw", "home-presence", "home-xp",
   "home-joins", "home-voice", "home-channels",
-  "home-users", "home-returned", "home-starters", "home-butterflies",
-  "home-loyalists",
 ];
 
 // Default for moderators — adds moderation snapshot
@@ -94,7 +91,6 @@ const TILE_LOADERS = {
   "health-cohort-retention":() => import("./tiles/cohort-retention.js"),
   "health-churn-risk":      () => import("./tiles/churn-risk.js"),
   "health-mod-workload":    () => import("./tiles/mod-workload.js"),
-  "health-incidents":       () => import("./tiles/incidents.js"),
   "health-sentiment-feed": () => import("./tiles/sentiment-feed.js"),
   "health-message-feed":  () => import("./tiles/message-feed.js"),
 };

@@ -2502,46 +2502,6 @@ textarea.field-input { resize: vertical; }
   min-width: 200px;
 }
 
-/* Incident timeline dots (tile) */
-.incident-timeline {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  margin: 8px 0;
-}
-.incident-dot {
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.incident-categories {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  font-size: 10px;
-}
-.incident-categories .incident-cat {
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: var(--bg);
-  color: var(--ink-dim);
-  text-transform: capitalize;
-}
-.incident-categories .incident-cat-active {
-  background: rgba(158,59,46,0.2);
-  color: #9E3B2E;
-}
-
-/* Incident categories (deep-dive) */
-.incident-cats { display: flex; flex-direction: column; gap: 4px; }
-.incident-cat {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-}
-.incident-cat-name { color: var(--ink); text-transform: capitalize; }
-.incident-cat-count { font-weight: 700; color: var(--gold-solid); }
 
 /* Health dimension bars (tile compact) */
 .health-dim-bars { margin-top: 6px; }

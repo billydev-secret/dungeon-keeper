@@ -45,29 +45,6 @@ def init_health_tables(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_sentiment_guild_channel
             ON message_sentiment (guild_id, channel_id);
 
-        CREATE TABLE IF NOT EXISTS incident_events (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id     INTEGER NOT NULL,
-            event_type   TEXT    NOT NULL,
-            severity     TEXT    NOT NULL,
-            channel_id   INTEGER,
-            details_json TEXT    NOT NULL DEFAULT '{}',
-            detected_at  REAL    NOT NULL,
-            resolved_at  REAL,
-            resolved_by  INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS idx_incidents_guild_ts
-            ON incident_events (guild_id, detected_at);
-
-        CREATE TABLE IF NOT EXISTS message_velocity_baseline (
-            guild_id    INTEGER NOT NULL,
-            hour_of_day INTEGER NOT NULL,
-            day_of_week INTEGER NOT NULL,
-            mean_rate   REAL    NOT NULL,
-            stddev_rate REAL    NOT NULL,
-            updated_at  REAL    NOT NULL,
-            PRIMARY KEY (guild_id, hour_of_day, day_of_week)
-        );
     """)
 
 

@@ -1554,77 +1554,7 @@ def compute_mod_workload(
 
 
 # ---------------------------------------------------------------------------
-# 11. Incident detection (reads from incident_events + baselines)
-# ---------------------------------------------------------------------------
-
-
-def compute_incidents(
-    conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
-) -> dict:
-    now = now or time.time()
-    seven_days_ago = _ts(7, now=now)
-
-    # Active (unresolved) incidents
-    active = conn.execute(
-        "SELECT COUNT(*) FROM incident_events WHERE guild_id=? AND resolved_at IS NULL",
-        (guild_id,),
-    ).fetchone()[0]
-
-    # 7-day incident log
-    log_rows = conn.execute(
-        """SELECT id, event_type, severity, channel_id, details_json,
-                  detected_at, resolved_at, resolved_by
-           FROM incident_events WHERE guild_id=? AND detected_at>=?
-           ORDER BY detected_at DESC LIMIT 50""",
-        (guild_id, seven_days_ago),
-    ).fetchall()
-    incident_log = [
-        {
-            "id": r["id"],
-            "type": r["event_type"],
-            "severity": r["severity"],
-            "channel_id": str(r["channel_id"]) if r["channel_id"] else None,
-            "detected_at": r["detected_at"],
-            "resolved_at": r["resolved_at"],
-            "duration_min": round((r["resolved_at"] - r["detected_at"]) / 60, 1)
-            if r["resolved_at"]
-            else None,
-        }
-        for r in log_rows
-    ]
-
-    # Alert category counts (7d)
-    cat_rows = conn.execute(
-        "SELECT event_type, COUNT(*) AS cnt FROM incident_events "
-        "WHERE guild_id=? AND detected_at>=? GROUP BY event_type",
-        (guild_id, seven_days_ago),
-    ).fetchall()
-    categories = {r["event_type"]: r["cnt"] for r in cat_rows}
-
-    # 7-day timeline (daily incident counts)
-    timeline = []
-    for d in range(6, -1, -1):
-        day_start = _ts(d + 1, now=now)
-        day_end = _ts(d, now=now)
-        cnt = conn.execute(
-            "SELECT COUNT(*) FROM incident_events WHERE guild_id=? AND detected_at>=? AND detected_at<?",
-            (guild_id, day_start, day_end),
-        ).fetchone()[0]
-        timeline.append(cnt)
-
-    badge = "clear" if active == 0 else "active"
-
-    return {
-        "active_count": active,
-        "badge": badge,
-        "incident_log": incident_log,
-        "categories": categories,
-        "timeline": timeline,
-    }
-
-
-# ---------------------------------------------------------------------------
-# 12. Composite health score
+# 11. Composite health score
 # ---------------------------------------------------------------------------
 
 

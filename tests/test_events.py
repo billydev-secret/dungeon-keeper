@@ -510,7 +510,6 @@ def _patch_join_deps():
         patch("bot_modules.cogs.events_cog.check_jail_rejoin", new_callable=AsyncMock),
         patch("bot_modules.cogs.events_cog.upsert_known_user"),
         patch("bot_modules.cogs.events_cog.record_member_event"),
-        patch("bot_modules.cogs.events_cog.check_join_raid"),
         patch(
             "bot_modules.cogs.events_cog.detect_inviter",
             new_callable=AsyncMock,

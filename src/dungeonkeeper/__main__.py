@@ -406,19 +406,16 @@ def main() -> None:
                             compute_dau_mau,
                             compute_gini,
                             compute_heatmap,
-                            compute_incidents,
                             compute_mod_workload,
                             compute_newcomer_funnel,
                             compute_sentiment,
                             compute_social_graph,
                         )
                         from bot_modules.services.health_service import set_cached
-                        from bot_modules.services.incident_detection import update_baselines
                         from bot_modules.services.sentiment_service import analyze_batch
 
                         with open_db(db_path) as conn:
                             analyze_batch(conn, gid, batch_size=500)
-                            update_baselines(conn, gid)
                             data = compute_dau_mau(
                                 conn,
                                 gid,
@@ -452,8 +449,6 @@ def main() -> None:
                             set_cached(conn, gid, "churn_risk", data)
                             data = compute_mod_workload(conn, gid, mod_ids=_mod_ids)
                             set_cached(conn, gid, "mod_workload", data)
-                            data = compute_incidents(conn, gid)
-                            set_cached(conn, gid, "incidents", data)
 
                     await asyncio.to_thread(_batch)
                     log.info(
