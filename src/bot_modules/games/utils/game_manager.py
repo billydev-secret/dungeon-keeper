@@ -82,6 +82,19 @@ async def check_game_enabled(db, game_type: str, guild_id: int) -> bool:
     return row is None or bool(row[0])
 
 
+async def get_game_options(db, game_type: str, guild_id: int) -> dict:
+    row = await db.fetchone(
+        "SELECT options FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+        (guild_id, game_type),
+    )
+    if not row or not row[0]:
+        return {}
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return {}
+
+
 async def get_active_game(db, channel_id: int):
     return await db.fetchone(
         "SELECT * FROM games_active_games WHERE channel_id = ?", (channel_id,)

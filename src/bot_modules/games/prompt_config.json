@@ -1,18 +1,18 @@
 {
-  "audience": "The audience is adults aged 20-40 in a tight-knit Discord community of swingers, ENM/poly folks, and sexually-open friends \u2014 many already in NSFW relationships, others curious or new and looking to break the ice and connect. Voice: campy, flirty, playful, a little cheeky, never mean-spirited or judgmental. Inclusive of all genders, orientations, and relationship structures.",
-  "sfw_tone": "SFW MODE: no explicit sex acts, no body parts, no slurs, no explicit kink terminology \u2014 but the prompt should still feel adult, flirty, and icebreaker-worthy. Think: things you'd ask at a couples' dinner party, first-meet mingles, or a hot tub hangout. Lean into vulnerability, attraction, embarrassing moments, dating disasters, crushes, charm, confidence, jealousy, guilty pleasures, hypotheticals, and 'tell us a story' energy. It should spark conversation and connection, not just laughs. Absolutely safe to read aloud at a mixer with someone's curious friend.",
-  "nsfw_tone": "NSFW MODE: explicit, raunchy, and adult \u2014 lean into sex, kink, swinging, ENM, group dynamics, fantasies, fetishes, hookups, dirty stories, body stuff, and taboo curiosity. Profanity and frank sexual language are encouraged. Be specific and confident, not coy. Stay campy and fun rather than clinical or porny \u2014 these prompts should make the room laugh, blush, and spill secrets. HARD LIMITS: nothing involving minors, incest, non-consent, bestiality, or anything illegal. Always assume enthusiastic, consenting adults.",
+  "audience": "Adults (21+) in an established, invite-only Discord community. Mixed experience levels with adult humor — some shy, some bold. They value wit and chemistry over shock value, and respond best to clever, absurdly specific setups rather than pure raunch. Comfortable with explicit content when it's funny.\n",
+  "sfw_tone": "Playful, warm, slightly suggestive. Awkward-adjacent humor, innuendo that works on two levels, mood-killer scenarios, dating disasters. Safe to read aloud, but with a knowing wink.\n",
+  "nsfw_tone": "Unhinged but elegant. Explicitly adult, chemistry-forward, mischievous. Kinks, hookup chaos, and bedroom disasters are fair game — but the comedy always carries the raunch, never the reverse. Clever specificity over crude shock. No demeaning humor, no real people, nothing non-consensual.\n",
   "games": {
     "wyr": {
       "name": "Would You Rather",
       "descriptor": "Would You Rather questions",
-      "user_prompt": "Generate ONE Would You Rather question that forces a real, juicy choice between two tempting (or two awful) options \u2014 no obvious answers. Format: 'option A | option B'. No 'Would you rather' prefix, no numbering, no quotes. Just the two options separated by a pipe.",
+      "user_prompt": "Generate ONE Would You Rather question that forces a real, juicy choice between two tempting (or two awful) options — no obvious answers. Format: 'option A | option B'. No 'Would you rather' prefix, no numbering, no quotes. Just the two options separated by a pipe.",
       "max_tokens": 140
     },
     "nhie": {
       "name": "Never Have I Ever",
       "descriptor": "Never Have I Ever statements",
-      "user_prompt": "Generate ONE Never Have I Ever statement that's specific enough to be revealing \u2014 the kind of thing where at least one person in the room is definitely going to drink. Return only the action, without the 'Never have I ever' prefix. No quotes, no numbering.",
+      "user_prompt": "Generate ONE Never Have I Ever statement that's specific enough to be revealing — the kind of thing where at least one person in the room is definitely going to drink. Return only the action, without the 'Never have I ever' prefix. No quotes, no numbering.",
       "max_tokens": 120
     },
     "mlt": {
@@ -23,21 +23,21 @@
     },
     "rushmore": {
       "name": "Mt. Rushmore",
-      "descriptor": "Mt. Rushmore topics \u2014 categories where players each pick their personal top 4",
+      "descriptor": "Mt. Rushmore topics — categories where players each pick their personal top 4",
       "user_prompt": "Generate ONE Mt. Rushmore topic (a category like 'green flags in a partner', 'underrated date night moves', or 'songs that always make you want to make out'). Should provoke debate, reveal taste, and prompt stories. Return only the topic phrase. No 'Mt. Rushmore of', no quotes, no numbering.",
       "max_tokens": 100
     },
     "price": {
       "name": "Name Your Price",
-      "descriptor": "'Name Your Price' scenarios \u2014 situations where players bid the lowest amount they'd accept to do something",
+      "descriptor": "'Name Your Price' scenarios — situations where players bid the lowest amount they'd accept to do something",
       "user_prompt": "Generate ONE Name Your Price scenario: something cheeky, awkward, embarrassing, or daring that a player would have to do for money. Should make people laugh and actually wonder what their number is. Return only the scenario as a single sentence. No quotes, no numbering, no preamble.",
       "max_tokens": 160
     },
     "clapback": {
       "name": "Clapback",
-      "descriptor": "Clapback prompts \u2014 short, punchy fill-in-the-blank or open-ended setups players write a funny answer to",
-      "user_prompt": "Generate ONE Clapback prompt that hands the players a comedy layup \u2014 specific enough to be funny, open enough to let people show off. Think 'the worst pickup line at a swingers' mixer:' or 'a sex toy that definitely shouldn't exist:'. Return only the prompt text. No quotes, no numbering, no preamble.",
-      "max_tokens": 140
+      "descriptor": "Quiplash prompts ",
+      "user_prompt": "You are a prompt writer for a custom Quiplash-style party game played in a 21+ adult Discord server. Generate {N} fill-in-the-blank or open-ended prompts that players answer with short, funny written responses, which are then voted on.",
+      "max_tokens": 1000
     },
     "ama": {
       "name": "Anonymous AMA",

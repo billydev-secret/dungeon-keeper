@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 
 import discord
 from discord.ext import commands
@@ -13,6 +14,7 @@ from bot_modules.games.constants import (
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
+    get_game_options,
     create_game,
     update_game_message,
     update_game_payload,
@@ -73,8 +75,17 @@ async def fetch_prompt(db, config: dict, used: list[str]) -> str | None:
 async def _ai_prompt(used: list[str]) -> str | None:
     for _ in range(2):  # retry once on failure
         result = await generate_text(AI_SYSTEM_PROMPT, AI_USER_PROMPT, max_tokens=100)
-        if result and result.strip('" \n') not in used:
-            return result.strip('" \n')
+        if not result:
+            continue
+        # Find the first non-header, non-empty line
+        prompt = None
+        for line in result.strip().splitlines():
+            line = line.strip().lstrip("-•*0123456789). ").strip('"').strip()
+            if line and not line.startswith("#"):
+                prompt = line
+                break
+        if prompt and prompt not in used:
+            return prompt
     return None
 
 
@@ -197,10 +208,11 @@ class ClapbackJoinView(discord.ui.View):
 
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
+        min_p = self.config.get("min_players", MIN_PLAYERS)
 
-        if len(players) < MIN_PLAYERS:
+        if len(players) < min_p:
             await interaction.response.send_message(
-                f"Need at least {MIN_PLAYERS} players to start Clapback. Currently: {len(players)}.",
+                f"Need at least {min_p} players to start Clapback. Currently: {len(players)}.",
                 ephemeral=True,
             )
             return
@@ -296,6 +308,7 @@ class ClapbackJoinView(discord.ui.View):
             config=self.config,
             players=players,
             name_resolver=lambda uid: resolve_name(guild, uid),
+            start_at=self.config.get("start_epoch"),
         )
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -551,6 +564,7 @@ class ClapbackCog(commands.Cog):
         vote_timer="Seconds per matchup vote (10-60, default 40)",
         source="Where prompts come from",
         anonymous="Hide author names until final recap",
+        start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
     )
     @app_commands.choices(
         source=[
@@ -567,6 +581,7 @@ class ClapbackCog(commands.Cog):
         vote_timer: int = 40,
         source: str = "both",
         anonymous: bool = False,
+        start_in: app_commands.Range[int, 1, 60] | None = None,
     ):
         log.info(
             "%s used /games play clapback in #%s",
@@ -603,6 +618,7 @@ class ClapbackCog(commands.Cog):
             options={
                 "rounds": rounds, "timer": timer, "vote_timer": vote_timer,
                 "source": source, "anonymous": anonymous,
+                "start_in": start_in,
             },
         )
         if game_id is None:
@@ -634,12 +650,18 @@ class ClapbackCog(commands.Cog):
         # Bank fallback: if the bank is empty, fall back to AI (no user to prompt headless).
         if source in ("bank", "both") and not await has_clapback_prompts(self.db):
             source = "ai"
+        start_in_min = options.get("start_in")
+        start_epoch = int(time.time()) + int(start_in_min) * 60 if start_in_min else None
+        game_opts = await get_game_options(self.db, "clapback", guild_id)
+        min_players = int(game_opts.get("min_players", MIN_PLAYERS))
         config = {
             "rounds": rounds,
             "timer": timer,
             "vote_timer": vote_timer,
             "source": source,
             "anonymous": bool(options.get("anonymous", False)),
+            "start_epoch": start_epoch,
+            "min_players": min_players,
         }
         return await self._start_new_game(
             channel=channel, host_id=host_id, host_name=host_name,
@@ -670,6 +692,7 @@ class ClapbackCog(commands.Cog):
             config=config,
             players=[],
             name_resolver=lambda uid: resolve_name(guild, uid),
+            start_at=config.get("start_epoch"),
         )
 
         view = ClapbackJoinView(game_id, host_id, self.db, self.bot, self, config)
@@ -814,13 +837,12 @@ class ClapbackCog(commands.Cog):
         msg = await channel.send(embed=embed, view=view)
         await update_game_message(self.db, game_id, msg.id)
 
-        # Wait for timer or all submissions. The timer field ticks down on the
-        # client via Discord's <t:UNIX:R> markup — no edits needed for that.
         submit_event = asyncio.Event()
         self._submit_events[game_id] = submit_event
 
         elapsed = 0
         last_count = 0
+        last_edit_at = -5  # triggers first timer update at elapsed=1
         while elapsed < timer_secs:
             if self._is_cancelled(game_id):
                 break
@@ -831,11 +853,19 @@ class ClapbackCog(commands.Cog):
                 pass
             elapsed += 1
 
-            # Check answer count — only edit when it actually changes
             p = await get_game_payload(self.db, game_id)
             count = len(p.get("answers", {}))
-            if count != last_count:
-                last_count = count
+            count_changed = count != last_count
+            timer_due = (elapsed - last_edit_at) >= 5
+
+            if count_changed or timer_due:
+                if count_changed:
+                    last_count = count
+                last_edit_at = elapsed
+                remaining = max(0, timer_secs - elapsed)
+                mins, secs = divmod(remaining, 60)
+                timer_val = f"⏰ {mins}:{secs:02d}" if mins else f"⏰ {secs}s"
+                embed.set_field_at(0, name="Timer", value=timer_val, inline=True)
                 embed.set_field_at(1, name="Answers In", value=f"{count}/{len(players)}", inline=True)
                 try:
                     await msg.edit(embed=embed)
@@ -897,13 +927,12 @@ class ClapbackCog(commands.Cog):
 
         msg = await channel.send(embed=embed, view=view)
 
-        # Wait for timer or all eligible votes. The timer ticks down via
-        # Discord's dynamic <t:UNIX:R> — no periodic edits needed for it.
         vote_event = asyncio.Event()
         self._vote_events[game_id] = vote_event
 
         elapsed = 0
         last_vcount = 0
+        last_edit_at = -5  # triggers first timer update at elapsed=1
         while elapsed < vote_timer:
             if self._is_cancelled(game_id):
                 return None
@@ -914,20 +943,27 @@ class ClapbackCog(commands.Cog):
                 pass
             elapsed += 1
 
-            # Update vote count display only when it actually changes
             p = await get_game_payload(self.db, game_id)
             m = p.get("matchups", [])
             if matchup_index < len(m):
                 vcount = len(m[matchup_index].get("votes", {}))
-                if vcount != last_vcount:
-                    last_vcount = vcount
+                vcount_changed = vcount != last_vcount
+                timer_due = (elapsed - last_edit_at) >= 5
+
+                if vcount_changed or timer_due:
+                    if vcount_changed:
+                        last_vcount = vcount
+                    last_edit_at = elapsed
+                    remaining = max(0, vote_timer - elapsed)
+                    mins, secs = divmod(remaining, 60)
+                    timer_val = f"⏰ {mins}:{secs:02d}" if mins else f"⏰ {secs}s"
+                    embed.set_field_at(0, name="Timer", value=timer_val, inline=True)
                     embed.set_field_at(1, name="Votes", value=str(vcount), inline=True)
                     try:
                         await msg.edit(embed=embed)
                     except Exception:
                         pass
 
-                # All eligible voted (everyone except own-answer self-vote)
                 eligible = len(players)
                 if vcount >= eligible and eligible > 0:
                     break

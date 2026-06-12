@@ -78,7 +78,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div class="section-label">Question Bank</div>' +
       '<div class="field-hint" style="margin-bottom:12px;">Questions used by this game. SFW and NSFW are managed separately.</div>' +
       '<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">' +
-      '<div style="flex:1;min-width:0;">' +
+      '<div style="flex:1;min-width:260px;">' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
       '<div class="field" style="margin:0;"><label>Category<select data-ctrl="filter-cat"><option value="">All</option><option value="sfw">SFW</option><option value="nsfw">NSFW</option></select></label></div>' +
       '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input type="text" data-ctrl="search" placeholder="Filter..." style="width:100%;" /></label></div>' +

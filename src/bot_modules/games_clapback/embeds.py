@@ -36,6 +36,7 @@ def build_lobby_embed(
     config: dict[str, Any],
     players: list[int],
     name_resolver: NameResolver,
+    start_at: int | None = None,
 ) -> discord.Embed:
     """Build the lobby embed shown while waiting for joiners.
 
@@ -53,6 +54,13 @@ def build_lobby_embed(
         ),
         color=CLAPBACK_COLOR,
     )
+
+    if start_at:
+        embed.add_field(
+            name="⏰ Starting",
+            value=f"<t:{start_at}:R>",
+            inline=True,
+        )
 
     if not players:
         player_str = "(nobody yet)"

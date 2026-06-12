@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -552,14 +553,17 @@ async def generate_questions(
     max_tokens = game_cfg.get("max_tokens", 200)
 
     system_prompt = f"{audience}\n\n{tone}"
-    user_prompt = body.custom_prompt if body.custom_prompt else base_user_prompt
+    raw_prompt = body.custom_prompt if body.custom_prompt else base_user_prompt
+    batch_mode = "{N}" in raw_prompt and not body.custom_prompt
+    user_prompt = raw_prompt.replace("{N}", str(count)) if batch_mode else raw_prompt
 
     results = []
     errors = 0
-    for _i in range(count):
+    iterations = 1 if batch_mode else count
+    for _i in range(iterations):
         text = await generate_text(system_prompt, user_prompt, max_tokens=max_tokens)
         if text:
-            results.append(text)
+            results.extend(_split_generated(text))
         else:
             errors += 1
 
@@ -567,6 +571,22 @@ async def generate_questions(
     if errors:
         response["error"] = f"{errors} generation(s) failed; check ANTHROPIC_API_KEY"
     return response
+
+
+def _split_generated(text: str) -> list[str]:
+    """Split a multi-line AI response into individual question strings."""
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Strip leading list markers: "1.", "2)", "-", "•", "*"
+        line = line.lstrip("-•* \t")
+        line = re.sub(r"^\d+[.)]\s*", "", line)
+        line = line.strip('"').strip()
+        if line:
+            lines.append(line)
+    return lines if lines else [text.strip()]
 
 
 # ── Game history ──────────────────────────────────────────────────────────────

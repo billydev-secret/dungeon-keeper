@@ -21,7 +21,7 @@ def _load_config() -> dict:
 def _first_line(text: str) -> str | None:
     for line in text.strip().splitlines():
         line = line.strip().lstrip("-•*0123456789. ").strip('"').strip()
-        if line:
+        if line and not line.startswith("#"):
             return line
     return None
 

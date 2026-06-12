@@ -920,15 +920,6 @@ class CropEditorView(discord.ui.View):
             )
             return
 
-        if hasattr(guess_channel, "is_nsfw") and not guess_channel.is_nsfw():
-            self.stop()
-            await interaction.followup.send(
-                f"{guess_channel.mention} is no longer NSFW-flagged. "
-                "Guess refuses to post explicit content in non-age-gated channels.",
-                ephemeral=True,
-            )
-            return
-
         crop_bytes = await asyncio.to_thread(render_crop, self.image_bytes, self.crop_box)
 
         db_path = self.bot.ctx.db_path
