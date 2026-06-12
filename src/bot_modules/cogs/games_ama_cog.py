@@ -1109,8 +1109,6 @@ class AMACog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
         game_id = self._active_channels.get(message.channel.id)
         if not game_id:
             return
