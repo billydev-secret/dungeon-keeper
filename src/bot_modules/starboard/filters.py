@@ -78,21 +78,3 @@ def validate_emoji(emoji_str: str) -> tuple[bool, str | None]:
             "(e.g. ⭐) or a server custom emoji (e.g. <:name:123456>)."
         )
     return True, None
-
-
-def merge_default_config(row) -> dict:  # row: sqlite3.Row | dict | None
-
-    """Return a starboard config dict, falling back to defaults for missing rows.
-
-    The cog edits one field at a time (channel, threshold, emoji, enabled)
-    and re-upserts the full row. This builder gives the merge a single
-    source of truth for the defaults.
-    """
-    if row:
-        return {
-            "channel_id": row["channel_id"],
-            "threshold": row["threshold"],
-            "emoji": row["emoji"],
-            "enabled": row["enabled"],
-        }
-    return {"channel_id": 0, "threshold": 3, "emoji": "⭐", "enabled": 1}

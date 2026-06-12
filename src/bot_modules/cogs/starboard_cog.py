@@ -6,10 +6,9 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 import discord
-from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.db_utils import add_config_id, get_config_id_set, remove_config_id
+from bot_modules.core.db_utils import get_config_id_set
 from bot_modules.services.starboard_service import (
     add_reactor,
     delete_starboard_post,
@@ -19,18 +18,14 @@ from bot_modules.services.starboard_service import (
     insert_starboard_post,
     remove_reactor,
     update_starboard_post_count,
-    upsert_starboard_config,
 )
 from bot_modules.starboard.embeds import (
     build_starboard_embed,
-    build_status_embed,
     updated_starboard_embed,
 )
 from bot_modules.starboard.filters import (
-    merge_default_config,
     nsfw_leak_blocked,
     should_process_reaction,
-    validate_emoji,
 )
 
 if TYPE_CHECKING:
@@ -47,10 +42,7 @@ _EXCLUDED_BUCKET = "starboard_excluded_channels"
 
 
 class StarboardCog(commands.Cog):
-    starboard = app_commands.Group(
-        name="starboard",
-        description="Starboard settings and management.",
-    )
+    """Listener-only cog; starboard configuration lives in the web dashboard."""
 
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
@@ -68,9 +60,6 @@ class StarboardCog(commands.Cog):
         except discord.HTTPException:
             log.warning("starboard: failed to fetch starboard message %s", message_id)
             return None
-
-    def _default_cfg(self, conn, guild_id: int) -> dict:
-        return merge_default_config(get_starboard_config(conn, guild_id))
 
     # ------------------------------------------------------------------
     # Reaction events
@@ -225,155 +214,6 @@ class StarboardCog(commands.Cog):
             # reaction creates a fresh post instead of trying to edit None.
             with self.ctx.open_db() as conn:
                 delete_starboard_post(conn, guild_id, message_id)
-
-    # ------------------------------------------------------------------
-    # Config commands
-    # ------------------------------------------------------------------
-
-    @starboard.command(name="channel", description="Set the starboard channel.")
-    @app_commands.describe(channel="Channel where starred messages will be posted.")
-    async def sb_channel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-        guild = interaction.guild
-        if guild is None:
-            return
-
-        # Preflight: refuse to set a channel where the bot can't post —
-        # otherwise reactions trigger silent log failures forever.
-        if guild.me is not None:
-            perms = channel.permissions_for(guild.me)
-            missing = [
-                name for name, ok in (
-                    ("Send Messages", perms.send_messages),
-                    ("Embed Links", perms.embed_links),
-                ) if not ok
-            ]
-            if missing:
-                await interaction.response.send_message(
-                    f"I'm missing **{', '.join(missing)}** in {channel.mention}. "
-                    "Grant those permissions and try again.",
-                    ephemeral=True,
-                )
-                return
-
-        with self.ctx.open_db() as conn:
-            cfg = self._default_cfg(conn, guild.id)
-            cfg["channel_id"] = channel.id
-            upsert_starboard_config(conn, guild.id, **cfg)
-        await interaction.response.send_message(
-            f"Starboard channel set to {channel.mention}.", ephemeral=True
-        )
-
-    @starboard.command(name="threshold", description="Set the minimum star count to post.")
-    @app_commands.describe(count="Number of stars required to post a message.")
-    async def sb_threshold(
-        self,
-        interaction: discord.Interaction,
-        count: app_commands.Range[int, 1, 100],
-    ) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-        guild_id = interaction.guild_id
-        if guild_id is None:
-            return
-        with self.ctx.open_db() as conn:
-            cfg = self._default_cfg(conn, guild_id)
-            cfg["threshold"] = int(count)
-            upsert_starboard_config(conn, guild_id, **cfg)
-        await interaction.response.send_message(
-            f"Starboard threshold set to **{count}**.", ephemeral=True
-        )
-
-    @starboard.command(name="emoji", description="Set the reaction emoji that triggers the starboard.")
-    @app_commands.describe(emoji="Emoji to watch for (e.g. ⭐ or :custom_name:).")
-    async def sb_emoji(self, interaction: discord.Interaction, emoji: str) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-        ok, error_message = validate_emoji(emoji)
-        if not ok:
-            await interaction.response.send_message(error_message, ephemeral=True)
-            return
-        emoji = emoji.strip()
-
-        guild_id = interaction.guild_id
-        if guild_id is None:
-            return
-        with self.ctx.open_db() as conn:
-            cfg = self._default_cfg(conn, guild_id)
-            cfg["emoji"] = emoji
-            upsert_starboard_config(conn, guild_id, **cfg)
-        await interaction.response.send_message(f"Starboard emoji set to **{emoji}**.", ephemeral=True)
-
-    @starboard.command(name="toggle", description="Enable or disable the starboard.")
-    async def sb_toggle(self, interaction: discord.Interaction) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-        guild_id = interaction.guild_id
-        if guild_id is None:
-            return
-        with self.ctx.open_db() as conn:
-            cfg = self._default_cfg(conn, guild_id)
-            cfg["enabled"] = 0 if cfg["enabled"] else 1
-            upsert_starboard_config(conn, guild_id, **cfg)
-        state = "enabled" if cfg["enabled"] else "disabled"
-        await interaction.response.send_message(f"Starboard **{state}**.", ephemeral=True)
-
-    @starboard.command(name="exclude", description="Exclude a channel from the starboard.")
-    @app_commands.describe(channel="Channel to exclude.")
-    async def sb_exclude(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-        guild_id = interaction.guild_id
-        if guild_id is None:
-            return
-        with self.ctx.open_db() as conn:
-            add_config_id(conn, _EXCLUDED_BUCKET, channel.id, guild_id)
-        await interaction.response.send_message(
-            f"{channel.mention} excluded from the starboard.", ephemeral=True
-        )
-
-    @starboard.command(name="unexclude", description="Remove a channel from the exclusion list.")
-    @app_commands.describe(channel="Channel to unexclude.")
-    async def sb_unexclude(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-        guild_id = interaction.guild_id
-        if guild_id is None:
-            return
-        with self.ctx.open_db() as conn:
-            remove_config_id(conn, _EXCLUDED_BUCKET, channel.id, guild_id)
-        await interaction.response.send_message(
-            f"{channel.mention} removed from exclusion list.", ephemeral=True
-        )
-
-    @starboard.command(name="status", description="Show the current starboard configuration.")
-    async def sb_status(self, interaction: discord.Interaction) -> None:
-        if not self.ctx.is_mod(interaction):
-            await interaction.response.send_message("Mod only.", ephemeral=True)
-            return
-        guild_id = interaction.guild_id
-        if guild_id is None:
-            return
-
-        with self.ctx.open_db() as conn:
-            cfg = self._default_cfg(conn, guild_id)
-            excluded_ids = get_config_id_set(conn, _EXCLUDED_BUCKET, guild_id)
-
-        embed = build_status_embed(cfg, excluded_ids)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: Bot) -> None:

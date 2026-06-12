@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services.voice_master_service import (
     VoiceProfile,
     add_trusted,
@@ -288,6 +288,39 @@ def test_force_delete_invokes_channel_delete_and_clears_db(authed_client, fake_c
     # DB row is gone
     body = authed_client.get("/api/voice-master/channels").json()
     assert body["channels"] == []
+
+
+def test_force_delete_mirrors_to_mod_log(authed_client, fake_ctx):
+    """Web force-delete posts the same mod-log mirror embed the retired
+    /voice-admin command did."""
+    voice = MagicMock(spec=discord.VoiceChannel)
+    voice.id = 5001
+    voice.name = "Room"
+    voice.members = []
+    voice.delete = AsyncMock()
+
+    mod_log = MagicMock(spec=discord.TextChannel)
+    mod_log.id = 7777
+    mod_log.send = AsyncMock()
+
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "mod_channel_id", "7777", fake_ctx.guild_id)
+        insert_active_channel(
+            conn,
+            channel_id=5001,
+            guild_id=fake_ctx.guild_id,
+            owner_id=42,
+            now=100.0,
+        )
+
+    _attach_bot(fake_ctx, channels=[voice, mod_log])
+
+    resp = authed_client.post("/api/voice-master/channels/5001/force-delete")
+    assert resp.status_code == 200
+    mod_log.send.assert_awaited_once()
+    embed = mod_log.send.await_args.kwargs["embed"]
+    assert "force-delete" in embed.title
+    assert "Room" in embed.description
 
 
 # ── POST /voice-master/channels/{id}/force-transfer ──────────────────

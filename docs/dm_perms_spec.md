@@ -12,7 +12,6 @@ This is **not** a Discord-friend system — it lives entirely inside the bot. Th
 | `/dm_set_mode mode:<open\|ask\|closed>` | Slash | Everyone | Assign yourself one of the `DMs: Open / Ask / Closed` roles |
 | `/dm_revoke user:<member>` | Slash | Everyone | Remove an existing consent pair with another member |
 | `/dm_status user:<member>` | Slash | Everyone | "✅ connected" / "❌ no connection yet" check |
-| `/dm_request_panel_refresh` | Slash | Manage Channels | Repost the panel as the newest message in its channel |
 | **Open DM Request Form** button | Persistent panel | Everyone | Opens the recipient picker + request modal |
 | **Accept** / **Deny** buttons | Persistent in-DM | Target only | Routes via the message id back to the pending request |
 | DM config | Web (dashboard) | Admin | Set the request channel and the audit channel |
@@ -67,7 +66,6 @@ The dashboard's audit log lists every state transition: requested, accepted, den
 
 - The bot needs **Manage Roles** to create and assign the three DM-mode roles, with its top role above them; **Send Messages** + **Embed Links** in the panel channel and the audit channel; **Read Message History** in the panel channel for the bump-to-bottom guard.
 - `/dm_help`, `/dm_set_mode`, `/dm_revoke`, `/dm_status` are guild-only; no Discord-side gate.
-- `/dm_request_panel_refresh` requires the user's **Manage Channels** permission (Discord-side default).
 - The panel button is open to everyone; Accept / Deny hard-check that the clicker is the target.
 - Dashboard endpoints require the **admin** role.
 - DM delivery to the target is best-effort — Discord-side, not bot-grantable. A target with closed DMs can't be reached at all.

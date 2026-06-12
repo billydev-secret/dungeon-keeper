@@ -243,7 +243,7 @@ class NHIECog(commands.Cog):
         log.info("%s used /games play nhie in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/games config allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
                 ephemeral=True,
             )
             return

@@ -57,7 +57,6 @@ from bot_modules.services.voice_master_service import (
     save_profile,
     set_owner,
     set_owner_left_at,
-    set_voice_master_config_value,
     try_dm,
 )
 from bot_modules.services.voice_master_service import (
@@ -65,14 +64,8 @@ from bot_modules.services.voice_master_service import (
     remove_member_from_all_lists,
     trusted_prune_loop,
 )
-from bot_modules.voice_master.embeds import (
-    build_admin_audit_mirror_embed,
-    build_profile_show_embed,
-)
+from bot_modules.voice_master.embeds import build_profile_show_embed
 from bot_modules.voice_master.logic import (
-    build_force_clear_profile_summary,
-    build_force_delete_summary,
-    build_force_transfer_summary,
     build_hub_join_notes,
     build_skipped_payload,
     classify_claim_attempt,
@@ -1276,7 +1269,7 @@ class VoiceMasterCog(commands.Cog):
             cfg = load_voice_master_config(conn, interaction.guild.id)
         if not cfg.control_channel_id:
             await interaction.response.send_message(
-                "No control channel set. Run `/voice-admin set-control-channel` first.",
+                "No control channel set. Configure it in the web dashboard first.",
                 ephemeral=True,
             )
             return
@@ -1295,212 +1288,6 @@ class VoiceMasterCog(commands.Cog):
         msg = await post_panel(self.ctx, channel)
         await interaction.followup.send(
             f"Panel posted: {msg.jump_url}", ephemeral=True
-        )
-
-    @voice_admin.command(
-        name="post-inline-panel",
-        description="Toggle whether the panel is auto-posted in each new channel's text chat.",
-    )
-    async def post_inline_panel_toggle(
-        self, interaction: discord.Interaction, enabled: bool
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        if interaction.guild is None:
-            await interaction.response.send_message("Server only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            set_voice_master_config_value(
-                conn,
-                interaction.guild.id,
-                "voice_master_post_inline_panel",
-                "1" if enabled else "0",
-            )
-        await interaction.response.send_message(
-            f"Inline panel auto-post: **{'enabled' if enabled else 'disabled'}**.",
-            ephemeral=True,
-        )
-
-    # ── Admin: force overrides (all mod-log mirrored) ─────────────────
-
-    async def _post_admin_audit_mirror(
-        self, interaction: discord.Interaction, *, action: str, summary: str
-    ) -> None:
-        """Post a brief admin-action embed to the mod log channel."""
-        if interaction.guild is None:
-            return
-        mod_channel_id = self.ctx.guild_config(interaction.guild.id).mod_channel_id
-        if mod_channel_id == 0:
-            return
-        log_channel = interaction.guild.get_channel(mod_channel_id)
-        if not isinstance(log_channel, discord.TextChannel):
-            return
-        embed = build_admin_audit_mirror_embed(
-            action=action,
-            summary=summary,
-            actor_name=str(interaction.user),
-            actor_id=interaction.user.id,
-        )
-        try:
-            await log_channel.send(embed=embed)
-        except (discord.Forbidden, discord.HTTPException):
-            log.exception("voice_master: failed to mirror admin audit to mod-log")
-
-    @voice_admin.command(
-        name="force-delete",
-        description="Force-delete a member-owned voice channel.",
-    )
-    async def force_delete(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.VoiceChannel,
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
-        if row is None:
-            await interaction.response.send_message(
-                "That channel isn't managed by Voice Master.", ephemeral=True
-            )
-            return
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        try:
-            await channel.delete(reason=f"Voice Master: admin force-delete by {interaction.user}")
-        except (discord.Forbidden, discord.HTTPException):
-            await interaction.followup.send(
-                "Couldn't delete that channel.", ephemeral=True
-            )
-            return
-        with self.ctx.open_db() as conn:
-            delete_active_channel(conn, channel.id)
-            write_audit(
-                conn,
-                guild_id=channel.guild.id,
-                action="vm_admin_force_delete",
-                actor_id=interaction.user.id,
-                target_id=row.owner_id,
-                extra={"channel_id": channel.id},
-            )
-        await self._post_admin_audit_mirror(
-            interaction,
-            action="force-delete",
-            summary=build_force_delete_summary(
-                channel_name=channel.name,
-                channel_id=channel.id,
-                owner_id=row.owner_id,
-            ),
-        )
-        await interaction.followup.send(
-            f"Deleted `{channel.name}`.", ephemeral=True
-        )
-
-    @voice_admin.command(
-        name="force-transfer",
-        description="Force-transfer ownership of a managed channel to another member.",
-    )
-    async def force_transfer(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.VoiceChannel,
-        new_owner: discord.Member,
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        if new_owner.bot:
-            await interaction.response.send_message(
-                "Can't transfer ownership to a bot.", ephemeral=True
-            )
-            return
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
-        if row is None:
-            await interaction.response.send_message(
-                "That channel isn't managed by Voice Master.", ephemeral=True
-            )
-            return
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        overwrite = channel.overwrites_for(new_owner)
-        overwrite.connect = True
-        overwrite.view_channel = True
-        try:
-            await channel.set_permissions(
-                new_owner,
-                overwrite=overwrite,
-                reason=f"Voice Master: admin force-transfer by {interaction.user}",
-            )
-        except (discord.Forbidden, discord.HTTPException):
-            await interaction.followup.send(
-                "Couldn't update channel permissions.", ephemeral=True
-            )
-            return
-        with self.ctx.open_db() as conn:
-            set_owner(conn, channel.id, new_owner.id)
-            write_audit(
-                conn,
-                guild_id=channel.guild.id,
-                action="vm_admin_force_transfer",
-                actor_id=interaction.user.id,
-                target_id=row.owner_id,
-                extra={"channel_id": channel.id, "new_owner_id": new_owner.id},
-            )
-        await self._post_admin_audit_mirror(
-            interaction,
-            action="force-transfer",
-            summary=build_force_transfer_summary(
-                channel_name=channel.name,
-                channel_id=channel.id,
-                old_owner_id=row.owner_id,
-                new_owner_mention=new_owner.mention,
-            ),
-        )
-        await interaction.followup.send(
-            f"Ownership of `{channel.name}` transferred to {new_owner.mention}.",
-            ephemeral=True,
-        )
-
-    @voice_admin.command(
-        name="force-clear-profile",
-        description="Wipe a member's saved Voice Master profile (logged).",
-    )
-    async def force_clear_profile(
-        self, interaction: discord.Interaction, member: discord.Member
-    ) -> None:
-        if not _admin_only(self.ctx, interaction):
-            await interaction.response.send_message("Administrator only.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True, thinking=False)
-        gid = member.guild.id
-        with self.ctx.open_db() as conn:
-            delete_profile(conn, gid, member.id)
-            conn.execute(
-                "DELETE FROM voice_master_trusted WHERE guild_id = ? AND owner_id = ?",
-                (gid, member.id),
-            )
-            conn.execute(
-                "DELETE FROM voice_master_blocked WHERE guild_id = ? AND owner_id = ?",
-                (gid, member.id),
-            )
-            write_audit(
-                conn,
-                guild_id=gid,
-                action="vm_admin_clear_profile",
-                actor_id=interaction.user.id,
-                target_id=member.id,
-                extra={},
-            )
-        await interaction.followup.send(
-            f"Profile cleared for {member.mention}.", ephemeral=True
-        )
-        await self._post_admin_audit_mirror(
-            interaction,
-            action="force-clear-profile",
-            summary=build_force_clear_profile_summary(
-                target_mention=member.mention,
-            ),
         )
 
 

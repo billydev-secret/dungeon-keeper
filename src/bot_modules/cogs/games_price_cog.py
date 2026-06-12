@@ -568,7 +568,7 @@ class PriceCog(commands.Cog):
         )
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it with `/games allow-channel`.",
+                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
                 ephemeral=True,
             )
             return

@@ -837,29 +837,6 @@ class DmPermsCog(commands.Cog):
             ephemeral=True,
         )
 
-    # ── Admin commands ────────────────────────────────────────────────────────
-
-    @app_commands.command(name="dm_request_panel_refresh", description="Repost the DM request panel so it is the newest message.")
-    @app_commands.guild_only()
-    @app_commands.default_permissions(manage_channels=True)
-    async def dm_request_panel_refresh(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild
-        settings = self.panel_settings.get(interaction.guild.id, {})
-        panel_channel_id = settings.get("panel_channel_id")
-        if panel_channel_id is None:
-            await interaction.response.send_message(
-                "No panel is set up yet — use `/dm_request_panel_set` to get started.", ephemeral=True
-            )
-            return
-        await interaction.response.defer(ephemeral=True)
-        message_id = await self._ensure_panel(interaction.guild, panel_channel_id, force_repost=True)
-        if message_id is None:
-            await interaction.followup.send(
-                "Couldn't refresh the panel — I may not have permission to post in that channel.", ephemeral=True
-            )
-            return
-        await interaction.followup.send("✅ Panel bumped to the bottom.", ephemeral=True)
-
 
 async def setup(bot: Bot) -> None:
     await bot.add_cog(DmPermsCog(bot, bot.ctx))

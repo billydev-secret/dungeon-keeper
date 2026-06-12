@@ -7,8 +7,6 @@ touch the network — testable with mocked Discord objects.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 import discord
 
 from bot_modules.services.embeds import STARBOARD_PRIMARY
@@ -60,25 +58,3 @@ def updated_starboard_embed(
     new_embed = old_embed.copy()
     new_embed.set_footer(text=f"{emoji} {star_count}")
     return new_embed
-
-
-def build_status_embed(cfg: dict, excluded_ids: Iterable[int]) -> discord.Embed:
-    """Build the status embed shown by ``/starboard status``."""
-    channel_mention = (
-        f"<#{cfg['channel_id']}>" if cfg["channel_id"] else "*not set*"
-    )
-    state = "enabled" if cfg["enabled"] else "disabled"
-    sorted_excluded = sorted(excluded_ids)
-    excluded_text = (
-        " ".join(f"<#{cid}>" for cid in sorted_excluded)
-        if sorted_excluded
-        else "*none*"
-    )
-
-    embed = discord.Embed(title="Starboard Configuration", color=STARBOARD_PRIMARY)
-    embed.add_field(name="Status", value=state, inline=True)
-    embed.add_field(name="Channel", value=channel_mention, inline=True)
-    embed.add_field(name="Threshold", value=str(cfg["threshold"]), inline=True)
-    embed.add_field(name="Emoji", value=cfg["emoji"], inline=True)
-    embed.add_field(name="Excluded channels", value=excluded_text, inline=False)
-    return embed

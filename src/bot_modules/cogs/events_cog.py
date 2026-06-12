@@ -793,6 +793,18 @@ class EventsCog(commands.Cog):
             and cfg.welcome_channel_id > 0
         ):
             await self._send_welcome(after, cfg)
+            if cfg.greeter_chat_channel_id > 0:
+                greeter_channel = after.guild.get_channel(cfg.greeter_chat_channel_id)
+                if isinstance(greeter_channel, discord.TextChannel):
+                    try:
+                        await greeter_channel.send(f"@here - {after.mention} has arrived")
+                    except discord.Forbidden:
+                        log.warning(
+                            "Missing permission to send greeter ping in #%s.",
+                            greeter_channel.name,
+                        )
+                    except discord.HTTPException as exc:
+                        log.error("Failed to send greeter chat ping: %s", exc)
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member) -> None:

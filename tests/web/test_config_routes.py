@@ -1018,3 +1018,53 @@ def test_welcome_preview_renders_with_bot_member(authed_client, fake_ctx):
     assert "leave" in body
 
 
+# ── PUT /api/config/guess — NSFW channel guard ─────────────────────────
+
+
+def _attach_guess_bot(fake_ctx, *, nsfw: bool):
+    channel = MagicMock()
+    channel.is_nsfw = MagicMock(return_value=nsfw)
+    guild = MagicMock()
+    guild.get_channel = MagicMock(return_value=channel)
+    bot = MagicMock()
+    bot.get_guild = MagicMock(return_value=guild)
+    fake_ctx.bot = bot
+
+
+def test_update_guess_channel_rejects_non_nsfw_channel(authed_client, fake_ctx):
+    _attach_guess_bot(fake_ctx, nsfw=False)
+
+    resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert "age-gated" in data["detail"]
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.core.db_utils import get_config_value
+        assert get_config_value(conn, "guess_channel_id", "0", fake_ctx.guild_id) == "0"
+
+
+def test_update_guess_channel_accepts_nsfw_channel(authed_client, fake_ctx):
+    _attach_guess_bot(fake_ctx, nsfw=True)
+
+    resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        from bot_modules.core.db_utils import get_config_value
+        assert get_config_value(conn, "guess_channel_id", "0", fake_ctx.guild_id) == "555"
+
+
+def test_update_guess_channel_rejects_unknown_channel(authed_client, fake_ctx):
+    guild = MagicMock()
+    guild.get_channel = MagicMock(return_value=None)
+    bot = MagicMock()
+    bot.get_guild = MagicMock(return_value=guild)
+    fake_ctx.bot = bot
+
+    resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is False
+    assert "not found" in data["detail"].lower()
+

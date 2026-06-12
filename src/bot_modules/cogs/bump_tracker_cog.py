@@ -226,7 +226,7 @@ def _build_widget_embed(statuses: list[_SiteStatus]) -> discord.Embed:
         color=discord.Color.blurple(),
     )
     if not statuses:
-        embed.description = "No sites configured. Use `/bump add` to add one."
+        embed.description = "No sites configured. Add sites from the web dashboard."
         return embed
 
     lines = []
@@ -409,101 +409,6 @@ class BumpTrackerCog(commands.Cog):
             if current.lower() in r["site_name"].lower()
         ][:25]
 
-    # ── /bump setup ───────────────────────────────────────────────────────
-
-    @bump.command(name="setup", description="Set the channel and role for bump reminders.")
-    @app_commands.describe(
-        channel="Channel where bump reminders and the status widget are posted.",
-        role="Role to ping when a site is ready to bump.",
-    )
-    async def bump_setup(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        role: discord.Role,
-    ) -> None:
-        assert interaction.guild is not None
-        guild_id = interaction.guild.id
-
-        def _q():
-            with open_db(self.ctx.db_path) as conn:
-                _upsert_config(
-                    conn,
-                    guild_id,
-                    channel_id=channel.id,
-                    role_id=role.id,
-                    enabled=True,
-                )
-
-        await asyncio.to_thread(_q)
-        await interaction.response.send_message(
-            f"Bump tracker configured: {channel.mention} / {role.mention}. "
-            "Use `/bump add` to add sites.",
-            ephemeral=True,
-        )
-
-    # ── /bump add ─────────────────────────────────────────────────────────
-
-    @bump.command(name="add", description="Add a listing site to track.")
-    @app_commands.describe(
-        name="Short name for the site (e.g. DISBOARD).",
-        cooldown_hours="How many hours between bumps.",
-    )
-    async def bump_add(
-        self,
-        interaction: discord.Interaction,
-        name: str,
-        cooldown_hours: float,
-    ) -> None:
-        assert interaction.guild is not None
-        name = name.strip()
-        if not name:
-            await interaction.response.send_message("Site name can't be empty.", ephemeral=True)
-            return
-        if cooldown_hours <= 0:
-            await interaction.response.send_message("Cooldown must be positive.", ephemeral=True)
-            return
-
-        seconds = int(cooldown_hours * 3600)
-        guild_id = interaction.guild.id
-
-        def _q():
-            with open_db(self.ctx.db_path) as conn:
-                _add_site(conn, guild_id, name, seconds)
-
-        await asyncio.to_thread(_q)
-        h = int(cooldown_hours)
-        m = int((cooldown_hours - h) * 60)
-        duration = f"{h}h" if not m else f"{h}h {m}m"
-        await interaction.response.send_message(
-            f"Added **{name}** with a {duration} cooldown.", ephemeral=True
-        )
-
-    # ── /bump remove ──────────────────────────────────────────────────────
-
-    @bump.command(name="remove", description="Remove a listing site from tracking.")
-    @app_commands.describe(name="Site to remove.")
-    @app_commands.autocomplete(name=_site_autocomplete)
-    async def bump_remove(
-        self,
-        interaction: discord.Interaction,
-        name: str,
-    ) -> None:
-        assert interaction.guild is not None
-        guild_id = interaction.guild.id
-
-        def _q():
-            with open_db(self.ctx.db_path) as conn:
-                return _remove_site(conn, guild_id, name)
-
-        removed = await asyncio.to_thread(_q)
-        if removed:
-            await interaction.response.send_message(f"Removed **{name}**.", ephemeral=True)
-        else:
-            await interaction.response.send_message(
-                f"No site named **{name}** found.", ephemeral=True
-            )
-
     # ── /bump log ─────────────────────────────────────────────────────────
 
     @bump.command(name="log", description="Record that you just bumped a site.")
@@ -566,7 +471,7 @@ class BumpTrackerCog(commands.Cog):
         log_rows = await asyncio.to_thread(_q)
         if not log_rows:
             await interaction.response.send_message(
-                "No sites configured. Use `/bump add` to add one.", ephemeral=True
+                "No sites configured. Add sites from the web dashboard.", ephemeral=True
             )
             return
 
@@ -581,72 +486,6 @@ class BumpTrackerCog(commands.Cog):
         ]
         embed = _build_widget_embed(statuses)
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ── /bump disable ─────────────────────────────────────────────────────
-
-    @bump.command(name="disable", description="Disable bump reminders for this server.")
-    async def bump_disable(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild is not None
-        guild_id = interaction.guild.id
-
-        def _q():
-            with open_db(self.ctx.db_path) as conn:
-                _upsert_config(conn, guild_id, enabled=False)
-
-        await asyncio.to_thread(_q)
-        await interaction.response.send_message("Bump tracker disabled.", ephemeral=True)
-
-    # ── /bump set-detector ────────────────────────────────────────────────
-
-    @bump.command(
-        name="set-detector",
-        description="Configure auto-detection for a site by watching its bot's confirmation message.",
-    )
-    @app_commands.describe(
-        name="Site to configure detection for.",
-        bot_id="User ID of the bot that posts the bump confirmation (e.g. 302050872383242240 for DISBOARD).",
-        pattern='Text to match in the bot\'s message (e.g. "Bump done"). Leave blank to match any message from that bot.',
-    )
-    @app_commands.autocomplete(name=_site_autocomplete)
-    async def bump_set_detector(
-        self,
-        interaction: discord.Interaction,
-        name: str,
-        bot_id: str,
-        pattern: str = "",
-    ) -> None:
-        assert interaction.guild is not None
-        guild_id = interaction.guild.id
-
-        try:
-            bot_id_int = int(bot_id)
-        except ValueError:
-            await interaction.response.send_message(
-                "Bot ID must be a numeric Discord user ID.", ephemeral=True
-            )
-            return
-
-        def _q():
-            with open_db(self.ctx.db_path) as conn:
-                return _set_detector(conn, guild_id, name, bot_id_int, pattern.strip())
-
-        updated = await asyncio.to_thread(_q)
-        if not updated:
-            await interaction.response.send_message(
-                f"No site named **{name}** found.", ephemeral=True
-            )
-            return
-
-        if pattern.strip():
-            await interaction.response.send_message(
-                f"Detection set for **{name}**: watching bot `{bot_id_int}` for `{pattern.strip()}`.",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                f"Detection set for **{name}**: watching bot `{bot_id_int}` (any message).",
-                ephemeral=True,
-            )
 
     # ── on_message — auto-detect bumps ───────────────────────────────────
 

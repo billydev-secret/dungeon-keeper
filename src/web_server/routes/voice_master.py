@@ -10,6 +10,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from bot_modules.services.moderation import write_audit
+from bot_modules.voice_master.embeds import build_admin_audit_mirror_embed
+from bot_modules.voice_master.logic import (
+    build_force_clear_profile_summary,
+    build_force_delete_summary,
+    build_force_transfer_summary,
+)
 from bot_modules.services.voice_master_service import (
     add_name_blocklist,
     delete_active_channel,
@@ -69,6 +75,37 @@ class NameBlocklistAdd(BaseModel):
 
 class ForceTransferPayload(BaseModel):
     new_owner_id: int
+
+
+async def _post_mod_log_mirror(
+    ctx: Any,
+    guild: discord.Guild,
+    *,
+    action: str,
+    summary: str,
+    user: AuthenticatedUser,
+) -> None:
+    """Mirror a web admin force-action to the Discord mod-log channel.
+
+    Parity with the audit embeds the retired /voice-admin force-* commands
+    posted; the web audit log row is written separately by the caller.
+    """
+    mod_channel_id = ctx.guild_config(guild.id).mod_channel_id
+    if not mod_channel_id:
+        return
+    channel = guild.get_channel(mod_channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+    embed = build_admin_audit_mirror_embed(
+        action=action,
+        summary=summary,
+        actor_name=f"{user.username} (web)",
+        actor_id=int(user.user_id),
+    )
+    try:
+        await channel.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception("voice_master web: failed to mirror admin audit to mod-log")
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +341,7 @@ async def force_delete(
         invalidate_report_cache("voice-master-channels", guild_id)
         return {"status": "ok", "note": "channel was already deleted"}
 
+    channel_name = ch.name
     try:
         await ch.delete(reason=f"Voice Master: web admin force-delete by {user.user_id}")
     except (discord.Forbidden, discord.HTTPException) as e:
@@ -322,6 +360,17 @@ async def force_delete(
             )
 
     await run_query(_persist)
+    await _post_mod_log_mirror(
+        ctx,
+        guild,
+        action="force-delete",
+        summary=build_force_delete_summary(
+            channel_name=channel_name,
+            channel_id=channel_id,
+            owner_id=row.owner_id,
+        ),
+        user=user,
+    )
     invalidate_report_cache("voice-master-channels", guild_id)
     return {"status": "ok"}
 
@@ -384,6 +433,18 @@ async def force_transfer(
             )
 
     await run_query(_persist)
+    await _post_mod_log_mirror(
+        ctx,
+        guild,
+        action="force-transfer",
+        summary=build_force_transfer_summary(
+            channel_name=ch.name,
+            channel_id=channel_id,
+            old_owner_id=row.owner_id,
+            new_owner_mention=new_owner.mention,
+        ),
+        user=user,
+    )
     invalidate_report_cache("voice-master-channels", guild_id)
     return {"status": "ok"}
 
@@ -465,4 +526,13 @@ async def clear_profile(
             )
 
     await run_query(_q)
+    guild = ctx.bot.get_guild(guild_id) if ctx.bot else None
+    if guild is not None:
+        await _post_mod_log_mirror(
+            ctx,
+            guild,
+            action="force-clear-profile",
+            summary=build_force_clear_profile_summary(target_mention=f"<@{user_id}>"),
+            user=user,
+        )
     return {"status": "ok"}

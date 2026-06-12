@@ -1189,7 +1189,7 @@ class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
 
         if config.guess_role_id == 0 or config.guess_channel_id == 0:
             await interaction.followup.send(
-                "Guess is not fully configured. Ask an admin to run `/guess setup`.",
+                "Guess is not fully configured. Ask an admin to set it up in the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -1541,14 +1541,14 @@ class GuessCog(commands.Cog):
 
         if config.guess_role_id == 0:
             await interaction.followup.send(
-                "Guess role is not configured. Ask an admin to run `/guess setup`.",
+                "Guess role is not configured. Ask an admin to set it in the web dashboard.",
                 ephemeral=True,
             )
             return
 
         if config.guess_channel_id == 0:
             await interaction.followup.send(
-                "Guess channel is not configured. Ask an admin to run `/guess setup`.", ephemeral=True
+                "Guess channel is not configured. Ask an admin to set it in the web dashboard.", ephemeral=True
             )
             return
 
@@ -1708,7 +1708,7 @@ class GuessCog(commands.Cog):
 
         if config.guess_role_id == 0:
             await interaction.followup.send(
-                "Guess role is not configured. Ask an admin to run `/guess setup`.",
+                "Guess role is not configured. Ask an admin to set it in the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -1717,7 +1717,7 @@ class GuessCog(commands.Cog):
         if role is None:
             await interaction.followup.send(
                 "Guess role is configured but no longer exists. "
-                "Ask an admin to re-run `/guess setup`.",
+                "Ask an admin to fix the Guess config in the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -1768,7 +1768,7 @@ class GuessCog(commands.Cog):
 
         if config.guess_role_id == 0 or config.guess_channel_id == 0:
             await interaction.followup.send(
-                "Guess is not fully configured. Ask an admin to run `/guess setup`.",
+                "Guess is not fully configured. Ask an admin to set it up in the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -1849,7 +1849,7 @@ class GuessCog(commands.Cog):
 
         if config.guess_channel_id == 0:
             await interaction.followup.send(
-                "Guess channel is not configured. Run `/guess setup` first.",
+                "Guess channel is not configured. Set it in the web dashboard first.",
                 ephemeral=True,
             )
             return
@@ -1860,7 +1860,7 @@ class GuessCog(commands.Cog):
         ):
             await interaction.followup.send(
                 "Configured Guess channel can't be posted to. "
-                "Re-run `/guess setup`.",
+                "Update the Guess channel in the web dashboard.",
                 ephemeral=True,
             )
             return
@@ -1868,41 +1868,6 @@ class GuessCog(commands.Cog):
         await _repost_prompt(self.bot, channel, interaction.guild.id)
         await interaction.followup.send(
             f"Prompt posted in {channel.mention}.", ephemeral=True
-        )
-
-
-    @guess.command(name="setup", description="Configure the Guess game channel and role.")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.describe(
-        channel="The NSFW channel where game posts appear",
-        role="Role required to submit images and act as guess answers",
-    )
-    async def guess_setup(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        role: discord.Role,
-    ) -> None:
-        assert interaction.guild
-        await interaction.response.defer(ephemeral=True)
-
-        if not channel.is_nsfw():
-            await interaction.followup.send(
-                f"{channel.mention} is not age-gated. Guess only posts in NSFW channels — "
-                "enable the channel's NSFW flag and try again.",
-                ephemeral=True,
-            )
-            return
-
-        db_path = self.bot.ctx.db_path
-        guild_id = interaction.guild.id
-
-        await asyncio.to_thread(_do_set_config, db_path, guild_id, "guess_channel_id", str(channel.id))
-        await asyncio.to_thread(_do_set_config, db_path, guild_id, "guess_role_id", str(role.id))
-
-        await interaction.followup.send(
-            f"Guess configured.\n- Game channel: {channel.mention}\n- Guess role: {role.mention}",
-            ephemeral=True,
         )
 
 

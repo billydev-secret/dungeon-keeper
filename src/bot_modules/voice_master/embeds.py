@@ -57,7 +57,7 @@ def build_admin_audit_mirror_embed(
     actor_name: str,
     actor_id: int,
 ) -> discord.Embed:
-    """Embed posted to mod-log for any ``/voice-admin`` force-* action.
+    """Embed posted to mod-log for any web admin force-* action.
 
     ``action`` is the short label (e.g. ``"force-delete"``); the title
     prefixes with ``Voice Master ·`` so the audit feed groups our

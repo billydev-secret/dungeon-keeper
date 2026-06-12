@@ -16,11 +16,9 @@ import pytest
 
 from bot_modules.starboard.embeds import (
     build_starboard_embed,
-    build_status_embed,
     updated_starboard_embed,
 )
 from bot_modules.starboard.filters import (
-    merge_default_config,
     nsfw_leak_blocked,
     should_process_reaction,
     validate_emoji,
@@ -152,20 +150,6 @@ def test_validate_emoji_strips_surrounding_whitespace_first():
     assert msg is None
 
 
-# ── merge_default_config ─────────────────────────────────────────────
-
-
-def test_merge_default_config_uses_defaults_when_row_is_none():
-    cfg = merge_default_config(None)
-    assert cfg == {"channel_id": 0, "threshold": 3, "emoji": "⭐", "enabled": 1}
-
-
-def test_merge_default_config_preserves_stored_row_values():
-    row = {"channel_id": 5001, "threshold": 7, "emoji": "🔥", "enabled": 0}
-    cfg = merge_default_config(row)
-    assert cfg == row
-
-
 # ── build_starboard_embed ────────────────────────────────────────────
 
 
@@ -278,37 +262,3 @@ def test_updated_starboard_embed_supports_emoji_swap():
     original = build_starboard_embed(msg, star_count=3, emoji="⭐")
     updated = updated_starboard_embed(original, star_count=3, emoji="🔥")
     assert updated.footer.text == "🔥 3"
-
-
-# ── build_status_embed ───────────────────────────────────────────────
-
-
-def test_build_status_embed_shows_not_set_when_no_channel_configured():
-    cfg = {"channel_id": 0, "threshold": 3, "emoji": "⭐", "enabled": 0}
-    embed = build_status_embed(cfg, excluded_ids=[])
-    by_name = {f.name: f.value for f in embed.fields}
-    assert by_name["Channel"] == "*not set*"
-    assert by_name["Status"] == "disabled"
-    assert by_name["Excluded channels"] == "*none*"
-
-
-def test_build_status_embed_renders_channel_mentions():
-    cfg = {"channel_id": 7777, "threshold": 5, "emoji": "🔥", "enabled": 1}
-    embed = build_status_embed(cfg, excluded_ids=[111, 222])
-    by_name = {f.name: f.value for f in embed.fields}
-    assert by_name["Channel"] == "<#7777>"
-    assert by_name["Status"] == "enabled"
-    assert by_name["Threshold"] == "5"
-    assert by_name["Emoji"] == "🔥"
-    assert "<#111>" in by_name["Excluded channels"]
-    assert "<#222>" in by_name["Excluded channels"]
-
-
-def test_build_status_embed_sorts_excluded_channel_mentions():
-    """Stable output regardless of input ordering — easier to read at a glance."""
-    cfg = {"channel_id": 1, "threshold": 3, "emoji": "⭐", "enabled": 1}
-    embed = build_status_embed(cfg, excluded_ids=[300, 100, 200])
-    by_name = {f.name: f.value for f in embed.fields}
-    # Channels appear in sorted order
-    assert by_name["Excluded channels"].index("100") < by_name["Excluded channels"].index("200")
-    assert by_name["Excluded channels"].index("200") < by_name["Excluded channels"].index("300")

@@ -412,7 +412,7 @@ def profile_reset_summary(field: str) -> str:
 def build_force_delete_summary(
     *, channel_name: str, channel_id: int, owner_id: int
 ) -> str:
-    """Build the mod-log body for ``/voice-admin force-delete``."""
+    """Build the mod-log body for a web admin force-delete."""
     return (
         f"Deleted channel `{channel_name}` (id `{channel_id}`) "
         f"owned by <@{owner_id}>."
@@ -426,7 +426,7 @@ def build_force_transfer_summary(
     old_owner_id: int,
     new_owner_mention: str,
 ) -> str:
-    """Build the mod-log body for ``/voice-admin force-transfer``."""
+    """Build the mod-log body for a web admin force-transfer."""
     return (
         f"Channel `{channel_name}` (id `{channel_id}`): "
         f"<@{old_owner_id}> → {new_owner_mention}."
@@ -434,7 +434,7 @@ def build_force_transfer_summary(
 
 
 def build_force_clear_profile_summary(*, target_mention: str) -> str:
-    """Build the mod-log body for ``/voice-admin force-clear-profile``."""
+    """Build the mod-log body for a web admin force-clear-profile."""
     return f"Cleared saved profile for {target_mention}."
 
 

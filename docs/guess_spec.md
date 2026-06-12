@@ -9,7 +9,6 @@ A guess-the-member image game. A consenting submitter posts an NSFW image; the b
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `/guess submit <image>` | Slash | Guess role (Everyone if unset) | Submit an NSFW image; opens the crop editor and post flow |
-| `/guess setup channel:[#ch] [role:@role]` | Slash | Manage Server | First-time setup: configure the Guess channel and consent role |
 | `/guess optin` / `/guess optout` | Slash | Everyone | Toggle the consent role and your eligibility as an answer |
 | `/guess stats [user]` | Slash | Everyone | Submitter + guesser stats for yourself or another member |
 | `/guess leaderboard [category]` | Slash | Everyone | Top 10 for submitters / guessers / accuracy / streaks / hardest crops |
@@ -17,7 +16,7 @@ A guess-the-member image game. A consenting submitter posts an NSFW image; the b
 | `/guess delete <round_id>` | Slash | Submitter or Mod | Soft-delete a round (message removed, stats preserved) |
 | `/guess confess text:<...>` | Slash | Guess role | Post an anonymous text confession in the guess channel |
 | `Guess` button (on round post) | Persistent | Everyone | Open the picker / search-by-name flow |
-| Web config panel | Web (dashboard) | Admin | Per-guild role, channel, cooldown, difficulty, image limits |
+| Web config panel | Web (dashboard) | Admin | Per-guild role, channel, cooldown, difficulty, image limits. The channel must be age-gated (NSFW) — the API rejects non-NSFW channels when the bot can resolve them |
 | Web audit log | Web (dashboard) | Mod | Recent submit / delete / solve / guess-cap events |
 
 Bot perms required: **Send Messages**, **Embed Links**, **Attach Files**, **Read Message History** in the guess channel; **Manage Roles** to toggle the consent role on opt-in / opt-out.
@@ -65,7 +64,6 @@ On a **correct first solve**, the bot edits the round's message: the original im
 
 - `/guess submit`, `/guess optin`, `/guess optout`, `/guess stats`, `/guess leaderboard`, `/guess confess`: consent role required (or Everyone if the role is unset).
 - `/guess delete` on your own round: submitter; on someone else's round: Mod.
-- `/guess setup`: Manage Server.
 - `/guess round`: Mod.
 - Submitter cannot guess on their own round.
 

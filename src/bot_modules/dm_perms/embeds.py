@@ -249,8 +249,7 @@ def build_dm_help_embed(guild_icon_url: Optional[str]) -> discord.Embed:
     embed.add_field(
         name="Moderator Tools",
         value=(
-            "`/dm_request_panel_refresh` — Repost the request panel as the newest "
-            "message in its channel. Panels are set up via `/setup` and the web "
+            "Request panels are set up and reposted via `/setup` and the web "
             "dashboard."
         ),
         inline=False,

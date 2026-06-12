@@ -874,23 +874,7 @@
 
     <h3 id="starboard">Starboard</h3>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/starboard channel:#best-of &nbsp; /starboard threshold:5 &nbsp; /starboard toggle &nbsp; /starboard status</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Configure and enable the starboard. When a message receives enough star reactions, it's reposted to the starboard channel as a highlight.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/starboard emoji ⭐</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Change which reaction emoji counts toward the threshold. Defaults to ⭐. Accepts unicode or a custom emoji from this server.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/starboard exclude #channel &nbsp; /starboard unexclude #channel</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Channels in the exclusion list never have their messages mirrored to the starboard, even if they get enough stars.</span>
-    </div>
+    <p>When a message receives enough star reactions, it's reposted to the starboard channel as a highlight. The channel, threshold, emoji, and exclusion list are configured in the <a href="/#/config-starboard">Starboard panel</a> on the web dashboard.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          7. VOICE CHANNELS
@@ -919,15 +903,11 @@
     </table>
 
     <h3 id="voice-admin">Admin Override Commands</h3>
-    <p>Configuration setters (hub channel, category, default name, control panel placement, name blocklist, saveable fields, numeric tunables, view-profile) now live on the <strong>Voice Master</strong> panel in the <a href="/">web dashboard</a>. The remaining slash commands handle live operational fixes:</p>
+    <p>Configuration and admin overrides (hub channel, category, name blocklist, numeric tunables, inline panel auto-post, force-delete, force-transfer, force-clear-profile) live on the <strong>Voice Master</strong> panel in the <a href="/">web dashboard</a>. One slash command remains for in-Discord use:</p>
     <table>
       <thead><tr><th>Command</th><th>What it does</th></tr></thead>
       <tbody>
         <tr><td><code>/voice-admin post-panel</code></td><td>Repost the global voice control panel buttons</td></tr>
-        <tr><td><code>/voice-admin post-inline-panel</code></td><td>Toggle whether a control panel is auto-posted in each new channel's text chat</td></tr>
-        <tr><td><code>/voice-admin force-delete &lt;channel&gt;</code></td><td>Admin-delete any personal channel</td></tr>
-        <tr><td><code>/voice-admin force-transfer &lt;ch&gt; @user</code></td><td>Reassign ownership of any channel</td></tr>
-        <tr><td><code>/voice-admin force-clear-profile @user</code></td><td>Wipe a user's saved channel settings</td></tr>
       </tbody>
     </table>
 
@@ -1008,12 +988,6 @@
       <span class="cmd-name">/dm_set_mode mode:[open|ask|closed]</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
       <span class="cmd-desc">Set your own DM mode. <strong>open</strong> = anyone may DM you. <strong>ask</strong> = approval required (default). <strong>closed</strong> = no DM requests accepted.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/dm_request_panel_refresh</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Channels</span></span>
-      <span class="cmd-desc">Re-post the persistent DM request button panel so it's at the bottom of the configured channel. Background bumping is automatic; this is a manual override.</span>
     </div>
 
     <div class="cmd-block">
@@ -1171,11 +1145,7 @@
     <h3 id="auto-thread">Auto-Threading</h3>
     <p>Automatically opens a thread under every message posted in configured channels — useful for keeping showcase or support channels tidy.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/needle add channel:#chan &nbsp;&nbsp; /needle remove &nbsp;&nbsp; /needle list</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Threads</span></span>
-      <span class="cmd-desc">Enable, disable, or list auto-threading per channel (defaults to the current channel). The <strong>Auto-Thread</strong> panel on the <a href="/#/config-needle">web dashboard</a> offers the same controls.</span>
-    </div>
+    <p>Channels are enabled, configured, and disabled from the <strong>Auto-Thread</strong> panel on the <a href="/#/config-needle">web dashboard</a>.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/close &nbsp;&nbsp; /title name:&lt;new-name&gt;</span>
@@ -1186,16 +1156,12 @@
     <h3 id="bump">Bump Reminders</h3>
     <p>Tracks server-listing sites (e.g. DISBOARD) and reminds you when a bump cooldown has expired, with a status widget pinned to the bottom of the configured channel. Bumps are auto-detected from the listing bot's confirmation message where supported.</p>
 
-    <div class="cmd-block">
-      <span class="cmd-name">/bump setup channel:#chan role:@role &nbsp;&nbsp; /bump add &nbsp;&nbsp; /bump remove &nbsp;&nbsp; /bump disable</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Set the reminder channel and ping role, then add or remove listing sites to track. <strong>disable</strong> turns reminders off for the server.</span>
-    </div>
+    <p>The reminder channel, ping role, tracked sites, and auto-detection rules are configured on the <strong>Bump Tracker</strong> panel in the <a href="/">web dashboard</a>.</p>
 
     <div class="cmd-block">
-      <span class="cmd-name">/bump log &nbsp;&nbsp; /bump status &nbsp;&nbsp; /bump set-detector</span>
-      <span class="cmd-perm"><span class="perm perm-all">Everyone</span> (status) / <span class="perm perm-mod">Mod</span> (log, set-detector)</span>
-      <span class="cmd-desc">Record a manual bump, check every site's cooldown at a glance, or configure auto-detection for a site by watching its bot's confirmation message.</span>
+      <span class="cmd-name">/bump log &nbsp;&nbsp; /bump status</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
+      <span class="cmd-desc">Record a manual bump, or check every site's cooldown at a glance.</span>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
@@ -1241,9 +1207,9 @@
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/guess prompt &nbsp;&nbsp; /guess setup channel:#chan [role:@role]</span>
+      <span class="cmd-name">/guess prompt</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Guild</span></span>
-      <span class="cmd-desc">Re-post the persistent Submit / Help prompt at the bottom of the Guess channel, or run first-time setup to choose the channel and (optionally) submitter role.</span>
+      <span class="cmd-desc">Re-post the persistent Submit / Help prompt at the bottom of the Guess channel. The Guess channel and submitter role are configured on the <a href="/">web dashboard</a> — the channel must be age-gated (NSFW).</span>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
@@ -1300,7 +1266,7 @@
       <span class="callout-icon">💡</span>
       <div class="callout-body">
         <strong>Consent &amp; channel allowlist</strong>
-        <p>Games only run in channels an admin has allowlisted (<code>/games config allow-channel</code>). Members control whether they can be pulled into games via <code>/consent</code> — the bot checks consent when someone is @mentioned into an active game. Check your own status anytime with <code>/consent-status</code>.</p>
+        <p>Games only run in channels an admin has allowlisted on the Games Config panel in the web dashboard. Members control whether they can be pulled into games via <code>/consent</code> — the bot checks consent when someone is @mentioned into an active game. Check your own status anytime with <code>/consent-status</code>.</p>
       </div>
     </div>
 
@@ -1373,21 +1339,9 @@
     <h3 id="games-web">For Hosts &amp; Admins</h3>
 
     <div class="cmd-block">
-      <span class="cmd-name">/games config allow-channel &nbsp;&nbsp; disallow-channel &nbsp;&nbsp; list-channels</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Add or remove the current channel from the games allowlist, or list every allowed channel.</span>
-    </div>
-
-    <div class="cmd-block">
       <span class="cmd-name">/games config game-status &nbsp;&nbsp; /games config game-end</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Show the active game in the current channel, or force-close it if it's stuck.</span>
-    </div>
-
-    <div class="cmd-block">
-      <span class="cmd-name">/games config audit-channel channel:#chan</span>
-      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
-      <span class="cmd-desc">Set (or clear) the audit log channel where anonymous game submissions are recorded for accountability.</span>
+      <span class="cmd-desc">Show the active game in the current channel, or force-close it if it's stuck. The games channel allowlist and the audit log channel are managed on the Games Config panel in the <a href="/#/games-logs">web dashboard</a>.</span>
     </div>
 
     <div class="callout callout-info">
@@ -1474,7 +1428,7 @@
         <tr><td><strong><a href="/#/config-auto-role">Auto-Role</a></strong></td><td>Roles applied automatically on join</td></tr>
         <tr><td><strong><a href="/#/config-auto-delete">Auto-Delete</a></strong></td><td>Per-channel age + schedule rules</td></tr>
         <tr><td><strong><a href="/#/config-needle">Auto-Thread</a></strong></td><td>Channels with automatic thread creation</td></tr>
-        <tr><td><strong><a href="/#/config-starboard">Starboard</a></strong></td><td>Channel, threshold, emoji, channel exclusion list (also tunable in Discord — see <a href="#starboard">Starboard</a>)</td></tr>
+        <tr><td><strong><a href="/#/config-starboard">Starboard</a></strong></td><td>Channel, threshold, emoji, channel exclusion list</td></tr>
         <tr><td><strong><a href="/#/config-voice-master">Voice Master</a></strong></td><td>Hub channel, default category, name template, control panel placement, saveable fields</td></tr>
         <tr><td><strong><a href="/#/config-birthday">Birthdays</a></strong> / <a href="/#/birthday-calendar">Calendar</a></td><td>Announcement channel and time; browsable birthday calendar</td></tr>
         <tr><td><strong><a href="/#/config-bios">Bios</a></strong></td><td>Member bio display settings</td></tr>

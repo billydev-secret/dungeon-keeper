@@ -6,15 +6,10 @@ Two related features that ride together. **Starboard** reposts highly-reacted me
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/starboard channel <channel>` | Slash | Mod | Set the channel where starred messages get reposted |
-| `/starboard threshold <count>` | Slash | Mod | Set the minimum star count to repost (1–100) |
-| `/starboard emoji <emoji>` | Slash | Mod | Set the reaction emoji that triggers the board (unicode or custom) |
-| `/starboard toggle` | Slash | Mod | Enable / disable the starboard |
-| `/starboard exclude <channel>` | Slash | Mod | Add a channel to the exclusion list |
-| `/starboard unexclude <channel>` | Slash | Mod | Remove a channel from the exclusion list |
-| `/starboard status` | Slash | Mod | Show current config |
 | `Quote` | Message context menu | Everyone | Generate a quote card from the clicked message |
 | Web `/api/config/starboard` | Web (dashboard) | Admin | Edit channel, threshold, emoji, enabled flag, exclusion list |
+
+There are no starboard slash commands — all configuration lives on the web dashboard's Starboard panel.
 
 Bot perms required: **Send Messages** + **Embed Links** in the starboard channel; **Read Message History** in source channels for embed building; **Attach Files** in the channel where Quote cards post.
 
@@ -38,7 +33,6 @@ Each quote post writes an audit row (who quoted whom, where, theme/font used).
 
 ## Permissions
 
-- All `/starboard` config commands require Mod.
 - **Quote** has no user-side gate — anyone who can read the message can quote it. Discord's own visibility rules are the ACL.
 - The web config endpoint requires the `admin` perm.
 
@@ -46,9 +40,8 @@ Each quote post writes an audit row (who quoted whom, where, theme/font used).
 
 | When | The user sees |
 |---|---|
-| Bot lacks Send Messages or Embed Links in the chosen starboard channel | "I'm missing **X, Y** in #ch. Grant those permissions and try again." |
-| `/starboard emoji` value is empty | "Emoji cannot be empty." |
-| `/starboard emoji` value doesn't parse as an emoji | "That doesn't look like a reaction emoji…" |
+| Web emoji value is empty | HTTP 400 "Emoji cannot be empty." |
+| Web emoji value doesn't parse as an emoji | HTTP 400 "That doesn't look like a reaction emoji…" |
 | Quote on a system message or empty message | Ephemeral rejection |
 | Avatar fetch fails | "Couldn't fetch the author's avatar." |
 | Card renderer fails | "Failed to render the quote card." |

@@ -184,7 +184,6 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/dm_set_mode` — Set your DM request mode
 - `/dm_revoke` — Revoke DM permission with another user
 - `/dm_status` — Check mutual DM permission status with a user
-- `/dm_request_panel_refresh` — Repost the DM request panel (mod)
 
 **Wellness**
 - `/wellness setup` — Opt in (timezone + enforcement style)
@@ -195,9 +194,8 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/games recap` — Recap of the current game-night session
 - `/games consent` — Manage your consent settings for game nights
 - `/games help` / `/games support` — Game list and support link
-- `/games config allow-channel` / `disallow-channel` / `list-channels` — Manage allowed game channels (admin)
-- `/games config audit-channel` — Set/clear the anonymous-submission audit log (admin)
 - `/games config game-status` / `game-end` — Inspect or force-close the active game (mod)
+- *The games channel allowlist and audit-log channel are managed from the web dashboard's Games Config panel.*
 
 **Head-to-Head & Group Games**
 - `/pressure challenge @user` — Pressure Cooker duel (loser renamed 24h); also `cancel`, `stats`, `revert`, `config`
@@ -211,11 +209,11 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/whisper send @user <message>` — Send an anonymous whisper (recipient gets three guesses); also `optin`, `optout`, `sent`, `forget-me`
 - `/bio` — Create or update your profile bio (wizard)
 - `/risky start` — Open a Risky Rolls round in this channel
-- `/guess submit` — Submit an image to start a Guess round; also `optin`, `confess`, `leaderboard`, `prompt`, `round` (mod), `delete`, `setup` (mod)
+- `/guess submit` — Submit an image to start a Guess round; also `optin`, `confess`, `leaderboard`, `prompt`, `round` (mod), `delete`
 - `/steal_emoji <url> <name>` — Add a custom emoji from an image URL; also a **Steal Emoji** message context-menu
 - **Quote** — message context-menu that renders a styled quote card over the author's avatar
-- `/needle add/remove/list` — Manage auto-thread channels (mod)
-- `/bump setup/add/remove/disable/status/log` — Manage listing-site bump reminders (mod)
+- `/bump status` / `/bump log` — Check bump cooldowns or record a manual bump (mod)
+- *Auto-thread channels and bump-tracker sites are managed from the web dashboard.*
 
 **Voice (your channel)**
 - `/voice lock` / `/voice unlock` — Lock or unlock your channel
@@ -229,9 +227,8 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/voice profile show/reset` — Inspect or reset your saved profile
 
 **Voice Master Admin** (mod)
-- `/voice-admin post-panel`, `/voice-admin post-inline-panel` — Post / toggle the owner-control panel
-- `/voice-admin force-delete`, `/voice-admin force-transfer`, `/voice-admin force-clear-profile` — Admin overrides on member channels
-- *Hub/category/control-channel/template/name-blocklist settings and profile inspection are managed from the web dashboard (`/voice-master/config`, `/voice-master/name-blocklist`, `/voice-master/profiles`).*
+- `/voice-admin post-panel` — Repost the owner-control panel
+- *All other admin controls (hub/category/control-channel/template/name-blocklist settings, inline-panel toggle, force-delete / force-transfer / force-clear-profile, profile inspection) are managed from the web dashboard (`/voice-master/config`, `/voice-master/name-blocklist`, `/voice-master/channels`, `/voice-master/profiles`).*
 
 **Music**
 - `/play <query>` — Play YouTube/Spotify URL or search terms
@@ -272,9 +269,6 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Privacy** (mod)
 - `/delete_user @user` — Permanently delete all messages and data for a user
-
-**Starboard** (mod)
-- `/starboard channel/threshold/emoji/toggle/exclude/unexclude/status`
 
 **Configuration** (mod)
 - `/setup` — First-time bot setup: provision channels + walk through role/category config

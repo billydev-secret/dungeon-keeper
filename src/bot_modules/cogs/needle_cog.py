@@ -288,11 +288,7 @@ def _has_thread_perm(user: discord.User | discord.Member, thread: discord.Thread
 
 
 class NeedleCog(commands.Cog):
-    needle = app_commands.Group(
-        name="needle",
-        description="Auto-thread channel management.",
-        default_permissions=discord.Permissions(manage_threads=True),
-    )
+    """Auto-threading; channel configuration lives in the web dashboard."""
 
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
@@ -318,18 +314,6 @@ class NeedleCog(commands.Cog):
     def _load_global_config(self, guild_id: int) -> NeedleGlobalConfig:
         with open_db(self.ctx.db_path) as conn:
             return _get_global_config(conn, guild_id)
-
-    def _upsert(self, *, guild_id: int, channel_id: int, **kwargs) -> None:  # type: ignore[override]
-        with open_db(self.ctx.db_path) as conn:
-            _upsert_channel(conn, guild_id=guild_id, channel_id=channel_id, **kwargs)
-
-    def _delete(self, guild_id: int, channel_id: int) -> bool:
-        with open_db(self.ctx.db_path) as conn:
-            return bool(_delete_channel(conn, guild_id, channel_id))
-
-    def _list(self, guild_id: int) -> list[NeedleChannelConfig]:
-        with open_db(self.ctx.db_path) as conn:
-            return _list_channels(conn, guild_id)
 
     # ── on_message ────────────────────────────────────────────────────────
 
@@ -584,134 +568,6 @@ class NeedleCog(commands.Cog):
             except discord.HTTPException:
                 pass
         # was_unarchived: reactions cleared above — user reopened, state is unknown
-
-    # ── /needle add ───────────────────────────────────────────────────────
-
-    @needle.command(name="add", description="Enable auto-threading in a channel.")
-    @app_commands.describe(
-        channel="Channel to auto-thread (defaults to current channel).",
-        title_type="How to name new threads.",
-        custom_title="Custom title template — supports $USER and $DATE.",
-        include_bots="Also auto-thread messages from bots.",
-        slowmode="Per-message slowmode in new threads (seconds, 0 = off).",
-        delete_behavior="What to do when the original message is deleted.",
-        reply_type="Welcome message to post in new threads.",
-        custom_reply="Custom welcome text (reply_type=custom). Supports $USER, $CHANNEL, $THREAD.",
-        status_reactions="Emoji-react to original message to show thread status.",
-        archive_immediately="Remove unanswered reaction as soon as a non-OP replies.",
-        default_reactions="Comma-separated emoji to always react with (e.g. 👍,👎).",
-    )
-    @app_commands.choices(
-        title_type=[
-            app_commands.Choice(name="First 50 chars (default)", value="first_fifty"),
-            app_commands.Choice(name="First line of message",    value="first_line"),
-            app_commands.Choice(name="Username + date",          value="user_date"),
-            app_commands.Choice(name="Custom template",          value="custom"),
-        ],
-        delete_behavior=[
-            app_commands.Choice(name="Delete if empty, else archive (default)", value="archive_if_empty"),
-            app_commands.Choice(name="Always archive",  value="archive"),
-            app_commands.Choice(name="Always delete",   value="delete"),
-            app_commands.Choice(name="Do nothing",      value="nothing"),
-        ],
-        reply_type=[
-            app_commands.Choice(name="Default server message", value="default"),
-            app_commands.Choice(name="Custom message",         value="custom"),
-            app_commands.Choice(name="No message",             value="none"),
-        ],
-    )
-    async def needle_add(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-        title_type: str = "first_fifty",
-        custom_title: str = "",
-        include_bots: bool = False,
-        slowmode: int = 0,
-        delete_behavior: str = "archive_if_empty",
-        reply_type: str = "default",
-        custom_reply: str = "",
-        status_reactions: bool = False,
-        archive_immediately: bool = False,
-        default_reactions: str = "",
-    ) -> None:
-        assert interaction.guild is not None
-        target = channel or interaction.channel
-        if not isinstance(target, discord.TextChannel):
-            await interaction.response.send_message(
-                "Auto-threading only works in text channels.", ephemeral=True
-            )
-            return
-
-        await asyncio.to_thread(
-            self._upsert,
-            guild_id=interaction.guild.id,
-            channel_id=target.id,
-            title_type=title_type,  # type: ignore[arg-type]
-            custom_title=custom_title,
-            include_bots=include_bots,
-            slowmode=max(0, slowmode),
-            delete_behavior=delete_behavior,
-            reply_type=reply_type,
-            custom_reply=custom_reply,
-            status_reactions=status_reactions,
-            archive_immediately=archive_immediately,
-            default_reactions=default_reactions,
-        )
-        await interaction.response.send_message(
-            f"Auto-threading enabled in {target.mention}.", ephemeral=True
-        )
-
-    # ── /needle remove ────────────────────────────────────────────────────
-
-    @needle.command(name="remove", description="Disable auto-threading in a channel.")
-    @app_commands.describe(channel="Channel to stop auto-threading (defaults to current).")
-    async def needle_remove(
-        self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel | None = None,
-    ) -> None:
-        assert interaction.guild is not None
-        target = channel or interaction.channel
-        if not isinstance(target, discord.TextChannel):
-            await interaction.response.send_message("That's not a text channel.", ephemeral=True)
-            return
-        deleted = await asyncio.to_thread(self._delete, interaction.guild.id, target.id)
-        if deleted:
-            await interaction.response.send_message(
-                f"Auto-threading disabled in {target.mention}.", ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                f"{target.mention} wasn't configured for auto-threading.", ephemeral=True
-            )
-
-    # ── /needle list ──────────────────────────────────────────────────────
-
-    @needle.command(name="list", description="List channels with auto-threading enabled.")
-    async def needle_list(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild is not None
-        configs = await asyncio.to_thread(self._list, interaction.guild.id)
-        if not configs:
-            await interaction.response.send_message(
-                "No channels have auto-threading enabled.", ephemeral=True
-            )
-            return
-        lines = []
-        for cfg in configs:
-            ch = interaction.guild.get_channel(cfg.channel_id)
-            mention = ch.mention if ch else f"<#{cfg.channel_id}>"
-            parts = [f"title: `{cfg.title_type}`", f"delete: `{cfg.delete_behavior}`"]
-            if cfg.slowmode:
-                parts.append(f"slowmode: {cfg.slowmode}s")
-            if cfg.status_reactions:
-                parts.append("reactions: ✓")
-            if cfg.default_reactions:
-                parts.append(f"reacts: {cfg.default_reactions}")
-            lines.append(f"• {mention} — {', '.join(parts)}")
-        await interaction.response.send_message(
-            "**Auto-thread channels:**\n" + "\n".join(lines), ephemeral=True
-        )
 
     # ── /close ────────────────────────────────────────────────────────────
 

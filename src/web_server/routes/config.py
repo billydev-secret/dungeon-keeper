@@ -96,6 +96,7 @@ from bot_modules.cogs.bump_tracker_cog import (
     _set_detector as _bump_set_detector,
     _upsert_config as _bump_upsert_config,
 )
+from bot_modules.starboard.filters import validate_emoji as _starboard_validate_emoji
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
@@ -2060,10 +2061,10 @@ async def update_starboard(
                     raise HTTPException(400, "Threshold must be at least 1")
                 threshold = body.threshold
             if body.emoji is not None:
-                stripped = body.emoji.strip()
-                if not stripped:
-                    raise HTTPException(400, "Emoji cannot be empty")
-                emoji = stripped
+                ok, error_message = _starboard_validate_emoji(body.emoji)
+                if not ok:
+                    raise HTTPException(400, error_message)
+                emoji = body.emoji.strip()
             if body.enabled is not None:
                 enabled = 1 if body.enabled else 0
 
@@ -2336,6 +2337,26 @@ async def update_guess_config(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+
+    # Guess only posts in age-gated channels (parity with the retired
+    # /guess setup command). Best-effort: enforced when the bot can resolve
+    # the channel; skipped when the cache can't see it.
+    if body.channel_id:
+        try:
+            new_channel_id = int(body.channel_id)
+        except ValueError:
+            return {"ok": False, "detail": "channel_id must be a numeric channel ID"}
+        bot = getattr(ctx, "bot", None)
+        guild = bot.get_guild(guild_id) if bot else None
+        if guild is not None:
+            channel = guild.get_channel(new_channel_id)
+            if channel is None:
+                return {"ok": False, "detail": "Channel not found in this guild"}
+            if not getattr(channel, "is_nsfw", lambda: False)():
+                return {
+                    "ok": False,
+                    "detail": "Guess only posts in age-gated channels — enable the channel's NSFW flag first",
+                }
 
     def _q():
         from bot_modules.services.guess_repo import set_guess_config_value
