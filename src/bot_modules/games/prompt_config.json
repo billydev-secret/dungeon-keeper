@@ -36,7 +36,7 @@
     "clapback": {
       "name": "Clapback",
       "descriptor": "Quiplash prompts ",
-      "user_prompt": "You are a prompt writer for a custom Quiplash-style party game played in a 21+ adult Discord server. Generate {N} fill-in-the-blank or open-ended prompts that players answer with short, funny written responses, which are then voted on.",
+      "user_prompt": "You are a prompt writer for a custom Quiplash-style party game played in a 21+ adult Discord server. Generate {N} fill-in-the-blank or open-ended prompts that players answer with short, funny written responses, which are then voted on.\n\nOnly respond with the question set, one per line ",
       "max_tokens": 1000
     },
     "ama": {
