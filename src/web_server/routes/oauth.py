@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import secrets
@@ -209,6 +210,19 @@ async def callback(request: Request) -> RedirectResponse:
                         "icon": str(g.icon.url) if g.icon else None,
                     })
 
+            # Support user: also include opted-in guilds they haven't joined
+            support_user_id = int(os.getenv("SUPPORT_USER_ID", "0") or "0")
+            if support_user_id and user_id == support_user_id:
+                existing_ids = {g["id"] for g in mutual_guilds}
+                opted_in_ids = await asyncio.to_thread(_get_opted_in_guild_ids, ctx)
+                for g in bot.guilds:
+                    if g.id not in existing_ids and g.id in opted_in_ids:
+                        mutual_guilds.append({
+                            "id": g.id,
+                            "name": g.name,
+                            "icon": str(g.icon.url) if g.icon else None,
+                        })
+
             if not mutual_guilds:
                 return _login_redirect("no_shared_guild")
 
@@ -302,6 +316,19 @@ async def logout() -> RedirectResponse:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
+
+
+def _get_opted_in_guild_ids(ctx) -> set[int]:
+    """Return IDs of guilds that have opted in to support access (blocking, run via to_thread)."""
+    try:
+        from bot_modules.core.db_utils import open_db
+        with ctx.open_db() as conn:
+            rows = conn.execute(
+                "SELECT guild_id FROM config WHERE key = 'support_access_enabled' AND value = '1'"
+            ).fetchall()
+            return {row["guild_id"] for row in rows}
+    except Exception:
+        return set()
 
 
 _ERROR_MESSAGES: dict[str, str] = {

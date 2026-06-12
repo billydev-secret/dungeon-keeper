@@ -798,6 +798,43 @@ async def update_global(
     return result
 
 
+@router.get("/config/support-access")
+async def get_support_access(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            val = get_config_value(conn, "support_access_enabled", "0", guild_id, allow_legacy_fallback=False)
+            return {"enabled": val == "1"}
+
+    return await run_query(_q)
+
+
+class SupportAccessUpdate(BaseModel):
+    enabled: bool
+
+
+@router.put("/config/support-access")
+async def update_support_access(
+    request: Request,
+    body: SupportAccessUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            set_config_value(conn, "support_access_enabled", "1" if body.enabled else "0", guild_id)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
 class PrivacyConfigUpdate(BaseModel):
     message_storage_level: str | None = None
 

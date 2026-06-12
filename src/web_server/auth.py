@@ -107,11 +107,25 @@ class DiscordOAuthAuth:
     at login time.
     """
 
-    def __init__(self, session_secret: str, guild_id: int) -> None:
+    def __init__(self, session_secret: str, guild_id: int, support_user_id: int = 0) -> None:
         from itsdangerous import URLSafeTimedSerializer
 
         self._serializer = URLSafeTimedSerializer(session_secret)
         self._guild_id = guild_id
+        self._support_user_id = support_user_id
+
+    def _support_access_enabled(self, ctx, guild_id: int) -> bool:
+        """Return True if the given guild has opted in to support access."""
+        try:
+            from bot_modules.core.db_utils import get_config_value
+            with ctx.open_db() as conn:
+                val = get_config_value(
+                    conn, "support_access_enabled", "0", guild_id,
+                    allow_legacy_fallback=False,
+                )
+                return val == "1"
+        except Exception:
+            return False
 
     # ── Session cookie helpers ──────────────────────────────────────
 
@@ -184,11 +198,25 @@ class DiscordOAuthAuth:
         bot = getattr(ctx, "bot", None)
         guild = bot.get_guild(active_guild_id) if bot else None
 
+        _SUPPORT_PERMS = frozenset({"admin", "moderator", "manage_server"})
+        is_support = self._support_user_id != 0 and user_id == self._support_user_id
+
         if guild:
             member = guild.get_member(user_id)
             if not member:
+                # Support user in an opted-in guild they haven't joined
+                if is_support and self._support_access_enabled(ctx, active_guild_id):
+                    return AuthenticatedUser(
+                        user_id=user_id,
+                        username=username,
+                        perms=_SUPPORT_PERMS,
+                        avatar_url=avatar_url,
+                    )
                 return None  # User no longer in guild
             perms = resolve_discord_perms(member.guild_permissions.value)
+            # Elevate support user to full admin when the guild has opted in
+            if is_support and self._support_access_enabled(ctx, active_guild_id):
+                perms = _SUPPORT_PERMS
             rids = tuple(r.id for r in member.roles if not r.is_default())
             rnames = tuple(r.name for r in member.roles if not r.is_default())
             return AuthenticatedUser(
@@ -204,10 +232,13 @@ class DiscordOAuthAuth:
         perms_bits: int = session.get("perms_bits", 0)
         stored_rids = tuple(int(r) for r in session.get("role_ids", []))
         stored_rnames = tuple(str(r) for r in session.get("role_names", []))
+        fallback_perms = resolve_discord_perms(perms_bits)
+        if is_support and self._support_access_enabled(ctx, active_guild_id):
+            fallback_perms = _SUPPORT_PERMS
         return AuthenticatedUser(
             user_id=user_id,
             username=username,
-            perms=resolve_discord_perms(perms_bits),
+            perms=fallback_perms,
             role_ids=stored_rids,
             role_names=stored_rnames,
             avatar_url=avatar_url,

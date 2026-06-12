@@ -12,7 +12,10 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config...</div></div>`;
 
   (async () => {
-    const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
+    const [config, channels, roles, supportResp] = await Promise.all([
+      loadConfig(), loadChannels(), loadRoles(),
+      fetch("/api/config/support-access", { credentials: "same-origin" }).then(r => r.ok ? r.json() : { enabled: false }),
+    ]);
     const g = config.global;
     const bi = config.bot_identity || { nick: "", avatar_url: "" };
 
@@ -67,6 +70,18 @@ export function mount(container) {
             <input type="file" data-avatar-file accept="image/*" />
           </div>
           <div><button type="button" class="btn btn-primary" data-identity-apply>Apply</button><span data-identity-status></span></div>
+        </section>
+
+        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
+          <h3 style="margin:0 0 0.25rem">Support Access</h3>
+          <div class="field-hint" style="margin-bottom:1rem">Allow the Dungeon Keeper developer to access this server's dashboard to help troubleshoot issues or assist with configuration. You can revoke access at any time.</div>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <label style="margin:0;cursor:pointer;display:flex;align-items:center;gap:8px;">
+              <input type="checkbox" data-support-toggle ${supportResp.enabled ? "checked" : ""} />
+              Enable developer support access
+            </label>
+            <span data-support-status></span>
+          </div>
         </section>
       </div>
     `;
@@ -129,6 +144,18 @@ export function mount(container) {
         showStatus(identityStatus, true, "Applied");
       } catch (err) {
         showStatus(identityStatus, false, err.message);
+      }
+    });
+
+    const supportToggle = container.querySelector("[data-support-toggle]");
+    const supportStatus = container.querySelector("[data-support-status]");
+    supportToggle.addEventListener("change", async () => {
+      try {
+        await apiPut("/api/config/support-access", { enabled: supportToggle.checked });
+        showStatus(supportStatus, true, supportToggle.checked ? "Access granted" : "Access revoked");
+      } catch (err) {
+        supportToggle.checked = !supportToggle.checked;
+        showStatus(supportStatus, false, err.message);
       }
     });
   })();

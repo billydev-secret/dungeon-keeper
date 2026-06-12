@@ -158,8 +158,9 @@ def _auto_detect_auth(guild_id: int) -> AuthBackend:
     session_secret = os.getenv("SESSION_SECRET")
 
     if client_id and session_secret:
+        support_user_id = int(os.getenv("SUPPORT_USER_ID", "0") or "0")
         _log.info("Discord OAuth2 authentication enabled (client_id=%s)", client_id)
-        return DiscordOAuthAuth(session_secret, guild_id)
+        return DiscordOAuthAuth(session_secret, guild_id, support_user_id=support_user_id)
 
     _log.info(
         "Open authentication (LAN mode) — set DISCORD_CLIENT_ID + SESSION_SECRET to enable OAuth"
