@@ -323,7 +323,7 @@ async def _tick(
         now = time.time()
         stale = (now - last_widget_update.get(guild_id, 0)) >= _WIDGET_MIN_INTERVAL
         if pinged_any or stale:
-            await _refresh_widget(bot, db_path, cfg, statuses, last_widget_update)
+            await _refresh_widget(bot, db_path, cfg, statuses, last_widget_update, force_resend=pinged_any)
 
 
 async def _refresh_widget(
@@ -332,6 +332,8 @@ async def _refresh_widget(
     cfg: dict,
     statuses: list[_SiteStatus],
     last_widget_update: dict[int, float],
+    *,
+    force_resend: bool = False,
 ) -> None:
     guild_id = cfg["guild_id"]
     channel_id = cfg["channel_id"]
@@ -343,7 +345,19 @@ async def _refresh_widget(
 
     embed = _build_widget_embed(statuses)
 
-    # Delete the old widget (silently) so the new one appears at the bottom.
+    # Edit in place when nothing new was posted to the channel — avoids
+    # firing the unread-message indicator unnecessarily.
+    if not force_resend and widget_message_id:
+        try:
+            old = await channel.fetch_message(widget_message_id)
+            await old.edit(embed=embed)
+            last_widget_update[guild_id] = time.time()
+            return
+        except (discord.NotFound, discord.HTTPException):
+            pass  # fall through and send a fresh message
+
+    # A new message landed in the channel (ping or detected bump), so the
+    # widget needs to move to the bottom.
     if widget_message_id:
         try:
             old = await channel.fetch_message(widget_message_id)
@@ -455,7 +469,7 @@ class BumpTrackerCog(commands.Cog):
             )
             for r in log_rows
         ]
-        await _refresh_widget(self.bot, self.ctx.db_path, dict(cfg), statuses, {})
+        await _refresh_widget(self.bot, self.ctx.db_path, dict(cfg), statuses, {}, force_resend=False)
 
     # ── /bump status ──────────────────────────────────────────────────────
 
@@ -548,7 +562,7 @@ class BumpTrackerCog(commands.Cog):
             )
             for r in log_rows
         ]
-        await _refresh_widget(self.bot, self.ctx.db_path, dict(cfg), statuses, {})
+        await _refresh_widget(self.bot, self.ctx.db_path, dict(cfg), statuses, {}, force_resend=True)
 
 
 async def setup(bot: Bot) -> None:
