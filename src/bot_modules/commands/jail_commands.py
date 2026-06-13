@@ -164,7 +164,7 @@ async def _dm_user(
 async def _post_audit(
     ctx: AppContext, guild: discord.Guild, embed: discord.Embed
 ) -> None:
-    log_ch_id = _get_config(ctx, "log_channel_id")
+    log_ch_id = _get_config(ctx, "log_channel_id", guild_id=guild.id)
     if not log_ch_id:
         return
     ch = guild.get_channel(log_ch_id)
@@ -207,9 +207,9 @@ async def _collect_and_post_transcript(
     filename = f"{record_type}-{record_id}-transcript.md"
 
     # Post to transcript channel
-    transcript_ch_id = _get_config(ctx, "transcript_channel_id")
+    transcript_ch_id = _get_config(ctx, "transcript_channel_id", guild_id=channel.guild.id)
     if not transcript_ch_id:
-        transcript_ch_id = _get_config(ctx, "log_channel_id")
+        transcript_ch_id = _get_config(ctx, "log_channel_id", guild_id=channel.guild.id)
     if transcript_ch_id:
         ch = channel.guild.get_channel(transcript_ch_id)
         if ch and isinstance(ch, discord.TextChannel):
@@ -950,7 +950,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
             )
             return
 
-        cat_id = _get_config(ctx, "ticket_category_id")
+        cat_id = _get_config(ctx, "ticket_category_id", guild_id=guild.id)
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
@@ -1533,7 +1533,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
             await interaction.response.send_message("Server only.", ephemeral=True)
             return
 
-        cat_id = _get_config(ctx, "ticket_category_id")
+        cat_id = _get_config(ctx, "ticket_category_id", guild_id=guild.id)
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(

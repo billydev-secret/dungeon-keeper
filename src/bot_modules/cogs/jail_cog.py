@@ -453,7 +453,7 @@ class JailCog(commands.Cog):
             await interaction.response.send_message("Server-only.", ephemeral=True)
             return
 
-        cat_id = _get_config(ctx, "ticket_category_id")
+        cat_id = _get_config(ctx, "ticket_category_id", guild_id=guild.id)
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
@@ -851,7 +851,7 @@ class JailCog(commands.Cog):
             )
             return
 
-        cat_id = _get_config(ctx, "ticket_category_id")
+        cat_id = _get_config(ctx, "ticket_category_id", guild_id=guild.id)
         category = guild.get_channel(cat_id) if cat_id else None
         if not isinstance(category, discord.CategoryChannel):
             await interaction.response.send_message(
