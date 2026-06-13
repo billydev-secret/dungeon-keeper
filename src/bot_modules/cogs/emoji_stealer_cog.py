@@ -41,8 +41,19 @@ async def _fetch_bytes(url: str) -> bytes:
         return r.content
 
 
-def _eligible_guilds(bot: Bot) -> list[discord.Guild]:
-    return [g for g in bot.guilds if g.me and g.me.guild_permissions.manage_expressions]
+def _eligible_guilds(bot: Bot, user_id: int) -> list[discord.Guild]:
+    result = []
+    for g in bot.guilds:
+        if not (g.me and g.me.guild_permissions.manage_expressions):
+            continue
+        member = g.get_member(user_id)
+        if member and (
+            member.guild_permissions.administrator
+            or member.guild_permissions.manage_expressions
+            or member.guild_permissions.manage_guild
+        ):
+            result.append(g)
+    return result
 
 
 _NOT_AN_IMAGE_MSG = (
@@ -303,7 +314,7 @@ class EmojiStealerCog(commands.Cog):
     async def _steal_from_message(
         self, interaction: discord.Interaction, message: discord.Message
     ) -> None:
-        guilds = _eligible_guilds(self.bot)
+        guilds = _eligible_guilds(self.bot, interaction.user.id)
         if not guilds:
             await interaction.response.send_message(
                 "I don't have **Manage Expressions** in any server.", ephemeral=True
@@ -381,7 +392,7 @@ class EmojiStealerCog(commands.Cog):
             await interaction.response.send_message(error_msg, ephemeral=True)
             return
 
-        guilds = _eligible_guilds(self.bot)
+        guilds = _eligible_guilds(self.bot, interaction.user.id)
         if not guilds:
             await interaction.response.send_message(
                 "I don't have **Manage Expressions** in any server.", ephemeral=True
