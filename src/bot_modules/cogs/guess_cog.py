@@ -558,8 +558,6 @@ class GuessSelectView(discord.ui.View):
                 self.round_id, answer_mention, submitter_mention,
                 interaction.user.mention, guess_count, unique_count,
             )
-            new_game_view = GameView(self.bot, self.round_id, solved=True)
-
             full_attachments: list[discord.File] = []
             orig_path: Path | None = None
             if round_row.original_path:
@@ -590,11 +588,11 @@ class GuessSelectView(discord.ui.View):
             if full_attachments:
                 await self.game_message.edit(
                     embed=solved_emb,
-                    view=new_game_view,
+                    view=None,
                     attachments=full_attachments,
                 )
             else:
-                await self.game_message.edit(embed=solved_emb, view=new_game_view)
+                await self.game_message.edit(embed=solved_emb, view=None)
 
             if orig_path is not None:
                 await asyncio.to_thread(orig_path.unlink, missing_ok=True)
