@@ -1,5 +1,4 @@
 import { api, apiPost, esc } from "../api.js";
-import { renderSortableTable } from "../table.js";
 
 const GENDERS = [
   { value: "male",      label: "Male" },
@@ -87,23 +86,145 @@ export function mount(container) {
     classifyPane.querySelector("[data-skip]").addEventListener("click", () => { cursor++; renderClassify(); });
   }
 
+  // Persists across tab switches so filter/sort survive a reload.
+  const listState = { all: [], sortKey: "set_at", sortAsc: false, search: "", genderFilter: "" };
+
+  function listRows() {
+    const q = listState.search.trim().toLowerCase();
+    const filtered = listState.all.filter((r) => {
+      if (listState.genderFilter && r.gender !== listState.genderFilter) return false;
+      if (q && !(r.display_name || r.user_id || "").toLowerCase().includes(q)) return false;
+      return true;
+    });
+    const k = listState.sortKey, asc = listState.sortAsc;
+    return filtered.sort((a, b) => {
+      let av = k === "display_name" ? (a.display_name || a.user_id || "") : a[k];
+      let bv = k === "display_name" ? (b.display_name || b.user_id || "") : b[k];
+      if (av == null) av = "";
+      if (bv == null) bv = "";
+      if (typeof av === "string" && typeof bv === "string") {
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+      }
+      return asc ? av - bv : bv - av;
+    });
+  }
+
+  function genderSelectHtml(userId, current) {
+    const opts = GENDERS.map(
+      (g) => `<option value="${g.value}"${g.value === current ? " selected" : ""}>${g.label}</option>`,
+    ).join("");
+    return `<select class="gender-edit" data-user="${esc(userId)}">${opts}</select>`;
+  }
+
+  function renderListTable() {
+    const body = listPane.querySelector("[data-table-body]");
+    const countEl = listPane.querySelector("[data-count]");
+    if (!body) return;
+    const rows = listRows();
+    countEl.textContent = `${rows.length} of ${listState.all.length} tagged`;
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="4" style="padding:20px; color:var(--ink-dim); text-align:center;">No members match this filter.</td></tr>`;
+    } else {
+      body.innerHTML = rows.map((r) => {
+        const when = r.set_at ? new Date(r.set_at * 1000).toLocaleString() : "";
+        return `<tr>
+          <td>${esc(r.display_name || r.user_id)}</td>
+          <td>${genderSelectHtml(r.user_id, r.gender)}</td>
+          <td>${esc(when)}</td>
+          <td><span data-status style="font-size:12px;"></span></td>
+        </tr>`;
+      }).join("");
+    }
+    listPane.querySelectorAll("th[data-sort]").forEach((th) => {
+      th.classList.remove("sort-asc", "sort-desc");
+      if (th.dataset.sort === listState.sortKey) {
+        th.classList.add(listState.sortAsc ? "sort-asc" : "sort-desc");
+      }
+    });
+  }
+
   async function loadList() {
     listPane.textContent = "Loading…";
     try {
       const data = await api("/api/gender/list", {});
-      if (!data.classified.length) {
+      listState.all = data.classified || [];
+      if (!listState.all.length) {
         listPane.textContent = "No tagged members yet.";
         return;
       }
-      listPane.innerHTML = `<div data-table></div>`;
-      renderSortableTable(listPane.querySelector("[data-table]"), {
-        columns: [
-          { key: "display_name", label: "Member", format: (v, r) => esc(r.display_name || r.user_id) },
-          { key: "gender", label: "Gender" },
-          { key: "set_at", label: "Tagged at", format: (v) => v ? new Date(v * 1000).toLocaleString() : "" },
-        ],
-        data: data.classified,
-        defaultSort: "set_at",
+      listPane.innerHTML = `
+        <div class="controls">
+          <label>Search
+            <input type="text" data-search placeholder="Member name…" />
+          </label>
+          <label>Gender
+            <select data-gender-filter>
+              <option value="">All</option>
+              ${GENDERS.map((g) => `<option value="${g.value}">${g.label}</option>`).join("")}
+            </select>
+          </label>
+          <span class="subtitle" data-count style="margin-left:auto;"></span>
+        </div>
+        <div style="max-height:520px; overflow-y:auto;">
+          <table class="data-table">
+            <thead><tr>
+              <th data-sort="display_name" style="cursor:pointer;">Member</th>
+              <th data-sort="gender" style="cursor:pointer;">Gender</th>
+              <th data-sort="set_at" style="cursor:pointer;">Tagged at</th>
+              <th>Saved</th>
+            </tr></thead>
+            <tbody data-table-body></tbody>
+          </table>
+        </div>
+      `;
+
+      const searchEl = listPane.querySelector("[data-search]");
+      const filterEl = listPane.querySelector("[data-gender-filter]");
+      searchEl.value = listState.search;
+      filterEl.value = listState.genderFilter;
+      renderListTable();
+
+      searchEl.addEventListener("input", () => { listState.search = searchEl.value; renderListTable(); });
+      filterEl.addEventListener("change", () => { listState.genderFilter = filterEl.value; renderListTable(); });
+
+      listPane.querySelector("thead").addEventListener("click", (e) => {
+        const th = e.target.closest("th[data-sort]");
+        if (!th) return;
+        const key = th.dataset.sort;
+        if (listState.sortKey === key) {
+          listState.sortAsc = !listState.sortAsc;
+        } else {
+          listState.sortKey = key;
+          listState.sortAsc = key !== "set_at"; // names ascending, newest-first for dates
+        }
+        renderListTable();
+      });
+
+      // One delegated listener survives every re-render of the tbody.
+      listPane.querySelector("[data-table-body]").addEventListener("change", async (e) => {
+        const sel = e.target.closest("select.gender-edit");
+        if (!sel) return;
+        const userId = sel.dataset.user;
+        const gender = sel.value;
+        const statusEl = sel.closest("tr").querySelector("[data-status]");
+        const rec = listState.all.find((r) => String(r.user_id) === String(userId));
+        const prev = rec ? rec.gender : null;
+        statusEl.textContent = "Saving…";
+        statusEl.style.color = "var(--ink-dim)";
+        sel.disabled = true;
+        try {
+          await apiPost("/api/gender/set", { user_id: userId, gender });
+          if (rec) { rec.gender = gender; rec.set_at = Date.now() / 1000; }
+          statusEl.textContent = "✓ Saved";
+          statusEl.style.color = "var(--green)";
+        } catch (err) {
+          if (rec) rec.gender = prev;
+          sel.value = prev;
+          statusEl.textContent = `Error: ${err.message}`;
+          statusEl.style.color = "var(--red)";
+        } finally {
+          sel.disabled = false;
+        }
       });
     } catch (err) {
       listPane.textContent = `Error: ${err.message}`;
