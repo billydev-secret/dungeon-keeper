@@ -523,6 +523,9 @@
       <span class="cmd-name">/unjail user:@user reason:...</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
       <span class="cmd-desc">Releases the member, restores their previous roles, and saves a full transcript of the jail conversation.</span>
+      <div class="cmd-params">
+        <strong>reason</strong> — optional; logged to the audit trail and stored in the transcript.
+      </div>
     </div>
 
     <div class="callout callout-info">
@@ -584,7 +587,7 @@
             <tr>
               <td>Message</td>
               <td><strong>Steal Emoji</strong></td>
-              <td>Extracts any custom emojis from the message and lets you add one to a server you manage. Also available as <code>/steal_emoji url:&lt;url&gt; name:&lt;name&gt;</code> for grabbing emojis directly from a URL.</td>
+              <td>Extracts any custom emojis from the message and lets you add one (or all) to a server you manage — requires Manage Expressions in that server. Also available as <code>/steal_emoji url:&lt;url&gt; name:&lt;name&gt;</code> for grabbing any image URL directly. <strong>url</strong> — direct image link ending in <code>.png</code>, <code>.gif</code>, or <code>.webp</code>. <strong>name</strong> — emoji name (letters, numbers, underscores, 2–32 characters).</td>
             </tr>
             <tr>
               <td>Message</td>
@@ -624,6 +627,9 @@
       <span class="cmd-name">/warn user:@user reason:...</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
       <span class="cmd-desc">Issues a warning to a member. Warnings are private — the member is not notified. Stored in the audit log. Admins are pinged when a threshold is reached.</span>
+      <div class="cmd-params">
+        <strong>reason</strong> — optional; logged to the audit trail. The member is never shown this text.
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -632,26 +638,34 @@
       <span class="cmd-desc">Lists all active and revoked warnings for a member, with dates, reasons, and which mod issued each one.</span>
     </div>
 
-    <div class="callout callout-info">
-      <span class="callout-icon">ℹ️</span>
-      <div class="callout-body">
-        <strong>Revoking warnings</strong>
-        <p>Run <code>/warnings @user</code> to list warning IDs, then <code>/revokewarn user:@user warning_id:&lt;N&gt; reason:...</code> to revoke one. Revoked warnings stay in history (they don't disappear), they just no longer count toward thresholds.</p>
+    <div class="cmd-block">
+      <span class="cmd-name">/revokewarn user:@user warning_id:&lt;N&gt; reason:...</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Revoke a specific warning. Revoked warnings stay in the member's history (they don't disappear) but no longer count toward thresholds. Run <code>/warnings @user</code> first to find the numeric warning ID.</span>
+      <div class="cmd-params">
+        <strong>warning_id</strong> — numeric ID from <code>/warnings</code>.<br>
+        <strong>reason</strong> — optional; recorded in the audit log alongside the revocation.
       </div>
     </div>
 
     <h3 id="ticket-cmds">Ticket Commands</h3>
 
     <div class="cmd-block">
-      <span class="cmd-name">/ticket panel</span>
+      <span class="cmd-name">/ticket panel channel:#ticket-channel</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Re-posts the persistent "Open a Ticket" panel button in the configured ticket channel. Use after the panel scrolls off or after a bot restart.</span>
+      <span class="cmd-desc">Posts (or re-posts) the persistent "Open a Ticket" button panel in the specified channel. Use after the panel scrolls off or after a bot restart.</span>
+      <div class="cmd-params">
+        <strong>channel</strong> — the text channel to post the panel in.
+      </div>
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/ticket open</span>
+      <span class="cmd-name">/ticket open description:Brief summary of your issue</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Opens a private ticket channel visible to the member and all mods. Members can describe their issue in the opening modal.</span>
+      <span class="cmd-desc">Opens a private ticket channel visible to the member and all mods.</span>
+      <div class="cmd-params">
+        <strong>description</strong> — optional short summary of the issue; shown in the ticket's opening embed. You can also leave this blank and explain inside the ticket.
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -664,12 +678,18 @@
       <span class="cmd-name">/ticket escalate reason:...</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
       <span class="cmd-desc">Brings admins into the ticket with a ping. Use when the issue is above your authority level.</span>
+      <div class="cmd-params">
+        <strong>reason</strong> — optional; posted in the ticket to explain the escalation to admins.
+      </div>
     </div>
 
     <div class="cmd-block">
       <span class="cmd-name">/ticket close reason:...</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Locks the channel and posts Reopen / Delete buttons. The channel remains visible for review until deleted.</span>
+      <span class="cmd-desc">Locks the channel and posts Reopen / Delete buttons. The channel remains visible for review until deleted. The ticket creator is DM'd that it's closed.</span>
+      <div class="cmd-params">
+        <strong>reason</strong> — optional; included in the closure message and in the DM to the ticket creator.
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -695,8 +715,12 @@
 
     <div class="cmd-block">
       <span class="cmd-name">/policy open title:... description:...</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc">Creates a policy proposal with Yes / No / Abstain voting buttons for the mod team.</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Creates a private policy proposal channel visible to the mod team and opens a discussion thread. Once discussion is complete, run <code>/policy vote</code> to start the formal vote.</span>
+      <div class="cmd-params">
+        <strong>title</strong> — short label for the proposal (required, max 200 characters).<br>
+        <strong>description</strong> — optional detailed explanation of the proposal.
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -809,6 +833,9 @@
       <span class="cmd-name">/rules-watch set-channel channel:#mod-alerts</span>
       <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
       <span class="cmd-desc">Choose the channel where immediate-tier alerts are posted. Each alert includes the flagged message, the matched rule, and Confirm / False-positive buttons (they keep working across bot restarts).</span>
+      <div class="cmd-params">
+        <strong>channel</strong> — the text channel to receive immediate-tier alert embeds.
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -818,9 +845,19 @@
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/rules-watch label event_id:&lt;n&gt; verdict:[violation|fp] &nbsp;&nbsp; /rules-watch stats</span>
+      <span class="cmd-name">/rules-watch label event_id:&lt;n&gt; verdict:[violation|fp]</span>
       <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
-      <span class="cmd-desc">Manually label a queued event as a violation or false positive, and view signal firing rates, label counts, and the false-positive rate.</span>
+      <span class="cmd-desc">Manually label a queued event as a violation or false positive. Labels tune the signal over time.</span>
+      <div class="cmd-params">
+        <strong>event_id</strong> — numeric ID shown in the digest embed.<br>
+        <strong>verdict</strong> — <code>violation</code> (confirmed real) or <code>fp</code> (false positive).
+      </div>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/rules-watch stats</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin — Manage Guild</span></span>
+      <span class="cmd-desc">View signal firing rates, label counts, and the false-positive rate.</span>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
@@ -850,6 +887,10 @@
       <span class="cmd-name">/grant role:denizen member:@user</span>
       <span class="cmd-perm">Configured per role</span>
       <span class="cmd-desc">Grants a configured community role to a member. Role options and who can grant them are configured on the <strong>Roles</strong> dashboard panel. The action is logged and optionally announced.</span>
+      <div class="cmd-params">
+        <strong>role</strong> — autocompletes from roles configured on the <strong>Role Grants</strong> dashboard panel.<br>
+        <strong>member</strong> — member to receive the role.
+      </div>
     </div>
 
     <div class="callout callout-info">
@@ -864,6 +905,9 @@
       <span class="cmd-name">/quality_leave add member:@user days:30</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
       <span class="cmd-desc">Puts a member on Leave of Absence so their inactivity doesn't count against quality scoring. Use for members who announced a temporary break.</span>
+      <div class="cmd-params">
+        <strong>days</strong> — duration of the leave: <code>30</code>, <code>60</code>, or <code>90</code> days.
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -945,7 +989,11 @@
       <span class="cmd-name">/247 enabled:true autoplay_playlist:&lt;spotify-url&gt;</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Channels</span></span>
       <span class="cmd-desc">Keep the bot in your current voice channel even when no one else is around, with optional Spotify autoplay. Only one channel per server can have 24/7 enabled at a time.</span>
-      <div class="cmd-params">Pair with <code>/247_status</code> (everyone) to list every 24/7 channel and its autoplay URL.</div>
+      <div class="cmd-params">
+        <strong>enabled</strong> — <code>true</code> to turn on, <code>false</code> to turn off.<br>
+        <strong>autoplay_playlist</strong> — optional Spotify playlist URL; the bot shuffles it when the queue empties. Requires a prior <code>/spotify_authorize</code> by the bot owner.<br>
+        Pair with <code>/247_status</code> (<span class="perm perm-all">Everyone</span>) to list every 24/7 channel and its autoplay URL.
+      </div>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
@@ -987,7 +1035,13 @@
     <div class="cmd-block">
       <span class="cmd-name">/dm_set_mode mode:[open|ask|closed]</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Set your own DM mode. <strong>open</strong> = anyone may DM you. <strong>ask</strong> = approval required (default). <strong>closed</strong> = no DM requests accepted.</span>
+      <span class="cmd-desc">Set your own DM mode.</span>
+      <div class="cmd-params">
+        <strong>mode</strong>:<br>
+        &nbsp;&nbsp;<code>open</code> — anyone in the server may DM you.<br>
+        &nbsp;&nbsp;<code>ask</code> — others must send a request you approve first (default).<br>
+        &nbsp;&nbsp;<code>closed</code> — no DM requests are accepted.
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -1024,9 +1078,12 @@
     </div>
 
     <div class="cmd-block">
-      <span class="cmd-name">/away on text:&lt;custom&gt; &nbsp;&nbsp; /away off</span>
+      <span class="cmd-name">/away on text:&lt;custom message&gt; &nbsp;&nbsp; /away off</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Enables an away auto-reply. When someone @mentions an away member, the bot replies automatically with a default or custom message (max 500 chars).</span>
+      <span class="cmd-desc">Enables an away auto-reply. When someone @mentions you, the bot replies automatically.</span>
+      <div class="cmd-params">
+        <strong>text</strong> — optional custom auto-reply message (max 500 chars). If omitted, a default "I'm away" message is used.
+      </div>
     </div>
 
     <h3 id="wellness-admin-section">Admin Overrides</h3>
@@ -1069,7 +1126,7 @@
         <tr><td><code>/help</code></td><td>Browse all commands by category in an interactive ephemeral dropdown</td></tr>
         <tr><td><code>/support</code></td><td>Ephemeral link to the support Discord server</td></tr>
         <tr><td><code>/invite</code></td><td>Generate a Discord OAuth invite link for adding the bot to another server</td></tr>
-        <tr><td><code>/todo task:&lt;text&gt;</code></td><td>Add a task to the server's shared todo list (max 500 chars). Mods can also right-click → <strong>Add to Todo</strong>.</td></tr>
+        <tr><td><code>/todo task:&lt;text&gt;</code></td><td>Add a task to the server's shared todo list. <strong>task</strong> — up to 500 characters. Mods can also right-click → <strong>Add to Todo</strong>.</td></tr>
         <tr><td><code>/bio</code></td><td>Create or update your member bio via a modal.</td></tr>
         <tr><td><code>/birthday set</code> / <code>remove</code></td><td>Register your birthday (month + day) for daily announcements, or remove it.</td></tr>
       </tbody>
@@ -1221,7 +1278,12 @@
     <div class="cmd-block">
       <span class="cmd-name">/whisper send target:@user message:Your secret message</span>
       <span class="cmd-perm">Opted-in members (hold the configured Whisper role)</span>
-      <span class="cmd-desc">Delivers an anonymous message to another opted-in member via DM. Only opted-in members appear in autocomplete. Cooldown: 30 seconds between sends; max 5 whispers to the same person per hour.</span>
+      <span class="cmd-desc">Delivers an anonymous message to another opted-in member via DM. Only opted-in members appear in autocomplete.</span>
+      <div class="cmd-params">
+        <strong>target</strong> — autocompletes from opted-in members only.<br>
+        <strong>message</strong> — the anonymous text to deliver.<br>
+        Rate limits: 30-second cooldown between any sends; max 5 whispers to the same person per hour.
+      </div>
     </div>
 
     <div class="cmd-block">
@@ -1387,7 +1449,7 @@
 
     <h3 id="first-steps">First-Time Setup (Admin)</h3>
     <ol class="steps">
-      <li>Run <code>/setup</code> in Discord — Phase 1 creates all required bot channels and categories (mod-log, join-leave-log, ticket panel, etc.); Phase 2 walks you through a 6-step wizard for mod/admin roles and jail/ticket categories.</li>
+      <li>Run <code>/setup</code> in Discord — walks you through a 6-step wizard for mod/admin roles and jail/ticket categories.</li>
       <li>Open the <a href="/">web dashboard</a> and sign in via the Discord OAuth login.</li>
       <li><strong>Global</strong> panel — set your mod role IDs, admin role IDs, mod notification channel, and server timezone offset.</li>
       <li><strong>Roles</strong> panel — configure which community roles can be handed out with <code>/grant</code> and who can grant them.</li>
@@ -1470,7 +1532,9 @@
       <thead><tr><th>Command</th><th>Permission</th><th>Description</th></tr></thead>
       <tbody>
         <tr><td><a href="#jail"><code>/jail</code> / <code>/unjail</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to jail / release with restored roles</td></tr>
-        <tr><td><a href="#warnings"><code>/warn</code> / <code>/warnings</code> / <code>/revokewarn</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Issue / list / revoke warnings</td></tr>
+        <tr><td><a href="#warnings"><code>/warn user:@u reason:...</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Issue a private warning (member not notified)</td></tr>
+        <tr><td><a href="#warnings"><code>/warnings user:@u</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>List all active and revoked warnings for a member</td></tr>
+        <tr><td><a href="#warnings"><code>/revokewarn user:@u warning_id:N</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Revoke a warning by ID — stays in history, stops counting</td></tr>
         <tr><td><a href="#modinfo"><code>/modinfo</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member (jail, warnings, tickets, age)</td></tr>
         <tr><td><a href="#purge"><code>/purge</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
         <tr><td><a href="#ticket-cmds"><code>/ticket open</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private support ticket</td></tr>
