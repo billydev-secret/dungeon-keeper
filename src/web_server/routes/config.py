@@ -97,6 +97,11 @@ from bot_modules.cogs.bump_tracker_cog import (
     _upsert_config as _bump_upsert_config,
 )
 from bot_modules.starboard.filters import validate_emoji as _starboard_validate_emoji
+from bot_modules.cogs.pen_pals_cog import (
+    _get_config as _pp_get_config,
+    _get_pool as _pp_get_pool,
+    _set_config as _pp_set_config,
+)
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
@@ -349,6 +354,34 @@ def _auto_react_section(conn, guild_id: int) -> list:
         }
         for r in list_auto_react_rules_for_guild_with_conn(conn, guild_id)
     ]
+
+
+def _pen_pals_section(conn, guild_id: int) -> dict:
+    cfg = _pp_get_config(conn, guild_id)
+    pool_size = len(_pp_get_pool(conn, guild_id))
+    if cfg is None:
+        return {
+            "enabled": False,
+            "category_id": None,
+            "opt_in_role_id": None,
+            "question_category": "sfw",
+            "log_channel_id": None,
+            "auto_round_dow": -1,
+            "auto_round_hour": 12,
+            "panel_channel_id": None,
+            "pool_size": pool_size,
+        }
+    return {
+        "enabled": bool(cfg["enabled"]),
+        "category_id": str(cfg["category_id"]) if cfg["category_id"] else None,
+        "opt_in_role_id": str(cfg["opt_in_role_id"]) if cfg["opt_in_role_id"] else None,
+        "question_category": cfg["question_category"] or "sfw",
+        "log_channel_id": str(cfg["log_channel_id"]) if cfg["log_channel_id"] else None,
+        "auto_round_dow": int(cfg["auto_round_dow"]),
+        "auto_round_hour": int(cfg["auto_round_hour"]),
+        "panel_channel_id": str(cfg["panel_channel_id"]) if cfg["panel_channel_id"] else None,
+        "pool_size": pool_size,
+    }
 
 
 def _bump_tracker_section(conn, guild_id: int) -> dict:
@@ -671,6 +704,7 @@ async def get_config(
                 "policy": _policy_section(conn, guild_id),
                 "auto_react": _auto_react_section(conn, guild_id),
                 "bump_tracker": _bump_tracker_section(conn, guild_id),
+                "pen_pals": _pen_pals_section(conn, guild_id),
             }
 
     return await run_query(_q)
@@ -1850,6 +1884,60 @@ async def log_bump_tracker_bump(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+# ── Pen Pals config ──────────────────────────────────────────────────
+
+
+class PenPalsConfigUpdate(BaseModel):
+    enabled: bool = False
+    category_id: str | None = None
+    opt_in_role_id: str | None = None
+    question_category: str = "sfw"
+    log_channel_id: str | None = None
+    auto_round_dow: int = -1
+    auto_round_hour: int = 12
+    panel_channel_id: str | None = None
+
+
+@router.put("/config/pen-pals")
+async def update_pen_pals_config(
+    request: Request,
+    body: PenPalsConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    new_channel_id = int(body.panel_channel_id) if body.panel_channel_id else 0
+
+    def _q() -> tuple[int, int]:
+        with open_db(ctx.db_path) as conn:
+            existing = _pp_get_config(conn, guild_id)
+            old_channel_id = int(existing["panel_channel_id"]) if existing and existing["panel_channel_id"] else 0
+            old_message_id = int(existing["panel_message_id"]) if existing and existing["panel_message_id"] else 0
+            _pp_set_config(
+                conn,
+                guild_id,
+                enabled=body.enabled,
+                category_id=int(body.category_id) if body.category_id else 0,
+                opt_in_role_id=int(body.opt_in_role_id) if body.opt_in_role_id else 0,
+                question_category=body.question_category,
+                log_channel_id=int(body.log_channel_id) if body.log_channel_id else 0,
+                auto_round_dow=body.auto_round_dow,
+                auto_round_hour=body.auto_round_hour,
+                panel_channel_id=new_channel_id,
+            )
+            return old_channel_id, old_message_id
+
+    old_channel_id, old_message_id = await run_query(_q)
+
+    if ctx.bot:
+        ctx.bot.dispatch(
+            "pen_pals_panel_refresh",
+            guild_id, new_channel_id, old_channel_id, old_message_id,
+        )
+
+    return {"ok": True}
 
 
 # ── Confessions config ───────────────────────────────────────────────
