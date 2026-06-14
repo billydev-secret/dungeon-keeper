@@ -2,7 +2,6 @@
 import { api, esc } from "./api.js";
 import { HELP_GROUPS } from "./panels/help-sections.js?v=24";
 
-const _moduleVer = "?v=24";
 
 // The Help nav is generated from help-sections.js (single source shared with
 // the help panel) so nav entries can't drift from the manual's sections.
@@ -517,7 +516,7 @@ async function mountPanel() {
   rootEl.innerHTML = `<div class="panel"><div class="panel-loading">Loading ${esc(page.label)}…</div></div>`;
 
   try {
-    const mod = await import(page.module + _moduleVer);
+    const mod = await import(page.module);
     currentPanel = mod.mount(rootEl, params) || null;
   } catch (err) {
     rootEl.innerHTML = `<div class="panel"><div class="error">Failed to load ${esc(page.label)}: ${esc(err.message)}</div></div>`;
