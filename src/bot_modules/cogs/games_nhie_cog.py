@@ -352,6 +352,57 @@ class NHIECog(commands.Cog):
         rounds_data[str(round_num)] = {"guilty": [], "innocent": [], "stmt": statement}
         await update_game_payload(self.db, game_id, payload)
 
+        view = self._build_round_view(
+            game_id=game_id,
+            host_id=host_id,
+            host_name=host_name,
+            round_num=round_num,
+            channel=channel,
+            guild=guild,
+            statement=statement,
+            lives=lives,
+            eliminated=eliminated,
+            max_lives=max_lives,
+            interaction=interaction,
+        )
+        if carry_over_queue:
+            view.queued_statements = carry_over_queue
+            count = len(carry_over_queue)
+            view.next_btn.label = f"⏭️ Next ({count} queued)"
+        self.bot.active_views[game_id] = view
+
+        embed = view._build_embed()
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            # Clean up and let the caller (slash wrapper / scheduler) report the failure.
+            await end_game(self.db, game_id)
+            if game_id in self.bot.active_views:
+                del self.bot.active_views[game_id]
+            raise
+        await update_game_message(self.db, game_id, msg.id)
+
+    def _build_round_view(
+        self,
+        *,
+        game_id: str,
+        host_id: int,
+        host_name: str,
+        round_num: int,
+        channel,
+        guild,
+        statement: str,
+        lives: dict[int, int] | None,
+        eliminated: set[int] | None,
+        max_lives: int,
+        interaction=None,
+    ) -> "NHIERoundView":
+        """Construct a round view with its advance callback wired.
+
+        Shared by _run_round (fresh round) and recover_game (post-restart) so
+        round-to-round advancement behaves identically after a crash.
+        """
+
         async def advance(message: discord.Message):
             if view._closed:
                 return
@@ -463,22 +514,42 @@ class NHIECog(commands.Cog):
             guild=guild,
             max_lives=max_lives,
         )
-        if carry_over_queue:
-            view.queued_statements = carry_over_queue
-            count = len(carry_over_queue)
-            view.next_btn.label = f"⏭️ Next ({count} queued)"
-        self.bot.active_views[game_id] = view
+        return view
 
-        embed = view._build_embed()
-        try:
-            msg = await channel.send(embed=embed, view=view)
-        except discord.Forbidden:
-            # Clean up and let the caller (slash wrapper / scheduler) report the failure.
-            await end_game(self.db, game_id)
-            if game_id in self.bot.active_views:
-                del self.bot.active_views[game_id]
-            raise
-        await update_game_message(self.db, game_id, msg.id)
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Rebuild the current round's view after a restart, restoring state."""
+        rounds = payload.get("rounds", {})
+        if not rounds:
+            return False
+        cur = max(rounds, key=lambda k: int(k))
+        rd = rounds.get(cur, {})
+        statement = rd.get("stmt", "") or ""
+
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        guild = getattr(channel, "guild", None)
+        host_name = resolve_name(guild, host_id) if guild else "Host"
+        lives, eliminated, max_lives = payload_to_round_state(payload)
+
+        view = self._build_round_view(
+            game_id=game_id,
+            host_id=host_id,
+            host_name=host_name,
+            round_num=int(cur),
+            channel=channel,
+            guild=guild,
+            statement=statement,
+            lives=lives,
+            eliminated=eliminated,
+            max_lives=max_lives,
+            interaction=None,
+        )
+        view.guilty = list(rd.get("guilty", []))
+        view.innocent = list(rd.get("innocent", []))
+        self.bot.active_views[game_id] = view
+        self.bot.add_view(view, message_id=message.id)
+        log.info("Recovered nhie game %s (round %s) in #%s", game_id, cur, getattr(channel, "name", channel.id))
+        return True
 
 
 async def setup(bot: commands.Bot):
@@ -487,3 +558,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("nhie")
     play.add_command(cog.nhie)
     bot.game_launchers["nhie"] = cog.launch
+    bot.game_recoverers["nhie"] = cog.recover_game

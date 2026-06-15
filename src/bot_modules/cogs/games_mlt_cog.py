@@ -11,10 +11,12 @@ from bot_modules.games.utils.game_manager import (
     create_game,
     update_game_message,
     update_game_payload,
+    modify_payload,
     get_game_payload,
     end_game,
     update_session,
     is_game_expired,
+    resolve_name,
     resolve_names,
     ConfirmCloseView,
 )
@@ -246,6 +248,15 @@ class MLTVoteView(discord.ui.View):
             return
         target_id = int(interaction.data["values"][0])
         changed = apply_vote(self.votes, interaction.user.id, target_id)
+
+        # Persist live votes so a crash mid-round doesn't lose them.
+        def _save(payload):
+            rounds = payload.setdefault("rounds", {})
+            rd = rounds.setdefault(str(self.round_num), {})
+            rd["votes"] = encode_round_votes(self.votes)
+
+        await modify_payload(self.db, self.game_id, _save)
+
         member = self.guild.get_member(target_id) if self.guild else None
         name = member.display_name if member else str(target_id)
         msg = f"✅ Voted for **{name}**{' (changed)' if changed else ''}"
@@ -433,6 +444,59 @@ class MLTCog(commands.Cog):
         rounds_data[str(round_num)] = {"votes": {}, "prompt": prompt}
         await update_game_payload(self.db, game_id, payload)
 
+        view = self._build_vote_view(
+            game_id=game_id,
+            host_id=host_id,
+            host_name=host_name,
+            round_num=round_num,
+            players=players,
+            channel=channel,
+            prompt=prompt,
+            interaction=interaction,
+        )
+        if carry_over_queue:
+            view.queued_prompts = carry_over_queue
+            count = len(carry_over_queue)
+            view.next_btn.label = f"⏭️ Next ({count} queued)"
+        self.bot.active_views[game_id] = view
+
+        embed = view._build_embed()
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            await end_game(self.db, game_id)
+            if game_id in self.bot.active_views:
+                del self.bot.active_views[game_id]
+            try:
+                await interaction.followup.send(
+                    "❌ I don't have permission to send messages in that channel. "
+                    "Please grant me **Send Messages** and **Embed Links** permissions.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+        await update_game_message(self.db, game_id, msg.id)
+
+    def _build_vote_view(
+        self,
+        *,
+        game_id: str,
+        host_id: int,
+        host_name: str,
+        round_num: int,
+        players: list[int],
+        channel,
+        prompt: str,
+        interaction=None,
+    ) -> "MLTVoteView":
+        """Construct a vote-round view with its advance callback wired.
+
+        Shared by _run_round (fresh round) and recover_game (post-restart) so
+        round-to-round advancement behaves identically after a crash.
+        """
+        guild = getattr(channel, "guild", None)
+
         async def advance(message: discord.Message):
             if view._closed:
                 return
@@ -483,7 +547,6 @@ class MLTCog(commands.Cog):
                 except Exception:
                     pass
 
-        guild = channel.guild if hasattr(channel, "guild") else None
         view = MLTVoteView(
             game_id=game_id,
             host_id=host_id,
@@ -496,29 +559,47 @@ class MLTCog(commands.Cog):
             guild=guild,
             advance_callback=advance,
         )
-        if carry_over_queue:
-            view.queued_prompts = carry_over_queue
-            count = len(carry_over_queue)
-            view.next_btn.label = f"⏭️ Next ({count} queued)"
-        self.bot.active_views[game_id] = view
+        return view
 
-        embed = view._build_embed()
-        try:
-            msg = await channel.send(embed=embed, view=view)
-        except discord.Forbidden:
-            await end_game(self.db, game_id)
-            if game_id in self.bot.active_views:
-                del self.bot.active_views[game_id]
-            try:
-                await interaction.followup.send(
-                    "❌ I don't have permission to send messages in that channel. "
-                    "Please grant me **Send Messages** and **Embed Links** permissions.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
-            return
-        await update_game_message(self.db, game_id, msg.id)
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Rebuild the current phase's view after a restart.
+
+        Join lobby -> MLTJoinView; a started game -> the current vote round's
+        view with its live votes restored.
+        """
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        rounds = payload.get("rounds", {})
+
+        if not rounds:
+            view = MLTJoinView(game_id, host_id, self.db, self.bot, self)
+            self.bot.active_views[game_id] = view
+            self.bot.add_view(view, message_id=message.id)
+            log.info("Recovered mlt game %s (join phase) in #%s", game_id, getattr(channel, "name", channel.id))
+            return True
+
+        cur = max(rounds, key=lambda k: int(k))
+        rd = rounds.get(cur, {})
+        prompt = rd.get("prompt", "") or ""
+        players = [int(p) for p in payload.get("players", [])]
+        guild = getattr(channel, "guild", None)
+        host_name = resolve_name(guild, host_id) if guild else "Host"
+
+        view = self._build_vote_view(
+            game_id=game_id,
+            host_id=host_id,
+            host_name=host_name,
+            round_num=int(cur),
+            players=players,
+            channel=channel,
+            prompt=prompt,
+            interaction=None,
+        )
+        view.votes = {int(k): int(v) for k, v in (rd.get("votes") or {}).items()}
+        self.bot.active_views[game_id] = view
+        self.bot.add_view(view, message_id=message.id)
+        log.info("Recovered mlt game %s (round %s) in #%s", game_id, cur, getattr(channel, "name", channel.id))
+        return True
 
 
 async def setup(bot: commands.Bot):
@@ -527,3 +608,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("mlt")
     play.add_command(cog.mlt)
     bot.game_launchers["mlt"] = cog.launch
+    bot.game_recoverers["mlt"] = cog.recover_game

@@ -502,6 +502,26 @@ class StoryCog(commands.Cog):
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-register the join lobby after a restart.
+
+        Once the story is underway, play runs in a blocking per-turn loop whose
+        turn messages aren't tracked, so an in-play story can't be resumed yet
+        (handled by the Tier 3 rewrite). Only the join lobby is recoverable.
+        """
+        if payload.get("sentences"):
+            log.info(
+                "story game %s already in play phase — not yet resumable, skipping",
+                row["game_id"],
+            )
+            return False
+        game_id = row["game_id"]
+        view = StoryJoinView(game_id, int(row["host_id"]), self.db, self.bot, self)
+        self.bot.active_views[game_id] = view
+        self.bot.add_view(view, message_id=message.id)
+        log.info("Recovered story game %s (join phase) in #%s", game_id, getattr(channel, "name", channel.id))
+        return True
+
 
 async def setup(bot: commands.Bot):
     cog = StoryCog(bot)
@@ -509,3 +529,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("story")
     play.add_command(cog.story)
     bot.game_launchers["story"] = cog.launch
+    bot.game_recoverers["story"] = cog.recover_game

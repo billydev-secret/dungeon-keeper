@@ -12,7 +12,12 @@ import pytest
 
 from bot_modules.cogs.games_ffa_cog import FFACog
 from bot_modules.cogs.games_mfk_cog import MFKCog
+from bot_modules.cogs.games_mlt_cog import MLTCog, MLTJoinView
+from bot_modules.cogs.games_nhie_cog import NHIECog
+from bot_modules.cogs.games_story_cog import StoryCog, StoryJoinView
 from bot_modules.cogs.games_traditional_cog import TraditionalCog
+from bot_modules.cogs.games_wyr_cog import WYRCog
+from bot_modules.games.utils.game_manager import get_game_payload, update_game_payload
 from bot_modules.games.utils.recovery import recover_active_games
 from bot_modules.services.games_db import GamesDb
 
@@ -142,6 +147,60 @@ async def test_unknown_game_type_is_skipped_not_crashed(sync_db_path):
     await update_game_message(db, game_id, msg.id)
 
     await recover_active_games(bot)  # must not raise
+
+    assert bot.added_views == []
+    assert game_id not in bot.active_views
+
+
+async def test_wyr_recovers_round_view():
+    bot, game_id, msg_id = await _launch_and_restart(WYRCog, "wyr", {"question": "fly | be invisible"})
+    assert game_id in bot.active_views
+    view, bound_id = bot.added_views[0]
+    assert bound_id == msg_id
+    assert view.option_a == "fly" and view.option_b == "be invisible"
+
+
+async def test_nhie_recovers_round_view():
+    bot, game_id, msg_id = await _launch_and_restart(NHIECog, "nhie", {"question": "ghosted someone"})
+    assert game_id in bot.active_views
+    view, bound_id = bot.added_views[0]
+    assert bound_id == msg_id
+    assert view.statement == "ghosted someone"
+
+
+async def test_mlt_recovers_join_lobby():
+    bot, game_id, msg_id = await _launch_and_restart(MLTCog, "mlt", {})
+    assert game_id in bot.active_views
+    view, bound_id = bot.added_views[0]
+    assert isinstance(view, MLTJoinView)
+    assert bound_id == msg_id
+
+
+async def test_story_recovers_join_lobby():
+    bot, game_id, msg_id = await _launch_and_restart(StoryCog, "story", {})
+    assert game_id in bot.active_views
+    view, bound_id = bot.added_views[0]
+    assert isinstance(view, StoryJoinView)
+    assert bound_id == msg_id
+
+
+async def test_story_in_play_is_deferred(sync_db_path):
+    """A story past the join phase is skipped (play resume is a Tier-3 follow-up)."""
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = StoryCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["story"] = cog.recover_game
+    channel = _FakeChannel(999)
+    bot._channels[channel.id] = channel
+    game_id = await cog.launch(
+        channel=channel, host_id=2001, host_name="Tester", guild_id=9001, options={},
+    )
+    payload = await get_game_payload(db, game_id)
+    payload["sentences"] = [{"author": 2001, "text": "Once upon a time"}]
+    await update_game_payload(db, game_id, payload)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
 
     assert bot.added_views == []
     assert game_id not in bot.active_views

@@ -15,6 +15,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     is_game_expired,
+    resolve_name,
     ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
@@ -346,6 +347,52 @@ class WYRCog(commands.Cog):
         rounds_data[str(round_num)] = {"a": [], "b": [], "q": f"{option_a} OR {option_b}"}
         await update_game_payload(self.db, game_id, payload)
 
+        view = self._build_round_view(
+            game_id=game_id,
+            host_id=host_id,
+            host_name=host_name,
+            round_num=round_num,
+            channel=channel,
+            option_a=option_a,
+            option_b=option_b,
+            anonymous=payload.get("anonymous", True),
+            interaction=interaction,
+        )
+        if carry_over_queue:
+            view.queued_questions = carry_over_queue
+            view.next_btn.label = next_button_label(len(carry_over_queue))
+        self.bot.active_views[game_id] = view
+
+        embed = view._build_embed()
+        try:
+            msg = await channel.send(embed=embed, view=view)
+        except discord.Forbidden:
+            # Clean up and let the caller (slash wrapper / scheduler) report the failure.
+            await end_game(self.db, game_id)
+            if game_id in self.bot.active_views:
+                del self.bot.active_views[game_id]
+            raise
+        await update_game_message(self.db, game_id, msg.id)
+
+    def _build_round_view(
+        self,
+        *,
+        game_id: str,
+        host_id: int,
+        host_name: str,
+        round_num: int,
+        channel,
+        option_a: str,
+        option_b: str,
+        anonymous: bool = True,
+        interaction=None,
+    ) -> "WYRRoundView":
+        """Construct a round view with its advance callback wired.
+
+        Shared by _run_round (fresh round) and recover_game (post-restart) so
+        round-to-round advancement behaves identically after a crash.
+        """
+
         async def advance(message: discord.Message):
             if view._closed:
                 return
@@ -398,27 +445,46 @@ class WYRCog(commands.Cog):
             option_a=option_a,
             option_b=option_b,
             round_num=round_num,
-            anonymous=True,
+            anonymous=anonymous,
             db=self.db,
             bot=self.bot,
             host_name=host_name,
             advance_callback=advance,
         )
-        if carry_over_queue:
-            view.queued_questions = carry_over_queue
-            view.next_btn.label = next_button_label(len(carry_over_queue))
-        self.bot.active_views[game_id] = view
+        return view
 
-        embed = view._build_embed()
-        try:
-            msg = await channel.send(embed=embed, view=view)
-        except discord.Forbidden:
-            # Clean up and let the caller (slash wrapper / scheduler) report the failure.
-            await end_game(self.db, game_id)
-            if game_id in self.bot.active_views:
-                del self.bot.active_views[game_id]
-            raise
-        await update_game_message(self.db, game_id, msg.id)
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Rebuild the current round's view after a restart, restoring votes."""
+        rounds = payload.get("rounds", {})
+        if not rounds:
+            return False
+        cur = max(rounds, key=lambda k: int(k))
+        rd = rounds.get(cur, {})
+        q = rd.get("q", "") or ""
+        option_a, option_b = (q.split(" OR ", 1) + [""])[:2] if " OR " in q else (q, "")
+
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        guild = getattr(channel, "guild", None)
+        host_name = resolve_name(guild, host_id) if guild else "Host"
+
+        view = self._build_round_view(
+            game_id=game_id,
+            host_id=host_id,
+            host_name=host_name,
+            round_num=int(cur),
+            channel=channel,
+            option_a=option_a,
+            option_b=option_b,
+            anonymous=payload.get("anonymous", True),
+            interaction=None,
+        )
+        view.votes_a = list(rd.get("a", []))
+        view.votes_b = list(rd.get("b", []))
+        self.bot.active_views[game_id] = view
+        self.bot.add_view(view, message_id=message.id)
+        log.info("Recovered wyr game %s (round %s) in #%s", game_id, cur, getattr(channel, "name", channel.id))
+        return True
 
 
 async def setup(bot: commands.Bot):
@@ -427,3 +493,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("wyr")
     play.add_command(cog.wyr)
     bot.game_launchers["wyr"] = cog.launch
+    bot.game_recoverers["wyr"] = cog.recover_game
