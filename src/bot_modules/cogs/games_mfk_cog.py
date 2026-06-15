@@ -241,6 +241,15 @@ class MFKCog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-register the MFK view after a restart so its buttons work again."""
+        game_id = row["game_id"]
+        view = MFKView(game_id, int(row["host_id"]), self.db, self.bot, labels=payload.get("labels"))
+        self.bot.active_views[game_id] = view
+        self.bot.add_view(view, message_id=message.id)
+        log.info("Recovered mfk game %s in #%s", game_id, getattr(channel, "name", channel.id))
+        return True
+
 
 async def setup(bot: commands.Bot):
     cog = MFKCog(bot)
@@ -248,3 +257,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("mfk")
     play.add_command(cog.mfk)
     bot.game_launchers["mfk"] = cog.launch
+    bot.game_recoverers["mfk"] = cog.recover_game

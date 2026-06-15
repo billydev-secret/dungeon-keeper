@@ -306,6 +306,16 @@ class TraditionalCog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-register the host view after a restart so its buttons work again."""
+        game_id = row["game_id"]
+        host_view = TraditionalHostView(game_id, int(row["host_id"]), self.db, self.bot)
+        host_view._message = message
+        self.bot.active_views[game_id] = host_view
+        self.bot.add_view(host_view, message_id=message.id)
+        log.info("Recovered traditional game %s in #%s", game_id, getattr(channel, "name", channel.id))
+        return True
+
 
 async def setup(bot: commands.Bot):
     cog = TraditionalCog(bot)
@@ -313,3 +323,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("traditional")
     play.add_command(cog.traditional)
     bot.game_launchers["traditional"] = cog.launch
+    bot.game_recoverers["traditional"] = cog.recover_game

@@ -157,6 +157,10 @@ def main() -> None:
     # Registry of interaction-free game launchers, keyed by game_type. Each party
     # game cog registers its launch() here in setup(); the scheduler calls them.
     bot.game_launchers: dict = {}  # type: ignore[attr-defined]
+    # Registry of crash-recovery handlers, keyed by game_type. Each party game
+    # cog registers its recover_game() here in setup(); the startup recovery
+    # task re-registers in-flight games' views/timers after a restart.
+    bot.game_recoverers: dict = {}  # type: ignore[attr-defined]
     bot.extension_names = [
         "bot_modules.cogs.events_cog",
         "bot_modules.cogs.role_grant_cog",
@@ -282,6 +286,20 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: db_backup_loop(bot, db_path))
+
+    # ==============================
+    # Games — crash recovery (re-register in-flight views/timers on boot)
+    # ==============================
+    async def _game_recovery() -> None:
+        from bot_modules.games.utils.recovery import recover_active_games
+
+        await bot.wait_until_ready()
+        try:
+            await recover_active_games(bot)
+        except Exception:
+            log.exception("Game recovery sweep failed")
+
+    bot.startup_task_factories.append(lambda: _game_recovery())
 
     # ==============================
     # Games — 24-hour cleanup sweep

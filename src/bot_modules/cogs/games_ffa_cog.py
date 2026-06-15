@@ -227,6 +227,16 @@ class FFACog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-register the FFA view after a restart so its buttons work again."""
+        game_id = row["game_id"]
+        view = FFAView(game_id, int(row["host_id"]), payload.get("question", "") or "", self.db, self.bot)
+        view._game_msg = message
+        self.bot.active_views[game_id] = view
+        self.bot.add_view(view, message_id=message.id)
+        log.info("Recovered ffa game %s in #%s", game_id, getattr(channel, "name", channel.id))
+        return True
+
 
 async def setup(bot: commands.Bot):
     cog = FFACog(bot)
@@ -234,3 +244,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("ffa")
     play.add_command(cog.ffa)
     bot.game_launchers["ffa"] = cog.launch
+    bot.game_recoverers["ffa"] = cog.recover_game
