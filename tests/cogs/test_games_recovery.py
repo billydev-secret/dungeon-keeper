@@ -245,6 +245,7 @@ async def test_clapback_recover_respawns_game_loop(sync_db_path):
     await update_game_message(db, game_id, stale.id)
 
     bot.active_views.clear()
+    _baseline = set(asyncio.all_tasks())
     await recover_active_games(bot)
     for _ in range(10):
         await asyncio.sleep(0.01)
@@ -254,10 +255,14 @@ async def test_clapback_recover_respawns_game_loop(sync_db_path):
         assert stale.edited
         assert calls.get("run_game") == 2  # resumes after the one completed round
     finally:
-        _cancel_pending()
+        _cancel_pending(_baseline)
 
 
-async def test_price_recover_resumes_at_next_round(sync_db_path):
+async def test_price_recover_resumes_mid_round_without_score_drift(sync_db_path):
+    """Round 2 was submitted (so it's in payload["rounds"]) but interrupted
+    mid-scoring. Resume must use completed_rounds (1) -> round 2, NOT
+    len(rounds) (2) -> round 3, and roll scores back to the checkpoint so the
+    partial round-2 point is neither double-counted nor lost."""
     db = GamesDb(sync_db_path)
     bot = _FakeBot(db)
     cog = PriceCog(bot)  # type: ignore[arg-type]
@@ -274,12 +279,17 @@ async def test_price_recover_resumes_at_next_round(sync_db_path):
     game_id = await create_game(
         db, channel.id, 7, "price", state="playing",
         payload={"settings": {"rounds": 3, "timer": 60, "vote_timer": 30, "source": "bank"},
-                 "total_rounds": 3, "rounds": {"1": {}}, "scores": {}},
+                 "total_rounds": 3,
+                 "rounds": {"1": {}, "2": {}},  # round 2 entry exists but wasn't scored
+                 "completed_rounds": 1,
+                 "scores": {"reasonable_wins": {"7": 2}, "unhinged_wins": {}},      # partial round-2 point
+                 "scores_checkpoint": {"reasonable_wins": {"7": 1}, "unhinged_wins": {}}},
     )
     stale = await channel.send()
     await update_game_message(db, game_id, stale.id)
 
     bot.active_views.clear()
+    _baseline = set(asyncio.all_tasks())
     await recover_active_games(bot)
     for _ in range(10):
         await asyncio.sleep(0.01)
@@ -287,9 +297,11 @@ async def test_price_recover_resumes_at_next_round(sync_db_path):
             break
     try:
         assert stale.edited
-        assert calls.get("round_num") == 2
+        assert calls.get("round_num") == 2  # completed_rounds+1, not len(rounds)+1
+        payload = await get_game_payload(db, game_id)
+        assert payload["scores"] == {"reasonable_wins": {"7": 1}, "unhinged_wins": {}}
     finally:
-        _cancel_pending()
+        _cancel_pending(_baseline)
 
 
 async def test_rushmore_recover_join_lobby(sync_db_path):
@@ -376,8 +388,13 @@ async def _poll_for(bot, game_id, view_type, tries=50):
     return bot.active_views.get(game_id)
 
 
-def _cancel_pending():
-    for task in asyncio.all_tasks():
+def _cancel_pending(baseline):
+    """Cancel only tasks spawned since ``baseline`` (re-driven game loops).
+
+    Scoped to avoid touching the test runner's own tasks, which matters under
+    pytest-xdist / asyncio_mode=auto.
+    """
+    for task in asyncio.all_tasks() - baseline:
         if task is not asyncio.current_task():
             task.cancel()
 
@@ -401,6 +418,7 @@ async def test_ttl_redrives_guessing_skipping_played_subjects(sync_db_path):
     await update_game_message(db, game_id, stale.id)
 
     bot.active_views.clear()
+    _baseline = set(asyncio.all_tasks())
     await recover_active_games(bot)
     try:
         view = await _poll_for(bot, game_id, TTLGuessView)
@@ -409,7 +427,7 @@ async def test_ttl_redrives_guessing_skipping_played_subjects(sync_db_path):
         row = await db.fetchone("SELECT message_id FROM games_active_games WHERE game_id = ?", (game_id,))
         assert int(row["message_id"]) != stale.id
     finally:
-        _cancel_pending()
+        _cancel_pending(_baseline)
 
 
 async def test_hottakes_redrives_voting_skipping_done_takes(sync_db_path):
@@ -430,6 +448,7 @@ async def test_hottakes_redrives_voting_skipping_done_takes(sync_db_path):
     await update_game_message(db, game_id, stale.id)
 
     bot.active_views.clear()
+    _baseline = set(asyncio.all_tasks())
     await recover_active_games(bot)
     try:
         view = await _poll_for(bot, game_id, HotTakeVoteView)
@@ -437,7 +456,7 @@ async def test_hottakes_redrives_voting_skipping_done_takes(sync_db_path):
         assert view.take_num == 2  # take A done -> resume at take B
         assert view.take_text == "take B"
     finally:
-        _cancel_pending()
+        _cancel_pending(_baseline)
 
 
 async def test_deleted_anchor_message_is_skipped(sync_db_path):

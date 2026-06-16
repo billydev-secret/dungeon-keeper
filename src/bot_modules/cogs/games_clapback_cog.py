@@ -245,6 +245,9 @@ class ClapbackJoinView(discord.ui.View):
 
         # Initialize scores
         payload["scores"] = {str(p): 0 for p in players}
+        # Snapshot of scores as of the last fully-completed round. Restored on
+        # crash-resume so a round interrupted mid-scoring can't double-count.
+        payload["scores_checkpoint"] = {str(p): 0 for p in players}
         payload["clapbacks"] = {str(p): 0 for p in players}
         payload["current_round"] = 0
         payload["round_history"] = []
@@ -558,9 +561,10 @@ class ClapbackCog(commands.Cog):
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the game from the next un-played round after a restart.
 
-        Completed rounds (and their scores) live in payload["round_history"];
-        _run_game resumes at len(round_history)+1, so the round in progress at
-        crash time is abandoned rather than replayed. The stale phase message is
+        Completed rounds live in payload["round_history"]; _run_game resumes at
+        len(round_history)+1, re-running the interrupted round after rolling
+        scores back to the last-completed-round checkpoint so its partial
+        mid-scoring mutations can't double-count. The stale phase message is
         retired and the game loop is re-spawned in the background.
         """
         if not payload.get("config"):
@@ -744,11 +748,15 @@ class ClapbackCog(commands.Cog):
         host_id = payload.get("host_id") or payload["players"][0]
 
         # Resume-aware: a fresh game has an empty round_history (starts at round
-        # 1); after a crash we skip the completed rounds recorded there and
-        # continue from the next one. The interrupted round is not replayed, so
-        # its partial scores can't double-count.
+        # 1); after a crash we continue from the round after the last completed
+        # one. That interrupted round is re-run from scratch, so we roll scores
+        # back to the last-completed-round checkpoint first — otherwise the
+        # round's partial mid-scoring mutations would be counted twice.
         payload = await get_game_payload(self.db, game_id)
         start_round = len(payload.get("round_history", [])) + 1
+        if "scores_checkpoint" in payload:
+            payload["scores"] = dict(payload["scores_checkpoint"])
+            await update_game_payload(self.db, game_id, payload)
 
         for round_num in range(start_round, total_rounds + 1):
             if self._is_cancelled(game_id):
@@ -822,6 +830,8 @@ class ClapbackCog(commands.Cog):
             if bye_player is not None:
                 round_record["bye_player"] = bye_player
             payload.setdefault("round_history", []).append(round_record)
+            # Round fully scored — checkpoint so a later crash resumes from here.
+            payload["scores_checkpoint"] = dict(payload.get("scores", {}))
             payload["phase"] = "revealing"
             await update_game_payload(self.db, game_id, payload)
 

@@ -538,9 +538,11 @@ class PriceCog(commands.Cog):
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Re-drive the round loop from the next un-played round after a restart.
 
-        Completed rounds live in payload["rounds"]; _run_round is recursive, so
-        we simply re-invoke it at len(rounds)+1. The round in progress at crash
-        time is abandoned rather than replayed, so its scores can't double-count.
+        ``completed_rounds`` counts rounds that finished *scoring* (a round's
+        entry is written to payload["rounds"] earlier, at submission time, so it
+        isn't a safe completion marker). _run_round is recursive, so we re-invoke
+        it at completed_rounds+1 and roll scores back to the matching checkpoint,
+        so a round interrupted mid-scoring neither double-counts nor is lost.
         """
         settings = payload.get("settings")
         if not settings:
@@ -550,7 +552,14 @@ class PriceCog(commands.Cog):
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
         total_rounds = payload.get("total_rounds", settings.get("rounds", 0))
-        start_round = len(payload.get("rounds", {})) + 1
+        start_round = payload.get("completed_rounds", 0) + 1
+
+        # Roll scores back to the last completed round so the interrupted round
+        # (which may have written partial scores) re-runs from a clean base.
+        if "scores_checkpoint" in payload:
+            payload["scores"] = {k: dict(v) for k, v in payload["scores_checkpoint"].items()}
+            await update_game_payload(self.db, game_id, payload)
+
         try:
             await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
         except Exception:
@@ -568,6 +577,29 @@ class PriceCog(commands.Cog):
             game_id, start_round, getattr(channel, "name", channel.id),
         )
         return True
+
+    async def _advance_round(
+        self, game_id, host_id, host_name, channel, guild, round_num, settings, msg,
+        *, pre_round_delay: int = 0,
+    ):
+        """Finish round_num: checkpoint scores, then go to the next round / recap.
+
+        Called at every round-completion site so the checkpoint (used by
+        recover_game) is written in exactly one place, after scoring is final.
+        """
+        payload = await get_game_payload(self.db, game_id)
+        payload["completed_rounds"] = round_num
+        scores = payload.get("scores", {})
+        payload["scores_checkpoint"] = {k: dict(v) for k, v in scores.items()}
+        await update_game_payload(self.db, game_id, payload)
+
+        total_rounds = payload.get("total_rounds", settings["rounds"])
+        if round_num < total_rounds:
+            if pre_round_delay:
+                await asyncio.sleep(pre_round_delay)
+            await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg)
+        else:
+            await self._show_recap(game_id, host_id, host_name, channel, guild, settings)
 
     # ── Slash command ────────────────────────────────────────────────
 
@@ -808,11 +840,7 @@ class PriceCog(commands.Cog):
             except Exception:
                 pass
             # Advance to next round or end
-            if round_num < total_rounds:
-                await asyncio.sleep(2)
-                await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg)
-            else:
-                await self._show_recap(game_id, host_id, host_name, channel, guild, settings)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=2)
             return
 
         # ── Submission phase ──
@@ -887,11 +915,7 @@ class PriceCog(commands.Cog):
                 await channel.send("Nobody submitted a price this round. Moving on...")
             except Exception:
                 pass
-            if round_num < total_rounds:
-                await asyncio.sleep(3)
-                await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg)
-            else:
-                await self._show_recap(game_id, host_id, host_name, channel, guild, settings)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=3)
             return
 
         # ── Reveal phase ──
@@ -910,10 +934,7 @@ class PriceCog(commands.Cog):
             except Exception:
                 pass
             await asyncio.sleep(3)
-            if round_num < total_rounds:
-                await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg)
-            else:
-                await self._show_recap(game_id, host_id, host_name, channel, guild, settings)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
             return
 
         # 5s pause for reactions
@@ -945,10 +966,7 @@ class PriceCog(commands.Cog):
             vote_view._msg = vote_msg
         except Exception:
             # Can't send vote view — skip voting
-            if round_num < total_rounds:
-                await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg)
-            else:
-                await self._show_recap(game_id, host_id, host_name, channel, guild, settings)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
             return
 
         vote_done = asyncio.Event()
@@ -1027,13 +1045,7 @@ class PriceCog(commands.Cog):
         await asyncio.sleep(5)
 
         # Re-read total_rounds in case host added rounds
-        payload = await get_game_payload(self.db, game_id)
-        total_rounds = payload.get("total_rounds", settings["rounds"])
-
-        if round_num < total_rounds:
-            await self._run_round(game_id, host_id, host_name, channel, guild, round_num + 1, settings, msg)
-        else:
-            await self._show_recap(game_id, host_id, host_name, channel, guild, settings)
+        await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
 
     # ── Recap ────────────────────────────────────────────────────────
 
