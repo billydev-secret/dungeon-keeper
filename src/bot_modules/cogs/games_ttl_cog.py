@@ -14,6 +14,7 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
+    resolve_name,
     ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
@@ -393,11 +394,20 @@ class TTLCog(commands.Cog):
         host_id: int,
         host_name: str,
         channel,
+        resume: bool = False,
     ):
         guild = channel.guild if hasattr(channel, "guild") else None
-        scores: dict[str, dict] = {}
-        played_ids: set[str] = set()
-        round_num = 0
+        # On resume after a restart, seed from persisted scores so already-played
+        # subjects are skipped; the subject whose round was interrupted is still
+        # "unplayed" and gets a fresh round.
+        if resume:
+            payload = await get_game_payload(self.db, game_id)
+            scores: dict[str, dict] = dict(payload.get("scores", {}))
+            played_ids: set[str] = set(scores.keys())
+        else:
+            scores = {}
+            played_ids = set()
+        round_num = len(played_ids)
 
         while True:
             # Re-read submissions each iteration so late joiners are picked up
@@ -523,6 +533,44 @@ class TTLCog(commands.Cog):
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-drive the guessing loop after a restart.
+
+        Completed rounds live in payload["scores"]; the in-progress round can't
+        be reconstructed (its shuffled statements/votes aren't persisted), so we
+        retire the stale round message and restart that subject's round. The
+        re-driven loop reconstructs scores from the payload and continues.
+        """
+        if not payload.get("submissions"):
+            return False
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        guild = getattr(channel, "guild", None)
+        host_name = resolve_name(guild, host_id) if guild else "Host"
+        try:
+            await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
+        except Exception:
+            pass
+        # Keep the game "live" until the re-driven loop posts its first round so
+        # the loop's in-active_views guards (and final recap) behave correctly.
+        self.bot.active_views[game_id] = _RecoverySentinel()
+        asyncio.create_task(
+            self._run_guessing(
+                interaction=None,
+                game_id=game_id,
+                host_id=host_id,
+                host_name=host_name,
+                channel=channel,
+                resume=True,
+            )
+        )
+        log.info("Recovering ttl game %s (re-driving guessing) in #%s", game_id, getattr(channel, "name", channel.id))
+        return True
+
+
+class _RecoverySentinel:
+    """Placeholder kept in bot.active_views while a re-driven loop spins up."""
+
 
 async def setup(bot: commands.Bot):
     cog = TTLCog(bot)
@@ -530,3 +578,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("twotruths")
     play.add_command(cog.twotruths)
     bot.game_launchers["ttl"] = cog.launch
+    bot.game_recoverers["ttl"] = cog.recover_game

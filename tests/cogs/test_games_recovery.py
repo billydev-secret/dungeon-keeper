@@ -8,16 +8,26 @@ simulate a restart by clearing the in-memory view map, run the sweep, and assert
 the view is back and bound to the right message.
 """
 
+import asyncio
+
 import pytest
 
+from bot_modules.cogs.games_fantasies_cog import FantasiesCog, FantasiesMainView
 from bot_modules.cogs.games_ffa_cog import FFACog
+from bot_modules.cogs.games_hottakes_cog import HotTakeVoteView, HotTakesCog
 from bot_modules.cogs.games_mfk_cog import MFKCog
 from bot_modules.cogs.games_mlt_cog import MLTCog, MLTJoinView
 from bot_modules.cogs.games_nhie_cog import NHIECog
 from bot_modules.cogs.games_story_cog import StoryCog, StoryJoinView
 from bot_modules.cogs.games_traditional_cog import TraditionalCog
+from bot_modules.cogs.games_ttl_cog import TTLCog, TTLGuessView
 from bot_modules.cogs.games_wyr_cog import WYRCog
-from bot_modules.games.utils.game_manager import get_game_payload, update_game_payload
+from bot_modules.games.utils.game_manager import (
+    create_game,
+    get_game_payload,
+    update_game_message,
+    update_game_payload,
+)
 from bot_modules.games.utils.recovery import recover_active_games
 from bot_modules.services.games_db import GamesDb
 
@@ -204,6 +214,106 @@ async def test_story_in_play_is_deferred(sync_db_path):
 
     assert bot.added_views == []
     assert game_id not in bot.active_views
+
+
+async def test_fantasies_recovers_control_panel(sync_db_path):
+    """Host-driven: the main control panel re-registers, round counter restored."""
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = FantasiesCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["fantasies"] = cog.recover_game
+    channel = _FakeChannel(321)
+    bot._channels[channel.id] = channel
+    game_id = await cog.launch(
+        channel=channel, host_id=2001, host_name="Tester", guild_id=9001, options={},
+    )
+    row = await db.fetchone("SELECT message_id FROM games_active_games WHERE game_id = ?", (game_id,))
+    msg_id = row["message_id"]
+    payload = await get_game_payload(db, game_id)
+    payload["rounds"] = {"1": [{"text": "x", "user_id": 1, "category": "F"}],
+                         "2": [{"text": "y", "user_id": 2, "category": "F"}]}
+    await update_game_payload(db, game_id, payload)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
+
+    view, bound_id = bot.added_views[0]
+    assert isinstance(view, FantasiesMainView)
+    assert bound_id == msg_id
+    assert view.round_num == 2  # numbering continues from the last collected round
+
+
+async def _poll_for(bot, game_id, view_type, tries=50):
+    """Wait for a re-driven background loop to post and register its view."""
+    for _ in range(tries):
+        if isinstance(bot.active_views.get(game_id), view_type):
+            return bot.active_views[game_id]
+        await asyncio.sleep(0.02)
+    return bot.active_views.get(game_id)
+
+
+def _cancel_pending():
+    for task in asyncio.all_tasks():
+        if task is not asyncio.current_task():
+            task.cancel()
+
+
+async def test_ttl_redrives_guessing_skipping_played_subjects(sync_db_path):
+    """Re-drive restarts the interrupted subject's round; scored subjects skipped."""
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = TTLCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["ttl"] = cog.recover_game
+    channel = _FakeChannel(654)
+    bot._channels[channel.id] = channel
+    subs = {"111": {"statements": ["a", "b", "c"], "lie": 2},
+            "222": {"statements": ["d", "e", "f"], "lie": 0}}
+    game_id = await create_game(
+        db, channel.id, 2001, "ttl", state="guessing",
+        payload={"submissions": subs, "submission_count": 2, "submitter_names": {},
+                 "scores": {"111": {"correct": 1, "fooled": 0, "points": 1}}, "prompt": None},
+    )
+    stale = await channel.send()
+    await update_game_message(db, game_id, stale.id)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
+    try:
+        view = await _poll_for(bot, game_id, TTLGuessView)
+        assert isinstance(view, TTLGuessView), f"got {type(view).__name__}"
+        assert view.subject_id == 222  # 111 already scored -> skipped
+        row = await db.fetchone("SELECT message_id FROM games_active_games WHERE game_id = ?", (game_id,))
+        assert int(row["message_id"]) != stale.id
+    finally:
+        _cancel_pending()
+
+
+async def test_hottakes_redrives_voting_skipping_done_takes(sync_db_path):
+    """Re-drive resumes voting at the first take without a persisted result."""
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = HotTakesCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["hottakes"] = cog.recover_game
+    channel = _FakeChannel(655)
+    bot._channels[channel.id] = channel
+    takes = [{"text": "take A", "user_id": 111}, {"text": "take B", "user_id": 222}]
+    results = [{"text": "take A", "counts": {}, "avg": 0, "std": 0, "voters": [111], "author": 111}]
+    game_id = await create_game(
+        db, channel.id, 2001, "hottakes", state="voting",
+        payload={"takes": takes, "results": results},
+    )
+    stale = await channel.send()
+    await update_game_message(db, game_id, stale.id)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
+    try:
+        view = await _poll_for(bot, game_id, HotTakeVoteView)
+        assert isinstance(view, HotTakeVoteView), f"got {type(view).__name__}"
+        assert view.take_num == 2  # take A done -> resume at take B
+        assert view.take_text == "take B"
+    finally:
+        _cancel_pending()
 
 
 async def test_deleted_anchor_message_is_skipped(sync_db_path):

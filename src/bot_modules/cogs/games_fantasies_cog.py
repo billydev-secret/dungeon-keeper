@@ -490,6 +490,32 @@ class FantasiesCog(commands.Cog):
             return
         await channel.send(embed=embed)
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-register the host control panel after a restart.
+
+        Fantasies is host-driven: the FantasiesMainView (the tracked message) is
+        the persistent control panel, and the host presses "Start Round" to run
+        each round. A round's submit/vote messages aren't tracked, so a round
+        interrupted by a crash is abandoned — the host simply starts the next
+        round. We restore the round counter so numbering continues correctly.
+        """
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        view = FantasiesMainView(game_id, host_id, self.db, self.bot, self)
+        rounds = payload.get("rounds", {})
+        if rounds:
+            try:
+                view.round_num = max(int(k) for k in rounds)
+            except ValueError:
+                view.round_num = 0
+        self.bot.active_views[game_id] = view
+        self.bot.add_view(view, message_id=message.id)
+        log.info(
+            "Recovered fantasies game %s (control panel, round_num=%d) in #%s",
+            game_id, view.round_num, getattr(channel, "name", channel.id),
+        )
+        return True
+
 
 async def setup(bot: commands.Bot):
     cog = FantasiesCog(bot)
@@ -497,3 +523,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("fantasies")
     play.add_command(cog.fantasies)
     bot.game_launchers["fantasies"] = cog.launch
+    bot.game_recoverers["fantasies"] = cog.recover_game

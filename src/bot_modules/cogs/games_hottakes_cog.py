@@ -15,6 +15,7 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
+    resolve_name,
     ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
@@ -410,9 +411,17 @@ class HotTakesCog(commands.Cog):
         host_id: int,
         host_name: str,
         channel,
+        resume: bool = False,
     ):
-        results = []
-        processed = 0
+        # On resume after a restart, seed from persisted results so already-voted
+        # takes are skipped; the take whose round was interrupted is re-voted.
+        if resume:
+            payload = await get_game_payload(self.db, game_id)
+            results = list(payload.get("results", []))
+            processed = len(results)
+        else:
+            results = []
+            processed = 0
 
         while True:
             payload = await get_game_payload(self.db, game_id)
@@ -505,6 +514,43 @@ class HotTakesCog(commands.Cog):
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-drive the voting loop after a restart.
+
+        Completed takes live in payload["results"]; the take being voted on at
+        crash time can't be reconstructed (live votes aren't persisted), so we
+        retire the stale message and re-vote that take. The re-driven loop seeds
+        results from the payload and continues with the remaining takes.
+        """
+        takes = payload.get("takes", [])
+        if not takes or len(payload.get("results", [])) >= len(takes):
+            return False  # nothing left to resume; cleanup loop will archive it
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        guild = getattr(channel, "guild", None)
+        host_name = resolve_name(guild, host_id) if guild else "Host"
+        try:
+            await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
+        except Exception:
+            pass
+        self.bot.active_views[game_id] = _RecoverySentinel()
+        asyncio.create_task(
+            self._run_voting(
+                interaction=None,
+                game_id=game_id,
+                host_id=host_id,
+                host_name=host_name,
+                channel=channel,
+                resume=True,
+            )
+        )
+        log.info("Recovering hottakes game %s (re-driving voting) in #%s", game_id, getattr(channel, "name", channel.id))
+        return True
+
+
+class _RecoverySentinel:
+    """Placeholder kept in bot.active_views while a re-driven loop spins up."""
+
 
 async def setup(bot: commands.Bot):
     cog = HotTakesCog(bot)
@@ -512,6 +558,7 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("hottakes")
     play.add_command(cog.hottakes)
     bot.game_launchers["hottakes"] = cog.launch
+    bot.game_recoverers["hottakes"] = cog.recover_game
 
 
 # Re-export VOTE_VALUES so any tests / external callers that imported it
