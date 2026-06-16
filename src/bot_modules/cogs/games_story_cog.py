@@ -503,18 +503,25 @@ class StoryCog(commands.Cog):
             del self.bot.active_views[game_id]
 
     async def recover_game(self, row, payload, channel, message) -> bool:
-        """Re-register the join lobby after a restart.
+        """Recover after a restart.
 
-        Once the story is underway, play runs in a blocking per-turn loop whose
-        turn messages aren't tracked, so an in-play story can't be resumed yet
-        (handled by the Tier 3 rewrite). Only the join lobby is recoverable.
+        The join lobby re-registers cleanly. Once the story is underway, play
+        runs in a blocking per-turn loop whose turn messages aren't tracked, so
+        it can't be resumed — end it gracefully so players aren't left waiting on
+        a dead turn prompt.
         """
         if payload.get("sentences"):
-            log.info(
-                "story game %s already in play phase — not yet resumable, skipping",
-                row["game_id"],
-            )
-            return False
+            try:
+                await channel.send(
+                    "📖 This Story game was interrupted by a bot restart and can't be "
+                    "resumed — start a new one with `/games play story`."
+                )
+            except Exception:
+                pass
+            await end_game(self.db, row["game_id"])
+            self.bot.active_views.pop(row["game_id"], None)
+            log.info("story game %s was mid-play at restart; ended gracefully.", row["game_id"])
+            return True
         game_id = row["game_id"]
         view = StoryJoinView(game_id, int(row["host_id"]), self.db, self.bot, self)
         self.bot.active_views[game_id] = view

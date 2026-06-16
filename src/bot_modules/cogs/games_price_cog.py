@@ -535,6 +535,40 @@ class PriceCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-drive the round loop from the next un-played round after a restart.
+
+        Completed rounds live in payload["rounds"]; _run_round is recursive, so
+        we simply re-invoke it at len(rounds)+1. The round in progress at crash
+        time is abandoned rather than replayed, so its scores can't double-count.
+        """
+        settings = payload.get("settings")
+        if not settings:
+            return False
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        guild = getattr(channel, "guild", None)
+        host_name = resolve_name(guild, host_id) if guild else "Host"
+        total_rounds = payload.get("total_rounds", settings.get("rounds", 0))
+        start_round = len(payload.get("rounds", {})) + 1
+        try:
+            await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
+        except Exception:
+            pass
+        if start_round > total_rounds:
+            asyncio.create_task(self._show_recap(game_id, host_id, host_name, channel, guild, settings))
+        else:
+            asyncio.create_task(self._run_round(
+                game_id=game_id, host_id=host_id, host_name=host_name,
+                channel=channel, guild=guild, round_num=start_round,
+                settings=settings, msg=message,
+            ))
+        log.info(
+            "Recovering price game %s (resuming at round %d) in #%s",
+            game_id, start_round, getattr(channel, "name", channel.id),
+        )
+        return True
+
     # ── Slash command ────────────────────────────────────────────────
 
     @app_commands.command(name="price", description="Start a Name Your Price game!")
@@ -1070,3 +1104,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("price")
     play.add_command(cog.price_cmd)
     bot.game_launchers["price"] = cog.launch
+    bot.game_recoverers["price"] = cog.recover_game

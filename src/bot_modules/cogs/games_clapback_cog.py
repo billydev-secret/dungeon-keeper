@@ -555,6 +555,32 @@ class ClapbackCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Re-drive the game from the next un-played round after a restart.
+
+        Completed rounds (and their scores) live in payload["round_history"];
+        _run_game resumes at len(round_history)+1, so the round in progress at
+        crash time is abandoned rather than replayed. The stale phase message is
+        retired and the game loop is re-spawned in the background.
+        """
+        if not payload.get("config"):
+            return False
+        game_id = row["game_id"]
+        try:
+            await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
+        except Exception:
+            pass
+        # _is_cancelled() treats an absent active_views entry as cancelled, so
+        # seed a placeholder until _run_game posts its first phase view.
+        self.bot.active_views[game_id] = _RecoverySentinel()
+        self._game_cancelled.discard(game_id)
+        asyncio.create_task(self._run_game(game_id, channel, payload))
+        log.info(
+            "Recovering clapback game %s (resuming at round %d) in #%s",
+            game_id, len(payload.get("round_history", [])) + 1, getattr(channel, "name", channel.id),
+        )
+        return True
+
     # ── Slash command ────────────────────────────────────────────────────
 
     @app_commands.command(name="clapback", description="Start a Clapback game — comedy head-to-head!")
@@ -717,7 +743,14 @@ class ClapbackCog(commands.Cog):
         total_rounds = config["rounds"]
         host_id = payload.get("host_id") or payload["players"][0]
 
-        for round_num in range(1, total_rounds + 1):
+        # Resume-aware: a fresh game has an empty round_history (starts at round
+        # 1); after a crash we skip the completed rounds recorded there and
+        # continue from the next one. The interrupted round is not replayed, so
+        # its partial scores can't double-count.
+        payload = await get_game_payload(self.db, game_id)
+        start_round = len(payload.get("round_history", [])) + 1
+
+        for round_num in range(start_round, total_rounds + 1):
             if self._is_cancelled(game_id):
                 return
 
@@ -1128,9 +1161,19 @@ class ClapbackCog(commands.Cog):
         self._game_cancelled.discard(game_id)
 
 
+class _RecoverySentinel:
+    """Placeholder kept in bot.active_views while a re-driven game spins up.
+
+    _is_cancelled() treats an absent active_views entry as a cancelled game, so
+    the re-driven loop needs *something* registered until it posts its first
+    phase view.
+    """
+
+
 async def setup(bot: commands.Bot):
     cog = ClapbackCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("clapback")
     play.add_command(cog.clapback)
     bot.game_launchers["clapback"] = cog.launch
+    bot.game_recoverers["clapback"] = cog.recover_game

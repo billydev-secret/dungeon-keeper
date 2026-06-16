@@ -12,9 +12,12 @@ import asyncio
 
 import pytest
 
+from bot_modules.cogs.games_clapback_cog import ClapbackCog
 from bot_modules.cogs.games_fantasies_cog import FantasiesCog, FantasiesMainView
 from bot_modules.cogs.games_ffa_cog import FFACog
 from bot_modules.cogs.games_hottakes_cog import HotTakeVoteView, HotTakesCog
+from bot_modules.cogs.games_price_cog import PriceCog
+from bot_modules.cogs.games_rushmore_cog import RushmoreCog, RushmoreJoinView
 from bot_modules.cogs.games_mfk_cog import MFKCog
 from bot_modules.cogs.games_mlt_cog import MLTCog, MLTJoinView
 from bot_modules.cogs.games_nhie_cog import NHIECog
@@ -194,8 +197,8 @@ async def test_story_recovers_join_lobby():
     assert bound_id == msg_id
 
 
-async def test_story_in_play_is_deferred(sync_db_path):
-    """A story past the join phase is skipped (play resume is a Tier-3 follow-up)."""
+async def test_story_in_play_ends_gracefully(sync_db_path):
+    """A story past the join phase can't resume, so it's ended cleanly."""
     db = GamesDb(sync_db_path)
     bot = _FakeBot(db)
     cog = StoryCog(bot)  # type: ignore[arg-type]
@@ -212,8 +215,129 @@ async def test_story_in_play_is_deferred(sync_db_path):
     bot.active_views.clear()
     await recover_active_games(bot)
 
-    assert bot.added_views == []
+    assert bot.added_views == []  # no view re-registered
     assert game_id not in bot.active_views
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (game_id,))
+    assert row is None  # game ended
+
+
+async def test_clapback_recover_respawns_game_loop(sync_db_path):
+    """Recovery retires the stale phase message and re-spawns the game loop."""
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["clapback"] = cog.recover_game
+    calls = {}
+
+    async def fake_run_game(game_id, channel, payload):
+        calls["run_game"] = len(payload.get("round_history", [])) + 1
+
+    cog._run_game = fake_run_game  # type: ignore[method-assign]
+
+    channel = _FakeChannel(1100)
+    bot._channels[channel.id] = channel
+    game_id = await create_game(
+        db, channel.id, 1, "clapback", state="playing",
+        payload={"config": {"rounds": 3}, "players": [1, 2], "host_id": 1, "scores": {},
+                 "round_history": [{"round": 1, "prompt": "p", "matchups": []}]},
+    )
+    stale = await channel.send()
+    await update_game_message(db, game_id, stale.id)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
+    for _ in range(10):
+        await asyncio.sleep(0.01)
+        if "run_game" in calls:
+            break
+    try:
+        assert stale.edited
+        assert calls.get("run_game") == 2  # resumes after the one completed round
+    finally:
+        _cancel_pending()
+
+
+async def test_price_recover_resumes_at_next_round(sync_db_path):
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = PriceCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["price"] = cog.recover_game
+    calls = {}
+
+    async def fake_run_round(*, round_num, **kw):
+        calls["round_num"] = round_num
+
+    cog._run_round = fake_run_round  # type: ignore[method-assign]
+
+    channel = _FakeChannel(1200)
+    bot._channels[channel.id] = channel
+    game_id = await create_game(
+        db, channel.id, 7, "price", state="playing",
+        payload={"settings": {"rounds": 3, "timer": 60, "vote_timer": 30, "source": "bank"},
+                 "total_rounds": 3, "rounds": {"1": {}}, "scores": {}},
+    )
+    stale = await channel.send()
+    await update_game_message(db, game_id, stale.id)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
+    for _ in range(10):
+        await asyncio.sleep(0.01)
+        if "round_num" in calls:
+            break
+    try:
+        assert stale.edited
+        assert calls.get("round_num") == 2
+    finally:
+        _cancel_pending()
+
+
+async def test_rushmore_recover_join_lobby(sync_db_path):
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = RushmoreCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["rushmore"] = cog.recover_game
+    channel = _FakeChannel(1300)
+    bot._channels[channel.id] = channel
+    game_id = await create_game(
+        db, channel.id, 9, "rushmore", state="joining",
+        payload={"settings": {"timer": 60, "source": "host", "vote_timer": 30},
+                 "players": [9, 10], "topic": "movies"},
+    )
+    stale = await channel.send()
+    await update_game_message(db, game_id, stale.id)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
+
+    view, bound_id = bot.added_views[0]
+    assert isinstance(view, RushmoreJoinView)
+    assert bound_id == stale.id
+    assert view.players == [9, 10]
+    assert view.topic == "movies"
+
+
+async def test_rushmore_recover_underway_ends_gracefully(sync_db_path):
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = RushmoreCog(bot)  # type: ignore[arg-type]
+    bot.game_recoverers["rushmore"] = cog.recover_game
+    channel = _FakeChannel(1301)
+    bot._channels[channel.id] = channel
+    game_id = await create_game(
+        db, channel.id, 9, "rushmore", state="playing",
+        payload={"settings": {"timer": 60, "source": "host", "vote_timer": 30},
+                 "players": [9, 10], "topic": "movies", "boards": {}},
+    )
+    stale = await channel.send()
+    await update_game_message(db, game_id, stale.id)
+
+    bot.active_views.clear()
+    await recover_active_games(bot)
+
+    assert bot.added_views == []
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (game_id,))
+    assert row is None  # underway game ended gracefully
 
 
 async def test_fantasies_recovers_control_panel(sync_db_path):

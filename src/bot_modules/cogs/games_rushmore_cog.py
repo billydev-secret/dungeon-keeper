@@ -562,6 +562,51 @@ class RushmoreCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
+    async def recover_game(self, row, payload, channel, message) -> bool:
+        """Recover after a restart.
+
+        Rushmore is a single linear game (join -> draft -> vote -> recap), not a
+        series of rounds. The join lobby re-registers cleanly. Once drafting or
+        voting is underway there's no prior round to fall back to, and those run
+        in blocking loops that can't be safely re-driven, so we end the game
+        gracefully rather than leave dead buttons.
+        """
+        game_id = row["game_id"]
+        host_id = int(row["host_id"])
+        guild = getattr(channel, "guild", None)
+        host_name = resolve_name(guild, host_id) if guild else "Host"
+
+        if row["state"] == "joining":
+            settings = payload.get("settings", {})
+            view = RushmoreJoinView(
+                game_id, host_id, host_name,
+                payload.get("topic"), settings.get("source", "host"),
+                self.db, self.bot, self,
+            )
+            view.players = list(payload.get("players", []))
+            view._msg = message
+            self.bot.active_views[game_id] = view
+            self.bot.add_view(view, message_id=message.id)
+            log.info("Recovered rushmore game %s (join phase) in #%s", game_id, getattr(channel, "name", channel.id))
+            return True
+
+        # Drafting/voting underway — end gracefully.
+        try:
+            await message.edit(view=None)
+        except Exception:
+            pass
+        try:
+            await channel.send(
+                "🗿 This Rushmore game was interrupted by a bot restart and can't be "
+                "resumed — start a new one with `/games play rushmore`."
+            )
+        except Exception:
+            pass
+        await end_game(self.db, game_id)
+        self.bot.active_views.pop(game_id, None)
+        log.info("Rushmore game %s was mid-play at restart; ended gracefully.", game_id)
+        return True
+
     async def _get_settings(self, game_id: str) -> dict:
         payload = await get_game_payload(self.db, game_id)
         return payload.get("settings", {})
@@ -970,3 +1015,4 @@ async def setup(bot: commands.Bot):
     bot.tree.remove_command("rushmore")
     play.add_command(cog.rushmore_cmd)
     bot.game_launchers["rushmore"] = cog.launch
+    bot.game_recoverers["rushmore"] = cog.recover_game
