@@ -22,3 +22,4 @@ numpy
 matplotlib>=3.8.0
 llama-cpp-python>=0.3.0
 huggingface_hub>=0.24.0
+faster-whisper>=1.0.0

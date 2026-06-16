@@ -218,6 +218,7 @@ def main() -> None:
         "bot_modules.cogs.games_clapback_cog",
         "bot_modules.cogs.games_legitlibs",
         "bot_modules.cogs.pen_pals_cog",
+        "bot_modules.cogs.voice_transcription_cog",
     ]
 
     # ==============================

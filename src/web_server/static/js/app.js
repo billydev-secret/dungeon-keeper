@@ -122,6 +122,7 @@ const SECTIONS = [
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
       { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js" },
       { id: "config-pen-pals",  label: "Pen Pals",          module: "./panels/config-pen-pals.js" },
+      { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js" },
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js" },
       { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true },
       { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },

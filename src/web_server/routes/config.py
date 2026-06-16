@@ -102,6 +102,13 @@ from bot_modules.cogs.pen_pals_cog import (
     _get_pool as _pp_get_pool,
     _set_config as _pp_set_config,
 )
+from bot_modules.services.voice_transcription_service import (
+    DEFAULT_MODEL as _VT_DEFAULT_MODEL,
+    VALID_MODELS as _VT_VALID_MODELS,
+    get_config as _vt_get_config,
+    is_available as _vt_is_available,
+    set_config as _vt_set_config,
+)
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
@@ -381,6 +388,23 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "auto_round_hour": int(cfg["auto_round_hour"]),
         "panel_channel_id": str(cfg["panel_channel_id"]) if cfg["panel_channel_id"] else None,
         "pool_size": pool_size,
+    }
+
+
+def _voice_transcription_section(conn, guild_id: int) -> dict:
+    cfg = _vt_get_config(conn, guild_id)
+    if cfg is None:
+        return {
+            "enabled": False,
+            "model_name": _VT_DEFAULT_MODEL,
+            "channel_ids": [],
+            "available": _vt_is_available(),
+        }
+    return {
+        "enabled": cfg.enabled,
+        "model_name": cfg.model_name,
+        "channel_ids": [str(c) for c in cfg.channel_ids],
+        "available": _vt_is_available(),
     }
 
 
@@ -705,6 +729,7 @@ async def get_config(
                 "auto_react": _auto_react_section(conn, guild_id),
                 "bump_tracker": _bump_tracker_section(conn, guild_id),
                 "pen_pals": _pen_pals_section(conn, guild_id),
+                "voice_transcription": _voice_transcription_section(conn, guild_id),
             }
 
     return await run_query(_q)
@@ -1938,6 +1963,40 @@ async def update_pen_pals_config(
         )
 
     return {"ok": True}
+
+
+# ── Voice transcription config ───────────────────────────────────────
+
+
+class VoiceTranscriptionConfigUpdate(BaseModel):
+    enabled: bool = False
+    model_name: str = _VT_DEFAULT_MODEL
+    channel_ids: list[str] = []
+
+
+@router.put("/config/voice-transcription")
+async def update_voice_transcription_config(
+    request: Request,
+    body: VoiceTranscriptionConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    model = body.model_name if body.model_name in _VT_VALID_MODELS else _VT_DEFAULT_MODEL
+    channel_ids = tuple(int(c) for c in body.channel_ids if c)
+
+    def _q() -> dict:
+        with open_db(ctx.db_path) as conn:
+            _vt_set_config(
+                conn,
+                guild_id,
+                enabled=body.enabled,
+                model_name=model,
+                channel_ids=channel_ids,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
 
 
 # ── Confessions config ───────────────────────────────────────────────
