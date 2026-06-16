@@ -25,11 +25,36 @@ channel no longer resolves, or whose type has no registered recoverer are
 skipped — never crashed.
 """
 
+import asyncio
+import json
 import logging
 
-from bot_modules.games.utils.game_manager import get_game_payload, is_game_expired
+from bot_modules.games.utils.game_manager import is_game_expired
 
 log = logging.getLogger(__name__)
+
+
+class RecoverySentinel:
+    """Placeholder kept in ``bot.active_views`` while a re-driven game loop spins
+    up. Recovery for the blocking, host-advanced games re-invokes the game's
+    run-loop as a background task; until that loop posts its first phase view, a
+    sentinel keeps the game "live" so guards that treat an absent ``active_views``
+    entry as a cancelled game don't abort it.
+    """
+
+
+async def start_redrive(bot, game_id, message, coro, *, channel, log_label):
+    """Scaffold a re-drive recovery, shared by the games whose rounds run in a
+    blocking loop (ttl, hottakes, clapback): retire the stale phase message,
+    seed a liveness sentinel, spawn the run-loop, and log.
+    """
+    try:
+        await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
+    except Exception:
+        pass
+    bot.active_views[game_id] = RecoverySentinel()
+    asyncio.create_task(coro)
+    log.info("Recovering %s in #%s", log_label, getattr(channel, "name", channel.id))
 
 
 async def resolve_anchor(bot, channel_id, message_id):
@@ -97,7 +122,7 @@ async def recover_active_games(bot):
                 no_message += 1
                 continue
 
-            payload = await get_game_payload(db, game_id)
+            payload = json.loads(row["payload"]) if row["payload"] else {}
             ok = await recover(row, payload, channel, message)
             if ok:
                 recovered += 1

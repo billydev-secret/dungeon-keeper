@@ -18,6 +18,7 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
+from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games_ttl.embeds import (
     build_guess_embed,
     build_lobby_embed,
@@ -547,29 +548,15 @@ class TTLCog(commands.Cog):
         host_id = int(row["host_id"])
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
-        try:
-            await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
-        except Exception:
-            pass
-        # Keep the game "live" until the re-driven loop posts its first round so
-        # the loop's in-active_views guards (and final recap) behave correctly.
-        self.bot.active_views[game_id] = _RecoverySentinel()
-        asyncio.create_task(
+        await start_redrive(
+            self.bot, game_id, message,
             self._run_guessing(
-                interaction=None,
-                game_id=game_id,
-                host_id=host_id,
-                host_name=host_name,
-                channel=channel,
-                resume=True,
-            )
+                interaction=None, game_id=game_id, host_id=host_id,
+                host_name=host_name, channel=channel, resume=True,
+            ),
+            channel=channel, log_label=f"ttl game {game_id} (re-driving guessing)",
         )
-        log.info("Recovering ttl game %s (re-driving guessing) in #%s", game_id, getattr(channel, "name", channel.id))
         return True
-
-
-class _RecoverySentinel:
-    """Placeholder kept in bot.active_views while a re-driven loop spins up."""
 
 
 async def setup(bot: commands.Bot):

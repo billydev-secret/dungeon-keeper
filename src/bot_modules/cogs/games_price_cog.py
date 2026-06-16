@@ -1043,8 +1043,6 @@ class PriceCog(commands.Cog):
 
         # ── Next round or recap ──
         await asyncio.sleep(5)
-
-        # Re-read total_rounds in case host added rounds
         await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
 
     # ── Recap ────────────────────────────────────────────────────────

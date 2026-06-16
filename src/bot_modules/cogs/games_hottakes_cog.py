@@ -19,6 +19,7 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
+from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games_hottakes.embeds import (
     build_lobby_embed,
     build_recap_embed,
@@ -529,27 +530,15 @@ class HotTakesCog(commands.Cog):
         host_id = int(row["host_id"])
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
-        try:
-            await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
-        except Exception:
-            pass
-        self.bot.active_views[game_id] = _RecoverySentinel()
-        asyncio.create_task(
+        await start_redrive(
+            self.bot, game_id, message,
             self._run_voting(
-                interaction=None,
-                game_id=game_id,
-                host_id=host_id,
-                host_name=host_name,
-                channel=channel,
-                resume=True,
-            )
+                interaction=None, game_id=game_id, host_id=host_id,
+                host_name=host_name, channel=channel, resume=True,
+            ),
+            channel=channel, log_label=f"hottakes game {game_id} (re-driving voting)",
         )
-        log.info("Recovering hottakes game %s (re-driving voting) in #%s", game_id, getattr(channel, "name", channel.id))
         return True
-
-
-class _RecoverySentinel:
-    """Placeholder kept in bot.active_views while a re-driven loop spins up."""
 
 
 async def setup(bot: commands.Bot):

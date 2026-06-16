@@ -25,6 +25,7 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     resolve_name,
 )
+from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import get_clapback_prompt, has_clapback_prompts
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.command_groups import play
@@ -570,18 +571,12 @@ class ClapbackCog(commands.Cog):
         if not payload.get("config"):
             return False
         game_id = row["game_id"]
-        try:
-            await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
-        except Exception:
-            pass
-        # _is_cancelled() treats an absent active_views entry as cancelled, so
-        # seed a placeholder until _run_game posts its first phase view.
-        self.bot.active_views[game_id] = _RecoverySentinel()
         self._game_cancelled.discard(game_id)
-        asyncio.create_task(self._run_game(game_id, channel, payload))
-        log.info(
-            "Recovering clapback game %s (resuming at round %d) in #%s",
-            game_id, len(payload.get("round_history", [])) + 1, getattr(channel, "name", channel.id),
+        resume_round = len(payload.get("round_history", [])) + 1
+        await start_redrive(
+            self.bot, game_id, message,
+            self._run_game(game_id, channel, payload),
+            channel=channel, log_label=f"clapback game {game_id} (resuming at round {resume_round})",
         )
         return True
 
@@ -1169,15 +1164,6 @@ class ClapbackCog(commands.Cog):
         self._submit_events.pop(game_id, None)
         self._vote_events.pop(game_id, None)
         self._game_cancelled.discard(game_id)
-
-
-class _RecoverySentinel:
-    """Placeholder kept in bot.active_views while a re-driven game spins up.
-
-    _is_cancelled() treats an absent active_views entry as a cancelled game, so
-    the re-driven loop needs *something* registered until it posts its first
-    phase view.
-    """
 
 
 async def setup(bot: commands.Bot):
