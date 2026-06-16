@@ -3258,3 +3258,109 @@ textarea.field-input { resize: vertical; }
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
+
+/* ════════════════════════════════════════════════════════════════════
+   Theme consistency backstop
+   ────────────────────────────────────────────────────────────────────
+   Catches native <select> chrome and a few legacy button classes that
+   were never given dashboard styling, so they stop rendering with the
+   browser's light default look. Low specificity / appended last, so the
+   per-domain rules above still win where they're more specific.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Dropdowns ──────────────────────────────────────────────────────
+   Baseline keeps any unstyled <select> dark instead of system-white. */
+select {
+  background-color: var(--bg-input);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  font-family: inherit;
+  font-size: 13px;
+}
+select:focus {
+  outline: none;
+  border-color: var(--gold-solid);
+}
+/* Replace the native arrow with a themed chevron on single selects.
+   Sets only background-image (not the shorthand), so the per-domain
+   background-color above and on .field/.controls selects is preserved. */
+select:not([multiple]) {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2380848e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 11px;
+  padding-right: 26px;
+}
+select:not([multiple]):hover { border-color: var(--ink-mute); }
+select option { background: var(--bg-input); color: var(--ink); }
+/* Games panels wrap the control in <label> (.field > label > select), whose
+   grouped rule sets `background:` shorthand and out-specifies the chevron
+   rule above — restore the arrow + clearance here at higher specificity. */
+.field > label > select:not([multiple]) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2380848e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 11px;
+  padding-right: 26px;
+}
+
+/* ── Tab strip (config-bios, gender-admin) ─────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--rule);
+}
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.tab-btn:hover { color: var(--ink-bright); }
+.tab-btn.active {
+  color: var(--gold-solid);
+  border-bottom-color: var(--gold-solid);
+}
+
+/* ── Expand/collapse toggle in tables (invite-effectiveness) ───────── */
+.expand-btn {
+  background: none;
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  padding: 3px 7px;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.expand-btn:hover {
+  background: var(--hover);
+  border-color: var(--ink-mute);
+  color: var(--ink-bright);
+}
+
+/* ── Secondary button alias ────────────────────────────────────────
+   Used as `.btn .btn-secondary` (config-bios, rules-watch); makes the
+   neutral intent explicit rather than relying on the bare .btn fallback. */
+.btn-secondary {
+  background: var(--bg-input);
+  border-color: var(--rule);
+  color: var(--ink);
+}
+.btn-secondary:hover {
+  background: var(--hover);
+  border-color: var(--ink-mute);
+  color: var(--ink-bright);
+}
