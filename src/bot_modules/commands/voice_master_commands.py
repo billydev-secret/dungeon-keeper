@@ -52,11 +52,11 @@ from bot_modules.voice_master.logic import (
     format_rename_result,
     format_reset_result,
     format_transfer_result,
+    panel_group_placeholder,
+    panel_metas_for_group,
     parse_limit_input,
     plan_lock_text_grants,
     plan_unlock_overwrite_cleanup,
-    panel_group_placeholder,
-    panel_metas_for_group,
     should_save_profile_field,
     user_picker_labels,
     validate_invite_target,
@@ -748,7 +748,6 @@ class _PanelSelect(
     """
 
     def __init__(self, group: str) -> None:
-        self._group = group
         options = [
             discord.SelectOption(label=m.label, value=m.action, emoji=m.emoji)
             for m in panel_metas_for_group(group)

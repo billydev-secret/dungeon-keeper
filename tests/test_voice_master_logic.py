@@ -1254,7 +1254,6 @@ def test_panel_button_meta_known_action():
     assert isinstance(meta, PanelButtonMeta)
     assert meta.label == "Lock"
     assert meta.emoji == "🔒"
-    assert meta.style_name == "secondary"
 
 
 def test_panel_button_meta_unknown_action_returns_none():
@@ -1264,12 +1263,6 @@ def test_panel_button_meta_unknown_action_returns_none():
 def test_all_panel_button_metas_returns_canonical_order():
     metas = all_panel_button_metas()
     assert [m.action for m in metas] == list(PANEL_BUTTON_ORDER)
-
-
-def test_all_panel_button_metas_style_names_are_valid():
-    valid = {"primary", "secondary", "success", "danger"}
-    for meta in all_panel_button_metas():
-        assert meta.style_name in valid
 
 
 # ── Panel select groups ──────────────────────────────────────────────

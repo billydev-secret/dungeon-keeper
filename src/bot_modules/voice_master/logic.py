@@ -834,16 +834,10 @@ def user_picker_labels(mode: str) -> UserPickerLabels:
 
 @dataclass(frozen=True)
 class PanelButtonMeta:
-    """Pure description of one panel button.
-
-    ``style_name`` is one of ``"primary"``, ``"secondary"``, ``"success"``,
-    ``"danger"`` — the commands layer maps these to
-    ``discord.ButtonStyle`` enum members.
-    """
+    """Pure description of one panel action — its dropdown label + emoji."""
     action: str
     label: str
     emoji: str
-    style_name: str
 
 
 PANEL_BUTTON_ORDER: tuple[str, ...] = (
@@ -854,16 +848,16 @@ PANEL_BUTTON_ORDER: tuple[str, ...] = (
 
 
 _PANEL_BUTTON_META: dict[str, PanelButtonMeta] = {
-    "lock":     PanelButtonMeta("lock",     "Lock",     "🔒",   "secondary"),
-    "unlock":   PanelButtonMeta("unlock",   "Unlock",   "🔓",   "secondary"),
-    "hide":     PanelButtonMeta("hide",     "Hide",     "👁️",  "secondary"),
-    "unhide":   PanelButtonMeta("unhide",   "Unhide",   "👀",   "secondary"),
-    "rename":   PanelButtonMeta("rename",   "Rename",   "✏️",  "primary"),
-    "limit":    PanelButtonMeta("limit",    "Limit",    "🔢",   "primary"),
-    "invite":   PanelButtonMeta("invite",   "Invite",   "👋",   "success"),
-    "kick":     PanelButtonMeta("kick",     "Kick",     "🚫",   "danger"),
-    "transfer": PanelButtonMeta("transfer", "Transfer", "👑",   "primary"),
-    "reset":    PanelButtonMeta("reset",    "Reset",    "🧹",   "secondary"),
+    "lock":     PanelButtonMeta("lock",     "Lock",     "🔒"),
+    "unlock":   PanelButtonMeta("unlock",   "Unlock",   "🔓"),
+    "hide":     PanelButtonMeta("hide",     "Hide",     "👁️"),
+    "unhide":   PanelButtonMeta("unhide",   "Unhide",   "👀"),
+    "rename":   PanelButtonMeta("rename",   "Rename",   "✏️"),
+    "limit":    PanelButtonMeta("limit",    "Limit",    "🔢"),
+    "invite":   PanelButtonMeta("invite",   "Invite",   "👋"),
+    "kick":     PanelButtonMeta("kick",     "Kick",     "🚫"),
+    "transfer": PanelButtonMeta("transfer", "Transfer", "👑"),
+    "reset":    PanelButtonMeta("reset",    "Reset",    "🧹"),
 }
 
 
@@ -882,16 +876,17 @@ def all_panel_button_metas() -> list[PanelButtonMeta]:
 # ---------------------------------------------------------------------------
 #
 # The panel is presented as two grouped select menus rather than a wall of
-# buttons. Every action belongs to exactly one group; the tuples below double
-# as the in-menu display order. The grouping is partition-checked in tests
-# against PANEL_BUTTON_ORDER so an action can never silently fall off the panel.
-
-PANEL_GROUP_ORDER: tuple[str, ...] = ("settings", "permissions")
+# buttons. Each group's tuple is its in-menu display order; PANEL_GROUP_ORDER
+# (the order the menus themselves appear) derives from the dict so the two
+# can't drift. The grouping is partition-checked in tests against
+# PANEL_BUTTON_ORDER so an action can never silently fall off the panel.
 
 _GROUP_ACTIONS: dict[str, tuple[str, ...]] = {
     "settings": ("rename", "limit", "hide", "unhide", "reset"),
     "permissions": ("lock", "unlock", "invite", "kick", "transfer"),
 }
+
+PANEL_GROUP_ORDER: tuple[str, ...] = tuple(_GROUP_ACTIONS)
 
 _GROUP_PLACEHOLDER: dict[str, str] = {
     "settings": "Change channel settings",
