@@ -1,10 +1,16 @@
-import { loadConfig, loadChannels, loadRoles, channelSelect, channelSelectMulti, roleSelect, apiPut, showStatus } from "../config-helpers.js";
+import {
+  loadConfig, loadChannels, loadRoles, loadMembers,
+  mountChannelPicker, mountRolePicker, mountChannelMultiPicker, mountMemberMultiPicker,
+  apiPut, showStatus,
+} from "../config-helpers.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
 
   (async () => {
-    const [config, channels, roles] = await Promise.all([loadConfig(), loadChannels(), loadRoles()]);
+    const [config, channels, roles, members] = await Promise.all([
+      loadConfig(), loadChannels(), loadRoles(), loadMembers(),
+    ]);
     const xp = config.xp;
 
     container.innerHTML = `
@@ -16,25 +22,25 @@ export function mount(container) {
         <form class="form" data-form>
           <div class="field">
             <label>Level 5 Role</label>
-            <select name="level_5_role_id">${roleSelect(roles, xp.level_5_role_id)}</select>
+            <div data-picker="level_5_role_id"></div>
           </div>
           <div class="field">
             <label>Level 5 Log Channel</label>
-            <select name="level_5_log_channel_id">${channelSelect(channels, xp.level_5_log_channel_id)}</select>
+            <div data-picker="level_5_log_channel_id"></div>
           </div>
           <div class="field">
             <label>Level-Up Log Channel</label>
-            <select name="level_up_log_channel_id">${channelSelect(channels, xp.level_up_log_channel_id)}</select>
+            <div data-picker="level_up_log_channel_id"></div>
           </div>
           <div class="field">
-            <label>XP Grant Allowed User IDs</label>
-            <input type="text" name="xp_grant_allowed_user_ids" value="${xp.xp_grant_allowed_user_ids.join(", ")}" />
-            <div class="field-hint">Comma-separated user IDs allowed to use /xp_give</div>
+            <label>XP Grant Allowed Users</label>
+            <div data-picker="xp_grant_allowed_user_ids"></div>
+            <div class="field-hint">Members allowed to use /xp_give — type to search, click to add</div>
           </div>
           <div class="field">
             <label>XP Excluded Channels</label>
-            <select name="xp_excluded_channel_ids" multiple size="6">${channelSelectMulti(channels, xp.xp_excluded_channel_ids)}</select>
-            <div class="field-hint">Channels where XP is not earned (Ctrl/Cmd-click to select multiple)</div>
+            <div data-picker="xp_excluded_channel_ids"></div>
+            <div class="field-hint">Channels where XP is not earned — type to search, click to add</div>
           </div>
 
           <details class="form-section" open>
@@ -130,16 +136,23 @@ export function mount(container) {
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");
+
+    const level5Role = mountRolePicker(form.querySelector('[data-picker="level_5_role_id"]'), roles, xp.level_5_role_id);
+    const level5Log = mountChannelPicker(form.querySelector('[data-picker="level_5_log_channel_id"]'), channels, xp.level_5_log_channel_id);
+    const levelUpLog = mountChannelPicker(form.querySelector('[data-picker="level_up_log_channel_id"]'), channels, xp.level_up_log_channel_id);
+    const grantUsers = mountMemberMultiPicker(form.querySelector('[data-picker="xp_grant_allowed_user_ids"]'), members, xp.xp_grant_allowed_user_ids);
+    const excludedChannels = mountChannelMultiPicker(form.querySelector('[data-picker="xp_excluded_channel_ids"]'), channels, xp.xp_excluded_channel_ids);
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
       try {
         await apiPut("/api/config/xp", {
-          level_5_role_id: fd.get("level_5_role_id"),
-          level_5_log_channel_id: fd.get("level_5_log_channel_id"),
-          level_up_log_channel_id: fd.get("level_up_log_channel_id"),
-          xp_grant_allowed_user_ids: fd.get("xp_grant_allowed_user_ids").split(",").map((s) => s.trim()).filter(Boolean),
-          xp_excluded_channel_ids: Array.from(form.querySelector('select[name="xp_excluded_channel_ids"]').selectedOptions).map((o) => o.value),
+          level_5_role_id: level5Role.getValue(),
+          level_5_log_channel_id: level5Log.getValue(),
+          level_up_log_channel_id: levelUpLog.getValue(),
+          xp_grant_allowed_user_ids: grantUsers.getValues(),
+          xp_excluded_channel_ids: excludedChannels.getValues(),
           // Algorithm coefficients
           message_word_xp: parseFloat(fd.get("message_word_xp")),
           reply_bonus_xp: parseFloat(fd.get("reply_bonus_xp")),

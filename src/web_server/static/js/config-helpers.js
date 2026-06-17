@@ -1,5 +1,6 @@
 // Shared helpers for config panels.
 import { api } from "./api.js";
+import { filterSelect, multiFilterSelect } from "./filter-select.js";
 
 // HTML-escape a value before interpolating it into innerHTML.
 // Use this whenever a Discord name (channel, role, category) goes into a template string.
@@ -52,6 +53,86 @@ export async function loadRoles() {
   if (_roles) return _roles;
   try { _roles = await api("/api/meta/roles"); } catch (_) { _roles = []; }
   return _roles;
+}
+
+let _members = null;
+export async function loadMembers() {
+  if (_members) return _members;
+  try { _members = await api("/api/meta/members"); } catch (_) { _members = []; }
+  return _members;
+}
+
+// ── Searchable picker adapters ──────────────────────────────────────────
+// Convert the /api/meta/* records into the {id, label} option shape the
+// filter-select widgets expect, then mount a picker in place of a slot node.
+// Panels render a placeholder (e.g. <span data-picker="welcome_channel_id">)
+// in their innerHTML and call one of the mount* helpers below afterwards,
+// holding the returned handle to read getValue()/getValues() on save.
+
+export function toChannelOptions(channels) {
+  return channels.map((c) => ({ id: String(c.id), label: `#${c.name}` }));
+}
+export function toRoleOptions(roles) {
+  return roles.map((r) => ({ id: String(r.id), label: `@${r.name}` }));
+}
+export function toCategoryOptions(categories) {
+  return categories.map((c) => ({ id: String(c.id), label: c.name }));
+}
+export function toMemberOptions(members) {
+  return members.map((m) => {
+    const left = m.left_server ? " (left)" : "";
+    const base = m.display_name && m.display_name !== m.name
+      ? `${m.display_name} (${m.name})`
+      : m.name;
+    return { id: String(m.id), label: `${base}${left}` };
+  });
+}
+
+function _normalizeIds(values) {
+  if (Array.isArray(values)) return values.map(String).filter(Boolean);
+  return String(values || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+// Mount a single-value searchable picker, replacing `slotEl`. `opts` is passed
+// through to filterSelect (so callers can supply `filter`, `emptyLabel`, etc.).
+export function mountPicker(slotEl, options, value, opts = {}) {
+  const fs = filterSelect(opts.placeholder || "Type to filter…", options, opts);
+  fs.setValue(value);
+  slotEl.replaceWith(fs.el);
+  return fs;
+}
+
+// Mount a multi-value chip picker, replacing `slotEl`.
+export function mountMultiPicker(slotEl, options, values, opts = {}) {
+  const fs = multiFilterSelect(opts.placeholder || "Type to filter…", options, opts);
+  fs.setValues(_normalizeIds(values));
+  slotEl.replaceWith(fs.el);
+  return fs;
+}
+
+// Typed conveniences — build the option list and the right empty sentinel.
+// Single-pickers default to emptyValue "0" (the unset id config uses) so
+// getValue() returns "0" when cleared, matching the old <select> behaviour.
+export function mountChannelPicker(slotEl, channels, value, opts = {}) {
+  return mountPicker(slotEl, toChannelOptions(channels), value,
+    { emptyValue: "0", emptyLabel: "(disabled)", ...opts });
+}
+export function mountRolePicker(slotEl, roles, value, opts = {}) {
+  return mountPicker(slotEl, toRoleOptions(roles), value,
+    { emptyValue: "0", emptyLabel: "(none)", ...opts });
+}
+export function mountCategoryPicker(slotEl, categories, value, opts = {}) {
+  return mountPicker(slotEl, toCategoryOptions(categories), value,
+    { emptyValue: "0", emptyLabel: "(none)", ...opts });
+}
+export function mountChannelMultiPicker(slotEl, channels, values, opts = {}) {
+  return mountMultiPicker(slotEl, toChannelOptions(channels), values, opts);
+}
+export function mountRoleMultiPicker(slotEl, roles, values, opts = {}) {
+  return mountMultiPicker(slotEl, toRoleOptions(roles), values, opts);
+}
+export function mountMemberMultiPicker(slotEl, members, values, opts = {}) {
+  return mountMultiPicker(slotEl, toMemberOptions(members), values, opts);
 }
 
 export function channelName(channels, id) {
