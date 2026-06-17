@@ -1,7 +1,8 @@
-"""Tests for the extracted Free For All pure-logic modules.
+"""Tests for the extracted Truth-or-Dare card (FFA) pure-logic modules.
 
-Covers ``bot_modules/games_ffa/logic.py`` (anonymous reply append) and
-``bot_modules/games_ffa/embeds.py`` (FFA status-bar embed). Mirrors
+Covers ``bot_modules/games_ffa/logic.py`` (anonymous reply append),
+``bot_modules/games_ffa/embeds.py`` (card status-bar embed), and
+``bot_modules/games_ffa/prompts.py`` (prompt bank + picker). Mirrors
 the pressure_cooker / traditional pattern: the cog file stays thin;
 this module proves the extracted pieces work without spinning up
 Discord.
@@ -11,6 +12,12 @@ from __future__ import annotations
 
 from bot_modules.games_ffa.embeds import build_ffa_embed
 from bot_modules.games_ffa.logic import add_anon_reply
+from bot_modules.games_ffa.prompts import (
+    DARE,
+    TRUTH,
+    label_for_kind,
+    pick_prompt,
+)
 
 
 # ── add_anon_reply ───────────────────────────────────────────────────
@@ -77,62 +84,89 @@ def test_add_anon_reply_keeps_other_payload_keys_untouched():
 # ── build_ffa_embed ──────────────────────────────────────────────────
 
 
-def test_build_ffa_embed_has_title_and_question_field():
-    embed = build_ffa_embed("What's your favourite colour?")
+def test_build_ffa_embed_title_has_label_and_number():
+    embed = build_ffa_embed("TRUTH", 5)
     assert embed.title is not None
-    assert "FREE FOR ALL" in embed.title
-
-    by_name = {f.name: f.value or "" for f in embed.fields}
-    assert "Question" in by_name
-    assert "What's your favourite colour?" in by_name["Question"]
+    assert "TRUTH" in embed.title
+    assert "#5" in embed.title
 
 
-def test_build_ffa_embed_renders_question_as_h1():
-    embed = build_ffa_embed("hello")
-    by_name = {f.name: f.value or "" for f in embed.fields}
-    assert by_name["Question"].startswith("# ")
+def test_build_ffa_embed_references_card_attachment():
+    from bot_modules.games_ffa.embeds import CARD_FILENAME
 
-
-def test_build_ffa_embed_escapes_markdown_in_question():
-    """A question containing markdown shouldn't break rendering."""
-    embed = build_ffa_embed("**not bold** _nor italic_")
-    by_name = {f.name: f.value or "" for f in embed.fields}
-    # The asterisks/underscores should be escaped with backslashes
-    assert "\\*\\*not bold\\*\\*" in by_name["Question"]
-    assert "\\_nor italic\\_" in by_name["Question"]
+    embed = build_ffa_embed("DARE", 1)
+    assert embed.image.url == f"attachment://{CARD_FILENAME}"
 
 
 def test_build_ffa_embed_footer_hides_count_when_zero():
     """Empty game shouldn't say "0 anonymous replies"."""
-    embed = build_ffa_embed("Q?", reply_count=0)
+    embed = build_ffa_embed("TRUTH", 1, reply_count=0)
     assert embed.footer.text is not None
-    assert "Free For All" in embed.footer.text
+    assert "Truth or Dare" in embed.footer.text
     assert "anonymous replies" not in embed.footer.text
 
 
 def test_build_ffa_embed_footer_shows_count_when_positive():
-    embed = build_ffa_embed("Q?", reply_count=5)
+    embed = build_ffa_embed("TRUTH", 1, reply_count=5)
     assert embed.footer.text is not None
     assert "5 anonymous replies" in embed.footer.text
 
 
 def test_build_ffa_embed_footer_singular_or_plural_count_is_literal():
-    """The current cog uses the same string for 1 reply as for many —
+    """The cog uses the same string for 1 reply as for many —
     pin the behaviour so a future change is visible."""
-    embed = build_ffa_embed("Q?", reply_count=1)
+    embed = build_ffa_embed("TRUTH", 1, reply_count=1)
     assert embed.footer.text is not None
     assert "1 anonymous replies" in embed.footer.text
 
 
-def test_build_ffa_embed_has_golden_meadow_color():
+def test_build_ffa_embed_has_brand_color():
     from bot_modules.games.constants import BRAND_COLOR
 
-    embed = build_ffa_embed("Q?")
+    embed = build_ffa_embed("TRUTH", 1)
     assert embed.color is not None
     assert embed.color.value == BRAND_COLOR
 
 
 def test_build_ffa_embed_default_reply_count_is_zero():
-    embed = build_ffa_embed("Q?")
+    embed = build_ffa_embed("DARE", 2)
     assert embed.footer.text is not None
     assert "anonymous replies" not in embed.footer.text
+
+
+# ── pick_prompt / label_for_kind ─────────────────────────────────────
+
+
+def test_pick_prompt_truth_returns_truth_label():
+    label, text = pick_prompt("truth", nsfw=False)
+    assert label == TRUTH
+    assert isinstance(text, str) and text
+
+
+def test_pick_prompt_dare_returns_dare_label():
+    label, text = pick_prompt("dare", nsfw=True)
+    assert label == DARE
+    assert isinstance(text, str) and text
+
+
+def test_pick_prompt_random_always_returns_a_valid_label():
+    for _ in range(50):
+        label, text = pick_prompt("random", nsfw=False)
+        assert label in (TRUTH, DARE)
+        assert text
+
+
+def test_pick_prompt_nsfw_pulls_from_nsfw_bank():
+    from bot_modules.games_ffa.prompts import TRUTH_NSFW, TRUTH_SFW
+
+    sfw_only = set(TRUTH_SFW) - set(TRUTH_NSFW)
+    # Every nsfw truth pick should come from the nsfw bank.
+    for _ in range(50):
+        _, text = pick_prompt("truth", nsfw=True)
+        assert text not in sfw_only
+
+
+def test_label_for_kind_defaults_to_truth():
+    assert label_for_kind("dare") == DARE
+    assert label_for_kind("truth") == TRUTH
+    assert label_for_kind("random") == TRUTH

@@ -1,14 +1,14 @@
-"""Embed builders for the Free For All cog.
+"""Embed builder for the Free For All (Truth-or-Dare card) cog.
 
-These functions accept plain dicts/primitives and return
-``discord.Embed`` objects. They never call out to Discord — testable
-with no network and no mocks of the Bot/Guild API.
+The host posts a rendered prompt card; the embed wraps that image so the
+running anonymous-reply count and the CLOSED state can be updated in
+place by editing the embed (a bare image attachment has nothing to edit).
 
-The single embed shape :func:`build_ffa_embed` is rendered twice: once
-when the host posts the question (``reply_count=0``) and again every
-time an anonymous reply lands (``reply_count`` increments). The footer
-flips to include the running count once at least one reply is in so an
-empty game doesn't show "0 anonymous replies".
+:func:`build_ffa_embed` is rendered once when the card is posted
+(``reply_count=0``) and again every time an anonymous reply lands so the
+footer count stays in sync. The image is referenced via the
+``attachment://`` scheme — the cog sends the PNG as ``ffa.png`` alongside
+this embed.
 """
 
 from __future__ import annotations
@@ -17,26 +17,23 @@ import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 
+CARD_FILENAME = "ffa.png"
 
-def build_ffa_embed(question: str, reply_count: int = 0) -> discord.Embed:
-    """Build the main FFA embed shown alongside the reply button.
 
-    ``question`` is rendered as an H1 inside the field value (escaped
-    against markdown injection). ``reply_count`` controls whether the
-    footer shows just the game name or appends a running count of
-    anonymous replies — the cog calls this every time the count
-    changes so the embed stays in sync.
+def build_ffa_embed(label: str, number: int, reply_count: int = 0) -> discord.Embed:
+    """Build the embed that frames the prompt card.
+
+    ``label`` is "TRUTH" or "DARE" and ``number`` the per-channel count
+    (e.g. ``TRUTH #5``). ``reply_count`` controls whether the footer
+    appends a running tally of anonymous replies — the cog calls this
+    every time the count changes so the embed stays in sync.
     """
     embed = discord.Embed(
-        title=f"{GAME_ICONS['ffa']} FREE FOR ALL",
+        title=f"{GAME_ICONS['ffa']} {label} #{number}",
         color=BRAND_COLOR,
     )
-    embed.add_field(
-        name="Question",
-        value=f"# {discord.utils.escape_markdown(question)}",
-        inline=False,
-    )
-    footer_parts = [f"{GAME_ICONS['ffa']} Free For All"]
+    embed.set_image(url=f"attachment://{CARD_FILENAME}")
+    footer_parts = [f"{GAME_ICONS['ffa']} Truth or Dare"]
     if reply_count > 0:
         footer_parts.append(f"📊 {reply_count} anonymous replies")
     embed.set_footer(text=" • ".join(footer_parts))

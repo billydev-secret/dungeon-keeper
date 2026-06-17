@@ -16,7 +16,7 @@ CLAPBACK_WIN_COLOR = 0xFFD700   # Gold (winner / CLAPBACK moments)
 CLAPBACK_TIE_COLOR = 0x99AAB5   # Grey (ties)
 
 GAME_ICONS = {
-    'ffa': '📣',
+    'ffa': '🎭',
     'traditional': '🎲',
     'compliment': '💛',
     'mfk': '💍',
@@ -38,7 +38,7 @@ GAME_ICONS = {
 }
 
 GAME_NAMES = {
-    'ffa': 'Free For All',
+    'ffa': 'Truth or Dare Cards',
     'traditional': 'Truth or Dare',
     'compliment': 'Spin the Compliment',
     'mfk': 'Marry, Fornicate, Kiss',
@@ -82,7 +82,12 @@ SCHEDULABLE_GAME_TYPES = [
 # Games with no setup options have an empty list. Mirrors each cog's slash params.
 SCHEDULE_OPTION_SCHEMA = {
     'ffa': [
-        {'name': 'question', 'label': 'Opening question', 'type': 'str', 'default': ''},
+        {'name': 'kind', 'label': 'Prompt type', 'type': 'choice', 'default': 'random',
+         'choices': [{'value': 'random', 'label': 'Random'},
+                     {'value': 'truth', 'label': 'Truth'},
+                     {'value': 'dare', 'label': 'Dare'}]},
+        {'name': 'nsfw', 'label': 'Use spicier (NSFW) prompts', 'type': 'bool', 'default': False},
+        {'name': 'prompt', 'label': 'Custom prompt (optional)', 'type': 'str', 'default': ''},
     ],
     'traditional': [],
     'compliment': [],
@@ -166,13 +171,14 @@ SCHEDULE_OPTION_SCHEMA = {
 
 HOW_TO_PLAY = {
     'ffa': (
-        "🎤 **Free For All**\n"
-        "The host poses a question and the whole room answers.\n\n"
-        "1. Read the question on the embed\n"
-        "2. Reply in the channel with your answer — or click **Reply Anonymously** "
-        "to send it through a popup that hides your name\n"
-        "3. Anonymous replies are posted by the bot with no attribution\n\n"
-        "💡 The host can close the game whenever the conversation winds down."
+        "🎭 **Truth or Dare Cards**\n"
+        "The host drops a Truth or Dare card and a thread opens for replies.\n\n"
+        "1. Read the prompt on the card (TRUTH or DARE)\n"
+        "2. Reply in the card's thread — or click **Reply Anonymously** to send "
+        "it through a popup that hides your name\n"
+        "3. Anonymous replies are posted into the thread by the bot with no attribution\n\n"
+        "💡 The host picks Truth/Dare/random and can toggle the spicier (NSFW) bank, "
+        "or write their own prompt. Close the game whenever it winds down."
     ),
     'traditional': (
         "🎲 **Truth or Dare**\n"
