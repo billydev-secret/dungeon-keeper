@@ -16,15 +16,16 @@ import pytest
 
 from bot_modules.games_traditional.embeds import (
     build_lobby_embed,
+    build_question_embed,
     build_recap_embed,
     build_tod_embed,
-    format_question_post,
 )
 from bot_modules.games_traditional.logic import (
     CAT_LABELS,
     CATEGORIES,
     asked_counts_by_user,
     available_targets,
+    question_pool_size,
     record_asked,
     select_next_question_target,
     summarize_asked_by_category,
@@ -238,6 +239,26 @@ def test_summarize_asked_by_category_tolerates_unknown_categories():
     assert result["sfw_truth"] == 0
 
 
+# ── question_pool_size ───────────────────────────────────────────────
+
+
+def test_question_pool_size_sums_pref_combos():
+    prefs = {"1": ["sfw_truth", "sfw_dare"], "2": ["nsfw_dare"]}
+    assert question_pool_size(prefs, {}) == 3
+
+
+def test_question_pool_size_empty():
+    assert question_pool_size({}, {}) == 0
+
+
+def test_question_pool_size_counts_asked_combos_dropped_from_prefs():
+    """A category asked then removed from a player's prefs still counts,
+    so the denominator never drops below the number already asked."""
+    prefs = {"1": ["sfw_truth"]}  # player dropped sfw_dare after being asked
+    asked = {"1:sfw_truth": "Q", "1:sfw_dare": "Q"}
+    assert question_pool_size(prefs, asked) == 2
+
+
 # ── build_tod_embed ──────────────────────────────────────────────────
 
 
@@ -260,7 +281,21 @@ def test_build_tod_embed_counts_participants_and_asked():
     embed = build_tod_embed("Alice", payload)
     by_name = {f.name: f.value for f in embed.fields}
     assert by_name["Participants"] == "3"
-    assert by_name["Questions Asked"] == "2"
+    # No prefs in the payload, so the pool is just the asked combos: 2 / 2.
+    assert by_name["Questions Asked"] == "2 / 2"
+
+
+def test_build_tod_embed_shows_progress_against_pref_pool():
+    """The 'Questions Asked' field reports X / Y against the full pool of
+    declared (player, category) combinations."""
+    payload = {
+        "participants": [1, 2],
+        "prefs": {"1": ["sfw_truth", "sfw_dare"], "2": ["nsfw_dare"]},
+        "asked": {"1:sfw_truth": "Q"},
+    }
+    embed = build_tod_embed("Alice", payload)
+    by_name = {f.name: f.value for f in embed.fields}
+    assert by_name["Questions Asked"] == "1 / 3"
 
 
 def test_build_tod_embed_closed_flag_changes_title():
@@ -329,28 +364,53 @@ def test_build_lobby_embed_shows_host_name():
     assert by_name["Questions Asked"] == "0"
 
 
-# ── format_question_post ─────────────────────────────────────────────
+# ── build_question_embed ─────────────────────────────────────────────
 
 
-def test_format_question_post_includes_category_label_and_question():
-    text = format_question_post("sfw_truth", "<@42>", "What's your favourite color?")
-    assert "SFW Truth" in text
-    assert "<@42>" in text
-    assert "What's your favourite color?" in text
+def test_build_question_embed_includes_category_label_and_question():
+    embed = build_question_embed("sfw_truth", "What's your favourite color?", "Alice")
+    assert "SFW TRUTH" in embed.title
+    assert "What's your favourite color?" in embed.description
+    assert embed.author.name == "For Alice"
 
 
-def test_format_question_post_uses_category_label_lookup():
+def test_build_question_embed_uses_category_label_lookup():
     """Known categories render as their friendly label, not the raw key."""
-    text = format_question_post("nsfw_dare", "<@1>", "Q?")
-    assert CAT_LABELS["nsfw_dare"] in text
-    assert "nsfw_dare" not in text
+    embed = build_question_embed("nsfw_dare", "Q?")
+    assert CAT_LABELS["nsfw_dare"].upper() in embed.title
+    assert "nsfw_dare" not in embed.title
 
 
-def test_format_question_post_falls_back_to_raw_category_when_unknown():
-    """Unknown category keys (stale payloads) shouldn't crash — they're
-    used verbatim."""
-    text = format_question_post("legacy_cat", "<@1>", "Q?")
-    assert "legacy_cat" in text
+def test_build_question_embed_distinct_color_per_category():
+    """Each category carries its own accent color so cards differ at a glance."""
+    colors = {
+        cat: build_question_embed(cat, "Q?").color.value for cat in CATEGORIES
+    }
+    assert len(set(colors.values())) == len(CATEGORIES)
+
+
+def test_build_question_embed_preserves_markdown():
+    """The question's markdown is left intact so the embed renders it."""
+    embed = build_question_embed("sfw_truth", "*emphasised*")
+    assert "*emphasised*" in embed.description
+
+
+def test_build_question_embed_keeps_multiline_inside_blockquote():
+    embed = build_question_embed("sfw_truth", "line one\nline two")
+    assert "> line one" in embed.description
+    assert "> line two" in embed.description
+
+
+def test_build_question_embed_falls_back_when_category_unknown():
+    """Unknown category keys (stale payloads) shouldn't crash — they fall
+    back to a neutral style and use the raw key as the label."""
+    embed = build_question_embed("legacy_cat", "Q?")
+    assert "LEGACY_CAT" in embed.title
+
+
+def test_build_question_embed_omits_author_without_target():
+    embed = build_question_embed("sfw_dare", "Q?")
+    assert embed.author.name is None
 
 
 # ── CATEGORIES / CAT_LABELS sanity ──────────────────────────────────

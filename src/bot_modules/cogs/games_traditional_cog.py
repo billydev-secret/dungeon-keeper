@@ -19,9 +19,9 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games_traditional.embeds import (
     build_lobby_embed,
+    build_question_embed,
     build_recap_embed,
     build_tod_embed,
-    format_question_post,
 )
 from bot_modules.games_traditional.logic import (
     CAT_LABELS,
@@ -62,7 +62,10 @@ class AskQuestionModal(discord.ui.Modal):
         target_member = interaction.guild.get_member(int(self.target_id)) if interaction.guild else None
         mention = target_member.mention if target_member else f"**{self.target_name}**"
 
-        await self.channel.send(format_question_post(self.cat, mention, self.question.value))
+        await self.channel.send(
+            content=mention,
+            embed=build_question_embed(self.cat, self.question.value, self.target_name),
+        )
 
         await interaction.response.defer()
 

@@ -12,9 +12,25 @@ from typing import Any
 import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
-from bot_modules.games_traditional.logic import CATEGORIES, CAT_LABELS, summarize_asked_by_category
+from bot_modules.games_traditional.logic import (
+    CATEGORIES,
+    CAT_LABELS,
+    question_pool_size,
+    summarize_asked_by_category,
+)
 
 _RESULTS_GREY = 0x808080
+
+# Per-category card styling: (emoji, accent color). Truths are cool-toned
+# and inquisitive; dares are warm-toned and bold; the NSFW variants get
+# spicier glyphs and deeper colors so the card reads at a glance.
+_CARD_STYLE: dict[str, tuple[str, int]] = {
+    "sfw_truth":  ("💭", 0x4E9AF1),  # blue
+    "sfw_dare":   ("🔥", 0xFF6B35),  # orange
+    "nsfw_truth": ("💋", 0x9B59B6),  # purple
+    "nsfw_dare":  ("😈", 0xED4245),  # red
+}
+_CARD_FALLBACK: tuple[str, int] = ("🎲", BRAND_COLOR)
 
 
 def build_tod_embed(
@@ -34,9 +50,12 @@ def build_tod_embed(
     embed.add_field(name="Participants", value=str(len(participants)), inline=True)
 
     asked: dict[str, str] = payload.get("asked", {})
-    embed.add_field(name="Questions Asked", value=str(len(asked)), inline=True)
-
     prefs: dict[str, list[str]] = payload.get("prefs", {})
+
+    total_pool = question_pool_size(prefs, asked)
+    asked_value = f"{len(asked)} / {total_pool}" if total_pool else str(len(asked))
+    embed.add_field(name="Questions Asked", value=asked_value, inline=True)
+
     for cat in CATEGORIES:
         members_in_cat = [
             (names.get(uid, uid) if names else uid)
@@ -93,14 +112,35 @@ def build_lobby_embed(host_name: str) -> discord.Embed:
     return embed
 
 
-def format_question_post(category: str, target_mention: str, question: str) -> str:
-    """Format the public message announcing a question to the channel.
+def build_question_embed(
+    category: str,
+    question: str,
+    target_name: str | None = None,
+) -> discord.Embed:
+    """Build the question "card" posted to the channel when a host asks.
 
-    Centralized so the wording can be tested and so future variants
-    (DM mode, anonymous mode) can share the same template.
+    Each category gets its own emoji + accent color so the card reads at
+    a glance. The target's ping lives in the message ``content`` (embeds
+    never fire notifications), so this card carries the display name in
+    its author line instead.
+
+    Unknown category keys (stale payloads) fall back to a neutral style
+    rather than crashing — callers can pass legacy keys safely.
+
+    The question's own markdown is left intact so embeds render it (bold,
+    italic, etc.). Newlines are indented so a multi-line question stays
+    inside the blockquote instead of spilling out after the first line.
     """
+    emoji, color = _CARD_STYLE.get(category, _CARD_FALLBACK)
     label = CAT_LABELS.get(category, category)
-    return (
-        f"**{GAME_ICONS['traditional']} {label}** for {target_mention}\n"
-        f"**{question}**"
+
+    quoted = "> " + question.replace("\n", "\n> ")
+    embed = discord.Embed(
+        title=f"{emoji} {label.upper()}",
+        description=quoted,
+        color=color,
     )
+    if target_name:
+        embed.set_author(name=f"For {target_name}")
+    embed.set_footer(text=f"{GAME_ICONS['traditional']} Truth or Dare")
+    return embed

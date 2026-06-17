@@ -152,3 +152,17 @@ def summarize_asked_by_category(asked: dict[str, str]) -> dict[str, int]:
         _, cat = key.rsplit(":", 1)
         by_cat[cat] = by_cat.get(cat, 0) + 1
     return by_cat
+
+
+def question_pool_size(prefs: dict[str, list[str]], asked: dict[str, str]) -> int:
+    """Total number of distinct ``(player, category)`` questions in play.
+
+    This is the denominator for the "X / Y asked" progress report: every
+    preference combo currently declared, unioned with anything already
+    asked. The union keeps the total ``>= len(asked)`` even if a player
+    drops a preference after being asked that category, so the progress
+    never reads as more-asked-than-possible.
+    """
+    pool = {f"{uid}:{cat}" for uid, cats in prefs.items() for cat in cats}
+    pool |= set(asked.keys())
+    return len(pool)
