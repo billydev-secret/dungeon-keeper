@@ -18,6 +18,7 @@ from bot_modules.core.db_utils import (
     get_grant_permissions,
     get_grant_roles,
     open_db,
+    parse_bool,
     remove_grant_permission,
     set_config_value,
     upsert_grant_role,
@@ -145,6 +146,11 @@ def _float_val(conn, key: str, default: float = 0.0, guild_id: int = 0) -> float
         return float(raw)
     except (TypeError, ValueError):
         return default
+
+
+def _bool_val(conn, key: str, default: bool = False, guild_id: int = 0) -> bool:
+    raw = get_config_value(conn, key, "1" if default else "0", guild_id)
+    return parse_bool(raw)
 
 
 def _xp_coefficients(conn, guild_id: int = 0) -> dict:
@@ -560,6 +566,9 @@ async def get_config(
                     "welcome_ping_role_id": str(
                         _int_val(conn, "welcome_ping_role_id", guild_id=guild_id)
                     ),
+                    "welcome_ping_member": _bool_val(
+                        conn, "welcome_ping_member", guild_id=guild_id
+                    ),
                     "welcome_trigger": _str_val(
                         conn, "welcome_trigger", "join", guild_id=guild_id
                     ),
@@ -883,6 +892,7 @@ class WelcomeConfigUpdate(BaseModel):
     welcome_channel_id: str | None = None
     welcome_message: str | None = None
     welcome_ping_role_id: str | None = None
+    welcome_ping_member: bool | None = None
     welcome_trigger: str | None = None
     unverified_role_id: str | None = None
     leave_channel_id: str | None = None
@@ -918,6 +928,13 @@ async def update_welcome(
 
     def _q():
         with ctx.open_db() as conn:
+            if body.welcome_ping_member is not None:
+                set_config_value(
+                    conn,
+                    "welcome_ping_member",
+                    "1" if body.welcome_ping_member else "0",
+                    guild_id,
+                )
             for field_name, config_key in _FIELDS.items():
                 val = getattr(body, field_name)
                 if val is not None:

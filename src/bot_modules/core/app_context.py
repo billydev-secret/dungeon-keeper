@@ -23,6 +23,7 @@ from bot_modules.core.db_utils import (
     get_config_value,
     get_grant_roles,
     open_db,
+    parse_bool,
     remove_config_id,
     set_config_value as _db_set_config_value,
 )
@@ -301,6 +302,7 @@ class GuildConfig:
     welcome_channel_id: int
     welcome_message: str
     welcome_ping_role_id: int
+    welcome_ping_member: bool
     welcome_trigger: str
     unverified_role_id: int
     greeter_chat_channel_id: int
@@ -371,6 +373,7 @@ class GuildConfig:
             welcome_channel_id=_int("welcome_channel_id"),
             welcome_message=_val("welcome_message", DEFAULT_WELCOME_MESSAGE),
             welcome_ping_role_id=_int("welcome_ping_role_id"),
+            welcome_ping_member=parse_bool(_val("welcome_ping_member", "false")),
             welcome_trigger=_val("welcome_trigger", "join"),
             unverified_role_id=_int("unverified_role_id"),
             greeter_chat_channel_id=_int("greeter_chat_channel_id"),

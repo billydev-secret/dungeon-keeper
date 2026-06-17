@@ -170,6 +170,7 @@ def test_guild_config_member_is_mod_matches_mod_or_admin_role():
         welcome_channel_id=0,
         welcome_message="",
         welcome_ping_role_id=0,
+        welcome_ping_member=False,
         welcome_trigger="join",
         unverified_role_id=0,
         greeter_chat_channel_id=0,

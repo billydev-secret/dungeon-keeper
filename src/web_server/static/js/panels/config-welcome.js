@@ -111,6 +111,10 @@ export function mount(container) {
             <select name="welcome_ping_role_id">${roleSelect(roles, w.welcome_ping_role_id)}</select>
           </div>
           <div class="field">
+            <label><input type="checkbox" name="welcome_ping_member" ${w.welcome_ping_member ? "checked" : ""} /> Ping the new member</label>
+            <div class="field-hint">Mention the joining member in the message so they get a notification. The <code>{member}</code> placeholder inside the message body looks like a mention but does not notify — only this option pings the member.</div>
+          </div>
+          <div class="field">
             <label>Leave Channel</label>
             <select name="leave_channel_id">${channelSelect(channels, w.leave_channel_id)}</select>
           </div>
@@ -209,6 +213,7 @@ export function mount(container) {
           welcome_channel_id: fd.get("welcome_channel_id"),
           welcome_message: fd.get("welcome_message"),
           welcome_ping_role_id: fd.get("welcome_ping_role_id"),
+          welcome_ping_member: fd.get("welcome_ping_member") === "on",
           welcome_trigger: fd.get("welcome_trigger"),
           unverified_role_id: fd.get("unverified_role_id"),
           leave_channel_id: fd.get("leave_channel_id"),

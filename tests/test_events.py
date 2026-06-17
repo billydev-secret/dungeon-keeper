@@ -438,6 +438,7 @@ class _StubGuildConfig:
         welcome_channel_id: int = 0,
         welcome_message: str = "",
         welcome_ping_role_id: int = 0,
+        welcome_ping_member: bool = False,
         welcome_trigger: str = "join",
         unverified_role_id: int = 0,
         greeter_chat_channel_id: int = 0,
@@ -457,6 +458,7 @@ class _StubGuildConfig:
         self.welcome_channel_id = welcome_channel_id
         self.welcome_message = welcome_message
         self.welcome_ping_role_id = welcome_ping_role_id
+        self.welcome_ping_member = welcome_ping_member
         self.welcome_trigger = welcome_trigger
         self.unverified_role_id = unverified_role_id
         self.greeter_chat_channel_id = greeter_chat_channel_id
@@ -616,6 +618,60 @@ async def test_on_member_join_omits_ping_when_role_unset():
 
     sent_kwargs = welcome_channel.send.call_args.kwargs
     assert sent_kwargs["content"] is None
+
+
+async def test_on_member_join_pings_member_when_enabled():
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(
+            welcome_channel_id=42,
+            welcome_ping_role_id=88,
+            welcome_ping_member=True,
+        ),
+    )
+    cog = EventsCog(bot, ctx)
+
+    welcome_channel = MagicMock(spec=discord.TextChannel)
+    welcome_channel.send = AsyncMock()
+    member = _make_member()
+    member.guild.get_channel = MagicMock(return_value=welcome_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    sent_kwargs = welcome_channel.send.call_args.kwargs
+    # Role ping and the member mention both ride in the content so the join
+    # actually notifies the new member (mentions inside the embed do not).
+    assert sent_kwargs["content"] == f"<@&88> {member.mention}"
+
+
+async def test_on_member_join_pings_only_member_without_role():
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(
+            welcome_channel_id=42,
+            welcome_ping_role_id=0,
+            welcome_ping_member=True,
+        ),
+    )
+    cog = EventsCog(bot, ctx)
+
+    welcome_channel = MagicMock(spec=discord.TextChannel)
+    welcome_channel.send = AsyncMock()
+    member = _make_member()
+    member.guild.get_channel = MagicMock(return_value=welcome_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    sent_kwargs = welcome_channel.send.call_args.kwargs
+    assert sent_kwargs["content"] == member.mention
 
 
 async def test_on_member_join_sends_greeter_ping():

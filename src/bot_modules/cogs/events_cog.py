@@ -731,14 +731,18 @@ class EventsCog(commands.Cog):
         except Exception:
             log.exception("Failed to resolve member bio link for %d", member.id)
             member_bio_link = ""
-        ping = (
-            f"<@&{cfg.welcome_ping_role_id}>"
-            if cfg.welcome_ping_role_id > 0
-            else None
-        )
+        # Mentions inside an embed don't notify anyone, so the user/role ping
+        # has to ride in the message content to actually fire a notification.
+        ping_parts: list[str] = []
+        if cfg.welcome_ping_role_id > 0:
+            ping_parts.append(f"<@&{cfg.welcome_ping_role_id}>")
+        if cfg.welcome_ping_member:
+            ping_parts.append(member.mention)
+        ping = " ".join(ping_parts) or None
         try:
             await channel.send(
                 content=ping,
+                allowed_mentions=discord.AllowedMentions(users=True, roles=True),
                 embed=build_welcome_embed(
                     member,
                     cfg.welcome_message,
