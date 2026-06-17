@@ -17,7 +17,10 @@ from bot_modules.services.voice_master_service import (
     add_name_blocklist,
     add_trusted,
     can_edit,
+    LOCKED_NAME_ICON,
+    OPEN_NAME_ICON,
     compute_reconciliation_actions,
+    decorate_channel_name,
     default_profile,
     delete_active_channel,
     delete_profile,
@@ -39,6 +42,7 @@ from bot_modules.services.voice_master_service import (
     remove_trusted,
     render_name_template,
     resolve_channel_name,
+    strip_state_icon,
     save_profile,
     set_owner,
     set_owner_left_at,
@@ -392,6 +396,47 @@ def test_name_is_blocked_empty_patterns_skipped():
     # Empty pattern would otherwise match everything.
     assert not name_is_blocked("anything", [""])
     assert not name_is_blocked("anything", [])
+
+
+# ── Lock-state name decoration ───────────────────────────────────────
+
+
+def test_decorate_channel_name_adds_locked_icon():
+    out = decorate_channel_name("Alice's Room", locked=True)
+    assert out == f"{LOCKED_NAME_ICON} Alice's Room"
+
+
+def test_decorate_channel_name_adds_open_icon():
+    out = decorate_channel_name("Alice's Room", locked=False)
+    assert out == f"{OPEN_NAME_ICON} Alice's Room"
+
+
+def test_decorate_channel_name_is_idempotent_and_never_stacks():
+    # Toggling repeatedly must yield exactly one current-state prefix.
+    name = "Alice's Room"
+    locked = decorate_channel_name(name, locked=True)
+    unlocked = decorate_channel_name(locked, locked=False)
+    relocked = decorate_channel_name(unlocked, locked=True)
+    assert unlocked == f"{OPEN_NAME_ICON} Alice's Room"
+    assert relocked == f"{LOCKED_NAME_ICON} Alice's Room"
+    # No stacked icons anywhere.
+    assert relocked.count(LOCKED_NAME_ICON) == 1
+    assert OPEN_NAME_ICON not in relocked
+
+
+def test_decorate_channel_name_truncates_to_limit():
+    out = decorate_channel_name("z" * 200, locked=True, max_len=100)
+    assert len(out) == 100
+    assert out.startswith(f"{LOCKED_NAME_ICON} ")
+
+
+def test_strip_state_icon_roundtrips_and_tolerates_bare_names():
+    assert strip_state_icon("Alice's Room") == "Alice's Room"
+    assert strip_state_icon(f"{LOCKED_NAME_ICON} Alice's Room") == "Alice's Room"
+    assert strip_state_icon(f"{OPEN_NAME_ICON} Alice's Room") == "Alice's Room"
+    # Idempotent: stripping an already-bare name is a no-op.
+    once = strip_state_icon(f"{LOCKED_NAME_ICON} Alice's Room")
+    assert strip_state_icon(once) == once
 
 
 # ── Edit budget ──────────────────────────────────────────────────────

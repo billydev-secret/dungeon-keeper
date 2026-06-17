@@ -723,6 +723,46 @@ def resolve_channel_name(
 
 
 # ---------------------------------------------------------------------------
+# Lock-state name decoration
+# ---------------------------------------------------------------------------
+#
+# A temp channel's name carries a leading icon advertising whether it's open
+# to everyone or locked (others must knock / ask to join). The icon is purely
+# cosmetic: it is stripped before a name is blocklist-checked or saved to a
+# profile, so it never stacks across lock/unlock toggles nor leaks into
+# ``saved_name``.
+
+LOCKED_NAME_ICON: str = "❓"   # locked — others must knock to ask to join
+OPEN_NAME_ICON: str = "👋"     # unlocked — all welcome
+_STATE_NAME_ICONS: tuple[str, ...] = (LOCKED_NAME_ICON, OPEN_NAME_ICON)
+
+
+def strip_state_icon(name: str) -> str:
+    """Return ``name`` with any leading lock-state icon removed.
+
+    Idempotent and safe on bare names — only an icon sitting at the very
+    start (optionally followed by whitespace) is stripped.
+    """
+    for icon in _STATE_NAME_ICONS:
+        if name.startswith(icon):
+            return name[len(icon):].lstrip()
+    return name
+
+
+def decorate_channel_name(
+    name: str, *, locked: bool, max_len: int = MAX_NAME_LEN
+) -> str:
+    """Prefix ``name`` with the lock-state icon, replacing any existing one.
+
+    Strips a prior icon first so repeated lock/unlock toggles never stack
+    prefixes (``❓ ❓ Room``). Truncated to Discord's name limit.
+    """
+    base = strip_state_icon(name)
+    icon = LOCKED_NAME_ICON if locked else OPEN_NAME_ICON
+    return f"{icon} {base}"[:max_len]
+
+
+# ---------------------------------------------------------------------------
 # Pure helpers — reconciliation planner
 # ---------------------------------------------------------------------------
 

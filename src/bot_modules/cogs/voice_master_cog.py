@@ -40,6 +40,7 @@ from bot_modules.services.voice_master_service import (
     add_blocked,
     add_trusted,
     compute_reconciliation_actions,
+    decorate_channel_name,
     default_profile,
     delete_active_channel,
     get_active_channel,
@@ -551,6 +552,9 @@ class VoiceMasterCog(commands.Cog):
                 username=member.name,
                 blocklist_patterns=blocklist,
             )
+            # Advertise the channel's open/locked state in its name. Done after
+            # blocklist resolution so the icon never affects that check.
+            name = decorate_channel_name(name, locked=bool(profile.locked))
 
             target_cat = guild.get_channel(cfg.category_id) if cfg.category_id else None
             if isinstance(target_cat, discord.CategoryChannel):

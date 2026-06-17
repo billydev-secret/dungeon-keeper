@@ -293,6 +293,63 @@ def plan_initial_overwrites(
     return OverwritePlan(entries=entries, missing_target_ids=missing)
 
 
+def plan_lock_text_grants(
+    *, present_member_ids: list[int], owner_id: int, bot_id: int | None = None
+) -> list[int]:
+    """Member ids that need an explicit ``connect`` grant when locking.
+
+    Discord gates a voice channel's integrated text chat behind the
+    ``Connect`` permission, so the lock (denying ``Connect`` to ``@everyone``)
+    also strips text-chat access from everyone in the channel who relied on
+    ``@everyone``. To keep the chat usable for the people already inside, each
+    present member is given an explicit ``connect=True`` overwrite. The owner
+    already has a persistent overwrite and the bot needs no grant, so both are
+    skipped. Input order is preserved and duplicates collapsed.
+    """
+    skip = {owner_id}
+    if bot_id is not None:
+        skip.add(bot_id)
+    seen: set[int] = set()
+    out: list[int] = []
+    for uid in present_member_ids:
+        if uid in skip or uid in seen:
+            continue
+        seen.add(uid)
+        out.append(uid)
+    return out
+
+
+def plan_unlock_overwrite_cleanup(
+    *,
+    member_overwrites: list[tuple[int, bool | None, bool | None]],
+    owner_id: int,
+    trusted_ids: list[int],
+    blocked_ids: list[int],
+) -> list[int]:
+    """Member ids whose per-member overwrite should be cleared on unlock.
+
+    Locking grants transient ``connect=True`` overwrites — with ``view_channel``
+    left untouched — to whoever was in the channel (see
+    :func:`plan_lock_text_grants`); unlock drops exactly those again so the
+    channel returns to a clean state.
+
+    Each entry in ``member_overwrites`` is ``(member_id, connect, view_channel)``
+    read from the live overwrite. Only the lock-grant *shape* is removed:
+    ``connect is True`` **and** ``view_channel is None``. Every other grant the
+    bot writes sets ``view_channel=True`` (invite, knock-accept, claim,
+    transfer, the owner's own grant) or ``connect=False`` (block), so none of
+    those match and a one-off invited guest keeps their access. The owner and
+    any trusted/blocked ids are excluded as a belt-and-suspenders guard. Input
+    order preserved.
+    """
+    keep = {owner_id, *trusted_ids, *blocked_ids}
+    return [
+        mid
+        for (mid, connect, view_channel) in member_overwrites
+        if mid not in keep and connect is True and view_channel is None
+    ]
+
+
 def select_effective_limit(
     *, saved_limit: int, default_user_limit: int
 ) -> int:

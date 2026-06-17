@@ -16,6 +16,7 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
 from bot_modules.services.voice_master_service import (
+    OPEN_NAME_ICON,
     add_name_blocklist,
     insert_active_channel,
     load_profile,
@@ -61,6 +62,7 @@ def voice_channel():
     ch.name = "Owner's Room"
     ch.guild = g
     ch.members = []
+    ch.overwrites = {}
     ch.set_permissions = AsyncMock()
     ch.edit = AsyncMock()
     ch.delete = AsyncMock()
@@ -269,6 +271,108 @@ async def test_apply_lock_defers_before_slow_call(ctx, voice_channel):
     inter.response.defer.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_apply_lock_grants_connect_to_in_channel_members(ctx, voice_channel):
+    """Locking hands each in-channel member an explicit Connect overwrite so the
+    voice channel's text chat keeps working — Discord ties text-chat access to
+    Connect, which the @everyone denial would otherwise strip. The owner (who
+    has a persistent overwrite) and the bot are skipped."""
+    from bot_modules.commands.voice_master_commands import _apply_lock
+    from bot_modules.services.voice_master_service import get_active_channel
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(
+            conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0
+        )
+        row = get_active_channel(conn, CH)
+    assert row is not None
+
+    guild = voice_channel.guild
+    guild.me = MagicMock()
+    guild.me.id = 999  # bot — must be skipped
+    owner_m = MagicMock(spec=discord.Member)
+    owner_m.id = OWNER
+    guest = MagicMock(spec=discord.Member)
+    guest.id = 4242
+    voice_channel.members = [owner_m, guest]
+    guild.get_member = MagicMock(
+        side_effect=lambda uid: {OWNER: owner_m, 4242: guest}.get(uid)
+    )
+    # Fresh overwrite per target so the @everyone and guest edits don't alias.
+    voice_channel.overwrites_for = MagicMock(
+        side_effect=lambda target: discord.PermissionOverwrite()
+    )
+
+    inter = _wire_interaction(ctx)
+    await _apply_lock(inter, voice_channel, row, locked=True)
+
+    targets = [c.args[0] for c in voice_channel.set_permissions.await_args_list]
+    assert guild.default_role in targets  # @everyone lock applied
+    assert guest in targets               # in-channel member granted
+    assert owner_m not in targets         # owner skipped (persistent overwrite)
+    guest_call = next(
+        c for c in voice_channel.set_permissions.await_args_list if c.args[0] is guest
+    )
+    assert guest_call.kwargs["overwrite"].connect is True
+
+
+@pytest.mark.asyncio
+async def test_apply_unlock_clears_only_lock_shaped_grants(ctx, voice_channel):
+    """Unlock drops only the lock-grant shape (connect=True, view inherited).
+    The owner, trusted/blocked entries, and one-off invite/knock guests (who
+    carry connect=True *and* view_channel=True) must survive."""
+    from bot_modules.commands.voice_master_commands import _apply_lock
+    from bot_modules.services.voice_master_service import (
+        add_blocked,
+        add_trusted,
+        get_active_channel,
+    )
+
+    TRUSTED, BLOCKED, GUEST, INVITED = 100, 200, 300, 400
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(
+            conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0
+        )
+        add_trusted(conn, GUILD, OWNER, TRUSTED)
+        add_blocked(conn, GUILD, OWNER, BLOCKED)
+        row = get_active_channel(conn, CH)
+    assert row is not None
+
+    def mk(i):
+        m = MagicMock(spec=discord.Member)
+        m.id = i
+        return m
+
+    owner_m, trusted_m, blocked_m, guest_m, invited_m = (
+        mk(OWNER), mk(TRUSTED), mk(BLOCKED), mk(GUEST), mk(INVITED)
+    )
+    voice_channel.overwrites = {
+        owner_m: discord.PermissionOverwrite(connect=True, view_channel=True),
+        trusted_m: discord.PermissionOverwrite(connect=True, view_channel=True),
+        blocked_m: discord.PermissionOverwrite(connect=False),
+        # Transient lock grant — connect only, view left to inherit.
+        guest_m: discord.PermissionOverwrite(connect=True),
+        # One-off invite/knock guest — not trusted, but carries view=True.
+        invited_m: discord.PermissionOverwrite(connect=True, view_channel=True),
+    }
+    voice_channel.guild.get_member = MagicMock(
+        side_effect=lambda uid: {
+            OWNER: owner_m, TRUSTED: trusted_m, BLOCKED: blocked_m,
+            GUEST: guest_m, INVITED: invited_m,
+        }.get(uid)
+    )
+
+    inter = _wire_interaction(ctx)
+    await _apply_lock(inter, voice_channel, row, locked=False)
+
+    removed = [
+        c.args[0]
+        for c in voice_channel.set_permissions.await_args_list
+        if c.kwargs.get("overwrite") is None
+    ]
+    assert removed == [guest_m]  # invited guest preserved despite no trust entry
+
+
 # ── _apply_rename + name blocklist ─────────────────────────────────────────
 
 
@@ -311,7 +415,9 @@ async def test_apply_rename_succeeds_and_saves_name(ctx, voice_channel):
 
     voice_channel.edit.assert_awaited_once()
     args, kwargs = voice_channel.edit.await_args
-    assert kwargs["name"] == "Game Night"
+    # Channel name carries the lock-state icon (unlocked here); the saved
+    # profile name stays bare so the icon never accumulates.
+    assert kwargs["name"] == f"{OPEN_NAME_ICON} Game Night"
     with open_db(ctx.db_path) as conn:
         p = load_profile(conn, GUILD, OWNER)
     assert p is not None

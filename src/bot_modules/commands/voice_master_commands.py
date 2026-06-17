@@ -18,10 +18,13 @@ from bot_modules.services.voice_master_service import (
     add_blocked,
     add_trusted,
     can_edit,
+    decorate_channel_name,
     delete_profile,
     get_active_channel,
     get_owned_channel,
+    list_blocked,
     list_name_blocklist,
+    list_trusted,
     load_voice_master_config,
     record_edit_in_db,
     set_owner,
@@ -52,6 +55,8 @@ from bot_modules.voice_master.logic import (
     format_reset_result,
     format_transfer_result,
     parse_limit_input,
+    plan_lock_text_grants,
+    plan_unlock_overwrite_cleanup,
     should_save_profile_field,
     user_picker_labels,
     validate_invite_target,
@@ -206,6 +211,78 @@ async def _gate_and_record_edit(
 # ---------------------------------------------------------------------------
 
 
+async def _sync_lock_member_overwrites(
+    ctx: AppContext,
+    channel: discord.VoiceChannel,
+    row: ActiveChannel,
+    *,
+    locked: bool,
+) -> None:
+    """Keep in-channel members' text-chat access in sync with the lock state.
+
+    On lock, grant ``connect=True`` to everyone currently in the channel so the
+    integrated text chat stays usable (Discord ties text-chat access to the
+    Connect permission). On unlock, remove those transient grants again, leaving
+    the owner's and any trusted/blocked overwrites untouched. Individual
+    permission edits are best-effort: a failure on one member must not abort the
+    lock toggle, which has already been applied to ``@everyone``.
+    """
+    if locked:
+        bot_member = channel.guild.me
+        grant_ids = plan_lock_text_grants(
+            present_member_ids=[m.id for m in channel.members],
+            owner_id=row.owner_id,
+            bot_id=bot_member.id if bot_member is not None else None,
+        )
+        for uid in grant_ids:
+            member = channel.guild.get_member(uid)
+            if member is None:
+                continue
+            overwrite = channel.overwrites_for(member)
+            overwrite.connect = True
+            try:
+                await channel.set_permissions(
+                    member,
+                    overwrite=overwrite,
+                    reason="Voice Master: keep text-chat access while locked",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        return
+
+    with ctx.open_db() as conn:
+        trusted_ids = list_trusted(conn, channel.guild.id, row.owner_id)
+        blocked_ids = list_blocked(conn, channel.guild.id, row.owner_id)
+    # ``channel.overwrites`` rebuilds its dict on each access, so snapshot once.
+    # Keep the resolved Member objects: keys are already Members (we drop any
+    # unresolved discord.Object), and set_permissions needs a Role/Member
+    # target — not a bare snowflake.
+    overwrites = channel.overwrites
+    overwrite_members = {
+        target.id: target
+        for target in overwrites
+        if isinstance(target, discord.Member)
+    }
+    cleanup_ids = plan_unlock_overwrite_cleanup(
+        member_overwrites=[
+            (m.id, overwrites[m].connect, overwrites[m].view_channel)
+            for m in overwrite_members.values()
+        ],
+        owner_id=row.owner_id,
+        trusted_ids=trusted_ids,
+        blocked_ids=blocked_ids,
+    )
+    for uid in cleanup_ids:
+        try:
+            await channel.set_permissions(
+                overwrite_members[uid],
+                overwrite=None,
+                reason="Voice Master: drop transient lock grant on unlock",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
 async def _apply_lock(
     interaction: discord.Interaction,
     channel: discord.VoiceChannel,
@@ -229,6 +306,23 @@ async def _apply_lock(
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't update channel permissions.")
         return
+    # Discord gates a voice channel's text chat behind Connect, so denying it
+    # to @everyone above also cuts text-chat access for the people inside. Keep
+    # them online by granting per-member Connect on lock, and tidy those grants
+    # away on unlock.
+    await _sync_lock_member_overwrites(ctx, channel, row, locked=locked)
+    # Reflect the new state in the channel name. The rename budget was already
+    # consumed by _gate_and_record_edit at the call site, so no extra gating;
+    # the name is cosmetic, so a failed edit must not undo the lock above.
+    decorated = decorate_channel_name(channel.name, locked=locked)
+    if decorated != channel.name:
+        try:
+            await channel.edit(
+                name=decorated,
+                reason=f"Voice Master: {'lock' if locked else 'unlock'} name marker",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
         _maybe_save_profile_field(
@@ -266,9 +360,13 @@ async def _apply_rename(
         return
     new_name = result.cleaned
     await _defer_if_needed(interaction)
+    # Keep the lock-state icon on the new name (saved_name stays bare below).
+    everyone = channel.guild.default_role
+    locked = channel.overwrites_for(everyone).connect is False
+    display_name = decorate_channel_name(new_name, locked=locked)
     try:
         await channel.edit(
-            name=new_name, reason="Voice Master: rename by owner"
+            name=display_name, reason="Voice Master: rename by owner"
         )
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't rename the channel.")
@@ -301,7 +399,9 @@ async def _reset_channel_overwrites(
     }
     try:
         await channel.edit(
-            overwrites=new_overwrites, reason="Voice Master: reset by owner"
+            overwrites=new_overwrites,
+            name=decorate_channel_name(channel.name, locked=False),
+            reason="Voice Master: reset by owner",
         )
         return True
     except (discord.Forbidden, discord.HTTPException):
