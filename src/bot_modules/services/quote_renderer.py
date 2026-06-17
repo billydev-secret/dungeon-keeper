@@ -115,16 +115,6 @@ BORDERS: dict[str, BorderStyle] = {
         flip=False,
         luma_key=False,
     ),
-    # No decorative overlay — just the themed card. The path intentionally does
-    # not exist so the border-compositing step below skips it. Useful for
-    # centred-text layouts (pfp_shape="none") where a floral corner would
-    # collide with the text.
-    "none": BorderStyle(
-        name="None",
-        path=Path("assets") / "__no_border__.png",
-        flip=False,
-        luma_key=False,
-    ),
 }
 
 
@@ -366,8 +356,10 @@ def render_quote_card(
     px, py = pfp_cx - pfp_r, pfp_cy - pfp_r
 
     if _no_pfp:
-        text_pad_l = int(width * 0.10)
-        text_col_w = int(width * 0.80)
+        # Keep the prompt in the left-centre clear zone so it never collides
+        # with the brand's floral corner (bottom-right of the default border).
+        text_pad_l = int(width * 0.07)
+        text_col_w = int(width * 0.55)
     else:
         text_pad_l = int(width * 0.40)
         text_col_w = int(width * 0.45)
@@ -409,7 +401,9 @@ def render_quote_card(
         _header_h = int(_hb[3] - _hb[1])
         _header_gap = max(10, line_h // 2)
     _content_h = text_block_h + (_header_h + _header_gap if _header_text else 0)
-    _content_top = (height - _content_h) // 2
+    # Bias the block slightly upward in no-pfp mode so taller prompts stay above
+    # the densest part of the bottom floral corner.
+    _content_top = int((height - _content_h) * (0.42 if _no_pfp else 0.5))
     text_y_start = _content_top + (_header_h + _header_gap if _header_text else 0)
 
     # Soft gaussian text shadow
@@ -452,7 +446,7 @@ def render_quote_card(
         # No avatar box — draw the label as a centred header above the prompt.
         if _header_text:
             _hb2 = draw.textbbox((0, 0), _header_text, font=body_font)
-            _hx = (width - int(_hb2[2] - _hb2[0])) // 2
+            _hx = text_pad_l + max(0, (text_col_w - int(_hb2[2] - _hb2[0])) // 2)
             draw.text((_hx + 2, _content_top + 2), _header_text, font=body_font, fill=(0, 0, 0))
             draw.text((_hx, _content_top), _header_text, font=body_font, fill=theme.attribution_color)
     else:
