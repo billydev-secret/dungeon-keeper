@@ -15,7 +15,7 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games.command_groups import play
 from bot_modules.games_ffa.prompts import pick_prompt, label_for_kind
-from bot_modules.services.quote_renderer import render_quote_card, THEMES
+from bot_modules.services.quote_renderer import render_quote_card, THEMES, BORDERS
 # Reuse the confession bot's anonymous-identity machinery so replies look and
 # behave exactly like confession replies. These live in the confessions DB
 # tables, which share the same SQLite file as the games DB.
@@ -281,7 +281,8 @@ class FFACog(commands.Cog):
                 author_name=label,
                 avatar_bytes=image_bytes,
                 theme=THEMES[_THEME_FOR_LABEL.get(label, "rose")],
-                pfp_shape="square",
+                pfp_shape="none",
+                border_style=BORDERS["none"],
             )
         except Exception:
             log.exception("ffa launch failed to render card in channel %s", channel.id)

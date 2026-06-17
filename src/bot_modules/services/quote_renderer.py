@@ -115,6 +115,16 @@ BORDERS: dict[str, BorderStyle] = {
         flip=False,
         luma_key=False,
     ),
+    # No decorative overlay — just the themed card. The path intentionally does
+    # not exist so the border-compositing step below skips it. Useful for
+    # centred-text layouts (pfp_shape="none") where a floral corner would
+    # collide with the text.
+    "none": BorderStyle(
+        name="None",
+        path=Path("assets") / "__no_border__.png",
+        flip=False,
+        luma_key=False,
+    ),
 }
 
 
@@ -313,16 +323,23 @@ def render_quote_card(
     Layout: pfp on LEFT, text on RIGHT. Returns PNG bytes with transparent corners.
 
     ``pfp_shape`` controls the foreground avatar: ``"circle"`` (default — circular
-    crop with a double ring) or ``"square"`` (rounded-square that shows the whole
-    avatar without clipping its corners).
+    crop with a double ring), ``"square"`` (rounded-square that shows the whole
+    avatar without clipping its corners), or ``"none"`` (no avatar box at all —
+    the prompt is centred across the card and ``author_name`` becomes a centred
+    header above it).
     """
     from PIL import Image, ImageDraw, ImageFilter  # noqa: PLC0415
 
     if len(text) > QUOTE_MAX_CHARS:
         text = text[:QUOTE_MAX_CHARS - 1] + "…"
 
-    # Blurred background, face offset left 20%
-    bg = _build_background(avatar_bytes, width, height, theme, offset_x=int(width * 0.20))
+    # Blurred background — when there's a left-side pfp, push the face left so it
+    # doesn't sit under the text column; with no pfp keep the image centred.
+    _no_pfp = pfp_shape == "none"
+    bg = _build_background(
+        avatar_bytes, width, height, theme,
+        offset_x=0 if _no_pfp else int(width * 0.20),
+    )
 
     # Outer card shape — full canvas with rounded corners matching the border frame.
     card_mask = Image.new("L", (width, height), 0)
@@ -348,8 +365,12 @@ def render_quote_card(
     pfp_d = pfp_r * 2
     px, py = pfp_cx - pfp_r, pfp_cy - pfp_r
 
-    text_pad_l = int(width * 0.40)
-    text_col_w = int(width * 0.45)
+    if _no_pfp:
+        text_pad_l = int(width * 0.10)
+        text_col_w = int(width * 0.80)
+    else:
+        text_pad_l = int(width * 0.40)
+        text_col_w = int(width * 0.45)
 
     body_size = max(26, width // 24)
     attr_size = max(16, width // 40)
@@ -371,14 +392,32 @@ def render_quote_card(
     _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
     lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
     text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
-    text_y_start = (height - text_block_h) // 2
+
+    # Per-line horizontal centring — used in no-pfp mode so the prompt sits
+    # centred across the whole card instead of in a right-hand column.
+    _full_measure = _make_emoji_measure(_base_m, line_h)
+    def _line_x(s: str) -> int:
+        if not _no_pfp:
+            return text_pad_l
+        return text_pad_l + max(0, (text_col_w - _full_measure(s)) // 2)
+
+    # No-pfp mode turns the label into a centred header above the prompt.
+    _header_text = author_name if (_no_pfp and author_name) else ""
+    _header_h = _header_gap = 0
+    if _header_text:
+        _hb = draw.textbbox((0, 0), _header_text, font=body_font)
+        _header_h = int(_hb[3] - _hb[1])
+        _header_gap = max(10, line_h // 2)
+    _content_h = text_block_h + (_header_h + _header_gap if _header_text else 0)
+    _content_top = (height - _content_h) // 2
+    text_y_start = _content_top + (_header_h + _header_gap if _header_text else 0)
 
     # Soft gaussian text shadow
     _shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     _sdraw = ImageDraw.Draw(_shadow)
     _sy = text_y_start
     for line in lines:
-        _sdraw.text((text_pad_l + 4, _sy + 4), _DISCORD_EMOJI_RE.sub('', line), font=body_font, fill=(0, 0, 0, 170))
+        _sdraw.text((_line_x(line) + 4, _sy + 4), _DISCORD_EMOJI_RE.sub('', line), font=body_font, fill=(0, 0, 0, 170))
         _sy += line_h + line_gap
     _shadow = _shadow.filter(ImageFilter.GaussianBlur(radius=5))
     _bg_rgba = bg.convert("RGBA")
@@ -392,7 +431,7 @@ def render_quote_card(
         with _Pilmoji(bg, source=_EmojiSource) as _pm:  # type: ignore[misc]
             for line in lines:
                 _render_line_mixed(
-                    line, text_pad_l, text_y,
+                    line, _line_x(line), text_y,
                     font=body_font, color=theme.text_color,
                     emoji_size=line_h, custom_emojis=custom_emojis,
                     bg=bg, draw=draw, pilmoji=_pm,
@@ -409,55 +448,63 @@ def render_quote_card(
             text_y += line_h + line_gap
     draw = ImageDraw.Draw(bg)
 
-    _square = pfp_shape == "square"
-    _sq_r = max(6, int(pfp_d * 0.10))
-
-    # Pfp drop shadow
-    _pfp_sh = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    _soff = pfp_r // 5
-    _sh_draw = ImageDraw.Draw(_pfp_sh)
-    _sh_box = (px + _soff - 6, py + _soff - 6, px + pfp_d + _soff + 6, py + pfp_d + _soff + 6)
-    if _square:
-        _sh_draw.rounded_rectangle(_sh_box, radius=_sq_r + 6, fill=(0, 0, 0, 150))
+    if _no_pfp:
+        # No avatar box — draw the label as a centred header above the prompt.
+        if _header_text:
+            _hb2 = draw.textbbox((0, 0), _header_text, font=body_font)
+            _hx = (width - int(_hb2[2] - _hb2[0])) // 2
+            draw.text((_hx + 2, _content_top + 2), _header_text, font=body_font, fill=(0, 0, 0))
+            draw.text((_hx, _content_top), _header_text, font=body_font, fill=theme.attribution_color)
     else:
-        _sh_draw.ellipse(_sh_box, fill=(0, 0, 0, 150))
-    _pfp_sh = _pfp_sh.filter(ImageFilter.GaussianBlur(radius=pfp_r // 3))
-    _bg_rgba = bg.convert("RGBA")
-    _bg_rgba.alpha_composite(_pfp_sh)
-    bg = _bg_rgba.convert("RGB")
-    draw = ImageDraw.Draw(bg)
+        _square = pfp_shape == "square"
+        _sq_r = max(6, int(pfp_d * 0.10))
 
-    # Pfp — unblurred avatar, circle-cropped or rounded-square per pfp_shape
-    avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
-    avatar_img = avatar_img.resize((pfp_d, pfp_d), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
-    pfp_mask = Image.new("L", (pfp_d, pfp_d), 0)
-    if _square:
-        ImageDraw.Draw(pfp_mask).rounded_rectangle((0, 0, pfp_d - 1, pfp_d - 1), radius=_sq_r, fill=255)
-    else:
-        ImageDraw.Draw(pfp_mask).ellipse((0, 0, pfp_d - 1, pfp_d - 1), fill=255)
-    bg.paste(avatar_img, (px, py), mask=pfp_mask)
-    draw = ImageDraw.Draw(bg)
+        # Pfp drop shadow
+        _pfp_sh = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+        _soff = pfp_r // 5
+        _sh_draw = ImageDraw.Draw(_pfp_sh)
+        _sh_box = (px + _soff - 6, py + _soff - 6, px + pfp_d + _soff + 6, py + pfp_d + _soff + 6)
+        if _square:
+            _sh_draw.rounded_rectangle(_sh_box, radius=_sq_r + 6, fill=(0, 0, 0, 150))
+        else:
+            _sh_draw.ellipse(_sh_box, fill=(0, 0, 0, 150))
+        _pfp_sh = _pfp_sh.filter(ImageFilter.GaussianBlur(radius=pfp_r // 3))
+        _bg_rgba = bg.convert("RGBA")
+        _bg_rgba.alpha_composite(_pfp_sh)
+        bg = _bg_rgba.convert("RGB")
+        draw = ImageDraw.Draw(bg)
 
-    # Double frame: outer cream + inner gold, matching the pfp shape
-    _rg, _rt = 4, 3
-    _outer = (px - _rg - _rt, py - _rg - _rt, px + pfp_d + _rg + _rt - 1, py + pfp_d + _rg + _rt - 1)
-    _inner = (px - 3, py - 3, px + pfp_d + 2, py + pfp_d + 2)
-    if _square:
-        draw.rounded_rectangle(_outer, radius=_sq_r + _rg + _rt, outline=(255, 248, 220), width=_rt)
-        draw.rounded_rectangle(_inner, radius=_sq_r + 3, outline=theme.attribution_color, width=3)
-    else:
-        draw.ellipse(_outer, outline=(255, 248, 220), width=_rt)
-        draw.ellipse(_inner, outline=theme.attribution_color, width=3)
+        # Pfp — unblurred avatar, circle-cropped or rounded-square per pfp_shape
+        avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
+        avatar_img = avatar_img.resize((pfp_d, pfp_d), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
+        pfp_mask = Image.new("L", (pfp_d, pfp_d), 0)
+        if _square:
+            ImageDraw.Draw(pfp_mask).rounded_rectangle((0, 0, pfp_d - 1, pfp_d - 1), radius=_sq_r, fill=255)
+        else:
+            ImageDraw.Draw(pfp_mask).ellipse((0, 0, pfp_d - 1, pfp_d - 1), fill=255)
+        bg.paste(avatar_img, (px, py), mask=pfp_mask)
+        draw = ImageDraw.Draw(bg)
 
-    # Author name centred below pfp
-    if author_name:
-        attr_text = f"— {author_name}"
-        attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
-        attr_w = attr_bbox[2] - attr_bbox[0]
-        ax = pfp_cx - attr_w // 2
-        ay = pfp_cy + pfp_r + int(height * 0.04)
-        draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
-        draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
+        # Double frame: outer cream + inner gold, matching the pfp shape
+        _rg, _rt = 4, 3
+        _outer = (px - _rg - _rt, py - _rg - _rt, px + pfp_d + _rg + _rt - 1, py + pfp_d + _rg + _rt - 1)
+        _inner = (px - 3, py - 3, px + pfp_d + 2, py + pfp_d + 2)
+        if _square:
+            draw.rounded_rectangle(_outer, radius=_sq_r + _rg + _rt, outline=(255, 248, 220), width=_rt)
+            draw.rounded_rectangle(_inner, radius=_sq_r + 3, outline=theme.attribution_color, width=3)
+        else:
+            draw.ellipse(_outer, outline=(255, 248, 220), width=_rt)
+            draw.ellipse(_inner, outline=theme.attribution_color, width=3)
+
+        # Author name centred below pfp
+        if author_name:
+            attr_text = f"— {author_name}"
+            attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
+            attr_w = attr_bbox[2] - attr_bbox[0]
+            ax = pfp_cx - attr_w // 2
+            ay = pfp_cy + pfp_r + int(height * 0.04)
+            draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
+            draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
 
     # Apply rounded-rect transparency — pixels outside the card shape go fully transparent
     out = bg.convert("RGBA")
