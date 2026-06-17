@@ -393,19 +393,20 @@ def render_quote_card(
         # exclusion so the usable right edge drops toward the bottom; each line is
         # centred within the remaining [left_margin, right_limit] band, so the
         # prompt reads centred yet flows around the floral corner.
-        _ex_apex_y = height * 0.22          # above this the full width is free
-        _ex_reach_y = height * 0.55         # at/below this the carve is maxed out
-        _ex_right_top = width * 0.93        # usable right edge above the flowers
-        _ex_right_min = width * 0.46        # usable right edge level with them
+        _ex_apex_y = height * 0.24          # above this the full width is free
+        _ex_reach_y = height * 0.62         # at/below this the carve is maxed out
+        _ex_left_top = width * 0.93         # flowers' left edge above the corner
+        _ex_left_min = width * 0.50         # flowers' left edge level with them
+        _gap3 = 3 * max(1, _full_measure("nnn") // 3)  # ~3 characters of breathing room
 
-        def _right_limit(y: float) -> float:
+        def _flower_left(y: float) -> float:
             if y <= _ex_apex_y:
-                return _ex_right_top
+                return _ex_left_top
             frac = min(1.0, (y - _ex_apex_y) / max(1.0, _ex_reach_y - _ex_apex_y))
-            return _ex_right_top - frac * (_ex_right_top - _ex_right_min)
+            return _ex_left_top - frac * (_ex_left_top - _ex_left_min)
 
         def _avail_w(y: float) -> int:
-            return max(int(width * 0.28), int(_right_limit(y) - left_margin))
+            return max(int(width * 0.28), int(_flower_left(y) - _gap3 - left_margin))
 
         def _flow(text_start_y: int) -> list[str]:
             out: list[str] = []
@@ -440,7 +441,9 @@ def render_quote_card(
         text_y_start, _content_top = _layout(lines)
 
         def _line_x(s: str, y: int) -> int:
-            return left_margin + max(0, (_avail_w(y) - _full_measure(s)) // 2)
+            # Right edge sits ~3 characters off the floral contour; clamp at the
+            # left margin so a long line never runs off the left of the card.
+            return max(left_margin, int(_flower_left(y) - _gap3 - _full_measure(s)))
     else:
         _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
         lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
