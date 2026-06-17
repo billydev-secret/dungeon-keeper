@@ -909,15 +909,21 @@ def test_build_inline_panel_embed_delegates(owner_member):
     assert owner_member.mention in embed.description
 
 
-def test_build_panel_view_has_all_buttons():
-    from bot_modules.commands.voice_master_commands import (
-        PANEL_BUTTON_ACTIONS,
-        build_panel_view,
-    )
+def test_build_panel_view_has_grouped_selects():
+    from bot_modules.commands.voice_master_commands import _PanelSelect, build_panel_view
+    from bot_modules.voice_master.logic import PANEL_BUTTON_ORDER, PANEL_GROUP_ORDER
 
     view = build_panel_view()
-    # 10 buttons in the registry.
-    assert len(view.children) == len(PANEL_BUTTON_ACTIONS)
+    # One dropdown per group (not a wall of buttons). Each child is a
+    # DynamicItem wrapping a real Select (the Select is ``.item``).
+    assert len(view.children) == len(PANEL_GROUP_ORDER)
+    assert all(isinstance(c, _PanelSelect) for c in view.children)
+    selects = [c.item for c in view.children]
+    # Building the selects exercises SelectOption emoji parsing for real.
+    all_options = [opt.value for sel in selects for opt in sel.options]
+    # Together the dropdowns expose every panel action exactly once.
+    assert set(all_options) == set(PANEL_BUTTON_ORDER)
+    assert len(all_options) == len(PANEL_BUTTON_ORDER)
 
 
 @pytest.mark.asyncio
@@ -1053,46 +1059,42 @@ def test_check_edit_budget_full_window_rejects():
     assert retry > 0
 
 
-# ── Panel button registry / DynamicItem.from_custom_id ────────────────────
+# ── Panel select groups / DynamicItem.from_custom_id ──────────────────────
 
 
-def test_button_registry_has_all_actions():
-    from bot_modules.commands.voice_master_commands import (
-        PANEL_BUTTON_ACTIONS,
-        _BUTTON_REGISTRY,
-    )
+def test_every_grouped_action_has_a_handler():
+    """Each action shown in a dropdown must have an _ON_CLICKS handler, so no
+    option ever dispatches into the void."""
+    from bot_modules.commands.voice_master_commands import _ON_CLICKS
+    from bot_modules.voice_master.logic import PANEL_GROUP_ORDER, panel_metas_for_group
 
-    for action in PANEL_BUTTON_ACTIONS:
-        assert action in _BUTTON_REGISTRY
-
-
-@pytest.mark.asyncio
-async def test_panel_button_from_custom_id_returns_instance():
-    from bot_modules.commands.voice_master_commands import _PanelButton
-
-    match = {"action": "lock"}
-    instance = await _PanelButton.from_custom_id(
-        MagicMock(), MagicMock(), match
-    )
-    assert isinstance(instance, _PanelButton)
+    for group in PANEL_GROUP_ORDER:
+        for meta in panel_metas_for_group(group):
+            assert meta.action in _ON_CLICKS
 
 
 @pytest.mark.asyncio
-async def test_panel_button_callback_unknown_action_noop():
-    from bot_modules.commands.voice_master_commands import _PanelButton
+async def test_panel_select_from_custom_id_returns_instance():
+    from bot_modules.commands.voice_master_commands import _PanelSelect
 
-    btn = _PanelButton("lock")
-    # Force the action to something not in the registry.
-    btn._action = "nonsense"
+    for group in ("settings", "permissions"):
+        instance = await _PanelSelect.from_custom_id(
+            MagicMock(), MagicMock(), {"group": group}
+        )
+        assert isinstance(instance, _PanelSelect)
+
+
+@pytest.mark.asyncio
+async def test_panel_select_callback_unknown_value_noop():
+    from bot_modules.commands.voice_master_commands import _PanelSelect
+
+    sel = _PanelSelect("settings")
     inter = MagicMock()
-    inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
-    inter.guild = MagicMock()
-    inter.response = MagicMock()
-    inter.response.send_message = AsyncMock()
-    inter.response.is_done = MagicMock(return_value=False)
-    # Should return cleanly without raising.
-    await btn.callback(inter)
+    # An option value with no handler must not raise.
+    inter.data = {"values": ["nonsense"]}
+    inter.message = None  # short-circuits the cosmetic dropdown reset
+    # Should return cleanly without raising or dispatching.
+    await sel.callback(inter)
 
 
 # ── _UserPickerView._run success paths ────────────────────────────────────

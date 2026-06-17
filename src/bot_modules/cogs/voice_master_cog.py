@@ -14,7 +14,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.commands.voice_master_commands import (
-    PANEL_BUTTON_CLASSES,
+    PANEL_DYNAMIC_ITEM_CLASSES,
     _apply_hide,
     _apply_invite,
     _apply_kick,
@@ -137,11 +137,11 @@ class VoiceMasterCog(commands.Cog):
         super().__init__()
 
     async def cog_load(self) -> None:
-        # Expose the AppContext to button DynamicItem callbacks (which only
+        # Expose the AppContext to panel DynamicItem callbacks (which only
         # see ``interaction.client``). Mirrors the jail cog's _mod_ctx pattern.
         setattr(self.bot, "_vm_ctx", self.ctx)
-        # Register persistent button classes so they survive bot restarts.
-        for cls in PANEL_BUTTON_CLASSES:
+        # Register persistent panel dropdown classes so they survive restarts.
+        for cls in PANEL_DYNAMIC_ITEM_CLASSES:
             self.bot.add_dynamic_items(cls)
         # Background prune loop: runs daily, only does work when the per-guild
         # threshold is configured (default 0 = never).

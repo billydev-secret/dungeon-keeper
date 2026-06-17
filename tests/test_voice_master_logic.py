@@ -20,6 +20,7 @@ from bot_modules.voice_master.embeds import (
 )
 from bot_modules.voice_master.logic import (
     PANEL_BUTTON_ORDER,
+    PANEL_GROUP_ORDER,
     PROFILE_RESET_FIELDS,
     ClaimDecision,
     MemberInfo,
@@ -54,6 +55,8 @@ from bot_modules.voice_master.logic import (
     format_trusted_list,
     hub_create_blocked_by_cooldown,
     panel_button_meta,
+    panel_group_placeholder,
+    panel_metas_for_group,
     parse_limit_input,
     plan_initial_overwrites,
     profile_reset_summary,
@@ -1267,6 +1270,32 @@ def test_all_panel_button_metas_style_names_are_valid():
     valid = {"primary", "secondary", "success", "danger"}
     for meta in all_panel_button_metas():
         assert meta.style_name in valid
+
+
+# ── Panel select groups ──────────────────────────────────────────────
+
+
+def test_panel_groups_partition_all_actions():
+    """The dropdown groups must cover every action exactly once — no action
+    silently dropped from the panel, none duplicated across menus."""
+    grouped: list[str] = []
+    for group in PANEL_GROUP_ORDER:
+        grouped.extend(m.action for m in panel_metas_for_group(group))
+    # Exact partition of PANEL_BUTTON_ORDER.
+    assert set(grouped) == set(PANEL_BUTTON_ORDER)
+    assert len(grouped) == len(PANEL_BUTTON_ORDER)  # no action in two groups
+
+
+def test_panel_metas_for_group_preserve_display_order():
+    settings = [m.action for m in panel_metas_for_group("settings")]
+    assert settings == ["rename", "limit", "hide", "unhide", "reset"]
+    perms = [m.action for m in panel_metas_for_group("permissions")]
+    assert perms == ["lock", "unlock", "invite", "kick", "transfer"]
+
+
+def test_panel_group_placeholder_text():
+    assert panel_group_placeholder("settings") == "Change channel settings"
+    assert panel_group_placeholder("permissions") == "Change channel permissions"
 
 
 # ── Panel embeds ─────────────────────────────────────────────────────

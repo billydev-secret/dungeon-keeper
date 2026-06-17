@@ -875,3 +875,35 @@ def panel_button_meta(action: str) -> PanelButtonMeta | None:
 def all_panel_button_metas() -> list[PanelButtonMeta]:
     """Return every panel button meta in canonical order."""
     return [_PANEL_BUTTON_META[a] for a in PANEL_BUTTON_ORDER]
+
+
+# ---------------------------------------------------------------------------
+# Panel select groups (the actions split across two dropdown menus)
+# ---------------------------------------------------------------------------
+#
+# The panel is presented as two grouped select menus rather than a wall of
+# buttons. Every action belongs to exactly one group; the tuples below double
+# as the in-menu display order. The grouping is partition-checked in tests
+# against PANEL_BUTTON_ORDER so an action can never silently fall off the panel.
+
+PANEL_GROUP_ORDER: tuple[str, ...] = ("settings", "permissions")
+
+_GROUP_ACTIONS: dict[str, tuple[str, ...]] = {
+    "settings": ("rename", "limit", "hide", "unhide", "reset"),
+    "permissions": ("lock", "unlock", "invite", "kick", "transfer"),
+}
+
+_GROUP_PLACEHOLDER: dict[str, str] = {
+    "settings": "Change channel settings",
+    "permissions": "Change channel permissions",
+}
+
+
+def panel_group_placeholder(group: str) -> str:
+    """Return the dropdown placeholder text for a panel select group."""
+    return _GROUP_PLACEHOLDER[group]
+
+
+def panel_metas_for_group(group: str) -> list[PanelButtonMeta]:
+    """Return the panel metas in one select group, in display order."""
+    return [_PANEL_BUTTON_META[a] for a in _GROUP_ACTIONS[group]]

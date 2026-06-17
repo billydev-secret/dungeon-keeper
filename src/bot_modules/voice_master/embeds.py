@@ -78,7 +78,7 @@ def build_panel_embed() -> discord.Embed:
         title="Voice Master controls",
         description=(
             "Join the Hub voice channel to spin up your own room.\n"
-            "Use these buttons to manage **the channel you currently own**.\n\n"
+            "Use the menus below to manage **the channel you currently own**.\n\n"
             "🔒 / 🔓 Lock or unlock — control whether new members can join.\n"
             "👁️ / 👀 Hide or unhide — control whether the channel is visible "
             "at all.\n"
@@ -86,7 +86,7 @@ def build_panel_embed() -> discord.Embed:
         color=discord.Color.blurple(),
     )
     embed.set_footer(
-        text="Buttons act on the channel you own. Don't own one? Join the Hub."
+        text="Menus act on the channel you own. Don't own one? Join the Hub."
     )
     return embed
 
@@ -96,7 +96,7 @@ def build_inline_panel_embed(*, owner_mention: str) -> discord.Embed:
     return discord.Embed(
         title="Your voice channel is ready",
         description=(
-            f"Welcome, {owner_mention}. Use the buttons below to manage "
+            f"Welcome, {owner_mention}. Use the menus below to manage "
             "**this channel** — lock/hide it, rename it, set a user limit, "
             "invite or kick members, transfer ownership, or reset it. "
             "Changes you make are saved as your default for next time."

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
@@ -39,8 +38,7 @@ from bot_modules.voice_master.embeds import (
 )
 from bot_modules.voice_master.logic import (
     MemberInfo,
-    PANEL_BUTTON_ORDER,
-    all_panel_button_metas,
+    PANEL_GROUP_ORDER,
     build_join_url,
     build_transfer_picker_plan,
     format_edit_rate_limit_error,
@@ -57,6 +55,8 @@ from bot_modules.voice_master.logic import (
     parse_limit_input,
     plan_lock_text_grants,
     plan_unlock_overwrite_cleanup,
+    panel_group_placeholder,
+    panel_metas_for_group,
     should_save_profile_field,
     user_picker_labels,
     validate_invite_target,
@@ -69,13 +69,6 @@ from bot_modules.voice_master.logic import (
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext
 
-
-_STYLE_BY_NAME: dict[str, discord.ButtonStyle] = {
-    "primary": discord.ButtonStyle.primary,
-    "secondary": discord.ButtonStyle.secondary,
-    "success": discord.ButtonStyle.success,
-    "danger": discord.ButtonStyle.danger,
-}
 
 log = logging.getLogger("dungeonkeeper.voice_master.commands")
 
@@ -721,67 +714,68 @@ async def _apply_hide(
 
 
 # ---------------------------------------------------------------------------
-# Persistent button classes
+# Persistent panel dropdowns
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class _ButtonSpec:
-    label: str
-    emoji: str
-    style: discord.ButtonStyle
-    on_click: Callable[
-        [discord.Interaction, discord.VoiceChannel, "ActiveChannel"],
-        Awaitable[None],
-    ]
+async def _reset_panel_dropdowns(interaction: discord.Interaction) -> None:
+    """Re-render the panel so the dropdowns return to their placeholders.
+
+    A select keeps showing the picked option until the message is edited;
+    re-attaching a fresh view clears it. Best-effort and independent of how
+    the action handler used the interaction response (it edits the message
+    via the bot token, not the interaction token).
+    """
+    msg = interaction.message
+    if msg is None:
+        return
+    try:
+        await msg.edit(view=build_panel_view())
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 
 
-_BUTTON_REGISTRY: dict[str, _ButtonSpec] = {}
-
-
-def _register_button(
-    action: str,
-    *,
-    label: str,
-    emoji: str,
-    style: discord.ButtonStyle,
-    on_click: Callable[
-        [discord.Interaction, discord.VoiceChannel, "ActiveChannel"],
-        Awaitable[None],
-    ],
-) -> None:
-    _BUTTON_REGISTRY[action] = _ButtonSpec(label, emoji, style, on_click)
-
-
-class _PanelButton(
-    discord.ui.DynamicItem[discord.ui.Button],
-    template=r"voice_master:(?P<action>\w+)",
+class _PanelSelect(
+    discord.ui.DynamicItem[discord.ui.Select],
+    template=r"voice_master:select:(?P<group>\w+)",
 ):
-    def __init__(self, action: str) -> None:
-        spec = _BUTTON_REGISTRY[action]
+    """One grouped dropdown of channel actions.
+
+    Each option's value is an action key; selecting it dispatches to the
+    same handler the buttons used (``_ON_CLICKS``), so behaviour is identical
+    — only the presentation changed. The menu is reset to its placeholder
+    afterwards so it always reads as a fresh prompt.
+    """
+
+    def __init__(self, group: str) -> None:
+        self._group = group
+        options = [
+            discord.SelectOption(label=m.label, value=m.action, emoji=m.emoji)
+            for m in panel_metas_for_group(group)
+        ]
         super().__init__(
-            discord.ui.Button(
-                label=spec.label,
-                emoji=spec.emoji,
-                style=spec.style,
-                custom_id=f"voice_master:{action}",
+            discord.ui.Select(
+                custom_id=f"voice_master:select:{group}",
+                placeholder=panel_group_placeholder(group),
+                min_values=1,
+                max_values=1,
+                options=options,
             )
         )
-        self._action = action
 
     @classmethod
     async def from_custom_id(cls, interaction, item, match, /):
-        return cls(match["action"])
+        return cls(match["group"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        spec = _BUTTON_REGISTRY.get(self._action)
-        if spec is None:
-            return
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await spec.on_click(interaction, channel, row)
+        values = (interaction.data or {}).get("values") or []
+        on_click = _ON_CLICKS.get(values[0]) if values else None
+        if on_click is not None:
+            resolved = await _resolve_owned_channel(interaction)
+            if resolved is not None:
+                channel, row = resolved
+                await on_click(interaction, channel, row)
+        await _reset_panel_dropdowns(interaction)
 
 
 class _RenameModal(discord.ui.Modal, title="Rename voice channel"):
@@ -1163,35 +1157,9 @@ _ON_CLICKS: dict[str, Callable[
 }
 
 
-def _register_panel_buttons_from_meta() -> None:
-    """Translate the pure-Python meta table into runtime button specs.
-
-    The meta lives in ``voice_master.logic`` so tests can pin the
-    visible labels/emojis/style names without instantiating any Discord
-    UI. This thin glue maps the style-name strings to enum values and
-    couples each action to its handler.
-    """
-    for meta in all_panel_button_metas():
-        on_click = _ON_CLICKS.get(meta.action)
-        if on_click is None:
-            continue
-        _register_button(
-            meta.action,
-            label=meta.label,
-            emoji=meta.emoji,
-            style=_STYLE_BY_NAME[meta.style_name],
-            on_click=on_click,
-        )
-
-
-_register_panel_buttons_from_meta()
-
-
-# Order in which buttons appear on the panel. Update this when adding new ones.
-PANEL_BUTTON_ACTIONS = PANEL_BUTTON_ORDER
-
-# Backward-compat alias for the cog's `add_dynamic_items` registration loop.
-PANEL_BUTTON_CLASSES = (_PanelButton,)
+# Dynamic-item classes the cog re-registers via ``add_dynamic_items`` so the
+# panel's selects keep working after a restart.
+PANEL_DYNAMIC_ITEM_CLASSES = (_PanelSelect,)
 
 
 # ---------------------------------------------------------------------------
@@ -1206,8 +1174,8 @@ def build_panel_embed() -> discord.Embed:
 
 def build_panel_view() -> discord.ui.View:
     view = discord.ui.View(timeout=None)
-    for action in PANEL_BUTTON_ACTIONS:
-        view.add_item(_PanelButton(action))
+    for group in PANEL_GROUP_ORDER:
+        view.add_item(_PanelSelect(group))
     return view
 
 
