@@ -395,8 +395,8 @@ def render_quote_card(
         # prompt reads centred yet flows around the floral corner.
         _ex_apex_y = height * 0.24          # above this the full width is free
         _ex_reach_y = height * 0.62         # at/below this the carve is maxed out
-        _ex_left_top = width * 0.93         # flowers' left edge above the corner
-        _ex_left_min = width * 0.50         # flowers' left edge level with them
+        _ex_left_top = width * 0.95         # flowers' left edge above the corner
+        _ex_left_min = width * 0.58         # flowers' left edge level with them
         _gap3 = 3 * max(1, _full_measure("nnn") // 3)  # ~3 characters of breathing room
 
         def _flower_left(y: float) -> float:
