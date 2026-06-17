@@ -355,14 +355,8 @@ def render_quote_card(
     pfp_d = pfp_r * 2
     px, py = pfp_cx - pfp_r, pfp_cy - pfp_r
 
-    if _no_pfp:
-        # Keep the prompt in the left-centre clear zone so it never collides
-        # with the brand's floral corner (bottom-right of the default border).
-        text_pad_l = int(width * 0.07)
-        text_col_w = int(width * 0.55)
-    else:
-        text_pad_l = int(width * 0.40)
-        text_col_w = int(width * 0.45)
+    text_pad_l = int(width * 0.40)
+    text_col_w = int(width * 0.45)
 
     body_size = max(26, width // 24)
     attr_size = max(16, width // 40)
@@ -381,17 +375,7 @@ def render_quote_card(
         def _base_m(t: str) -> int:  # type: ignore[misc]
             return int(draw.textbbox((0, 0), t, font=body_font)[2] - draw.textbbox((0, 0), t, font=body_font)[0])
     _quoted_text = f"“{text}”"
-    _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
-    lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
-    text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
-
-    # Per-line horizontal centring — used in no-pfp mode so the prompt sits
-    # centred across the whole card instead of in a right-hand column.
     _full_measure = _make_emoji_measure(_base_m, line_h)
-    def _line_x(s: str) -> int:
-        if not _no_pfp:
-            return text_pad_l
-        return text_pad_l + max(0, (text_col_w - _full_measure(s)) // 2)
 
     # No-pfp mode turns the label into a centred header above the prompt.
     _header_text = author_name if (_no_pfp and author_name) else ""
@@ -400,18 +384,80 @@ def render_quote_card(
         _hb = draw.textbbox((0, 0), _header_text, font=body_font)
         _header_h = int(_hb[3] - _hb[1])
         _header_gap = max(10, line_h // 2)
-    _content_h = text_block_h + (_header_h + _header_gap if _header_text else 0)
-    # Bias the block slightly upward in no-pfp mode so taller prompts stay above
-    # the densest part of the bottom floral corner.
-    _content_top = int((height - _content_h) * (0.42 if _no_pfp else 0.5))
-    text_y_start = _content_top + (_header_h + _header_gap if _header_text else 0)
+    _header_block = (_header_h + _header_gap) if _header_text else 0
+
+    left_margin = int(width * 0.06)
+
+    if _no_pfp:
+        # The brand's flowers fill the bottom-right corner. Carve a matching
+        # exclusion so the usable right edge drops toward the bottom; each line is
+        # centred within the remaining [left_margin, right_limit] band, so the
+        # prompt reads centred yet flows around the floral corner.
+        _ex_apex_y = height * 0.22          # above this the full width is free
+        _ex_reach_y = height * 0.55         # at/below this the carve is maxed out
+        _ex_right_top = width * 0.93        # usable right edge above the flowers
+        _ex_right_min = width * 0.46        # usable right edge level with them
+
+        def _right_limit(y: float) -> float:
+            if y <= _ex_apex_y:
+                return _ex_right_top
+            frac = min(1.0, (y - _ex_apex_y) / max(1.0, _ex_reach_y - _ex_apex_y))
+            return _ex_right_top - frac * (_ex_right_top - _ex_right_min)
+
+        def _avail_w(y: float) -> int:
+            return max(int(width * 0.28), int(_right_limit(y) - left_margin))
+
+        def _flow(text_start_y: int) -> list[str]:
+            out: list[str] = []
+            for para in _quoted_text.splitlines():
+                words = para.split()
+                if not words:
+                    out.append("")
+                    continue
+                cur = ""
+                for w in words:
+                    y = text_start_y + len(out) * (line_h + line_gap)
+                    cand = f"{cur} {w}".strip()
+                    if _full_measure(cand) <= _avail_w(y) or not cur:
+                        cur = cand
+                    else:
+                        out.append(cur)
+                        cur = w
+                if cur:
+                    out.append(cur)
+            return out or [""]
+
+        def _layout(lines_: list[str]) -> tuple[int, int]:
+            blk = len(lines_) * line_h + max(0, len(lines_) - 1) * line_gap
+            top = int((height - (blk + _header_block)) * 0.40)  # bias slightly up
+            return top + _header_block, top
+
+        # One re-flow: lay out at a nominal top, re-centre, then flow at the final
+        # start (usable width depends on absolute y).
+        lines = _flow(int(height * 0.26))
+        text_y_start, _content_top = _layout(lines)
+        lines = _flow(text_y_start)
+        text_y_start, _content_top = _layout(lines)
+
+        def _line_x(s: str, y: int) -> int:
+            return left_margin + max(0, (_avail_w(y) - _full_measure(s)) // 2)
+    else:
+        _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
+        lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
+        _content_top = (height - (len(lines) * line_h + max(0, len(lines) - 1) * line_gap)) // 2
+        text_y_start = _content_top
+
+        def _line_x(s: str, y: int) -> int:
+            return text_pad_l
+
+    text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
 
     # Soft gaussian text shadow
     _shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     _sdraw = ImageDraw.Draw(_shadow)
     _sy = text_y_start
     for line in lines:
-        _sdraw.text((_line_x(line) + 4, _sy + 4), _DISCORD_EMOJI_RE.sub('', line), font=body_font, fill=(0, 0, 0, 170))
+        _sdraw.text((_line_x(line, _sy) + 4, _sy + 4), _DISCORD_EMOJI_RE.sub('', line), font=body_font, fill=(0, 0, 0, 170))
         _sy += line_h + line_gap
     _shadow = _shadow.filter(ImageFilter.GaussianBlur(radius=5))
     _bg_rgba = bg.convert("RGBA")
@@ -425,7 +471,7 @@ def render_quote_card(
         with _Pilmoji(bg, source=_EmojiSource) as _pm:  # type: ignore[misc]
             for line in lines:
                 _render_line_mixed(
-                    line, _line_x(line), text_y,
+                    line, _line_x(line, text_y), text_y,
                     font=body_font, color=theme.text_color,
                     emoji_size=line_h, custom_emojis=custom_emojis,
                     bg=bg, draw=draw, pilmoji=_pm,
@@ -446,7 +492,7 @@ def render_quote_card(
         # No avatar box — draw the label as a centred header above the prompt.
         if _header_text:
             _hb2 = draw.textbbox((0, 0), _header_text, font=body_font)
-            _hx = text_pad_l + max(0, (text_col_w - int(_hb2[2] - _hb2[0])) // 2)
+            _hx = (width - int(_hb2[2] - _hb2[0])) // 2
             draw.text((_hx + 2, _content_top + 2), _header_text, font=body_font, fill=(0, 0, 0))
             draw.text((_hx, _content_top), _header_text, font=body_font, fill=theme.attribution_color)
     else:
