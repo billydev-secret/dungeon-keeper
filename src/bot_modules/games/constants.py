@@ -17,6 +17,7 @@ CLAPBACK_TIE_COLOR = 0x99AAB5   # Grey (ties)
 
 GAME_ICONS = {
     'ffa': '🎭',
+    'photo': '📸',
     'traditional': '🎲',
     'compliment': '💛',
     'mfk': '💍',
@@ -39,6 +40,7 @@ GAME_ICONS = {
 
 GAME_NAMES = {
     'ffa': 'Truth or Dare Cards',
+    'photo': 'Photo Challenge',
     'traditional': 'Truth or Dare',
     'compliment': 'Spin the Compliment',
     'mfk': 'Marry, Fornicate, Kiss',
@@ -67,7 +69,7 @@ GAME_NAMES = {
 # in its cog setup() (see bot.game_launchers); the startup coverage check warns
 # on drift.
 SCHEDULABLE_GAME_TYPES = [
-    'ffa', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
+    'ffa', 'photo', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
     'hottakes', 'story', 'ama', 'fantasies', 'price', 'rushmore', 'clapback',
     'legitlibs', 'risky_roll',
 ]
@@ -88,6 +90,10 @@ SCHEDULE_OPTION_SCHEMA = {
                      {'value': 'dare', 'label': 'Dare'}]},
         {'name': 'nsfw', 'label': 'Use spicier (NSFW) prompts', 'type': 'bool', 'default': False},
         {'name': 'prompt', 'label': 'Custom prompt (optional)', 'type': 'str', 'default': ''},
+    ],
+    'photo': [
+        {'name': 'nsfw', 'label': 'Use spicier (NSFW) prompts', 'type': 'bool', 'default': False},
+        {'name': 'prompt', 'label': 'Custom challenge (optional)', 'type': 'str', 'default': ''},
     ],
     'traditional': [],
     'compliment': [],
@@ -181,6 +187,16 @@ HOW_TO_PLAY = {
         "(mods can still see who sent them)\n\n"
         "💡 The host picks Truth/Dare/random, can toggle the spicier (NSFW) bank, "
         "or write their own prompt — and can schedule an automated series from the dashboard."
+    ),
+    'photo': (
+        "📸 **Photo Challenge**\n"
+        "The host drops a Photo Challenge card and a thread opens for everyone's shots.\n\n"
+        "1. Read the challenge on the card\n"
+        "2. Reply right in the thread with your photo\n"
+        "3. Browse everyone else's takes as they roll in\n\n"
+        "💡 Challenges are curated in the **Games Studio** (web dashboard). The host "
+        "can toggle the spicier (NSFW) bank, write their own challenge, or schedule "
+        "an automated series."
     ),
     'traditional': (
         "🎲 **Truth or Dare**\n"

@@ -181,6 +181,10 @@ const SECTIONS = [
         { id: "games-ama",        label: "Questions",  module: "./panels/games-ama.js" },
         { id: "games-ama-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "ama" },
       ]},
+      { heading: "Photo Challenge", items: [
+        { id: "games-photo",        label: "Questions",  module: "./panels/games-photo.js" },
+        { id: "games-photo-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "photo" },
+      ]},
       { heading: "Guess Who", items: [
         { id: "config-guess", label: "Config",     module: "./panels/config-guess.js" },
       ]},

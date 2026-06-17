@@ -206,6 +206,7 @@ def main() -> None:
         "bot_modules.cogs.games_config_cog",
         "bot_modules.cogs.games_help_cog",
         "bot_modules.cogs.games_ffa_cog",
+        "bot_modules.cogs.games_photo_cog",
         "bot_modules.cogs.games_traditional_cog",
         "bot_modules.cogs.games_compliment_cog",
         "bot_modules.cogs.games_mfk_cog",

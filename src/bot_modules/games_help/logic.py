@@ -19,6 +19,7 @@ SUPPORT_INVITE_URL = "https://discord.gg/7gfbYYkH"
 # Slash command name for each game.
 GAME_COMMANDS: dict[str, str] = {
     "ffa": "/ffa",
+    "photo": "/photo",
     "traditional": "/traditional",
     "compliment": "/compliment",
     "mfk": "/mfk",
@@ -39,6 +40,7 @@ GAME_COMMANDS: dict[str, str] = {
 # Short one-line descriptions for the help list.
 GAME_DESCRIPTIONS: dict[str, str] = {
     "ffa": "Ask the server a question — everyone replies.",
+    "photo": "Drop a photo challenge — everyone posts their shot in the thread.",
     "traditional": "Classic truth or dare with SFW/NSFW categories.",
     "compliment": "Random pairings — give your match a compliment.",
     "mfk": "Assign three names to each player. You know the rest.",

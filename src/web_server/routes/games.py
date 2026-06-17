@@ -22,11 +22,11 @@ _PROMPT_CONFIG_PATH = (
     Path(__file__).parent.parent.parent / "bot_modules" / "games" / "prompt_config.json"
 )
 
-VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama"}
+VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo"}
 
 ALL_GAME_TYPES = [
     "wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama",
-    "traditional", "mfk", "compliment", "ffa", "ttl", "hottakes",
+    "traditional", "mfk", "compliment", "ffa", "photo", "ttl", "hottakes",
     "story", "fantasies", "risky_roller",
 ]
 

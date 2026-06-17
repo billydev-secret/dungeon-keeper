@@ -2,11 +2,12 @@
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
-const GAME_TYPES = ["wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama"];
-const GAME_ICONS = { wyr: "🤔", nhie: "⛔", mlt: "👑", rushmore: "🗿", price: "💰", clapback: "⚔️", ama: "🎙️" };
+const GAME_TYPES = ["wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo"];
+const GAME_ICONS = { wyr: "🤔", nhie: "⛔", mlt: "👑", rushmore: "🗿", price: "💰", clapback: "⚔️", ama: "🎙️", photo: "📸" };
 const GAME_NAMES = {
   wyr: "Would You Rather", nhie: "Never Have I Ever", mlt: "Most Likely To",
   rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
+  photo: "Photo Challenge",
 };
 
 function gameLabel(gt) {

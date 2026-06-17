@@ -44,6 +44,12 @@
       "descriptor": "Anonymous AMA questions for a player in the hot seat",
       "user_prompt": "Generate ONE anonymous AMA question that someone would ask in a Discord hot-seat game. Keep it clear, specific, and conversation-starting. Return only the question text, no quotes, no numbering, no preamble.",
       "max_tokens": 120
+    },
+    "photo": {
+      "name": "Photo Challenge",
+      "descriptor": "Photo Challenge prompts — playful dares to post a single photo",
+      "user_prompt": "Generate ONE Photo Challenge prompt: a short, playful dare that anyone can answer by posting a single photo from their phone right now (e.g. 'the last photo in your camera roll', 'your most chaotic selfie', 'whatever's closest to you'). Achievable in seconds, no special setup. Return only the prompt as a single sentence. No quotes, no numbering, no preamble.",
+      "max_tokens": 120
     }
   }
 }

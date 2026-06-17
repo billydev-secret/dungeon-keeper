@@ -124,6 +124,16 @@ async def get_clapback_prompt(
     return await _ai_generate("clapback", category)
 
 
+async def get_photo_prompt(db, category: str = "sfw") -> str | None:
+    """Return a random Photo Challenge prompt from the bank, or None if empty.
+
+    Bank-only by design: photo prompts are curated in the web Games Studio
+    (no AI fallback at launch). The cog posts a "no prompts available" notice
+    when this returns None.
+    """
+    return await _get_bank_question(db, "photo", category=category)
+
+
 async def has_clapback_prompts(db) -> bool:
     """Returns True if at least 1 Clapback prompt exists in the bank.
 
