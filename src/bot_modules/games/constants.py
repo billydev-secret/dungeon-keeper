@@ -174,11 +174,13 @@ HOW_TO_PLAY = {
         "🎭 **Truth or Dare Cards**\n"
         "The host drops a Truth or Dare card and a thread opens for replies.\n\n"
         "1. Read the prompt on the card (TRUTH or DARE)\n"
-        "2. Reply in the card's thread — or click **Reply Anonymously** to send "
-        "it through a popup that hides your name\n"
-        "3. Anonymous replies are posted into the thread by the bot with no attribution\n\n"
-        "💡 The host picks Truth/Dare/random and can toggle the spicier (NSFW) bank, "
-        "or write their own prompt. Close the game whenever it winds down."
+        "2. Reply right in the thread — or use the thread's buttons:\n"
+        "   • **🎭 Reply Anonymously** — same anon nickname all thread\n"
+        "   • **🎲 Reply Super Anonymously** — a fresh nickname each time\n"
+        "3. Anonymous replies are posted into the thread with no attribution "
+        "(mods can still see who sent them)\n\n"
+        "💡 The host picks Truth/Dare/random, can toggle the spicier (NSFW) bank, "
+        "or write their own prompt — and can schedule an automated series from the dashboard."
     ),
     'traditional': (
         "🎲 **Truth or Dare**\n"

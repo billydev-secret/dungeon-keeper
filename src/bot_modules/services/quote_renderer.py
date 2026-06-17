@@ -306,10 +306,15 @@ def render_quote_card(
     width: int = 900,
     height: int = 500,
     custom_emojis: "dict[str, bytes] | None" = None,
+    pfp_shape: str = "circle",
 ) -> bytes:
     """Render a quote card with the avatar as a blurred, color-graded background.
 
     Layout: pfp on LEFT, text on RIGHT. Returns PNG bytes with transparent corners.
+
+    ``pfp_shape`` controls the foreground avatar: ``"circle"`` (default — circular
+    crop with a double ring) or ``"square"`` (rounded-square that shows the whole
+    avatar without clipping its corners).
     """
     from PIL import Image, ImageDraw, ImageFilter  # noqa: PLC0415
 
@@ -404,39 +409,45 @@ def render_quote_card(
             text_y += line_h + line_gap
     draw = ImageDraw.Draw(bg)
 
+    _square = pfp_shape == "square"
+    _sq_r = max(6, int(pfp_d * 0.10))
+
     # Pfp drop shadow
     _pfp_sh = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     _soff = pfp_r // 5
-    ImageDraw.Draw(_pfp_sh).ellipse(
-        (px + _soff - 6, py + _soff - 6, px + pfp_d + _soff + 6, py + pfp_d + _soff + 6),
-        fill=(0, 0, 0, 150),
-    )
+    _sh_draw = ImageDraw.Draw(_pfp_sh)
+    _sh_box = (px + _soff - 6, py + _soff - 6, px + pfp_d + _soff + 6, py + pfp_d + _soff + 6)
+    if _square:
+        _sh_draw.rounded_rectangle(_sh_box, radius=_sq_r + 6, fill=(0, 0, 0, 150))
+    else:
+        _sh_draw.ellipse(_sh_box, fill=(0, 0, 0, 150))
     _pfp_sh = _pfp_sh.filter(ImageFilter.GaussianBlur(radius=pfp_r // 3))
     _bg_rgba = bg.convert("RGBA")
     _bg_rgba.alpha_composite(_pfp_sh)
     bg = _bg_rgba.convert("RGB")
     draw = ImageDraw.Draw(bg)
 
-    # Circular pfp — unblurred avatar cropped into a circle
+    # Pfp — unblurred avatar, circle-cropped or rounded-square per pfp_shape
     avatar_img = Image.open(io.BytesIO(avatar_bytes)).convert("RGB")
     avatar_img = avatar_img.resize((pfp_d, pfp_d), Image.Resampling.LANCZOS)  # type: ignore[attr-defined]
-    circle_mask = Image.new("L", (pfp_d, pfp_d), 0)
-    ImageDraw.Draw(circle_mask).ellipse((0, 0, pfp_d - 1, pfp_d - 1), fill=255)
-    bg.paste(avatar_img, (px, py), mask=circle_mask)
+    pfp_mask = Image.new("L", (pfp_d, pfp_d), 0)
+    if _square:
+        ImageDraw.Draw(pfp_mask).rounded_rectangle((0, 0, pfp_d - 1, pfp_d - 1), radius=_sq_r, fill=255)
+    else:
+        ImageDraw.Draw(pfp_mask).ellipse((0, 0, pfp_d - 1, pfp_d - 1), fill=255)
+    bg.paste(avatar_img, (px, py), mask=pfp_mask)
     draw = ImageDraw.Draw(bg)
 
-    # Double ring: outer cream + inner gold
+    # Double frame: outer cream + inner gold, matching the pfp shape
     _rg, _rt = 4, 3
-    draw.ellipse(
-        (px - _rg - _rt, py - _rg - _rt, px + pfp_d + _rg + _rt - 1, py + pfp_d + _rg + _rt - 1),
-        outline=(255, 248, 220),
-        width=_rt,
-    )
-    draw.ellipse(
-        (px - 3, py - 3, px + pfp_d + 2, py + pfp_d + 2),
-        outline=theme.attribution_color,
-        width=3,
-    )
+    _outer = (px - _rg - _rt, py - _rg - _rt, px + pfp_d + _rg + _rt - 1, py + pfp_d + _rg + _rt - 1)
+    _inner = (px - 3, py - 3, px + pfp_d + 2, py + pfp_d + 2)
+    if _square:
+        draw.rounded_rectangle(_outer, radius=_sq_r + _rg + _rt, outline=(255, 248, 220), width=_rt)
+        draw.rounded_rectangle(_inner, radius=_sq_r + 3, outline=theme.attribution_color, width=3)
+    else:
+        draw.ellipse(_outer, outline=(255, 248, 220), width=_rt)
+        draw.ellipse(_inner, outline=theme.attribution_color, width=3)
 
     # Author name centred below pfp
     if author_name:
