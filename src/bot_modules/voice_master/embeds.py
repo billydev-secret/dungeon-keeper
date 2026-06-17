@@ -105,6 +105,71 @@ def build_inline_panel_embed(*, owner_mention: str) -> discord.Embed:
     )
 
 
+def build_howto_embed(*, hub_mention: str | None = None) -> discord.Embed:
+    """A member-facing 'how it works' guide, meant for a lobby channel.
+
+    ``hub_mention`` is an optional ``<#id>`` mention for the configured Hub
+    channel; when absent (Hub unset) we fall back to plain text so the guide
+    still reads correctly on an unconfigured guild.
+
+    Kept comfortably inside Discord's embed limits (field values ≤1024,
+    ≤25 fields) — the command lists are short by design.
+    """
+    hub = hub_mention or "the **Hub** voice channel"
+    embed = discord.Embed(
+        title="🔊 Make Your Own Voice Channel",
+        description=(
+            f"Join {hub} and the bot instantly spins up a **private room "
+            "that's yours**. You're the owner — shape it however you like, "
+            "and it cleans itself up automatically once everyone leaves.\n\n"
+            "Manage your room from the **control panel** that appears in its "
+            "chat (two dropdown menus), or with `/voice` slash commands "
+            "anywhere."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.add_field(
+        name="🛠️ Settings menu",
+        value=(
+            "✏️ **Rename** · 🔢 **Limit** (max people) · "
+            "👁️ **Hide** / 👀 **Unhide** · 🧹 **Reset**"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🔑 Permissions menu",
+        value=(
+            "🔒 **Lock** / 🔓 **Unlock** · 👋 **Invite** · "
+            "🚫 **Kick** · 👑 **Transfer** ownership"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="💬 Handy commands",
+        value=(
+            "`/voice lock` · `/voice limit` · `/voice invite` · "
+            "`/voice rename` · `/voice kick` · `/voice transfer`\n"
+            "`/voice knock` — ask to join a locked room\n"
+            "`/voice claim` — take over if the owner left\n"
+            "`/voice sleepkick` — auto-disconnect yourself later\n"
+            "`/voice owner` — see who runs the room you're in"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="⭐ Remembered for next time",
+        value=(
+            "`/voice trusted add` — auto-invite someone to every future room\n"
+            "`/voice blocked add` — auto-deny someone from every future room\n"
+            "`/voice profile` — your name, limit & lock/hide settings save as "
+            "defaults"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Join the Hub to get started — your room is yours.")
+    return embed
+
+
 def build_knock_request_embed(
     *,
     requester_mention: str,

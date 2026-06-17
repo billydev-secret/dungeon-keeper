@@ -133,6 +133,51 @@ def test_post_config_treats_empty_channel_ids_as_zero(authed_client):
     assert body["category_id"] == "0"
 
 
+# ── POST /voice-master/post-howto ────────────────────────────────────
+
+
+def test_post_howto_returns_503_when_bot_offline(authed_client, fake_ctx):
+    # fake_ctx.bot is None by default → no live bot to send the message.
+    resp = authed_client.post(
+        "/api/voice-master/post-howto", json={"channel_id": "300"}
+    )
+    assert resp.status_code == 503
+
+
+def test_post_howto_rejects_non_text_channel(authed_client, fake_ctx):
+    voice = MagicMock(spec=discord.VoiceChannel)
+    voice.id = 300
+    _attach_bot(fake_ctx, channels=[voice])
+    resp = authed_client.post(
+        "/api/voice-master/post-howto", json={"channel_id": "300"}
+    )
+    assert resp.status_code == 400
+
+
+def test_post_howto_posts_embed_with_hub_mention(authed_client, fake_ctx):
+    lobby = MagicMock(spec=discord.TextChannel)
+    lobby.id = 300
+    sent = MagicMock()
+    sent.jump_url = "https://discord.com/channels/1/300/999"
+    lobby.send = AsyncMock(return_value=sent)
+
+    with open_db(fake_ctx.db_path) as conn:
+        set_voice_master_config_value(
+            conn, fake_ctx.guild_id, "voice_master_hub_channel_id", "555"
+        )
+    _attach_bot(fake_ctx, channels=[lobby])
+
+    resp = authed_client.post(
+        "/api/voice-master/post-howto", json={"channel_id": "300"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["message_url"] == sent.jump_url
+    lobby.send.assert_awaited_once()
+    embed = lobby.send.await_args.kwargs["embed"]
+    assert "Voice Channel" in embed.title
+    assert "<#555>" in embed.description  # configured Hub is mentioned
+
+
 # ── name blocklist ───────────────────────────────────────────────────
 
 

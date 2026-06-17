@@ -10,7 +10,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from bot_modules.services.moderation import write_audit
-from bot_modules.voice_master.embeds import build_admin_audit_mirror_embed
+from bot_modules.voice_master.embeds import (
+    build_admin_audit_mirror_embed,
+    build_howto_embed,
+)
 from bot_modules.voice_master.logic import (
     build_force_clear_profile_summary,
     build_force_delete_summary,
@@ -71,6 +74,10 @@ class ConfigPayload(BaseModel):
 
 class NameBlocklistAdd(BaseModel):
     pattern: str
+
+
+class PostHowtoPayload(BaseModel):
+    channel_id: str
 
 
 class ForceTransferPayload(BaseModel):
@@ -203,6 +210,65 @@ async def set_config(
 
     await run_query(_q)
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# How-to guide
+# ---------------------------------------------------------------------------
+
+
+@router.post("/voice-master/post-howto")
+async def post_howto(
+    request: Request,
+    payload: PostHowtoPayload,
+    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+) -> dict[str, Any]:
+    """Post the member-facing Voice Master how-to embed into a chosen channel.
+
+    Needs the live bot to send the message; returns 503 when it's offline,
+    matching the other dashboard 'post to channel' actions.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    bot = getattr(ctx, "bot", None)
+    if bot is None:
+        raise HTTPException(503, "Bot not available")
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        raise HTTPException(503, "Discord guild not available")
+    try:
+        channel_id = int(payload.channel_id)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Invalid channel_id")
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        raise HTTPException(400, "Channel must be a text channel in this guild")
+
+    def _load_hub() -> int:
+        with ctx.open_db() as conn:
+            return load_voice_master_config(conn, guild_id).hub_channel_id
+
+    hub_id = await run_query(_load_hub)
+    hub_mention = f"<#{hub_id}>" if hub_id else None
+    embed = build_howto_embed(hub_mention=hub_mention)
+    try:
+        msg = await channel.send(embed=embed)
+    except (discord.Forbidden, discord.HTTPException) as e:
+        raise HTTPException(500, f"Discord error: {e}")
+
+    def _audit() -> None:
+        with ctx.open_db() as conn:
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="vm_post_howto",
+                actor_id=int(user.user_id),
+                extra={"channel_id": channel_id, "via": "web"},
+            )
+
+    await run_query(_audit)
+    return {"status": "ok", "message_url": msg.jump_url}
 
 
 # ---------------------------------------------------------------------------

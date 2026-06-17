@@ -217,6 +217,46 @@ export function mount(container) {
       }
     });
 
+    // ── How-to guide ──────────────────────────────────────────────────
+    const howtoHeader = document.createElement("div");
+    howtoHeader.className = "section-label";
+    howtoHeader.textContent = "Post how-to guide";
+    panel.appendChild(howtoHeader);
+
+    const howtoForm = document.createElement("form");
+    howtoForm.className = "form";
+    panel.appendChild(howtoForm);
+    howtoForm.appendChild(buildField(
+      "Channel for the guide",
+      selectFromChannels("howto_channel_id", channels, "0", "text"),
+      "Posts a member-facing 'how Voice Master works' embed (e.g. in your lobby). Re-run anytime.",
+    ));
+    const howtoRow = document.createElement("div");
+    const howtoBtn = document.createElement("button");
+    howtoBtn.type = "submit";
+    howtoBtn.className = "btn";
+    howtoBtn.textContent = "Post guide";
+    const howtoStatus = document.createElement("span");
+    howtoRow.appendChild(howtoBtn);
+    howtoRow.appendChild(howtoStatus);
+    howtoForm.appendChild(howtoRow);
+
+    howtoForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(howtoForm);
+      const channel_id = String(fd.get("howto_channel_id") || "0");
+      if (channel_id === "0") {
+        showStatus(howtoStatus, false, "Pick a channel first");
+        return;
+      }
+      try {
+        await apiPost("/api/voice-master/post-howto", { channel_id });
+        showStatus(howtoStatus, true);
+      } catch (err) {
+        showStatus(howtoStatus, false, err.message);
+      }
+    });
+
     // ── Name blocklist ────────────────────────────────────────────────
     const blHeader = document.createElement("div");
     blHeader.className = "section-label";

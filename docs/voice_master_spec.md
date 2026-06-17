@@ -55,6 +55,10 @@ A single message in a designated text channel holds buttons for every owner acti
 
 The Reset button asks the owner to choose between resetting just this channel (current state) or also resetting their saved profile.
 
+### How-to guide
+
+Admins can post a member-facing how-it-works embed into any text channel (e.g. a lobby) from the web dashboard's Voice Master panel — pick a channel and click **Post guide**. The embed explains the Hub-to-create flow, the panel's Settings / Permissions menus, and the handy `/voice` commands; it mentions the configured Hub channel when one is set, and falls back to plain text otherwise. It's a one-shot post (re-run anytime), separate from the persistent control panel, and posting is audit-logged (`vm_post_howto`).
+
 ### Ownership and the grace period
 
 When the owner leaves the channel, ownership stays with them — they can return at any time. If they've been gone for past the configured **grace period** (default 5 min) or have left the server entirely, any remaining member can claim ownership via `/voice claim` or the panel.
