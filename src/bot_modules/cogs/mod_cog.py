@@ -207,14 +207,8 @@ def _build_help_pages(
         _page(
             "Image Guessing Games",
             "Submit a cropped NSFW image; opted-in members guess whose body it is. "
-            "Veil uses a dropdown picker, Guess uses written-name guessing with a leaderboard.\n\n"
-            "**🫥 Veil**\n"
-            + _fmt(
-                [
-                    ("/veil submit image:<attachment>", "Submit an NSFW image to the Veil channel — bot validates, crops, previews, then posts."),
-                ]
-            )
-            + "\n\n**❓ Guess**\n"
+            "Guess uses written-name guessing with a leaderboard.\n\n"
+            "**❓ Guess**\n"
             + _fmt(
                 [
                     ("/guess submit image:<attachment>", "Open the Guess crop editor — position the reveal, then post."),

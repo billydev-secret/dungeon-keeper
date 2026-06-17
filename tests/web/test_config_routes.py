@@ -82,7 +82,7 @@ def test_e2e_moderation_roles_per_guild_permission_isolation(fake_ctx):
 # ── GET /api/guess/audit ───────────────────────────────────────────────
 
 
-def test_veil_audit_returns_events_for_active_guild(authed_client, fake_ctx):
+def test_guess_audit_returns_events_for_active_guild(authed_client, fake_ctx):
     with open_db(fake_ctx.db_path) as conn:
         insert_audit_event(
             conn, guild_id=fake_ctx.guild_id, actor_id=42,
@@ -102,7 +102,7 @@ def test_veil_audit_returns_events_for_active_guild(authed_client, fake_ctx):
     assert events[0]["actor_id"] == "43"  # IDs serialized as strings
 
 
-def test_veil_audit_filter_by_action(authed_client, fake_ctx):
+def test_guess_audit_filter_by_action(authed_client, fake_ctx):
     with open_db(fake_ctx.db_path) as conn:
         insert_audit_event(
             conn, guild_id=fake_ctx.guild_id, actor_id=1,
@@ -120,7 +120,7 @@ def test_veil_audit_filter_by_action(authed_client, fake_ctx):
     assert events[0]["action"] == "solve"
 
 
-def test_veil_audit_rejects_invalid_action(authed_client):
+def test_guess_audit_rejects_invalid_action(authed_client):
     resp = authed_client.get("/api/guess/audit?action=hax")
     assert resp.status_code == 400
 
@@ -424,7 +424,7 @@ def test_booster_role_upsert_and_delete(authed_client, fake_ctx):
     assert "fire" not in [r["role_key"] for r in roles]
 
 
-def test_get_config_includes_veil_section(authed_client):
+def test_get_config_includes_guess_section(authed_client):
     resp = authed_client.get("/api/config")
     assert resp.status_code == 200
     v = resp.json()["guess"]
@@ -483,7 +483,7 @@ def test_auto_delete_rule_upsert_and_delete(authed_client, fake_ctx):
 # ── PUT /api/config/guess ──────────────────────────────────────────────
 
 
-def test_update_veil_channel(authed_client, fake_ctx):
+def test_update_guess_channel(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/guess", json={"channel_id": "555"})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
@@ -493,7 +493,7 @@ def test_update_veil_channel(authed_client, fake_ctx):
     assert val == "555"
 
 
-def test_update_veil_crop_difficulty_hard(authed_client, fake_ctx):
+def test_update_guess_crop_difficulty_hard(authed_client, fake_ctx):
     resp = authed_client.put("/api/config/guess", json={"crop_difficulty": "hard"})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
@@ -503,7 +503,7 @@ def test_update_veil_crop_difficulty_hard(authed_client, fake_ctx):
     assert val == "hard"
 
 
-def test_update_veil_invalid_difficulty_returns_error(authed_client):
+def test_update_guess_invalid_difficulty_returns_error(authed_client):
     resp = authed_client.put("/api/config/guess", json={"crop_difficulty": "insane"})
     assert resp.status_code == 200
     data = resp.json()
