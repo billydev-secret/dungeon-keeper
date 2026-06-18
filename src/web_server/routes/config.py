@@ -233,6 +233,57 @@ def _dms_section_with_conn(conn, guild_id: int) -> dict:
 # ── Starboard config helper ──────────────────────────────────────────
 
 
+def _bulk_cleanup_section(conn, guild_id: int) -> dict:
+    from bot_modules.services.bulk_cleanup_service import (
+        DEFAULT_AGE_DAYS,
+        EXCLUDED_BUCKET,
+        _AGE_DAYS_KEY,
+        _ENABLED_KEY,
+        _LAST_RUN_KEY,
+    )
+
+    enabled = (
+        get_config_value(
+            conn, _ENABLED_KEY, "0", guild_id, allow_legacy_fallback=False
+        )
+        == "1"
+    )
+    try:
+        age_days = int(
+            get_config_value(
+                conn,
+                _AGE_DAYS_KEY,
+                str(DEFAULT_AGE_DAYS),
+                guild_id,
+                allow_legacy_fallback=False,
+            )
+        )
+    except (TypeError, ValueError):
+        age_days = DEFAULT_AGE_DAYS
+    try:
+        last_run_ts = float(
+            get_config_value(
+                conn, _LAST_RUN_KEY, "0", guild_id, allow_legacy_fallback=False
+            )
+        )
+    except (TypeError, ValueError):
+        last_run_ts = 0.0
+
+    return {
+        "enabled": enabled,
+        "age_days": age_days,
+        "last_run_ts": last_run_ts,
+        "excluded_channels": [
+            str(i)
+            for i in sorted(
+                get_config_id_set(
+                    conn, EXCLUDED_BUCKET, guild_id, allow_legacy_fallback=False
+                )
+            )
+        ],
+    }
+
+
 def _starboard_section(conn, guild_id: int) -> dict:
     import sqlite3
 
@@ -733,6 +784,7 @@ async def get_config(
                     }
                     for r in list_auto_delete_rules_for_guild_with_conn(conn, guild_id)
                 ],
+                "bulk_cleanup": _bulk_cleanup_section(conn, guild_id),
                 "confessions": _confessions_section(guild_id, bot, conn),
                 "dms": _dms_section_with_conn(conn, guild_id),
                 "starboard": _starboard_section(conn, guild_id),
@@ -2292,6 +2344,49 @@ async def update_starboard(
                     add_config_id(
                         conn, _STARBOARD_EXCLUDED_BUCKET, int(cid), guild_id
                     )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class BulkCleanupUpdate(BaseModel):
+    enabled: bool | None = None
+    age_days: int | None = None
+    excluded_channels: list[str] | None = None
+
+
+@router.put("/config/bulk-cleanup")
+async def update_bulk_cleanup(
+    request: Request,
+    body: BulkCleanupUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    from bot_modules.services.bulk_cleanup_service import (
+        EXCLUDED_BUCKET,
+        MIN_AGE_DAYS,
+        _AGE_DAYS_KEY,
+        _ENABLED_KEY,
+    )
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.age_days is not None and body.age_days < MIN_AGE_DAYS:
+                raise HTTPException(
+                    400, f"Age must be at least {MIN_AGE_DAYS} day(s)"
+                )
+            if body.enabled is not None:
+                set_config_value(
+                    conn, _ENABLED_KEY, "1" if body.enabled else "0", guild_id
+                )
+            if body.age_days is not None:
+                set_config_value(conn, _AGE_DAYS_KEY, str(int(body.age_days)), guild_id)
+            if body.excluded_channels is not None:
+                clear_config_id_bucket(conn, EXCLUDED_BUCKET, guild_id)
+                for cid in body.excluded_channels:
+                    add_config_id(conn, EXCLUDED_BUCKET, int(cid), guild_id)
         return {"ok": True}
 
     return await run_query(_q)
