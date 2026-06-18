@@ -27,6 +27,47 @@ STORAGE_LEVEL_DELETE_CACHE = "delete_cache"  # reserved — not implemented
 SUPPORTED_STORAGE_LEVELS = frozenset({STORAGE_LEVEL_NONE, STORAGE_LEVEL_ALL})
 
 
+# ── Media-kind classification ─────────────────────────────────────────
+# A coarse per-message media classification kept as metadata even when raw
+# content/attachment URLs are dropped (storage level "none"), so media-based
+# metrics (e.g. NSFW posting by gender) keep working without retaining content.
+# Derived from attachment file extensions only — no URL or content is stored.
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+_VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm", ".avi", ".mkv")
+# "media" = non-gif image/video (what the NSFW media metric counts).
+MEDIA_KIND_MEDIA = "media"
+MEDIA_KIND_GIF = "gif"
+MEDIA_KIND_OTHER = "other"
+
+
+def classify_media_kind(filenames: list[str]) -> str | None:
+    """Reduce a message's attachment names to a single coarse media_kind.
+
+    Precedence: ``media`` (non-gif image/video) > ``gif`` > ``other``; returns
+    ``None`` when there are no attachments. ``filenames`` may be filenames or
+    full URLs — only the extension (before any ``?`` query string) is inspected,
+    so no URL or content is retained.
+    """
+    if not filenames:
+        return None
+    kinds: set[str] = set()
+    for name in filenames:
+        path = name.split("?", 1)[0].lower()
+        dot = path.rfind(".")
+        ext = path[dot:] if dot != -1 else ""
+        if ext in _IMAGE_EXTENSIONS or ext in _VIDEO_EXTENSIONS:
+            kinds.add(MEDIA_KIND_MEDIA)
+        elif ext == ".gif":
+            kinds.add(MEDIA_KIND_GIF)
+        else:
+            kinds.add(MEDIA_KIND_OTHER)
+    if MEDIA_KIND_MEDIA in kinds:
+        return MEDIA_KIND_MEDIA
+    if MEDIA_KIND_GIF in kinds:
+        return MEDIA_KIND_GIF
+    return MEDIA_KIND_OTHER
+
+
 def guild_retains_content(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -78,7 +119,8 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
             reply_to_id INTEGER,
             ts          INTEGER NOT NULL,
             sentiment   REAL,
-            emotion     TEXT
+            emotion     TEXT,
+            media_kind  TEXT
         )
         """
     )
@@ -373,6 +415,7 @@ def store_message(
     emotion: str | None = None,
     embeds: Sequence[dict] = (),
     retain_content: bool = True,
+    media_kind: str | None = None,
 ) -> None:
     """Store a message and its related data. Silently skips if already stored.
 
@@ -383,9 +426,10 @@ def store_message(
 
     When ``retain_content`` is False (guild storage level ``none``), the raw
     message text, attachment URLs, and embeds are dropped — only the row
-    skeleton (ids/ts), derivations (sentiment/emotion), and @-mention edges
-    are persisted, leaving a content-less record that still reconstructs a
-    Discord deep link.
+    skeleton (ids/ts), derivations (sentiment/emotion/media_kind), and
+    @-mention edges are persisted, leaving a content-less record that still
+    reconstructs a Discord deep link. ``media_kind`` is metadata (an attachment
+    classification, not a URL), so it is retained regardless of storage level.
     """
     if not retain_content:
         content = None
@@ -399,8 +443,8 @@ def store_message(
     conn.execute(
         """
         INSERT INTO messages
-            (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts, sentiment, emotion)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (message_id, guild_id, channel_id, author_id, content, reply_to_id, ts, sentiment, emotion, media_kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(message_id) DO UPDATE SET
             content = CASE
                 WHEN (messages.content IS NULL OR messages.content = '')
@@ -411,7 +455,8 @@ def store_message(
             END,
             reply_to_id = COALESCE(messages.reply_to_id, excluded.reply_to_id),
             sentiment = COALESCE(excluded.sentiment, messages.sentiment),
-            emotion = COALESCE(excluded.emotion, messages.emotion)
+            emotion = COALESCE(excluded.emotion, messages.emotion),
+            media_kind = COALESCE(excluded.media_kind, messages.media_kind)
         """,
         (
             message_id,
@@ -423,6 +468,7 @@ def store_message(
             ts,
             sentiment,
             emotion,
+            media_kind,
         ),
     )
     for url in attachment_urls:

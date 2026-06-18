@@ -24,6 +24,7 @@ from bot_modules.services.interaction_graph import record_interactions
 from bot_modules.services.invite_tracker import detect_inviter, record_invite, refresh_invite_cache
 from bot_modules.services.message_store import (
     adjust_reaction_count,
+    classify_media_kind,
     mark_member_left,
     record_member_event,
     record_reaction,
@@ -156,6 +157,9 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                             if retain
                             else (),
                             retain_content=retain,
+                            media_kind=classify_media_kind(
+                                [a.filename for a in msg.attachments]
+                            ),
                         )
                         for reaction in msg.reactions:
                             set_reaction_count(
@@ -368,6 +372,9 @@ class EventsCog(commands.Cog):
         if message.reference and message.reference.message_id:
             reply_to_id = message.reference.message_id
         attachment_urls = [a.url for a in message.attachments] if retain else []
+        # media_kind is metadata (an attachment classification, not a URL), so it
+        # is recorded regardless of storage level to keep media metrics working.
+        media_kind = classify_media_kind([a.filename for a in message.attachments])
 
         if is_bot_author:
             sentiment, emotion = await asyncio.to_thread(score_text, message.content)
@@ -397,6 +404,7 @@ class EventsCog(commands.Cog):
                     if retain
                     else (),
                     retain_content=retain,
+                    media_kind=media_kind,
                 )
                 if sentiment is not None:
                     conn.execute(
@@ -457,6 +465,7 @@ class EventsCog(commands.Cog):
                     if retain
                     else (),
                     retain_content=retain,
+                    media_kind=media_kind,
                 )
                 upsert_known_user(
                     conn,
@@ -529,6 +538,7 @@ class EventsCog(commands.Cog):
                 if retain
                 else (),
                 retain_content=retain,
+                media_kind=media_kind,
             )
 
             if sentiment is not None:

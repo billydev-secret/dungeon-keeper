@@ -726,19 +726,20 @@ def test_query_nsfw_gender_activity_buckets_by_gender(db_conn):
     assert sum(by_gender["unknown"]) == 1
 
 
-def test_query_nsfw_gender_activity_media_only_filters_to_attachments(db_conn):
+def test_query_nsfw_gender_activity_media_only_filters_by_media_kind(db_conn):
     now_ts = int(datetime.now(timezone.utc).timestamp() - 60)
     _seed_messages(
         db_conn,
         rows=[
             (1, 999, 7, now_ts, None, "hi"),
             (2, 999, 7, now_ts + 1, None, "pic"),
+            (3, 999, 7, now_ts + 2, None, "gif"),
         ],
     )
-    db_conn.execute(
-        "INSERT INTO message_attachments (message_id, url) VALUES (?,?)",
-        (2, "https://cdn.example.com/pic.png"),
-    )
+    # media_kind is the lightweight metadata that drives the media split — it is
+    # recorded even when raw attachment URLs are not retained (storage "none").
+    db_conn.execute("UPDATE messages SET media_kind = 'media' WHERE message_id = 2")
+    db_conn.execute("UPDATE messages SET media_kind = 'gif' WHERE message_id = 3")
     db_conn.commit()
     _, by_gender = query_nsfw_gender_activity(
         db_conn,
@@ -747,7 +748,7 @@ def test_query_nsfw_gender_activity_media_only_filters_to_attachments(db_conn):
         channel_ids=[999],
         media_only=True,
     )
-    # Only message 2 has an attachment with image extension
+    # Only message 2 counts: 'media' is included, 'gif' and text are excluded.
     total = sum(sum(v) for v in by_gender.values())
     assert total == 1
 

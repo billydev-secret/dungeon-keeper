@@ -17,6 +17,7 @@ import discord
 
 from bot_modules.services.interaction_graph import clear_interaction_data, record_interactions
 from bot_modules.services.message_store import (
+    classify_media_kind,
     guild_retains_content,
     set_reaction_count,
     store_message,
@@ -433,6 +434,9 @@ async def backfill_interactions_async(
                         if retain_content
                         else (),
                         retain_content=retain_content,
+                        media_kind=classify_media_kind(
+                            [a.filename for a in message.attachments]
+                        ),
                     )
 
                     for reaction in message.reactions:

@@ -2319,20 +2319,6 @@ _GENDER_COLORS = {
 _GENDER_ORDER = ["male", "female", "nonbinary", "unknown"]
 
 
-_MEDIA_EXTENSIONS = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-    ".bmp",
-    ".mp4",
-    ".mov",
-    ".webm",
-    ".avi",
-    ".mkv",
-}
-
-
 def query_nsfw_gender_activity(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -2362,59 +2348,29 @@ def query_nsfw_gender_activity(
     ch_placeholders = ", ".join("?" for _ in channel_ids)
     params: list[object] = [guild_id, since_ts, *channel_ids]
 
-    if media_only:
-        # Use messages + message_attachments; ts column is integer epoch
-        # Discord CDN URLs have query params after extension, so we strip
-        # them by extracting the path portion before '?' for matching.
-        bucket_expr = _strftime_expr(
-            resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs
-        )
-        # _url_path strips query params: "foo.jpg?ex=abc" -> "foo.jpg"
-        _url_path = (
-            "CASE WHEN INSTR(ma.url, '?') > 0 "
-            "THEN SUBSTR(LOWER(ma.url), 1, INSTR(ma.url, '?') - 1) "
-            "ELSE LOWER(ma.url) END"
-        )
-        ext_conditions = " OR ".join(
-            f"({_url_path}) LIKE '%{ext}'" for ext in sorted(_MEDIA_EXTENSIONS)
-        )
-        rows = conn.execute(
-            f"""
-            SELECT
-                {bucket_expr} AS bucket,
-                COALESCE(mg.gender, 'unknown') AS gender,
-                COUNT(DISTINCT m.message_id) AS cnt
-            FROM messages m
-            INNER JOIN message_attachments ma ON ma.message_id = m.message_id
-            LEFT JOIN member_gender mg
-                ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
-            WHERE m.guild_id = ? AND m.ts >= ?
-                AND m.channel_id IN ({ch_placeholders})
-                AND ({ext_conditions})
-                AND ({_url_path}) NOT LIKE '%.gif'
-            GROUP BY bucket, gender
-            """,
-            params,
-        ).fetchall()
-    else:
-        bucket_expr = _strftime_expr(
-            resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs
-        )
-        rows = conn.execute(
-            f"""
-            SELECT
-                {bucket_expr} AS bucket,
-                COALESCE(mg.gender, 'unknown') AS gender,
-                COUNT(*) AS cnt
-            FROM messages m
-            LEFT JOIN member_gender mg
-                ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
-            WHERE m.guild_id = ? AND m.ts >= ?
-                AND m.channel_id IN ({ch_placeholders})
-            GROUP BY bucket, gender
-            """,
-            params,
-        ).fetchall()
+    bucket_expr = _strftime_expr(
+        resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs
+    )
+    # ``media_kind`` is recorded at ingest as lightweight metadata (an attachment
+    # classification, not a URL), so the media split works even at storage level
+    # "none". 'media' = non-gif image/video — exactly what this metric counts.
+    media_filter = "AND m.media_kind = 'media'" if media_only else ""
+    rows = conn.execute(
+        f"""
+        SELECT
+            {bucket_expr} AS bucket,
+            COALESCE(mg.gender, 'unknown') AS gender,
+            COUNT(*) AS cnt
+        FROM messages m
+        LEFT JOIN member_gender mg
+            ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
+        WHERE m.guild_id = ? AND m.ts >= ?
+            AND m.channel_id IN ({ch_placeholders})
+            {media_filter}
+        GROUP BY bucket, gender
+        """,
+        params,
+    ).fetchall()
 
     # Build per-gender counts aligned to bucket sequence
     counts_by_gender: dict[str, dict[str, int]] = {}
