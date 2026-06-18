@@ -96,3 +96,44 @@ def mark_announced(
         (guild_id, user_id, date_iso),
     )
     return (cur.rowcount or 0) > 0
+
+
+# ── Pin tracking ───────────────────────────────────────────────────────
+
+
+def record_pin(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    date_iso: str,
+) -> None:
+    """Remember a pinned birthday message so a later pass can unpin it."""
+    conn.execute(
+        "INSERT OR REPLACE INTO birthday_pins "
+        "(guild_id, channel_id, message_id, pinned_date) VALUES (?, ?, ?, ?)",
+        (guild_id, channel_id, message_id, date_iso),
+    )
+
+
+def pins_before(
+    conn: sqlite3.Connection, guild_id: int, before_iso: str
+) -> list[tuple[int, int]]:
+    """Return (channel_id, message_id) of pins recorded before ``before_iso``."""
+    rows = conn.execute(
+        "SELECT channel_id, message_id FROM birthday_pins "
+        "WHERE guild_id = ? AND pinned_date < ?",
+        (guild_id, before_iso),
+    ).fetchall()
+    return [(row["channel_id"], row["message_id"]) for row in rows]
+
+
+def clear_pin(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int, message_id: int
+) -> None:
+    """Drop a tracked pin row once the message has been unpinned (or is gone)."""
+    conn.execute(
+        "DELETE FROM birthday_pins "
+        "WHERE guild_id = ? AND channel_id = ? AND message_id = ?",
+        (guild_id, channel_id, message_id),
+    )

@@ -114,7 +114,7 @@ from bot_modules.services.voice_transcription_service import (
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
 _RISKY_MIN_GAME_KEY = "risky_min_game_seconds"
-_BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂"
+_BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}"
 _POLICY_VOTE_TIMEOUT_KEY = "policy_vote_timeout_hours"
 _POLICY_VOTE_TIMEOUT_DEFAULT = 72
 
@@ -272,6 +272,14 @@ def _birthday_section(conn, guild_id: int) -> dict:
         "birthday_message": _str_val(
             conn, "birthday_message", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
         ),
+        "birthday_pin": _bool_val(conn, "birthday_pin", guild_id=guild_id),
+        "birthday_channel_id_2": str(
+            _int_val(conn, "birthday_channel_id_2", guild_id=guild_id)
+        ),
+        "birthday_message_2": _str_val(
+            conn, "birthday_message_2", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
+        ),
+        "birthday_pin_2": _bool_val(conn, "birthday_pin_2", guild_id=guild_id),
     }
 
 
@@ -2295,6 +2303,10 @@ async def update_starboard(
 class BirthdayConfigUpdate(BaseModel):
     birthday_channel_id: str | None = None
     birthday_message: str | None = None
+    birthday_pin: bool | None = None
+    birthday_channel_id_2: str | None = None
+    birthday_message_2: str | None = None
+    birthday_pin_2: bool | None = None
 
 
 @router.put("/config/birthday")
@@ -2317,6 +2329,23 @@ async def update_birthday(
                 if not msg:
                     raise HTTPException(400, "Message cannot be empty")
                 set_config_value(conn, "birthday_message", msg, guild_id)
+            if body.birthday_pin is not None:
+                set_config_value(
+                    conn, "birthday_pin", "1" if body.birthday_pin else "0", guild_id
+                )
+            if body.birthday_channel_id_2 is not None:
+                set_config_value(
+                    conn, "birthday_channel_id_2", body.birthday_channel_id_2, guild_id
+                )
+            if body.birthday_message_2 is not None:
+                msg2 = body.birthday_message_2.strip()
+                if not msg2:
+                    raise HTTPException(400, "Message cannot be empty")
+                set_config_value(conn, "birthday_message_2", msg2, guild_id)
+            if body.birthday_pin_2 is not None:
+                set_config_value(
+                    conn, "birthday_pin_2", "1" if body.birthday_pin_2 else "0", guild_id
+                )
         return {"ok": True}
 
     return await run_query(_q)
