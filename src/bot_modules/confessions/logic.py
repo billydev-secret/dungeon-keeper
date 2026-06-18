@@ -21,9 +21,12 @@ from bot_modules.services.confessions_service import (
     jump_link,
 )
 
-REPLY_HELP_TEXT = (
-    "**🎭 Reply Anonymously** — gives you a consistent identity in this thread. "
-    "Your name and color stay the same across all your replies here.\n\n"
+HELP_TEXT = (
+    "**Confess** — posts your message anonymously in the confessions channel. "
+    "Nobody, including staff, can see who sent it.\n\n"
+    "Once a confession is posted, anyone can reply to it anonymously:\n\n"
+    "**🎭 Reply Anonymously** — gives you a consistent identity in that thread. "
+    "Your name and color stay the same across all your replies there.\n\n"
     "**🎲 Reply as Someone New** — gives you a one-time random identity for just "
     "that message. A fresh name and color every time you click it."
 )

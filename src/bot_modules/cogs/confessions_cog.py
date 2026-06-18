@@ -11,7 +11,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot_modules.confessions.logic import (
-    REPLY_HELP_TEXT,
+    HELP_TEXT,
     build_dm_notification_text,
     compute_confession_max_chars,
     compute_reply_cooldown,
@@ -532,11 +532,6 @@ class ConfessionsCog(commands.Cog):
             style=discord.ButtonStyle.secondary,
             custom_id=f"crn|{root_message_id}",
         ))
-        view.add_item(discord.ui.Button(
-            label="❓ What's this?",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"crh|{root_message_id}",
-        ))
         return view
 
     @staticmethod
@@ -546,6 +541,11 @@ class ConfessionsCog(commands.Cog):
             label="Confess",
             style=discord.ButtonStyle.primary,
             custom_id=f"nc|{guild_id}",
+        ))
+        view.add_item(discord.ui.Button(
+            label="❓ What's this?",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"crh|{guild_id}",
         ))
         return view
 
@@ -663,7 +663,7 @@ class ConfessionsCog(commands.Cog):
 
             if decoded.kind == "reply_help":
                 action = "help request"
-                await self._safe_ephemeral(interaction, REPLY_HELP_TEXT)
+                await self._safe_ephemeral(interaction, HELP_TEXT)
                 return
 
             cfg = get_config(self.ctx.db_path, interaction.guild.id)

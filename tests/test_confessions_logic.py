@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.confessions.logic import (
-    REPLY_HELP_TEXT,
+    HELP_TEXT,
     ButtonAction,
     ThreadRootInfo,
     build_dm_notification_text,
@@ -370,13 +370,14 @@ def test_is_stale_interaction_error_code_false_for_others(code):
     assert is_stale_interaction_error_code(code) is False
 
 
-# ── REPLY_HELP_TEXT constant ─────────────────────────────────────────
+# ── HELP_TEXT constant ───────────────────────────────────────────────
 
 
-def test_reply_help_text_mentions_both_buttons():
-    """Spot check that the help blurb still names both reply modes."""
-    assert "Reply Anonymously" in REPLY_HELP_TEXT
-    assert "Reply as Someone New" in REPLY_HELP_TEXT
+def test_help_text_mentions_confess_and_both_reply_buttons():
+    """Spot check that the help blurb names confessing and both reply modes."""
+    assert "Confess" in HELP_TEXT
+    assert "Reply Anonymously" in HELP_TEXT
+    assert "Reply as Someone New" in HELP_TEXT
 
 
 # ── ButtonAction dataclass ───────────────────────────────────────────
