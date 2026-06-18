@@ -103,31 +103,35 @@ const SECTIONS = [
   },
   {
     id: "config", label: "Config", perms: ["moderator"],
+    // Most Config pages load at moderator level but every save requires admin,
+    // so they're marked adminOnly to hide them from moderators who can't use
+    // them. Exceptions: Birthday Calendar is genuinely moderator-level (read
+    // only), and Wellness config is gated on manage_server, not admin.
     items: [
-      { id: "config-global",     label: "Global",          module: "./panels/config-global.js" },
-      { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js" },
-      { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js" },
-      { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js" },
-      { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js" },
-      { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js" },
-      { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js" },
-      { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js" },
-      { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js" },
-      { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js" },
-      { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js" },
-      { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js" },
-      { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js" },
-      { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js" },
-      { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js" },
+      { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true },
+      { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
+      { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true },
+      { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js", adminOnly: true },
+      { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
+      { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true },
+      { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
+      { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js", adminOnly: true },
+      { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },
+      { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
+      { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true },
+      { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true },
+      { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
+      { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
+      { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
-      { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js" },
-      { id: "config-pen-pals",  label: "Pen Pals",          module: "./panels/config-pen-pals.js" },
-      { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js" },
-      { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js" },
-      { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true },
-      { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js" },
-      { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js" },
-      { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js" },
+      { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
+      { id: "config-pen-pals",  label: "Pen Pals",          module: "./panels/config-pen-pals.js", adminOnly: true },
+      { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
+      { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true },
+      { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true },
+      { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"] },
+      { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
+      { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js", adminOnly: true },
     ],
   },
   {
@@ -147,11 +151,11 @@ const SECTIONS = [
       { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js" },
       { id: "games-scheduling",   label: "Scheduling",        module: "./panels/games-scheduling.js" },
       { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
-      { id: "games-config",       label: "Config",            module: "./panels/games-config.js" },
+      { id: "games-config",       label: "Config",            module: "./panels/games-config.js", adminOnly: true },
     ],
     groups: [
       { heading: "Risky Roller", items: [
-        { id: "config-risky-rolls",  label: "Config",    module: "./panels/config-risky-rolls.js" },
+        { id: "config-risky-rolls",  label: "Config",    module: "./panels/config-risky-rolls.js", adminOnly: true },
       ]},
       { heading: "Would You Rather", items: [
         { id: "games-wyr",        label: "Questions",  module: "./panels/games-wyr.js" },
@@ -186,13 +190,13 @@ const SECTIONS = [
         { id: "games-photo-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "photo" },
       ]},
       { heading: "Guess Who", items: [
-        { id: "config-guess", label: "Config",     module: "./panels/config-guess.js" },
+        { id: "config-guess", label: "Config",     module: "./panels/config-guess.js", perms: ["moderator"] },
       ]},
       { heading: "Whisper", items: [
-        { id: "config-whisper",    label: "Config",     module: "./panels/config-whisper.js" },
+        { id: "config-whisper",    label: "Config",     module: "./panels/config-whisper.js", perms: ["moderator"] },
       ]},
       { heading: "Confessions", items: [
-        { id: "config-confessions",  label: "Config",     module: "./panels/config-confessions.js" },
+        { id: "config-confessions",  label: "Config",     module: "./panels/config-confessions.js", adminOnly: true },
       ]},
     ],
   },
@@ -227,9 +231,12 @@ function rebuildIndex() {
     window.__dk_user.guild_id !== primaryGuildId;
 
   visibleSections = SECTIONS.filter((sec) => {
-    // Game host role: show Games section to admins OR configured role holders
+    // Game host role: show Games section to admins OR configured role holders.
+    // NOT moderators — every Games endpoint is gated by require_game_host
+    // (admin OR game-host role), which excludes plain moderators, so a
+    // moderator-visible Games section would only ever 403 on the backend.
     if (sec.gameHostRole) {
-      if (userPerms.has("admin") || userPerms.has("moderator")) return true;
+      if (userPerms.has("admin")) return true;
       const hostRoleId = window.__dk_user?.games_editor_role_id;
       return !!(hostRoleId && userRoleIds.has(hostRoleId));
     }
@@ -256,16 +263,29 @@ function rebuildIndex() {
       .filter((sec) => sec.id !== "config" || (sec.items && sec.items.length > 0));
   }
 
-  if (!userPerms.has("admin")) {
-    visibleSections = visibleSections.map((sec) => {
-      const filterItem = (it) => !it.adminOnly;
-      const newItems = (sec.items || []).filter(filterItem);
-      const newGroups = sec.groups
-        ? sec.groups.map((g) => ({ ...g, items: g.items.filter(filterItem) })).filter((g) => g.items.length > 0)
-        : sec.groups;
-      return { ...sec, items: newItems, groups: newGroups };
-    });
-  }
+  // Per-item permission gating. An item shows only if the user satisfies the
+  // section's perms AND the item's own requirements. This hides nav links to
+  // pages a user can't actually use even though they can see the section:
+  //   - adminOnly: true       → only admins (shorthand for perms: ["admin"])
+  //   - perms: ["manage_server", …] → all listed perms required
+  // Note `admin` implies moderator/manage_server (see auth.resolve_discord_perms),
+  // so admins satisfy every check here.
+  const itemAllowed = (it) => {
+    if (it.adminOnly && !userPerms.has("admin")) return false;
+    if (it.perms && !it.perms.every((p) => userPerms.has(p))) return false;
+    return true;
+  };
+  visibleSections = visibleSections.map((sec) => {
+    const newItems = (sec.items || []).filter(itemAllowed);
+    const newGroups = sec.groups
+      ? sec.groups.map((g) => ({ ...g, items: g.items.filter(itemAllowed) })).filter((g) => g.items.length > 0)
+      : sec.groups;
+    return { ...sec, items: newItems, groups: newGroups };
+  });
+
+  // Drop sections left with nothing to show after item filtering, so we never
+  // render an empty section header.
+  visibleSections = visibleSections.filter((sec) => allPages(sec).length > 0);
 
   ALL_PAGES = visibleSections.flatMap(allPages);
   PAGE_TO_SECTION = {};
