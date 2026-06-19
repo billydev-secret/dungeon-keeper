@@ -575,6 +575,7 @@ class VoiceMasterCog(commands.Cog):
             bitrate = select_effective_bitrate(
                 saved_bitrate=profile.bitrate,
                 default_bitrate=cfg.default_bitrate,
+                guild_max_bitrate=int(guild.bitrate_limit),
             )
 
             overwrites, skipped_targets = self._build_initial_overwrites(

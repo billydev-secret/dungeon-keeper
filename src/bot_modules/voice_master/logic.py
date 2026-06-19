@@ -365,12 +365,20 @@ def select_effective_limit(
 
 
 def select_effective_bitrate(
-    *, saved_bitrate: int | None, default_bitrate: int
+    *, saved_bitrate: int | None, default_bitrate: int, guild_max_bitrate: int
 ) -> int:
-    """Pick the bitrate to apply. ``0`` means "use Discord default"."""
-    if saved_bitrate:
-        return saved_bitrate
-    return default_bitrate
+    """Pick the bitrate to apply, clamped to the guild's tier maximum.
+
+    A saved per-user bitrate wins, else the guild-configured default. When
+    neither is set (both ``0``/``None``) we fall back to the highest bitrate the
+    guild's boost tier allows rather than Discord's base default. The result is
+    always clamped to ``guild_max_bitrate`` so a value saved under a higher
+    boost tier can't 400 the channel create after a downgrade.
+    """
+    chosen = saved_bitrate or default_bitrate or guild_max_bitrate
+    if guild_max_bitrate > 0:
+        chosen = min(chosen, guild_max_bitrate)
+    return chosen
 
 
 def build_skipped_payload(

@@ -511,14 +511,18 @@ def test_select_effective_limit_both_zero_returns_zero():
 
 def test_select_effective_bitrate_saved_wins():
     assert (
-        select_effective_bitrate(saved_bitrate=64000, default_bitrate=32000)
+        select_effective_bitrate(
+            saved_bitrate=64000, default_bitrate=32000, guild_max_bitrate=96000
+        )
         == 64000
     )
 
 
 def test_select_effective_bitrate_none_falls_back():
     assert (
-        select_effective_bitrate(saved_bitrate=None, default_bitrate=32000)
+        select_effective_bitrate(
+            saved_bitrate=None, default_bitrate=32000, guild_max_bitrate=96000
+        )
         == 32000
     )
 
@@ -526,7 +530,30 @@ def test_select_effective_bitrate_none_falls_back():
 def test_select_effective_bitrate_zero_falls_back():
     """0 is treated as 'use default' the same as None."""
     assert (
-        select_effective_bitrate(saved_bitrate=0, default_bitrate=32000) == 32000
+        select_effective_bitrate(
+            saved_bitrate=0, default_bitrate=32000, guild_max_bitrate=96000
+        )
+        == 32000
+    )
+
+
+def test_select_effective_bitrate_falls_back_to_guild_max():
+    """No saved and no default → use the highest bitrate the guild allows."""
+    assert (
+        select_effective_bitrate(
+            saved_bitrate=0, default_bitrate=0, guild_max_bitrate=384000
+        )
+        == 384000
+    )
+
+
+def test_select_effective_bitrate_clamps_to_guild_max():
+    """A value saved under a higher boost tier is clamped to the current max."""
+    assert (
+        select_effective_bitrate(
+            saved_bitrate=384000, default_bitrate=0, guild_max_bitrate=96000
+        )
+        == 96000
     )
 
 
