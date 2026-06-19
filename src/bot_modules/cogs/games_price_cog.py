@@ -35,7 +35,7 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     resolve_name,
 )
-from bot_modules.games.utils.question_source import get_price_scenario
+from bot_modules.games.utils.question_source import get_price_scenario, has_matching_questions
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.utils.timer import GameTimer
 from bot_modules.games_price.embeds import (
@@ -609,6 +609,7 @@ class PriceCog(commands.Cog):
         timer="Seconds for price submission per round (default 30)",
         vote_timer="Seconds for voting per round (default 20)",
         source="Where scenarios come from",
+        tags="Comma-separated tags to filter the bank when source uses it (include 'nsfw' to allow NSFW)",
     )
     @app_commands.choices(
         source=[
@@ -626,6 +627,7 @@ class PriceCog(commands.Cog):
         timer: int = 30,
         vote_timer: int = 20,
         source: str = "host",
+        tags: str = "",
     ):
         log.info(
             "%s used /games play price in #%s",
@@ -642,13 +644,21 @@ class PriceCog(commands.Cog):
             await interaction.response.send_message("Name Your Price is currently disabled on this server.", ephemeral=True)
             return
 
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list and source == "bank" and not await has_matching_questions(self.db, "price", tag_list):
+            await interaction.response.send_message(
+                f"No scenarios match tags: {', '.join(tag_list)} for this game.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"rounds": rounds, "timer": timer, "vote_timer": vote_timer, "source": source},
+            options={"rounds": rounds, "timer": timer, "vote_timer": vote_timer, "source": source, "tags": tag_list},
         )
         if game_id is None:
             try:
@@ -681,6 +691,7 @@ class PriceCog(commands.Cog):
             "timer": timer,
             "vote_timer": vote_timer,
             "source": source,
+            "tags": options.get("tags") or [],
         }
 
         game_id = await create_game(
@@ -727,22 +738,23 @@ class PriceCog(commands.Cog):
     async def _get_scenario(self, settings: dict, host_id: int, channel, interaction_or_msg) -> str | None:
         """Fetch a scenario based on the source setting."""
         source = settings["source"]
+        tags = settings.get("tags") or None
 
         if source == "host":
-            return await self._host_scenario(host_id, channel, interaction_or_msg)
+            return await self._host_scenario(host_id, channel, interaction_or_msg, tags=tags)
 
         if source == "players":
-            return await self._player_scenario(channel, interaction_or_msg)
+            return await self._player_scenario(channel, interaction_or_msg, tags=tags)
 
         if source == "ai":
             return await self._ai_scenario()
 
         if source == "bank":
-            return await get_price_scenario(self.db)
+            return await get_price_scenario(self.db, tags=tags)
 
         if source == "both":
             if random.random() < 0.5:
-                result = await get_price_scenario(self.db)
+                result = await get_price_scenario(self.db, tags=tags)
                 if result:
                     return result
             return await self._ai_scenario()
@@ -757,7 +769,7 @@ class PriceCog(commands.Cog):
             max_tokens=150,
         )
 
-    async def _host_scenario(self, host_id: int, channel, msg) -> str | None:
+    async def _host_scenario(self, host_id: int, channel, msg, tags: list[str] | None = None) -> str | None:
         """Prompt the host to write a scenario. Returns text or None on timeout."""
         modal = HostScenarioModal()
         write_view = HostWriteView(modal)
@@ -779,11 +791,11 @@ class PriceCog(commands.Cog):
 
         if not result:
             log.info("Host scenario timed out, falling back to question bank")
-            return await get_price_scenario(self.db)
+            return await get_price_scenario(self.db, tags=tags)
 
         return result
 
-    async def _player_scenario(self, channel, msg) -> str | None:
+    async def _player_scenario(self, channel, msg, tags: list[str] | None = None) -> str | None:
         """Let any player submit a scenario. First submission wins."""
         modal = HostScenarioModal()
         write_view = PlayerWriteView(modal)
@@ -804,7 +816,7 @@ class PriceCog(commands.Cog):
 
         if not result:
             log.info("Player scenario timed out, falling back to question bank")
-            return await get_price_scenario(self.db)
+            return await get_price_scenario(self.db, tags=tags)
 
         return result
 
@@ -831,7 +843,7 @@ class PriceCog(commands.Cog):
         scenario = await self._get_scenario(settings, host_id, channel, msg)
         if not scenario:
             # Fall back to question bank, then AI as last resort
-            scenario = await get_price_scenario(self.db)
+            scenario = await get_price_scenario(self.db, tags=settings.get("tags") or None)
         if not scenario:
             scenario = await self._ai_scenario()
         if not scenario:

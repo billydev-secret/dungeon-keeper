@@ -99,6 +99,40 @@ def test_games_question_bank_added_by_defaults_to_zero(sync_db_path):
     assert row["added_by"] == 0
 
 
+def test_games_question_bank_tags_column_defaults_to_empty_json(sync_db_path):
+    """Migration 053 adds a JSON tags column defaulting to '[]'."""
+    with open_db(sync_db_path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(games_question_bank)")}
+        assert "tags" in cols
+        conn.execute(
+            "INSERT INTO games_question_bank (game_type, question_text)"
+            " VALUES ('wyr', 'no tags?')"
+        )
+    with open_db(sync_db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE question_text = 'no tags?'"
+        ).fetchone()
+    assert row["tags"] == "[]"
+
+
+def test_games_question_bank_ffa_prompts_seeded_with_tags(sync_db_path):
+    """Migration 054 seeds FFA prompts tagged truth/dare (+nsfw)."""
+    import json
+
+    with open_db(sync_db_path) as conn:
+        rows = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE game_type = 'ffa'"
+        ).fetchall()
+    assert len(rows) > 0
+    tag_sets = [set(json.loads(r["tags"])) for r in rows]
+    # Every seeded prompt is tagged exactly one of truth/dare.
+    assert all(("truth" in ts) ^ ("dare" in ts) for ts in tag_sets)
+    # Both labels and an nsfw subset are present.
+    assert any("truth" in ts for ts in tag_sets)
+    assert any("dare" in ts for ts in tag_sets)
+    assert any("nsfw" in ts for ts in tag_sets)
+
+
 def test_games_allowed_channels_added_by_defaults_to_zero(sync_db_path):
     with open_db(sync_db_path) as conn:
         conn.execute(

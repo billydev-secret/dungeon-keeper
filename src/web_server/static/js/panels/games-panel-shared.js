@@ -73,14 +73,86 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
   return { unmount() {} };
 
+  // ── Tag helpers (shared by list filter, add, bulk, inline edit) ────────────
+  const tagDatalistId = "bank-tags-dl-" + gameType;
+  let knownTags = [];
+
+  function parseTags(raw) {
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === "string" && raw) return raw.split(",").map(s => s.trim()).filter(Boolean);
+    return [];
+  }
+
+  function refreshDatalist() {
+    const dl = container.querySelector('[data-ctrl="tags-datalist"]');
+    if (dl) dl.innerHTML = knownTags.map(t => '<option value="' + esc(t) + '"></option>').join("");
+  }
+
+  async function loadTags() {
+    try {
+      const data = await api("/api/games/bank/tags?game_type=" + encodeURIComponent(gameType));
+      knownTags = data.tags || [];
+    } catch { knownTags = []; }
+    refreshDatalist();
+  }
+
+  // A chip-input widget: type a tag + Enter/comma to add a chip; click × to remove.
+  // Suggestions come from the shared datalist. Returns { el, getTags, setTags }.
+  function makeTagWidget(initial) {
+    const tags = [];
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;align-items:center;border:1px solid var(--rule);border-radius:var(--r);padding:4px 6px;min-height:32px;background:var(--bg);";
+    const input = document.createElement("input");
+    input.type = "text";
+    input.setAttribute("list", tagDatalistId);
+    input.placeholder = "add tag…";
+    input.style.cssText = "border:none;outline:none;background:transparent;flex:1;min-width:70px;font-size:12px;color:inherit;";
+
+    function render() {
+      wrap.querySelectorAll(".bank-chip").forEach(c => c.remove());
+      tags.forEach((tag, i) => {
+        const chip = document.createElement("span");
+        chip.className = "ll-tag bank-chip";
+        chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;";
+        chip.appendChild(document.createTextNode(tag));
+        const x = document.createElement("span");
+        x.textContent = "×";
+        x.style.cssText = "cursor:pointer;font-weight:700;";
+        x.addEventListener("click", () => { tags.splice(i, 1); render(); });
+        chip.appendChild(x);
+        wrap.insertBefore(chip, input);
+      });
+    }
+    function commit(val) {
+      val = (val || "").trim().replace(/,+$/, "").trim();
+      if (val && !tags.includes(val)) tags.push(val);
+      input.value = "";
+      render();
+    }
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commit(input.value); }
+      else if (e.key === "Backspace" && !input.value && tags.length) { tags.pop(); render(); }
+    });
+    input.addEventListener("blur", () => commit(input.value));
+    wrap.appendChild(input);
+    parseTags(initial).forEach(t => { const v = String(t).trim(); if (v && !tags.includes(v)) tags.push(v); });
+    render();
+    return {
+      el: wrap,
+      getTags() { commit(input.value); return tags.slice(); },
+      setTags(arr) { tags.length = 0; parseTags(arr).forEach(t => tags.push(t)); render(); },
+    };
+  }
+
   function buildBankHtml() {
     return '<section>' +
       '<div class="section-label">Question Bank</div>' +
-      '<div class="field-hint" style="margin-bottom:12px;">Questions used by this game. SFW and NSFW are managed separately.</div>' +
+      '<div class="field-hint" style="margin-bottom:12px;">Questions used by this game. Tag content to organize it; the reserved <strong>nsfw</strong> tag is hidden from games unless a host opts in.</div>' +
+      '<datalist data-ctrl="tags-datalist"></datalist>' +
       '<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">' +
       '<div style="flex:1;min-width:260px;">' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
-      '<div class="field" style="margin:0;"><label>Category<select data-ctrl="filter-cat"><option value="">All</option><option value="sfw">SFW</option><option value="nsfw">NSFW</option></select></label></div>' +
+      '<div class="field" style="margin:0;"><label>Tag<input type="text" data-ctrl="filter-tag" list="' + esc(tagDatalistId) + '" placeholder="Any" style="width:120px;" /></label></div>' +
       '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input type="text" data-ctrl="search" placeholder="Filter..." style="width:100%;" /></label></div>' +
       '<button class="btn" data-action="search-btn">Search</button>' +
       "</div>" +
@@ -90,13 +162,13 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div style="width:300px;flex-shrink:0;">' +
       '<section style="background:var(--bg);border:1px solid var(--rule);border-radius:var(--r);padding:16px;">' +
       '<div class="section-label" style="margin-bottom:10px;">Add Question</div>' +
-      '<div class="field"><label>Category<select data-ctrl="add-cat"><option value="sfw">SFW</option><option value="nsfw">NSFW</option></select></label></div>' +
+      '<div class="field"><label>Tags<div data-ctrl="add-tags"></div></label></div>' +
       '<div class="field"><label>Question<textarea data-ctrl="add-text" rows="3" style="width:100%;"></textarea></label></div>' +
       '<div style="display:flex;gap:8px;align-items:center;"><button class="btn btn-primary" data-action="add-question">Add</button><span data-status="add" class="save-status"></span></div>' +
       "</section>" +
       '<section style="background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);padding:16px;margin-top:12px;">' +
       '<div class="section-label" style="margin-bottom:10px;">Bulk Import</div>' +
-      '<div class="field"><label>Category<select data-ctrl="bulk-cat"><option value="sfw">SFW</option><option value="nsfw">NSFW</option></select></label></div>' +
+      '<div class="field"><label>Tags (applied to all)<div data-ctrl="bulk-tags"></div></label></div>' +
       '<div class="field"><label>Lines (one per line)<textarea data-ctrl="bulk-text" rows="6" style="width:100%;font-size:12px;"></textarea></label></div>' +
       '<div style="display:flex;gap:8px;align-items:center;"><button class="btn btn-primary" data-action="bulk-import">Import</button><span data-status="bulk" class="save-status"></span></div>' +
       "</section></div></div></section>";
@@ -104,14 +176,20 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
   function initBank() {
     let currentPage = 1;
-    let currentCat = "";
+    let currentTag = "";
     let currentSearch = "";
+
+    // Mount the persistent add/bulk tag widgets.
+    const addTags = makeTagWidget([]);
+    ctrl("add-tags").appendChild(addTags.el);
+    const bulkTags = makeTagWidget([]);
+    ctrl("bulk-tags").appendChild(bulkTags.el);
 
     async function loadBank() {
       const el = region("bank-list");
       el.innerHTML = '<div class="empty">Loading...</div>';
       const params = new URLSearchParams({ game_type: gameType, page: currentPage, per_page: 50 });
-      if (currentCat) params.set("category", currentCat);
+      if (currentTag) params.set("tag", currentTag);
       if (currentSearch) params.set("search", currentSearch);
       try {
         const data = await api("/api/games/bank?" + params);
@@ -123,11 +201,9 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         }
         let rows = "";
         for (const q of qs) {
-          const badge = q.category === "nsfw"
-            ? '<span style="color:#e87070;font-size:11px;font-weight:600;">NSFW</span>'
-            : '<span style="color:#70c870;font-size:11px;font-weight:600;">SFW</span>';
+          const chips = parseTags(q.tags).map(t => '<span class="ll-tag">' + esc(t) + "</span>").join(" ");
           rows += '<tr data-qid="' + q.question_id + '">' +
-            '<td style="width:48px;">' + badge + "</td>" +
+            '<td class="bank-tags-cell" style="width:160px;"><div class="ll-tags">' + chips + "</div></td>" +
             '<td class="bank-text-cell" style="padding-right:8px;">' + esc(q.question_text) + "</td>" +
             '<td style="width:120px;white-space:nowrap;">' +
             '<button class="btn" style="padding:2px 6px;font-size:12px;margin-right:4px;" data-action="edit-q" data-qid="' + q.question_id + '">Edit</button>' +
@@ -135,7 +211,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
             "</td></tr>";
         }
         el.innerHTML = '<table style="width:100%;border-collapse:collapse;" class="data-table">' +
-          '<thead><tr><th style="width:48px;">Cat</th><th>Question</th><th style="width:120px;"></th></tr></thead>' +
+          '<thead><tr><th style="width:160px;">Tags</th><th>Question</th><th style="width:120px;"></th></tr></thead>' +
           "<tbody>" + rows + "</tbody></table>";
 
         el.querySelectorAll('[data-action="edit-q"]').forEach(btn => {
@@ -143,13 +219,14 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
             const qid = btn.dataset.qid;
             const row = el.querySelector('tr[data-qid="' + qid + '"]');
             const textCell = row.querySelector(".bank-text-cell");
-            const catCell = row.querySelector("td:first-child");
+            const tagsCell = row.querySelector(".bank-tags-cell");
             const origText = textCell.textContent;
-            const origCat = catCell.querySelector("span").textContent.toLowerCase().trim();
+            const origTags = Array.from(tagsCell.querySelectorAll(".ll-tag")).map(s => s.textContent.trim());
             textCell.innerHTML = '<textarea class="field-input" style="width:100%;min-height:60px;">' + esc(origText) + "</textarea>";
-            catCell.innerHTML = '<select class="field-input" style="width:60px;font-size:12px;">' +
-              '<option value="sfw"' + (origCat === "sfw" ? " selected" : "") + ">SFW</option>" +
-              '<option value="nsfw"' + (origCat === "nsfw" ? " selected" : "") + ">NSFW</option></select>";
+            const widget = makeTagWidget(origTags);
+            tagsCell.innerHTML = "";
+            tagsCell.appendChild(widget.el);
+            row._tagWidget = widget;
             btn.textContent = "Save";
             btn.dataset.action = "save-q";
           });
@@ -185,9 +262,9 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       if (btn.dataset.action === "save-q") {
         const row = list.querySelector('tr[data-qid="' + qid + '"]');
         const newText = row.querySelector("textarea") && row.querySelector("textarea").value.trim();
-        const newCat = row.querySelector("select") && row.querySelector("select").value;
+        const newTags = row._tagWidget ? row._tagWidget.getTags() : [];
         if (!newText) return;
-        try { await apiPut("/api/games/bank/" + qid, { question_text: newText, category: newCat }); loadBank(); }
+        try { await apiPut("/api/games/bank/" + qid, { question_text: newText, tags: newTags }); await loadTags(); loadBank(); }
         catch (err) { toast("Save failed: " + err.message, "error"); }
       } else if (btn.dataset.action === "del-q") {
         if (!(await confirmDialog("Delete this question?", { danger: true, confirmLabel: "Delete" }))) return;
@@ -196,22 +273,25 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       }
     });
 
-    ctrl("filter-cat").addEventListener("change", () => { currentCat = ctrl("filter-cat").value; currentPage = 1; loadBank(); });
+    ctrl("filter-tag").addEventListener("change", () => { currentTag = ctrl("filter-tag").value.trim(); currentPage = 1; loadBank(); });
     ctrl("search").addEventListener("keydown", e => {
       if (e.key === "Enter") { currentSearch = ctrl("search").value.trim(); currentPage = 1; loadBank(); }
     });
     container.querySelector('[data-action="search-btn"]').addEventListener("click", () => {
-      currentSearch = ctrl("search").value.trim(); currentPage = 1; loadBank();
+      currentSearch = ctrl("search").value.trim();
+      currentTag = ctrl("filter-tag").value.trim();
+      currentPage = 1; loadBank();
     });
     container.querySelector('[data-action="add-question"]').addEventListener("click", async () => {
       const st = container.querySelector('[data-status="add"]');
       const text = ctrl("add-text").value.trim();
-      const cat = ctrl("add-cat").value;
       if (!text) { showStatus(st, false, "Question text required"); return; }
       try {
-        await apiPost("/api/games/bank", { game_type: gameType, category: cat, question_text: text });
+        await apiPost("/api/games/bank", { game_type: gameType, tags: addTags.getTags(), question_text: text });
         ctrl("add-text").value = "";
+        addTags.setTags([]);
         showStatus(st, true, "Added");
+        await loadTags();
         loadBank();
       } catch (err) { showStatus(st, false, err.message); }
     });
@@ -220,14 +300,15 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       const raw = ctrl("bulk-text").value;
       const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
       if (!lines.length) { showStatus(st, false, "No lines to import"); return; }
-      const cat = ctrl("bulk-cat").value;
       try {
-        const res = await apiPost("/api/games/bank/bulk", { game_type: gameType, category: cat, lines });
+        const res = await apiPost("/api/games/bank/bulk", { game_type: gameType, tags: bulkTags.getTags(), lines });
         ctrl("bulk-text").value = "";
         showStatus(st, true, "Imported " + res.added);
+        await loadTags();
         loadBank();
       } catch (err) { showStatus(st, false, err.message); }
     });
+    loadTags();
     loadBank();
   }
 }

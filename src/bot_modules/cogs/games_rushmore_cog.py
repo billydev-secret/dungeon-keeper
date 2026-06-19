@@ -35,7 +35,7 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     resolve_name,
 )
-from bot_modules.games.utils.question_source import get_rushmore_topic
+from bot_modules.games.utils.question_source import get_rushmore_topic, has_matching_questions
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games_rushmore.logic import (
     DRAFT_ROUNDS,
@@ -269,13 +269,15 @@ class RushmoreJoinView(discord.ui.View):
                     model="gpt-4o-mini", max_tokens=50,
                 )
                 if not topic:
-                    topic = await get_rushmore_topic(self.db)
+                    _tags = (await get_game_payload(self.db, self.game_id)).get("settings", {}).get("tags") or None
+                    topic = await get_rushmore_topic(self.db, tags=_tags)
                 if not topic:
                     await interaction.followup.send("Couldn't generate a topic. Try setting one manually with `/rushmore topic:...`.", ephemeral=True)
                     return
             elif self.source == "bank":
                 await interaction.response.defer()
-                topic = await get_rushmore_topic(self.db)
+                _tags = (await get_game_payload(self.db, self.game_id)).get("settings", {}).get("tags") or None
+                topic = await get_rushmore_topic(self.db, tags=_tags)
                 if not topic:
                     await interaction.followup.send("No topics in the question bank.", ephemeral=True)
                     return
@@ -619,6 +621,7 @@ class RushmoreCog(commands.Cog):
         timer="Seconds per pick (default 30)",
         source="Where topics come from",
         vote_timer="Seconds for the final vote (default 30)",
+        tags="Comma-separated tags to filter the bank when source is 'bank' (include 'nsfw' to allow NSFW)",
     )
     @app_commands.choices(
         source=[
@@ -634,6 +637,7 @@ class RushmoreCog(commands.Cog):
         timer: int = 30,
         source: str = "host",
         vote_timer: int = 30,
+        tags: str = "",
     ):
         log.info(
             "%s used /games play rushmore in #%s",
@@ -650,13 +654,21 @@ class RushmoreCog(commands.Cog):
             await interaction.response.send_message("Mt. Rushmore Draft is currently disabled on this server.", ephemeral=True)
             return
 
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list and source == "bank" and not topic.strip() and not await has_matching_questions(self.db, "rushmore", tag_list):
+            await interaction.response.send_message(
+                f"No topics match tags: {', '.join(tag_list)} for this game.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"topic": topic, "timer": timer, "source": source, "vote_timer": vote_timer},
+            options={"topic": topic, "timer": timer, "source": source, "vote_timer": vote_timer, "tags": tag_list},
         )
         if game_id is None:
             try:
@@ -683,7 +695,7 @@ class RushmoreCog(commands.Cog):
         timer, vote_timer = clamp_settings(
             int(options.get("timer", 30)), int(options.get("vote_timer", 30))
         )
-        settings = {"timer": timer, "source": source, "vote_timer": vote_timer}
+        settings = {"timer": timer, "source": source, "vote_timer": vote_timer, "tags": options.get("tags") or []}
 
         game_id = await create_game(
             self.db,

@@ -19,7 +19,7 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
-from bot_modules.games.utils.question_source import get_nhie_statement
+from bot_modules.games.utils.question_source import get_nhie_statement, has_matching_questions
 from bot_modules.games_nhie.embeds import (
     build_closed_embed,
     build_recap_embed,
@@ -233,12 +233,14 @@ class NHIECog(commands.Cog):
     @app_commands.describe(
         question="Opening statement (e.g. 'gone skydiving') — defaults to question bank",
         lives="Number of lives per player (default 3, 0 = no elimination)",
+        tags="Comma-separated tags to filter the question bank (include 'nsfw' to allow NSFW)",
     )
     async def nhie(
         self,
         interaction: discord.Interaction,
         question: str = "",
         lives: int = DEFAULT_LIVES,
+        tags: str = "",
     ):
         log.info("%s used /games play nhie in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
@@ -251,13 +253,21 @@ class NHIECog(commands.Cog):
             await interaction.response.send_message("Never Have I Ever is currently disabled on this server.", ephemeral=True)
             return
 
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list and not question.strip() and not await has_matching_questions(self.db, "nhie", tag_list):
+            await interaction.response.send_message(
+                f"No questions match tags: {', '.join(tag_list)} for this game.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"question": question, "lives": lives},
+            options={"question": question, "lives": lives, "tags": tag_list},
         )
         if game_id is None:
             try:
@@ -289,7 +299,7 @@ class NHIECog(commands.Cog):
             host_id,
             "nhie",
             state="playing",
-            payload={"rounds": {}, "guilt_scores": {}, "lives": {}, "eliminated": [], "max_lives": lives},
+            payload={"rounds": {}, "guilt_scores": {}, "lives": {}, "eliminated": [], "max_lives": lives, "tags": options.get("tags") or []},
         )
         log.info("Game %s (nhie) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
@@ -331,7 +341,8 @@ class NHIECog(commands.Cog):
         if custom_statement:
             statement = custom_statement
         else:
-            statement = await get_nhie_statement(self.db)
+            tags = (await get_game_payload(self.db, game_id)).get("tags") or None
+            statement = await get_nhie_statement(self.db, tags=tags)
         if not statement:
             await channel.send(
                 "❌ The statement bank is empty! Use **✍️ Pose Statement** to submit your own, "

@@ -55,3 +55,56 @@ def test_label_for_kind_defaults_to_truth():
     assert label_for_kind("dare") == DARE
     assert label_for_kind("truth") == TRUTH
     assert label_for_kind("random") == TRUTH
+
+
+# ── get_ffa_prompt (bank-backed, with code fallback) ──────────────────────────
+
+import asyncio
+import json
+
+from bot_modules.games.utils.question_source import get_ffa_prompt
+
+
+class _FakeDB:
+    def __init__(self, rows):
+        # rows: (game_type, tags_list, question_text)
+        self._rows = rows
+
+    async def fetchall(self, sql, params):
+        (game_type,) = params
+        return [(r[2], json.dumps(r[1])) for r in self._rows if r[0] == game_type]
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def test_get_ffa_prompt_kind_drives_label():
+    db = _FakeDB([
+        ("ffa", ["truth"], "A truth."),
+        ("ffa", ["dare"], "A dare."),
+    ])
+    assert _run(get_ffa_prompt(db, kind="truth")) == (TRUTH, "A truth.")
+    assert _run(get_ffa_prompt(db, kind="dare")) == (DARE, "A dare.")
+
+
+def test_get_ffa_prompt_excludes_nsfw_unless_opted_in():
+    db = _FakeDB([
+        ("ffa", ["truth"], "Tame truth."),
+        ("ffa", ["truth", "nsfw"], "Spicy truth."),
+    ])
+    seen = {_run(get_ffa_prompt(db, kind="truth"))[1] for _ in range(40)}
+    assert seen == {"Tame truth."}
+    seen = {_run(get_ffa_prompt(db, kind="truth", tags=["nsfw"]))[1] for _ in range(40)}
+    assert seen == {"Tame truth.", "Spicy truth."}
+
+
+def test_get_ffa_prompt_filtered_miss_returns_none():
+    db = _FakeDB([("ffa", ["truth"], "Only truth.")])
+    assert _run(get_ffa_prompt(db, kind="random", tags=["nope"])) is None
+
+
+def test_get_ffa_prompt_empty_bank_falls_back_to_code():
+    db = _FakeDB([])
+    label, text = _run(get_ffa_prompt(db, kind="truth"))
+    assert label == TRUTH and isinstance(text, str) and text

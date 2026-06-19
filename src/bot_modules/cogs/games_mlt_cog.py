@@ -20,7 +20,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     ConfirmCloseView,
 )
-from bot_modules.games.utils.question_source import get_mlt_prompt
+from bot_modules.games.utils.question_source import get_mlt_prompt, has_matching_questions
 from bot_modules.games_mlt.embeds import (
     build_closed_embed,
     build_join_embed,
@@ -343,11 +343,13 @@ class MLTCog(commands.Cog):
     @app_commands.command(name="mlt", description="Start a Most Likely To game!")
     @app_commands.describe(
         question="Opening prompt (e.g. 'win a staring contest') — defaults to question bank",
+        tags="Comma-separated tags to filter the question bank (include 'nsfw' to allow NSFW)",
     )
     async def mlt(
         self,
         interaction: discord.Interaction,
         question: str = "",
+        tags: str = "",
     ):
         log.info("%s used /games play mlt in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
@@ -360,13 +362,21 @@ class MLTCog(commands.Cog):
             await interaction.response.send_message("Most Likely To is currently disabled on this server.", ephemeral=True)
             return
 
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list and not question.strip() and not await has_matching_questions(self.db, "mlt", tag_list):
+            await interaction.response.send_message(
+                f"No questions match tags: {', '.join(tag_list)} for this game.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"question": question},
+            options={"question": question, "tags": tag_list},
         )
         if game_id is None:
             try:
@@ -395,7 +405,7 @@ class MLTCog(commands.Cog):
             host_id,
             "mlt",
             state="joining",
-            payload={"opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": []},
+            payload={"opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": [], "tags": options.get("tags") or []},
         )
 
         log.info("Game %s (mlt) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
@@ -429,7 +439,8 @@ class MLTCog(commands.Cog):
         if custom_prompt:
             prompt = custom_prompt
         else:
-            prompt = await get_mlt_prompt(self.db)
+            tags = (await get_game_payload(self.db, game_id)).get("tags") or None
+            prompt = await get_mlt_prompt(self.db, tags=tags)
         if not prompt:
             await channel.send(
                 "❌ The prompt bank is empty! Use **✍️ Pose Prompt** to submit your own, "

@@ -190,6 +190,9 @@ const SECTIONS = [
         { id: "games-photo",        label: "Questions",  module: "./panels/games-photo.js" },
         { id: "games-photo-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "photo" },
       ]},
+      { heading: "FFA / Truth or Dare", items: [
+        { id: "games-ffa", label: "Questions", module: "./panels/games-ffa.js" },
+      ]},
       { heading: "Guess Who", items: [
         { id: "config-guess", label: "Config",     module: "./panels/config-guess.js", perms: ["moderator"] },
       ]},

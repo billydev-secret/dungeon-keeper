@@ -19,7 +19,7 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
-from bot_modules.games.utils.question_source import get_wyr_question
+from bot_modules.games.utils.question_source import get_wyr_question, has_matching_questions
 from bot_modules.games_wyr.embeds import build_closed_embed, build_wyr_embed
 from bot_modules.games_wyr.logic import (
     next_button_label,
@@ -230,11 +230,13 @@ class WYRCog(commands.Cog):
     @app_commands.command(name="wyr", description="Start a Would You Rather game!")
     @app_commands.describe(
         question="Opening question (format: 'option A | option B') — defaults to question bank",
+        tags="Comma-separated tags to filter the question bank (include 'nsfw' to allow NSFW)",
     )
     async def wyr(
         self,
         interaction: discord.Interaction,
         question: str = "",
+        tags: str = "",
     ):
         log.info("%s used /wyr in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         if not await check_allowed_channel(self.db, interaction.channel_id):
@@ -254,13 +256,21 @@ class WYRCog(commands.Cog):
             )
             return
 
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list and not question.strip() and not await has_matching_questions(self.db, "wyr", tag_list):
+            await interaction.response.send_message(
+                f"No questions match tags: {', '.join(tag_list)} for this game.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"question": question},
+            options={"question": question, "tags": tag_list},
         )
         if game_id is None:
             try:
@@ -295,7 +305,7 @@ class WYRCog(commands.Cog):
             host_id,
             "wyr",
             state="playing",
-            payload={"anonymous": True, "rounds": {}},
+            payload={"anonymous": True, "rounds": {}, "tags": options.get("tags") or []},
         )
         log.info("Game %s (wyr) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
@@ -331,7 +341,8 @@ class WYRCog(commands.Cog):
         if custom_question:
             option_a, option_b = custom_question
         else:
-            question = await get_wyr_question(self.db)
+            tags = (await get_game_payload(self.db, game_id)).get("tags") or None
+            question = await get_wyr_question(self.db, tags=tags)
             if not question:
                 await channel.send(
                     "❌ The question bank is empty! Use **✍️ Pose Question** to submit your own, "

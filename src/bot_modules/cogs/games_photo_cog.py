@@ -69,21 +69,21 @@ class PhotoCog(commands.Cog):
         description="Post a Photo Challenge card and open a thread for everyone's photos!",
     )
     @app_commands.describe(
-        nsfw="Use the spicier prompt bank (default: off)",
+        tags="Comma-separated tags to filter the prompt bank (include 'nsfw' to allow NSFW)",
         prompt="Write your own challenge instead of pulling one from the bank (optional)",
     )
     async def photo(
         self,
         interaction: discord.Interaction,
-        nsfw: bool = False,
+        tags: str = "",
         prompt: str | None = None,
     ):
-        await self.start_photo(interaction, nsfw, prompt)
+        await self.start_photo(interaction, tags, prompt)
 
     async def start_photo(
         self,
         interaction: discord.Interaction,
-        nsfw: bool = False,
+        tags: str = "",
         prompt: str | None = None,
     ):
         log.info(
@@ -105,18 +105,20 @@ class PhotoCog(commands.Cog):
             return
 
         custom = (prompt or "").strip()
-        category = "nsfw" if nsfw else "sfw"
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         # When no custom prompt is given, pull one from the curated bank now so we
         # can give a friendly notice (instead of a generic error) if it's empty.
         text = custom
         if not text:
-            text = await get_photo_prompt(self.db, category)
+            text = await get_photo_prompt(self.db, tags=tag_list or None)
             if not text:
-                await interaction.response.send_message(
-                    "📸 No photo challenges are in the bank yet — an editor can add some "
-                    "from the **Games Studio** in the web dashboard.",
-                    ephemeral=True,
+                msg = (
+                    f"📸 No photo challenges match tags: {', '.join(tag_list)}."
+                    if tag_list
+                    else "📸 No photo challenges are in the bank yet — an editor can add some "
+                    "from the **Games Studio** in the web dashboard."
                 )
+                await interaction.response.send_message(msg, ephemeral=True)
                 return
 
         await interaction.response.defer()
@@ -125,7 +127,7 @@ class PhotoCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"nsfw": nsfw, "prompt": text},
+            options={"tags": tag_list, "prompt": text},
         )
         if game_id is None:
             try:
@@ -151,13 +153,15 @@ class PhotoCog(commands.Cog):
         Returns None when the bank is empty (and no custom prompt was given) so the
         scheduler simply skips the run instead of posting an empty card.
         """
-        nsfw = bool(options.get("nsfw", False))
         custom = (options.get("prompt") or "").strip()
-        category = "nsfw" if nsfw else "sfw"
+        tags = list(options.get("tags") or [])
+        # Backward-compat: legacy scheduled games stored {"nsfw": true}.
+        if options.get("nsfw") and "nsfw" not in tags:
+            tags.append("nsfw")
 
-        text = custom or await get_photo_prompt(self.db, category)
+        text = custom or await get_photo_prompt(self.db, tags=tags or None)
         if not text:
-            log.info("photo launch: bank empty for category=%s in channel %s", category, channel.id)
+            log.info("photo launch: bank empty for tags=%s in channel %s", tags, channel.id)
             return None
 
         guild = getattr(channel, "guild", None)
@@ -212,7 +216,7 @@ class PhotoCog(commands.Cog):
             state="open",
             payload={
                 "prompt": text,
-                "nsfw": nsfw,
+                "tags": tags,
                 "thread_id": thread.id if thread is not None else None,
             },
         )

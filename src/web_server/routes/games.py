@@ -22,7 +22,7 @@ _PROMPT_CONFIG_PATH = (
     Path(__file__).parent.parent.parent / "bot_modules" / "games" / "prompt_config.json"
 )
 
-VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo"}
+VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo", "ffa"}
 
 ALL_GAME_TYPES = [
     "wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama",
@@ -36,24 +36,24 @@ ALL_GAME_TYPES = [
 
 class BankCreateBody(BaseModel):
     game_type: str
-    category: str
+    tags: list[str] = []
     question_text: str
 
 
 class BankUpdateBody(BaseModel):
     question_text: Optional[str] = None
-    category: Optional[str] = None
+    tags: Optional[list[str]] = None
 
 
 class BankBulkBody(BaseModel):
     game_type: str
-    category: str
+    tags: list[str] = []
     lines: list[str]
 
 
 class BankImportItem(BaseModel):
     game_type: str
-    category: str
+    tags: list[str] = []
     question_text: str
 
 
@@ -126,6 +126,27 @@ class LegitLibsAIPrepBody(BaseModel):
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
+def _norm_tags(raw) -> list[str]:
+    """Dedupe + strip a list of tag strings, preserving first-seen order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in (raw or []):
+        t = str(t).strip()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
+def _parse_tags_col(raw) -> list[str]:
+    """Parse a stored JSON tags column into a list, tolerating bad data."""
+    try:
+        val = json.loads(raw or "[]")
+        return [str(t) for t in val] if isinstance(val, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 def _load_prompt_config() -> dict:
     if _PROMPT_CONFIG_PATH.exists():
         return json.loads(_PROMPT_CONFIG_PATH.read_text(encoding="utf-8"))
@@ -185,16 +206,16 @@ async def get_stats(
 
             unique_players = len(player_ids)
 
-            # Bank by type: {game_type: {sfw: N, nsfw: N}}
+            # Bank by type: {game_type: {sfw: N, nsfw: N}} — nsfw is now the
+            # reserved tag, so count it by parsing each row's tags.
             bank_rows = conn.execute(
-                "SELECT game_type, category, COUNT(*) FROM games_question_bank "
-                "GROUP BY game_type, category"
+                "SELECT game_type, tags FROM games_question_bank"
             ).fetchall()
             bank_by_type: dict[str, dict[str, int]] = {}
-            for gt, cat, cnt in bank_rows:
-                if gt not in bank_by_type:
-                    bank_by_type[gt] = {"sfw": 0, "nsfw": 0}
-                bank_by_type[gt][cat] = cnt
+            for gt, raw in bank_rows:
+                is_nsfw = "nsfw" in _parse_tags_col(raw)
+                d = bank_by_type.setdefault(gt, {"sfw": 0, "nsfw": 0})
+                d["nsfw" if is_nsfw else "sfw"] += 1
 
             # Games by type: {game_type: N}
             hist_rows = conn.execute(
@@ -222,7 +243,7 @@ async def list_bank(
     request: Request,
     _: AuthenticatedUser = Depends(require_game_host),
     game_type: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
+    tag: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
@@ -236,40 +257,41 @@ async def list_bank(
             if game_type:
                 clauses.append("game_type = ?")
                 params.append(game_type)
-            if category:
-                clauses.append("category = ?")
-                params.append(category)
             if search:
                 clauses.append("question_text LIKE ?")
                 params.append(f"%{search}%")
 
             where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM games_question_bank {where}", params
-            ).fetchone()[0]
-
-            offset = (page - 1) * per_page
             rows = conn.execute(
-                f"""SELECT question_id, game_type, category, question_text, added_at
+                f"""SELECT question_id, game_type, tags, question_text, added_at
                     FROM games_question_bank {where}
-                    ORDER BY question_id DESC
-                    LIMIT ? OFFSET ?""",
-                [*params, per_page, offset],
+                    ORDER BY question_id DESC""",
+                params,
             ).fetchall()
 
-            questions = [
-                {
-                    "question_id": r[0],
-                    "game_type": r[1],
-                    "category": r[2],
-                    "question_text": r[3],
-                    "added_at": r[4],
-                }
-                for r in rows
-            ]
+            # Tag filtering happens in Python (no fragile SQL LIKE on JSON);
+            # pagination is recomputed from the filtered set.
+            items = []
+            for r in rows:
+                tags = _parse_tags_col(r[2])
+                if tag and tag not in tags:
+                    continue
+                items.append(
+                    {
+                        "question_id": r[0],
+                        "game_type": r[1],
+                        "tags": tags,
+                        "question_text": r[3],
+                        "added_at": r[4],
+                    }
+                )
+
+            total = len(items)
+            offset = (page - 1) * per_page
+            page_items = items[offset:offset + per_page]
             total_pages = max(1, -(-total // per_page))
             return {
-                "questions": questions,
+                "questions": page_items,
                 "total": total,
                 "page": page,
                 "per_page": per_page,
@@ -287,16 +309,15 @@ async def create_question(
 ):
     if body.game_type not in VALID_GAME_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid game_type: {body.game_type}")
-    if body.category not in ("sfw", "nsfw"):
-        raise HTTPException(status_code=400, detail="category must be 'sfw' or 'nsfw'")
 
     ctx = get_ctx(request)
+    tags_json = json.dumps(_norm_tags(body.tags))
 
     def _q():
         with ctx.open_db() as conn:
             cur = conn.execute(
-                "INSERT INTO games_question_bank (game_type, category, question_text) VALUES (?, ?, ?)",
-                (body.game_type, body.category, body.question_text.strip()),
+                "INSERT INTO games_question_bank (game_type, tags, question_text) VALUES (?, ?, ?)",
+                (body.game_type, tags_json, body.question_text.strip()),
             )
             conn.commit()
             return {"question_id": cur.lastrowid}
@@ -311,9 +332,6 @@ async def update_question(
     body: BankUpdateBody,
     _: AuthenticatedUser = Depends(require_game_host),
 ):
-    if body.category and body.category not in ("sfw", "nsfw"):
-        raise HTTPException(status_code=400, detail="category must be 'sfw' or 'nsfw'")
-
     ctx = get_ctx(request)
 
     def _q():
@@ -330,9 +348,9 @@ async def update_question(
             if body.question_text is not None:
                 sets.append("question_text = ?")
                 params.append(body.question_text.strip())
-            if body.category is not None:
-                sets.append("category = ?")
-                params.append(body.category)
+            if body.tags is not None:
+                sets.append("tags = ?")
+                params.append(json.dumps(_norm_tags(body.tags)))
 
             if sets:
                 params.append(question_id)
@@ -385,20 +403,19 @@ async def bulk_add_questions(
 ):
     if body.game_type not in VALID_GAME_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid game_type: {body.game_type}")
-    if body.category not in ("sfw", "nsfw"):
-        raise HTTPException(status_code=400, detail="category must be 'sfw' or 'nsfw'")
 
     lines = [line.strip() for line in body.lines if line.strip()]
     if not lines:
         raise HTTPException(status_code=400, detail="No non-empty lines provided")
 
     ctx = get_ctx(request)
+    tags_json = json.dumps(_norm_tags(body.tags))
 
     def _q():
         with ctx.open_db() as conn:
             conn.executemany(
-                "INSERT INTO games_question_bank (game_type, category, question_text) VALUES (?, ?, ?)",
-                [(body.game_type, body.category, line) for line in lines],
+                "INSERT INTO games_question_bank (game_type, tags, question_text) VALUES (?, ?, ?)",
+                [(body.game_type, tags_json, line) for line in lines],
             )
             conn.commit()
             return {"added": len(lines)}
@@ -418,17 +435,17 @@ async def export_bank(
         with ctx.open_db() as conn:
             if game_type:
                 rows = conn.execute(
-                    "SELECT game_type, category, question_text FROM games_question_bank "
+                    "SELECT game_type, tags, question_text FROM games_question_bank "
                     "WHERE game_type = ? ORDER BY question_id",
                     (game_type,),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT game_type, category, question_text FROM games_question_bank "
+                    "SELECT game_type, tags, question_text FROM games_question_bank "
                     "ORDER BY game_type, question_id"
                 ).fetchall()
             return [
-                {"game_type": r[0], "category": r[1], "question_text": r[2]}
+                {"game_type": r[0], "tags": _parse_tags_col(r[1]), "question_text": r[2]}
                 for r in rows
             ]
 
@@ -449,15 +466,17 @@ async def import_bank(
         if not isinstance(entry, dict):
             raise HTTPException(status_code=400, detail=f"Item {i} is not an object")
         gt = entry.get("game_type", "")
-        cat = entry.get("category", "")
         text = entry.get("question_text", "").strip()
         if gt not in VALID_GAME_TYPES:
             raise HTTPException(status_code=400, detail=f"Item {i}: invalid game_type '{gt}'")
-        if cat not in ("sfw", "nsfw"):
-            raise HTTPException(status_code=400, detail=f"Item {i}: category must be sfw or nsfw")
         if not text:
             continue
-        items.append((gt, cat, text))
+        # Old exports without a "tags" key default to []. Legacy "category":"nsfw"
+        # is still honored as the nsfw tag for backward compatibility.
+        tags = _norm_tags(entry.get("tags", []))
+        if not tags and entry.get("category") == "nsfw":
+            tags = ["nsfw"]
+        items.append((gt, json.dumps(tags), text))
 
     if not items:
         return {"imported": 0}
@@ -467,11 +486,40 @@ async def import_bank(
     def _q():
         with ctx.open_db() as conn:
             conn.executemany(
-                "INSERT INTO games_question_bank (game_type, category, question_text) VALUES (?, ?, ?)",
+                "INSERT INTO games_question_bank (game_type, tags, question_text) VALUES (?, ?, ?)",
                 items,
             )
             conn.commit()
             return {"imported": len(items)}
+
+    return await run_query(_q)
+
+
+@router.get("/bank/tags")
+async def list_bank_tags(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_game_host),
+    game_type: Optional[str] = Query(None),
+):
+    """Distinct tags currently in use (optionally for one game_type) — autocomplete."""
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if game_type:
+                rows = conn.execute(
+                    "SELECT tags FROM games_question_bank WHERE game_type = ?",
+                    (game_type,),
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT tags FROM games_question_bank").fetchall()
+            seen: set[str] = set()
+            for (raw,) in rows:
+                for t in _parse_tags_col(raw):
+                    t = t.strip()
+                    if t:
+                        seen.add(t)
+            return {"tags": sorted(seen)}
 
     return await run_query(_q)
 

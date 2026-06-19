@@ -11,12 +11,16 @@ BASE = "/api/games"
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _seed_question(db_path, game_type="wyr", category="sfw", text="Test?"):
+def _seed_question(db_path, game_type="wyr", category="sfw", text="Test?", tags=None):
+    """Seed a bank row. ``category`` is translated to the reserved ``nsfw`` tag
+    (legacy callers pass 'sfw'/'nsfw'); explicit ``tags`` override it."""
+    if tags is None:
+        tags = ["nsfw"] if category == "nsfw" else []
     with open_db(db_path) as conn:
         cur = conn.execute(
-            "INSERT INTO games_question_bank (game_type, category, question_text)"
+            "INSERT INTO games_question_bank (game_type, tags, question_text)"
             " VALUES (?, ?, ?)",
-            (game_type, category, text),
+            (game_type, json.dumps(tags), text),
         )
         return cur.lastrowid
 
@@ -100,7 +104,7 @@ def test_stats_counts_questions_and_history(open_client, fake_ctx):
 def test_bank_create_returns_question_id(open_client):
     resp = open_client.post(
         f"{BASE}/bank",
-        json={"game_type": "wyr", "category": "sfw", "question_text": "Fly or swim?"},
+        json={"game_type": "wyr", "tags": ["funny"], "question_text": "Fly or swim?"},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -108,18 +112,38 @@ def test_bank_create_returns_question_id(open_client):
     assert isinstance(data["question_id"], int)
 
 
+def test_bank_create_tags_roundtrip(open_client, fake_ctx):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "wyr", "tags": ["spicy", "nsfw", "spicy"], "question_text": "Q?"},
+    )
+    assert resp.status_code == 200
+    qid = resp.json()["question_id"]
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["spicy", "nsfw"]  # deduped, order preserved
+
+
+def test_bank_create_no_tags_defaults_empty(open_client, fake_ctx):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "wyr", "question_text": "Q?"},
+    )
+    assert resp.status_code == 200
+    qid = resp.json()["question_id"]
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert json.loads(row["tags"]) == []
+
+
 def test_bank_create_invalid_game_type(open_client):
     resp = open_client.post(
         f"{BASE}/bank",
-        json={"game_type": "bogus", "category": "sfw", "question_text": "Q?"},
-    )
-    assert resp.status_code == 400
-
-
-def test_bank_create_invalid_category(open_client):
-    resp = open_client.post(
-        f"{BASE}/bank",
-        json={"game_type": "wyr", "category": "spicy", "question_text": "Q?"},
+        json={"game_type": "bogus", "tags": [], "question_text": "Q?"},
     )
     assert resp.status_code == 400
 
@@ -155,15 +179,26 @@ def test_bank_list_filter_by_game_type(open_client, fake_ctx):
     assert data["questions"][0]["game_type"] == "wyr"
 
 
-def test_bank_list_filter_by_category(open_client, fake_ctx):
-    _seed_question(fake_ctx.db_path, "wyr", "sfw", "Safe?")
-    _seed_question(fake_ctx.db_path, "wyr", "nsfw", "Spicy?")
+def test_bank_list_filter_by_tag(open_client, fake_ctx):
+    _seed_question(fake_ctx.db_path, "wyr", text="Safe?", tags=["calm"])
+    _seed_question(fake_ctx.db_path, "wyr", text="Spicy?", tags=["nsfw"])
 
-    resp = open_client.get(f"{BASE}/bank?category=nsfw")
+    resp = open_client.get(f"{BASE}/bank?tag=nsfw")
     assert resp.status_code == 200
     data = resp.json()
     assert data["total"] == 1
-    assert data["questions"][0]["category"] == "nsfw"
+    assert data["questions"][0]["tags"] == ["nsfw"]
+    assert data["questions"][0]["question_text"] == "Spicy?"
+
+
+def test_bank_tags_endpoint_returns_distinct_tags(open_client, fake_ctx):
+    _seed_question(fake_ctx.db_path, "wyr", text="A?", tags=["a", "b"])
+    _seed_question(fake_ctx.db_path, "wyr", text="B?", tags=["b", "c"])
+    _seed_question(fake_ctx.db_path, "nhie", text="C?", tags=["other"])
+
+    resp = open_client.get(f"{BASE}/bank/tags?game_type=wyr")
+    assert resp.status_code == 200
+    assert resp.json()["tags"] == ["a", "b", "c"]  # sorted, distinct, only wyr
 
 
 def test_bank_list_search(open_client, fake_ctx):
@@ -197,10 +232,16 @@ def test_bank_update_not_found(open_client):
     assert resp.status_code == 404
 
 
-def test_bank_update_invalid_category(open_client, fake_ctx):
-    qid = _seed_question(fake_ctx.db_path)
-    resp = open_client.put(f"{BASE}/bank/{qid}", json={"category": "meh"})
-    assert resp.status_code == 400
+def test_bank_update_tags(open_client, fake_ctx):
+    qid = _seed_question(fake_ctx.db_path, tags=["old"])
+    resp = open_client.put(f"{BASE}/bank/{qid}", json={"tags": ["new", "nsfw"]})
+    assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["new", "nsfw"]
 
 
 def test_bank_delete_question(open_client, fake_ctx):
@@ -228,7 +269,7 @@ def test_bank_bulk_add_questions(open_client, fake_ctx):
         f"{BASE}/bank/bulk",
         json={
             "game_type": "nhie",
-            "category": "sfw",
+            "tags": ["batch"],
             "lines": ["Q1?", "Q2?", "  Q3?  ", "Q4?"],
         },
     )
@@ -236,10 +277,11 @@ def test_bank_bulk_add_questions(open_client, fake_ctx):
     assert resp.json()["added"] == 4
 
     with open_db(fake_ctx.db_path) as conn:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM games_question_bank WHERE game_type = 'nhie'"
-        ).fetchone()[0]
-    assert count == 4
+        rows = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE game_type = 'nhie'"
+        ).fetchall()
+    assert len(rows) == 4
+    assert all(json.loads(r["tags"]) == ["batch"] for r in rows)
 
 
 def test_bank_bulk_blank_lines_stripped(open_client):
@@ -247,7 +289,7 @@ def test_bank_bulk_blank_lines_stripped(open_client):
         f"{BASE}/bank/bulk",
         json={
             "game_type": "wyr",
-            "category": "sfw",
+            "tags": [],
             "lines": ["Real Q?", "   ", ""],
         },
     )
@@ -258,7 +300,7 @@ def test_bank_bulk_blank_lines_stripped(open_client):
 def test_bank_bulk_all_empty_lines_rejected(open_client):
     resp = open_client.post(
         f"{BASE}/bank/bulk",
-        json={"game_type": "wyr", "category": "sfw", "lines": ["  ", ""]},
+        json={"game_type": "wyr", "tags": [], "lines": ["  ", ""]},
     )
     assert resp.status_code == 400
 
@@ -266,7 +308,7 @@ def test_bank_bulk_all_empty_lines_rejected(open_client):
 def test_bank_bulk_invalid_game_type(open_client):
     resp = open_client.post(
         f"{BASE}/bank/bulk",
-        json={"game_type": "unknown", "category": "sfw", "lines": ["Q?"]},
+        json={"game_type": "unknown", "tags": [], "lines": ["Q?"]},
     )
     assert resp.status_code == 400
 
@@ -282,7 +324,8 @@ def test_bank_export_all(open_client, fake_ctx):
     assert resp.status_code == 200
     items = resp.json()
     assert len(items) == 2
-    assert all("game_type" in i and "category" in i and "question_text" in i for i in items)
+    assert all("game_type" in i and "tags" in i and "question_text" in i for i in items)
+    assert all(isinstance(i["tags"], list) for i in items)
 
 
 def test_bank_export_filtered_by_game_type(open_client, fake_ctx):
@@ -304,16 +347,25 @@ def test_bank_export_empty_returns_list(open_client):
 
 def test_bank_import_valid_array(open_client, fake_ctx):
     payload = [
-        {"game_type": "wyr", "category": "sfw", "question_text": "Fly or swim?"},
+        {"game_type": "wyr", "tags": ["air"], "question_text": "Fly or swim?"},
+        # No "tags" key → defaults to []. Legacy "category":"nsfw" maps to the nsfw tag.
         {"game_type": "nhie", "category": "nsfw", "question_text": "Never have I?"},
+        {"game_type": "wyr", "question_text": "Bare question?"},
     ]
     resp = open_client.post(f"{BASE}/bank/import", json=payload)
     assert resp.status_code == 200
-    assert resp.json()["imported"] == 2
+    assert resp.json()["imported"] == 3
 
     with open_db(fake_ctx.db_path) as conn:
-        count = conn.execute("SELECT COUNT(*) FROM games_question_bank").fetchone()[0]
-    assert count == 2
+        rows = {
+            r["question_text"]: json.loads(r["tags"])
+            for r in conn.execute(
+                "SELECT question_text, tags FROM games_question_bank"
+            ).fetchall()
+        }
+    assert rows["Fly or swim?"] == ["air"]
+    assert rows["Never have I?"] == ["nsfw"]  # legacy category backfilled to tag
+    assert rows["Bare question?"] == []  # missing tags defaults to empty
 
 
 def test_bank_import_not_an_array(open_client):
@@ -322,21 +374,15 @@ def test_bank_import_not_an_array(open_client):
 
 
 def test_bank_import_invalid_game_type(open_client):
-    payload = [{"game_type": "bogus", "category": "sfw", "question_text": "Q?"}]
-    resp = open_client.post(f"{BASE}/bank/import", json=payload)
-    assert resp.status_code == 400
-
-
-def test_bank_import_invalid_category(open_client):
-    payload = [{"game_type": "wyr", "category": "meh", "question_text": "Q?"}]
+    payload = [{"game_type": "bogus", "tags": [], "question_text": "Q?"}]
     resp = open_client.post(f"{BASE}/bank/import", json=payload)
     assert resp.status_code == 400
 
 
 def test_bank_import_empty_texts_skipped(open_client):
     payload = [
-        {"game_type": "wyr", "category": "sfw", "question_text": "   "},
-        {"game_type": "wyr", "category": "sfw", "question_text": ""},
+        {"game_type": "wyr", "tags": [], "question_text": "   "},
+        {"game_type": "wyr", "tags": [], "question_text": ""},
     ]
     resp = open_client.post(f"{BASE}/bank/import", json=payload)
     assert resp.status_code == 200

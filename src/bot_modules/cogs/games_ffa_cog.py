@@ -14,7 +14,8 @@ from bot_modules.games.utils.game_manager import (
     end_game,
 )
 from bot_modules.games.command_groups import play
-from bot_modules.games_ffa.prompts import pick_prompt, label_for_kind
+from bot_modules.games_ffa.prompts import label_for_kind
+from bot_modules.games.utils.question_source import get_ffa_prompt, has_matching_questions
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
 # Reuse the confession bot's anonymous-identity machinery so replies look and
 # behave exactly like confession replies. These live in the confessions DB
@@ -198,23 +199,23 @@ class FFACog(commands.Cog):
     )
     @app_commands.describe(
         kind="Truth, Dare, or a random pick (default: random)",
-        nsfw="Use the spicier prompt bank (default: off)",
+        tags="Comma-separated tags to filter the prompt bank (include 'nsfw' to allow NSFW)",
         prompt="Write your own prompt instead of pulling a random one (optional)",
     )
     async def ffa(
         self,
         interaction: discord.Interaction,
         kind: Literal["random", "truth", "dare"] = "random",
-        nsfw: bool = False,
+        tags: str = "",
         prompt: str | None = None,
     ):
-        await self.start_ffa(interaction, kind, nsfw, prompt)
+        await self.start_ffa(interaction, kind, tags, prompt)
 
     async def start_ffa(
         self,
         interaction: discord.Interaction,
         kind: str = "random",
-        nsfw: bool = False,
+        tags: str = "",
         prompt: str | None = None,
     ):
         log.info("%s used /games play ffa in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
@@ -231,13 +232,21 @@ class FFACog(commands.Cog):
             )
             return
 
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list and not (prompt or "").strip() and not await has_matching_questions(self.db, "ffa", tag_list):
+            await interaction.response.send_message(
+                f"No prompts match tags: {', '.join(tag_list)} for this game.",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"kind": kind, "nsfw": nsfw, "prompt": prompt or ""},
+            options={"kind": kind, "tags": tag_list, "prompt": prompt or ""},
         )
         if game_id is None:
             try:
@@ -260,13 +269,20 @@ class FFACog(commands.Cog):
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         kind = (options.get("kind") or "random").lower()
-        nsfw = bool(options.get("nsfw", False))
+        tags = list(options.get("tags") or [])
+        # Backward-compat: legacy scheduled games stored {"nsfw": true}.
+        if options.get("nsfw") and "nsfw" not in tags:
+            tags.append("nsfw")
         custom = (options.get("prompt") or "").strip()
 
         if custom:
             label, text = label_for_kind(kind), custom
         else:
-            label, text = pick_prompt(kind, nsfw)
+            picked = await get_ffa_prompt(self.db, kind=kind, tags=tags or None)
+            if picked is None:
+                log.info("ffa launch: no prompt for kind=%s tags=%s in channel %s", kind, tags, channel.id)
+                return None
+            label, text = picked
 
         guild = getattr(channel, "guild", None)
         image_bytes = await _resolve_card_image(guild, self.bot, host_id)
@@ -323,7 +339,7 @@ class FFACog(commands.Cog):
                 "prompt": text,
                 "label": label,
                 "kind": kind,
-                "nsfw": nsfw,
+                "tags": tags,
                 "thread_id": thread.id if thread is not None else None,
             },
         )

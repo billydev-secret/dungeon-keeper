@@ -26,7 +26,11 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
 )
 from bot_modules.games.utils.recovery import start_redrive
-from bot_modules.games.utils.question_source import get_clapback_prompt, has_clapback_prompts
+from bot_modules.games.utils.question_source import (
+    get_clapback_prompt,
+    has_clapback_prompts,
+    has_matching_questions,
+)
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.command_groups import play
 from bot_modules.games_clapback.logic import (
@@ -60,14 +64,16 @@ async def fetch_prompt(db, config: dict, used: list[str]) -> str | None:
     """Get a prompt from bank and/or AI depending on *source*."""
     source = config.get("source", "both")
 
+    tags = config.get("tags") or None
+
     if source == "bank":
-        return await get_clapback_prompt(db, exclude=used)
+        return await get_clapback_prompt(db, exclude=used, tags=tags)
 
     if source == "ai":
         return await _ai_prompt(used)
 
     # source == "both": try bank first, fall back to AI
-    prompt = await get_clapback_prompt(db, exclude=used)
+    prompt = await get_clapback_prompt(db, exclude=used, tags=tags)
     if prompt:
         return prompt
     return await _ai_prompt(used)
@@ -590,6 +596,7 @@ class ClapbackCog(commands.Cog):
         source="Where prompts come from",
         anonymous="Hide author names until final recap",
         start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
+        tags="Comma-separated tags to filter the bank when source uses it (include 'nsfw' to allow NSFW)",
     )
     @app_commands.choices(
         source=[
@@ -607,6 +614,7 @@ class ClapbackCog(commands.Cog):
         source: str = "both",
         anonymous: bool = False,
         start_in: app_commands.Range[int, 1, 60] | None = None,
+        tags: str = "",
     ):
         log.info(
             "%s used /games play clapback in #%s",
@@ -625,14 +633,24 @@ class ClapbackCog(commands.Cog):
             await interaction.response.send_message("Clapback is currently disabled on this server.", ephemeral=True)
             return
 
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+
         # Hard bank-error pre-check (nice ephemeral message; launch falls back silently).
-        if source == "bank" and not await has_clapback_prompts(self.db):
-            await interaction.response.send_message(
-                "No prompts in the bank for Clapback. "
-                "Add some with `/bank add clapback` or use `source:ai`.",
-                ephemeral=True,
-            )
-            return
+        if source == "bank":
+            if tag_list:
+                if not await has_matching_questions(self.db, "clapback", tag_list):
+                    await interaction.response.send_message(
+                        f"No prompts match tags: {', '.join(tag_list)} for Clapback.",
+                        ephemeral=True,
+                    )
+                    return
+            elif not await has_clapback_prompts(self.db):
+                await interaction.response.send_message(
+                    "No prompts in the bank for Clapback. "
+                    "Add some with `/bank add clapback` or use `source:ai`.",
+                    ephemeral=True,
+                )
+                return
 
         await interaction.response.defer()
         game_id = await self.launch(
@@ -643,7 +661,7 @@ class ClapbackCog(commands.Cog):
             options={
                 "rounds": rounds, "timer": timer, "vote_timer": vote_timer,
                 "source": source, "anonymous": anonymous,
-                "start_in": start_in,
+                "start_in": start_in, "tags": tag_list,
             },
         )
         if game_id is None:
@@ -687,6 +705,7 @@ class ClapbackCog(commands.Cog):
             "anonymous": bool(options.get("anonymous", False)),
             "start_epoch": start_epoch,
             "min_players": min_players,
+            "tags": options.get("tags") or [],
         }
         return await self._start_new_game(
             channel=channel, host_id=host_id, host_name=host_name,
