@@ -284,6 +284,12 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
             path = request.url.path
             if not (path.startswith("/static/") and path.endswith(".js")):
                 return response
+            # Never cache a non-200 (e.g. a transient 404 for a not-yet-deployed
+            # module) as immutable — doing so poisons the browser/CDN for a year
+            # against that exact ?v= URL, even after the file appears.
+            if response.status_code != 200:
+                response.headers["cache-control"] = "no-store"
+                return response
             raw_chunks: list[Any] = []
             async for chunk in cast(StreamingResponse, response).body_iterator:
                 raw_chunks.append(chunk)

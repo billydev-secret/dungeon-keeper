@@ -546,7 +546,12 @@ async function mountPanel() {
   rootEl.innerHTML = `<div class="panel"><div class="panel-loading">Loading ${esc(page.label)}…</div></div>`;
 
   try {
-    const mod = await import(page.module);
+    // The ?v=1 literal is rewritten to the current boot id by the server's
+    // _CacheBustJS middleware, so each reboot yields a fresh panel URL. Without
+    // it, dynamically-imported panels (a variable specifier the import-rewrite
+    // regex can't see) would stay immutable-cached forever and never pick up
+    // changes to their module graph.
+    const mod = await import(`${page.module}?v=1`);
     currentPanel = mod.mount(rootEl, params) || null;
   } catch (err) {
     rootEl.innerHTML = `<div class="panel"><div class="error">Failed to load ${esc(page.label)}: ${esc(err.message)}</div></div>`;

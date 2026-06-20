@@ -50,6 +50,23 @@ function selectFromChannels(name, channels, selectedId, kind) {
   return sel;
 }
 
+function selectFromRoles(name, roles, selectedId) {
+  const sel = document.createElement("select");
+  sel.name = name;
+  const none = document.createElement("option");
+  none.value = "0";
+  none.textContent = "(none — open to everyone)";
+  sel.appendChild(none);
+  for (const r of roles) {
+    const opt = document.createElement("option");
+    opt.value = r.id;
+    opt.textContent = "@" + r.name;
+    if (String(r.id) === String(selectedId)) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  return sel;
+}
+
 function numberInput(name, value, min = 0) {
   const inp = document.createElement("input");
   inp.type = "number";
@@ -105,11 +122,12 @@ export function mount(container) {
   container.appendChild(loading);
 
   (async () => {
-    let cfg, channels;
+    let cfg, channels, roles;
     try {
-      [cfg, channels] = await Promise.all([
+      [cfg, channels, roles] = await Promise.all([
         apiGet("/api/voice-master/config"),
         apiGet("/api/meta/channels?types=text,voice,category"),
+        apiGet("/api/meta/roles"),
       ]);
     } catch (err) {
       loading.textContent = "Failed to load: " + err.message;
@@ -169,9 +187,17 @@ export function mount(container) {
       "Auto-post the control panel into each new channel's text chat.",
     ));
     form.appendChild(buildField(
+      "Spectator gate role",
+      selectFromRoles("spectator_gate_role_id", roles, cfg.spectator_gate_role_id),
+      "If set, only members with this role can join spectator-mode channels. " +
+      "Others see the channel exists but can't join or read its chat (Discord " +
+      "ties the voice text-chat to the Connect permission). Leave as (none) to " +
+      "let anyone spectate (then non-members can still read, just not speak).",
+    ));
+    form.appendChild(buildField(
       "Saveable fields",
       checkboxList("saveable_fields",
-        ["name", "limit", "locked", "hidden", "trusted", "blocked"],
+        ["name", "limit", "locked", "hidden", "spectator", "trusted", "blocked"],
         new Set(cfg.saveable_fields),
       ),
       "Which profile fields owners may persist.",
@@ -208,6 +234,7 @@ export function mount(container) {
         disable_saves: fd.get("disable_saves") === "true",
         saveable_fields: saveable,
         post_inline_panel: fd.get("post_inline_panel") === "true",
+        spectator_gate_role_id: String(fd.get("spectator_gate_role_id") || "0"),
       };
       try {
         await apiPost("/api/voice-master/config", payload);

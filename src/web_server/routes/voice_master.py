@@ -70,6 +70,7 @@ class ConfigPayload(BaseModel):
     disable_saves: bool
     saveable_fields: list[str]
     post_inline_panel: bool
+    spectator_gate_role_id: str = "0"
 
 
 class NameBlocklistAdd(BaseModel):
@@ -150,6 +151,7 @@ async def get_config(
             "disable_saves": cfg.disable_saves,
             "saveable_fields": sorted(cfg.saveable_fields),
             "post_inline_panel": cfg.post_inline_panel,
+            "spectator_gate_role_id": str(cfg.spectator_gate_role_id),
             "name_blocklist": patterns,
         }
 
@@ -164,7 +166,9 @@ async def set_config(
 ) -> dict[str, str]:
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    valid_fields = {"name", "limit", "locked", "hidden", "trusted", "blocked"}
+    valid_fields = {
+        "name", "limit", "locked", "hidden", "spectator", "trusted", "blocked",
+    }
     chosen = {f.lower() for f in payload.saveable_fields}
     if not chosen.issubset(valid_fields):
         raise HTTPException(400, f"Unknown fields: {chosen - valid_fields}")
@@ -181,6 +185,7 @@ async def set_config(
     hub_id = _to_id(payload.hub_channel_id)
     category_id = _to_id(payload.category_id)
     control_id = _to_id(payload.control_channel_id)
+    gate_role_id = _to_id(payload.spectator_gate_role_id)
 
     def _q() -> None:
         with ctx.open_db() as conn:
@@ -200,6 +205,7 @@ async def set_config(
             set_voice_master_config_value(conn, guild_id, "voice_master_disable_saves", "1" if payload.disable_saves else "0")
             set_voice_master_config_value(conn, guild_id, "voice_master_saveable_fields", ",".join(sorted(chosen)))
             set_voice_master_config_value(conn, guild_id, "voice_master_post_inline_panel", "1" if payload.post_inline_panel else "0")
+            set_voice_master_config_value(conn, guild_id, "voice_master_spectator_gate_role_id", gate_role_id)
             write_audit(
                 conn,
                 guild_id=guild_id,

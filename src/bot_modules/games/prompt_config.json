@@ -1,7 +1,7 @@
 {
   "audience": "Adults (21+) in an established, invite-only Discord community. Mixed experience levels with adult humor — some shy, some bold. They value wit and chemistry over shock value, and respond best to clever, absurdly specific setups rather than pure raunch. Comfortable with explicit content when it's funny.\n",
   "sfw_tone": "Playful, warm, slightly suggestive. Awkward-adjacent humor, innuendo that works on two levels, mood-killer scenarios, dating disasters. Safe to read aloud, but with a knowing wink.\n",
-  "nsfw_tone": "Unhinged but elegant. Explicitly adult, chemistry-forward, mischievous. Kinks, hookup chaos, and bedroom disasters are fair game — but the comedy always carries the raunch, never the reverse. Clever specificity over crude shock. No demeaning humor, no real people, nothing non-consensual.\n",
+  "nsfw_tone": "Unhinged but elegant. Explicitly adult, chemistry-forward, mischievous. Kinks, hookup chaos, and bedroom disasters are fair game — but the comedy always carries the raunch, never the reverse. Clever specificity over crude shock. No demeaning humor, no real people, nothing non-consensual.\n\nThe room is particularly fond of Bdsm, kink, discord, DMs, sexting, voice and video calls. Body writing. ",
   "games": {
     "wyr": {
       "name": "Would You Rather",
@@ -12,7 +12,7 @@
     "nhie": {
       "name": "Never Have I Ever",
       "descriptor": "Never Have I Ever statements",
-      "user_prompt": "Generate ONE Never Have I Ever statement that's specific enough to be revealing — the kind of thing where at least one person in the room is definitely going to drink. Return only the action, without the 'Never have I ever' prefix. No quotes, no numbering.",
+      "user_prompt": "Generate ONE Never Have I Ever statement that's specific enough to be revealing — the kind of thing where at least one person in the room is definitely going to drink. Return only the action, without the 'Never have I ever' prefix. No quotes, no numbering.\n\nThey should focus around online BDSM and dating. ",
       "max_tokens": 120
     },
     "mlt": {

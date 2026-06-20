@@ -202,22 +202,44 @@ def format_blocked_list(ids: list[int]) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Voice/text permissions that separate a "speaker" from a "spectator". In
+# spectator mode these are denied on the audience target (``@everyone`` when
+# ungated, or the gate role when gated) and granted explicitly to whoever may
+# participate — a member overwrite outranks the role/@everyone deny, so the
+# owner, trusted, invited and already-present members keep full rights. Denying
+# ``stream`` covers both webcam and Go Live (Discord's "Video" permission);
+# denying the two ``send_messages`` perms makes the side chat read-only.
+SPECTATOR_PARTICIPATION_PERMS: tuple[str, ...] = (
+    "speak",
+    "stream",
+    "send_messages",
+    "send_messages_in_threads",
+)
+
+
 @dataclass(frozen=True)
 class OverwritePlanEntry:
     """One line of the channel-create overwrite plan.
 
     ``target_id`` is the snowflake (member or role). ``target_kind`` is
     ``"everyone"`` for the default-role row, ``"owner"`` for the channel
-    owner, or ``"trusted"``/``"blocked"`` for trust/block entries. The cog
-    maps these back to actual ``discord.Role``/``discord.Member`` objects.
+    owner, ``"trusted"``/``"blocked"`` for trust/block entries, or
+    ``"gate_role"`` for the spectator gate role. The cog maps these back to
+    actual ``discord.Role``/``discord.Member`` objects.
 
-    ``view_channel``/``connect``: ``True`` grants, ``False`` denies, ``None``
-    inherits (matches ``PermissionOverwrite`` semantics).
+    ``view_channel``/``connect`` and the spectator participation fields
+    (``speak``/``stream``/``send_messages``/``send_messages_in_threads``):
+    ``True`` grants, ``False`` denies, ``None`` inherits (matches
+    ``PermissionOverwrite`` semantics).
     """
     target_id: int
     target_kind: str
     view_channel: bool | None
     connect: bool | None
+    speak: bool | None = None
+    stream: bool | None = None
+    send_messages: bool | None = None
+    send_messages_in_threads: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -238,6 +260,8 @@ def plan_initial_overwrites(
     everyone_role_id: int,
     profile_locked: bool,
     profile_hidden: bool,
+    profile_spectator: bool = False,
+    gate_role_id: int | None = None,
     trusted_ids: list[int],
     blocked_ids: list[int],
     present_member_ids: set[int],
@@ -247,22 +271,67 @@ def plan_initial_overwrites(
     ``present_member_ids`` is the guild's current member roster (or any
     superset). Trust/block ids not in this set are returned in the plan's
     ``missing_target_ids`` list and omitted from the entries.
+
+    Spectator mode (``profile_spectator``) and lock are mutually exclusive at
+    the caller; if both arrive, spectator wins. When ``gate_role_id`` is set
+    (non-zero), spectating is gated to that role: ``@everyone`` is denied
+    Connect (visible + readable, but can't join) and the gate role becomes the
+    muted/no-video/read-only audience. Ungated, ``@everyone`` itself is the
+    audience. The owner and trusted members get explicit participation grants
+    so the audience deny never reaches them.
     """
+    gated = profile_spectator and bool(gate_role_id)
     entries: list[OverwritePlanEntry] = []
+
+    everyone_connect: bool | None = None
+    everyone_speak: bool | None = None
+    everyone_stream: bool | None = None
+    everyone_send: bool | None = None
+    everyone_send_threads: bool | None = None
+    if profile_spectator:
+        if gated:
+            # Block joining only — role-less members still see and read.
+            everyone_connect = False
+        else:
+            everyone_speak = False
+            everyone_stream = False
+            everyone_send = False
+            everyone_send_threads = False
+    elif profile_locked:
+        everyone_connect = False
     entries.append(
         OverwritePlanEntry(
             target_id=everyone_role_id,
             target_kind="everyone",
             view_channel=False if profile_hidden else None,
-            connect=False if profile_locked else None,
+            connect=everyone_connect,
+            speak=everyone_speak,
+            stream=everyone_stream,
+            send_messages=everyone_send,
+            send_messages_in_threads=everyone_send_threads,
         )
     )
+    if gated:
+        entries.append(
+            OverwritePlanEntry(
+                target_id=int(gate_role_id),  # type: ignore[arg-type]
+                target_kind="gate_role",
+                view_channel=None,
+                connect=True,
+                speak=False,
+                stream=False,
+                send_messages=False,
+                send_messages_in_threads=False,
+            )
+        )
+    speaker = _speaker_grant_fields(profile_spectator)
     entries.append(
         OverwritePlanEntry(
             target_id=owner_id,
             target_kind="owner",
             view_channel=True,
             connect=True,
+            **speaker,
         )
     )
     missing: list[int] = []
@@ -276,6 +345,7 @@ def plan_initial_overwrites(
                 target_kind="trusted",
                 view_channel=True,
                 connect=True,
+                **speaker,
             )
         )
     for uid in blocked_ids:
@@ -291,6 +361,16 @@ def plan_initial_overwrites(
             )
         )
     return OverwritePlan(entries=entries, missing_target_ids=missing)
+
+
+def _speaker_grant_fields(spectator: bool) -> dict[str, bool | None]:
+    """Participation-grant kwargs for a privileged member's plan entry.
+
+    Only meaningful in spectator mode (where the audience deny would otherwise
+    mute them); ``None`` everywhere else so open/lock-mode shapes are unchanged.
+    """
+    value: bool | None = True if spectator else None
+    return {perm: value for perm in SPECTATOR_PARTICIPATION_PERMS}
 
 
 def plan_lock_text_grants(
@@ -348,6 +428,91 @@ def plan_unlock_overwrite_cleanup(
         for (mid, connect, view_channel) in member_overwrites
         if mid not in keep and connect is True and view_channel is None
     ]
+
+
+def plan_spectator_speaker_grants(
+    *, present_member_ids: list[int], owner_id: int, bot_id: int | None = None
+) -> list[int]:
+    """Member ids that need a transient speaker grant when spectator turns on.
+
+    Anyone already in the channel when the owner enables spectator mode keeps
+    full participation (the design's "anyone already in + invited" rule). They
+    joined via ``@everyone`` and have no persistent overwrite, so without an
+    explicit grant the audience deny would mute them. The owner already has a
+    persistent overwrite (granted the speaker fields directly) and the bot
+    needs nothing, so both are skipped. Order preserved, duplicates collapsed.
+    """
+    skip = {owner_id}
+    if bot_id is not None:
+        skip.add(bot_id)
+    seen: set[int] = set()
+    out: list[int] = []
+    for uid in present_member_ids:
+        if uid in skip or uid in seen:
+            continue
+        seen.add(uid)
+        out.append(uid)
+    return out
+
+
+def plan_spectator_grant_cleanup(
+    *,
+    member_overwrites: list[tuple[int, bool | None, bool | None, bool | None]],
+    owner_id: int,
+    trusted_ids: list[int],
+    blocked_ids: list[int],
+) -> list[int]:
+    """Member ids whose *transient* spectator speaker grant to drop on disable.
+
+    Enabling spectator grants ``speak=True`` (plus the other participation
+    perms) to the already-present, otherwise-unprivileged members
+    (:func:`plan_spectator_speaker_grants`); disabling drops exactly those.
+
+    Each entry is ``(member_id, speak, connect, view_channel)`` read from the
+    live overwrite. The transient grant's shape is ``speak is True`` **and**
+    ``connect is None`` **and** ``view_channel is None`` — i.e. a pure
+    participation grant with no persistent access. Owner/trusted/invited
+    speakers instead carry ``connect=True``/``view_channel=True``, so they're
+    handled separately (their participation fields are reset in place, not
+    removed). Owner/trusted/blocked ids are excluded as a guard. Order kept.
+    """
+    keep = {owner_id, *trusted_ids, *blocked_ids}
+    return [
+        mid
+        for (mid, speak, connect, view_channel) in member_overwrites
+        if mid not in keep
+        and speak is True
+        and connect is None
+        and view_channel is None
+    ]
+
+
+def classify_access_mode(
+    *,
+    everyone_connect: bool | None,
+    everyone_speak: bool | None,
+    gate_role_set: bool,
+    gate_role_connect: bool | None,
+    gate_role_speak: bool | None,
+) -> str:
+    """Classify a channel's current access mode from its overwrite values.
+
+    Returns ``"open"``, ``"lock"``, or ``"spectate"``. The gate-role check
+    comes first because gated-spectator denies Connect to ``@everyone`` — the
+    same shape as a plain lock — so the two are only distinguishable by the
+    gate role carrying ``connect=True`` + a participation deny.
+    """
+    if (
+        gate_role_set
+        and gate_role_connect is True
+        and gate_role_speak is False
+    ):
+        return "spectate"
+    if everyone_speak is False:
+        return "spectate"
+    if everyone_connect is False:
+        return "lock"
+    return "open"
 
 
 def select_effective_limit(
@@ -447,7 +612,7 @@ def hub_create_blocked_by_cooldown(
 
 # What ``/voice profile reset`` accepts as ``field``.
 PROFILE_RESET_FIELDS: frozenset[str] = frozenset(
-    {"all", "name", "limit", "locked", "hidden", "trusted", "blocked"}
+    {"all", "name", "limit", "locked", "hidden", "spectator", "trusted", "blocked"}
 )
 
 
@@ -652,6 +817,21 @@ def format_hide_result(*, hidden: bool) -> str:
     return f"Channel is now **{'hidden' if hidden else 'visible'}**."
 
 
+def format_spectator_result(*, spectator: bool, gated: bool = False) -> str:
+    """Confirmation reply after toggling spectator mode."""
+    if not spectator:
+        return "Spectator mode **off** — the channel is open again."
+    if gated:
+        return (
+            "Spectator mode **on** (gated) — role-holders can join muted, with "
+            "no camera, read-only in chat. Others can't join."
+        )
+    return (
+        "Spectator mode **on** — anyone can join muted, with no camera, "
+        "read-only in chat. Invite people to let them speak."
+    )
+
+
 def format_rename_result(*, new_name: str) -> str:
     """Confirmation reply after a rename."""
     return f"Renamed to **{new_name}**."
@@ -849,23 +1029,25 @@ class PanelButtonMeta:
 
 
 PANEL_BUTTON_ORDER: tuple[str, ...] = (
-    "lock", "unlock", "hide", "unhide",
+    "lock", "unlock", "spectator", "unspectator", "hide", "unhide",
     "rename", "limit", "invite", "kick",
     "transfer", "reset",
 )
 
 
 _PANEL_BUTTON_META: dict[str, PanelButtonMeta] = {
-    "lock":     PanelButtonMeta("lock",     "Lock",     "🔒"),
-    "unlock":   PanelButtonMeta("unlock",   "Unlock",   "🔓"),
-    "hide":     PanelButtonMeta("hide",     "Hide",     "👁️"),
-    "unhide":   PanelButtonMeta("unhide",   "Unhide",   "👀"),
-    "rename":   PanelButtonMeta("rename",   "Rename",   "✏️"),
-    "limit":    PanelButtonMeta("limit",    "Limit",    "🔢"),
-    "invite":   PanelButtonMeta("invite",   "Invite",   "👋"),
-    "kick":     PanelButtonMeta("kick",     "Kick",     "🚫"),
-    "transfer": PanelButtonMeta("transfer", "Transfer", "👑"),
-    "reset":    PanelButtonMeta("reset",    "Reset",    "🧹"),
+    "lock":        PanelButtonMeta("lock",        "Lock",        "🔒"),
+    "unlock":      PanelButtonMeta("unlock",      "Unlock",      "🔓"),
+    "spectator":   PanelButtonMeta("spectator",   "Spectate",    "🎭"),
+    "unspectator": PanelButtonMeta("unspectator", "Un-spectate", "🎤"),
+    "hide":        PanelButtonMeta("hide",        "Hide",        "👁️"),
+    "unhide":      PanelButtonMeta("unhide",      "Unhide",      "👀"),
+    "rename":      PanelButtonMeta("rename",      "Rename",      "✏️"),
+    "limit":       PanelButtonMeta("limit",       "Limit",       "🔢"),
+    "invite":      PanelButtonMeta("invite",      "Invite",      "👋"),
+    "kick":        PanelButtonMeta("kick",        "Kick",        "🚫"),
+    "transfer":    PanelButtonMeta("transfer",    "Transfer",    "👑"),
+    "reset":       PanelButtonMeta("reset",       "Reset",       "🧹"),
 }
 
 
@@ -891,7 +1073,9 @@ def all_panel_button_metas() -> list[PanelButtonMeta]:
 
 _GROUP_ACTIONS: dict[str, tuple[str, ...]] = {
     "settings": ("rename", "limit", "hide", "unhide", "reset"),
-    "permissions": ("lock", "unlock", "invite", "kick", "transfer"),
+    "permissions": (
+        "lock", "unlock", "spectator", "unspectator", "invite", "kick", "transfer",
+    ),
 }
 
 PANEL_GROUP_ORDER: tuple[str, ...] = tuple(_GROUP_ACTIONS)

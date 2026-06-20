@@ -208,6 +208,146 @@ async def test_apply_hide_handles_permission_failure(ctx, voice_channel):
     ) >= 1
 
 
+# ── _apply_spectator ──────────────────────────────────────────────────────
+
+
+def _per_target_overwrites(voice_channel):
+    """Make overwrites_for return a fresh overwrite per distinct target.
+
+    The default fixture returns one shared instance, so mutations leak between
+    the @everyone / owner / member edits. This keeps them independent and lets
+    a test read back what was written for each target.
+    """
+    store: dict[int, discord.PermissionOverwrite] = {}
+
+    def _for(target):
+        key = id(target)
+        if key not in store:
+            store[key] = discord.PermissionOverwrite()
+        return store[key]
+
+    voice_channel.overwrites_for = MagicMock(side_effect=_for)
+    voice_channel.overwrites = {}
+    return store
+
+
+@pytest.mark.asyncio
+async def test_apply_spectator_enable_mutes_everyone_and_saves(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_spectator
+
+    _per_target_overwrites(voice_channel)
+    everyone = voice_channel.guild.default_role
+    owner_obj = MagicMock(spec=discord.Member)
+    owner_obj.id = OWNER
+    voice_channel.guild.get_member = MagicMock(return_value=owner_obj)
+    voice_channel.guild.me = MagicMock(id=1)
+    voice_channel.members = []
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
+        # Pre-seed locked=True to prove enabling spectator clears it.
+        set_voice_master_config_value(conn, GUILD, "voice_master_saveable_fields",
+                                      "name,limit,locked,hidden,spectator,trusted,blocked")
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    await _apply_spectator(inter, voice_channel, row, spectator=True)
+
+    everyone_ow = voice_channel.overwrites_for(everyone)
+    assert everyone_ow.speak is False
+    assert everyone_ow.stream is False
+    assert everyone_ow.send_messages is False
+    assert everyone_ow.connect is None  # ungated → still joinable
+    owner_ow = voice_channel.overwrites_for(owner_obj)
+    assert owner_ow.speak is True and owner_ow.connect is True
+
+    with open_db(ctx.db_path) as conn:
+        p = load_profile(conn, GUILD, OWNER)
+    assert p is not None
+    assert p.spectator is True
+    assert p.locked is False  # mutually exclusive
+
+
+@pytest.mark.asyncio
+async def test_apply_spectator_enable_gated_blocks_everyone_join(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_spectator
+
+    store = _per_target_overwrites(voice_channel)
+    everyone = voice_channel.guild.default_role
+    gate_role = MagicMock(spec=discord.Role)
+    gate_role.id = 4242
+    owner_obj = MagicMock(spec=discord.Member)
+    owner_obj.id = OWNER
+    voice_channel.guild.get_member = MagicMock(return_value=owner_obj)
+    voice_channel.guild.get_role = MagicMock(return_value=gate_role)
+    voice_channel.guild.me = MagicMock(id=1)
+    voice_channel.members = []
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
+        set_voice_master_config_value(
+            conn, GUILD, "voice_master_spectator_gate_role_id", "4242"
+        )
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    await _apply_spectator(inter, voice_channel, row, spectator=True)
+
+    everyone_ow = voice_channel.overwrites_for(everyone)
+    assert everyone_ow.connect is False  # blocked from joining
+    assert everyone_ow.speak is None
+    gate_ow = voice_channel.overwrites_for(gate_role)
+    assert gate_ow.connect is True
+    assert gate_ow.speak is False and gate_ow.stream is False
+
+
+@pytest.mark.asyncio
+async def test_apply_invite_grants_speaker_when_spectating(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_invite
+
+    store = _per_target_overwrites(voice_channel)
+    everyone = voice_channel.guild.default_role
+    # Put @everyone in spectator (ungated) shape so the channel reads "spectate".
+    store[id(everyone)] = discord.PermissionOverwrite(
+        speak=False, stream=False, send_messages=False
+    )
+    voice_channel.guild.get_role = MagicMock(return_value=None)
+    target = MagicMock(spec=discord.Member)
+    target.id = OTHER
+    target.bot = False
+    target.mention = f"<@{OTHER}>"
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    await _apply_invite(inter, voice_channel, row, target=target, remember=False)
+
+    target_ow = voice_channel.overwrites_for(target)
+    assert target_ow.connect is True and target_ow.view_channel is True
+    assert target_ow.speak is True and target_ow.stream is True
+
+
+@pytest.mark.asyncio
+async def test_apply_invite_no_speaker_grant_when_open(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_invite
+
+    _per_target_overwrites(voice_channel)  # @everyone overwrite is empty → open
+    voice_channel.guild.get_role = MagicMock(return_value=None)
+    target = MagicMock(spec=discord.Member)
+    target.id = OTHER
+    target.bot = False
+    target.mention = f"<@{OTHER}>"
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    await _apply_invite(inter, voice_channel, row, target=target, remember=False)
+
+    target_ow = voice_channel.overwrites_for(target)
+    assert target_ow.connect is True and target_ow.view_channel is True
+    assert target_ow.speak is None  # no participation grant in open mode
+
+
 # ── _apply_rename branches ────────────────────────────────────────────────
 
 

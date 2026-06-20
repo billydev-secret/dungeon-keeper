@@ -57,9 +57,12 @@ class VoiceMasterConfig:
     disable_saves: bool
     saveable_fields: frozenset[str]
     post_inline_panel: bool
+    spectator_gate_role_id: int
 
 
-_DEFAULT_SAVEABLE = frozenset({"name", "limit", "locked", "hidden", "trusted", "blocked"})
+_DEFAULT_SAVEABLE = frozenset(
+    {"name", "limit", "locked", "hidden", "spectator", "trusted", "blocked"}
+)
 
 
 _CONFIG_DEFAULTS: dict[str, str] = {
@@ -78,8 +81,9 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "voice_master_empty_grace_s": "15",
     "voice_master_trusted_prune_days": "0",
     "voice_master_disable_saves": "0",
-    "voice_master_saveable_fields": "name,limit,locked,hidden,trusted,blocked",
+    "voice_master_saveable_fields": "name,limit,locked,hidden,spectator,trusted,blocked",
     "voice_master_post_inline_panel": "1",
+    "voice_master_spectator_gate_role_id": "0",
 }
 
 
@@ -130,6 +134,9 @@ def load_voice_master_config(
         disable_saves=_parse_bool(raw["voice_master_disable_saves"]),
         saveable_fields=saveable,
         post_inline_panel=_parse_bool(raw["voice_master_post_inline_panel"]),
+        spectator_gate_role_id=_parse_int(
+            raw["voice_master_spectator_gate_role_id"], 0
+        ),
     )
 
 
@@ -157,11 +164,17 @@ class VoiceProfile:
     locked: bool
     hidden: bool
     bitrate: int | None
+    spectator: bool = False
 
 
 def default_profile() -> VoiceProfile:
     return VoiceProfile(
-        saved_name=None, saved_limit=0, locked=False, hidden=False, bitrate=None
+        saved_name=None,
+        saved_limit=0,
+        locked=False,
+        hidden=False,
+        bitrate=None,
+        spectator=False,
     )
 
 
@@ -334,7 +347,7 @@ def load_profile(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> VoiceProfile | None:
     row = conn.execute(
-        "SELECT saved_name, saved_limit, locked, hidden, bitrate "
+        "SELECT saved_name, saved_limit, locked, hidden, bitrate, spectator "
         "FROM voice_master_profiles WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
     ).fetchone()
@@ -346,6 +359,7 @@ def load_profile(
         locked=bool(row["locked"]),
         hidden=bool(row["hidden"]),
         bitrate=int(row["bitrate"]) if row["bitrate"] is not None else None,
+        spectator=bool(row["spectator"]),
     )
 
 
@@ -360,14 +374,16 @@ def save_profile(
     conn.execute(
         """
         INSERT INTO voice_master_profiles
-            (guild_id, user_id, saved_name, saved_limit, locked, hidden, bitrate, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (guild_id, user_id, saved_name, saved_limit, locked, hidden, bitrate,
+             spectator, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
             saved_name=excluded.saved_name,
             saved_limit=excluded.saved_limit,
             locked=excluded.locked,
             hidden=excluded.hidden,
             bitrate=excluded.bitrate,
+            spectator=excluded.spectator,
             updated_at=excluded.updated_at
         """,
         (
@@ -378,6 +394,7 @@ def save_profile(
             int(profile.locked),
             int(profile.hidden),
             profile.bitrate,
+            int(profile.spectator),
             now if now is not None else time.time(),
         ),
     )
@@ -400,6 +417,7 @@ def update_profile_field(
         "locked": profile.locked,
         "hidden": profile.hidden,
         "bitrate": profile.bitrate,
+        "spectator": profile.spectator,
     }
     if field not in kwargs:
         raise ValueError(f"unknown profile field: {field}")
@@ -756,10 +774,44 @@ def decorate_channel_name(
 
     Strips a prior icon first so repeated lock/unlock toggles never stack
     prefixes (``❓ ❓ Room``). Truncated to Discord's name limit.
+
+    No longer used on the live channel name — lock state is advertised via the
+    voice channel *status* line (``lock_status_text``) instead, which rides a
+    separate endpoint immune to the 2-edits-per-10-minutes name rate limit.
+    Kept for the strip/idempotence helpers and their tests.
     """
     base = strip_state_icon(name)
     icon = LOCKED_NAME_ICON if locked else OPEN_NAME_ICON
     return f"{icon} {base}"[:max_len]
+
+
+# ---------------------------------------------------------------------------
+# Lock-state voice channel status
+# ---------------------------------------------------------------------------
+#
+# A voice channel carries a free-text "status" line shown under its name in the
+# channel list. We use it to advertise the room's lock state. Unlike the channel
+# name, status edits go through ``PUT /channels/{id}/voice-status`` — a separate
+# rate-limit bucket from the name's brutal 2-per-10-minutes limit — so it can be
+# toggled freely on every lock/unlock.
+
+OPEN_STATUS_TEXT: str = "👋 All welcome"
+LOCKED_STATUS_TEXT: str = "🔒 Ask to join"
+SPECTATE_STATUS_TEXT: str = "🎭 Spectators welcome"
+
+
+def lock_status_text(*, locked: bool) -> str:
+    """Voice-channel status string advertising the room's lock state."""
+    return LOCKED_STATUS_TEXT if locked else OPEN_STATUS_TEXT
+
+
+def access_status_text(*, mode: str) -> str:
+    """Voice-channel status string for an access mode (open/lock/spectate)."""
+    if mode == "lock":
+        return LOCKED_STATUS_TEXT
+    if mode == "spectate":
+        return SPECTATE_STATUS_TEXT
+    return OPEN_STATUS_TEXT
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import contextlib
 import logging
 import time
 from collections import defaultdict
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import discord
@@ -22,9 +23,10 @@ from bot_modules.commands.voice_master_commands import (
     _apply_lock,
     _apply_rename,
     _apply_reset,
+    _apply_spectator,
     _apply_transfer,
     _ephemeral,
-    _gate_and_record_edit,
+    _grant_speaker_if_spectating,
     _resolve_owned_channel,
     post_inline_panel,
     post_knock_request,
@@ -36,11 +38,11 @@ from bot_modules.services.voice_master_service import (
     DEFAULT_NAME_TEMPLATE,
     VoiceMasterConfig,
     VoiceProfile,
+    access_status_text,
     active_channel_count,
     add_blocked,
     add_trusted,
     compute_reconciliation_actions,
-    decorate_channel_name,
     default_profile,
     delete_active_channel,
     get_active_channel,
@@ -327,6 +329,7 @@ class VoiceMasterCog(commands.Cog):
                 overwrite = ch.overwrites_for(new_owner)
                 overwrite.connect = True
                 overwrite.view_channel = True
+                _grant_speaker_if_spectating(self.ctx, ch, overwrite)
                 try:
                     await ch.set_permissions(
                         new_owner,
@@ -552,9 +555,6 @@ class VoiceMasterCog(commands.Cog):
                 username=member.name,
                 blocklist_patterns=blocklist,
             )
-            # Advertise the channel's open/locked state in its name. Done after
-            # blocklist resolution so the icon never affects that check.
-            name = decorate_channel_name(name, locked=bool(profile.locked))
 
             target_cat = guild.get_channel(cfg.category_id) if cfg.category_id else None
             if isinstance(target_cat, discord.CategoryChannel):
@@ -584,6 +584,7 @@ class VoiceMasterCog(commands.Cog):
                 trusted_ids=trusted_ids,
                 blocked_ids=blocked_ids,
                 owner=member,
+                gate_role_id=cfg.spectator_gate_role_id,
             )
 
             create_kwargs: dict = {"name": name, "overwrites": overwrites}
@@ -637,6 +638,21 @@ class VoiceMasterCog(commands.Cog):
                     channel.id, member.id,
                 )
 
+            # Advertise the room's lock state on its status line. create_voice_channel
+            # can't carry a status, so set it here in a follow-up edit (separate
+            # endpoint, not subject to the name rate limit). Best-effort.
+            with self._suppress_voice_errors():
+                if profile.spectator:
+                    initial_mode = "spectate"
+                elif profile.locked:
+                    initial_mode = "lock"
+                else:
+                    initial_mode = "open"
+                await channel.edit(
+                    status=access_status_text(mode=initial_mode),
+                    reason="Voice Master: initial access-state status",
+                )
+
             # Drop the control panel into the new channel's text chat so the
             # owner has the buttons right where they are. Non-fatal on failure
             # (perms missing, channel deleted out from under us, etc.).
@@ -665,6 +681,7 @@ class VoiceMasterCog(commands.Cog):
         trusted_ids: list[int],
         blocked_ids: list[int],
         owner: discord.Member,
+        gate_role_id: int = 0,
     ) -> tuple[
         dict[discord.Role | discord.Member, discord.PermissionOverwrite],
         list[int],
@@ -684,11 +701,17 @@ class VoiceMasterCog(commands.Cog):
         present_ids: set[int] = {m.id for m in guild.members}
         # Trust/block ids that match the owner or @everyone are pruned by
         # the plan implicitly because the cog never feeds them in here.
+        gate_role = (
+            guild.get_role(gate_role_id) if gate_role_id else None
+        )
         plan = plan_initial_overwrites(
             owner_id=owner.id,
             everyone_role_id=guild.default_role.id,
             profile_locked=profile.locked,
             profile_hidden=profile.hidden,
+            profile_spectator=profile.spectator,
+            # Only treat spectating as gated if the role still exists.
+            gate_role_id=gate_role.id if gate_role is not None else None,
             trusted_ids=trusted_ids,
             blocked_ids=blocked_ids,
             present_member_ids=present_ids,
@@ -700,14 +723,20 @@ class VoiceMasterCog(commands.Cog):
                 key = guild.default_role
             elif entry.target_kind == "owner":
                 key = owner
+            elif entry.target_kind == "gate_role":
+                key = gate_role
             else:
                 key = guild.get_member(entry.target_id)
             if key is None:
-                # Member left between the snapshot and the resolve.
+                # Member/role left between the snapshot and the resolve.
                 continue
             ow[key] = discord.PermissionOverwrite(
                 view_channel=entry.view_channel,
                 connect=entry.connect,
+                speak=entry.speak,
+                stream=entry.stream,
+                send_messages=entry.send_messages,
+                send_messages_in_threads=entry.send_messages_in_threads,
             )
         return ow, plan.missing_target_ids
 
@@ -724,8 +753,6 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_lock(interaction, channel, row, locked=True)
 
     @voice.command(name="unlock", description="Unlock your voice channel.")
@@ -734,9 +761,29 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_lock(interaction, channel, row, locked=False)
+
+    @voice.command(
+        name="spectator",
+        description="Open your channel to muted spectators (no mic, no camera, read-only chat).",
+    )
+    async def voice_spectator(self, interaction: discord.Interaction) -> None:
+        resolved = await _resolve_owned_channel(interaction)
+        if resolved is None:
+            return
+        channel, row = resolved
+        await _apply_spectator(interaction, channel, row, spectator=True)
+
+    @voice.command(
+        name="unspectator",
+        description="Turn off spectator mode and reopen your channel.",
+    )
+    async def voice_unspectator(self, interaction: discord.Interaction) -> None:
+        resolved = await _resolve_owned_channel(interaction)
+        if resolved is None:
+            return
+        channel, row = resolved
+        await _apply_spectator(interaction, channel, row, spectator=False)
 
     @voice.command(name="hide", description="Hide your voice channel from non-invited members.")
     async def voice_hide(self, interaction: discord.Interaction) -> None:
@@ -744,8 +791,6 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_hide(interaction, channel, row, hidden=True)
 
     @voice.command(name="unhide", description="Make your voice channel visible again.")
@@ -754,8 +799,6 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_hide(interaction, channel, row, hidden=False)
 
     @voice.command(name="rename", description="Rename your voice channel.")
@@ -769,8 +812,6 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_rename(interaction, channel, row, new_name=name)
 
     @voice.command(name="limit", description="Set the user limit on your voice channel (0 = no cap).")
@@ -784,8 +825,6 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_limit(interaction, channel, row, new_limit=limit)
 
     @voice.command(name="invite", description="Grant a member access to your voice channel.")
@@ -803,8 +842,6 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_invite(
             interaction, channel, row, target=member, remember=remember
         )
@@ -824,8 +861,6 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_kick(
             interaction, channel, row, target=member, remember=remember
         )
@@ -852,8 +887,6 @@ class VoiceMasterCog(commands.Cog):
         if resolved is None:
             return
         channel, row = resolved
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_reset(interaction, channel, row, also_profile=also_profile)
 
     @voice.command(name="claim", description="Claim ownership of the channel you're in (if eligible).")
@@ -896,6 +929,7 @@ class VoiceMasterCog(commands.Cog):
         overwrite = channel.overwrites_for(member)
         overwrite.connect = True
         overwrite.view_channel = True
+        _grant_speaker_if_spectating(self.ctx, channel, overwrite)
         try:
             await channel.set_permissions(
                 member, overwrite=overwrite, reason="Voice Master: claim"
@@ -1154,6 +1188,7 @@ class VoiceMasterCog(commands.Cog):
             saved_limit=profile.saved_limit,
             locked=profile.locked,
             hidden=profile.hidden,
+            spectator=profile.spectator,
             trusted_count=len(trusted),
             blocked_count=len(blocked),
         )
@@ -1168,6 +1203,7 @@ class VoiceMasterCog(commands.Cog):
             app_commands.Choice(name="limit", value="limit"),
             app_commands.Choice(name="locked", value="locked"),
             app_commands.Choice(name="hidden", value="hidden"),
+            app_commands.Choice(name="spectator", value="spectator"),
             app_commands.Choice(name="trusted", value="trusted"),
             app_commands.Choice(name="blocked", value="blocked"),
         ]
@@ -1206,25 +1242,15 @@ class VoiceMasterCog(commands.Cog):
             else:
                 profile = load_profile(conn, gid, uid) or default_profile()
                 if target == "name":
-                    profile = VoiceProfile(
-                        saved_name=None, saved_limit=profile.saved_limit,
-                        locked=profile.locked, hidden=profile.hidden, bitrate=profile.bitrate,
-                    )
+                    profile = replace(profile, saved_name=None)
                 elif target == "limit":
-                    profile = VoiceProfile(
-                        saved_name=profile.saved_name, saved_limit=0,
-                        locked=profile.locked, hidden=profile.hidden, bitrate=profile.bitrate,
-                    )
+                    profile = replace(profile, saved_limit=0)
                 elif target == "locked":
-                    profile = VoiceProfile(
-                        saved_name=profile.saved_name, saved_limit=profile.saved_limit,
-                        locked=False, hidden=profile.hidden, bitrate=profile.bitrate,
-                    )
+                    profile = replace(profile, locked=False)
                 elif target == "hidden":
-                    profile = VoiceProfile(
-                        saved_name=profile.saved_name, saved_limit=profile.saved_limit,
-                        locked=profile.locked, hidden=False, bitrate=profile.bitrate,
-                    )
+                    profile = replace(profile, hidden=False)
+                elif target == "spectator":
+                    profile = replace(profile, spectator=False)
                 save_profile(conn, gid, uid, profile)
             summary = profile_reset_summary(target)
             write_audit(

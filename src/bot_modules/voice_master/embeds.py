@@ -20,6 +20,7 @@ def build_profile_show_embed(
     saved_limit: int,
     locked: bool,
     hidden: bool,
+    spectator: bool = False,
     trusted_count: int,
     blocked_count: int,
 ) -> discord.Embed:
@@ -45,6 +46,9 @@ def build_profile_show_embed(
     )
     embed.add_field(name="Locked", value="yes" if locked else "no", inline=True)
     embed.add_field(name="Hidden", value="yes" if hidden else "no", inline=True)
+    embed.add_field(
+        name="Spectator", value="yes" if spectator else "no", inline=True
+    )
     embed.add_field(name="Trusted (count)", value=str(trusted_count), inline=True)
     embed.add_field(name="Blocked (count)", value=str(blocked_count), inline=True)
     return embed
@@ -119,50 +123,22 @@ def build_howto_embed(*, hub_mention: str | None = None) -> discord.Embed:
     embed = discord.Embed(
         title="🔊 Make Your Own Voice Channel",
         description=(
-            f"Join {hub} and the bot instantly spins up a **private room "
-            "that's yours**. You're the owner — shape it however you like, "
-            "and it cleans itself up automatically once everyone leaves.\n\n"
-            "Manage your room from the **control panel** that appears in its "
-            "chat (two dropdown menus), or with `/voice` slash commands "
-            "anywhere."
+            f"Click {hub} to join, and the bot instantly makes you a "
+            "**private room of your own** that cleans itself up once everyone "
+            "leaves.\n\n"
+            "Set it up right in the room's **side chat** — use the control "
+            "panel there, or `/voice` commands."
         ),
         color=discord.Color.blurple(),
     )
     embed.add_field(
-        name="🛠️ Settings menu",
+        name="🔑 Who can get in",
         value=(
-            "✏️ **Rename** · 🔢 **Limit** (max people) · "
-            "👁️ **Hide** / 👀 **Unhide** · 🧹 **Reset**"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="🔑 Permissions menu",
-        value=(
-            "🔒 **Lock** / 🔓 **Unlock** · 👋 **Invite** · "
-            "🚫 **Kick** · 👑 **Transfer** ownership"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="💬 Handy commands",
-        value=(
-            "`/voice lock` · `/voice limit` · `/voice invite` · "
-            "`/voice rename` · `/voice kick` · `/voice transfer`\n"
-            "`/voice knock` — ask to join a locked room\n"
-            "`/voice claim` — take over if the owner left\n"
-            "`/voice sleepkick` — auto-disconnect yourself later\n"
-            "`/voice owner` — see who runs the room you're in"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="⭐ Remembered for next time",
-        value=(
-            "`/voice trusted add` — auto-invite someone to every future room\n"
-            "`/voice blocked add` — auto-deny someone from every future room\n"
-            "`/voice profile` — your name, limit & lock/hide settings save as "
-            "defaults"
+            "🔒 **Lock** — others must knock to ask in · 🔓 **Unlock** — all "
+            "welcome\n"
+            "👁️ **Hide** — make the room invisible to everyone else\n"
+            "👋 **Invite** someone in · 🚫 **Kick** someone out\n"
+            "🔔 **Knock** — ask to join someone else's locked room"
         ),
         inline=False,
     )

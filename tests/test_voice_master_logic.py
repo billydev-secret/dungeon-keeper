@@ -37,6 +37,7 @@ from bot_modules.voice_master.logic import (
     build_join_url,
     build_skipped_payload,
     build_transfer_picker_plan,
+    classify_access_mode,
     classify_claim_attempt,
     format_block_add_result,
     format_blocked_list,
@@ -59,6 +60,8 @@ from bot_modules.voice_master.logic import (
     panel_metas_for_group,
     parse_limit_input,
     plan_initial_overwrites,
+    plan_spectator_grant_cleanup,
+    plan_spectator_speaker_grants,
     profile_reset_summary,
     select_effective_bitrate,
     select_effective_limit,
@@ -492,6 +495,147 @@ def test_overwrite_plan_entry_is_a_dataclass():
         target_id=1, target_kind="owner", view_channel=True, connect=True
     )
     assert e.target_id == 1
+    # New participation fields default to inherit.
+    assert e.speak is None and e.stream is None
+    assert e.send_messages is None and e.send_messages_in_threads is None
+
+
+# ── plan_initial_overwrites: spectator mode ──────────────────────────
+
+
+def _entry(plan, kind):
+    return next(e for e in plan.entries if e.target_kind == kind)
+
+
+def test_plan_initial_overwrites_spectator_ungated_mutes_everyone():
+    plan = plan_initial_overwrites(
+        owner_id=10,
+        everyone_role_id=99,
+        profile_locked=False,
+        profile_hidden=False,
+        profile_spectator=True,
+        gate_role_id=None,
+        trusted_ids=[2],
+        blocked_ids=[],
+        present_member_ids={2},
+    )
+    everyone = _entry(plan, "everyone")
+    # @everyone can still join (open) but is muted / no-video / read-only.
+    assert everyone.connect is None
+    assert everyone.speak is False
+    assert everyone.stream is False
+    assert everyone.send_messages is False
+    assert everyone.send_messages_in_threads is False
+    # Owner + trusted get explicit participation grants so the deny misses them.
+    owner = _entry(plan, "owner")
+    assert owner.connect is True and owner.speak is True and owner.stream is True
+    trusted = _entry(plan, "trusted")
+    assert trusted.connect is True and trusted.speak is True
+    # No gate-role entry when ungated.
+    assert not any(e.target_kind == "gate_role" for e in plan.entries)
+
+
+def test_plan_initial_overwrites_spectator_gated_blocks_everyone_join():
+    plan = plan_initial_overwrites(
+        owner_id=10,
+        everyone_role_id=99,
+        profile_locked=False,
+        profile_hidden=False,
+        profile_spectator=True,
+        gate_role_id=77,
+        trusted_ids=[],
+        blocked_ids=[],
+        present_member_ids=set(),
+    )
+    everyone = _entry(plan, "everyone")
+    # Gated: @everyone can't join (visible/readable), no voice deny needed.
+    assert everyone.connect is False
+    assert everyone.speak is None
+    gate = _entry(plan, "gate_role")
+    assert gate.target_id == 77
+    assert gate.connect is True
+    assert gate.speak is False and gate.stream is False
+    assert gate.send_messages is False
+
+
+def test_plan_initial_overwrites_spectator_open_when_not_spectating():
+    """No participation grants leak into ordinary (non-spectator) channels."""
+    plan = plan_initial_overwrites(
+        owner_id=10,
+        everyone_role_id=99,
+        profile_locked=False,
+        profile_hidden=False,
+        profile_spectator=False,
+        trusted_ids=[2],
+        blocked_ids=[],
+        present_member_ids={2},
+    )
+    for e in plan.entries:
+        assert e.speak is None and e.stream is None
+        assert e.send_messages is None and e.send_messages_in_threads is None
+
+
+# ── classify_access_mode ─────────────────────────────────────────────
+
+
+def test_classify_access_mode_open():
+    assert classify_access_mode(
+        everyone_connect=None, everyone_speak=None,
+        gate_role_set=False, gate_role_connect=None, gate_role_speak=None,
+    ) == "open"
+
+
+def test_classify_access_mode_lock():
+    assert classify_access_mode(
+        everyone_connect=False, everyone_speak=None,
+        gate_role_set=False, gate_role_connect=None, gate_role_speak=None,
+    ) == "lock"
+
+
+def test_classify_access_mode_spectate_ungated():
+    assert classify_access_mode(
+        everyone_connect=None, everyone_speak=False,
+        gate_role_set=False, gate_role_connect=None, gate_role_speak=None,
+    ) == "spectate"
+
+
+def test_classify_access_mode_gated_spectate_disambiguated_from_lock():
+    """Gated spectate denies @everyone Connect — same shape as lock. The gate
+    role carrying connect=True + speak=False is what tells them apart."""
+    assert classify_access_mode(
+        everyone_connect=False, everyone_speak=None,
+        gate_role_set=True, gate_role_connect=True, gate_role_speak=False,
+    ) == "spectate"
+    # Gate role exists but isn't in spectate shape → @everyone deny is a lock.
+    assert classify_access_mode(
+        everyone_connect=False, everyone_speak=None,
+        gate_role_set=True, gate_role_connect=None, gate_role_speak=None,
+    ) == "lock"
+
+
+# ── spectator speaker grant / cleanup planners ───────────────────────
+
+
+def test_plan_spectator_speaker_grants_skips_owner_and_bot():
+    out = plan_spectator_speaker_grants(
+        present_member_ids=[10, 1, 2, 1, 5], owner_id=10, bot_id=5
+    )
+    assert out == [1, 2]  # owner + bot removed, dupes collapsed, order kept
+
+
+def test_plan_spectator_grant_cleanup_only_drops_transient_shape():
+    out = plan_spectator_grant_cleanup(
+        member_overwrites=[
+            (1, True, None, None),   # transient speaker grant → drop
+            (2, True, True, True),   # invited speaker (persistent) → keep
+            (3, None, True, True),   # plain invite, no speak → keep
+            (10, True, None, None),  # owner excluded by guard
+        ],
+        owner_id=10,
+        trusted_ids=[],
+        blocked_ids=[],
+    )
+    assert out == [1]
 
 
 # ── select_effective_limit / bitrate ─────────────────────────────────
@@ -692,7 +836,7 @@ def test_profile_reset_summary_blocked():
 
 
 def test_profile_reset_summary_named_field():
-    for field in ("name", "limit", "locked", "hidden"):
+    for field in ("name", "limit", "locked", "hidden", "spectator"):
         out = profile_reset_summary(field)
         assert f"`{field}`" in out
 
@@ -704,7 +848,10 @@ def test_profile_reset_summary_unknown_field_falls_back_safely():
 
 
 def test_profile_reset_fields_contains_all_choice_values():
-    expected = {"all", "name", "limit", "locked", "hidden", "trusted", "blocked"}
+    expected = {
+        "all", "name", "limit", "locked", "hidden", "spectator",
+        "trusted", "blocked",
+    }
     assert PROFILE_RESET_FIELDS == expected
 
 
@@ -1271,9 +1418,11 @@ def test_user_picker_labels_unknown_falls_back_to_invite():
 
 def test_panel_button_order_lists_all_actions():
     assert "lock" in PANEL_BUTTON_ORDER
+    assert "spectator" in PANEL_BUTTON_ORDER
+    assert "unspectator" in PANEL_BUTTON_ORDER
     assert "transfer" in PANEL_BUTTON_ORDER
     assert "reset" in PANEL_BUTTON_ORDER
-    assert len(PANEL_BUTTON_ORDER) == 10
+    assert len(PANEL_BUTTON_ORDER) == 12
 
 
 def test_panel_button_meta_known_action():

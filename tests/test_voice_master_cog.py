@@ -16,7 +16,8 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from migrations import apply_migrations_sync
 from bot_modules.services.voice_master_service import (
-    OPEN_NAME_ICON,
+    LOCKED_STATUS_TEXT,
+    OPEN_STATUS_TEXT,
     add_name_blocklist,
     insert_active_channel,
     load_profile,
@@ -251,6 +252,38 @@ async def test_apply_lock_sets_overwrite_and_saves_profile(ctx, voice_channel):
         p = load_profile(conn, GUILD, OWNER)
     assert p is not None
     assert p.locked is True
+    # Lock state is advertised via the channel status line (separate endpoint
+    # from the name edit), never by renaming the channel.
+    status_calls = [
+        c.kwargs["status"]
+        for c in voice_channel.edit.await_args_list
+        if "status" in c.kwargs
+    ]
+    assert status_calls == [LOCKED_STATUS_TEXT]
+    assert all("name" not in c.kwargs for c in voice_channel.edit.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_apply_unlock_sets_open_status(ctx, voice_channel):
+    from bot_modules.commands.voice_master_commands import _apply_lock
+    from bot_modules.services.voice_master_service import get_active_channel
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(
+            conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0
+        )
+        row = get_active_channel(conn, CH)
+    inter = _wire_interaction(ctx)
+    assert row is not None
+
+    await _apply_lock(inter, voice_channel, row, locked=False)
+
+    status_calls = [
+        c.kwargs["status"]
+        for c in voice_channel.edit.await_args_list
+        if "status" in c.kwargs
+    ]
+    assert status_calls == [OPEN_STATUS_TEXT]
 
 
 @pytest.mark.asyncio
@@ -415,9 +448,9 @@ async def test_apply_rename_succeeds_and_saves_name(ctx, voice_channel):
 
     voice_channel.edit.assert_awaited_once()
     args, kwargs = voice_channel.edit.await_args
-    # Channel name carries the lock-state icon (unlocked here); the saved
-    # profile name stays bare so the icon never accumulates.
-    assert kwargs["name"] == f"{OPEN_NAME_ICON} Game Night"
+    # Lock state now lives on the status line, so the channel name is written
+    # bare — no icon to strip from the saved profile name.
+    assert kwargs["name"] == "Game Night"
     with open_db(ctx.db_path) as conn:
         p = load_profile(conn, GUILD, OWNER)
     assert p is not None

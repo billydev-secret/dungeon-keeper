@@ -14,10 +14,10 @@ from bot_modules.services.voice_master_service import (
     MAX_NAME_LEN,
     ActiveChannel,
     EDIT_WINDOW_S,
+    access_status_text,
     add_blocked,
     add_trusted,
     can_edit,
-    decorate_channel_name,
     delete_profile,
     get_active_channel,
     get_owned_channel,
@@ -25,6 +25,7 @@ from bot_modules.services.voice_master_service import (
     list_name_blocklist,
     list_trusted,
     load_voice_master_config,
+    lock_status_text,
     record_edit_in_db,
     set_owner,
     set_voice_master_config_value,
@@ -39,8 +40,10 @@ from bot_modules.voice_master.embeds import (
 from bot_modules.voice_master.logic import (
     MemberInfo,
     PANEL_GROUP_ORDER,
+    SPECTATOR_PARTICIPATION_PERMS,
     build_join_url,
     build_transfer_picker_plan,
+    classify_access_mode,
     format_edit_rate_limit_error,
     format_hide_result,
     format_invite_dm,
@@ -51,11 +54,14 @@ from bot_modules.voice_master.logic import (
     format_lock_result,
     format_rename_result,
     format_reset_result,
+    format_spectator_result,
     format_transfer_result,
     panel_group_placeholder,
     panel_metas_for_group,
     parse_limit_input,
     plan_lock_text_grants,
+    plan_spectator_grant_cleanup,
+    plan_spectator_speaker_grants,
     plan_unlock_overwrite_cleanup,
     should_save_profile_field,
     user_picker_labels,
@@ -287,6 +293,20 @@ async def _apply_lock(
     if ctx is None:
         return
     await _defer_if_needed(interaction)
+    # Lock and spectate are mutually exclusive — tear down spectator mode first
+    # so its audience deny + speaker grants don't linger under the lock.
+    spectator_cleared = False
+    if locked:
+        with ctx.open_db() as conn:
+            gate_role_id = load_voice_master_config(
+                conn, channel.guild.id
+            ).spectator_gate_role_id
+        gate_role = _resolve_gate_role(channel, gate_role_id)
+        if _access_mode_for_channel(channel, gate_role=gate_role) == "spectate":
+            await _teardown_spectator_overwrites(
+                ctx, channel, row, gate_role=gate_role
+            )
+            spectator_cleared = True
     everyone = channel.guild.default_role
     overwrite = channel.overwrites_for(everyone)
     overwrite.connect = False if locked else None
@@ -304,18 +324,17 @@ async def _apply_lock(
     # them online by granting per-member Connect on lock, and tidy those grants
     # away on unlock.
     await _sync_lock_member_overwrites(ctx, channel, row, locked=locked)
-    # Reflect the new state in the channel name. The rename budget was already
-    # consumed by _gate_and_record_edit at the call site, so no extra gating;
-    # the name is cosmetic, so a failed edit must not undo the lock above.
-    decorated = decorate_channel_name(channel.name, locked=locked)
-    if decorated != channel.name:
-        try:
-            await channel.edit(
-                name=decorated,
-                reason=f"Voice Master: {'lock' if locked else 'unlock'} name marker",
-            )
-        except (discord.Forbidden, discord.HTTPException):
-            pass
+    # Advertise the new state on the channel's status line. This rides a
+    # separate endpoint from the name edit, so it isn't subject to the
+    # 2-per-10-minutes name rate limit and can toggle freely. Cosmetic: a
+    # failed status edit must not undo the lock above.
+    try:
+        await channel.edit(
+            status=lock_status_text(locked=locked),
+            reason=f"Voice Master: {'lock' if locked else 'unlock'} status marker",
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        pass
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
         _maybe_save_profile_field(
@@ -323,6 +342,12 @@ async def _apply_lock(
             guild_id=channel.guild.id, owner_id=row.owner_id,
             saveable_key="locked", profile_field="locked", value=locked,
         )
+        if spectator_cleared:
+            _maybe_save_profile_field(
+                conn, cfg,
+                guild_id=channel.guild.id, owner_id=row.owner_id,
+                saveable_key="spectator", profile_field="spectator", value=False,
+            )
         write_audit(
             conn,
             guild_id=channel.guild.id,
@@ -331,6 +356,290 @@ async def _apply_lock(
             extra={"channel_id": channel.id},
         )
     await _ephemeral(interaction, format_lock_result(locked=locked))
+
+
+# ---------------------------------------------------------------------------
+# Spectator mode
+# ---------------------------------------------------------------------------
+#
+# Spectator mode opens the channel to a muted, no-video, read-only audience.
+# Ungated, ``@everyone`` is that audience; with a gate role configured,
+# ``@everyone`` is denied Connect (visible + readable, can't join) and the gate
+# role becomes the audience. The owner, trusted/invited members and anyone
+# already inside get explicit participation grants — a member overwrite outranks
+# the role/@everyone deny — so they keep full voice/video/chat. Lock and
+# spectate are mutually exclusive: enabling one tears the other down first.
+
+
+def _set_participation(
+    overwrite: discord.PermissionOverwrite, value: bool | None
+) -> None:
+    """Set the spectator participation perms on ``overwrite`` to one value."""
+    for perm in SPECTATOR_PARTICIPATION_PERMS:
+        setattr(overwrite, perm, value)
+
+
+def _resolve_gate_role(
+    channel: discord.VoiceChannel, gate_role_id: int
+) -> discord.Role | None:
+    """Resolve the configured gate role, or ``None`` (unset/deleted → ungated)."""
+    if not gate_role_id:
+        return None
+    return channel.guild.get_role(gate_role_id)
+
+
+def _access_mode_for_channel(
+    channel: discord.VoiceChannel, *, gate_role: discord.Role | None
+) -> str:
+    """Classify the channel's live access mode (``open``/``lock``/``spectate``)."""
+    everyone = channel.overwrites_for(channel.guild.default_role)
+    gate_ow = (
+        channel.overwrites_for(gate_role) if gate_role is not None else None
+    )
+    return classify_access_mode(
+        everyone_connect=everyone.connect,
+        everyone_speak=everyone.speak,
+        gate_role_set=gate_role is not None,
+        gate_role_connect=gate_ow.connect if gate_ow is not None else None,
+        gate_role_speak=gate_ow.speak if gate_ow is not None else None,
+    )
+
+
+def _grant_speaker_if_spectating(
+    ctx: AppContext,
+    channel: discord.VoiceChannel,
+    overwrite: discord.PermissionOverwrite,
+) -> None:
+    """Add participation perms to ``overwrite`` iff the channel is spectating.
+
+    Used by the access-granting sites (invite, knock-accept, transfer): a
+    person let in while spectator mode is on should be a full speaker, not land
+    muted under the audience deny. No-op in open/lock mode.
+    """
+    with ctx.open_db() as conn:
+        gate_role_id = load_voice_master_config(
+            conn, channel.guild.id
+        ).spectator_gate_role_id
+    gate_role = _resolve_gate_role(channel, gate_role_id)
+    if _access_mode_for_channel(channel, gate_role=gate_role) == "spectate":
+        _set_participation(overwrite, True)
+
+
+async def _teardown_spectator_overwrites(
+    ctx: AppContext,
+    channel: discord.VoiceChannel,
+    row: ActiveChannel,
+    *,
+    gate_role: discord.Role | None,
+) -> None:
+    """Remove every spectator-mode overwrite, returning the channel to open.
+
+    Clears the audience deny (``@everyone`` participation + the gated Connect
+    deny, and the gate-role overwrite), drops the transient "already-in"
+    speaker grants by shape, and resets the persistent speakers' participation
+    fields back to inherit. Best-effort per edit. Does not touch the profile or
+    status line — callers own those.
+    """
+    everyone = channel.guild.default_role
+    everyone_ow = channel.overwrites_for(everyone)
+    _set_participation(everyone_ow, None)
+    if everyone_ow.connect is False:
+        # Only the gated-spectator path denies @everyone Connect; lock is
+        # exclusive with spectate, so clearing it here is safe.
+        everyone_ow.connect = None
+    try:
+        await channel.set_permissions(
+            everyone, overwrite=everyone_ow,
+            reason="Voice Master: clear spectator audience deny",
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+    if gate_role is not None:
+        try:
+            await channel.set_permissions(
+                gate_role, overwrite=None,
+                reason="Voice Master: clear spectator gate-role overwrite",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    with ctx.open_db() as conn:
+        trusted_ids = list_trusted(conn, channel.guild.id, row.owner_id)
+        blocked_ids = list_blocked(conn, channel.guild.id, row.owner_id)
+    overwrites = channel.overwrites
+    overwrite_members = {
+        target.id: target
+        for target in overwrites
+        if isinstance(target, discord.Member)
+    }
+    transient = set(
+        plan_spectator_grant_cleanup(
+            member_overwrites=[
+                (
+                    m.id,
+                    overwrites[m].speak,
+                    overwrites[m].connect,
+                    overwrites[m].view_channel,
+                )
+                for m in overwrite_members.values()
+            ],
+            owner_id=row.owner_id,
+            trusted_ids=trusted_ids,
+            blocked_ids=blocked_ids,
+        )
+    )
+    for uid, member in overwrite_members.items():
+        ow = overwrites[member]
+        if uid in transient:
+            # "Already-in" speaker — pure participation grant, remove entirely.
+            try:
+                await channel.set_permissions(
+                    member, overwrite=None,
+                    reason="Voice Master: drop transient spectator grant",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        elif ow.speak is True:
+            # Persistent speaker (owner/trusted/invited) — keep their access,
+            # just reset the participation fields we added back to inherit.
+            _set_participation(ow, None)
+            try:
+                await channel.set_permissions(
+                    member, overwrite=ow,
+                    reason="Voice Master: reset spectator speaker grant",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+
+async def _apply_spectator(
+    interaction: discord.Interaction,
+    channel: discord.VoiceChannel,
+    row: ActiveChannel,
+    *,
+    spectator: bool,
+) -> None:
+    ctx = _ctx_from_interaction(interaction)
+    if ctx is None:
+        return
+    await _defer_if_needed(interaction)
+    with ctx.open_db() as conn:
+        cfg = load_voice_master_config(conn, channel.guild.id)
+    gate_role = _resolve_gate_role(channel, cfg.spectator_gate_role_id)
+    gated = spectator and gate_role is not None
+    everyone = channel.guild.default_role
+
+    if not spectator:
+        await _teardown_spectator_overwrites(ctx, channel, row, gate_role=gate_role)
+    else:
+        # Spectate and lock are exclusive: clear any lock first (the @everyone
+        # Connect deny plus the transient text-chat grants it leaves behind).
+        everyone_ow = channel.overwrites_for(everyone)
+        if everyone_ow.connect is False:
+            everyone_ow.connect = None
+            try:
+                await channel.set_permissions(
+                    everyone, overwrite=everyone_ow,
+                    reason="Voice Master: clear lock before spectate",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            await _sync_lock_member_overwrites(ctx, channel, row, locked=False)
+
+        # Apply the audience deny.
+        everyone_ow = channel.overwrites_for(everyone)
+        if gated:
+            everyone_ow.connect = False  # block joining; gate role joins below
+            _set_participation(everyone_ow, None)
+        else:
+            _set_participation(everyone_ow, False)
+        try:
+            await channel.set_permissions(
+                everyone, overwrite=everyone_ow,
+                reason="Voice Master: enable spectator mode",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            await _ephemeral(interaction, "Couldn't update channel permissions.")
+            return
+        if gated:
+            gate_ow = channel.overwrites_for(gate_role)
+            gate_ow.connect = True
+            _set_participation(gate_ow, False)
+            try:
+                await channel.set_permissions(
+                    gate_role, overwrite=gate_ow,
+                    reason="Voice Master: spectator gate role",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        # Grant the owner full participation (their persistent overwrite).
+        owner = channel.guild.get_member(row.owner_id)
+        if owner is not None:
+            owner_ow = channel.overwrites_for(owner)
+            owner_ow.connect = True
+            owner_ow.view_channel = True
+            _set_participation(owner_ow, True)
+            try:
+                await channel.set_permissions(
+                    owner, overwrite=owner_ow,
+                    reason="Voice Master: owner speaks while spectating",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        # Anyone already inside keeps full participation (transient grant).
+        bot_member = channel.guild.me
+        for uid in plan_spectator_speaker_grants(
+            present_member_ids=[m.id for m in channel.members],
+            owner_id=row.owner_id,
+            bot_id=bot_member.id if bot_member is not None else None,
+        ):
+            member = channel.guild.get_member(uid)
+            if member is None:
+                continue
+            mem_ow = channel.overwrites_for(member)
+            _set_participation(mem_ow, True)
+            try:
+                await channel.set_permissions(
+                    member, overwrite=mem_ow,
+                    reason="Voice Master: speaker present at spectate enable",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+    # Status line (cosmetic — a failure must not undo the overwrites).
+    try:
+        await channel.edit(
+            status=access_status_text(mode="spectate" if spectator else "open"),
+            reason="Voice Master: spectator status marker",
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        pass
+
+    with ctx.open_db() as conn:
+        _maybe_save_profile_field(
+            conn, cfg,
+            guild_id=channel.guild.id, owner_id=row.owner_id,
+            saveable_key="spectator", profile_field="spectator", value=spectator,
+        )
+        if spectator:
+            # Mutually exclusive with lock — clear any saved lock state too.
+            _maybe_save_profile_field(
+                conn, cfg,
+                guild_id=channel.guild.id, owner_id=row.owner_id,
+                saveable_key="locked", profile_field="locked", value=False,
+            )
+        write_audit(
+            conn,
+            guild_id=channel.guild.id,
+            action="vm_channel_spectate_on" if spectator else "vm_channel_spectate_off",
+            actor_id=interaction.user.id,
+            extra={"channel_id": channel.id, "gated": gated},
+        )
+    await _ephemeral(
+        interaction, format_spectator_result(spectator=spectator, gated=gated)
+    )
 
 
 async def _apply_rename(
@@ -352,14 +661,16 @@ async def _apply_rename(
         await _ephemeral(interaction, result.error_message)
         return
     new_name = result.cleaned
+    # The channel *name* is the only edit subject to Discord's 2-per-10-minutes
+    # limit, so a rename is the one action we still rate-gate. Gate here (after
+    # validation) so a rejected name never burns a budget slot. Lock state now
+    # lives on the status line, so the name is written bare.
+    if not await _gate_and_record_edit(interaction, row):
+        return
     await _defer_if_needed(interaction)
-    # Keep the lock-state icon on the new name (saved_name stays bare below).
-    everyone = channel.guild.default_role
-    locked = channel.overwrites_for(everyone).connect is False
-    display_name = decorate_channel_name(new_name, locked=locked)
     try:
         await channel.edit(
-            name=display_name, reason="Voice Master: rename by owner"
+            name=new_name, reason="Voice Master: rename by owner"
         )
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't rename the channel.")
@@ -391,9 +702,13 @@ async def _reset_channel_overwrites(
         owner: discord.PermissionOverwrite(view_channel=True, connect=True),
     }
     try:
+        # Reset clears the @everyone Connect denial (i.e. unlocks), so also
+        # set the status line back to "open". Status rides a separate endpoint
+        # from the overwrites payload, so this is one PATCH + one PUT — neither
+        # touches the name rate limit, and the name is left untouched.
         await channel.edit(
             overwrites=new_overwrites,
-            name=decorate_channel_name(channel.name, locked=False),
+            status=lock_status_text(locked=False),
             reason="Voice Master: reset by owner",
         )
         return True
@@ -463,6 +778,7 @@ async def _apply_transfer(
     overwrite = channel.overwrites_for(new_owner)
     overwrite.connect = True
     overwrite.view_channel = True
+    _grant_speaker_if_spectating(ctx, channel, overwrite)
     try:
         await channel.set_permissions(
             new_owner, overwrite=overwrite, reason="Voice Master: ownership transfer"
@@ -508,6 +824,7 @@ async def _apply_invite(
     overwrite = channel.overwrites_for(target)
     overwrite.connect = True
     overwrite.view_channel = True
+    _grant_speaker_if_spectating(ctx, channel, overwrite)
     try:
         await channel.set_permissions(
             target, overwrite=overwrite, reason="Voice Master: invite by owner"
@@ -802,8 +1119,6 @@ class _RenameModal(discord.ui.Modal, title="Rename voice channel"):
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
             return
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_rename(interaction, channel, row, new_name=self.new_name.value)
 
 
@@ -837,8 +1152,6 @@ class _LimitModal(discord.ui.Modal, title="Set user limit"):
             row = get_active_channel(conn, channel.id)
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
-            return
-        if not await _gate_and_record_edit(interaction, row):
             return
         await _apply_limit(interaction, channel, row, new_limit=value)
 
@@ -971,8 +1284,6 @@ class _UserPickerView(discord.ui.View):
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
             return
-        if not await _gate_and_record_edit(interaction, row):
-            return
         if self._mode == "invite":
             await _apply_invite(
                 interaction, channel, row, target=self._selected, remember=remember
@@ -1020,8 +1331,6 @@ class _ResetConfirmView(discord.ui.View):
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
             return
-        if not await _gate_and_record_edit(interaction, row):
-            return
         await _apply_reset(interaction, channel, row, also_profile=also_profile)
 
     @discord.ui.button(label="Reset just this channel", style=discord.ButtonStyle.primary)
@@ -1043,32 +1352,36 @@ class _ResetConfirmView(discord.ui.View):
 async def _on_lock(
     interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
 ) -> None:
-    if not await _gate_and_record_edit(interaction, row):
-        return
     await _apply_lock(interaction, channel, row, locked=True)
 
 
 async def _on_unlock(
     interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
 ) -> None:
-    if not await _gate_and_record_edit(interaction, row):
-        return
     await _apply_lock(interaction, channel, row, locked=False)
+
+
+async def _on_spectator(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    await _apply_spectator(interaction, channel, row, spectator=True)
+
+
+async def _on_unspectator(
+    interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
+) -> None:
+    await _apply_spectator(interaction, channel, row, spectator=False)
 
 
 async def _on_hide(
     interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
 ) -> None:
-    if not await _gate_and_record_edit(interaction, row):
-        return
     await _apply_hide(interaction, channel, row, hidden=True)
 
 
 async def _on_unhide(
     interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
 ) -> None:
-    if not await _gate_and_record_edit(interaction, row):
-        return
     await _apply_hide(interaction, channel, row, hidden=False)
 
 
@@ -1145,6 +1458,8 @@ _ON_CLICKS: dict[str, Callable[
 ]] = {
     "lock": _on_lock,
     "unlock": _on_unlock,
+    "spectator": _on_spectator,
+    "unspectator": _on_unspectator,
     "hide": _on_hide,
     "unhide": _on_unhide,
     "rename": _on_rename,
@@ -1216,9 +1531,14 @@ class _KnockResponseView(discord.ui.View):
         if resolved is None:
             return
         channel, requester = resolved
+        ctx = _ctx_from_interaction(interaction)
         overwrite = channel.overwrites_for(requester)
         overwrite.connect = True
         overwrite.view_channel = True
+        if ctx is not None:
+            # If the room is spectating, an accepted knocker comes in as a full
+            # speaker (same as an invite), not as a muted spectator.
+            _grant_speaker_if_spectating(ctx, channel, overwrite)
         try:
             await channel.set_permissions(
                 requester, overwrite=overwrite, reason="Voice Master: knock accepted"
@@ -1226,7 +1546,6 @@ class _KnockResponseView(discord.ui.View):
         except (discord.Forbidden, discord.HTTPException):
             await _ephemeral(interaction, "Couldn't update channel permissions.")
             return
-        ctx = _ctx_from_interaction(interaction)
         if ctx is not None:
             with ctx.open_db() as conn:
                 write_audit(
