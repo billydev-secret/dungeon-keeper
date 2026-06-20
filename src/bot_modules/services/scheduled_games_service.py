@@ -251,8 +251,19 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         await _advance_or_finish(games_db, row, now, "skipped_disabled", offset, recur_days)
         return
 
-    # 3. Skip if the channel already has an active game.
-    if await get_active_game(games_db, channel_id) is not None:
+    # 3. Skip if the channel already has an active game. Most games register in the
+    #    games_active_games table; some (e.g. risky_roll) track rounds in-memory and
+    #    register an optional busy-check so we can see them too — otherwise we'd ping
+    #    "starting now!" and then fail to launch a duplicate. Let the running game ride.
+    busy = await get_active_game(games_db, channel_id) is not None
+    if not busy:
+        busy_check = getattr(bot, "game_busy_checks", {}).get(game_type)
+        if busy_check is not None:
+            try:
+                busy = bool(await busy_check(channel_id))
+            except Exception:
+                log.exception("Scheduled game %s: busy-check for %s raised", sched_id, game_type)
+    if busy:
         if row["recurrence"] == "once":
             if now >= (row["giveup_at"] or now):
                 await games_db.execute(
@@ -321,7 +332,7 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         await games_db.execute(
             "UPDATE games_scheduled SET last_status='error' WHERE id=?", (sched_id,)
         )
-        log.warning("Scheduled game %s: launcher %s returned no game (likely no perms)", sched_id, game_type)
+        log.warning("Scheduled game %s: launcher %s returned no game (no perms or channel busy)", sched_id, game_type)
 
 
 async def scheduled_games_loop(bot) -> None:

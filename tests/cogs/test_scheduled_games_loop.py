@@ -19,8 +19,10 @@ class _Chan:
         self.id = cid
         self.name = "games"
         self.guild = None
+        self.sends = []
 
     async def send(self, *a, **k):
+        self.sends.append(a[0] if a else k.get("content"))
         return _Msg()
 
 
@@ -104,6 +106,29 @@ async def test_recurring_busy_channel_skips_and_advances(sync_db_path):
     after = await _row(db, row["id"])
     assert after["last_status"] == "skipped_active"
     assert after["next_run_at"] > NOW
+
+
+async def test_busy_check_skips_without_announcing(sync_db_path):
+    # Games that track rounds in-memory (e.g. risky_roll) expose a busy-check so the
+    # scheduler skips a busy channel instead of pinging "starting now!" then failing
+    # to launch a duplicate. The existing in-progress game is left to ride.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+
+    async def busy_check(channel_id):
+        return channel_id == CHAN
+
+    bot.game_busy_checks = {"wyr": busy_check}
+    row = await _insert(db, recurrence="daily", announce=1, announce_role_id=555)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched == []                       # game not started
+    assert bot._channels[CHAN].sends == []      # no "starting now!" ping
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "skipped_active"
+    assert after["next_run_at"] > NOW           # advanced to next slot; round rides
 
 
 async def test_once_busy_before_giveup_stays_due(sync_db_path):
