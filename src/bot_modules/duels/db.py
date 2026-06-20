@@ -68,10 +68,17 @@ async def apply_nick(
     )
 
 
-async def fetch_expired_nicks(db: GamesDb, now: float) -> list[dict]:
+async def fetch_expired_nicks(db: GamesDb, now: float, game_type: str) -> list[dict]:
+    """Expired, not-yet-reverted nick sentences for one game.
+
+    Filtered by game_type so each game's expire loop only reverts its own
+    rows — otherwise every game cog's loop grabs the same expired row and
+    DMs the loser once each, with whichever game name happens to be running.
+    """
     rows = await db.fetchall(
-        "SELECT * FROM duel_nicks WHERE reverted_at IS NULL AND expires_at <= ?",
-        (now,),
+        "SELECT * FROM duel_nicks "
+        "WHERE reverted_at IS NULL AND expires_at <= ? AND game_type = ?",
+        (now, game_type),
     )
     return [dict(r) for r in rows]
 
