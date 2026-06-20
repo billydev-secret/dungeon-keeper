@@ -262,6 +262,18 @@ class RiskyRollCog(commands.Cog):
                             pass
                 raise
 
+    async def channel_has_active_round(self, channel_id: int) -> bool:
+        """Scheduler busy-check: True if an in-memory round is live in this channel.
+
+        Risky Rolls tracks rounds in ``rr_state.active_games`` (not the shared
+        games_active_games table), so the scheduler can't see them without this.
+        Registered as ``bot.game_busy_checks['risky_roll']`` so a scheduled run skips
+        instead of pinging "starting now!" and then refusing to start a duplicate.
+        """
+        return any(
+            s.channel_id == channel_id for s in rr_state.active_games.values()
+        )
+
     async def launch(
         self,
         *,
@@ -401,3 +413,4 @@ async def setup(bot: Bot) -> None:
     cog = RiskyRollCog(bot, bot.ctx)
     await bot.add_cog(cog)
     bot.game_launchers["risky_roll"] = cog.launch  # type: ignore[attr-defined]
+    bot.game_busy_checks["risky_roll"] = cog.channel_has_active_round  # type: ignore[attr-defined]
