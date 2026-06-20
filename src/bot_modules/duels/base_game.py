@@ -117,7 +117,7 @@ class BaseGame(commands.Cog):
                 elif game.state == "RESOLVED":
                     await self._expire_resolved(game)
 
-            nicks = await duels_db.fetch_expired_nicks(self.db, now)
+            nicks = await duels_db.fetch_expired_nicks(self.db, now, self.GAME_KEY)
             for nick_row in nicks:
                 await self._revert_nick(nick_row)
         except Exception:

@@ -182,7 +182,7 @@ async def apply_nick(
 
 
 async def fetch_expired_nicks(db: GamesDb, now: float) -> list[dict]:
-    return await duels_db.fetch_expired_nicks(db, now)
+    return await duels_db.fetch_expired_nicks(db, now, _GAME_TYPE)
 
 
 async def get_active_nick_for_user(

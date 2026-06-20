@@ -264,6 +264,28 @@ async def test_fetch_expired_nicks_excludes_future(db):
     assert len(rows) == 0
 
 
+async def test_fetch_expired_nicks_filters_by_game_type(db):
+    # An expired nick from another game must NOT come back through the
+    # pressure loop — otherwise every game's expire loop reverts the same
+    # row and DMs the loser once each (with the wrong game name).
+    from bot_modules.duels import db as duels_db
+
+    gid = await _create(db)
+    other_id = await duels_db.apply_nick(
+        db,
+        game_id=gid,
+        game_type="chicken",
+        guild_id=GUILD,
+        loser_id=1,
+        winner_id=2,
+        original_nick="Original",
+        imposed_nick="Imposed",
+        sentence_hours=0,  # expired
+    )
+    rows = await pdb.fetch_expired_nicks(db, time.time() + 1)
+    assert not any(r["id"] == other_id for r in rows)
+
+
 async def test_mark_nick_reverted(db):
     gid = await _create(db)
     nick_id = await pdb.apply_nick(
