@@ -2411,7 +2411,7 @@ class WhisperCog(commands.Cog):
         )
 
         await interaction.response.send_message(
-            "Whisper delivered.\n-# Your identity is logged by admins for moderation.",
+            "Whisper delivered.",
             ephemeral=True,
         )
 
@@ -2456,8 +2456,7 @@ class WhisperCog(commands.Cog):
             self, members, invoker_id=interaction.user.id
         )
         await interaction.followup.send(
-            "Pick someone to whisper. "
-            "-# Your identity is logged for moderation.",
+            "Pick someone to whisper.",
             view=view, ephemeral=True,
         )
 
