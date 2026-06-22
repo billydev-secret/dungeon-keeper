@@ -137,6 +137,22 @@ def build_reply_report_audit_embed(
 # ── Shared-whisper feed embed ────────────────────────────────────────────────
 
 
+def build_send_feed_embed(target_id: int) -> discord.Embed:
+    """The public feed announcement posted when a Whisper is sent.
+
+    Replaces the old plain-text ``📬 Someone sent @x an anonymous message``
+    line with a styled embed (accent bar + bold heading). The embed carries
+    the target's mention as the one *visible* name (embed mentions render but
+    don't ping); the ping itself rides in the message content as a spoiler
+    (``||<@id>||``), where the name stays hidden behind the spoiler bars.
+    """
+    return discord.Embed(
+        title="\U0001f4ec Someone sent a Whisper",
+        description=f"Someone sent <@{target_id}> an anonymous message.",
+        color=discord.Color.blurple(),
+    )
+
+
 def build_share_feed_embed(whisper: Whisper) -> discord.Embed:
     """The public "a fresh whisper was shared" feed post, as a styled embed.
 

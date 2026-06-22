@@ -27,6 +27,7 @@ from bot_modules.whisper.embeds import (
     build_reply_audit_embed,
     build_reply_report_audit_embed,
     build_report_audit_embed,
+    build_send_feed_embed,
     build_share_feed_embed,
     inbox_option_description,
     inbox_option_label,
@@ -40,7 +41,6 @@ from bot_modules.whisper.logic import (
     format_hourly_cap_message,
     format_reply_dm_body,
     format_send_dm_body,
-    format_send_feed_announcement,
     format_time_ago,
     fuzzy_score_members,
     inbox_action_buttons,
@@ -642,7 +642,7 @@ def test_hourly_cap_message_includes_cap():
     assert "5 whispers" in out
 
 
-# ── format_send_dm_body / format_send_feed_announcement ───────────────
+# ── format_send_dm_body / build_send_feed_embed ───────────────────────
 
 
 def test_send_dm_body_includes_guild_name_and_message():
@@ -659,10 +659,13 @@ def test_send_dm_body_strips_and_escapes_codefence():
     assert "```trim me ʼʼʼ evil```" in out
 
 
-def test_send_feed_announcement_uses_target_mention():
-    out = format_send_feed_announcement("<@42>")
-    assert "<@42>" in out
-    assert "anonymous" in out
+def test_build_send_feed_embed_mentions_target():
+    # The embed carries the visible name; the (separate) content ping is
+    # spoilered, so showing the mention here is the one un-hidden name.
+    emb = build_send_feed_embed(42)
+    assert "<@42>" in emb.description
+    assert "anonymous" in emb.description
+    assert "Whisper" in emb.title
 
 
 def test_launcher_message_body_constant():

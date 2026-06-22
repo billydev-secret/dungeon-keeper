@@ -66,6 +66,7 @@ from bot_modules.whisper.embeds import (
     build_reply_audit_embed,
     build_reply_report_audit_embed,
     build_report_audit_embed,
+    build_send_feed_embed,
     build_share_feed_embed,
     inbox_option_description,
     inbox_option_label,
@@ -79,7 +80,6 @@ from bot_modules.whisper.logic import (
     format_hourly_cap_message,
     format_reply_dm_body,
     format_send_dm_body,
-    format_send_feed_announcement,
     fuzzy_score_members,
     inbox_action_buttons,
     inbox_select_placeholder,
@@ -2395,7 +2395,8 @@ class WhisperCog(commands.Cog):
         feed_msg = None
         try:
             feed_msg = await feed_channel.send(
-                format_send_feed_announcement(target.mention),
+                content=f"||{target.mention}||",
+                embed=build_send_feed_embed(target.id),
                 allowed_mentions=discord.AllowedMentions(users=[target]),
             )
             asyncio.create_task(self.refresh_whisper_launcher(interaction.guild.id))

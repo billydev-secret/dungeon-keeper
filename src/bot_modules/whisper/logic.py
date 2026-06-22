@@ -230,11 +230,6 @@ def format_send_dm_body(*, guild_name: str, message: str) -> str:
     )
 
 
-def format_send_feed_announcement(target_mention: str) -> str:
-    """The "someone sent X an anonymous message" line dropped in the feed."""
-    return f"\U0001f4ec Someone sent {target_mention} an anonymous message."
-
-
 LAUNCHER_MESSAGE_BODY = (
     "**Whisper** — anonymous messages with a guessing game."
 )
