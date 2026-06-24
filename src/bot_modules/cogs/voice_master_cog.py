@@ -28,6 +28,7 @@ from bot_modules.commands.voice_master_commands import (
     _ephemeral,
     _grant_speaker_if_spectating,
     _resolve_owned_channel,
+    post_claim_prompt,
     post_inline_panel,
     post_knock_request,
     post_panel,
@@ -134,6 +135,8 @@ class VoiceMasterCog(commands.Cog):
         self._create_locks: defaultdict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         # channel_id → pending empty-grace cleanup task
         self._empty_timers: dict[int, asyncio.Task] = {}
+        # channel_id → pending post-grace "owner left, claim me" prompt task
+        self._claim_timers: dict[int, asyncio.Task] = {}
         # (guild_id, user_id) → pending self-disconnect task
         self._sleepkick_tasks: dict[tuple[int, int], asyncio.Task] = {}
         super().__init__()
@@ -217,6 +220,29 @@ class VoiceMasterCog(commands.Cog):
                 "voice_master: orphan voice channel %d in target category — leaving alone",
                 cid,
             )
+
+        # Re-arm claim prompts for channels orphaned (owner gone, members still
+        # inside) across the downtime. In-memory timers don't survive a restart,
+        # same as the empty-grace timers; reconcile heals them. Past-grace
+        # channels get the prompt now — a rare duplicate (if one was already
+        # posted before the restart) is harmless: first claim wins, and the
+        # other button then refuses (claiming clears owner_left_at).
+        now = time.time()
+        for row in tracked:
+            if (
+                row.channel_id not in present_ids
+                or row.channel_id not in with_humans
+                or row.owner_left_at is None
+            ):
+                continue
+            ch = guild.get_channel(row.channel_id)
+            if not isinstance(ch, discord.VoiceChannel):
+                continue
+            remaining = cfg.owner_grace_s - (now - row.owner_left_at)
+            if remaining <= 0:
+                await post_claim_prompt(ch)
+            else:
+                self._schedule_claim_prompt(ch, int(remaining))
 
         if cfg.hub_channel_id and guild.get_channel(cfg.hub_channel_id) is None:
             log.error(
@@ -427,6 +453,11 @@ class VoiceMasterCog(commands.Cog):
 
         if not any(not m.bot for m in channel.members):
             self._schedule_empty_delete(channel, cfg.empty_grace_s)
+        elif member.id == row.owner_id:
+            # Owner walked out but others remain. Arm a claim prompt that posts
+            # only if they don't come back within the grace window — a brief
+            # disconnect stays quiet (the join handler cancels this).
+            self._schedule_claim_prompt(channel, cfg.owner_grace_s)
 
     async def _handle_joined_tracked(
         self,
@@ -439,9 +470,16 @@ class VoiceMasterCog(commands.Cog):
             row = get_active_channel(conn, channel.id)
             if row is None:
                 return
-            if member.id == row.owner_id and row.owner_left_at is not None:
+            owner_returned = (
+                member.id == row.owner_id and row.owner_left_at is not None
+            )
+            if owner_returned:
                 set_owner_left_at(conn, channel.id, None)
         self._cancel_empty_timer(channel.id)
+        # The owner coming back disarms a pending claim prompt; a random member
+        # joining does not (the channel is still ownerless).
+        if owner_returned:
+            self._cancel_claim_timer(channel.id)
 
     def _schedule_empty_delete(
         self, channel: discord.VoiceChannel, grace_s: int
@@ -457,6 +495,41 @@ class VoiceMasterCog(commands.Cog):
         task = self._empty_timers.pop(channel_id, None)
         if task is not None and not task.done():
             task.cancel()
+
+    def _schedule_claim_prompt(
+        self, channel: discord.VoiceChannel, grace_s: int
+    ) -> None:
+        # Mirror of _schedule_empty_delete: post a claim prompt once the owner
+        # has been gone past the grace window, cancellable if they return.
+        self._cancel_claim_timer(channel.id)
+        task = self.bot.loop.create_task(
+            self._post_claim_after_grace(channel, max(grace_s, 0))
+        )
+        self._claim_timers[channel.id] = task
+
+    def _cancel_claim_timer(self, channel_id: int) -> None:
+        task = self._claim_timers.pop(channel_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def _post_claim_after_grace(
+        self, channel: discord.VoiceChannel, grace_s: int
+    ) -> None:
+        try:
+            await asyncio.sleep(grace_s)
+        except asyncio.CancelledError:
+            return
+        self._claim_timers.pop(channel.id, None)
+        live = self.bot.get_channel(channel.id)
+        if not isinstance(live, discord.VoiceChannel):
+            return
+        if not any(not m.bot for m in live.members):
+            return  # everyone left during grace; empty-cleanup will delete it
+        with self.ctx.open_db() as conn:
+            row = get_active_channel(conn, channel.id)
+        if row is None or row.owner_left_at is None:
+            return  # owner returned (cancel raced) — nothing to claim
+        await post_claim_prompt(live)
 
     async def _delete_after_grace(
         self, channel: discord.VoiceChannel, grace_s: int
@@ -481,6 +554,7 @@ class VoiceMasterCog(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             log.exception("voice_master: failed to delete empty channel %d", channel.id)
             return
+        self._cancel_claim_timer(channel.id)
         with self.ctx.open_db() as conn:
             delete_active_channel(conn, channel.id)
             write_audit(

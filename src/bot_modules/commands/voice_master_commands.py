@@ -33,6 +33,8 @@ from bot_modules.services.voice_master_service import (
     update_profile_field,
 )
 from bot_modules.voice_master.embeds import (
+    build_claim_done_embed,
+    build_claim_prompt_embed,
     build_inline_panel_embed as _build_inline_panel_embed,
     build_knock_request_embed,
     build_panel_embed as _build_panel_embed,
@@ -44,6 +46,7 @@ from bot_modules.voice_master.logic import (
     build_join_url,
     build_transfer_picker_plan,
     classify_access_mode,
+    classify_claim_attempt,
     format_edit_rate_limit_error,
     format_hide_result,
     format_invite_dm,
@@ -1557,9 +1560,139 @@ _ON_CLICKS: dict[str, Callable[
 }
 
 
+async def _handle_claim_button(
+    ctx: "AppContext",
+    interaction: discord.Interaction,
+    channel_id: int,
+) -> None:
+    """Claim ownership via the in-chat button posted when an owner leaves.
+
+    Mirrors the eligibility + grant logic of ``/voice claim`` but is driven by a
+    persistent button so members don't need to know the command. Re-validates
+    against live state on every click, so a stale button (owner came back, or
+    someone already claimed — both clear ``owner_left_at``) refuses cleanly
+    rather than handing off an actively-owned room.
+    """
+    guild = interaction.guild
+    member = interaction.user
+    if guild is None or not isinstance(member, discord.Member):
+        return
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.VoiceChannel):
+        await _ephemeral(interaction, "That channel no longer exists.")
+        return
+    if (
+        member.voice is None
+        or member.voice.channel is None
+        or member.voice.channel.id != channel_id
+    ):
+        await _ephemeral(interaction, "Join the channel first, then claim it.")
+        return
+    with ctx.open_db() as conn:
+        cfg = load_voice_master_config(conn, guild.id)
+        row = get_active_channel(conn, channel_id)
+    if row is None:
+        await _ephemeral(interaction, "This channel isn't managed by Voice Master.")
+        return
+    owner = guild.get_member(row.owner_id)
+    decision = classify_claim_attempt(
+        owner_present=owner is not None,
+        owner_left_at=row.owner_left_at,
+        now=time.time(),
+        owner_grace_s=cfg.owner_grace_s,
+        caller_is_owner=row.owner_id == member.id,
+    )
+    if not decision.eligible:
+        await _ephemeral(
+            interaction,
+            decision.error_message or "You can't claim this channel right now.",
+        )
+        return
+    overwrite = channel.overwrites_for(member)
+    overwrite.connect = True
+    overwrite.view_channel = True
+    _grant_speaker_if_spectating(ctx, channel, overwrite)
+    try:
+        await channel.set_permissions(
+            member, overwrite=overwrite, reason="Voice Master: claim (button)"
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        await _ephemeral(interaction, "Couldn't grant you ownership permissions.")
+        return
+    with ctx.open_db() as conn:
+        set_owner(conn, channel_id, member.id)
+        write_audit(
+            conn,
+            guild_id=guild.id,
+            action="vm_claim",
+            actor_id=member.id,
+            target_id=row.owner_id,
+            extra={"channel_id": channel_id, "via": "button"},
+        )
+    # Retire the prompt in place: swap to a 'claimed' embed and drop the button.
+    try:
+        await interaction.response.edit_message(
+            embed=build_claim_done_embed(
+                claimer_mention=member.mention, channel_name=channel.name
+            ),
+            view=None,
+        )
+    except (discord.Forbidden, discord.HTTPException, discord.InteractionResponded):
+        await _ephemeral(interaction, "You're the new owner of this channel.")
+
+
+class _ClaimButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"voice_master:claim:(?P<cid>\d+)",
+):
+    """Persistent 'Claim channel' button posted into a channel's side chat when
+    its owner leaves for good. Re-registered via ``add_dynamic_items`` so it
+    survives restarts; the callback re-validates eligibility on every click."""
+
+    def __init__(self, channel_id: int) -> None:
+        self._channel_id = channel_id
+        super().__init__(
+            discord.ui.Button(
+                label="Claim channel",
+                style=discord.ButtonStyle.success,
+                emoji="👑",
+                custom_id=f"voice_master:claim:{channel_id}",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):  # noqa: ANN001
+        return cls(int(match["cid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        ctx = getattr(interaction.client, "_vm_ctx", None)
+        if ctx is None:
+            await _ephemeral(interaction, "Voice Master is unavailable right now.")
+            return
+        await _handle_claim_button(ctx, interaction, self._channel_id)
+
+
+async def post_claim_prompt(
+    channel: discord.VoiceChannel,
+) -> discord.Message | None:
+    """Post the claim prompt + button into a channel's side chat.
+
+    Called once an owner has been gone past the grace window while members
+    remain inside. Best-effort: returns ``None`` if the bot can't post.
+    """
+    view = discord.ui.View(timeout=None)
+    view.add_item(_ClaimButton(channel.id))
+    try:
+        return await channel.send(
+            embed=build_claim_prompt_embed(channel_name=channel.name), view=view
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        return None
+
+
 # Dynamic-item classes the cog re-registers via ``add_dynamic_items`` so the
-# panel's selects keep working after a restart.
-PANEL_DYNAMIC_ITEM_CLASSES = (_PanelSelect,)
+# panel's selects and the claim button keep working after a restart.
+PANEL_DYNAMIC_ITEM_CLASSES = (_PanelSelect, _ClaimButton)
 
 
 # ---------------------------------------------------------------------------

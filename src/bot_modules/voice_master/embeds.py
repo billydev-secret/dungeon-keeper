@@ -76,6 +76,37 @@ def build_admin_audit_mirror_embed(
     return embed
 
 
+def build_claim_prompt_embed(*, channel_name: str) -> discord.Embed:
+    """Prompt dropped into a channel's side chat once its owner is gone for good.
+
+    Posted only after the owner-grace window elapses (a brief disconnect won't
+    trigger it), so its presence means the channel is genuinely claimable now.
+    """
+    embed = discord.Embed(
+        title="👑 Channel up for grabs",
+        description=(
+            "The owner left and didn't come back. Anyone in this channel can "
+            "take it over — claim it to rename, invite, and manage the room."
+        ),
+        color=discord.Color.gold(),
+    )
+    embed.set_footer(text=channel_name)
+    return embed
+
+
+def build_claim_done_embed(
+    *, claimer_mention: str, channel_name: str
+) -> discord.Embed:
+    """Replaces the claim prompt once someone takes ownership."""
+    embed = discord.Embed(
+        title="👑 Channel claimed",
+        description=f"{claimer_mention} is now the owner of this channel.",
+        color=discord.Color.green(),
+    )
+    embed.set_footer(text=channel_name)
+    return embed
+
+
 def build_panel_embed() -> discord.Embed:
     """Embed for the persistent control-channel Voice Master panel."""
     embed = discord.Embed(

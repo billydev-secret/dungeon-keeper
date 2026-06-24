@@ -13,6 +13,8 @@ import discord
 
 from bot_modules.voice_master.embeds import (
     build_admin_audit_mirror_embed,
+    build_claim_done_embed,
+    build_claim_prompt_embed,
     build_inline_panel_embed,
     build_knock_request_embed,
     build_panel_embed,
@@ -554,6 +556,25 @@ def test_plan_unhide_view_cleanup_targets_hidden_and_locked_member():
         member_overwrites=[(10, True)], owner_id=99, trusted_ids=[], blocked_ids=[]
     )
     assert out == [10]
+
+
+# ── claim-prompt embeds (owner-left → claim button) ──────────────────
+
+
+def test_build_claim_prompt_embed_names_the_channel():
+    embed = build_claim_prompt_embed(channel_name="Movie Night")
+    assert "grabs" in (embed.title or "").lower()
+    assert embed.footer.text == "Movie Night"
+    # Tells members they can take over.
+    assert "claim" in (embed.description or "").lower()
+
+
+def test_build_claim_done_embed_credits_the_claimer():
+    embed = build_claim_done_embed(
+        claimer_mention="<@42>", channel_name="Movie Night"
+    )
+    assert "<@42>" in (embed.description or "")
+    assert embed.footer.text == "Movie Night"
 
 
 # ── plan_initial_overwrites: spectator mode ──────────────────────────
