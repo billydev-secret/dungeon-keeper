@@ -2394,10 +2394,13 @@ class WhisperCog(commands.Cog):
 
         feed_msg = None
         try:
+            # The recipient is already notified by the DM above (which is
+            # awaited and rolls back on failure), so the feed post doesn't need
+            # to ping. Post the embed only — it names the recipient visibly,
+            # once, without firing a redundant channel notification.
             feed_msg = await feed_channel.send(
-                content=f"||{target.mention}||",
                 embed=build_send_feed_embed(target.id),
-                allowed_mentions=discord.AllowedMentions(users=[target]),
+                allowed_mentions=discord.AllowedMentions.none(),
             )
             asyncio.create_task(self.refresh_whisper_launcher(interaction.guild.id))
         except discord.HTTPException:

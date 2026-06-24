@@ -660,8 +660,8 @@ def test_send_dm_body_strips_and_escapes_codefence():
 
 
 def test_build_send_feed_embed_mentions_target():
-    # The embed carries the visible name; the (separate) content ping is
-    # spoilered, so showing the mention here is the one un-hidden name.
+    # The embed carries the recipient's name once, visibly. There's no
+    # separate channel ping — the recipient is already notified by the DM.
     emb = build_send_feed_embed(42)
     assert "<@42>" in emb.description
     assert "anonymous" in emb.description

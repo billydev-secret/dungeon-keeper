@@ -141,10 +141,10 @@ def build_send_feed_embed(target_id: int) -> discord.Embed:
     """The public feed announcement posted when a Whisper is sent.
 
     Replaces the old plain-text ``📬 Someone sent @x an anonymous message``
-    line with a styled embed (accent bar + bold heading). The embed carries
-    the target's mention as the one *visible* name (embed mentions render but
-    don't ping); the ping itself rides in the message content as a spoiler
-    (``||<@id>||``), where the name stays hidden behind the spoiler bars.
+    line with a styled embed (accent bar + bold heading). The embed names the
+    recipient once (embed mentions render but don't ping) — and that's fine,
+    since the recipient is already notified by the DM that carries the actual
+    message. The feed post is posted with no content ping at all.
     """
     return discord.Embed(
         title="\U0001f4ec Someone sent a Whisper",
