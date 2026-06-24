@@ -59,7 +59,9 @@ from bot_modules.voice_master.logic import (
     panel_group_placeholder,
     panel_metas_for_group,
     parse_limit_input,
+    plan_hide_text_grants,
     plan_initial_overwrites,
+    plan_unhide_view_cleanup,
     plan_spectator_grant_cleanup,
     plan_spectator_speaker_grants,
     profile_reset_summary,
@@ -498,6 +500,60 @@ def test_overwrite_plan_entry_is_a_dataclass():
     # New participation fields default to inherit.
     assert e.speak is None and e.stream is None
     assert e.send_messages is None and e.send_messages_in_threads is None
+
+
+# ── hide text-chat grants (side chat needs View Channel) ─────────────
+
+
+def test_plan_hide_text_grants_skips_owner_and_bot():
+    out = plan_hide_text_grants(
+        present_member_ids=[10, 99, 20, 7], owner_id=99, bot_id=7
+    )
+    assert out == [10, 20]
+
+
+def test_plan_hide_text_grants_dedups_and_preserves_order():
+    out = plan_hide_text_grants(
+        present_member_ids=[20, 10, 20, 30, 10], owner_id=99, bot_id=7
+    )
+    assert out == [20, 10, 30]
+
+
+def test_plan_hide_text_grants_empty_channel():
+    assert plan_hide_text_grants(
+        present_member_ids=[], owner_id=99, bot_id=7
+    ) == []
+
+
+def test_plan_hide_text_grants_without_bot_id_only_skips_owner():
+    assert plan_hide_text_grants(
+        present_member_ids=[1, 2, 99], owner_id=99
+    ) == [1, 2]
+
+
+def test_plan_unhide_view_cleanup_resets_only_transient_view_grants():
+    rows = [
+        (10, True),    # transient hide grant -> reset
+        (20, True),    # transient hide grant -> reset
+        (99, True),    # owner -> keep
+        (30, True),    # trusted -> keep
+        (40, True),    # blocked -> keep
+        (50, None),    # no view grant -> ignore
+        (60, False),   # explicit deny (e.g. blocked) -> ignore
+    ]
+    out = plan_unhide_view_cleanup(
+        member_overwrites=rows, owner_id=99, trusted_ids=[30], blocked_ids=[40]
+    )
+    assert out == [10, 20]
+
+
+def test_plan_unhide_view_cleanup_targets_hidden_and_locked_member():
+    # A member rescued by both hide and lock carries view=True; unhide must
+    # still reset the view field (the caller leaves their connect grant intact).
+    out = plan_unhide_view_cleanup(
+        member_overwrites=[(10, True)], owner_id=99, trusted_ids=[], blocked_ids=[]
+    )
+    assert out == [10]
 
 
 # ── plan_initial_overwrites: spectator mode ──────────────────────────

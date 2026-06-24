@@ -59,9 +59,11 @@ from bot_modules.voice_master.logic import (
     panel_group_placeholder,
     panel_metas_for_group,
     parse_limit_input,
+    plan_hide_text_grants,
     plan_lock_text_grants,
     plan_spectator_grant_cleanup,
     plan_spectator_speaker_grants,
+    plan_unhide_view_cleanup,
     plan_unlock_overwrite_cleanup,
     should_save_profile_field,
     user_picker_labels,
@@ -277,6 +279,86 @@ async def _sync_lock_member_overwrites(
                 overwrite_members[uid],
                 overwrite=None,
                 reason="Voice Master: drop transient lock grant on unlock",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+
+async def _sync_hidden_member_overwrites(
+    ctx: AppContext,
+    channel: discord.VoiceChannel,
+    row: ActiveChannel,
+    *,
+    hidden: bool,
+) -> None:
+    """Keep in-channel members' text-chat access in sync with the hidden state.
+
+    The mirror of :func:`_sync_lock_member_overwrites` for hide. Discord gates a
+    voice channel's integrated text chat behind ``View Channel``, so hiding
+    (denying it to ``@everyone``) also strips the side chat from the people
+    inside. On hide, grant ``view_channel=True`` to everyone currently present
+    so the chat stays usable; on unhide, clear that field again, dropping the
+    overwrite if nothing else remains — a member also rescued by the lock keeps
+    their ``connect`` grant. The two toggles compose: a hidden *and* locked
+    channel carries both grants on the same overwrite. Individual edits are
+    best-effort: a failure on one member must not abort the hide toggle, which
+    has already been applied to ``@everyone``.
+    """
+    if hidden:
+        bot_member = channel.guild.me
+        grant_ids = plan_hide_text_grants(
+            present_member_ids=[m.id for m in channel.members],
+            owner_id=row.owner_id,
+            bot_id=bot_member.id if bot_member is not None else None,
+        )
+        for uid in grant_ids:
+            member = channel.guild.get_member(uid)
+            if member is None:
+                continue
+            overwrite = channel.overwrites_for(member)
+            overwrite.view_channel = True
+            try:
+                await channel.set_permissions(
+                    member,
+                    overwrite=overwrite,
+                    reason="Voice Master: keep text-chat access while hidden",
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        return
+
+    with ctx.open_db() as conn:
+        trusted_ids = list_trusted(conn, channel.guild.id, row.owner_id)
+        blocked_ids = list_blocked(conn, channel.guild.id, row.owner_id)
+    # Snapshot once — ``channel.overwrites`` rebuilds its dict on each access —
+    # and keep the resolved Member objects (set_permissions needs a Member
+    # target, not a bare snowflake).
+    overwrites = channel.overwrites
+    overwrite_members = {
+        target.id: target
+        for target in overwrites
+        if isinstance(target, discord.Member)
+    }
+    cleanup_ids = plan_unhide_view_cleanup(
+        member_overwrites=[
+            (m.id, overwrites[m].view_channel)
+            for m in overwrite_members.values()
+        ],
+        owner_id=row.owner_id,
+        trusted_ids=trusted_ids,
+        blocked_ids=blocked_ids,
+    )
+    for uid in cleanup_ids:
+        member = overwrite_members[uid]
+        overwrite = channel.overwrites_for(member)
+        # Reset only our own field so a co-existing lock grant survives; drop
+        # the whole overwrite only when nothing else is left.
+        overwrite.view_channel = None
+        try:
+            await channel.set_permissions(
+                member,
+                overwrite=None if overwrite.is_empty() else overwrite,
+                reason="Voice Master: drop transient hide grant on unhide",
             )
         except (discord.Forbidden, discord.HTTPException):
             pass
@@ -1013,6 +1095,10 @@ async def _apply_hide(
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't update channel permissions.")
         return
+    # Discord gates a voice channel's text chat behind View Channel, so the
+    # deny above also cuts side-chat access for the people inside. Restore it
+    # with a per-member view grant on hide, and tidy those grants on unhide.
+    await _sync_hidden_member_overwrites(ctx, channel, row, hidden=hidden)
     with ctx.open_db() as conn:
         cfg = load_voice_master_config(conn, channel.guild.id)
         _maybe_save_profile_field(

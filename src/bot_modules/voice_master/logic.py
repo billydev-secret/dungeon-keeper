@@ -430,6 +430,68 @@ def plan_unlock_overwrite_cleanup(
     ]
 
 
+def plan_hide_text_grants(
+    *, present_member_ids: list[int], owner_id: int, bot_id: int | None = None
+) -> list[int]:
+    """Member ids that need an explicit ``view_channel`` grant when hiding.
+
+    The mirror of :func:`plan_lock_text_grants` for the hide toggle. Discord
+    gates a voice channel's integrated text chat behind ``View Channel`` (the
+    permission "includes reading messages ... and joining voice channels"), so
+    hiding — denying ``View Channel`` to ``@everyone`` — also strips the side
+    chat from everyone inside who relied on ``@everyone``. To keep the chat
+    usable for the people already present, each is given an explicit
+    ``view_channel=True`` overwrite. The owner already has a persistent grant
+    and the bot needs none, so both are skipped. A channel that is both hidden
+    and locked needs this grant *and* the lock's Connect grant; the two compose
+    on the same member overwrite. Input order preserved, duplicates collapsed.
+    """
+    skip = {owner_id}
+    if bot_id is not None:
+        skip.add(bot_id)
+    seen: set[int] = set()
+    out: list[int] = []
+    for uid in present_member_ids:
+        if uid in skip or uid in seen:
+            continue
+        seen.add(uid)
+        out.append(uid)
+    return out
+
+
+def plan_unhide_view_cleanup(
+    *,
+    member_overwrites: list[tuple[int, bool | None]],
+    owner_id: int,
+    trusted_ids: list[int],
+    blocked_ids: list[int],
+) -> list[int]:
+    """Member ids whose transient ``view_channel`` grant should be reset on unhide.
+
+    Hiding grants ``view_channel=True`` to whoever was inside (see
+    :func:`plan_hide_text_grants`); unhide clears that field again so no stale
+    grant survives to reveal the channel the next time it's hidden. Each entry
+    is ``(member_id, view_channel)`` read from the live overwrite. Any
+    non-privileged member carrying ``view_channel is True`` is returned; the
+    caller resets *only* the ``view_channel`` field and drops the overwrite if
+    nothing else remains, so a member also rescued by the lock keeps their
+    ``connect`` grant. Owner and trusted/blocked ids are excluded as a guard.
+
+    Cleanup is field-scoped, not shape-matched: a one-off invited guest who is
+    present at unhide also has their (now redundant) view grant trimmed. That is
+    harmless — unhiding restores ``@everyone`` visibility — and keeps the pass
+    leak-free, which matters more here than for unlock since a lingering
+    ``view_channel`` is exactly what hide exists to prevent. Input order
+    preserved.
+    """
+    keep = {owner_id, *trusted_ids, *blocked_ids}
+    return [
+        mid
+        for (mid, view_channel) in member_overwrites
+        if mid not in keep and view_channel is True
+    ]
+
+
 def plan_spectator_speaker_grants(
     *, present_member_ids: list[int], owner_id: int, bot_id: int | None = None
 ) -> list[int]:
