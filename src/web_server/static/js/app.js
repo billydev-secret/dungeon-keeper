@@ -114,6 +114,7 @@ const SECTIONS = [
       { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js", adminOnly: true },
       { id: "config-xp",            label: "XP Logging",      module: "./panels/config-xp.js", adminOnly: true },
       { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true },
+      { id: "config-rules-watch", label: "Rules Watch",       module: "./panels/config-rules-watch.js", adminOnly: true },
       { id: "config-policy-tickets", label: "Policy Ticket Settings",  module: "./panels/config-policy-tickets.js", adminOnly: true },
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js", adminOnly: true },
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },

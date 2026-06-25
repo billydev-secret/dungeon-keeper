@@ -8,6 +8,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
   function ctrl(name) { return container.querySelector('[data-ctrl="' + name + '"]'); }
   function region(name) { return container.querySelector('[data-region="' + name + '"]'); }
 
+  // Tag state (used by buildBankHtml below, which runs during initial render).
+  const tagDatalistId = "bank-tags-dl-" + gameType;
+  let knownTags = [];
+
   const optFieldsHtml = optSchema.map(opt => {
     if (opt.type === "bool") {
       return '<div class="field" style="margin-bottom:8px;"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;">' +
@@ -74,9 +78,6 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
   return { unmount() {} };
 
   // ── Tag helpers (shared by list filter, add, bulk, inline edit) ────────────
-  const tagDatalistId = "bank-tags-dl-" + gameType;
-  let knownTags = [];
-
   function parseTags(raw) {
     if (Array.isArray(raw)) return raw;
     if (typeof raw === "string" && raw) return raw.split(",").map(s => s.trim()).filter(Boolean);

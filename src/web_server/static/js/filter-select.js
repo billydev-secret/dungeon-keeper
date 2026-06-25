@@ -22,6 +22,49 @@ function styleInput(input, placeholder) {
   input.spellcheck = false;
 }
 
+// Promote the dropdown list into the browser's top layer via the Popover API
+// and pin it under the input with fixed coordinates. The top layer escapes
+// ancestor overflow clipping, `transform`/`filter` containing blocks, and every
+// z-index stacking context — which is why an absolutely-positioned list used to
+// disappear behind cards and panels. Returns { open, close, isOpen }.
+function attachPopover(input, list) {
+  // "manual" (not "auto"): we drive show/hide from focus/blur ourselves, so we
+  // don't want auto light-dismiss racing with the focus-to-open pattern.
+  list.popover = "manual";
+
+  function position() {
+    const r = input.getBoundingClientRect();
+    list.style.width = r.width + "px";
+    list.style.left = r.left + "px";
+    // Flip above the input when there isn't room below it in the viewport.
+    const h = list.offsetHeight;
+    const below = window.innerHeight - r.bottom;
+    list.style.top = (h > below && r.top > below ? r.top - h : r.bottom) + "px";
+  }
+
+  function reposition() { if (list.matches(":popover-open")) position(); }
+
+  function open() {
+    if (!list.isConnected || list.matches(":popover-open")) {
+      position();
+      return;
+    }
+    list.showPopover();
+    position();
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+  }
+
+  function close() {
+    if (!list.matches(":popover-open")) return;
+    list.hidePopover();
+    window.removeEventListener("scroll", reposition, true);
+    window.removeEventListener("resize", reposition);
+  }
+
+  return { open, close, isOpen: () => list.matches(":popover-open") };
+}
+
 /**
  * Searchable single-select.
  *
@@ -49,6 +92,7 @@ export function filterSelect(placeholder, options, opts = {}) {
   const list = document.createElement("div");
   list.className = "filter-select-list";
   wrap.appendChild(list);
+  const popover = attachPopover(input, list);
 
   let selectedId = emptyValue;
   let selectedLabel = "";
@@ -75,13 +119,13 @@ export function filterSelect(placeholder, options, opts = {}) {
 
   input.addEventListener("focus", () => {
     render(input.value);
-    list.style.display = "block";
+    popover.open();
   });
   input.addEventListener("input", () => {
     selectedId = emptyValue;
     selectedLabel = "";
     render(input.value);
-    list.style.display = "block";
+    popover.open();
   });
   list.addEventListener("mousedown", (e) => {
     // mousedown (not click) so it fires before the input's blur hides the list.
@@ -97,13 +141,13 @@ export function filterSelect(placeholder, options, opts = {}) {
       selectedLabel = item.textContent.trim();
       input.value = selectedLabel;
     }
-    list.style.display = "none";
+    popover.close();
   });
   input.addEventListener("blur", () => {
-    setTimeout(() => { list.style.display = "none"; }, 150);
+    setTimeout(() => { popover.close(); }, 150);
   });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { list.style.display = "none"; input.blur(); }
+    if (e.key === "Escape") { popover.close(); input.blur(); }
   });
 
   function setValue(id) {
@@ -125,7 +169,7 @@ export function filterSelect(placeholder, options, opts = {}) {
 
   function setFilter(fn) {
     predicate = typeof fn === "function" ? fn : null;
-    if (list.style.display === "block") render(input.value);
+    if (popover.isOpen()) render(input.value);
   }
 
   return {
@@ -166,6 +210,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
   const list = document.createElement("div");
   list.className = "filter-select-list";
   wrap.appendChild(list);
+  const popover = attachPopover(input, list);
 
   const selected = new Map();
 
@@ -211,11 +256,11 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
 
   input.addEventListener("focus", () => {
     renderList(input.value);
-    list.style.display = "block";
+    popover.open();
   });
   input.addEventListener("input", () => {
     renderList(input.value);
-    list.style.display = "block";
+    popover.open();
   });
   list.addEventListener("mousedown", (e) => {
     const item = e.target.closest(".filter-select-item");
@@ -227,6 +272,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     input.value = "";
     renderChips();
     renderList("");
+    popover.open();
   });
   chipsRow.addEventListener("click", (e) => {
     const x = e.target.closest(".filter-chip-x");
@@ -238,10 +284,10 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     renderList(input.value);
   });
   input.addEventListener("blur", () => {
-    setTimeout(() => { list.style.display = "none"; }, 150);
+    setTimeout(() => { popover.close(); }, 150);
   });
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { list.style.display = "none"; input.blur(); }
+    if (e.key === "Escape") { popover.close(); input.blur(); }
   });
 
   function setValues(ids) {
@@ -266,7 +312,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
 
   function setFilter(fn) {
     predicate = typeof fn === "function" ? fn : null;
-    if (list.style.display === "block") renderList(input.value);
+    if (popover.isOpen()) renderList(input.value);
   }
 
   return {

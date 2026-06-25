@@ -1363,19 +1363,22 @@ textarea.field-input { resize: vertical; }
   font-size: 13px;
   min-width: 160px;
 }
+/* Rendered in the top layer via the Popover API (see js/filter-select.js):
+   position/width are set in JS from the input's rect. `inset/margin/padding`
+   reset the UA popover defaults so those JS coordinates win. */
 .filter-select-list {
-  display: none;
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0;
   max-height: 240px;
   overflow-y: auto;
   background: var(--bg-rail);
+  color: var(--ink);
   border: 1px solid var(--rule);
-  border-top: none;
-  border-radius: 0 0 4px 4px;
-  z-index: 20;
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  z-index: 1300;
 }
 .filter-select-item {
   padding: 5px 8px;
@@ -2744,7 +2747,33 @@ textarea.field-input { resize: vertical; }
 
   #sidebar-backdrop.open { display: block; }
 
-  #panel-container { padding: 52px 16px 16px; }
+  #panel-container { padding: 52px 12px 24px; }
+  .panel h2 { font-size: 18px; }
+
+  /* Wide multi-column tables scroll sideways instead of being clipped by the
+     panel's overflow-x:hidden. display:block turns the table into its own
+     horizontal scroll container while keeping the thead/tbody table layout. */
+  .data-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    white-space: nowrap;
+  }
+
+  /* Filter bars stack full-width — easier to read and tap on a phone. */
+  .controls { gap: 8px; padding: 10px 12px; }
+  .controls label { width: 100%; }
+  .controls select,
+  .controls input[type="text"],
+  .controls input[type="number"] { width: 100%; min-width: 0; }
+
+  /* Config/edit forms: inputs span the full width rather than sizing to
+     content, so selects and text fields line up and are comfortable to tap. */
+  .form { max-width: none; }
+  .field select,
+  .field input[type="text"],
+  .field input[type="number"],
+  .field textarea { width: 100%; box-sizing: border-box; }
 
   .health-grid { grid-template-columns: 1fr; }
   .health-status-bar { font-size: 12px; gap: 10px; }

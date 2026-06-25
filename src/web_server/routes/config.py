@@ -110,6 +110,7 @@ from bot_modules.services.voice_transcription_service import (
     is_available as _vt_is_available,
     set_config as _vt_set_config,
 )
+from bot_modules.services.ollama_client import is_available as _ollama_is_available
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
@@ -411,6 +412,21 @@ def _policy_section(conn, guild_id: int) -> dict:
             _POLICY_VOTE_TIMEOUT_DEFAULT,
             guild_id=guild_id,
         ),
+    }
+
+
+def _rules_watch_section(conn, guild_id: int, db_path) -> dict:
+    # Read these the same way the monitor does (get_config_value with the
+    # default legacy fallback) so the panel never disagrees with what the
+    # listener actually acts on. ``guard_available`` mirrors the Ollama gate in
+    # monitor._process — enabling with no guard model records nothing, so we
+    # surface it read-only to explain a still-empty queue.
+    return {
+        "enabled": _bool_val(conn, "rules_watch_enabled", guild_id=guild_id),
+        "channel_id": str(
+            _int_val(conn, "rules_watch_channel_id", guild_id=guild_id)
+        ),
+        "guard_available": _ollama_is_available(db_path),
     }
 
 
@@ -795,6 +811,7 @@ async def get_config(
                 "needle": _needle_section(conn, guild_id),
                 "risky": _risky_section(conn, guild_id),
                 "policy": _policy_section(conn, guild_id),
+                "rules_watch": _rules_watch_section(conn, guild_id, ctx.db_path),
                 "auto_react": _auto_react_section(conn, guild_id),
                 "bump_tracker": _bump_tracker_section(conn, guild_id),
                 "pen_pals": _pen_pals_section(conn, guild_id),
@@ -1438,6 +1455,45 @@ async def update_moderation(
         # migrated to guild_config() (e.g. setup_cog reads ctx.mod_role_ids).
         ctx.reload_permission_roles()
     return result
+
+
+class RulesWatchConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    channel_id: str | None = None
+
+
+@router.put("/config/rules-watch")
+async def update_rules_watch(
+    request: Request,
+    body: RulesWatchConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Enable/disable the Rules Watch monitor and set its alert channel.
+
+    No cache invalidation needed: the monitor reads ``rules_watch_enabled`` and
+    ``rules_watch_channel_id`` straight from the DB on every message (see
+    ``RulesWatchMonitor._is_enabled`` / ``_alert_channel_id``), so the next
+    message picks up the change without a restart.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.enabled is not None:
+                set_config_value(
+                    conn,
+                    "rules_watch_enabled",
+                    "1" if body.enabled else "0",
+                    guild_id,
+                )
+            if body.channel_id is not None:
+                set_config_value(
+                    conn, "rules_watch_channel_id", body.channel_id, guild_id
+                )
+        return {"ok": True}
+
+    return await run_query(_q)
 
 
 class RoleGrantUpdate(BaseModel):
