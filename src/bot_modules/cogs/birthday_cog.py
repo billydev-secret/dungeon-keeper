@@ -13,7 +13,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.db_utils import get_config_value, open_db, parse_bool
+from bot_modules.core.db_utils import (
+    get_config_value,
+    get_tz_offset_hours,
+    open_db,
+    parse_bool,
+)
 from bot_modules.services.birthday_service import (
     MAX_DAYS as _MAX_DAYS,
     clear_pin as _clear_pin,
@@ -32,6 +37,11 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.birthday")
 
 _DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}"
+
+# Announce at 09:00 in each guild's local time (per its ``tz_offset_hours``).
+# The loop ticks hourly and fires once the local clock has reached this hour;
+# the persisted announcement row keeps it to one send per local day.
+_ANNOUNCE_HOUR = 9
 
 # Per-channel config keys: (channel_id, message, pin?). The first entry reuses
 # the original single-channel keys for backward compatibility.
@@ -180,13 +190,29 @@ async def _announce_for_guild(
 
 
 async def _announce_all_guilds(bot: discord.Client, db_path: Path) -> None:
-    """Run today's unpin cleanup + announcement pass across every guild."""
-    today_iso = datetime.now(timezone.utc).date().isoformat()
+    """Run today's unpin cleanup + announcement pass across every guild.
+
+    Each guild's "today" is its *local* calendar day, derived from the configured
+    ``tz_offset_hours`` (the same offset reports/games/jail honor). Announcements
+    are held until the local clock passes ``_ANNOUNCE_HOUR``; the unpin cleanup
+    runs every tick so a previous day's pin still clears at the start of the new
+    local day.
+    """
+    now_utc = datetime.now(timezone.utc)
     for guild in bot.guilds:
+        with open_db(db_path) as conn:
+            offset = get_tz_offset_hours(conn, guild.id)
+        local_now = now_utc + timedelta(hours=offset)
+        today_iso = local_now.date().isoformat()
+
         try:
             await _unpin_due_for_guild(guild, db_path, today_iso)
         except Exception:
             log.exception("birthday: unpin error for guild %s", guild.id)
+
+        if local_now.hour < _ANNOUNCE_HOUR:
+            continue  # before the local announce hour — a later tick handles it
+
         try:
             await _announce_for_guild(guild, db_path, today_iso)
         except Exception:
@@ -194,28 +220,31 @@ async def _announce_all_guilds(bot: discord.Client, db_path: Path) -> None:
 
 
 async def birthday_loop(bot: discord.Client, db_path: Path) -> None:
-    """Once per day at 00:00 UTC, announce today's birthdays.
+    """Tick hourly; announce each guild's birthdays at 09:00 local time.
 
-    Runs once on startup as a catch-up pass — if the bot was offline at the
-    last 00:00 UTC, today's birthdays still get announced (the persisted
-    ``announced_on`` flag prevents double-announcing).
+    The hourly cadence lets a single loop serve guilds in different timezones —
+    each pass computes the guild-local day/hour from its ``tz_offset_hours`` and
+    only announces once the local clock reaches ``_ANNOUNCE_HOUR``. The first
+    pass runs on startup as a catch-up: if the bot was offline across a guild's
+    09:00 local, today's birthdays still go out (the persisted announcement row
+    prevents double-announcing).
     """
     await bot.wait_until_ready()
 
-    # Startup catch-up — handle any unannounced birthdays for the current
-    # UTC day. Idempotent thanks to mark_announced.
+    # Startup catch-up — handle any still-unannounced birthdays for each guild's
+    # current local day. Idempotent thanks to mark_announced.
     try:
         await _announce_all_guilds(bot, db_path)
     except Exception:
         log.exception("birthday_loop startup pass failed")
 
     while not bot.is_closed():
-        # Sleep until the next 00:00 UTC tick, then run the daily pass.
+        # Sleep until the top of the next hour, then run the pass.
         now = datetime.now(timezone.utc)
-        next_midnight = (now + timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0
+        next_hour = (now + timedelta(hours=1)).replace(
+            minute=0, second=0, microsecond=0
         )
-        delay = (next_midnight - now).total_seconds()
+        delay = (next_hour - now).total_seconds()
         try:
             await asyncio.sleep(delay)
         except asyncio.CancelledError:
@@ -224,7 +253,7 @@ async def birthday_loop(bot: discord.Client, db_path: Path) -> None:
         try:
             await _announce_all_guilds(bot, db_path)
         except Exception:
-            log.exception("birthday_loop daily pass failed")
+            log.exception("birthday_loop hourly pass failed")
 
 
 # ---------------------------------------------------------------------------
