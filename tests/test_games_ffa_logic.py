@@ -8,6 +8,10 @@ pure logic is the prompt picker.
 
 from __future__ import annotations
 
+import asyncio
+import json
+
+from bot_modules.games.utils.question_source import get_ffa_prompt
 from bot_modules.games_ffa.prompts import (
     DARE,
     TRUTH,
@@ -58,11 +62,6 @@ def test_label_for_kind_defaults_to_truth():
 
 
 # ── get_ffa_prompt (bank-backed, with code fallback) ──────────────────────────
-
-import asyncio
-import json
-
-from bot_modules.games.utils.question_source import get_ffa_prompt
 
 
 class _FakeDB:

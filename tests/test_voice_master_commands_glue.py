@@ -271,7 +271,7 @@ async def test_apply_spectator_enable_mutes_everyone_and_saves(ctx, voice_channe
 async def test_apply_spectator_enable_gated_blocks_everyone_join(ctx, voice_channel):
     from bot_modules.commands.voice_master_commands import _apply_spectator
 
-    store = _per_target_overwrites(voice_channel)
+    _per_target_overwrites(voice_channel)
     everyone = voice_channel.guild.default_role
     gate_role = MagicMock(spec=discord.Role)
     gate_role.id = 4242

@@ -646,7 +646,7 @@ async def _apply_spectator(
         except (discord.Forbidden, discord.HTTPException):
             await _ephemeral(interaction, "Couldn't update channel permissions.")
             return
-        if gated:
+        if gated and gate_role is not None:
             gate_ow = channel.overwrites_for(gate_role)
             gate_ow.connect = True
             _set_participation(gate_ow, False)

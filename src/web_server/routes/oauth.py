@@ -321,7 +321,6 @@ async def logout() -> RedirectResponse:
 def _get_opted_in_guild_ids(ctx) -> set[int]:
     """Return IDs of guilds that have opted in to support access (blocking, run via to_thread)."""
     try:
-        from bot_modules.core.db_utils import open_db
         with ctx.open_db() as conn:
             rows = conn.execute(
                 "SELECT guild_id FROM config WHERE key = 'support_access_enabled' AND value = '1'"

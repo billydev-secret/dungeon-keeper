@@ -453,8 +453,6 @@ def render_quote_card(
         def _line_x(s: str, y: int) -> int:
             return text_pad_l
 
-    text_block_h = len(lines) * line_h + max(0, len(lines) - 1) * line_gap
-
     # Soft gaussian text shadow
     _shadow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     _sdraw = ImageDraw.Draw(_shadow)
