@@ -38,21 +38,19 @@ class DkToolsBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         # Imported here to avoid circular import: slash modules import DkToolsBot for typing.
-        from beta_tools.markov import MarkovChain
         from beta_tools.personas import load_puppet_personas
+        from beta_tools.silly_text import SillyTextSource
         from beta_tools.slash import register_all
 
-        # Load Markov chain if available
-        chain_path = Path(__file__).resolve().parent.parent / "fixtures" / "markov_chain.json"
-        if chain_path.exists():
-            self._chain = MarkovChain.load(chain_path)
-            log.info(
-                "loaded Markov chain: %d bigrams, corpus=%d",
-                self._chain.vocab_size,
-                self._chain.corpus_size,
-            )
-        else:
-            log.warning("fixtures/markov_chain.json not found — ambient sim will be unavailable")
+        # Ambient text comes from a baked-in library of silly off-the-shelf
+        # filler (bacon/corporate/hipster/cupcake/pirate ipsum). No DB or
+        # fixtures required, so the sim is always available.
+        self._chain = SillyTextSource()
+        log.info(
+            "loaded silly text source: %d lines, %d unique words",
+            self._chain.corpus_size,
+            self._chain.vocab_size,
+        )
 
         fixtures_dir = Path(__file__).resolve().parent.parent / "fixtures"
         personas = load_puppet_personas(fixtures_dir / "beta_puppets.yaml")
