@@ -558,6 +558,33 @@ def test_build_vote_embed_escapes_markdown_in_answers():
     assert "\\_italic\\_" in embed.description
 
 
+def test_build_vote_embed_shows_prompt_when_supplied():
+    embed = build_vote_embed(
+        answer_a="ans A",
+        answer_b="ans B",
+        round_num=1,
+        matchup_index=0,
+        total_matchups=1,
+        deadline_str="<t:1:R>",
+        prompt="A terrible name for a pet store",
+    )
+    assert embed.description is not None
+    assert "A terrible name for a pet store" in embed.description
+
+
+def test_build_vote_embed_omits_prompt_when_absent():
+    embed = build_vote_embed(
+        answer_a="ans A",
+        answer_b="ans B",
+        round_num=1,
+        matchup_index=0,
+        total_matchups=1,
+        deadline_str="<t:1:R>",
+    )
+    assert embed.description is not None
+    assert "💬" not in embed.description
+
+
 # ── build_reveal_embed: clapback branch ─────────────────────────────
 
 
@@ -681,6 +708,27 @@ def test_build_reveal_embed_regular_win_branch():
     assert embed.title is not None
     assert "MATCHUP RESULT" in embed.title
     # No "C L A P B A C K" prefix
+    assert "C L A P B A C K" not in embed.title
+
+
+def test_build_reveal_embed_shows_prompt_when_supplied():
+    result = {
+        "winner": 10,
+        "scores": {10: 67, 20: 33},
+        "clapback": False,
+        "vote_counts": {10: 2, 20: 1},
+    }
+    embed = build_reveal_embed(
+        result=result,
+        answers={"10": "winner answer", "20": "loser answer"},
+        player_a=10,
+        player_b=20,
+        anonymous=False,
+        name_resolver=_name_resolver,
+        prompt="The worst superpower to have on a first date",
+    )
+    assert embed.description is not None
+    assert "The worst superpower to have on a first date" in embed.description
     assert "C L A P B A C K" not in embed.title
     winner_field = next(f for f in embed.fields if f.name == "🏆 Winner")
     assert winner_field.value is not None

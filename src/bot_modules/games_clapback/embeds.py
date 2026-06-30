@@ -115,14 +115,24 @@ def build_vote_embed(
     total_matchups: int,
     deadline_str: str,
     vote_count: int = 0,
+    prompt: str | None = None,
 ) -> discord.Embed:
-    """Build the head-to-head voting embed for a single matchup."""
+    """Build the head-to-head voting embed for a single matchup.
+
+    When ``prompt`` is supplied, the original round prompt is shown above
+    the two answers so voters (including spectators) see what was being
+    answered.
+    """
+    prompt_line = (
+        f'💬 **"{discord.utils.escape_markdown(prompt)}"**\n\n' if prompt else ""
+    )
     embed = discord.Embed(
         title=(
             f"{ICON} HEAD TO HEAD — Round {round_num}, "
             f"Matchup {matchup_index + 1}/{total_matchups}"
         ),
         description=(
+            f"{prompt_line}"
             f"🅰️ *\"{discord.utils.escape_markdown(answer_a)}\"*\n\n"
             f"          ⚔️ VS ⚔️\n\n"
             f"🅱️ *\"{discord.utils.escape_markdown(answer_b)}\"*"
@@ -142,6 +152,7 @@ def build_reveal_embed(
     player_b: int,
     anonymous: bool,
     name_resolver: NameResolver,
+    prompt: str | None = None,
 ) -> discord.Embed:
     """Build the post-vote reveal embed for a finished matchup.
 
@@ -155,7 +166,8 @@ def build_reveal_embed(
 
     Names are resolved via ``name_resolver`` so the builder stays
     Discord-guild-free. When ``anonymous`` is true the resolver is
-    skipped and ``"???"`` is shown instead.
+    skipped and ``"???"`` is shown instead. When ``prompt`` is supplied,
+    the original round prompt is shown under the title.
     """
     vc = result["vote_counts"]
     total_v = vc[player_a] + vc[player_b]
@@ -251,6 +263,9 @@ def build_reveal_embed(
             ),
             inline=False,
         )
+
+    if prompt:
+        reveal.description = f'💬 *"{discord.utils.escape_markdown(prompt)}"*'
 
     reveal.set_footer(text=f"{ICON} Clapback")
     return reveal

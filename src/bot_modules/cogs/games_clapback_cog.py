@@ -410,12 +410,9 @@ class ClapbackVoteView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        if uid not in self.players:
-            await interaction.response.send_message(
-                "Only players in this game can vote.",
-                ephemeral=True,
-            )
-            return
+
+        # Anyone (players and spectators alike) can vote — the only people
+        # blocked are the two contestants in this matchup, above.
 
         idx = self.matchup_index
 
@@ -424,19 +421,11 @@ class ClapbackVoteView(discord.ui.View):
             if idx < len(matchups):
                 matchups[idx]["votes"][str(uid)] = voted_for
 
-        payload = await modify_payload(self.db, self.game_id, _store_vote)
-        matchups = payload.get("matchups", [])
-        vote_count = len(matchups[idx]["votes"]) if idx < len(matchups) else 0
+        await modify_payload(self.db, self.game_id, _store_vote)
 
         await interaction.response.send_message(
             f"Voted for {label}!", ephemeral=True, delete_after=3,
         )
-
-        # Matchup participants can't vote — everyone else does.
-        eligible = len(self.players) - 2
-        if vote_count >= eligible and eligible > 0:
-            if self.game_id in self.cog._vote_events:
-                self.cog._vote_events[self.game_id].set()
 
     @discord.ui.button(label="🛑 End Game", style=discord.ButtonStyle.danger, custom_id="ql_vote_end", row=1)
     async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -824,7 +813,7 @@ class ClapbackCog(commands.Cog):
                     return
                 result = await self._vote_matchup(
                     game_id, channel, payload, mi, matchup,
-                    answers, config, host_id, round_num, len(matchups),
+                    answers, config, host_id, round_num, len(matchups), prompt,
                 )
                 if result is None:
                     return  # game cancelled
@@ -954,7 +943,7 @@ class ClapbackCog(commands.Cog):
 
     async def _vote_matchup(
         self, game_id, channel, payload, matchup_index, matchup,
-        answers, config, host_id, round_num, total_matchups,
+        answers, config, host_id, round_num, total_matchups, prompt,
     ):
         from bot_modules.games.utils.timer import format_deadline, now_plus
         player_a, player_b = int(matchup["pair"][0]), int(matchup["pair"][1])
@@ -973,6 +962,7 @@ class ClapbackCog(commands.Cog):
             total_matchups=total_matchups,
             deadline_str=format_deadline(deadline),
             vote_count=0,
+            prompt=prompt,
         )
 
         view = ClapbackVoteView(
@@ -1021,9 +1011,9 @@ class ClapbackCog(commands.Cog):
                     except Exception:
                         pass
 
-                eligible = len(players)
-                if vcount >= eligible and eligible > 0:
-                    break
+        # Voting is open to everyone, so "all eligible voters have voted" is
+        # no longer determinable — the matchup always runs the full vote timer
+        # (the loop is still woken early by _confirm_end on a host end-game).
 
         self._vote_events.pop(game_id, None)
         view._closed = True
@@ -1053,6 +1043,7 @@ class ClapbackCog(commands.Cog):
             player_b=player_b,
             anonymous=anonymous,
             name_resolver=lambda uid: resolve_name(guild, uid),
+            prompt=prompt,
         )
 
         # Edit message with reveal (buttons disabled)
