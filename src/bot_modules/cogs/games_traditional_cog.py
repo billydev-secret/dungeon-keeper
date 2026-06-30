@@ -7,7 +7,6 @@ from discord.ext import commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
-    ConfirmCloseView,
     check_allowed_channel,
     create_game,
     end_game,
@@ -189,22 +188,7 @@ class TraditionalHostView(discord.ui.View):
         )
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="tod_close", row=1)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close this game.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            await self._do_close(confirm_interaction, game_msg, channel)
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="tod_htp", row=1)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="tod_htp", row=1)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["traditional"], ephemeral=True)

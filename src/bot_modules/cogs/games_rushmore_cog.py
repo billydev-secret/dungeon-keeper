@@ -19,7 +19,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_RECAP
+from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
@@ -32,7 +32,6 @@ from bot_modules.games.utils.game_manager import (
     get_game_payload,
     end_game,
     update_session,
-    ConfirmCloseView,
     resolve_name,
 )
 from bot_modules.games.utils.question_source import get_rushmore_topic, has_matching_questions
@@ -308,36 +307,7 @@ class RushmoreJoinView(discord.ui.View):
             settings=await self.cog._get_settings(self.game_id),
         )
 
-    @discord.ui.button(label="\U0001f6d1 Cancel", style=discord.ButtonStyle.danger, custom_id="rushmore_cancel", row=1)
-    async def cancel_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        game_msg = self._msg
-
-        async def _confirmed(confirm_interaction):
-            await end_game(self.db, self.game_id)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(
-                    embed=discord.Embed(
-                        title=f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT — CANCELLED",
-                        color=PHASE_RECAP,
-                    ),
-                    view=self,
-                )
-            except Exception:
-                pass
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to cancel this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="rushmore_htp", row=2)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="rushmore_htp", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["rushmore"], ephemeral=True)
@@ -429,37 +399,6 @@ class RushmoreDraftView(discord.ui.View):
             return
         rnd = self.draft_order[self.current_pick_index][0]
         await interaction.response.send_modal(PickModal(rnd, self.topic, self))
-
-    @discord.ui.button(label="\U0001f6d1 Close Game", style=discord.ButtonStyle.danger, custom_id="rushmore_close", row=0)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = self._msg
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            if self._pick_event:
-                self._pick_event.set()
-            await end_game(self.db, self.game_id)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-            self.stop()
-            try:
-                await game_msg.edit(
-                    embed=discord.Embed(
-                        title=f"{GAME_ICONS['rushmore']} MT. RUSHMORE DRAFT — CLOSED",
-                        description="This game was closed by the host.",
-                        color=PHASE_RECAP,
-                    ),
-                    view=None,
-                )
-            except Exception:
-                pass
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
 
 
 class RushmoreVoteView(discord.ui.View):
@@ -936,6 +875,10 @@ class RushmoreCog(commands.Cog):
         vote_view._timer_obj = timer
         await timer.start()
         await vote_done.wait()
+
+        # Bail if the game was force-ended (e.g. /games end) while voting.
+        if game_id not in self.bot.active_views:
+            return
 
         # Disable vote view
         for item in vote_view.children:

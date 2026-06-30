@@ -18,11 +18,9 @@ from bot_modules.games.utils.game_manager import (
     is_game_expired,
     resolve_name,
     resolve_names,
-    ConfirmCloseView,
 )
 from bot_modules.games.utils.question_source import get_mlt_prompt, has_matching_questions
 from bot_modules.games_mlt.embeds import (
-    build_closed_embed,
     build_join_embed,
     build_results_embed,
     build_round_embed,
@@ -98,7 +96,7 @@ class MLTJoinView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("✅ You've left the pool.", ephemeral=True)
 
-    @discord.ui.button(label="Start Game", style=discord.ButtonStyle.primary, custom_id="mlt_start")
+    @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="mlt_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         if not self.is_host_or_mod(interaction):
@@ -141,21 +139,7 @@ class MLTJoinView(discord.ui.View):
             custom_prompt=payload.get("opening_prompt"),
         )
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="mlt_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        self.stop()
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="Game cancelled.", view=self)
-        await end_game(self.db, self.game_id)
-        if self.game_id in self.bot.active_views:
-            del self.bot.active_views[self.game_id]
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="mlt_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="mlt_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["mlt"], ephemeral=True)
@@ -298,35 +282,7 @@ class MLTVoteView(discord.ui.View):
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="mlt_close", row=2)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                embed = build_closed_embed(
-                    prompt=self.prompt,
-                    round_num=self.round_num,
-                    vote_count=len(self.votes),
-                )
-                await game_msg.edit(embed=embed, view=self)
-            except Exception:
-                pass
-            await end_game(self.db, self.game_id)
-            self.bot.active_views.pop(self.game_id, None)
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="mlt_htp2", row=2)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="mlt_htp2", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["mlt"], ephemeral=True)

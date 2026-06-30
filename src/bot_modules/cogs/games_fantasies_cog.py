@@ -15,7 +15,6 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     modify_payload,
-    ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games_fantasies.embeds import (
@@ -123,39 +122,7 @@ class FantasiesMainView(discord.ui.View):
             channel=interaction.channel,
         )
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="fan_close")
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-
-            # Unblock any waiting submit_view so _run_round doesn't hang
-            if self._active_submit_view:
-                self._active_submit_view.stop()
-
-            payload = await get_game_payload(self.db, self.game_id)
-            await self.cog._post_recap(channel, payload)
-            log.info("Game %s ended — fantasies", self.game_id)
-            await end_game(self.db, self.game_id, payload=payload)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="fan_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="fan_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["fantasies"], ephemeral=True)
@@ -281,38 +248,6 @@ class FantasiesVoteView(discord.ui.View):
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
-
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="fan_vclose", row=1)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-            payload = await get_game_payload(self.db, self.game_id)
-            cog = self.bot.cogs.get("FantasiesCog")
-            if cog:
-                await cog._post_recap(channel, payload)
-            await end_game(self.db, self.game_id, payload=payload)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-            # Unblock the voting loop so it can exit cleanly
-            if self._advanced_event:
-                self._advanced_event.set()
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
 
 
 class FantasiesCog(commands.Cog):

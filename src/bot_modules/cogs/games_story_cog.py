@@ -15,7 +15,6 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
-    ConfirmCloseView,
     resolve_name,
     resolve_names,
 )
@@ -127,33 +126,6 @@ class StoryTurnView(discord.ui.View):
         self.stop()
         await interaction.response.send_message("⏩ Player skipped.", ephemeral=True)
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="story_turn_close")
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._skipped = True  # unblock the loop
-            self._submitted_event.set()
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-            await end_game(self.db, self.game_id)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-            await channel.send("🛑 Story ended by host.")
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
 
 class StoryJoinView(discord.ui.View):
     def __init__(self, game_id: str, host_id: int, db, bot, cog):
@@ -241,21 +213,7 @@ class StoryJoinView(discord.ui.View):
         payload["host_id"] = interaction.user.id
         await self.cog._run_story(interaction, self.game_id, payload, interaction.channel)
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="story_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        self.stop()
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="Game cancelled.", view=self)
-        await end_game(self.db, self.game_id)
-        if self.game_id in self.bot.active_views:
-            del self.bot.active_views[self.game_id]
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="story_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="story_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["story"], ephemeral=True)

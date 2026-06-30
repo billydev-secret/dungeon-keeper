@@ -360,7 +360,7 @@ class PriceGameView(discord.ui.View):
             return
         await interaction.response.send_modal(PriceModal(self))
 
-    @discord.ui.button(label="⏭️ Skip Round", style=discord.ButtonStyle.secondary, custom_id="price_skip", row=1)
+    @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="price_skip", row=1)
     async def skip_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         if not self.is_host_or_mod(interaction):
@@ -369,7 +369,7 @@ class PriceGameView(discord.ui.View):
         await interaction.response.defer()
         self.skip_timer()
 
-    @discord.ui.button(label="➕ Add Rounds", style=discord.ButtonStyle.secondary, custom_id="price_add_rounds", row=1)
+    @discord.ui.button(label="➕ Add", style=discord.ButtonStyle.secondary, custom_id="price_add_rounds", row=1)
     async def add_rounds(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         if not self.is_host_or_mod(interaction):
@@ -377,25 +377,7 @@ class PriceGameView(discord.ui.View):
             return
         await interaction.response.send_modal(AddRoundsModal(self.cog, self.game_id))
 
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="price_close", row=2)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = self._msg
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            if self._timer:
-                self._timer.cancel()
-            await self.cog._end_game(self.game_id, game_msg=game_msg, channel=channel)
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="price_htp", row=2)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="price_htp", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["price"], ephemeral=True)
@@ -995,6 +977,10 @@ class PriceCog(commands.Cog):
         vote_view._timer = vote_timer
         await vote_timer.start()
         await vote_done.wait()
+
+        # Bail if the game was force-ended (e.g. /games end) while voting.
+        if game_id not in self.bot.active_views:
+            return
 
         # Disable vote view
         vote_view._closed = True

@@ -16,7 +16,6 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     resolve_name,
-    ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
@@ -162,22 +161,7 @@ class HotTakesSubmitView(discord.ui.View):
             await end_game(self.db, self.game_id)
             self.bot.active_views.pop(self.game_id, None)
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="ht_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        self.stop()
-        for item in self.children:
-            item.disabled = True
-        await interaction.response.edit_message(content="Game cancelled.", view=self)
-
-        await end_game(self.db, self.game_id)
-        if self.game_id in self.bot.active_views:
-            del self.bot.active_views[self.game_id]
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ht_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ht_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["hottakes"], ephemeral=True)
@@ -278,51 +262,6 @@ class HotTakeVoteView(discord.ui.View):
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
-
-    @discord.ui.button(label="🛑 Close Game", style=discord.ButtonStyle.danger, custom_id="ht_close", row=1)
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can close.", ephemeral=True)
-            return
-        game_msg = interaction.message
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._closed = True
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(view=self)
-            except Exception:
-                pass
-            # Flush in-memory votes for the current round into the payload
-            payload = await get_game_payload(self.db, self.game_id)
-            if self.votes:
-                vote_counts, avg, _std = tally_votes(self.votes)
-                results = payload.get("results", [])
-                results.append({
-                    "text": self.take_text,
-                    "counts": vote_counts,
-                    "avg": avg,
-                    # Preserve historical behavior: close-game path has always
-                    # recorded std=0.0 here regardless of voter count.
-                    "std": 0.0,
-                    "voters": list(self.votes.keys()),
-                    "author": 0,
-                })
-                payload["results"] = results
-            await self._post_recap(channel, payload)
-            await end_game(self.db, self.game_id, payload=payload)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-            # Unblock the voting loop so it can exit cleanly
-            if self._advanced_event:
-                self._advanced_event.set()
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to end this game?", view=view, ephemeral=True)
 
     async def _post_recap(self, channel, payload: dict):
         results = payload.get("results", [])

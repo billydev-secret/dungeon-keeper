@@ -206,7 +206,7 @@ class ClapbackJoinView(discord.ui.View):
         log.info("%s left game %s", interaction.user.display_name, self.game_id)
         await self._update_embed(interaction, payload)
 
-    @discord.ui.button(label="▶️ Start Game", style=discord.ButtonStyle.primary, custom_id="ql_start")
+    @discord.ui.button(label="▶️ Start", style=discord.ButtonStyle.primary, custom_id="ql_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         if not self._is_host_or_mod(interaction):
@@ -271,31 +271,7 @@ class ClapbackJoinView(discord.ui.View):
             await end_game(self.db, self.game_id)
             self.bot.active_views.pop(self.game_id, None)
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="ql_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self._is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        game_msg = interaction.message
-
-        async def _confirmed(confirm_interaction):
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(content="Game cancelled.", view=self)
-            except Exception:
-                pass
-            await end_game(self.db, self.game_id)
-            self.bot.active_views.pop(self.game_id, None)
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message(
-            "⚠️ Are you sure you want to cancel this game?", view=view, ephemeral=True,
-        )
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ql_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ql_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         cfg = self.config
@@ -341,7 +317,7 @@ class ClapbackSubmitView(discord.ui.View):
             return perms.administrator or perms.manage_guild
         return False
 
-    @discord.ui.button(label="✏️ Submit Answer", style=discord.ButtonStyle.primary, custom_id="ql_submit")
+    @discord.ui.button(label="✏️ Submit", style=discord.ButtonStyle.primary, custom_id="ql_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         payload = await get_game_payload(self.db, self.game_id)
@@ -353,14 +329,6 @@ class ClapbackSubmitView(discord.ui.View):
             return
         modal = ClapbackAnswerModal(self.game_id, self.round_num, self.db, self.cog)
         await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="🛑 End Game", style=discord.ButtonStyle.danger, custom_id="ql_submit_end", row=1)
-    async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self._is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
-            return
-        await self.cog._confirm_end(interaction, self.game_id)
 
 
 class ClapbackVoteView(discord.ui.View):
@@ -427,14 +395,6 @@ class ClapbackVoteView(discord.ui.View):
             f"Voted for {label}!", ephemeral=True, delete_after=3,
         )
 
-    @discord.ui.button(label="🛑 End Game", style=discord.ButtonStyle.danger, custom_id="ql_vote_end", row=1)
-    async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self._is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
-            return
-        await self.cog._confirm_end(interaction, self.game_id)
-
 
 class ClapbackRoundSummaryView(discord.ui.View):
     def __init__(self, game_id: str, host_id: int, db, bot, cog):
@@ -468,14 +428,6 @@ class ClapbackRoundSummaryView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(view=self)
         self._advanced.set()
-
-    @discord.ui.button(label="🛑 End Game", style=discord.ButtonStyle.danger, custom_id="ql_round_end")
-    async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self._is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
-            return
-        await self.cog._confirm_end(interaction, self.game_id)
 
 
 class ClapbackRecapView(discord.ui.View):
@@ -1013,7 +965,8 @@ class ClapbackCog(commands.Cog):
 
         # Voting is open to everyone, so "all eligible voters have voted" is
         # no longer determinable — the matchup always runs the full vote timer
-        # (the loop is still woken early by _confirm_end on a host end-game).
+        # (a host /games end pops the game from active_views, which the next
+        # _is_cancelled check below catches within a second).
 
         self._vote_events.pop(game_id, None)
         view._closed = True
@@ -1129,35 +1082,6 @@ class ClapbackCog(commands.Cog):
         self._cleanup(game_id)
 
     # ── Helpers ──────────────────────────────────────────────────────────
-
-    async def _confirm_end(self, interaction: discord.Interaction, game_id: str):
-        """Show end-game confirmation. Used by multiple views."""
-        channel = interaction.channel
-
-        async def _confirmed(confirm_interaction):
-            self._game_cancelled.add(game_id)
-            # Unblock any waiting events
-            ev = self._submit_events.pop(game_id, None)
-            if ev:
-                ev.set()
-            ev = self._vote_events.pop(game_id, None)
-            if ev:
-                ev.set()
-
-            # Post partial recap if scores exist
-            payload = await get_game_payload(self.db, game_id)
-            if payload.get("scores"):
-                await self._post_recap(game_id, channel, payload, payload.get("config", {}))
-            else:
-                await end_game(self.db, game_id)
-                self.bot.active_views.pop(game_id, None)
-                self._cleanup(game_id)
-                await channel.send(f"{ICON} Game ended by host.")
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message(
-            "⚠️ Are you sure you want to end this game?", view=view, ephemeral=True,
-        )
 
     async def _cancel_game(self, game_id: str, reason: str = ""):
         """Silently cancel a game (e.g. lobby timeout)."""

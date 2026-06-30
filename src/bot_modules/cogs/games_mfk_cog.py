@@ -12,7 +12,6 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
-    ConfirmCloseView,
     resolve_names,
 )
 from bot_modules.games_mfk.embeds import (
@@ -130,30 +129,7 @@ class MFKView(discord.ui.View):
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]
 
-    @discord.ui.button(label="🛑 Cancel", style=discord.ButtonStyle.danger, custom_id="mfk_cancel")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        if not self.is_host_or_mod(interaction):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
-            return
-        game_msg = interaction.message
-
-        async def _confirmed(confirm_interaction):
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            try:
-                await game_msg.edit(content="Game cancelled.", view=self)
-            except Exception:
-                pass
-            await end_game(self.db, self.game_id)
-            if self.game_id in self.bot.active_views:
-                del self.bot.active_views[self.game_id]
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message("⚠️ Are you sure you want to cancel this game?", view=view, ephemeral=True)
-
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="mfk_htp")
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="mfk_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
         await interaction.response.send_message(HOW_TO_PLAY["mfk"], ephemeral=True)

@@ -220,6 +220,55 @@ async def end_game(
     log.info("Game %s ended and removed.", game_id)
 
 
+async def force_end_active_game(bot, db, game_id: str) -> None:
+    """Tear down a running game from outside its own views (e.g. /games end).
+
+    Games signal cancellation through whatever handle their current phase is
+    blocked on, and every game stashes that handle on the view it registers in
+    ``bot.active_views`` — a ``GameTimer`` (``_timer`` / ``_timer_obj``), an
+    ``asyncio.Event`` (``_advanced_event`` / ``_pick_event`` / ``_done_event`` /
+    ``_submitted_event``), or a nested sub-view it awaits. This pokes every
+    known handle so the game loop wakes, sees the game is gone (``_closed`` set
+    and the view popped from ``active_views``), and returns at its guard.
+
+    Reactive games have no loop — popping the view and archiving the row is
+    enough. ``end_game`` is idempotent, so callers may also await it themselves.
+    """
+    for key in (game_id, f"{game_id}_bottom"):
+        view = bot.active_views.pop(key, None)
+        if view is None:
+            continue
+        # Trips the `if view._closed and game_id not in active_views` guards.
+        if hasattr(view, "_closed"):
+            view._closed = True
+        # Wake a GameTimer the phase is awaiting. skip() fires the callback
+        # (which sets the loop's local event); cancel() would suppress it.
+        for tattr in ("_timer", "_timer_obj"):
+            timer = getattr(view, tattr, None)
+            if timer is not None and hasattr(timer, "skip"):
+                try:
+                    timer.skip()
+                except Exception:
+                    pass
+        # Wake any phase event the loop stashed on the view.
+        for eattr in ("_advanced_event", "_pick_event", "_done_event", "_submitted_event"):
+            ev = getattr(view, eattr, None)
+            if ev is not None and hasattr(ev, "set"):
+                ev.set()
+        # Wake a nested sub-view the loop is blocked on via View.wait().
+        sub = getattr(view, "_active_submit_view", None)
+        if sub is not None and hasattr(sub, "stop"):
+            try:
+                sub.stop()
+            except Exception:
+                pass
+        try:
+            view.stop()
+        except Exception:
+            pass
+    await end_game(db, game_id)
+
+
 async def get_all_active_games(db) -> list:
     return await db.fetchall("SELECT * FROM games_active_games")
 
