@@ -53,10 +53,16 @@ function renderDetail(ev) {
   if (!ev || !ev.id) return '<div class="empty">Select an event to review.</div>';
 
   let windowHtml = "";
+  let windowFlagged = false;
   if (ev.window_json) {
     try {
       const lines = JSON.parse(ev.window_json);
-      windowHtml = `<pre class="rw-window">${lines.map(esc).join("\n")}</pre>`;
+      // The triggering message is the newest line in the window (built oldest-first).
+      const last = lines.length - 1;
+      windowFlagged = last >= 0;
+      windowHtml = `<div class="rw-window">${lines.map((l, i) =>
+        `<div class="rw-window__line${i === last ? " rw-window__line--flag" : ""}">${esc(l)}</div>`
+      ).join("")}</div>`;
     } catch {
       windowHtml = `<pre class="rw-window">${esc(ev.window_json)}</pre>`;
     }
@@ -67,6 +73,7 @@ function renderDetail(ev) {
 
   return `
     <div class="rw-detail">
+      <button class="btn btn-secondary rw-back" data-back>← Back to queue</button>
       <div class="rw-detail__header">
         <span>Event #${ev.id}</span>
         ${TIER_BADGE[ev.priority_tier] || ""}
@@ -84,7 +91,7 @@ function renderDetail(ev) {
 
       <div class="rw-signals">${sigChips(ev)}</div>
 
-      ${windowHtml ? `<div class="rw-section"><div class="rw-section__title">Conversation window</div>${windowHtml}</div>` : ""}
+      ${windowHtml ? `<div class="rw-section"><div class="rw-section__title">Conversation window${windowFlagged ? ' · <span class="rw-flag-legend">flagged message</span>' : ""}</div>${windowHtml}</div>` : ""}
 
       ${!alreadyLabeled ? `
         <div class="rw-actions">
@@ -174,12 +181,38 @@ export function mount(container) {
       .rw-section__title { font-size:12px; color:var(--dim, #888); margin-bottom:4px; }
       .rw-window { font-size:12px; background:var(--surface2, #2a2d32); padding:10px; border-radius:4px;
                    white-space:pre-wrap; word-break:break-word; max-height:300px; overflow-y:auto; }
+      .rw-window__line { padding:1px 4px; border-radius:3px; }
+      .rw-window__line--flag { background:var(--red-soft, #4a1f1f); box-shadow:inset 3px 0 0 var(--red, #e06666);
+                               padding-left:8px; font-weight:600; }
+      .rw-flag-legend { color:var(--red, #e06666); }
       .rw-actions { display:flex; gap:8px; margin-top:12px; }
       .rw-stats__tables { display:flex; gap:16px; margin-top:16px; }
       .rw-table { border-collapse:collapse; font-size:13px; }
       .rw-table th, .rw-table td { padding:4px 12px; border:1px solid var(--border); }
       .rw-pending-toggle { font-size:13px; display:flex; align-items:center; gap:6px; margin-bottom:8px; }
       .badge-ok { background:#1e4620; color:#7ecb7f; }
+      .rw-back { display:none; }
+
+      @media (max-width: 700px) {
+        .rw-layout { flex-direction:column; min-height:0; }
+        .rw-list { flex:1 1 auto; max-height:none; }
+        /* Master/detail: show one pane at a time */
+        .rw-detail-pane { display:none; }
+        .rw-layout--detail .rw-list { display:none; }
+        .rw-layout--detail .rw-detail-pane { display:block; }
+        .rw-back { display:inline-flex; margin-bottom:10px; }
+        .rw-row { grid-template-columns:72px 1fr auto; column-gap:8px; row-gap:2px; padding:12px 10px;
+                  grid-template-areas:"tier rule score" "tier ts label"; font-size:14px; }
+        .rw-row__tier { grid-area:tier; }
+        .rw-row__rule { grid-area:rule; }
+        .rw-row__score { grid-area:score; text-align:right; }
+        .rw-row__ts { grid-area:ts; }
+        .rw-row__label { grid-area:label; text-align:right; }
+        .rw-meta { grid-template-columns:80px 1fr; }
+        .rw-actions { position:sticky; bottom:0; gap:10px; padding:10px 0;
+                      background:var(--bg-card, var(--bg, #1e1e1e)); }
+        .rw-actions .btn { flex:1; padding:14px 8px; font-size:15px; }
+      }
     </style>
   `;
 
@@ -188,6 +221,7 @@ export function mount(container) {
   const statsPane = container.querySelector('[data-tab-content="stats"]');
   const filterGroup = container.querySelector("[data-filter-group]");
   const pendingOnlyEl = container.querySelector("[data-pending-only]");
+  const layoutEl = container.querySelector(".rw-layout");
   const listEl = container.querySelector("[data-list]");
   const detailEl = container.querySelector("[data-detail]");
   const statsContent = container.querySelector("[data-stats-content]");
@@ -225,15 +259,46 @@ export function mount(container) {
     loadQueue();
   });
 
+  // --- Select an event (renders detail, syncs list, handles mobile master/detail) ---
+  function selectEvent(id) {
+    activeId = id;
+    renderList();
+    const ev = id != null ? events.find(x => x.id === id) || null : null;
+    detailEl.innerHTML = renderDetail(ev);
+    bindDetailActions(ev);
+    const mobile = window.matchMedia("(max-width: 700px)").matches;
+    layoutEl.classList.toggle("rw-layout--detail", id != null);
+    if (id != null) {
+      if (mobile) layoutEl.scrollIntoView({ block: "start" });
+      else {
+        const activeRow = listEl.querySelector(".rw-row.active");
+        if (activeRow) activeRow.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }
+
+  // Next still-unlabeled event after the given one (wraps to earlier ones, else null).
+  function nextUnlabeledId(afterId) {
+    const idx = events.findIndex(x => x.id === afterId);
+    for (let i = idx + 1; i < events.length; i++) {
+      if (events[i].is_violation == null) return events[i].id;
+    }
+    for (let i = 0; i < idx; i++) {
+      if (events[i].is_violation == null) return events[i].id;
+    }
+    return null;
+  }
+
   // --- List click ---
   listEl.addEventListener("click", e => {
     const row = e.target.closest("[data-id]");
     if (!row) return;
-    activeId = Number(row.dataset.id);
-    renderList();
-    const ev = events.find(x => x.id === activeId);
-    detailEl.innerHTML = renderDetail(ev || null);
-    bindDetailActions(ev);
+    selectEvent(Number(row.dataset.id));
+  });
+
+  // --- Back to queue (mobile) ---
+  detailEl.addEventListener("click", e => {
+    if (e.target.closest("[data-back]")) selectEvent(null);
   });
 
   // --- Label buttons in detail pane ---
@@ -245,9 +310,15 @@ export function mount(container) {
         try {
           await apiPost(`/api/rules-watch/events/${ev.id}/label`, { is_violation: isViolation });
           ev.is_violation = isViolation;
-          detailEl.innerHTML = renderDetail(ev);
-          bindDetailActions(ev);
-          renderList();
+          const nextId = nextUnlabeledId(ev.id);
+          if (nextId != null) {
+            selectEvent(nextId);
+          } else {
+            activeId = null;
+            renderList();
+            detailEl.innerHTML = '<div class="empty">✅ Nothing left to review in this queue.</div>';
+            layoutEl.classList.remove("rw-layout--detail");
+          }
         } catch (err) {
           toast(err.message, "error");
           btn.textContent = "Error — try again";
