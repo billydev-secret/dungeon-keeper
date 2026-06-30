@@ -350,13 +350,17 @@ def render_quote_card(
 
     # Layout constants
     pfp_r = int(min(width, height) * 0.16)
-    pfp_cx = int(width * 0.24)
+    pfp_cx = int(width * 0.18)
     pfp_cy = height // 2
     pfp_d = pfp_r * 2
     px, py = pfp_cx - pfp_r, pfp_cy - pfp_r
 
-    text_pad_l = int(width * 0.40)
-    text_col_w = int(width * 0.45)
+    # Text column sits between the left-side pfp (outer ring ≈ 0.28w) and the
+    # right frame / floral corner. Halve the slack on both sides for more room:
+    # left edge moved toward the avatar, right edge toward the flowers, while
+    # staying clear of the gold frame (inner edge ≈ 0.93w) and the upper petals.
+    text_pad_l = int(width * 0.34)
+    text_col_w = int(width * 0.48)
 
     body_size = max(26, width // 24)
     attr_size = max(16, width // 40)
@@ -544,7 +548,9 @@ def render_quote_card(
             attr_text = f"— {author_name}"
             attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
             attr_w = attr_bbox[2] - attr_bbox[0]
-            ax = pfp_cx - attr_w // 2
+            # Centre under the (left-shifted) pfp, but never let a long name slide
+            # behind the left gold frame.
+            ax = max(left_margin, pfp_cx - attr_w // 2)
             ay = pfp_cy + pfp_r + int(height * 0.04)
             draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
             draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
