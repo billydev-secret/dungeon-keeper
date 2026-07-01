@@ -129,12 +129,15 @@ async def get_price_scenario(db, tags: list[str] | None = None) -> str | None:
 
 async def get_clapback_prompt(
     db, exclude: list[str] | None = None, tags: list[str] | None = None,
+    allow_nsfw: bool = False,
 ) -> str | None:
     """Returns a Clapback prompt from the bank, or AI fallback if bank exhausted.
 
     A tag-filtered miss returns None (no AI fallback).
     """
-    result = await _get_bank_question(db, "clapback", exclude=exclude, tags=tags)
+    result = await _get_bank_question(
+        db, "clapback", exclude=exclude, tags=tags, allow_nsfw=allow_nsfw,
+    )
     if result is not None:
         return result
     if tags:
@@ -176,11 +179,13 @@ async def _get_bank_question(
     game_type: str,
     exclude: list[str] | None = None,
     tags: list[str] | None = None,
+    allow_nsfw: bool = False,
 ) -> str | None:
     """Fetch a random bank question for game_type, applying tag rules.
 
     Tag rules (in precedence order):
-      1. Rows tagged 'nsfw' are excluded UNLESS 'nsfw' is among the requested tags.
+      1. Rows tagged 'nsfw' are excluded UNLESS *allow_nsfw* is set or 'nsfw' is
+         among the requested tags.
       2. If a non-empty tag filter is requested: keep rows whose tags intersect it
          (ANY-match).
       3. If no tag filter: keep all remaining rows.
@@ -190,7 +195,7 @@ async def _get_bank_question(
         (game_type,),
     )
     requested = set(tags or [])
-    opted_nsfw = "nsfw" in requested
+    opted_nsfw = allow_nsfw or ("nsfw" in requested)
 
     candidates: list[str] = []
     for text, tags_json in rows:
@@ -206,10 +211,14 @@ async def _get_bank_question(
     return random.choice(candidates) if candidates else None
 
 
-async def has_matching_questions(db, game_type: str, tags: list[str] | None) -> bool:
+async def has_matching_questions(
+    db, game_type: str, tags: list[str] | None, allow_nsfw: bool = False,
+) -> bool:
     """True if at least one bank row matches the tag filter (same rules as
     _get_bank_question). Used by slash commands to refuse-on-empty-filtered-pool."""
-    return await _get_bank_question(db, game_type, tags=tags) is not None
+    return await _get_bank_question(
+        db, game_type, tags=tags, allow_nsfw=allow_nsfw,
+    ) is not None
 
 
 async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None):

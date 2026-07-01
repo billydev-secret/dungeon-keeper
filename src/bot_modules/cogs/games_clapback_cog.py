@@ -65,15 +65,16 @@ async def fetch_prompt(db, config: dict, used: list[str]) -> str | None:
     source = config.get("source", "both")
 
     tags = config.get("tags") or None
+    allow_nsfw = bool(config.get("allow_nsfw", True))
 
     if source == "bank":
-        return await get_clapback_prompt(db, exclude=used, tags=tags)
+        return await get_clapback_prompt(db, exclude=used, tags=tags, allow_nsfw=allow_nsfw)
 
     if source == "ai":
         return await _ai_prompt(used)
 
     # source == "both": try bank first, fall back to AI
-    prompt = await get_clapback_prompt(db, exclude=used, tags=tags)
+    prompt = await get_clapback_prompt(db, exclude=used, tags=tags, allow_nsfw=allow_nsfw)
     if prompt:
         return prompt
     return await _ai_prompt(used)
@@ -537,7 +538,8 @@ class ClapbackCog(commands.Cog):
         source="Where prompts come from",
         anonymous="Hide author names until final recap",
         start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
-        tags="Comma-separated tags to filter the bank when source uses it (include 'nsfw' to allow NSFW)",
+        tags="Comma-separated tags to filter the bank when source uses it",
+        allow_nsfw="Include NSFW prompts (on by default) — set False for a clean game",
     )
     @app_commands.choices(
         source=[
@@ -556,6 +558,7 @@ class ClapbackCog(commands.Cog):
         anonymous: bool = False,
         start_in: app_commands.Range[int, 1, 60] | None = None,
         tags: str = "",
+        allow_nsfw: bool = True,
     ):
         log.info(
             "%s used /games play clapback in #%s",
@@ -579,7 +582,7 @@ class ClapbackCog(commands.Cog):
         # Hard bank-error pre-check (nice ephemeral message; launch falls back silently).
         if source == "bank":
             if tag_list:
-                if not await has_matching_questions(self.db, "clapback", tag_list):
+                if not await has_matching_questions(self.db, "clapback", tag_list, allow_nsfw=allow_nsfw):
                     await interaction.response.send_message(
                         f"No prompts match tags: {', '.join(tag_list)} for Clapback.",
                         ephemeral=True,
@@ -602,7 +605,7 @@ class ClapbackCog(commands.Cog):
             options={
                 "rounds": rounds, "timer": timer, "vote_timer": vote_timer,
                 "source": source, "anonymous": anonymous,
-                "start_in": start_in, "tags": tag_list,
+                "start_in": start_in, "tags": tag_list, "allow_nsfw": allow_nsfw,
             },
         )
         if game_id is None:
@@ -647,6 +650,7 @@ class ClapbackCog(commands.Cog):
             "start_epoch": start_epoch,
             "min_players": min_players,
             "tags": options.get("tags") or [],
+            "allow_nsfw": bool(options.get("allow_nsfw", True)),
         }
         return await self._start_new_game(
             channel=channel, host_id=host_id, host_name=host_name,
@@ -668,7 +672,7 @@ class ClapbackCog(commands.Cog):
             host_id,
             "clapback",
             state="joining",
-            payload={"config": config, "players": []},
+            payload={"config": config, "players": [], "host_id": host_id},
         )
         log.info("Game %s (clapback) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
