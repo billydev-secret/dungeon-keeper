@@ -199,6 +199,26 @@ class RulesWatchMonitor(commands.Cog):
                     )
                     reply_note = f" [↩ replying to {reply_author_name}]"
                 window_lines.append(f"[{ts_str}] {name}{reply_note}: {text}")
+
+            # The triggering message is dispatched (create_task) concurrently with
+            # the events_cog message store, and _process reaches this window build
+            # before the store completes — so the message is usually NOT yet in the
+            # `messages` table above. Append it explicitly from memory so the guard
+            # evaluates the message the alert is actually about, as the final
+            # (most-recent) line it is told to judge.
+            if message.id not in id_to_author:
+                trig_ts = datetime.fromtimestamp(
+                    message.created_at.timestamp(), tz=timezone.utc
+                ).strftime("%H:%M")
+                trig_name = id_to_name.get(author_id) or getattr(
+                    message.author, "display_name", f"User {author_id}"
+                )
+                trig_reply = ""
+                if reply_to_id and reply_to_id in id_to_author:
+                    trig_reply = f" [↩ replying to {id_to_name.get(id_to_author[reply_to_id], '?')}]"
+                trig_text = content.replace("\n", " ")[:400]
+                window_lines.append(f"[{trig_ts}] {trig_name}{trig_reply}: {trig_text}")
+
             window_text = "\n".join(window_lines)
 
             # 3. Context signals (DB-bound) ----------------------------------------

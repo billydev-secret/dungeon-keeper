@@ -128,11 +128,14 @@ _slur_re_cache: re.Pattern[str] | None = None
 def _get_slur_re() -> re.Pattern[str]:
     global _slur_re_cache
     if _slur_re_cache is None:
-        # Seed list — identity attacks that are violations regardless of consent.
+        # Hard slurs — identity attacks that are violations regardless of consent.
         # Deliberately short; the guard model handles the broader taxonomy.
+        # NOTE: "slut", "whore", "cunt" are intentionally NOT here — on this
+        # kink-positive community they are consensual vocabulary (and appear in
+        # GIF/Tenor URLs), so gating the guard model on them produced almost all
+        # of the historical false positives. Context is left to the guard model.
         terms = [
-            r"f[a4]gg[o0]t", r"\btr[a4]nn[y]?\b", r"\bsl[u]t\b",
-            r"\bwh[o0]re\b", r"\bc[u]nt\b", r"\bret[a4]rd\b",
+            r"f[a4]gg[o0]t", r"\btr[a4]nn[y]?\b", r"\bret[a4]rd\b",
             r"\bn[i1]gg[a4e3]r\b", r"\bch[i1]nk\b", r"\bsp[i1]c\b",
             r"\bk[i1]ke\b", r"\bb[e3]aner\b",
         ]
