@@ -236,20 +236,8 @@ class ClapbackJoinView(discord.ui.View):
             item.disabled = True
         await interaction.response.edit_message(view=self)
 
-        # Ping players
-        if interaction.guild:
-            mentions = [
-                interaction.guild.get_member(uid).mention
-                for uid in players
-                if interaction.guild.get_member(uid)
-            ]
-            if mentions:
-                try:
-                    await interaction.followup.send(
-                        f"{ICON} **Clapback is starting!** {' '.join(mentions)}",
-                    )
-                except discord.Forbidden:
-                    log.warning("Clapback %s: missing perms to send start ping in #%s", self.game_id, getattr(interaction.channel, "name", "?"))
+        # Players are pinged per-round when each round's prompt is posted
+        # (see _submit_phase), so there's no separate start ping here.
 
         # Initialize scores
         payload["scores"] = {str(p): 0 for p in players}
@@ -836,7 +824,20 @@ class ClapbackCog(commands.Cog):
         view = ClapbackSubmitView(game_id, host_id, round_num, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
 
-        msg = await channel.send(embed=embed, view=view)
+        # Ping the active players so nobody misses a new round starting. Only
+        # user mentions go in the content, so no @everyone/@role pings.
+        guild = getattr(channel, "guild", None)
+        content = None
+        if guild:
+            mentions = " ".join(
+                member.mention
+                for uid in players
+                if (member := guild.get_member(uid))
+            )
+            if mentions:
+                content = f"{ICON} **Round {round_num} starting!** {mentions}"
+
+        msg = await channel.send(content=content, embed=embed, view=view)
         await update_game_message(self.db, game_id, msg.id)
 
         submit_event = asyncio.Event()
@@ -1103,6 +1104,45 @@ class ClapbackCog(commands.Cog):
         self._vote_events.pop(game_id, None)
         self._game_cancelled.discard(game_id)
 
+    # ── Mid-game join / leave (dispatched from /games join, /games leave) ──
+
+    async def mid_game_join(self, channel, game_id: str, member):
+        """Add *member* to a running game. The submit phase re-reads the
+        roster each round, so they play from the next round on."""
+        uid = member.id
+        state: dict = {}
+
+        def _add(payload):
+            players = payload.setdefault("players", [])
+            if uid in players:
+                state["already"] = True
+                return
+            players.append(uid)
+            payload.setdefault("scores", {}).setdefault(str(uid), 0)
+            payload.setdefault("clapbacks", {}).setdefault(str(uid), 0)
+
+        await modify_payload(self.db, game_id, _add)
+        if state.get("already"):
+            return False, f"**{member.display_name}** is already in this game."
+        return True, f"{ICON} **{member.display_name}** joined Clapback — they'll play from the next round!"
+
+    async def mid_game_leave(self, channel, game_id: str, member):
+        """Remove *member* from a running game. Their score stays on the board."""
+        uid = member.id
+        state: dict = {}
+
+        def _remove(payload):
+            players = payload.setdefault("players", [])
+            if uid not in players:
+                state["missing"] = True
+                return
+            players.remove(uid)
+
+        await modify_payload(self.db, game_id, _remove)
+        if state.get("missing"):
+            return False, f"**{member.display_name}** isn't in this game."
+        return True, f"{ICON} **{member.display_name}** left Clapback — their score stays on the board."
+
 
 async def setup(bot: commands.Bot):
     cog = ClapbackCog(bot)
@@ -1111,3 +1151,5 @@ async def setup(bot: commands.Bot):
     play.add_command(cog.clapback)
     bot.game_launchers["clapback"] = cog.launch
     bot.game_recoverers["clapback"] = cog.recover_game
+    bot.game_joiners["clapback"] = cog.mid_game_join
+    bot.game_leavers["clapback"] = cog.mid_game_leave

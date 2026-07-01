@@ -92,6 +92,80 @@ class GamesConfigCog(commands.Cog):
             "⚠️ Are you sure you want to end this game?", view=view, ephemeral=True,
         )
 
+    # Games with no fixed roster — anyone takes part by acting during an open
+    # phase, so there's nothing to join or leave.
+    OPEN_SUBMISSION_GAMES = {
+        "hottakes", "fantasies", "ttl", "wyr", "nhie", "traditional",
+    }
+
+    async def _can_manage_others(self, interaction: discord.Interaction, host_id) -> bool:
+        """True if the caller may add/remove *other* players: the game's host,
+        a mod/admin, or a holder of the configured Game Host role."""
+        if interaction.user.id == host_id:
+            return True
+        if has_mod_or_admin_permissions(getattr(interaction.user, "guild_permissions", None)):
+            return True
+        row = await self.db.fetchone(
+            "SELECT role_id FROM games_editor_role WHERE guild_id = ?",
+            (interaction.guild_id,),
+        )
+        if row:
+            user_role_ids = {r.id for r in getattr(interaction.user, "roles", [])}
+            if int(row["role_id"]) in user_role_ids:
+                return True
+        return False
+
+    async def _membership_command(self, interaction: discord.Interaction, user, joining: bool):
+        verb = "join" if joining else "leave"
+        log.info("%s used /games %s in #%s", interaction.user.display_name, verb, interaction.channel.name if interaction.channel else "unknown")
+        row = await get_active_game(self.db, interaction.channel_id)
+        if not row:
+            await interaction.response.send_message(
+                "There's no active game in this channel.", ephemeral=True,
+            )
+            return
+
+        target = user or interaction.user
+        # Adding or removing someone else requires elevation; self-service is open.
+        if target.id != interaction.user.id and not await self._can_manage_others(interaction, row["host_id"]):
+            await interaction.response.send_message(
+                "Only the game's host, a moderator, or a Game-Host-role holder "
+                "can add or remove other players.",
+                ephemeral=True,
+            )
+            return
+
+        game_type = row["game_type"]
+        registry = self.bot.game_joiners if joining else self.bot.game_leavers
+        handler = registry.get(game_type)
+        if handler is None:
+            if game_type in self.OPEN_SUBMISSION_GAMES:
+                await interaction.response.send_message(
+                    f"**{game_type}** is open to everyone — no need to {verb}; "
+                    "just take part when a round opens.",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    f"You can't {verb} **{game_type}** mid-game.", ephemeral=True,
+                )
+            return
+
+        ok, message = await handler(interaction.channel, row["game_id"], target)
+        # Announce successes in-channel so the room sees the roster change;
+        # keep failures (already in/not in) private to the caller.
+        await interaction.response.send_message(message, ephemeral=not ok)
+
+    @app_commands.command(name="join", description="Join the game running in this channel.")
+    @app_commands.describe(user="Add someone else (host/mod/game-host only). Omit to join yourself.")
+    async def games_join(self, interaction: discord.Interaction, user: discord.Member | None = None):
+        await self._membership_command(interaction, user, joining=True)
+
+    @app_commands.command(name="leave", description="Leave the game running in this channel.")
+    @app_commands.describe(user="Remove someone else (host/mod/game-host only). Omit to leave yourself.")
+    async def games_leave(self, interaction: discord.Interaction, user: discord.Member | None = None):
+        await self._membership_command(interaction, user, joining=False)
+
     config_group = app_commands.Group(
         name="config",
         description="In-channel game management commands (mods only).",
@@ -141,6 +215,10 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("config")
     bot.tree.remove_command("end")
+    bot.tree.remove_command("join")
+    bot.tree.remove_command("leave")
     games.add_command(cog.config_group)
     games.add_command(cog.games_end)
+    games.add_command(cog.games_join)
+    games.add_command(cog.games_leave)
     bot.tree.add_command(games)

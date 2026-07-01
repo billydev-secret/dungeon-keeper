@@ -492,6 +492,19 @@ class MLTCog(commands.Cog):
             payload["rounds"][str(round_num)]["votes"] = encode_round_votes(view.votes)
             await update_game_payload(self.db, game_id, payload)
 
+            # Re-read the roster so /games join and /games leave take effect next
+            # round. NOTE: keep this round's `players` (used above by tally_votes)
+            # untouched — only the next round runs with the updated roster.
+            next_players = [int(p) for p in payload.get("players", players)]
+
+            # Mid-game leaves can drop the roster below a playable size — end
+            # cleanly rather than trying to build a vote with < 2 candidates.
+            if len(next_players) < 2:
+                await channel.send("🎲 Not enough players left — ending the game.")
+                await end_game(self.db, game_id)
+                self.bot.active_views.pop(game_id, None)
+                return
+
             next_custom, remaining = pop_next_prompt(view.queued_prompts)
             try:
                 await self._run_round(
@@ -500,7 +513,7 @@ class MLTCog(commands.Cog):
                     host_id=host_id,
                     host_name=host_name,
                     round_num=round_num + 1,
-                    players=players,
+                    players=next_players,
                     channel=channel,
                     custom_prompt=next_custom,
                     carry_over_queue=remaining if remaining else None,
@@ -569,6 +582,35 @@ class MLTCog(commands.Cog):
         return True
 
 
+    async def mid_game_join(self, channel, game_id: str, member):
+        """Add *member* to a running game; they're in from the next round."""
+        uid = member.id
+        state: dict = {}
+
+        def _add(payload):
+            players = payload.setdefault("players", [])
+            state["added"] = add_player(players, uid)
+
+        await modify_payload(self.db, game_id, _add)
+        if not state.get("added"):
+            return False, f"**{member.display_name}** is already in this game."
+        return True, f"🎲 **{member.display_name}** joined Most Likely To — in from the next round!"
+
+    async def mid_game_leave(self, channel, game_id: str, member):
+        """Remove *member* from a running game. Their crowns stay on the board."""
+        uid = member.id
+        state: dict = {}
+
+        def _remove(payload):
+            players = payload.setdefault("players", [])
+            state["removed"] = remove_player(players, uid)
+
+        await modify_payload(self.db, game_id, _remove)
+        if not state.get("removed"):
+            return False, f"**{member.display_name}** isn't in this game."
+        return True, f"🎲 **{member.display_name}** left Most Likely To — their crowns stay on the board."
+
+
 async def setup(bot: commands.Bot):
     cog = MLTCog(bot)
     await bot.add_cog(cog)
@@ -576,3 +618,5 @@ async def setup(bot: commands.Bot):
     play.add_command(cog.mlt)
     bot.game_launchers["mlt"] = cog.launch
     bot.game_recoverers["mlt"] = cog.recover_game
+    bot.game_joiners["mlt"] = cog.mid_game_join
+    bot.game_leavers["mlt"] = cog.mid_game_leave

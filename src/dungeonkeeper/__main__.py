@@ -167,6 +167,12 @@ def main() -> None:
     # in-memory) register an async check(channel_id) -> bool here so the scheduler
     # can see they're busy and skip the occurrence instead of pinging then failing.
     bot.game_busy_checks: dict = {}  # type: ignore[attr-defined]
+    # Registries of mid-game roster handlers, keyed by game_type. Roster-based
+    # games register async add/remove callbacks here in setup(); the /games
+    # join and /games leave commands dispatch to them so people can join or
+    # leave a game that's already running.
+    bot.game_joiners: dict = {}  # type: ignore[attr-defined]
+    bot.game_leavers: dict = {}  # type: ignore[attr-defined]
     bot.extension_names = [
         "bot_modules.cogs.events_cog",
         "bot_modules.cogs.role_grant_cog",
