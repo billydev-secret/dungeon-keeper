@@ -148,7 +148,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
   function buildBankHtml() {
     return '<section>' +
       '<div class="section-label">Question Bank</div>' +
-      '<div class="field-hint" style="margin-bottom:12px;">Questions used by this game. Tag content to organize it; the reserved <strong>nsfw</strong> tag is hidden from games unless a host opts in.</div>' +
+      '<div class="field-hint" style="margin-bottom:12px;">Questions used by this game. Tag content to organize it; the reserved <strong>nsfw</strong> tag marks adult content, which games include by default.</div>' +
       '<datalist data-ctrl="tags-datalist"></datalist>' +
       '<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">' +
       '<div style="flex:1;min-width:260px;">' +
@@ -215,24 +215,6 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
           '<thead><tr><th style="width:160px;">Tags</th><th>Question</th><th style="width:120px;"></th></tr></thead>' +
           "<tbody>" + rows + "</tbody></table>";
 
-        el.querySelectorAll('[data-action="edit-q"]').forEach(btn => {
-          btn.addEventListener("click", () => {
-            const qid = btn.dataset.qid;
-            const row = el.querySelector('tr[data-qid="' + qid + '"]');
-            const textCell = row.querySelector(".bank-text-cell");
-            const tagsCell = row.querySelector(".bank-tags-cell");
-            const origText = textCell.textContent;
-            const origTags = Array.from(tagsCell.querySelectorAll(".ll-tag")).map(s => s.textContent.trim());
-            textCell.innerHTML = '<textarea class="field-input" style="width:100%;min-height:60px;">' + esc(origText) + "</textarea>";
-            const widget = makeTagWidget(origTags);
-            tagsCell.innerHTML = "";
-            tagsCell.appendChild(widget.el);
-            row._tagWidget = widget;
-            btn.textContent = "Save";
-            btn.dataset.action = "save-q";
-          });
-        });
-
         const pag = region("bank-pagination");
         const totalPages = data.total_pages || 1;
         const count = data.total || 0;
@@ -253,15 +235,30 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       }
     }
 
-    // Delegated save/delete handler — attached once; loadBank() only replaces
-    // the list's innerHTML, so re-attaching there would stack handlers.
+    // Delegated edit/save/delete handler — attached once; loadBank() only
+    // replaces the list's innerHTML, so re-attaching there would stack
+    // handlers. Edit is handled here too (rather than as a per-row direct
+    // listener) so a single click can't both open the editor AND bubble into
+    // the save branch after the button flips to data-action="save-q".
     region("bank-list").addEventListener("click", async (e) => {
-      const btn = e.target.closest('[data-action="save-q"],[data-action="del-q"]');
+      const btn = e.target.closest('[data-action="edit-q"],[data-action="save-q"],[data-action="del-q"]');
       if (!btn) return;
       const qid = btn.dataset.qid;
       const list = region("bank-list");
-      if (btn.dataset.action === "save-q") {
-        const row = list.querySelector('tr[data-qid="' + qid + '"]');
+      const row = list.querySelector('tr[data-qid="' + qid + '"]');
+      if (btn.dataset.action === "edit-q") {
+        const textCell = row.querySelector(".bank-text-cell");
+        const tagsCell = row.querySelector(".bank-tags-cell");
+        const origText = textCell.textContent;
+        const origTags = Array.from(tagsCell.querySelectorAll(".ll-tag")).map(s => s.textContent.trim());
+        textCell.innerHTML = '<textarea class="field-input" style="width:100%;min-height:60px;">' + esc(origText) + "</textarea>";
+        const widget = makeTagWidget(origTags);
+        tagsCell.innerHTML = "";
+        tagsCell.appendChild(widget.el);
+        row._tagWidget = widget;
+        btn.textContent = "Save";
+        btn.dataset.action = "save-q";
+      } else if (btn.dataset.action === "save-q") {
         const newText = row.querySelector("textarea") && row.querySelector("textarea").value.trim();
         const newTags = row._tagWidget ? row._tagWidget.getTags() : [];
         if (!newText) return;
