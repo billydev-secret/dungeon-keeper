@@ -109,6 +109,7 @@ const SECTIONS = [
     // only), and Wellness config is gated on manage_server, not admin.
     items: [
       { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true },
+      { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
       { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true },
       { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true },
       { id: "config-booster-roles", label: "Booster Roles",   module: "./panels/config-booster-roles.js", adminOnly: true },

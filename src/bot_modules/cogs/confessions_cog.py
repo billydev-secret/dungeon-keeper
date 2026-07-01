@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.confessions.logic import (
     HELP_TEXT,
     build_dm_notification_text,
@@ -35,7 +36,6 @@ from bot_modules.services.confessions_service import (
     build_anon_reply,
     build_confession_embed,
     check_and_bump_limits,
-    dominant_highlight_color,
     get_config,
     get_discord_thread_id,
     get_ephemeral_anon_identity,
@@ -135,7 +135,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         except discord.HTTPException:
             return
 
-        accent = await self.cog.resolve_accent_color(interaction.guild)
+        accent = await resolve_accent_color(self.cog.ctx.db_path, interaction.guild)
         confession_embed = build_confession_embed(content, colour=accent)
 
         if isinstance(dest_channel, discord.ForumChannel):
@@ -426,9 +426,6 @@ class ConfessionsCog(commands.Cog):
         self.bot = bot
         self.ctx = ctx
         self._launcher_locks: dict[int, asyncio.Lock] = {}
-        # guild_id -> (avatar_key, accent_colour); avatars rarely change so we
-        # cache the extracted highlight colour keyed by the avatar hash.
-        self._accent_cache: dict[int, tuple[str, discord.Colour]] = {}
         super().__init__()
 
     async def cog_load(self) -> None:
@@ -523,39 +520,6 @@ class ConfessionsCog(commands.Cog):
             cfg.launcher_message_id = sent.id
             upsert_config(self.ctx.db_path, cfg)
             await self._cleanup_duplicate_launchers(channel, guild_id, keep_message_id=sent.id)
-
-    # ── Embed accent colour ──────────────────────────────────────────────────
-
-    async def resolve_accent_color(self, guild: discord.Guild) -> discord.Colour:
-        """Return the confession embed accent, derived from the bot's avatar.
-
-        Picks a vivid highlight colour from the guild's bot avatar (falling
-        back to the global avatar). Results are cached per guild and keyed on
-        the avatar hash so we only download+process the image when it changes.
-        Falls back to the bot's role colour, then blurple, when the avatar
-        can't be read or is fully transparent.
-        """
-        me = guild.me
-        avatar = me.display_avatar if me else self.bot.user.display_avatar if self.bot.user else None
-        if avatar is None:
-            return discord.Colour.blurple()
-
-        cached = self._accent_cache.get(guild.id)
-        if cached and cached[0] == avatar.key:
-            return cached[1]
-
-        colour: Optional[discord.Colour] = None
-        try:
-            data = await avatar.read()
-            colour = dominant_highlight_color(data)
-        except (discord.HTTPException, discord.DiscordException):
-            colour = None
-        if colour is None:
-            role_colour = me.colour if me else discord.Colour.default()
-            colour = role_colour if role_colour.value else discord.Colour.blurple()
-
-        self._accent_cache[guild.id] = (avatar.key, colour)
-        return colour
 
     # ── View builders ────────────────────────────────────────────────────────
 

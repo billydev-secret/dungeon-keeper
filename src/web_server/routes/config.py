@@ -75,6 +75,15 @@ from bot_modules.services.confessions_service import (
     get_config_conn as _confessions_get_config_conn,
     upsert_config as _confessions_upsert_config,
 )
+from bot_modules.services.branding_service import (
+    ACCENT_MODE_AVATAR,
+    ACCENT_MODE_CUSTOM,
+    ACCENT_HEX_UNSET,
+    BrandingConfig,
+    get_branding_conn,
+    upsert_branding,
+)
+from bot_modules.core.branding import invalidate_accent_cache
 from bot_modules.services.starboard_service import (
     get_starboard_config as _get_starboard_config,
     upsert_starboard_config as _upsert_starboard_config,
@@ -344,6 +353,15 @@ def _bot_identity_section(guild) -> dict:
     return {
         "nick": guild.me.nick or "",
         "avatar_url": str(guild.me.display_avatar.url),
+    }
+
+
+def _branding_section(conn, guild_id: int) -> dict:
+    cfg = get_branding_conn(conn, guild_id)
+    accent_hex = f"#{cfg.accent_hex:06X}" if cfg.has_custom_colour() else ""
+    return {
+        "accent_mode": cfg.normalized_mode(),
+        "accent_hex": accent_hex,
     }
 
 
@@ -806,6 +824,7 @@ async def get_config(
                 "starboard": _starboard_section(conn, guild_id),
                 "birthday": _birthday_section(conn, guild_id),
                 "bot_identity": _bot_identity_section(prune_guild),
+                "branding": _branding_section(conn, guild_id),
                 "guess": _guess_section(conn, guild_id),
                 "whisper": _whisper_section(conn, guild_id),
                 "needle": _needle_section(conn, guild_id),
@@ -2844,6 +2863,66 @@ async def update_bot_identity(
         "nick": guild.me.nick or "",
         "avatar_url": str(guild.me.display_avatar.url),
     }
+
+
+# ── Branding (embed accent colour) ────────────────────────────────────
+
+
+class BrandingConfigUpdate(BaseModel):
+    accent_mode: str | None = None
+    accent_hex: str | None = None
+
+
+def _parse_hex_colour(raw: str) -> int:
+    """Parse a ``#RRGGBB`` (or ``RRGGBB``) string to an int, raising ValueError."""
+    s = raw.strip().lstrip("#")
+    if len(s) != 6:
+        raise ValueError("expected 6-digit hex colour")
+    return int(s, 16)
+
+
+@router.put("/config/branding")
+async def update_branding(
+    request: Request,
+    body: BrandingConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    new_mode: str | None = None
+    if body.accent_mode is not None:
+        new_mode = body.accent_mode.strip().lower()
+        if new_mode not in (ACCENT_MODE_AVATAR, ACCENT_MODE_CUSTOM):
+            raise HTTPException(400, "accent_mode must be 'avatar' or 'custom'")
+
+    hex_provided = body.accent_hex is not None
+    new_hex = ACCENT_HEX_UNSET
+    if hex_provided:
+        raw = (body.accent_hex or "").strip()
+        if raw:
+            try:
+                new_hex = _parse_hex_colour(raw)
+            except ValueError:
+                raise HTTPException(400, "accent_hex must be a #RRGGBB colour")
+
+    def _q():
+        with ctx.open_db() as conn:
+            cfg = get_branding_conn(conn, guild_id)
+        if new_mode is not None:
+            cfg.accent_mode = new_mode
+        if hex_provided:
+            cfg.accent_hex = new_hex
+        upsert_branding(ctx.db_path, cfg)
+        return {
+            "ok": True,
+            "accent_mode": cfg.normalized_mode(),
+            "accent_hex": f"#{cfg.accent_hex:06X}" if cfg.has_custom_colour() else "",
+        }
+
+    result = await run_query(_q)
+    invalidate_accent_cache(guild_id)
+    return result
 
 
 # ── Needle (auto-thread) config ──────────────────────────────────────────────

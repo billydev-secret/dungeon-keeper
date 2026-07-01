@@ -17,7 +17,6 @@ export function mount(container) {
       fetch("/api/config/support-access", { credentials: "same-origin" }).then(r => r.ok ? r.json() : { enabled: false }),
     ]);
     const g = config.global;
-    const bi = config.bot_identity || { nick: "", avatar_url: "" };
 
     container.innerHTML = `
       <div class="panel">
@@ -54,25 +53,6 @@ export function mount(container) {
         </form>
 
         <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
-          <h3 style="margin:0 0 1rem">Bot Identity <span style="font-weight:400;font-size:.85em;opacity:.6">(this server)</span></h3>
-          <img data-avatar-preview src="${_esc(bi.avatar_url)}" alt="Bot avatar" style="width:64px;height:64px;border-radius:50%;object-fit:cover;margin-bottom:1rem;display:${bi.avatar_url ? "block" : "none"}" />
-          <div class="field">
-            <label>Nickname</label>
-            <input type="text" data-nick value="${_esc(bi.nick)}" placeholder="Leave blank to clear nickname" />
-          </div>
-          <div class="field">
-            <label>Avatar URL</label>
-            <input type="url" data-avatar-url placeholder="https://example.com/image.png" />
-            <div class="field-hint">Paste an image URL, or upload a file below (file takes priority if both are set)</div>
-          </div>
-          <div class="field">
-            <label>Upload Avatar</label>
-            <input type="file" data-avatar-file accept="image/*" />
-          </div>
-          <div><button type="button" class="btn btn-primary" data-identity-apply>Apply</button><span data-identity-status></span></div>
-        </section>
-
-        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
           <h3 style="margin:0 0 0.25rem">Support Access</h3>
           <div class="field-hint" style="margin-bottom:1rem">Allow the Dungeon Keeper developer to access this server's dashboard to help troubleshoot issues or assist with configuration. You can revoke access at any time.</div>
           <div style="display:flex;align-items:center;gap:12px;">
@@ -102,48 +82,6 @@ export function mount(container) {
         showStatus(status, true);
       } catch (err) {
         showStatus(status, false, err.message);
-      }
-    });
-
-    const applyBtn = container.querySelector("[data-identity-apply]");
-    const identityStatus = container.querySelector("[data-identity-status]");
-    const avatarPreview = container.querySelector("[data-avatar-preview]");
-
-    applyBtn.addEventListener("click", async () => {
-      const nickInput = container.querySelector("[data-nick]");
-      const avatarUrlInput = container.querySelector("[data-avatar-url]");
-      const avatarFileInput = container.querySelector("[data-avatar-file]");
-
-      const fd = new FormData();
-      fd.append("nick", nickInput.value);
-      if (avatarFileInput.files.length > 0) {
-        fd.append("avatar_file", avatarFileInput.files[0]);
-      } else if (avatarUrlInput.value.trim()) {
-        fd.append("avatar_url", avatarUrlInput.value.trim());
-      }
-
-      try {
-        const res = await fetch("/api/config/bot-identity", {
-          method: "POST",
-          credentials: "same-origin",
-          body: fd,
-        });
-        if (!res.ok) {
-          let detail = res.statusText;
-          try { const b = await res.json(); if (b.detail) detail = b.detail; } catch (_) {}
-          throw new Error(`${res.status}: ${detail}`);
-        }
-        const data = await res.json();
-        if (data.avatar_url) {
-          avatarPreview.src = data.avatar_url;
-          avatarPreview.style.display = "block";
-        }
-        nickInput.value = data.nick || "";
-        avatarUrlInput.value = "";
-        avatarFileInput.value = "";
-        showStatus(identityStatus, true, "Applied");
-      } catch (err) {
-        showStatus(identityStatus, false, err.message);
       }
     });
 
