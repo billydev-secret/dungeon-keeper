@@ -154,11 +154,8 @@ SCHEDULE_OPTION_SCHEMA = {
         {'name': 'rounds', 'label': 'Rounds', 'type': 'int', 'default': 5, 'min': 1, 'max': 15},
         {'name': 'timer', 'label': 'Answer seconds', 'type': 'int', 'default': 120, 'min': 15, 'max': 180},
         {'name': 'vote_timer', 'label': 'Vote seconds/matchup', 'type': 'int', 'default': 40, 'min': 10, 'max': 60},
-        {'name': 'source', 'label': 'Prompt source', 'type': 'choice', 'default': 'ai',
-         'choices': [{'value': 'ai', 'label': 'AI generated'},
-                     {'value': 'bank', 'label': 'Question bank'},
-                     {'value': 'both', 'label': 'Both'}]},
         {'name': 'anonymous', 'label': 'Hide authors until recap', 'type': 'bool', 'default': False},
+        {'name': 'tags', 'label': 'Prompt tags (comma-separated, optional)', 'type': 'str', 'default': ''},
     ],
     'legitlibs': [
         {'name': 'mode', 'label': 'Mode', 'type': 'choice', 'default': 'classic',

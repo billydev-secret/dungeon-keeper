@@ -18,6 +18,11 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         '<input type="checkbox" data-opt="' + esc(opt.key) + '" style="width:16px;height:16px;cursor:pointer;" />' +
         "<span>" + esc(opt.label) + "</span></label></div>";
     }
+    if (opt.type === "text") {
+      return '<div class="field"><label>' + esc(opt.label) +
+        '<input type="text" data-opt="' + esc(opt.key) + '"' + (opt.placeholder ? ' placeholder="' + esc(opt.placeholder) + '"' : "") + ' style="width:240px;" /></label>' +
+        (opt.hint ? '<div class="field-hint">' + esc(opt.hint) + "</div>" : "") + "</div>";
+    }
     return '<div class="field"><label>' + esc(opt.label) +
       '<input type="number" data-opt="' + esc(opt.key) + '" min="' + (opt.min ?? 0) + '" max="' + (opt.max ?? 9999) + '" style="width:120px;" /></label>' +
       (opt.hint ? '<div class="field-hint">' + esc(opt.hint) + "</div>" : "") + "</div>";
@@ -62,6 +67,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       const el = container.querySelector('[data-opt="' + opt.key + '"]');
       if (!el) continue;
       if (opt.type === "bool") options[opt.key] = el.checked;
+      else if (opt.type === "text") options[opt.key] = el.value.trim();
       else options[opt.key] = parseInt(el.value, 10) || 0;
     }
     try {

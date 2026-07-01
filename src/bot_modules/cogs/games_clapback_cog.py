@@ -29,13 +29,9 @@ from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
     get_clapback_prompt,
     has_clapback_prompts,
-    has_matching_questions,
 )
-from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.command_groups import play
 from bot_modules.games_clapback.logic import (
-    AI_SYSTEM_PROMPT,
-    AI_USER_PROMPT,
     MAX_PLAYERS,
     MIN_PLAYERS,
     calculate_matchup_score,
@@ -61,40 +57,10 @@ ICON = GAME_ICONS["clapback"]
 
 
 async def fetch_prompt(db, config: dict, used: list[str]) -> str | None:
-    """Get a prompt from bank and/or AI depending on *source*."""
-    source = config.get("source", "both")
-
+    """Get a prompt from the question bank (Clapback is bank-only)."""
     tags = config.get("tags") or None
     allow_nsfw = bool(config.get("allow_nsfw", True))
-
-    if source == "bank":
-        return await get_clapback_prompt(db, exclude=used, tags=tags, allow_nsfw=allow_nsfw)
-
-    if source == "ai":
-        return await _ai_prompt(used)
-
-    # source == "both": try bank first, fall back to AI
-    prompt = await get_clapback_prompt(db, exclude=used, tags=tags, allow_nsfw=allow_nsfw)
-    if prompt:
-        return prompt
-    return await _ai_prompt(used)
-
-
-async def _ai_prompt(used: list[str]) -> str | None:
-    for _ in range(2):  # retry once on failure
-        result = await generate_text(AI_SYSTEM_PROMPT, AI_USER_PROMPT, max_tokens=100)
-        if not result:
-            continue
-        # Find the first non-header, non-empty line
-        prompt = None
-        for line in result.strip().splitlines():
-            line = line.strip().lstrip("-•*0123456789). ").strip('"').strip()
-            if line and not line.startswith("#"):
-                prompt = line
-                break
-        if prompt and prompt not in used:
-            return prompt
-    return None
+    return await get_clapback_prompt(db, exclude=used, tags=tags, allow_nsfw=allow_nsfw)
 
 
 # ── Modal ────────────────────────────────────────────────────────────────────
@@ -216,7 +182,7 @@ class ClapbackJoinView(discord.ui.View):
 
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
-        min_p = self.config.get("min_players", MIN_PLAYERS)
+        min_p = MIN_PLAYERS
 
         if len(players) < min_p:
             await interaction.response.send_message(
@@ -520,33 +486,12 @@ class ClapbackCog(commands.Cog):
 
     @app_commands.command(name="clapback", description="Start a Clapback game — comedy head-to-head!")
     @app_commands.describe(
-        rounds="Number of prompt rounds (1-15, default 5)",
-        timer="Seconds for answer submission (15-180, default 120)",
-        vote_timer="Seconds per matchup vote (10-60, default 40)",
-        source="Where prompts come from",
-        anonymous="Hide author names until final recap",
         start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
-        tags="Comma-separated tags to filter the bank when source uses it",
-        allow_nsfw="Include NSFW prompts (on by default) — set False for a clean game",
-    )
-    @app_commands.choices(
-        source=[
-            app_commands.Choice(name="AI Generated", value="ai"),
-            app_commands.Choice(name="Question Bank", value="bank"),
-            app_commands.Choice(name="Both", value="both"),
-        ],
     )
     async def clapback(
         self,
         interaction: discord.Interaction,
-        rounds: int = 5,
-        timer: int = 120,
-        vote_timer: int = 40,
-        source: str = "both",
-        anonymous: bool = False,
         start_in: app_commands.Range[int, 1, 60] | None = None,
-        tags: str = "",
-        allow_nsfw: bool = True,
     ):
         log.info(
             "%s used /games play clapback in #%s",
@@ -565,24 +510,14 @@ class ClapbackCog(commands.Cog):
             await interaction.response.send_message("Clapback is currently disabled on this server.", ephemeral=True)
             return
 
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-
-        # Hard bank-error pre-check (nice ephemeral message; launch falls back silently).
-        if source == "bank":
-            if tag_list:
-                if not await has_matching_questions(self.db, "clapback", tag_list, allow_nsfw=allow_nsfw):
-                    await interaction.response.send_message(
-                        f"No prompts match tags: {', '.join(tag_list)} for Clapback.",
-                        ephemeral=True,
-                    )
-                    return
-            elif not await has_clapback_prompts(self.db):
-                await interaction.response.send_message(
-                    "No prompts in the bank for Clapback. "
-                    "Add some with `/bank add clapback` or use `source:ai`.",
-                    ephemeral=True,
-                )
-                return
+        # Clapback is bank-only, so an empty bank means there's nothing to play.
+        if not await has_clapback_prompts(self.db):
+            await interaction.response.send_message(
+                "No prompts in the bank for Clapback. "
+                "Add some with `/bank add clapback` or in the dashboard.",
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.defer()
         game_id = await self.launch(
@@ -590,11 +525,7 @@ class ClapbackCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={
-                "rounds": rounds, "timer": timer, "vote_timer": vote_timer,
-                "source": source, "anonymous": anonymous,
-                "start_in": start_in, "tags": tag_list, "allow_nsfw": allow_nsfw,
-            },
+            options={"start_in": start_in},
         )
         if game_id is None:
             try:
@@ -616,29 +547,36 @@ class ClapbackCog(commands.Cog):
         options: dict,
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        # Clapback is bank-only; nothing to play if the bank is empty. Covers
+        # headless (scheduled) launches, which skip the slash pre-check.
+        if not await has_clapback_prompts(self.db):
+            log.warning("clapback launch skipped in channel %s — question bank is empty", getattr(channel, "id", "?"))
+            return None
+        # Pacing/content knobs live in the per-server dashboard config (game_opts);
+        # an explicit *options* value (e.g. from a saved schedule) still wins.
+        game_opts = await get_game_options(self.db, "clapback", guild_id)
         rounds, timer, vote_timer = clamp_config_values(
-            int(options.get("rounds", 5)),
-            int(options.get("timer", 120)),
-            int(options.get("vote_timer", 40)),
+            int(options.get("rounds", game_opts.get("rounds", 5))),
+            int(options.get("timer", game_opts.get("timer", 120))),
+            int(options.get("vote_timer", game_opts.get("vote_timer", 40))),
         )
-        source = options.get("source", "both")
-        # Bank fallback: if the bank is empty, fall back to AI (no user to prompt headless).
-        if source in ("bank", "both") and not await has_clapback_prompts(self.db):
-            source = "ai"
         start_in_min = options.get("start_in")
         start_epoch = int(time.time()) + int(start_in_min) * 60 if start_in_min else None
-        game_opts = await get_game_options(self.db, "clapback", guild_id)
-        min_players = int(game_opts.get("min_players", MIN_PLAYERS))
+        # Normalize tags to a list — the dashboard/scheduler store a
+        # comma-separated string, an explicit options value may be a list.
+        tags_cfg = options.get("tags", game_opts.get("tags", ""))
+        if isinstance(tags_cfg, str):
+            tags = [t.strip() for t in tags_cfg.split(",") if t.strip()]
+        else:
+            tags = [str(t).strip() for t in (tags_cfg or []) if str(t).strip()]
         config = {
             "rounds": rounds,
             "timer": timer,
             "vote_timer": vote_timer,
-            "source": source,
-            "anonymous": bool(options.get("anonymous", False)),
+            "anonymous": bool(options.get("anonymous", game_opts.get("anonymous", False))),
             "start_epoch": start_epoch,
-            "min_players": min_players,
-            "tags": options.get("tags") or [],
-            "allow_nsfw": bool(options.get("allow_nsfw", True)),
+            "tags": tags,
+            "allow_nsfw": bool(options.get("allow_nsfw", game_opts.get("allow_nsfw", True))),
         }
         return await self._start_new_game(
             channel=channel, host_id=host_id, host_name=host_name,
