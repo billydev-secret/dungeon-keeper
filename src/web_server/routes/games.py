@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -243,8 +243,9 @@ async def list_bank(
     request: Request,
     _: AuthenticatedUser = Depends(require_game_host),
     game_type: Optional[str] = Query(None),
-    tag: Optional[str] = Query(None),
+    tag: Optional[List[str]] = Query(None),
     search: Optional[str] = Query(None),
+    match: str = Query("all"),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
 ):
@@ -270,12 +271,21 @@ async def list_bank(
             ).fetchall()
 
             # Tag filtering happens in Python (no fragile SQL LIKE on JSON);
-            # pagination is recomputed from the filtered set.
+            # pagination is recomputed from the filtered set. With multiple
+            # requested tags, match="all" keeps rows having every tag (AND);
+            # match="any" keeps rows sharing at least one tag (OR).
+            requested = {t for t in (tag or []) if t}
+            any_match = match == "any"
             items = []
             for r in rows:
                 tags = _parse_tags_col(r[2])
-                if tag and tag not in tags:
-                    continue
+                if requested:
+                    inter = requested & set(tags)
+                    if any_match:
+                        if not inter:
+                            continue
+                    elif inter != requested:
+                        continue
                 items.append(
                     {
                         "question_id": r[0],

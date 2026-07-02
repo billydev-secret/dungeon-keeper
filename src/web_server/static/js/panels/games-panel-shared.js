@@ -105,8 +105,9 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
   // A chip-input widget: type a tag + Enter/comma to add a chip; click × to remove.
   // Suggestions come from the shared datalist. Returns { el, getTags, setTags }.
-  function makeTagWidget(initial) {
+  function makeTagWidget(initial, onChange) {
     const tags = [];
+    const notify = () => { if (typeof onChange === "function") onChange(tags.slice()); };
     const wrap = document.createElement("div");
     wrap.style.cssText = "display:flex;flex-wrap:wrap;gap:4px;align-items:center;border:1px solid var(--rule);border-radius:var(--r);padding:4px 6px;min-height:32px;background:var(--bg);";
     const input = document.createElement("input");
@@ -125,20 +126,22 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const x = document.createElement("span");
         x.textContent = "×";
         x.style.cssText = "cursor:pointer;font-weight:700;";
-        x.addEventListener("click", () => { tags.splice(i, 1); render(); });
+        x.addEventListener("click", () => { tags.splice(i, 1); render(); notify(); });
         chip.appendChild(x);
         wrap.insertBefore(chip, input);
       });
     }
     function commit(val) {
       val = (val || "").trim().replace(/,+$/, "").trim();
-      if (val && !tags.includes(val)) tags.push(val);
+      const added = val && !tags.includes(val);
+      if (added) tags.push(val);
       input.value = "";
       render();
+      if (added) notify();
     }
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === ",") { e.preventDefault(); commit(input.value); }
-      else if (e.key === "Backspace" && !input.value && tags.length) { tags.pop(); render(); }
+      else if (e.key === "Backspace" && !input.value && tags.length) { tags.pop(); render(); notify(); }
     });
     input.addEventListener("blur", () => commit(input.value));
     wrap.appendChild(input);
@@ -159,7 +162,8 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">' +
       '<div style="flex:1;min-width:260px;">' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
-      '<div class="field" style="margin:0;"><label>Tag<input type="text" data-ctrl="filter-tag" list="' + esc(tagDatalistId) + '" placeholder="Any" style="width:120px;" /></label></div>' +
+      '<div class="field" style="margin:0;min-width:180px;"><label>Tags<div data-ctrl="filter-tags"></div></label></div>' +
+      '<div class="field" style="margin:0;"><label>Match<select data-ctrl="filter-match" style="width:80px;"><option value="all">All</option><option value="any">Any</option></select></label></div>' +
       '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input type="text" data-ctrl="search" placeholder="Filter..." style="width:100%;" /></label></div>' +
       '<button class="btn" data-action="search-btn">Search</button>' +
       "</div>" +
@@ -183,8 +187,17 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
   function initBank() {
     let currentPage = 1;
-    let currentTag = "";
+    let currentTags = [];
     let currentSearch = "";
+
+    // Mount the multi-tag list filter; adding/removing a chip re-runs the
+    // search immediately (no need to press Search).
+    const filterTags = makeTagWidget([], (tags) => {
+      currentTags = tags;
+      currentPage = 1;
+      loadBank();
+    });
+    ctrl("filter-tags").appendChild(filterTags.el);
 
     // Mount the persistent add/bulk tag widgets.
     const addTags = makeTagWidget([]);
@@ -196,7 +209,8 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       const el = region("bank-list");
       el.innerHTML = '<div class="empty">Loading...</div>';
       const params = new URLSearchParams({ game_type: gameType, page: currentPage, per_page: 50 });
-      if (currentTag) params.set("tag", currentTag);
+      currentTags.forEach(t => params.append("tag", t));
+      if (currentTags.length > 1) params.set("match", ctrl("filter-match").value);
       if (currentSearch) params.set("search", currentSearch);
       try {
         const data = await api("/api/games/bank?" + params);
@@ -277,13 +291,13 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       }
     });
 
-    ctrl("filter-tag").addEventListener("change", () => { currentTag = ctrl("filter-tag").value.trim(); currentPage = 1; loadBank(); });
+    ctrl("filter-match").addEventListener("change", () => { if (currentTags.length > 1) { currentPage = 1; loadBank(); } });
     ctrl("search").addEventListener("keydown", e => {
       if (e.key === "Enter") { currentSearch = ctrl("search").value.trim(); currentPage = 1; loadBank(); }
     });
     container.querySelector('[data-action="search-btn"]').addEventListener("click", () => {
       currentSearch = ctrl("search").value.trim();
-      currentTag = ctrl("filter-tag").value.trim();
+      currentTags = filterTags.getTags();
       currentPage = 1; loadBank();
     });
     container.querySelector('[data-action="add-question"]').addEventListener("click", async () => {
