@@ -68,12 +68,31 @@ async def _ai_generate(game_type: str, category: str = "sfw") -> str | None:
 # ── Public API ──────────────────────────────────────────────────────
 
 
-async def get_wyr_question(db, tags: list[str] | None = None) -> tuple[str, str] | None:
+def channel_allows_nsfw(channel) -> bool:
+    """NSFW prompts are gated on Discord's channel age-restriction flag.
+
+    Threads inherit their parent channel's flag. Any channel we can't resolve
+    is treated as SFW (fail safe).
+    """
+    try:
+        if hasattr(channel, "is_nsfw"):
+            return bool(channel.is_nsfw())
+        parent = getattr(channel, "parent", None)
+        if parent is not None and hasattr(parent, "is_nsfw"):
+            return bool(parent.is_nsfw())
+    except Exception:
+        pass
+    return False
+
+
+async def get_wyr_question(
+    db, tags: list[str] | None = None, allow_nsfw: bool = False
+) -> tuple[str, str] | None:
     """Returns (option_a, option_b) from the bank, or AI fallback.
 
     When a tag filter is supplied but nothing matches, returns None (no AI fallback).
     """
-    result = await _get_bank_question(db, "wyr", tags=tags)
+    result = await _get_bank_question(db, "wyr", tags=tags, allow_nsfw=allow_nsfw)
     if result and "|" in result:
         a, b = result.split("|", 1)
         return a.strip(), b.strip()
@@ -91,8 +110,10 @@ async def get_wyr_question(db, tags: list[str] | None = None) -> tuple[str, str]
     return None
 
 
-async def get_nhie_statement(db, tags: list[str] | None = None) -> str | None:
-    result = await _get_bank_question(db, "nhie", tags=tags)
+async def get_nhie_statement(
+    db, tags: list[str] | None = None, allow_nsfw: bool = False
+) -> str | None:
+    result = await _get_bank_question(db, "nhie", tags=tags, allow_nsfw=allow_nsfw)
     if result is not None:
         return result
     if tags:
@@ -100,8 +121,10 @@ async def get_nhie_statement(db, tags: list[str] | None = None) -> str | None:
     return await _ai_generate("nhie", "sfw")
 
 
-async def get_mlt_prompt(db, tags: list[str] | None = None) -> str | None:
-    result = await _get_bank_question(db, "mlt", tags=tags)
+async def get_mlt_prompt(
+    db, tags: list[str] | None = None, allow_nsfw: bool = False
+) -> str | None:
+    result = await _get_bank_question(db, "mlt", tags=tags, allow_nsfw=allow_nsfw)
     if result is not None:
         return result
     if tags:
@@ -109,8 +132,10 @@ async def get_mlt_prompt(db, tags: list[str] | None = None) -> str | None:
     return await _ai_generate("mlt", "sfw")
 
 
-async def get_rushmore_topic(db, tags: list[str] | None = None) -> str | None:
-    result = await _get_bank_question(db, "rushmore", tags=tags)
+async def get_rushmore_topic(
+    db, tags: list[str] | None = None, allow_nsfw: bool = False
+) -> str | None:
+    result = await _get_bank_question(db, "rushmore", tags=tags, allow_nsfw=allow_nsfw)
     if result is not None:
         return result
     if tags:
@@ -118,8 +143,10 @@ async def get_rushmore_topic(db, tags: list[str] | None = None) -> str | None:
     return await _ai_generate("rushmore", "sfw")
 
 
-async def get_price_scenario(db, tags: list[str] | None = None) -> str | None:
-    result = await _get_bank_question(db, "price", tags=tags)
+async def get_price_scenario(
+    db, tags: list[str] | None = None, allow_nsfw: bool = False
+) -> str | None:
+    result = await _get_bank_question(db, "price", tags=tags, allow_nsfw=allow_nsfw)
     if result is not None:
         return result
     if tags:
@@ -145,14 +172,16 @@ async def get_clapback_prompt(
     return await _ai_generate("clapback", "sfw")
 
 
-async def get_photo_prompt(db, tags: list[str] | None = None) -> str | None:
+async def get_photo_prompt(
+    db, tags: list[str] | None = None, allow_nsfw: bool = False
+) -> str | None:
     """Return a random Photo Challenge prompt from the bank, or None if empty.
 
     Bank-only by design: photo prompts are curated in the web Games Studio
     (no AI fallback at launch). The cog posts a "no prompts available" notice
     when this returns None.
     """
-    return await _get_bank_question(db, "photo", tags=tags)
+    return await _get_bank_question(db, "photo", tags=tags, allow_nsfw=allow_nsfw)
 
 
 async def has_clapback_prompts(db) -> bool:
@@ -184,8 +213,9 @@ async def _get_bank_question(
     """Fetch a random bank question for game_type, applying tag rules.
 
     Tag rules (in precedence order):
-      1. Rows tagged 'nsfw' are excluded UNLESS *allow_nsfw* is set or 'nsfw' is
-         among the requested tags.
+      1. Rows tagged 'nsfw' are excluded unless *allow_nsfw* is True. NSFW is
+         gated on the Discord channel's age-restriction flag (see
+         :func:`channel_allows_nsfw`); a requested tag cannot re-enable it.
       2. If a non-empty tag filter is requested: keep rows whose tags intersect it
          (ANY-match).
       3. If no tag filter: keep all remaining rows.
@@ -195,7 +225,7 @@ async def _get_bank_question(
         (game_type,),
     )
     requested = set(tags or [])
-    opted_nsfw = allow_nsfw or ("nsfw" in requested)
+    opted_nsfw = allow_nsfw  # channel age-restriction is authoritative; a tag can't re-enable NSFW
 
     candidates: list[str] = []
     for text, tags_json in rows:
@@ -221,12 +251,14 @@ async def has_matching_questions(
     ) is not None
 
 
-async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None):
+async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None,
+                         allow_nsfw: bool = False):
     """Return (label, text) for an FFA Truth-or-Dare card, or None on a filtered miss.
 
     'truth'/'dare'/'nsfw' are reserved tags. *kind* ('truth'|'dare'|'random') is a
-    required dimension; the host's remaining (free) tags are ANY-match; 'nsfw' stays
-    opt-in. Falls back to the code prompt bank only when no tag filter was supplied.
+    required dimension; the host's remaining (free) tags are ANY-match. NSFW cards
+    are included by default (*allow_nsfw*); pass ``allow_nsfw=False`` for a clean
+    game. Falls back to the code prompt bank only when no tag filter was supplied.
     """
     from bot_modules.games_ffa.prompts import pick_prompt, TRUTH, DARE
 
@@ -235,7 +267,7 @@ async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None
         ("ffa",),
     )
     requested = set(tags or [])
-    opted_nsfw = "nsfw" in requested
+    opted_nsfw = allow_nsfw  # channel age-restriction is authoritative
     free = requested - {"truth", "dare", "nsfw"}    # host's non-reserved filter terms
     want = {"truth"} if kind == "truth" else {"dare"} if kind == "dare" else set()
 

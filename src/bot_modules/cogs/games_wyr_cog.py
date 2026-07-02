@@ -19,7 +19,11 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
-from bot_modules.games.utils.question_source import get_wyr_question, has_matching_questions
+from bot_modules.games.utils.question_source import (
+    get_wyr_question,
+    has_matching_questions,
+    channel_allows_nsfw,
+)
 from bot_modules.games_wyr.embeds import build_wyr_embed
 from bot_modules.games_wyr.logic import (
     next_button_label,
@@ -191,7 +195,7 @@ class WYRCog(commands.Cog):
     @app_commands.command(name="wyr", description="Start a Would You Rather game!")
     @app_commands.describe(
         question="Opening question (format: 'option A | option B') — defaults to question bank",
-        tags="Comma-separated tags to filter the question bank (include 'nsfw' to allow NSFW)",
+        tags="Comma-separated tags to filter the question bank",
     )
     async def wyr(
         self,
@@ -218,7 +222,9 @@ class WYRCog(commands.Cog):
             return
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and not question.strip() and not await has_matching_questions(self.db, "wyr", tag_list):
+        if tag_list and not question.strip() and not await has_matching_questions(
+            self.db, "wyr", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
+        ):
             await interaction.response.send_message(
                 f"No questions match tags: {', '.join(tag_list)} for this game.",
                 ephemeral=True,
@@ -303,7 +309,9 @@ class WYRCog(commands.Cog):
             option_a, option_b = custom_question
         else:
             tags = (await get_game_payload(self.db, game_id)).get("tags") or None
-            question = await get_wyr_question(self.db, tags=tags)
+            question = await get_wyr_question(
+                self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel)
+            )
             if not question:
                 await channel.send(
                     "❌ The question bank is empty! Use **✍️ Pose Question** to submit your own, "

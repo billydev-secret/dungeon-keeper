@@ -6,6 +6,7 @@ import time
 
 import discord
 
+from bot_modules.duels.filters import contains_disallowed_content
 from . import state as app_state
 from .formatters import (
     build_embed,
@@ -453,6 +454,13 @@ class SixtyNineQuestionModal(discord.ui.Modal, title="Ask A Question"):
             if not question_text:
                 await interaction.response.send_message(
                     "Enter a question before sending it.",
+                    ephemeral=True,
+                )
+                return
+
+            if contains_disallowed_content(question_text):
+                await interaction.response.send_message(
+                    "That question contains disallowed content. Please rephrase.",
                     ephemeral=True,
                 )
                 return

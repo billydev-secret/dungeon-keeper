@@ -30,11 +30,12 @@ from bot_modules.games.utils.game_manager import (
     update_game_payload,
     update_game_state,
     get_game_payload,
+    get_game_options,
     end_game,
     update_session,
     resolve_name,
 )
-from bot_modules.games.utils.question_source import get_rushmore_topic, has_matching_questions
+from bot_modules.games.utils.question_source import get_rushmore_topic, channel_allows_nsfw
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games_rushmore.logic import (
     DRAFT_ROUNDS,
@@ -269,14 +270,19 @@ class RushmoreJoinView(discord.ui.View):
                 )
                 if not topic:
                     _tags = (await get_game_payload(self.db, self.game_id)).get("settings", {}).get("tags") or None
-                    topic = await get_rushmore_topic(self.db, tags=_tags)
+                    topic = await get_rushmore_topic(
+                        self.db, tags=_tags,
+                        allow_nsfw=channel_allows_nsfw(interaction.channel),
+                    )
                 if not topic:
                     await interaction.followup.send("Couldn't generate a topic. Try setting one manually with `/rushmore topic:...`.", ephemeral=True)
                     return
             elif self.source == "bank":
                 await interaction.response.defer()
                 _tags = (await get_game_payload(self.db, self.game_id)).get("settings", {}).get("tags") or None
-                topic = await get_rushmore_topic(self.db, tags=_tags)
+                topic = await get_rushmore_topic(
+                    self.db, tags=_tags, allow_nsfw=channel_allows_nsfw(interaction.channel)
+                )
                 if not topic:
                     await interaction.followup.send("No topics in the question bank.", ephemeral=True)
                     return
@@ -557,10 +563,7 @@ class RushmoreCog(commands.Cog):
     @app_commands.command(name="rushmore", description="Start a Mt. Rushmore Draft!")
     @app_commands.describe(
         topic="The topic (leave blank for AI/bank/manual entry)",
-        timer="Seconds per pick (default 30)",
         source="Where topics come from",
-        vote_timer="Seconds for the final vote (default 30)",
-        tags="Comma-separated tags to filter the bank when source is 'bank' (include 'nsfw' to allow NSFW)",
     )
     @app_commands.choices(
         source=[
@@ -573,10 +576,7 @@ class RushmoreCog(commands.Cog):
         self,
         interaction: discord.Interaction,
         topic: str = "",
-        timer: int = 30,
         source: str = "host",
-        vote_timer: int = 30,
-        tags: str = "",
     ):
         log.info(
             "%s used /games play rushmore in #%s",
@@ -593,21 +593,13 @@ class RushmoreCog(commands.Cog):
             await interaction.response.send_message("Mt. Rushmore Draft is currently disabled on this server.", ephemeral=True)
             return
 
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and source == "bank" and not topic.strip() and not await has_matching_questions(self.db, "rushmore", tag_list):
-            await interaction.response.send_message(
-                f"No topics match tags: {', '.join(tag_list)} for this game.",
-                ephemeral=True,
-            )
-            return
-
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"topic": topic, "timer": timer, "source": source, "vote_timer": vote_timer, "tags": tag_list},
+            options={"topic": topic, "source": source},
         )
         if game_id is None:
             try:
@@ -631,8 +623,12 @@ class RushmoreCog(commands.Cog):
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         topic = options.get("topic") or None
         source = options.get("source", "host")
+        # Pacing knobs come from the per-server dashboard config; an explicit
+        # *options* value (e.g. from a saved schedule) still wins.
+        game_opts = await get_game_options(self.db, "rushmore", guild_id)
         timer, vote_timer = clamp_settings(
-            int(options.get("timer", 30)), int(options.get("vote_timer", 30))
+            int(options.get("timer", game_opts.get("timer", 30))),
+            int(options.get("vote_timer", game_opts.get("vote_timer", 30))),
         )
         settings = {"timer": timer, "source": source, "vote_timer": vote_timer, "tags": options.get("tags") or []}
 

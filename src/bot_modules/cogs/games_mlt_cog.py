@@ -19,7 +19,11 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     resolve_names,
 )
-from bot_modules.games.utils.question_source import get_mlt_prompt, has_matching_questions
+from bot_modules.games.utils.question_source import (
+    get_mlt_prompt,
+    has_matching_questions,
+    channel_allows_nsfw,
+)
 from bot_modules.games_mlt.embeds import (
     build_join_embed,
     build_results_embed,
@@ -299,7 +303,7 @@ class MLTCog(commands.Cog):
     @app_commands.command(name="mlt", description="Start a Most Likely To game!")
     @app_commands.describe(
         question="Opening prompt (e.g. 'win a staring contest') — defaults to question bank",
-        tags="Comma-separated tags to filter the question bank (include 'nsfw' to allow NSFW)",
+        tags="Comma-separated tags to filter the question bank",
     )
     async def mlt(
         self,
@@ -319,7 +323,9 @@ class MLTCog(commands.Cog):
             return
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and not question.strip() and not await has_matching_questions(self.db, "mlt", tag_list):
+        if tag_list and not question.strip() and not await has_matching_questions(
+            self.db, "mlt", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
+        ):
             await interaction.response.send_message(
                 f"No questions match tags: {', '.join(tag_list)} for this game.",
                 ephemeral=True,
@@ -396,7 +402,9 @@ class MLTCog(commands.Cog):
             prompt = custom_prompt
         else:
             tags = (await get_game_payload(self.db, game_id)).get("tags") or None
-            prompt = await get_mlt_prompt(self.db, tags=tags)
+            prompt = await get_mlt_prompt(
+                self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel)
+            )
         if not prompt:
             await channel.send(
                 "❌ The prompt bank is empty! Use **✍️ Pose Prompt** to submit your own, "

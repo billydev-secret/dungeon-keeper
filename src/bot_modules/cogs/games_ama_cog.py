@@ -18,6 +18,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
 )
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games_ama.embeds import (
@@ -112,7 +113,8 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             )
 
         if self.mode == "unfiltered":
-            embed = build_question_embed(self.question.value)
+            colour = await resolve_accent_color(interaction.client.ctx.db_path, interaction.guild) if interaction.guild else None
+            embed = build_question_embed(self.question.value, colour=colour)
             hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
             question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, q_idx, interaction.user.id, self.ama_view, self.question.value)
             question_msg = await self.channel.send(
@@ -188,10 +190,12 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted reply modal in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
 
+        colour = await resolve_accent_color(interaction.client.ctx.db_path, interaction.guild) if interaction.guild else None
         answered_embed = build_answered_embed(
             self.question_text,
             self.reply.value,
             interaction.user.display_name,
+            colour=colour,
         )
         await interaction.response.edit_message(embed=answered_embed, view=None)
 
@@ -199,7 +203,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
         try:
             asker = interaction.guild.get_member(self.asker_id) if interaction.guild else None
             if asker:
-                dm_embed = build_asker_dm_embed(interaction.channel.mention)
+                dm_embed = build_asker_dm_embed(interaction.channel.mention, colour=colour)
                 await asker.send(embed=dm_embed)
         except discord.Forbidden:
             pass  # DMs disabled
@@ -241,7 +245,8 @@ class ScreenedQuestionView(discord.ui.View):
         if interaction.user.id != self.ama_view.host_id:
             await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
             return
-        embed = build_question_embed(self.question_text)
+        colour = await resolve_accent_color(interaction.client.ctx.db_path, interaction.guild) if interaction.guild else None
+        embed = build_question_embed(self.question_text, colour=colour)
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
         question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, self.question_idx, self.asker_id, self.ama_view, self.question_text)
         question_msg = await self.channel.send(
@@ -353,8 +358,9 @@ class AMAView(discord.ui.View):
             return perms.administrator or perms.manage_guild
         return False
 
-    def _build_embed(self, host_name: str, payload: dict | None = None) -> discord.Embed:
+    async def _build_embed(self, host_name: str, payload: dict | None = None) -> discord.Embed:
         guild = self._game_msg.guild if self._game_msg else None
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
 
         def _name_resolver(uid: int) -> str:
             m = guild.get_member(uid) if guild else None
@@ -368,6 +374,7 @@ class AMAView(discord.ui.View):
             queue=list(self.queue),
             name_resolver=_name_resolver,
             payload=payload,
+            colour=colour,
         )
 
     async def refresh_status(self, channel):
@@ -377,7 +384,7 @@ class AMAView(discord.ui.View):
         try:
             payload = await get_game_payload(self.db, self.game_id)
             host_member = channel.guild.get_member(self.host_id) if channel.guild else None
-            embed = self._build_embed(
+            embed = await self._build_embed(
                 host_member.display_name if host_member else "Host",
                 payload=payload,
             )
@@ -473,7 +480,8 @@ class AMAView(discord.ui.View):
 
         hot_seat_member = channel.guild.get_member(self.hot_seat_id) if channel.guild else None
         question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, q_idx, 0, self, question_text)
-        embed = build_idle_ai_question_embed(question_text)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, channel.guild) if channel.guild else None
+        embed = build_idle_ai_question_embed(question_text, colour=colour)
         await channel.send("No player question arrived in 15 minutes, so here's an anonymous AI question.")
         question_msg = await channel.send(
             content=hot_seat_member.mention if hot_seat_member else None,
@@ -667,10 +675,25 @@ class AMAView(discord.ui.View):
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can select the hot seat.", ephemeral=True)
             return
-        select = HotSeatSelect(self.game_id, self.db, self)
+        # Only members who volunteered (are in the queue) may be promoted —
+        # nobody gets forced into the public hot seat without opting in.
+        guild = interaction.guild
+        candidates = [
+            m for m in (guild.get_member(uid) if guild else None for uid in self.queue) if m
+        ]
+        if not candidates:
+            await interaction.response.send_message(
+                "No one is waiting in the queue. Members can tap **Volunteer for Hot Seat** "
+                "to opt in, then you can pick them here.",
+                ephemeral=True,
+            )
+            return
+        select = HotSeatSelect(self.game_id, self.db, self, candidates)
         view = discord.ui.View(timeout=60)
         view.add_item(select)
-        await interaction.response.send_message("Select the new hot seat:", view=view, ephemeral=True)
+        await interaction.response.send_message(
+            "Select the new hot seat (from volunteers):", view=view, ephemeral=True
+        )
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ama_htp", row=1)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -699,7 +722,8 @@ class AMAView(discord.ui.View):
         total_q = stats["total_q"]
         unique_askers = stats["unique_askers"]
 
-        embed = build_recap_embed(self.mode, stats)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, channel.guild) if channel.guild else None
+        embed = build_recap_embed(self.mode, stats, colour=colour)
 
         self.stop()
         for item in self.children:
@@ -718,15 +742,31 @@ class AMAView(discord.ui.View):
             del self.bot.active_views[self.game_id]
 
 
-class HotSeatSelect(discord.ui.UserSelect):
-    def __init__(self, game_id: str, db, ama_view: AMAView):
-        super().__init__(placeholder="Select new hot seat", min_values=1, max_values=1)
+class HotSeatSelect(discord.ui.Select):
+    """Picker restricted to members who volunteered (are in the AMA queue),
+    so the host can rotate the hot seat only among people who opted in."""
+
+    def __init__(self, game_id: str, db, ama_view: AMAView, candidates: list[discord.Member]):
+        options = [
+            discord.SelectOption(label=m.display_name[:100], value=str(m.id))
+            for m in candidates[:25]
+        ]
+        super().__init__(
+            placeholder="Select new hot seat", min_values=1, max_values=1, options=options
+        )
         self.game_id = game_id
         self.db = db
         self.ama_view = ama_view
 
     async def callback(self, interaction: discord.Interaction):
-        new_member = self.values[0]
+        uid = int(self.values[0])
+        guild = interaction.guild
+        new_member = guild.get_member(uid) if guild else None
+        if new_member is None:
+            await interaction.response.send_message(
+                "That member is no longer available.", ephemeral=True
+            )
+            return
         # Remove from queue if they were queued
         if new_member.id in self.ama_view.queue:
             self.ama_view.queue.remove(new_member.id)
@@ -1178,7 +1218,9 @@ class AMACog(commands.Cog):
             },
         )
 
-        embed = build_lobby_embed(host_name, mode)
+        launch_guild = getattr(channel, "guild", None)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, launch_guild) if launch_guild else None
+        embed = build_lobby_embed(host_name, mode, colour=colour)
 
         log.info("Game %s (ama) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         view = AMAView(game_id, host_id, mode, self.db, self.bot)

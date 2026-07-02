@@ -20,6 +20,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.duels.filters import contains_disallowed_content
 from bot_modules.services.guess_models import BoundingBox, GuessConfig, GuessGuess, GuessRound
 from bot_modules.services.guess_pipeline import (
     compute_padded_crop,
@@ -70,6 +71,24 @@ log = logging.getLogger("dungeonkeeper.guess")
 # guess reveals them. Submitters are warned at submit time that the file is
 # kept until the round is solved.
 _GUESS_ORIG_DIR = Path("guess_cache") / "orig"
+
+# Per-user submission rate limit (in-memory flood protection; resets on restart).
+_SUBMIT_WINDOW_S = 3600
+_SUBMIT_MAX_PER_WINDOW = 5
+_submit_history: dict[int, list[float]] = {}
+
+
+def _submit_rate_limited(user_id: int) -> bool:
+    """Return True (and record the attempt) if the user has exceeded the
+    submission cap within the rolling window."""
+    now = time.time()
+    hist = [t for t in _submit_history.get(user_id, []) if now - t < _SUBMIT_WINDOW_S]
+    if len(hist) >= _SUBMIT_MAX_PER_WINDOW:
+        _submit_history[user_id] = hist
+        return True
+    hist.append(now)
+    _submit_history[user_id] = hist
+    return False
 
 
 # ── Pure validation helpers (module-level so they're patchable in tests) ─────
@@ -1548,6 +1567,14 @@ class GuessCog(commands.Cog):
             )
             return
 
+        if _submit_rate_limited(interaction.user.id):
+            await interaction.followup.send(
+                f"You've hit the submission limit ({_SUBMIT_MAX_PER_WINDOW} per hour). "
+                "Please wait a bit before submitting again.",
+                ephemeral=True,
+            )
+            return
+
         if not _validate_mime(image.content_type):
             await interaction.followup.send("Please submit an image file.", ephemeral=True)
             return
@@ -1772,6 +1799,12 @@ class GuessCog(commands.Cog):
         text = text.strip()
         if not text:
             await interaction.followup.send("Confession text cannot be empty.", ephemeral=True)
+            return
+
+        if contains_disallowed_content(text):
+            await interaction.followup.send(
+                "That confession contains disallowed content. Please rephrase.", ephemeral=True
+            )
             return
 
         card_bytes = await asyncio.to_thread(render_quote, text)

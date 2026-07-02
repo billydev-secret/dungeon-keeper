@@ -24,7 +24,20 @@ class FilterResult:
 
 def _clean(text: str) -> str:
     text = _ZERO_WIDTH.sub("", text)
-    return unicodedata.normalize("NFC", text).strip()
+    # NFKC (compatibility) folds fullwidth/homoglyph/combining forms so the
+    # denylist can't be bypassed with lookalike Unicode.
+    return unicodedata.normalize("NFKC", text).strip()
+
+
+def contains_disallowed_content(text: str, denylist: list[str] | None = None) -> bool:
+    """True if the cleaned text matches the slur/abuse denylist.
+
+    Reusable for free-text fields beyond nicknames/stakes (e.g. game question
+    prompts, confessions) so they share one guard.
+    """
+    cleaned = _clean(text)
+    effective_denylist = list(DEFAULT_NICK_DENYLIST) + (denylist or [])
+    return any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in effective_denylist)
 
 
 def validate_nickname(

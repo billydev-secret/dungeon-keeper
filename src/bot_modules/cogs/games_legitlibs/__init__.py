@@ -35,7 +35,7 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     # ── /games play legitlibs ─────────────────────────────────────────────────────────────
     @app_commands.command(name="legitlibs", description="Start a LegitLibs round!")
     @app_commands.describe(
-        mode="Game mode: classic (default), quiplash, or hotseat",
+        mode="Game mode: classic (default) or quiplash",
         tier="Heat tier 1–4 (1=Flirty, 2=Spicy, 3=Filthy, 4=Unhinged). Default: 2",
         template_id="Optional: use a specific template by ID",
         tag="Optional: filter templates by tag",
@@ -43,7 +43,6 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     @app_commands.choices(mode=[
         app_commands.Choice(name="Classic (sequential fill)", value="classic"),
         app_commands.Choice(name="Quiplash (everyone fills, all revealed)", value="quiplash"),
-        app_commands.Choice(name="Hot Seat (author picks best fills)", value="hotseat"),
     ])
     @app_commands.choices(tier=[
         app_commands.Choice(name="1 — Flirty 🌶️", value=1),

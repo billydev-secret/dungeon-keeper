@@ -29,13 +29,14 @@ from bot_modules.games.utils.game_manager import (
     update_game_message,
     update_game_payload,
     get_game_payload,
+    get_game_options,
     end_game,
     update_session,
     is_game_expired,
     ConfirmCloseView,
     resolve_name,
 )
-from bot_modules.games.utils.question_source import get_price_scenario, has_matching_questions
+from bot_modules.games.utils.question_source import get_price_scenario, channel_allows_nsfw
 from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games.utils.timer import GameTimer
 from bot_modules.games_price.embeds import (
@@ -587,11 +588,7 @@ class PriceCog(commands.Cog):
 
     @app_commands.command(name="price", description="Start a Name Your Price game!")
     @app_commands.describe(
-        rounds="Number of rounds (1-20, default 5)",
-        timer="Seconds for price submission per round (default 30)",
-        vote_timer="Seconds for voting per round (default 20)",
         source="Where scenarios come from",
-        tags="Comma-separated tags to filter the bank when source uses it (include 'nsfw' to allow NSFW)",
     )
     @app_commands.choices(
         source=[
@@ -605,11 +602,7 @@ class PriceCog(commands.Cog):
     async def price_cmd(
         self,
         interaction: discord.Interaction,
-        rounds: int = 5,
-        timer: int = 30,
-        vote_timer: int = 20,
         source: str = "host",
-        tags: str = "",
     ):
         log.info(
             "%s used /games play price in #%s",
@@ -626,21 +619,13 @@ class PriceCog(commands.Cog):
             await interaction.response.send_message("Name Your Price is currently disabled on this server.", ephemeral=True)
             return
 
-        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and source == "bank" and not await has_matching_questions(self.db, "price", tag_list):
-            await interaction.response.send_message(
-                f"No scenarios match tags: {', '.join(tag_list)} for this game.",
-                ephemeral=True,
-            )
-            return
-
         await interaction.response.defer()
         game_id = await self.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"rounds": rounds, "timer": timer, "vote_timer": vote_timer, "source": source, "tags": tag_list},
+            options={"source": source},
         )
         if game_id is None:
             try:
@@ -662,9 +647,12 @@ class PriceCog(commands.Cog):
         options: dict,
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
-        rounds = max(1, min(int(options.get("rounds", 5)), 20))
-        timer = max(10, min(int(options.get("timer", 30)), 120))
-        vote_timer = max(10, min(int(options.get("vote_timer", 20)), 60))
+        # Pacing knobs come from the per-server dashboard config; an explicit
+        # *options* value (e.g. from a saved schedule) still wins.
+        game_opts = await get_game_options(self.db, "price", guild_id)
+        rounds = max(1, min(int(options.get("rounds", game_opts.get("rounds", 5))), 20))
+        timer = max(10, min(int(options.get("timer", game_opts.get("timer", 30))), 120))
+        vote_timer = max(10, min(int(options.get("vote_timer", game_opts.get("vote_timer", 20))), 60))
         source = options.get("source", "host")
         guild = getattr(channel, "guild", None)
 
@@ -732,11 +720,11 @@ class PriceCog(commands.Cog):
             return await self._ai_scenario()
 
         if source == "bank":
-            return await get_price_scenario(self.db, tags=tags)
+            return await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
 
         if source == "both":
             if random.random() < 0.5:
-                result = await get_price_scenario(self.db, tags=tags)
+                result = await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
                 if result:
                     return result
             return await self._ai_scenario()
@@ -773,7 +761,7 @@ class PriceCog(commands.Cog):
 
         if not result:
             log.info("Host scenario timed out, falling back to question bank")
-            return await get_price_scenario(self.db, tags=tags)
+            return await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
 
         return result
 
@@ -798,7 +786,7 @@ class PriceCog(commands.Cog):
 
         if not result:
             log.info("Player scenario timed out, falling back to question bank")
-            return await get_price_scenario(self.db, tags=tags)
+            return await get_price_scenario(self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel))
 
         return result
 
@@ -825,7 +813,10 @@ class PriceCog(commands.Cog):
         scenario = await self._get_scenario(settings, host_id, channel, msg)
         if not scenario:
             # Fall back to question bank, then AI as last resort
-            scenario = await get_price_scenario(self.db, tags=settings.get("tags") or None)
+            scenario = await get_price_scenario(
+                self.db, tags=settings.get("tags") or None,
+                allow_nsfw=channel_allows_nsfw(channel),
+            )
         if not scenario:
             scenario = await self._ai_scenario()
         if not scenario:

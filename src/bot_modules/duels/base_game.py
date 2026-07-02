@@ -376,6 +376,21 @@ class BaseGame(commands.Cog):
             await interaction.response.send_message(perm_error, ephemeral=True)
             return
 
+        # Guard against overlapping sentences: if the loser is already serving a
+        # nick sentence from a concurrent game, applying a second one here would
+        # snapshot the already-imposed nick as the "original" and corrupt the
+        # eventual revert. Refuse rather than stack sentences.
+        existing_sentence = await self._check_no_active_nick(guild, [loser])
+        if existing_sentence:
+            await interaction.response.send_message(
+                f"**{loser.display_name}** is already serving a nickname sentence from "
+                "another game. Your win stands, but a new nickname can't be applied until "
+                "that one expires.",
+                ephemeral=True,
+            )
+            await self._db_set_state(game_id, "NO_NICK_SET")
+            return
+
         original_nick = loser.nick
 
         if loser.id == guild.owner_id:

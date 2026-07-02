@@ -12,7 +12,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
 )
 from bot_modules.games.command_groups import play
-from bot_modules.games.utils.question_source import get_photo_prompt
+from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
 # Reuse only the confession bot's thread-naming helper so the reply thread is
 # named after the prompt, exactly like the Truth-or-Dare card. Photo Challenge
@@ -69,7 +69,7 @@ class PhotoCog(commands.Cog):
         description="Post a Photo Challenge card and open a thread for everyone's photos!",
     )
     @app_commands.describe(
-        tags="Comma-separated tags to filter the prompt bank (include 'nsfw' to allow NSFW)",
+        tags="Comma-separated tags to filter the prompt bank",
         prompt="Write your own challenge instead of pulling one from the bank (optional)",
     )
     async def photo(
@@ -110,7 +110,10 @@ class PhotoCog(commands.Cog):
         # can give a friendly notice (instead of a generic error) if it's empty.
         text = custom
         if not text:
-            text = await get_photo_prompt(self.db, tags=tag_list or None)
+            text = await get_photo_prompt(
+                self.db, tags=tag_list or None,
+                allow_nsfw=channel_allows_nsfw(interaction.channel),
+            )
             if not text:
                 msg = (
                     f"📸 No photo challenges match tags: {', '.join(tag_list)}."
@@ -155,13 +158,15 @@ class PhotoCog(commands.Cog):
         """
         custom = (options.get("prompt") or "").strip()
         tags = list(options.get("tags") or [])
-        # Backward-compat: legacy scheduled games stored {"nsfw": true}.
-        if options.get("nsfw") and "nsfw" not in tags:
-            tags.append("nsfw")
 
-        text = custom or await get_photo_prompt(self.db, tags=tags or None)
+        text = custom or await get_photo_prompt(
+            self.db, tags=tags or None, allow_nsfw=channel_allows_nsfw(channel)
+        )
         if not text:
-            log.info("photo launch: bank empty for tags=%s in channel %s", tags, channel.id)
+            log.warning(
+                "photo launch: bank empty for tags=%s in channel %s — scheduled run skipped; "
+                "add prompts in the Games Studio", tags, channel.id,
+            )
             return None
 
         guild = getattr(channel, "guild", None)

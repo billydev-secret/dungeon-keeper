@@ -88,11 +88,9 @@ SCHEDULE_OPTION_SCHEMA = {
          'choices': [{'value': 'random', 'label': 'Random'},
                      {'value': 'truth', 'label': 'Truth'},
                      {'value': 'dare', 'label': 'Dare'}]},
-        {'name': 'nsfw', 'label': 'Use spicier (NSFW) prompts', 'type': 'bool', 'default': False},
         {'name': 'prompt', 'label': 'Custom prompt (optional)', 'type': 'str', 'default': ''},
     ],
     'photo': [
-        {'name': 'nsfw', 'label': 'Use spicier (NSFW) prompts', 'type': 'bool', 'default': False},
         {'name': 'prompt', 'label': 'Custom challenge (optional)', 'type': 'str', 'default': ''},
     ],
     'traditional': [],
@@ -160,8 +158,7 @@ SCHEDULE_OPTION_SCHEMA = {
     'legitlibs': [
         {'name': 'mode', 'label': 'Mode', 'type': 'choice', 'default': 'classic',
          'choices': [{'value': 'classic', 'label': 'Classic (sequential fill)'},
-                     {'value': 'quiplash', 'label': 'Quiplash (all fill, all revealed)'},
-                     {'value': 'hotseat', 'label': 'Hot Seat (author picks best)'}]},
+                     {'value': 'quiplash', 'label': 'Quiplash (all fill, all revealed)'}]},
         {'name': 'tier', 'label': 'Heat tier (1-4)', 'type': 'int', 'default': 2, 'min': 1, 'max': 4},
     ],
     'risky_roll': [
@@ -182,8 +179,9 @@ HOW_TO_PLAY = {
         "   • **🎲 Reply Super Anonymously** — a fresh nickname each time\n"
         "3. Anonymous replies are posted into the thread with no attribution "
         "(mods can still see who sent them)\n\n"
-        "💡 The host picks Truth/Dare/random, can toggle the spicier (NSFW) bank, "
-        "or write their own prompt — and can schedule an automated series from the dashboard."
+        "💡 The host picks Truth/Dare/random or writes their own prompt — and can schedule "
+        "an automated series from the dashboard. Spicier (NSFW) prompts appear only in "
+        "channels marked age-restricted in Discord."
     ),
     'photo': (
         "📸 **Photo Challenge**\n"
@@ -192,8 +190,8 @@ HOW_TO_PLAY = {
         "2. Reply right in the thread with your photo\n"
         "3. Browse everyone else's takes as they roll in\n\n"
         "💡 Challenges are curated in the **Games Studio** (web dashboard). The host "
-        "can toggle the spicier (NSFW) bank, write their own challenge, or schedule "
-        "an automated series."
+        "can write their own challenge or schedule an automated series. Spicier (NSFW) "
+        "challenges appear only in channels marked age-restricted in Discord."
     ),
     'traditional': (
         "🎲 **Truth or Dare**\n"

@@ -16,30 +16,34 @@ from __future__ import annotations
 
 SUPPORT_INVITE_URL = "https://discord.gg/7gfbYYkH"
 
-# Slash command name for each game.
+# Slash command name for each game. The party games launch under the
+# ``/games play`` group; the duel/standalone games (pressure, risky_roll)
+# have their own entry points.
 GAME_COMMANDS: dict[str, str] = {
-    "ffa": "/ffa",
-    "photo": "/photo",
-    "traditional": "/traditional",
-    "compliment": "/compliment",
-    "mfk": "/mfk",
-    "wyr": "/wyr",
-    "nhie": "/nhie",
-    "mlt": "/mlt",
-    "ttl": "/twotruths",
-    "hottakes": "/hottakes",
-    "story": "/story",
-    "ama": "/ama",
-    "fantasies": "/fantasies",
-    "price": "/price",
-    "rushmore": "/rushmore",
-    "clapback": "/clapback",
-    "legitlibs": "/legitlibs",
+    "ffa": "/games play ffa",
+    "photo": "/games play photo",
+    "traditional": "/games play traditional",
+    "compliment": "/games play compliment",
+    "mfk": "/games play mfk",
+    "wyr": "/games play wyr",
+    "nhie": "/games play nhie",
+    "mlt": "/games play mlt",
+    "ttl": "/games play twotruths",
+    "hottakes": "/games play hottakes",
+    "story": "/games play story",
+    "ama": "/games play ama",
+    "fantasies": "/games play fantasies",
+    "price": "/games play price",
+    "rushmore": "/games play rushmore",
+    "clapback": "/games play clapback",
+    "legitlibs": "/games play legitlibs",
+    "pressure": "/games pressure challenge",
+    "risky_roll": "/risky start",
 }
 
 # Short one-line descriptions for the help list.
 GAME_DESCRIPTIONS: dict[str, str] = {
-    "ffa": "Ask the server a question — everyone replies.",
+    "ffa": "A Truth or Dare card drops — answer in the thread, anonymously if you like.",
     "photo": "Drop a photo challenge — everyone posts their shot in the thread.",
     "traditional": "Classic truth or dare with SFW/NSFW categories.",
     "compliment": "Random pairings — give your match a compliment.",
@@ -59,13 +63,15 @@ GAME_DESCRIPTIONS: dict[str, str] = {
         "Fill in the blanks to complete a story — everyone gets their "
         "own unhinged version."
     ),
+    "pressure": "1v1 pressure duel — pump the gauge, don't be the one who pops it.",
+    "risky_roll": "Roll the dice — the highest and lowest rolls face off with a question.",
 }
 
 
 OTHER_COMMANDS_VALUE: str = (
-    "`/consent` — Manage your opt-in/opt-out settings\n"
-    "`/consent-status` — Check your current consent status\n"
-    "`/session-recap` — Recap of the current game night\n"
-    "`/games` — Admin channel/game management\n"
-    "`/games-support` — Join the support Discord server"
+    "`/games help` — Browse every game mode\n"
+    "`/games support` — Join the support Discord server\n"
+    "`/recap` — Recap of the current game night\n"
+    "`/games end` — End the game running in this channel\n"
+    "`/games join` · `/games leave` — Hop into or out of a running game"
 )

@@ -18,7 +18,11 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
-from bot_modules.games.utils.question_source import get_nhie_statement, has_matching_questions
+from bot_modules.games.utils.question_source import (
+    get_nhie_statement,
+    has_matching_questions,
+    channel_allows_nsfw,
+)
 from bot_modules.games_nhie.embeds import (
     build_recap_embed,
     build_round_embed,
@@ -192,7 +196,7 @@ class NHIECog(commands.Cog):
     @app_commands.describe(
         question="Opening statement (e.g. 'gone skydiving') — defaults to question bank",
         lives="Number of lives per player (default 3, 0 = no elimination)",
-        tags="Comma-separated tags to filter the question bank (include 'nsfw' to allow NSFW)",
+        tags="Comma-separated tags to filter the question bank",
     )
     async def nhie(
         self,
@@ -213,7 +217,9 @@ class NHIECog(commands.Cog):
             return
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and not question.strip() and not await has_matching_questions(self.db, "nhie", tag_list):
+        if tag_list and not question.strip() and not await has_matching_questions(
+            self.db, "nhie", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
+        ):
             await interaction.response.send_message(
                 f"No questions match tags: {', '.join(tag_list)} for this game.",
                 ephemeral=True,
@@ -301,7 +307,9 @@ class NHIECog(commands.Cog):
             statement = custom_statement
         else:
             tags = (await get_game_payload(self.db, game_id)).get("tags") or None
-            statement = await get_nhie_statement(self.db, tags=tags)
+            statement = await get_nhie_statement(
+                self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel)
+            )
         if not statement:
             await channel.send(
                 "❌ The statement bank is empty! Use **✍️ Pose Statement** to submit your own, "

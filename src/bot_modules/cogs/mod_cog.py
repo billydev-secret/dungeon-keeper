@@ -257,9 +257,8 @@ def _build_help_pages(
             + "\n\n**Settings & help**\n"
             + _fmt(
                 [
-                    ("/consent", "Configure which game modes can pull you in."),
-                    ("/games-help", "Full game-mode browser."),
-                    ("/games-support", "Link to the support server."),
+                    ("/games help", "Full game-mode browser."),
+                    ("/games support", "Link to the support server."),
                 ]
             ),
         )

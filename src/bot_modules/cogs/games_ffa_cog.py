@@ -15,7 +15,11 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games.command_groups import play
 from bot_modules.games_ffa.prompts import label_for_kind
-from bot_modules.games.utils.question_source import get_ffa_prompt, has_matching_questions
+from bot_modules.games.utils.question_source import (
+    get_ffa_prompt,
+    has_matching_questions,
+    channel_allows_nsfw,
+)
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
 # Reuse the confession bot's anonymous-identity machinery so replies look and
 # behave exactly like confession replies. These live in the confessions DB
@@ -199,7 +203,7 @@ class FFACog(commands.Cog):
     )
     @app_commands.describe(
         kind="Truth, Dare, or a random pick (default: random)",
-        tags="Comma-separated tags to filter the prompt bank (include 'nsfw' to allow NSFW)",
+        tags="Comma-separated tags to filter the prompt bank",
         prompt="Write your own prompt instead of pulling a random one (optional)",
     )
     async def ffa(
@@ -233,7 +237,9 @@ class FFACog(commands.Cog):
             return
 
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and not (prompt or "").strip() and not await has_matching_questions(self.db, "ffa", tag_list):
+        if tag_list and not (prompt or "").strip() and not await has_matching_questions(
+            self.db, "ffa", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
+        ):
             await interaction.response.send_message(
                 f"No prompts match tags: {', '.join(tag_list)} for this game.",
                 ephemeral=True,
@@ -270,15 +276,15 @@ class FFACog(commands.Cog):
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         kind = (options.get("kind") or "random").lower()
         tags = list(options.get("tags") or [])
-        # Backward-compat: legacy scheduled games stored {"nsfw": true}.
-        if options.get("nsfw") and "nsfw" not in tags:
-            tags.append("nsfw")
         custom = (options.get("prompt") or "").strip()
 
         if custom:
             label, text = label_for_kind(kind), custom
         else:
-            picked = await get_ffa_prompt(self.db, kind=kind, tags=tags or None)
+            picked = await get_ffa_prompt(
+                self.db, kind=kind, tags=tags or None,
+                allow_nsfw=channel_allows_nsfw(channel),
+            )
             if picked is None:
                 log.info("ffa launch: no prompt for kind=%s tags=%s in channel %s", kind, tags, channel.id)
                 return None
