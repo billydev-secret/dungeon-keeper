@@ -31,6 +31,8 @@ source = ["src"]
 "scripts/*.py" = ["E402"]
 "tests/conftest.py" = ["E402"]
 "tests/web/conftest.py" = ["E402"]
+# Section-organized test: imports intentionally grouped with their test block.
+"tests/test_games_ffa_logic.py" = ["E402"]
 
 [tool.pyright]
 pythonVersion = "3.10"
