@@ -153,26 +153,7 @@ def main() -> None:
     # Cog extensions
     # ==============================
     bot.ctx = ctx
-    bot.games_db = GamesDb(db_path)  # type: ignore[attr-defined]
-    bot.active_views: dict = {}  # type: ignore[attr-defined]
-    # Registry of interaction-free game launchers, keyed by game_type. Each party
-    # game cog registers its launch() here in setup(); the scheduler calls them.
-    bot.game_launchers: dict = {}  # type: ignore[attr-defined]
-    # Registry of crash-recovery handlers, keyed by game_type. Each party game
-    # cog registers its recover_game() here in setup(); the startup recovery
-    # task re-registers in-flight games' views/timers after a restart.
-    bot.game_recoverers: dict = {}  # type: ignore[attr-defined]
-    # Registry of optional "channel busy" checks, keyed by game_type. Games that
-    # track active rounds outside the games_active_games table (e.g. risky_roll,
-    # in-memory) register an async check(channel_id) -> bool here so the scheduler
-    # can see they're busy and skip the occurrence instead of pinging then failing.
-    bot.game_busy_checks: dict = {}  # type: ignore[attr-defined]
-    # Registries of mid-game roster handlers, keyed by game_type. Roster-based
-    # games register async add/remove callbacks here in setup(); the /games
-    # join and /games leave commands dispatch to them so people can join or
-    # leave a game that's already running.
-    bot.game_joiners: dict = {}  # type: ignore[attr-defined]
-    bot.game_leavers: dict = {}  # type: ignore[attr-defined]
+    bot.games_db = GamesDb(db_path)
     bot.extension_names = [
         "bot_modules.cogs.events_cog",
         "bot_modules.cogs.role_grant_cog",

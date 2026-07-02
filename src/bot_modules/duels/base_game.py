@@ -60,7 +60,7 @@ class BaseGame(commands.Cog):
 
     @property
     def db(self):
-        return self.bot.games_db  # type: ignore[attr-defined]
+        return self.bot.games_db
 
     def _get_lock(self, game_id: int) -> asyncio.Lock:
         if game_id not in self._game_locks:

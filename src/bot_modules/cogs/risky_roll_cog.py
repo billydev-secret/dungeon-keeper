@@ -412,5 +412,5 @@ class RiskyRollCog(commands.Cog):
 async def setup(bot: Bot) -> None:
     cog = RiskyRollCog(bot, bot.ctx)
     await bot.add_cog(cog)
-    bot.game_launchers["risky_roll"] = cog.launch  # type: ignore[attr-defined]
-    bot.game_busy_checks["risky_roll"] = cog.channel_has_active_round  # type: ignore[attr-defined]
+    bot.game_launchers["risky_roll"] = cog.launch
+    bot.game_busy_checks["risky_roll"] = cog.channel_has_active_round

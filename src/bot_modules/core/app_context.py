@@ -7,7 +7,7 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypedDict
 from collections.abc import Callable, Coroutine
 
 import discord
@@ -28,6 +28,10 @@ from bot_modules.core.db_utils import (
     set_config_value as _db_set_config_value,
 )
 from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS, XpSettings, load_xp_settings
+
+if TYPE_CHECKING:
+    from bot_modules.games.utils.recovery import RecoverySentinel
+    from bot_modules.services.games_db import GamesDb
 
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
@@ -166,8 +170,53 @@ def load_runtime_config(db_path: Path, *, debug: bool, default_guild_id: int = 0
         }
 
 
+# ---------------------------------------------------------------------------
+# Game runtime registry types
+# ---------------------------------------------------------------------------
+# Value stored in ``Bot.active_views``: the live top-level View for a game, or
+# a RecoverySentinel placeholder while a crashed game is being re-driven.
+ActiveGameView: TypeAlias = "discord.ui.View | RecoverySentinel"
+
+
+class GameLauncher(Protocol):
+    """Interaction-free game launcher, registered per game_type in cog setup().
+
+    Called by the scheduler and /games start. Returns the new game_id, or
+    ``None`` when the launch was refused (missing perms, channel busy, ...).
+    ``channel`` is deliberately ``Any``: channel-union narrowing is an
+    explicit follow-up outside this refactor.
+    """
+
+    def __call__(
+        self,
+        *,
+        channel: Any,
+        host_id: int,
+        host_name: str,
+        guild_id: int,
+        options: dict[str, Any],
+    ) -> Coroutine[Any, Any, str | None]: ...
+
+
+# Crash-recovery handler: (games_active_games row, decoded JSON payload,
+# resolved anchor channel, anchor message or None) -> True if re-armed.
+GameRecoverer: TypeAlias = Callable[
+    [sqlite3.Row, dict[str, Any], Any, discord.Message | None],
+    Coroutine[Any, Any, bool],
+]
+# Optional "channel busy" check for games that track active rounds outside
+# the games_active_games table (e.g. risky_roll, in-memory).
+GameBusyCheck: TypeAlias = Callable[[int], Coroutine[Any, Any, bool]]
+# Mid-game roster handler: (channel, game_id, member) -> (ok, user_message).
+GameRosterHandler: TypeAlias = Callable[
+    [Any, str, discord.Member],
+    Coroutine[Any, Any, tuple[bool, str]],
+]
+
+
 class Bot(commands.Bot):
     ctx: AppContext  # set by the entry point before bot.run()
+    games_db: GamesDb  # set by the entry point before bot.run() (needs db_path)
 
     def __init__(self, *, intents: discord.Intents, debug: bool, guild_id: int | str):
         super().__init__(intents=intents, command_prefix=commands.when_mentioned)
@@ -176,6 +225,31 @@ class Bot(commands.Bot):
         self.startup_task_factories: list[Callable[[], Coroutine[Any, Any, None]]] = []
         self.startup_tasks: list[asyncio.Task[None]] = []
         self.extension_names: list[str] = []
+        # Game runtime registries. Created here (not injected by the entry
+        # point) so they exist before setup_hook() loads extensions — cog
+        # setup() functions write into them.
+        # Live views (or RecoverySentinel placeholders) for in-flight games,
+        # keyed by game_id.
+        self.active_views: dict[str, ActiveGameView] = {}
+        # Interaction-free launchers, keyed by game_type. Each party game cog
+        # registers its launch() here in setup(); the scheduler calls them.
+        self.game_launchers: dict[str, GameLauncher] = {}
+        # Crash-recovery handlers, keyed by game_type. Each party game cog
+        # registers its recover_game() here in setup(); the startup recovery
+        # task re-registers in-flight games' views/timers after a restart.
+        self.game_recoverers: dict[str, GameRecoverer] = {}
+        # Optional "channel busy" checks, keyed by game_type. Games that track
+        # active rounds outside the games_active_games table (e.g. risky_roll,
+        # in-memory) register an async check(channel_id) -> bool here so the
+        # scheduler can see they're busy and skip the occurrence instead of
+        # pinging then failing.
+        self.game_busy_checks: dict[str, GameBusyCheck] = {}
+        # Mid-game roster handlers, keyed by game_type. Roster-based games
+        # register async add/remove callbacks here in setup(); /games join and
+        # /games leave dispatch to them so people can join or leave a game
+        # that's already running.
+        self.game_joiners: dict[str, GameRosterHandler] = {}
+        self.game_leavers: dict[str, GameRosterHandler] = {}
 
     async def setup_hook(self) -> None:
         from bot_modules.services.command_sync import sync_if_changed
