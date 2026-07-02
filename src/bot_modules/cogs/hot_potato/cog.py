@@ -1,6 +1,11 @@
 """Hot Potato cog — pass-the-bomb nickname duel."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import json
 import logging
@@ -9,7 +14,6 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
@@ -30,7 +34,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
     GAME_KEY = "hot_potato"
     GAME_DISPLAY_NAME = "Hot Potato"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
 
@@ -500,7 +504,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         )
 
 
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = HotPotatoDuel(bot)
     await bot.add_cog(cog)
     for name in ("cancel", "stats", "config"):

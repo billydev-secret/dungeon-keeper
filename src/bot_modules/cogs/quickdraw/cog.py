@@ -1,6 +1,11 @@
 """Quickdraw cog — slash commands and BaseDuel implementation."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import logging
 import random
@@ -8,7 +13,6 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
@@ -28,7 +32,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
     GAME_KEY = "quickdraw"
     GAME_DISPLAY_NAME = "Quickdraw"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
 
@@ -655,7 +659,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         )
 
 
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = QuickdrawDuel(bot)
     await bot.add_cog(cog)
     for name in ("cancel", "revert", "stats", "config"):

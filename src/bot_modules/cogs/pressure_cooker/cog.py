@@ -1,13 +1,17 @@
 """Pressure Cooker cog — slash commands and BaseDuel implementation."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import json
 import logging
 import random
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_duel import BaseDuel
@@ -366,7 +370,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         )
 
 
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = PressureCookerDuel(bot)
     await bot.add_cog(cog)
     for name in ("cancel", "revert", "stats", "config"):

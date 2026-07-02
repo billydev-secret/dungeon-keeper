@@ -1,6 +1,11 @@
 """Chicken cog — brinkmanship for 2..N players. Hold your nerve or bail before the crash."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import json
 import logging
@@ -8,7 +13,6 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
@@ -37,7 +41,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     GAME_KEY = "chicken"
     GAME_DISPLAY_NAME = "Chicken"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         # Chicken runs TWO concurrent tasks per game: the crash deadline + the meter
         # ticker that edits the embed as the bar climbs.
@@ -458,7 +462,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         )
 
 
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = ChickenCog(bot)
     await bot.add_cog(cog)
     for name in ("stats", "config"):

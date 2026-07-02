@@ -357,7 +357,11 @@ class EventsCog(commands.Cog):
     async def on_message(self, message: discord.Message) -> None:
         if not message.guild:
             return
-        cfg = self.ctx.guild_config(message.guild.id)
+        # Bound to a local so the narrowing survives into the _persist_*
+        # closures below (pyright can't narrow `message.guild` across a
+        # nested-function boundary).
+        guild_id = message.guild.id
+        cfg = self.ctx.guild_config(guild_id)
         is_bot_author = message.author.bot
         # At storage level "none" (the default) content/media are dropped, so
         # skip building the attachment/embed payloads that store_message would
@@ -381,10 +385,10 @@ class EventsCog(commands.Cog):
 
             def _persist_bot_message():
                 with self.ctx.open_db() as conn:
-                    if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+                    if auto_delete_rule_exists(conn, guild_id, message.channel.id):
                         track_auto_delete_message(
                             conn,
-                            message.guild.id,
+                            guild_id,
                             message.channel.id,
                             message.id,
                             message_ts,
@@ -392,7 +396,7 @@ class EventsCog(commands.Cog):
                     store_message(
                         conn,
                         message_id=message.id,
-                        guild_id=message.guild.id,
+                        guild_id=guild_id,
                         channel_id=message.channel.id,
                         author_id=message.author.id,
                         content=_archived_message_content(message),
@@ -415,7 +419,7 @@ class EventsCog(commands.Cog):
                             "VALUES (?, ?, ?, ?, ?, ?)",
                             (
                                 message.id,
-                                message.guild.id,
+                                guild_id,
                                 message.channel.id,
                                 sentiment,
                                 emotion,
@@ -424,7 +428,7 @@ class EventsCog(commands.Cog):
                         )
                     upsert_known_user(
                         conn,
-                        guild_id=message.guild.id,
+                        guild_id=guild_id,
                         user_id=message.author.id,
                         username=str(message.author),
                         display_name=message.author.display_name,
@@ -433,7 +437,7 @@ class EventsCog(commands.Cog):
                     )
                     upsert_known_channel(
                         conn,
-                        guild_id=message.guild.id,
+                        guild_id=guild_id,
                         channel_id=message.channel.id,
                         channel_name=getattr(message.channel, "name", str(message.channel.id)),
                         ts=message_ts,
@@ -448,10 +452,10 @@ class EventsCog(commands.Cog):
 
             def _persist_nonmember_message():
                 with self.ctx.open_db() as conn:
-                    if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+                    if auto_delete_rule_exists(conn, guild_id, message.channel.id):
                         track_auto_delete_message(
                             conn,
-                            message.guild.id,
+                            guild_id,
                             message.channel.id,
                             message.id,
                             message_ts,
@@ -459,7 +463,7 @@ class EventsCog(commands.Cog):
                     store_message(
                         conn,
                         message_id=message.id,
-                        guild_id=message.guild.id,
+                        guild_id=guild_id,
                         channel_id=message.channel.id,
                         author_id=message.author.id,
                         content=archive_content,
@@ -475,7 +479,7 @@ class EventsCog(commands.Cog):
                     )
                     upsert_known_user(
                         conn,
-                        guild_id=message.guild.id,
+                        guild_id=guild_id,
                         user_id=message.author.id,
                         username=str(message.author),
                         display_name=message.author.display_name,
@@ -483,7 +487,7 @@ class EventsCog(commands.Cog):
                     )
                     upsert_known_channel(
                         conn,
-                        guild_id=message.guild.id,
+                        guild_id=guild_id,
                         channel_id=message.channel.id,
                         channel_name=getattr(
                             message.channel, "name", str(message.channel.id)
@@ -515,16 +519,16 @@ class EventsCog(commands.Cog):
             with self.ctx.open_db() as conn:
                 record_member_activity(
                     conn,
-                    message.guild.id,
+                    guild_id,
                     message.author.id,
                     message.channel.id,
                     message.id,
                     message_ts,
                 )
-                if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+                if auto_delete_rule_exists(conn, guild_id, message.channel.id):
                     track_auto_delete_message(
                         conn,
-                        message.guild.id,
+                        guild_id,
                         message.channel.id,
                         message.id,
                         message_ts,
@@ -533,7 +537,7 @@ class EventsCog(commands.Cog):
                 store_message(
                     conn,
                     message_id=message.id,
-                    guild_id=message.guild.id,
+                    guild_id=guild_id,
                     channel_id=message.channel.id,
                     author_id=message.author.id,
                     content=archive_content,
@@ -557,7 +561,7 @@ class EventsCog(commands.Cog):
                         "VALUES (?, ?, ?, ?, ?, ?)",
                         (
                             message.id,
-                            message.guild.id,
+                            guild_id,
                             message.channel.id,
                             sentiment,
                             emotion,
@@ -567,7 +571,7 @@ class EventsCog(commands.Cog):
 
                 upsert_known_user(
                     conn,
-                    guild_id=message.guild.id,
+                    guild_id=guild_id,
                     user_id=message.author.id,
                     username=str(message.author),
                     display_name=message.author.display_name,
@@ -577,7 +581,7 @@ class EventsCog(commands.Cog):
 
                 upsert_known_channel(
                     conn,
-                    guild_id=message.guild.id,
+                    guild_id=guild_id,
                     channel_id=message.channel.id,
                     channel_name=getattr(message.channel, "name", str(message.channel.id)),
                     ts=message_ts,
@@ -599,7 +603,7 @@ class EventsCog(commands.Cog):
                 if interaction_targets:
                     record_interactions(
                         conn,
-                        message.guild.id,
+                        guild_id,
                         message.author.id,
                         interaction_targets,
                         ts=int(message_ts),
@@ -671,6 +675,8 @@ class EventsCog(commands.Cog):
             )
 
         if payload.guild_id:
+            gid = payload.guild_id  # bind so narrowing survives into the closure
+
             def _record_reaction_add():
                 with self.ctx.open_db() as conn:
                     adjust_reaction_count(conn, payload.message_id, str(payload.emoji), +1)
@@ -681,7 +687,7 @@ class EventsCog(commands.Cog):
                     if row and payload.user_id != int(row["author_id"]):
                         record_reaction(
                             conn,
-                            guild_id=payload.guild_id,
+                            guild_id=gid,
                             reactor_id=payload.user_id,
                             author_id=int(row["author_id"]),
                             channel_id=int(row["channel_id"]),

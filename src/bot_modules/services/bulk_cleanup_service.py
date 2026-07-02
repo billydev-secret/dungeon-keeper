@@ -98,7 +98,7 @@ def _excluded_ids(conn, guild_id: int) -> set[int]:
 
 async def _collect_targets(
     guild: discord.Guild, excluded: set[int]
-) -> list[discord.abc.Messageable]:
+) -> list[discord.TextChannel | discord.Thread]:
     """Gather every sweepable channel/thread in the guild, minus exclusions.
 
     Covers top-level text channels (which hold messages directly) plus the active
@@ -114,8 +114,8 @@ async def _collect_targets(
         perms = ch.permissions_for(me)
         return perms.read_message_history and perms.manage_messages
 
-    targets: list[discord.abc.Messageable] = []
-    parents: list[discord.abc.GuildChannel] = [
+    targets: list[discord.TextChannel | discord.Thread] = []
+    parents: list[discord.TextChannel | discord.ForumChannel] = [
         *guild.text_channels,
         *guild.forums,
     ]
@@ -170,7 +170,7 @@ async def run_bulk_cleanup_for_guild(
     total_deleted = 0
     total_failed = 0
 
-    async def _one(ch: discord.abc.Messageable) -> None:
+    async def _one(ch: discord.TextChannel | discord.Thread) -> None:
         nonlocal total_deleted, total_failed
         async with sem:
             try:

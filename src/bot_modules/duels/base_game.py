@@ -9,6 +9,11 @@ N>2 is added by `lobby.py` helpers and the group cogs.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import collections
 import json
@@ -46,7 +51,7 @@ class BaseGame(commands.Cog):
     GAME_KEY: str = ""
     GAME_DISPLAY_NAME: str = ""
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         self.bot = bot
         self._game_locks: dict[int, asyncio.Lock] = {}
         self._challenge_rate: dict[int, collections.deque] = collections.defaultdict(

@@ -45,7 +45,8 @@ def dominant_highlight_color(image_bytes: bytes) -> Optional[discord.Colour]:
 
     # bucket key -> [count, r_sum, g_sum, b_sum]
     buckets: dict[tuple[int, int, int], list[int]] = {}
-    for r, g, b, a in img.getdata():
+    # convert("RGBA") guarantees 4-tuples; PIL's stubs type getdata() loosely.
+    for r, g, b, a in img.getdata():  # pyright: ignore[reportGeneralTypeIssues]
         if a < 128:
             continue
         key = (r >> 4, g >> 4, b >> 4)

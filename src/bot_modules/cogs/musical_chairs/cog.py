@@ -1,6 +1,11 @@
 """Musical Chairs cog — reflex elimination for 3..N players."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
+
 import asyncio
 import json
 import logging
@@ -9,7 +14,6 @@ import time
 
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
@@ -29,7 +33,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     GAME_KEY = "musical_chairs"
     GAME_DISPLAY_NAME = "Musical Chairs"
 
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
         self._timers: dict[int, asyncio.Task] = {}
 
@@ -484,7 +488,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         )
 
 
-async def setup(bot: commands.Bot) -> None:
+async def setup(bot: Bot) -> None:
     cog = MusicalChairsCog(bot)
     await bot.add_cog(cog)
     for name in ("stats", "config"):
