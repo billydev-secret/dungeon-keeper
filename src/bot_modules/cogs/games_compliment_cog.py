@@ -229,5 +229,5 @@ async def setup(bot: commands.Bot):
     cog = ComplimentCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("compliment")
-    play.add_command(cog.compliment)
+    play.add_command(cog.compliment, override=True)
     bot.game_launchers["compliment"] = cog.launch

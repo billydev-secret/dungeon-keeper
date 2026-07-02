@@ -19,10 +19,13 @@ from bot_modules.games.utils.game_manager import (
 
 log = logging.getLogger(__name__)
 
+# NOTE: no `parent=games` here — that auto-registers into games._children at
+# import time, which collides (CommandAlreadyRegistered) on hot-reload since the
+# old `dev` still lives in the restored `games` group. Attach it in setup() with
+# override=True instead.
 dev = app_commands.Group(
     name="dev",
     description="Developer tools for testing games.",
-    parent=games,
 )
 
 _FAKE_ANSWERS = [
@@ -187,5 +190,6 @@ async def setup(bot: commands.Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("fill")
     bot.tree.remove_command("answer")
-    dev.add_command(cog.dev_fill)
-    dev.add_command(cog.dev_answer)
+    games.add_command(dev, override=True)
+    dev.add_command(cog.dev_fill, override=True)
+    dev.add_command(cog.dev_answer, override=True)

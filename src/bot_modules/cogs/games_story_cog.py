@@ -501,6 +501,6 @@ async def setup(bot: commands.Bot):
     cog = StoryCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("story")
-    play.add_command(cog.story)
+    play.add_command(cog.story, override=True)
     bot.game_launchers["story"] = cog.launch
     bot.game_recoverers["story"] = cog.recover_game

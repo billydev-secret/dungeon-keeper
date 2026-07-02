@@ -235,5 +235,5 @@ async def setup(bot: commands.Bot):
     cog = PhotoCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("photo")
-    play.add_command(cog.photo)
+    play.add_command(cog.photo, override=True)
     bot.game_launchers["photo"] = cog.launch

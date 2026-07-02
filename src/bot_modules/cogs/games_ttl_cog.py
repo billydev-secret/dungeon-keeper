@@ -523,6 +523,6 @@ async def setup(bot: commands.Bot):
     cog = TTLCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("twotruths")
-    play.add_command(cog.twotruths)
+    play.add_command(cog.twotruths, override=True)
     bot.game_launchers["ttl"] = cog.launch
     bot.game_recoverers["ttl"] = cog.recover_game

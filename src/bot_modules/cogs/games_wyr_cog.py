@@ -479,6 +479,6 @@ async def setup(bot: commands.Bot):
     cog = WYRCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("wyr")
-    play.add_command(cog.wyr)
+    play.add_command(cog.wyr, override=True)
     bot.game_launchers["wyr"] = cog.launch
     bot.game_recoverers["wyr"] = cog.recover_game

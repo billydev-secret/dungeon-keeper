@@ -359,5 +359,5 @@ async def setup(bot: commands.Bot):
     cog = FFACog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("ffa")
-    play.add_command(cog.ffa)
+    play.add_command(cog.ffa, override=True)
     bot.game_launchers["ffa"] = cog.launch

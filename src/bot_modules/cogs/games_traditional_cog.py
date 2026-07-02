@@ -314,6 +314,6 @@ async def setup(bot: commands.Bot):
     cog = TraditionalCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("traditional")
-    play.add_command(cog.traditional)
+    play.add_command(cog.traditional, override=True)
     bot.game_launchers["traditional"] = cog.launch
     bot.game_recoverers["traditional"] = cog.recover_game

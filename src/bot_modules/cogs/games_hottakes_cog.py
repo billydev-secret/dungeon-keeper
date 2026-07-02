@@ -484,7 +484,7 @@ async def setup(bot: commands.Bot):
     cog = HotTakesCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("hottakes")
-    play.add_command(cog.hottakes)
+    play.add_command(cog.hottakes, override=True)
     bot.game_launchers["hottakes"] = cog.launch
     bot.game_recoverers["hottakes"] = cog.recover_game
 

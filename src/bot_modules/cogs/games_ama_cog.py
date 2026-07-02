@@ -1254,5 +1254,5 @@ async def setup(bot: commands.Bot):
     cog = AMACog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("ama")
-    play.add_command(cog.ama)
+    play.add_command(cog.ama, override=True)
     bot.game_launchers["ama"] = cog.launch

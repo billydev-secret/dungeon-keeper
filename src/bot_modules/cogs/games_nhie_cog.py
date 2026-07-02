@@ -534,6 +534,6 @@ async def setup(bot: commands.Bot):
     cog = NHIECog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("nhie")
-    play.add_command(cog.nhie)
+    play.add_command(cog.nhie, override=True)
     bot.game_launchers["nhie"] = cog.launch
     bot.game_recoverers["nhie"] = cog.recover_game

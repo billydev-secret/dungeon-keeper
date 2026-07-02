@@ -237,6 +237,6 @@ async def setup(bot: commands.Bot):
     cog = MFKCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("mfk")
-    play.add_command(cog.mfk)
+    play.add_command(cog.mfk, override=True)
     bot.game_launchers["mfk"] = cog.launch
     bot.game_recoverers["mfk"] = cog.recover_game

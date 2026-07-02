@@ -648,7 +648,7 @@ async def setup(bot: commands.Bot):
     cog = MLTCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("mlt")
-    play.add_command(cog.mlt)
+    play.add_command(cog.mlt, override=True)
     bot.game_launchers["mlt"] = cog.launch
     bot.game_recoverers["mlt"] = cog.recover_game
     bot.game_joiners["mlt"] = cog.mid_game_join

@@ -1102,7 +1102,7 @@ async def setup(bot: commands.Bot):
     cog = ClapbackCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("clapback")
-    play.add_command(cog.clapback)
+    play.add_command(cog.clapback, override=True)
     bot.game_launchers["clapback"] = cog.launch
     bot.game_recoverers["clapback"] = cog.recover_game
     bot.game_joiners["clapback"] = cog.mid_game_join

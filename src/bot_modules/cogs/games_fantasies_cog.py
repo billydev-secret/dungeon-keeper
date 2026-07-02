@@ -479,6 +479,6 @@ async def setup(bot: commands.Bot):
     cog = FantasiesCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("fantasies")
-    play.add_command(cog.fantasies)
+    play.add_command(cog.fantasies, override=True)
     bot.game_launchers["fantasies"] = cog.launch
     bot.game_recoverers["fantasies"] = cog.recover_game

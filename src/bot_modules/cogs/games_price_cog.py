@@ -1106,6 +1106,6 @@ async def setup(bot: commands.Bot):
     cog = PriceCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("price")
-    play.add_command(cog.price_cmd)
+    play.add_command(cog.price_cmd, override=True)
     bot.game_launchers["price"] = cog.launch
     bot.game_recoverers["price"] = cog.recover_game

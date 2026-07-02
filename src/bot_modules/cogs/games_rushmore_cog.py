@@ -964,6 +964,6 @@ async def setup(bot: commands.Bot):
     cog = RushmoreCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("rushmore")
-    play.add_command(cog.rushmore_cmd)
+    play.add_command(cog.rushmore_cmd, override=True)
     bot.game_launchers["rushmore"] = cog.launch
     bot.game_recoverers["rushmore"] = cog.recover_game
