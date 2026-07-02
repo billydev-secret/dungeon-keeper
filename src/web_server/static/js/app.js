@@ -466,17 +466,25 @@ function renderNav(activeId) {
     const group = document.createElement("div");
     group.className = "nav-group";
     group.textContent = sec.label;
+    group.setAttribute("role", "button");
+    group.tabIndex = 0;
     // Collapse by default, except the group containing the active page
     const startCollapsed = !activeSection || sec.id !== activeSection.id;
     if (startCollapsed) group.classList.add("collapsed");
-    group.addEventListener("click", () => {
+    group.setAttribute("aria-expanded", String(!startCollapsed));
+    const toggleGroup = () => {
       group.classList.toggle("collapsed");
       const hidden = group.classList.contains("collapsed");
+      group.setAttribute("aria-expanded", String(!hidden));
       let n = group.nextElementSibling;
       while (n && !n.matches(".nav-group")) {
         n.classList.toggle("group-hidden", hidden);
         n = n.nextElementSibling;
       }
+    };
+    group.addEventListener("click", toggleGroup);
+    group.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGroup(); }
     });
     sidebarItemsEl.appendChild(group);
 
@@ -496,19 +504,27 @@ function renderNav(activeId) {
         const subLabel = document.createElement("div");
         subLabel.className = "nav-subgroup";
         subLabel.textContent = g.heading;
+        subLabel.setAttribute("role", "button");
+        subLabel.tabIndex = 0;
 
         const subgroupActive = g.items.some((item) => item.id === activeId);
         if (!subgroupActive) subLabel.classList.add("collapsed");
+        subLabel.setAttribute("aria-expanded", String(subgroupActive));
 
-        subLabel.addEventListener("click", (ev) => {
-          ev.stopPropagation();
+        const toggleSub = (ev) => {
+          if (ev) ev.stopPropagation();
           subLabel.classList.toggle("collapsed");
           const hidden = subLabel.classList.contains("collapsed");
+          subLabel.setAttribute("aria-expanded", String(!hidden));
           let n = subLabel.nextElementSibling;
           while (n && !n.matches(".nav-subgroup, .nav-group")) {
             n.classList.toggle("subgroup-hidden", hidden);
             n = n.nextElementSibling;
           }
+        };
+        subLabel.addEventListener("click", toggleSub);
+        subLabel.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSub(e); }
         });
 
         sidebarItemsEl.appendChild(subLabel);
