@@ -145,14 +145,7 @@ export function filterSelect(placeholder, options, opts = {}) {
     const els = optionEls();
     if (!els.length) return;
     hi = (idx + els.length) % els.length;
-    els.forEach((el, i) => {
-      const on = i === hi;
-      el.classList.toggle("active", on);
-      // Inline outline is a theme-safe visible cue for sighted keyboard users
-      // (the .active class hook is also set for a future app.css rule).
-      el.style.outline = on ? "2px solid var(--blurple, #5865F2)" : "";
-      el.style.outlineOffset = on ? "-2px" : "";
-    });
+    els.forEach((el, i) => el.classList.toggle("active", i === hi));
     const cur = els[hi];
     input.setAttribute("aria-activedescendant", cur.id);
     cur.scrollIntoView({ block: "nearest" });
@@ -332,12 +325,7 @@ export function multiFilterSelect(placeholder, options, opts = {}) {
     const els = optionEls();
     if (!els.length) return;
     hi = (idx + els.length) % els.length;
-    els.forEach((el, i) => {
-      const on = i === hi;
-      el.classList.toggle("active", on);
-      el.style.outline = on ? "2px solid var(--blurple, #5865F2)" : "";
-      el.style.outlineOffset = on ? "-2px" : "";
-    });
+    els.forEach((el, i) => el.classList.toggle("active", i === hi));
     const cur = els[hi];
     input.setAttribute("aria-activedescendant", cur.id);
     cur.scrollIntoView({ block: "nearest" });

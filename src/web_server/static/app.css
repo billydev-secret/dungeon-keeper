@@ -59,6 +59,7 @@ a { text-decoration: none; }
   display: flex;
   flex-direction: row;
   height: 100vh;
+  height: 100dvh; /* dynamic viewport — avoids iOS Safari toolbar overflow */
 }
 
 /* ── Sidebar shell ────────────────────────────────────────────────── */
@@ -1388,7 +1389,8 @@ textarea.field-input { resize: vertical; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.filter-select-item:hover {
+.filter-select-item:hover,
+.filter-select-item.active {
   background: var(--gold-solid);
   color: #fff;
 }
@@ -2775,9 +2777,32 @@ textarea.field-input { resize: vertical; }
   .field input[type="number"],
   .field textarea { width: 100%; box-sizing: border-box; }
 
+  /* 16px on any input stops iOS Safari from zooming the viewport on focus. */
+  input, select, textarea { font-size: 16px; }
+
+  /* Other wide tables get the same sideways-scroll treatment as .data-table
+     (the panel's overflow-x:hidden would otherwise clip them). */
+  .table, .w-table, .rw-table, .hm-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* 4-up desktop stat grids crowd at phone widths. */
+  .mod-stats { grid-template-columns: 1fr 1fr; }
+
   .health-grid { grid-template-columns: 1fr; }
   .health-status-bar { font-size: 12px; gap: 10px; }
   .risk-signals-cell { min-width: 150px; }
+
+  /* Message search: on iOS Safari the nested flex:1 + overflow scroll region
+     collapses to zero height (results invisible while form/pager still show).
+     Let results flow at content height and the panel handle scrolling. */
+  .msg-results {
+    flex: none;
+    min-height: 0;
+    overflow-y: visible;
+  }
 }
 
 /* ── Scrollable tables inside report cards ────────────────────────── */
