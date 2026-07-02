@@ -47,7 +47,11 @@ class SubmitStatementsModal(discord.ui.Modal):
     )
 
     def __init__(self, game_id: str, db, prompt: str | None = None, origin_message: discord.Message | None = None):
-        super().__init__(title=f"Prompt: {prompt[:70]}" if prompt else "Submit Truths and a Lie")
+        # Discord caps modal titles at 45 chars; truncate the whole title, not
+        # just the prompt, or send_modal 400s (Invalid Form Body) and the button
+        # dies with "interaction failed".
+        title = f"Prompt: {prompt}" if prompt else "Submit Truths and a Lie"
+        super().__init__(title=title[:45])
         self.game_id = game_id
         self.db = db
         self._origin_message = origin_message
