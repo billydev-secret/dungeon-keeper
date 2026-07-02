@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -197,8 +198,13 @@ class BoosterRoleDynamicButton(
             return
 
         ctx = interaction.client._booster_ctx  # type: ignore[attr-defined]
-        with ctx.open_db() as conn:
-            roles = get_booster_roles(conn, guild.id)
+        guild_id = guild.id
+
+        def _do_roles():
+            with ctx.open_db() as conn:
+                return get_booster_roles(conn, guild_id)
+
+        roles = await asyncio.to_thread(_do_roles)
 
         target = next((r for r in roles if r["role_key"] == self.key), None)
         if target is None:

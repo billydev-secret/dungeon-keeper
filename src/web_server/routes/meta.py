@@ -204,18 +204,21 @@ async def meta_roles(
 
     # Fallback: no live Discord cache (e.g. standalone dashboard mode).
     # Derive the list of roles from role_events history in the DB.
-    with ctx.open_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT role_name,
-                   SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS net
-            FROM role_events
-            WHERE guild_id = ?
-            GROUP BY role_name
-            ORDER BY role_name COLLATE NOCASE
-            """,
-            (guild_id,),
-        ).fetchall()
+    def _q():
+        with ctx.open_db() as conn:
+            return conn.execute(
+                """
+                SELECT role_name,
+                       SUM(CASE WHEN action = 'grant' THEN 1 ELSE -1 END) AS net
+                FROM role_events
+                WHERE guild_id = ?
+                GROUP BY role_name
+                ORDER BY role_name COLLATE NOCASE
+                """,
+                (guild_id,),
+            ).fetchall()
+
+    rows = await run_query(_q)
     return [
         RoleMeta(
             id=str(
@@ -335,16 +338,20 @@ async def meta_channels(
     # Fallback: derive channel list from messages table (text channels only).
     if "text" not in requested:
         return []
-    with ctx.open_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT channel_id
-            FROM processed_messages
-            WHERE guild_id = ?
-            ORDER BY channel_id
-            """,
-            (guild_id,),
-        ).fetchall()
+
+    def _q_ch():
+        with ctx.open_db() as conn:
+            return conn.execute(
+                """
+                SELECT DISTINCT channel_id
+                FROM processed_messages
+                WHERE guild_id = ?
+                ORDER BY channel_id
+                """,
+                (guild_id,),
+            ).fetchall()
+
+    rows = await run_query(_q_ch)
     return [
         ChannelMeta(
             id=str(r[0]),

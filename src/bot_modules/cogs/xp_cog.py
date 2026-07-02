@@ -309,16 +309,23 @@ class XpCog(commands.Cog):
             return
 
         now_ts = time.time()
-        with ctx.open_db() as conn:
-            award = apply_xp_award(
-                conn,
-                guild.id,
-                member.id,
-                cfg.xp_settings.manual_grant_xp,
-                event_source=XP_SOURCE_GRANT,
-                event_timestamp=now_ts,
-                settings=cfg.xp_settings,
-            )
+        guild_id = guild.id
+        member_id = member.id
+        xp_settings = cfg.xp_settings
+
+        def _do_xp():
+            with ctx.open_db() as conn:
+                return apply_xp_award(
+                    conn,
+                    guild_id,
+                    member_id,
+                    xp_settings.manual_grant_xp,
+                    event_source=XP_SOURCE_GRANT,
+                    event_timestamp=now_ts,
+                    settings=xp_settings,
+                )
+
+        award = await asyncio.to_thread(_do_xp)
 
         await handle_level_progress(
             member,

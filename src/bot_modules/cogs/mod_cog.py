@@ -449,8 +449,13 @@ class ModCog(commands.Cog):
             )
             return
 
-        with ctx.open_db() as conn:
-            tz_hours = get_tz_offset_hours(conn, interaction.guild_id or 0)
+        guild_id_val = interaction.guild_id or 0
+
+        def _do_get_tz() -> float:
+            with ctx.open_db() as conn:
+                return get_tz_offset_hours(conn, guild_id_val)
+
+        tz_hours = await asyncio.to_thread(_do_get_tz)
 
         after_dt: datetime | None = None
         if after is not None:

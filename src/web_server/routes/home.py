@@ -119,9 +119,14 @@ async def home_data(
     # available via the live guild cache.
     mod_ids: set[int] = set()
     if guild:
-        with ctx.open_db() as _conn_cfg:
-            _mod_raw = get_config_value(_conn_cfg, "mod_role_ids", "")
-            _admin_raw = get_config_value(_conn_cfg, "admin_role_ids", "")
+        def _q_mod():
+            with ctx.open_db() as _conn_cfg:
+                return (
+                    get_config_value(_conn_cfg, "mod_role_ids", ""),
+                    get_config_value(_conn_cfg, "admin_role_ids", ""),
+                )
+
+        _mod_raw, _admin_raw = await run_query(_q_mod)
         _configured_mod_roles = {
             int(x)
             for x in (_mod_raw + "," + _admin_raw).split(",")

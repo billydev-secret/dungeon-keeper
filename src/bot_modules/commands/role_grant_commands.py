@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -133,8 +134,15 @@ async def _execute_grant(
 
     from bot_modules.core.xp_system import log_role_event
 
-    with ctx.open_db() as db_conn:
-        log_role_event(db_conn, guild.id, member.id, role.name, "grant")
+    guild_id = guild.id
+    member_id = member.id
+    role_name = role.name
+
+    def _do_log() -> None:
+        with ctx.open_db() as db_conn:
+            log_role_event(db_conn, guild_id, member_id, role_name, "grant")
+
+    await asyncio.to_thread(_do_log)
 
     log.info(
         "%s granted %s to %s.",

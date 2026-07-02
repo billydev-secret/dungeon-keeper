@@ -1084,20 +1084,26 @@ async def welcome_preview(
     from bot_modules.bios.trigger import resolve_bio_placeholders
     from bot_modules.services.welcome_service import server_guide_mention_for
 
-    with ctx.open_db() as conn:
-        welcome_msg = get_config_value(
-            conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
-        )
-        leave_msg = get_config_value(
-            conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
-        )
-        bio_link, bios_channel_mention = resolve_bio_placeholders(conn, guild_id)
-        try:
-            server_guide_channel_id = int(
-                get_config_value(conn, "server_guide_channel_id", "0", guild_id)
+    def _q():
+        with ctx.open_db() as conn:
+            wm = get_config_value(
+                conn, "welcome_message", DEFAULT_WELCOME_MESSAGE, guild_id
             )
-        except (TypeError, ValueError):
-            server_guide_channel_id = 0
+            lm = get_config_value(
+                conn, "leave_message", DEFAULT_LEAVE_MESSAGE, guild_id
+            )
+            bl, bcm = resolve_bio_placeholders(conn, guild_id)
+            try:
+                sgcid = int(
+                    get_config_value(conn, "server_guide_channel_id", "0", guild_id)
+                )
+            except (TypeError, ValueError):
+                sgcid = 0
+            return wm, lm, bl, bcm, sgcid
+
+    welcome_msg, leave_msg, bio_link, bios_channel_mention, server_guide_channel_id = (
+        await run_query(_q)
+    )
     server_guide_mention = server_guide_mention_for(server_guide_channel_id)
 
     try:
