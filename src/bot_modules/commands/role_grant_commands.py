@@ -6,12 +6,11 @@ import logging
 from typing import TYPE_CHECKING
 
 import discord
-from discord import app_commands
 
 from bot_modules.core.utils import format_user_for_log, get_bot_member
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import AppContext
 
 log = logging.getLogger("dungeonkeeper.role_grant")
 
@@ -168,52 +167,3 @@ async def _execute_grant(
                 embed=audit_embed,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-
-
-def register_role_grant_commands(bot: Bot, ctx: AppContext) -> None:
-
-    async def _role_autocomplete(
-        interaction: discord.Interaction,
-        current: str,
-    ) -> list[app_commands.Choice[str]]:
-        choices: list[app_commands.Choice[str]] = []
-        for key, cfg in ctx.guild_config(interaction.guild_id or 0).grant_roles.items():
-            if (
-                current.lower() in key.lower()
-                or current.lower() in cfg["label"].lower()
-            ):
-                choices.append(app_commands.Choice(name=cfg["label"], value=key))
-        return choices[:25]
-
-    @bot.tree.command(
-        name="grant", description="Give a configured community role to a member."
-    )
-    @app_commands.describe(
-        role="Role to grant (from your configured grant roles).",
-        member="Member to receive the role.",
-    )
-    @app_commands.autocomplete(role=_role_autocomplete)
-    async def grant_cmd(
-        interaction: discord.Interaction, role: str, member: discord.Member
-    ) -> None:
-        if not ctx.can_use_grant_role(interaction, role):
-            await interaction.response.send_message(
-                "You don't have permission to use this command.", ephemeral=True
-            )
-            return
-        cfg = ctx.guild_config(interaction.guild_id or 0).grant_roles.get(role)
-        if cfg is None:
-            await interaction.response.send_message(
-                "This grant role is not configured.", ephemeral=True
-            )
-            return
-        await _execute_grant(
-            interaction,
-            member,
-            role_id=cfg["role_id"],
-            log_channel_id=cfg["log_channel_id"],
-            announce_channel_id=cfg["announce_channel_id"],
-            grant_message=cfg["grant_message"],
-            ctx=ctx,
-            required_role_id=cfg.get("required_role_id", 0),
-        )

@@ -609,7 +609,7 @@ function populateGuildPicker(guilds, activeId) {
     nameEl.textContent = active.name;
     if (sigilEl) {
       if (active.icon) {
-        sigilEl.innerHTML = `<img class="guild-sigil-img" src="${escText(active.icon)}" alt="">`;
+        sigilEl.innerHTML = `<img class="guild-sigil-img" src="${esc(active.icon)}" alt="">`;
       } else {
         sigilEl.textContent = active.name.charAt(0).toUpperCase();
       }
@@ -638,22 +638,16 @@ function renderUserBar(me) {
   const status = isGuest ? "offline" : (me.status || "online");
   const statusLabel = isGuest ? "guest" : status;
   const avatarInner = (!isGuest && me.avatar_url)
-    ? `<img class="user-avatar-img" src="${escText(me.avatar_url)}" alt="">`
-    : escText(initial);
+    ? `<img class="user-avatar-img" src="${esc(me.avatar_url)}" alt="">`
+    : esc(initial);
   meEl.innerHTML = `
-    <div class="user-avatar status-${escText(status)}">${avatarInner}</div>
+    <div class="user-avatar status-${esc(status)}">${avatarInner}</div>
     <div class="user-meta">
-      <b>${escText(me.username || "")}</b>
-      <small>${escText(statusLabel)}</small>
+      <b>${esc(me.username || "")}</b>
+      <small>${esc(statusLabel)}</small>
     </div>
     ${!isGuest ? `<a class="logout-link" href="/logout">Logout</a>` : ""}
   `;
-}
-
-function escText(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  })[c]);
 }
 
 async function switchGuild(newGuildId) {
@@ -697,7 +691,7 @@ async function boot() {
 
     renderUserBar(me);
   } catch (err) {
-    meEl.innerHTML = `<div class="user-meta"><small style="color:var(--red)">auth error: ${escText(err.message)}</small></div>`;
+    meEl.innerHTML = `<div class="user-meta"><small style="color:var(--red)">auth error: ${esc(err.message)}</small></div>`;
   }
   window.addEventListener("hashchange", mountPanel);
   mountPanel();
