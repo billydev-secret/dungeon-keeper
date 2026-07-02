@@ -67,6 +67,34 @@ def test_other_commands_value_references_recap():
     assert "/games support" in OTHER_COMMANDS_VALUE
 
 
+# ── doc-count tripwires ──────────────────────────────────────────────
+# The README and web manual advertise the party-game count in prose. These
+# numbers have drifted twice (16 → 17 → 18); fail loudly when a game is
+# added to GAME_ICONS without updating the docs.
+
+_PARTY_GAME_KEYS = [k for k in GAME_ICONS if k not in ("pressure", "risky_roll")]
+_DOCS_ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
+
+
+def test_readme_party_game_count_matches_code():
+    readme = (_DOCS_ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    expected = f"{len(_PARTY_GAME_KEYS)}-game"
+    assert expected in readme, (
+        f"docs/README.md should say '{expected}' (GAME_ICONS has "
+        f"{len(_PARTY_GAME_KEYS)} party games) — update the count."
+    )
+
+
+def test_manual_party_game_count_matches_code():
+    manual = (
+        _DOCS_ROOT / "src" / "web_server" / "static" / "manual.html"
+    ).read_text(encoding="utf-8")
+    expected = f"{len(_PARTY_GAME_KEYS)} party games"
+    assert expected in manual, (
+        f"manual.html's Feature Map should say '{expected}' — update the count."
+    )
+
+
 # ── build_help_embed ─────────────────────────────────────────────────
 
 

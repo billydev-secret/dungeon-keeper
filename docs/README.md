@@ -35,9 +35,10 @@ Discord moderation, community, voice, and analytics bot.
 - **Music** — YouTube and Spotify playback via Lavalink with a persistent now-playing card and queue: `/play`, `/skip`, `/shuffle`, `/loop`, `/queue`, `/pause`, `/resume`, `/stop`, `/nowplaying`, `/disconnect`. Mod-only `/247` keeps the bot parked in a channel and auto-queues from a playlist when idle.
 
 ### Party games
-A 17-game social suite that shares session windows, anonymous audit logging, per-guild
+An 18-game social suite that shares session windows, anonymous audit logging, per-guild
 enable/disable, channel allowlists, and an AI question-bank fallback.
 - **Free For All** — A host poses a question and everyone answers, in chat or through a name-hiding popup modal. Lurk anonymously or jump in as yourself.
+- **Truth or Dare Card** — The banner variant of Free For All: just drops the prompt card in the channel for open chat, no reply buttons.
 - **Would You Rather** — Multi-round voting where each prompt splits the room between two options. Queue your own scenarios or let the bot generate them, then reveal who picked what.
 - **Never Have I Ever** — Confess or claim innocence as each statement is read aloud. Play with lives for elimination stakes or set lives to zero for casual voting.
 - **Most Likely To** — The room votes on who best fits each prompt and the winner takes a crown. Most crowns after all rounds wins — and yes, you can vote for yourself.
@@ -192,7 +193,7 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/wellness away on` / `/wellness away off` — Toggle your away auto-reply
 
 **Party Games**
-- `/games play <game>` — Start a party game in an allowed channel. Games: `ffa`, `wyr`, `nhie`, `mlt`, `mfk`, `twotruths`, `traditional` (Truth or Dare), `compliment`, `hottakes`, `story`, `ama`, `fantasies`, `price`, `rushmore`, `clapback`, `legitlibs`, `photo`
+- `/games play <game>` — Start a party game in an allowed channel. Games: `ffa`, `ffa_banner`, `wyr`, `nhie`, `mlt`, `mfk`, `twotruths`, `traditional` (Truth or Dare), `compliment`, `hottakes`, `story`, `ama`, `fantasies`, `price`, `rushmore`, `clapback`, `legitlibs`, `photo`
 - `/recap` — Recap of the current game-night session
 - `/games help` / `/games support` — Game list and support link
 - *Spicier (NSFW) prompts appear only in channels an admin has marked age-restricted in Discord.*
