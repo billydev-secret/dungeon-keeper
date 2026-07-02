@@ -381,18 +381,25 @@ def render_quote_card(
     _quoted_text = f"“{text}”"
     _full_measure = _make_emoji_measure(_base_m, line_h)
 
-    # No-pfp mode turns the label into a centred header above the prompt.
+    # No-pfp mode turns the label into a centred header above the prompt. Give it
+    # a dedicated font that's larger than the body and faux-bolded with a stroke
+    # (there's no bold TTF in assets/) so it reads clearly as a title.
     _header_text = author_name if (_no_pfp and author_name) else ""
+    header_size = max(body_size + 10, int(body_size * 1.6))
+    header_font = _load_font(header_size, font_style)
+    _header_stroke = max(2, header_size // 16)
     _header_h = _header_gap = 0
     if _header_text:
-        _hb = draw.textbbox((0, 0), _header_text, font=body_font)
+        _hb = draw.textbbox((0, 0), _header_text, font=header_font, stroke_width=_header_stroke)
         _header_h = int(_hb[3] - _hb[1])
-        _header_gap = max(10, line_h // 2)
+        _header_gap = max(14, line_h)
     _header_block = (_header_h + _header_gap) if _header_text else 0
 
     left_margin = int(width * 0.06)
 
     if _no_pfp:
+        # Left-justified body: keep ~one character of buffer off the left frame.
+        left_margin += max(1, _full_measure("n"))
         # The brand's flowers fill the bottom-right corner. Carve a matching
         # exclusion so the usable right edge drops toward the bottom; each line is
         # centred within the remaining [left_margin, right_limit] band, so the
@@ -434,7 +441,10 @@ def render_quote_card(
 
         def _layout(lines_: list[str]) -> tuple[int, int]:
             blk = len(lines_) * line_h + max(0, len(lines_) - 1) * line_gap
-            top = int((height - (blk + _header_block)) * 0.40)  # bias slightly up
+            if _header_block:
+                top = int(height * 0.15)  # pin the header near the top of the card
+            else:
+                top = int((height - blk) * 0.40)  # no header: bias the prompt up
             return top + _header_block, top
 
         # One re-flow: lay out at a nominal top, re-centre, then flow at the final
@@ -445,9 +455,9 @@ def render_quote_card(
         text_y_start, _content_top = _layout(lines)
 
         def _line_x(s: str, y: int) -> int:
-            # Right edge sits ~3 characters off the floral contour; clamp at the
-            # left margin so a long line never runs off the left of the card.
-            return max(left_margin, int(_flower_left(y) - _gap3 - _full_measure(s)))
+            # Left-justified: every line starts at the left margin. Wrapping via
+            # _avail_w(y) already keeps lines clear of the floral corner.
+            return left_margin
     else:
         _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
         lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
@@ -496,10 +506,17 @@ def render_quote_card(
     if _no_pfp:
         # No avatar box — draw the label as a centred header above the prompt.
         if _header_text:
-            _hb2 = draw.textbbox((0, 0), _header_text, font=body_font)
+            _hb2 = draw.textbbox((0, 0), _header_text, font=header_font, stroke_width=_header_stroke)
             _hx = (width - int(_hb2[2] - _hb2[0])) // 2
-            draw.text((_hx + 2, _content_top + 2), _header_text, font=body_font, fill=(0, 0, 0))
-            draw.text((_hx, _content_top), _header_text, font=body_font, fill=theme.attribution_color)
+            draw.text(
+                (_hx + 2, _content_top + 2), _header_text, font=header_font,
+                fill=(0, 0, 0), stroke_width=_header_stroke, stroke_fill=(0, 0, 0),
+            )
+            draw.text(
+                (_hx, _content_top), _header_text, font=header_font,
+                fill=theme.attribution_color, stroke_width=_header_stroke,
+                stroke_fill=theme.attribution_color,
+            )
     else:
         _square = pfp_shape == "square"
         _sq_r = max(6, int(pfp_d * 0.10))
