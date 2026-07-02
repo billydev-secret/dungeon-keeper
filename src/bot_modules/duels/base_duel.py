@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
@@ -120,7 +121,8 @@ class BaseDuel(BaseGame):
         )
         self._record_challenge(challenger.id)
 
-        embed = self._build_challenge_embed(challenger, target, stakes_text)  # type: ignore[arg-type]
+        accent = await resolve_accent_color(self.bot.ctx.db_path, guild)
+        embed = self._build_challenge_embed(challenger, target, stakes_text, accent)  # type: ignore[arg-type]
         view = ChallengeView(
             game_id=game_id,
             target_id=target.id,
@@ -138,11 +140,14 @@ class BaseDuel(BaseGame):
         challenger: discord.Member,
         target: discord.Member,
         stakes: str | None,
+        colour: "discord.Colour | None" = None,
     ) -> discord.Embed:
+        if colour is None:
+            colour = discord.Colour(COLOR_GOLD)
         stakes_text = stakes or "Loser surrenders their nickname for 24 hours."
         embed = discord.Embed(
             title=f"⚔️ {self.GAME_DISPLAY_NAME.upper()} CHALLENGE",
-            color=COLOR_GOLD,
+            color=colour,
         )
         embed.add_field(
             name="Challenge",

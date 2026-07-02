@@ -25,16 +25,18 @@ import discord
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 
 
-def build_lobby_embed(host_name: str, participants: list[str]) -> discord.Embed:
+def build_lobby_embed(host_name: str, participants: list[str], colour: "discord.Colour | None" = None) -> discord.Embed:
     """Build the lobby embed shown while players are joining.
 
     ``participants`` is a list of pre-resolved display names (the cog
     runs the resolution against the guild before calling). Empty list
     renders as ``"—"`` so the field always has a value.
     """
+    if colour is None:
+        colour = discord.Colour(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['compliment']} SPIN THE COMPLIMENT",
-        color=BRAND_COLOR,
+        color=colour,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     pool_str = ", ".join(participants) if participants else "—"
@@ -55,7 +57,7 @@ def format_pairing_line(giver_mention: str, receiver_mention: str) -> str:
     return f"{giver_mention} → {receiver_mention}"
 
 
-def build_pairings_embed(pairing_lines: list[str]) -> discord.Embed:
+def build_pairings_embed(pairing_lines: list[str], colour: "discord.Colour | None" = None) -> discord.Embed:
     """Build the post-close embed announcing the pairings.
 
     ``pairing_lines`` are the pre-formatted ``giver → receiver`` strings
@@ -65,9 +67,11 @@ def build_pairings_embed(pairing_lines: list[str]) -> discord.Embed:
     The trailing call-to-action ("Reply to deliver your compliment!") is
     appended unconditionally so even a 2-player game has the prompt.
     """
+    if colour is None:
+        colour = discord.Colour(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['compliment']} COMPLIMENT PAIRINGS",
-        color=BRAND_COLOR,
+        color=colour,
     )
     body = "\n".join(pairing_lines)
     embed.description = f"{body}\n\n💛 Reply to deliver your compliment!"

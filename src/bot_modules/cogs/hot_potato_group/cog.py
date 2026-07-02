@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
@@ -358,8 +359,9 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
             return
         target = user or interaction.user
         stats = await hpgdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
+        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
         embed = discord.Embed(
-            title=f"🥔 Hot Potato (group) — {target.display_name}", color=COLOR_GOLD
+            title=f"🥔 Hot Potato (group) — {target.display_name}", color=accent
         )
         embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
         embed.add_field(name="Losses", value=str(stats["losses"]), inline=True)
@@ -418,7 +420,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         if not shared_updates and not game_updates:
             shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
             game_cfg = await hpgdb.get_config(self.db, interaction.guild.id)
-            embed = discord.Embed(title="🔧 Hot Potato (group) Config", color=COLOR_GOLD)
+            accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
+            embed = discord.Embed(title="🔧 Hot Potato (group) Config", color=accent)
             for k, v in shared_cfg.items():
                 if k not in ("guild_id", "game_type"):
                     embed.add_field(name=k, value=str(v), inline=True)

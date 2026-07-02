@@ -16,6 +16,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     resolve_names,
 )
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games_compliment.embeds import (
     build_lobby_embed,
     build_pairings_embed,
@@ -62,9 +63,12 @@ class ComplimentView(discord.ui.View):
 
         names = resolve_names(interaction.guild, payload.get("participants", []))
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
+        guild = interaction.guild
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_lobby_embed(
             host_member.display_name if host_member else "Host",
             names,
+            colour=colour,
         )
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send(
@@ -100,7 +104,9 @@ class ComplimentView(discord.ui.View):
             lines.append(format_pairing_line(giver_str, receiver_str))
             mention_lookup[giver_id] = giver_str
             mention_lookup[receiver_id] = receiver_str
-        embed = build_pairings_embed(lines)
+        guild = interaction.guild
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_pairings_embed(lines, colour=colour)
         # Ping all participants (preserve order from pairings dict)
         unique_mentions = [mention_lookup[uid] for uid in pairing_ids(pairings) if uid in mention_lookup]
 
@@ -201,7 +207,9 @@ class ComplimentCog(commands.Cog):
         )
 
         log.info("Game %s (compliment) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
-        embed = build_lobby_embed(host_name, [])
+        guild = getattr(channel, "guild", None)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_lobby_embed(host_name, [], colour=colour)
         view = ComplimentView(game_id, host_id, self.db, self.bot)
         self.bot.active_views[game_id] = view
 

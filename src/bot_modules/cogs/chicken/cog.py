@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
@@ -381,7 +382,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             return
         target = user or interaction.user
         stats = await chdb.get_stats(self.db, interaction.guild.id, target.id)  # type: ignore[arg-type]
-        embed = discord.Embed(title=f"🐔 Chicken — {target.display_name}", color=COLOR_GOLD)
+        accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
+        embed = discord.Embed(title=f"🐔 Chicken — {target.display_name}", color=accent)
         embed.add_field(name="Wins", value=str(stats["wins"]), inline=True)
         embed.add_field(name="Crashes", value=str(stats["losses"]), inline=True)
         embed.add_field(name="Games", value=str(stats["total_games"]), inline=True)
@@ -431,7 +433,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         if not shared_updates and not game_updates:
             shared_cfg = await duels_db.get_config(self.db, interaction.guild.id, self.GAME_KEY)
             game_cfg = await chdb.get_config(self.db, interaction.guild.id)
-            embed = discord.Embed(title="🔧 Chicken Config", color=COLOR_GOLD)
+            accent = await resolve_accent_color(self.bot.ctx.db_path, interaction.guild)
+            embed = discord.Embed(title="🔧 Chicken Config", color=accent)
             for k, v in shared_cfg.items():
                 if k not in ("guild_id", "game_type"):
                     embed.add_field(name=k, value=str(v), inline=True)

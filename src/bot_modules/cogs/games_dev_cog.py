@@ -93,15 +93,22 @@ class GamesDevCog(commands.Cog):
         if game_type == "clapback" and row["message_id"]:
             try:
                 from bot_modules.games_clapback.embeds import build_lobby_embed
+                from bot_modules.core.branding import resolve_accent_color
                 config = payload.get("config", {})
                 guild = interaction.guild
                 host_member = guild.get_member(row["host_id"]) if guild else None
+                colour = (
+                    await resolve_accent_color(self.bot.ctx.db_path, guild)
+                    if guild
+                    else None
+                )
                 embed = build_lobby_embed(
                     host_name=host_member.display_name if host_member else "Host",
                     config=config,
                     players=players,
                     name_resolver=lambda uid: resolve_name(guild, uid),
                     start_at=config.get("start_epoch"),
+                    colour=colour,
                 )
                 msg = await interaction.channel.fetch_message(row["message_id"])
                 await msg.edit(embed=embed)

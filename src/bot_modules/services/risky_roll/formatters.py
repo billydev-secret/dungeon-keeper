@@ -230,8 +230,11 @@ def build_rolloff_embed(
     winner_id: int,
     title: str = "Tie Rolloff",
     pick_lowest: bool = False,
+    colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
-    embed = discord.Embed(title=f"⚔️ {title}", color=discord.Color(0xFF9800))
+    if colour is None:
+        colour = discord.Color(0xFF9800)
+    embed = discord.Embed(title=f"⚔️ {title}", color=colour)
     roll_label = "Lowest roll tied" if pick_lowest else "Highest roll tied"
     embed.description = (
         f"{roll_label} — automatic rolloff.\n"

@@ -38,12 +38,15 @@ def build_tod_embed(
     payload: dict[str, Any],
     closed: bool = False,
     names: dict[str, str] | None = None,
+    colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
     """Build the main lobby embed shown alongside the host/player buttons."""
+    if colour is None:
+        colour = discord.Colour(BRAND_COLOR)
     title = f"{GAME_ICONS['traditional']} TRUTH OR DARE"
     if closed:
         title += " — GAME OVER"
-    embed = discord.Embed(title=title, color=BRAND_COLOR)
+    embed = discord.Embed(title=title, color=colour)
     embed.add_field(name="Host", value=host_name, inline=True)
 
     participants: list = payload.get("participants", [])
@@ -69,13 +72,18 @@ def build_tod_embed(
     return embed
 
 
-def build_recap_embed(payload: dict[str, Any]) -> discord.Embed:
+def build_recap_embed(
+    payload: dict[str, Any],
+    colour: "discord.Colour | None" = None,
+) -> discord.Embed:
     """Build the game-over recap embed.
 
     Shows totals plus a per-category breakdown for any non-zero
     category — categories with zero questions are skipped to keep the
     embed compact.
     """
+    if colour is None:
+        colour = discord.Colour(_RESULTS_GREY)
     participants: list = payload.get("participants", [])
     asked: dict[str, str] = payload.get("asked", {})
     total_q = len(asked)
@@ -83,7 +91,7 @@ def build_recap_embed(payload: dict[str, Any]) -> discord.Embed:
 
     embed = discord.Embed(
         title=f"{GAME_ICONS['traditional']} TRUTH OR DARE — GAME OVER",
-        color=_RESULTS_GREY,
+        color=colour,
     )
     embed.add_field(name="Total Questions Asked", value=str(total_q), inline=True)
     embed.add_field(name="Participants", value=str(len(participants)), inline=True)
@@ -94,16 +102,21 @@ def build_recap_embed(payload: dict[str, Any]) -> discord.Embed:
     return embed
 
 
-def build_lobby_embed(host_name: str) -> discord.Embed:
+def build_lobby_embed(
+    host_name: str,
+    colour: "discord.Colour | None" = None,
+) -> discord.Embed:
     """Build the initial lobby embed shown when ``/traditional`` is invoked.
 
     Distinct from :func:`build_tod_embed` only in the description and
     the hard-coded zero counts (no payload required yet).
     """
+    if colour is None:
+        colour = discord.Colour(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['traditional']} TRUTH OR DARE",
         description="Select your preferences below to join!",
-        color=BRAND_COLOR,
+        color=colour,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Participants", value="0", inline=True)

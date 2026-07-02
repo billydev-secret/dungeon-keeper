@@ -22,6 +22,7 @@ def build_session_recap_embed(
     player_ids: list[int],
     duration_str: str,
     highlights: list[str],
+    colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
     """Build the ``/session-recap`` embed.
 
@@ -33,9 +34,11 @@ def build_session_recap_embed(
     Empty ``player_ids`` and empty ``highlights`` both skip their
     respective fields so a sparse session doesn't render dashes.
     """
+    if colour is None:
+        colour = discord.Colour(BRAND_COLOR)
     embed = discord.Embed(
         title="📋 GAME NIGHT SESSION RECAP",
-        color=BRAND_COLOR,
+        color=colour,
     )
     embed.add_field(name="🎮 Games Played", value=str(game_count), inline=True)
     embed.add_field(name="👥 Unique Players", value=str(len(player_ids)), inline=True)

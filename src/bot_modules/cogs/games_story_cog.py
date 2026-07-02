@@ -6,6 +6,7 @@ from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     create_game,
@@ -307,10 +308,13 @@ class StoryCog(commands.Cog):
             },
         )
 
+        guild = getattr(channel, "guild", None)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
         embed = build_lobby_embed(
             host_name=host_name,
             visibility=visibility,
             max_sentences=max_sentences,
+            colour=colour,
         )
 
         log.info("Game %s (story) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
@@ -371,12 +375,14 @@ class StoryCog(commands.Cog):
             mention = current_member.mention if current_member else f"**{player_name}**"
             turn_view = StoryTurnView(game_id, host_id, current_player_id, context_text, self.db, self.bot)
 
+            turn_colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
             turn_embed = build_turn_embed(
                 sentence_count=sentence_count,
                 max_sentences=max_sentences,
                 current_player_id=current_player_id,
                 turn_order=turn_order,
                 name_resolver=_name_for,
+                colour=turn_colour,
             )
 
             timeout_min = _TURN_TIMEOUT // 60
@@ -434,19 +440,22 @@ class StoryCog(commands.Cog):
         def _name_for(author_id: int) -> str:
             return resolve_name(guild, author_id)
 
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+
         # Send the full story embed first
         story_text = assemble_story_text(sentences)
         complete_embed = build_complete_story_embed(
             story_text=story_text,
             player_count=len(players),
             sentence_count=len(sentences),
+            colour=colour,
         )
         await channel.send(embed=complete_embed)
 
         # Send attributed breakdown — split across messages if needed
         lines = build_attribution_lines(sentences, _name_for)
         chunks = chunk_attribution_lines(lines)
-        attr_embed = build_attribution_embed(chunks)
+        attr_embed = build_attribution_embed(chunks, colour=colour)
         await channel.send(embed=attr_embed)
 
         payload = await get_game_payload(self.db, game_id)

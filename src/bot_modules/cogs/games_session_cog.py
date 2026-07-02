@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games_session.embeds import build_session_recap_embed
 from bot_modules.games_session.logic import build_highlights, format_duration
 
@@ -81,11 +82,18 @@ class SessionCog(commands.Cog):
 
         highlights = build_highlights(game_histories, name_lookup)
 
+        guild = interaction.guild
+        colour = (
+            await resolve_accent_color(self.bot.ctx.db_path, guild)
+            if guild
+            else None
+        )
         embed = build_session_recap_embed(
             game_count=len(game_ids),
             player_ids=player_ids,
             duration_str=duration_str,
             highlights=highlights,
+            colour=colour,
         )
         await interaction.followup.send(embed=embed)
 

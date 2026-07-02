@@ -4,6 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
@@ -111,7 +112,8 @@ class TraditionalHostView(discord.ui.View):
         host_member = guild.get_member(self.host_id) if guild else None
         host_name = host_member.display_name if host_member else "Host"
         names = self._resolve_names(guild, payload)
-        embed = build_tod_embed(host_name, payload, names=names)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_tod_embed(host_name, payload, names=names, colour=colour)
         if hasattr(self, '_message') and self._message:
             try:
                 await self._message.edit(embed=embed, view=self)
@@ -199,7 +201,9 @@ class TraditionalHostView(discord.ui.View):
         asked = payload.get("asked", {})
         total_q = len(asked)
 
-        embed = build_recap_embed(payload)
+        guild = (interaction.guild if interaction else None) or getattr(channel, "guild", None)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_recap_embed(payload, colour=colour)
 
         self.stop()
         for item in self.children:
@@ -275,7 +279,9 @@ class TraditionalCog(commands.Cog):
             state="joining",
         )
 
-        embed = build_lobby_embed(host_name)
+        guild = getattr(channel, "guild", None)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_lobby_embed(host_name, colour=colour)
 
         log.info("Game %s (traditional) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         host_view = TraditionalHostView(game_id, host_id, self.db, self.bot)

@@ -17,6 +17,7 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games_fantasies.embeds import (
     build_lobby_embed,
     build_recap_embed,
@@ -194,6 +195,7 @@ class FantasiesVoteView(discord.ui.View):
         self._updater = LiveBarUpdater()
         self._closed = False
         self._advanced_event: asyncio.Event | None = None
+        self._accent_colour: "discord.Colour | None" = None
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
@@ -212,6 +214,7 @@ class FantasiesVoteView(discord.ui.View):
             nope_votes=self.nope_votes,
             total_entries=self.total_entries,
             closed=closed,
+            colour=self._accent_colour,
         )
 
     @discord.ui.button(label="✅ Same", style=discord.ButtonStyle.success, custom_id="fan_same", row=0)
@@ -305,7 +308,9 @@ class FantasiesCog(commands.Cog):
             payload={"rounds": {}, "results": []},
         )
 
-        embed = build_lobby_embed(host_name)
+        guild = getattr(channel, "guild", None)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_lobby_embed(host_name, colour=colour)
 
         log.info("Game %s (fantasies) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         view = FantasiesMainView(game_id, host_id, self.db, self.bot, self)
@@ -330,7 +335,9 @@ class FantasiesCog(commands.Cog):
         round_num: int,
         channel,
     ):
-        submit_embed = build_round_submit_embed(round_num)
+        guild = getattr(channel, "guild", None)
+        accent_colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        submit_embed = build_round_submit_embed(round_num, colour=accent_colour)
         submit_view = SubmitRoundView(game_id, host_id, round_num, self.db, self.bot)
         # Let the main view know so it can stop us on close
         main_view = self.bot.active_views.get(game_id)
@@ -402,6 +409,7 @@ class FantasiesCog(commands.Cog):
                 total_entries=len(entries),
             )
             view._advanced_event = advanced
+            view._accent_colour = accent_colour
             self.bot.active_views[game_id] = view
 
             embed = view._build_embed()
@@ -420,7 +428,9 @@ class FantasiesCog(commands.Cog):
 
     async def _post_recap(self, channel, payload: dict):
         results = payload.get("results", [])
-        embed = build_recap_embed(results)
+        guild = getattr(channel, "guild", None)
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_recap_embed(results, colour=colour)
         if embed is None:
             return
         await channel.send(embed=embed)

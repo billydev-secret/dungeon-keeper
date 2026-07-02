@@ -9,6 +9,7 @@ from bot_modules.games_config.embeds import (
     build_game_status_embed,
 )
 from bot_modules.games_config.logic import has_mod_or_admin_permissions
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.command_groups import games
 from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
@@ -177,7 +178,9 @@ class GamesConfigCog(commands.Cog):
         log.info("%s used /games config game-status in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
         from bot_modules.games.utils.game_manager import get_active_game
         row = await get_active_game(self.db, interaction.channel_id)
-        embed = build_game_status_embed(row)
+        guild = interaction.guild
+        colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
+        embed = build_game_status_embed(row, colour=colour)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @config_group.command(name="game-end", description="Force-close the active game in this channel.")

@@ -12,6 +12,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
 )
 from bot_modules.games.constants import GAME_ICONS
+from bot_modules.core.branding import resolve_accent_color
 from ..data import (
     pick_template, mark_template_used, get_prompts, get_channel_max_tier,
     HEAT_LABELS,
@@ -317,7 +318,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 cast_embed = discord.Embed(
                     title=f"{_GAME_ICONS_LL} WHO WROTE WHAT",
                     description="\n".join(cast_lines),
-                    color=0x99AAB5,
+                    color=await resolve_accent_color(cog.bot.ctx.db_path, guild),
                 )
                 await channel.send(embed=cast_embed)
 

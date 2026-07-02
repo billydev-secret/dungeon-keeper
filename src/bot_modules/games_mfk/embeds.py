@@ -35,6 +35,7 @@ def build_lobby_embed(
     host_name: str,
     participants: list[str],
     labels: list[str] | None = None,
+    colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
     """Build the lobby embed shown while players are joining.
 
@@ -45,11 +46,13 @@ def build_lobby_embed(
     ``labels`` overrides the default categories — when supplied, both
     the title and the "Categories" field swap to the host's choices.
     """
+    if colour is None:
+        colour = discord.Colour(BRAND_COLOR)
     labels = labels or DEFAULT_LABELS
     title_str = _title_for(labels)
     embed = discord.Embed(
         title=f"{GAME_ICONS['mfk']} {title_str.upper()}",
-        color=BRAND_COLOR,
+        color=colour,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(
@@ -78,6 +81,7 @@ def format_assignment_value(target_names: list[str]) -> str:
 def build_assignments_embed(
     player_assignments: list[tuple[str, list[str]]],
     labels: list[str] | None = None,
+    colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
     """Build the post-close embed announcing each player's three targets.
 
@@ -89,12 +93,14 @@ def build_assignments_embed(
     ``labels`` matches the call sent to :func:`build_lobby_embed`; the
     embed title/footer track the host's chosen categories.
     """
+    if colour is None:
+        colour = discord.Colour(BRAND_COLOR)
     labels = labels or DEFAULT_LABELS
     title_str = _title_for(labels)
     embed = discord.Embed(
         title=f"{GAME_ICONS['mfk']} {title_str.upper()} — YOUR THREE NAMES",
         description=f"Reply with your {title_str} picks!",
-        color=BRAND_COLOR,
+        color=colour,
     )
     for player_mention, target_names in player_assignments:
         embed.add_field(
