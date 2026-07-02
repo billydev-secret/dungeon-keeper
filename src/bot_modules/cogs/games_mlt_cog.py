@@ -25,6 +25,7 @@ from bot_modules.games.utils.question_source import (
     channel_allows_nsfw,
 )
 from bot_modules.games_mlt.embeds import (
+    build_final_standings_embed,
     build_join_embed,
     build_results_embed,
     build_round_embed,
@@ -45,6 +46,9 @@ from bot_modules.games_mlt.logic import (
 )
 
 log = logging.getLogger(__name__)
+
+# Cap the player-submitted prompt queue to prevent flooding.
+_MAX_QUEUED_PROMPTS = 15
 
 
 class MLTJoinView(discord.ui.View):
@@ -166,6 +170,12 @@ class PoseMLTModal(discord.ui.Modal, title="Pose a Prompt"):
         log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Prompt", interaction.channel.name if interaction.channel else "unknown")
         if self._view._closed:
             await interaction.response.send_message("This round already ended.", ephemeral=True)
+            return
+        if len(self._view.queued_prompts) >= _MAX_QUEUED_PROMPTS:
+            await interaction.response.send_message(
+                f"The prompt queue is full ({_MAX_QUEUED_PROMPTS}). Let some play first!",
+                ephemeral=True,
+            )
             return
         count = queue_prompt(self._view.queued_prompts, self.prompt.value)
         self._view.next_btn.label = f"⏭️ Next ({count} queued)"
@@ -386,6 +396,19 @@ class MLTCog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
+    async def _emit_final_standings(self, channel, game_id: str) -> None:
+        """Post the cumulative-crown standings when a game ends (skipped if no
+        crowns were ever awarded). Best-effort — never blocks teardown."""
+        try:
+            payload = await get_game_payload(self.db, game_id)
+            crowns = payload.get("crowns") or {}
+            if not any(int(c) > 0 for c in crowns.values()):
+                return
+            guild = getattr(channel, "guild", None)
+            await channel.send(embed=build_final_standings_embed(crowns, guild))
+        except Exception:
+            log.exception("MLT: failed to emit final standings for %s", game_id)
+
     async def _run_round(
         self,
         interaction,
@@ -410,6 +433,7 @@ class MLTCog(commands.Cog):
                 "❌ The prompt bank is empty! Use **✍️ Pose Prompt** to submit your own, "
                 "or ask an admin to add prompts with `/bank add`."
             )
+            await self._emit_final_standings(channel, game_id)
             await end_game(self.db, game_id)
             self.bot.active_views.pop(game_id, None)
             return
@@ -509,6 +533,7 @@ class MLTCog(commands.Cog):
             # cleanly rather than trying to build a vote with < 2 candidates.
             if len(next_players) < 2:
                 await channel.send("🎲 Not enough players left — ending the game.")
+                await self._emit_final_standings(channel, game_id)
                 await end_game(self.db, game_id)
                 self.bot.active_views.pop(game_id, None)
                 return

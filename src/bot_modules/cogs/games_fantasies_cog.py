@@ -177,6 +177,7 @@ class FantasiesVoteView(discord.ui.View):
         bot,
         host_name: str,
         advance_callback,
+        entry_author_id: int = 0,
         total_entries: int = 0,
     ):
         super().__init__(timeout=None)
@@ -190,6 +191,7 @@ class FantasiesVoteView(discord.ui.View):
         self.bot = bot
         self.host_name = host_name
         self.advance_callback = advance_callback
+        self.entry_author_id = entry_author_id
         self.same_votes: list[int] = []
         self.nope_votes: list[int] = []
         self._updater = LiveBarUpdater()
@@ -223,6 +225,11 @@ class FantasiesVoteView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
             return
+        if interaction.user.id == self.entry_author_id:
+            await interaction.response.send_message(
+                "You can't vote on your own entry!", ephemeral=True
+            )
+            return
         changed = apply_vote(
             self.same_votes, self.nope_votes, interaction.user.id, "same"
         )
@@ -235,6 +242,11 @@ class FantasiesVoteView(discord.ui.View):
         log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
         if self._closed:
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
+            return
+        if interaction.user.id == self.entry_author_id:
+            await interaction.response.send_message(
+                "You can't vote on your own entry!", ephemeral=True
+            )
             return
         changed = apply_vote(
             self.same_votes, self.nope_votes, interaction.user.id, "nope"
@@ -406,6 +418,7 @@ class FantasiesCog(commands.Cog):
                 bot=self.bot,
                 host_name=host_name,
                 advance_callback=advance,
+                entry_author_id=entry_data["user_id"],
                 total_entries=len(entries),
             )
             view._advanced_event = advanced

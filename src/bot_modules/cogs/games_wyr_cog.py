@@ -32,6 +32,9 @@ from bot_modules.games_wyr.logic import (
 
 log = logging.getLogger(__name__)
 
+# Cap the player-submitted question queue to prevent flooding.
+_MAX_QUEUED_QUESTIONS = 15
+
 
 class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
     option_a = discord.ui.TextInput(
@@ -61,6 +64,12 @@ class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
         b = self.option_b.value.strip()
         if not a or not b:
             await interaction.response.send_message("Both options are required.", ephemeral=True)
+            return
+        if len(self._view.queued_questions) >= _MAX_QUEUED_QUESTIONS:
+            await interaction.response.send_message(
+                f"The question queue is full ({_MAX_QUEUED_QUESTIONS}). Let some play first!",
+                ephemeral=True,
+            )
             return
         self._view.queued_questions.append((a, b))
         count = len(self._view.queued_questions)

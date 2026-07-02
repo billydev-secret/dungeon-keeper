@@ -210,6 +210,9 @@ class ReasonableSelect(discord.ui.Select):
         view: PriceVoteView = self.view
         uid = interaction.user.id
         target = int(self.values[0])
+        if uid == target:
+            await interaction.response.send_message("You can't vote for yourself!", ephemeral=True)
+            return
         changed = uid in view.reasonable_votes
         view.reasonable_votes[uid] = target
         target_name = resolve_name(interaction.guild, target)
@@ -235,6 +238,9 @@ class UnhingedSelect(discord.ui.Select):
         view: PriceVoteView = self.view
         uid = interaction.user.id
         target = int(self.values[0])
+        if uid == target:
+            await interaction.response.send_message("You can't vote for yourself!", ephemeral=True)
+            return
         changed = uid in view.unhinged_votes
         view.unhinged_votes[uid] = target
         target_name = resolve_name(interaction.guild, target)

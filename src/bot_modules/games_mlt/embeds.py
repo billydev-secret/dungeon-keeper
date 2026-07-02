@@ -145,3 +145,32 @@ def build_results_embed(
         text=f"{GAME_ICONS['mlt']} Most Likely To  •  Round {round_num} Results"
     )
     return embed
+
+
+def build_final_standings_embed(crowns: dict, guild: Any = None) -> discord.Embed:
+    """Final cumulative-crown standings shown when a game ends.
+
+    ``crowns`` maps ``str(user_id) -> crown count``. Players are ranked by
+    crown count; ties at the top all get 👑.
+    """
+    embed = discord.Embed(
+        title=f"{GAME_ICONS['mlt']} Most Likely To — Final Standings",
+        color=PHASE_RECAP,
+    )
+    items = sorted(
+        ((int(uid), int(c)) for uid, c in (crowns or {}).items() if int(c) > 0),
+        key=lambda x: -x[1],
+    )
+    if not items:
+        embed.description = "No crowns were awarded this game."
+        return embed
+    top = items[0][1]
+    lines: list[str] = []
+    for rank, (uid, count) in enumerate(items, start=1):
+        name = resolve_name(guild, uid) if guild is not None else str(uid)
+        prefix = "👑 " if count == top else f"{rank}. "
+        plural = "crown" if count == 1 else "crowns"
+        lines.append(f"{prefix}**{discord.utils.escape_markdown(name)}** — {count} {plural}")
+    embed.description = "\n".join(lines)
+    embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To  •  Final crown tally")
+    return embed
