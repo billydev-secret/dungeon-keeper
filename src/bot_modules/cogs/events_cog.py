@@ -378,112 +378,120 @@ class EventsCog(commands.Cog):
 
         if is_bot_author:
             sentiment, emotion = await asyncio.to_thread(score_text, message.content)
-            with self.ctx.open_db() as conn:
-                if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
-                    track_auto_delete_message(
-                        conn,
-                        message.guild.id,
-                        message.channel.id,
-                        message.id,
-                        message_ts,
-                    )
-                store_message(
-                    conn,
-                    message_id=message.id,
-                    guild_id=message.guild.id,
-                    channel_id=message.channel.id,
-                    author_id=message.author.id,
-                    content=_archived_message_content(message),
-                    reply_to_id=reply_to_id,
-                    ts=int(message_ts),
-                    attachment_urls=attachment_urls,
-                    mention_ids=[],
-                    sentiment=sentiment,
-                    emotion=emotion,
-                    embeds=[_discord_embed_to_dict(e) for e in message.embeds]
-                    if retain
-                    else (),
-                    retain_content=retain,
-                    media_kind=media_kind,
-                )
-                if sentiment is not None:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO message_sentiment "
-                        "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?)",
-                        (
-                            message.id,
+
+            def _persist_bot_message():
+                with self.ctx.open_db() as conn:
+                    if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+                        track_auto_delete_message(
+                            conn,
                             message.guild.id,
                             message.channel.id,
-                            sentiment,
-                            emotion,
+                            message.id,
                             message_ts,
-                        ),
+                        )
+                    store_message(
+                        conn,
+                        message_id=message.id,
+                        guild_id=message.guild.id,
+                        channel_id=message.channel.id,
+                        author_id=message.author.id,
+                        content=_archived_message_content(message),
+                        reply_to_id=reply_to_id,
+                        ts=int(message_ts),
+                        attachment_urls=attachment_urls,
+                        mention_ids=[],
+                        sentiment=sentiment,
+                        emotion=emotion,
+                        embeds=[_discord_embed_to_dict(e) for e in message.embeds]
+                        if retain
+                        else (),
+                        retain_content=retain,
+                        media_kind=media_kind,
                     )
-                upsert_known_user(
-                    conn,
-                    guild_id=message.guild.id,
-                    user_id=message.author.id,
-                    username=str(message.author),
-                    display_name=message.author.display_name,
-                    ts=message_ts,
-                    is_bot=message.author.bot,
-                )
-                upsert_known_channel(
-                    conn,
-                    guild_id=message.guild.id,
-                    channel_id=message.channel.id,
-                    channel_name=getattr(message.channel, "name", str(message.channel.id)),
-                    ts=message_ts,
-                )
+                    if sentiment is not None:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO message_sentiment "
+                            "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            (
+                                message.id,
+                                message.guild.id,
+                                message.channel.id,
+                                sentiment,
+                                emotion,
+                                message_ts,
+                            ),
+                        )
+                    upsert_known_user(
+                        conn,
+                        guild_id=message.guild.id,
+                        user_id=message.author.id,
+                        username=str(message.author),
+                        display_name=message.author.display_name,
+                        ts=message_ts,
+                        is_bot=message.author.bot,
+                    )
+                    upsert_known_channel(
+                        conn,
+                        guild_id=message.guild.id,
+                        channel_id=message.channel.id,
+                        channel_name=getattr(message.channel, "name", str(message.channel.id)),
+                        ts=message_ts,
+                    )
+
+            await asyncio.to_thread(_persist_bot_message)
             return
 
         archive_content = _archived_message_content(message)
         if not _counts_as_member_activity(message):
             mention_ids = _message_mention_ids(cfg.recorded_bot_user_ids, message)
-            with self.ctx.open_db() as conn:
-                if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
-                    track_auto_delete_message(
+
+            def _persist_nonmember_message():
+                with self.ctx.open_db() as conn:
+                    if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+                        track_auto_delete_message(
+                            conn,
+                            message.guild.id,
+                            message.channel.id,
+                            message.id,
+                            message_ts,
+                        )
+                    store_message(
                         conn,
-                        message.guild.id,
-                        message.channel.id,
-                        message.id,
-                        message_ts,
+                        message_id=message.id,
+                        guild_id=message.guild.id,
+                        channel_id=message.channel.id,
+                        author_id=message.author.id,
+                        content=archive_content,
+                        reply_to_id=reply_to_id,
+                        ts=int(message_ts),
+                        attachment_urls=attachment_urls,
+                        mention_ids=mention_ids,
+                        embeds=[_discord_embed_to_dict(e) for e in message.embeds]
+                        if retain
+                        else (),
+                        retain_content=retain,
+                        media_kind=media_kind,
                     )
-                store_message(
-                    conn,
-                    message_id=message.id,
-                    guild_id=message.guild.id,
-                    channel_id=message.channel.id,
-                    author_id=message.author.id,
-                    content=archive_content,
-                    reply_to_id=reply_to_id,
-                    ts=int(message_ts),
-                    attachment_urls=attachment_urls,
-                    mention_ids=mention_ids,
-                    embeds=[_discord_embed_to_dict(e) for e in message.embeds]
-                    if retain
-                    else (),
-                    retain_content=retain,
-                    media_kind=media_kind,
-                )
-                upsert_known_user(
-                    conn,
-                    guild_id=message.guild.id,
-                    user_id=message.author.id,
-                    username=str(message.author),
-                    display_name=message.author.display_name,
-                    ts=message_ts,
-                )
-                upsert_known_channel(
-                    conn,
-                    guild_id=message.guild.id,
-                    channel_id=message.channel.id,
-                    channel_name=getattr(
-                        message.channel, "name", str(message.channel.id)
-                    ),
-                    ts=message_ts,
-                )
+                    upsert_known_user(
+                        conn,
+                        guild_id=message.guild.id,
+                        user_id=message.author.id,
+                        username=str(message.author),
+                        display_name=message.author.display_name,
+                        ts=message_ts,
+                    )
+                    upsert_known_channel(
+                        conn,
+                        guild_id=message.guild.id,
+                        channel_id=message.channel.id,
+                        channel_name=getattr(
+                            message.channel, "name", str(message.channel.id)
+                        ),
+                        ts=message_ts,
+                    )
+
+            await asyncio.to_thread(_persist_nonmember_message)
             return
 
         spoiler_deleted = await enforce_spoiler_requirement(
@@ -503,99 +511,102 @@ class EventsCog(commands.Cog):
 
         sentiment, emotion = await asyncio.to_thread(score_text, message.content)
 
-        with self.ctx.open_db() as conn:
-            record_member_activity(
-                conn,
-                message.guild.id,
-                message.author.id,
-                message.channel.id,
-                message.id,
-                message_ts,
-            )
-            if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
-                track_auto_delete_message(
+        def _persist_member_message():
+            with self.ctx.open_db() as conn:
+                record_member_activity(
                     conn,
                     message.guild.id,
+                    message.author.id,
                     message.channel.id,
                     message.id,
                     message_ts,
                 )
-
-            store_message(
-                conn,
-                message_id=message.id,
-                guild_id=message.guild.id,
-                channel_id=message.channel.id,
-                author_id=message.author.id,
-                content=archive_content,
-                reply_to_id=reply_to_id,
-                ts=int(message_ts),
-                attachment_urls=attachment_urls,
-                mention_ids=mention_ids,
-                sentiment=sentiment,
-                emotion=emotion,
-                embeds=[_discord_embed_to_dict(e) for e in message.embeds]
-                if retain
-                else (),
-                retain_content=retain,
-                media_kind=media_kind,
-            )
-
-            if sentiment is not None:
-                conn.execute(
-                    "INSERT OR IGNORE INTO message_sentiment "
-                    "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        message.id,
+                if auto_delete_rule_exists(conn, message.guild.id, message.channel.id):
+                    track_auto_delete_message(
+                        conn,
                         message.guild.id,
                         message.channel.id,
-                        sentiment,
-                        emotion,
+                        message.id,
                         message_ts,
-                    ),
-                )
+                    )
 
-            upsert_known_user(
-                conn,
-                guild_id=message.guild.id,
-                user_id=message.author.id,
-                username=str(message.author),
-                display_name=message.author.display_name,
-                ts=message_ts,
-                is_bot=message.author.bot,
-            )
-
-            upsert_known_channel(
-                conn,
-                guild_id=message.guild.id,
-                channel_id=message.channel.id,
-                channel_name=getattr(message.channel, "name", str(message.channel.id)),
-                ts=message_ts,
-            )
-
-            interaction_targets = list(mention_ids)
-            if (
-                reply_to_id
-                and message.reference
-                and isinstance(message.reference.resolved, discord.Message)
-            ):
-                ref = message.reference.resolved
-                if (
-                    (not ref.author.bot or ref.author.id in cfg.recorded_bot_user_ids)
-                    and ref.author.id != message.author.id
-                    and ref.author.id not in interaction_targets
-                ):
-                    interaction_targets.insert(0, ref.author.id)
-            if interaction_targets:
-                record_interactions(
+                store_message(
                     conn,
-                    message.guild.id,
-                    message.author.id,
-                    interaction_targets,
-                    ts=int(message_ts),
                     message_id=message.id,
+                    guild_id=message.guild.id,
+                    channel_id=message.channel.id,
+                    author_id=message.author.id,
+                    content=archive_content,
+                    reply_to_id=reply_to_id,
+                    ts=int(message_ts),
+                    attachment_urls=attachment_urls,
+                    mention_ids=mention_ids,
+                    sentiment=sentiment,
+                    emotion=emotion,
+                    embeds=[_discord_embed_to_dict(e) for e in message.embeds]
+                    if retain
+                    else (),
+                    retain_content=retain,
+                    media_kind=media_kind,
                 )
+
+                if sentiment is not None:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO message_sentiment "
+                        "(message_id, guild_id, channel_id, sentiment, emotion, computed_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            message.id,
+                            message.guild.id,
+                            message.channel.id,
+                            sentiment,
+                            emotion,
+                            message_ts,
+                        ),
+                    )
+
+                upsert_known_user(
+                    conn,
+                    guild_id=message.guild.id,
+                    user_id=message.author.id,
+                    username=str(message.author),
+                    display_name=message.author.display_name,
+                    ts=message_ts,
+                    is_bot=message.author.bot,
+                )
+
+                upsert_known_channel(
+                    conn,
+                    guild_id=message.guild.id,
+                    channel_id=message.channel.id,
+                    channel_name=getattr(message.channel, "name", str(message.channel.id)),
+                    ts=message_ts,
+                )
+
+                interaction_targets = list(mention_ids)
+                if (
+                    reply_to_id
+                    and message.reference
+                    and isinstance(message.reference.resolved, discord.Message)
+                ):
+                    ref = message.reference.resolved
+                    if (
+                        (not ref.author.bot or ref.author.id in cfg.recorded_bot_user_ids)
+                        and ref.author.id != message.author.id
+                        and ref.author.id not in interaction_targets
+                    ):
+                        interaction_targets.insert(0, ref.author.id)
+                if interaction_targets:
+                    record_interactions(
+                        conn,
+                        message.guild.id,
+                        message.author.id,
+                        interaction_targets,
+                        ts=int(message_ts),
+                        message_id=message.id,
+                    )
+
+        await asyncio.to_thread(_persist_member_message)
 
         result = await award_message_xp(
             message,
