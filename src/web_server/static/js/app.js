@@ -604,6 +604,8 @@ function populateGuildPicker(guilds, activeId) {
   const sigilEl = guildSelectEl.querySelector("[data-guild-sigil]");
   const menuEl = guildSelectEl.querySelector(".guild-picker__menu");
   menuEl.innerHTML = "";
+  menuEl.setAttribute("role", "listbox");
+  menuEl.setAttribute("aria-label", "Switch server");
   const active = guilds.find((g) => g.id === activeId) || guilds[0];
   if (active) {
     nameEl.textContent = active.name;
@@ -620,12 +622,34 @@ function populateGuildPicker(guilds, activeId) {
     li.className = "guild-picker__item" + (g.id === activeId ? " active" : "");
     li.textContent = g.name;
     li.dataset.id = g.id;
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", g.id === activeId ? "true" : "false");
+    li.tabIndex = -1;
     li.addEventListener("click", () => {
       guildSelectEl.classList.remove("open");
       if (g.id !== activeId) switchGuild(g.id);
     });
     menuEl.appendChild(li);
   }
+  // Keyboard operation: arrows move focus, Enter/Space select, Escape closes.
+  menuEl.addEventListener("keydown", (e) => {
+    const items = Array.from(menuEl.querySelectorAll(".guild-picker__item"));
+    if (!items.length) return;
+    const idx = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const next = e.key === "ArrowDown" ? idx + 1 : idx - 1;
+      items[(next + items.length) % items.length].focus();
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (idx >= 0) items[idx].click();
+    } else if (e.key === "Escape") {
+      guildSelectEl.classList.remove("open");
+      const toggle = guildSelectEl.querySelector(".guild-picker__toggle");
+      toggle?.setAttribute("aria-expanded", "false");
+      toggle?.focus();
+    }
+  });
   // Always show the guild bar — it doubles as the sidebar head.
   // If only one guild, suppress the dropdown but keep the bar visible.
   guildSelectEl.style.display = "";
@@ -678,14 +702,38 @@ async function boot() {
     // Guild picker
     if (me.guilds && me.guilds.length > 0) {
       populateGuildPicker(me.guilds, me.guild_id);
-      guildSelectEl.querySelector(".guild-picker__toggle").addEventListener("click", (e) => {
+      const toggle = guildSelectEl.querySelector(".guild-picker__toggle");
+      toggle.setAttribute("aria-haspopup", "listbox");
+      toggle.setAttribute("aria-expanded", "false");
+      const setOpen = (open) => {
+        guildSelectEl.classList.toggle("open", open);
+        toggle.setAttribute("aria-expanded", String(open));
+        if (open) {
+          // Move focus into the list so arrow keys work immediately.
+          const first =
+            guildSelectEl.querySelector(".guild-picker__item.active") ||
+            guildSelectEl.querySelector(".guild-picker__item");
+          first?.focus();
+        }
+      };
+      toggle.addEventListener("click", (e) => {
         // Only open the dropdown if there's more than one guild
         if (me.guilds.length <= 1) return;
         e.stopPropagation();
-        guildSelectEl.classList.toggle("open");
+        setOpen(!guildSelectEl.classList.contains("open"));
+      });
+      toggle.addEventListener("keydown", (e) => {
+        if (me.guilds.length <= 1) return;
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setOpen(true);
+        }
       });
       document.addEventListener("click", (e) => {
-        if (!guildSelectEl.contains(e.target)) guildSelectEl.classList.remove("open");
+        if (!guildSelectEl.contains(e.target)) {
+          guildSelectEl.classList.remove("open");
+          toggle.setAttribute("aria-expanded", "false");
+        }
       });
     }
 

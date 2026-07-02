@@ -14,7 +14,9 @@
   --ink:           #dbdee1;
   --ink-bright:    #f2f3f5;
   --ink-dim:       #b5bac1;
-  --ink-mute:      #80848e;
+  /* Lightened from #80848e (3.4–4.4:1) to clear WCAG AA 4.5:1 on every
+     surface it's used against (--bg 4.53, --bg-card 4.95, --bg-rail 5.91). */
+  --ink-mute:      #979ba3;
   --gold:          #e6b84cb3;
   --gold-solid:    #e6b84c;
   --gold-soft:     #e6b84c1a;
