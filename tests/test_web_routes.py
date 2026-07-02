@@ -103,7 +103,13 @@ class _TestCtx:
 
 @pytest.fixture
 def ctx(tmp_path):
+    from migrations import apply_migrations_sync
+
     db_path = tmp_path / "test.db"
+    # GET /api/config now aggregates sections (needle, auto-react, bump
+    # tracker, ...) that query their tables directly, so build the full
+    # canonical schema instead of hand-picking table-init helpers.
+    apply_migrations_sync(db_path)
     init_config_db(db_path)
     with open_db(db_path) as conn:
         init_grant_role_tables(conn)

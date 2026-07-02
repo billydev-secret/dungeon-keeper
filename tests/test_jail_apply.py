@@ -73,9 +73,13 @@ def _member(
     for rid in role_ids:
         role = MagicMock(spec=discord.Role)
         role.id = rid
+        # A bare MagicMock .managed is truthy, which would make apply_jail
+        # treat every role as integration-managed and skip it.
+        role.managed = False
         roles.append(role)
     m.roles = roles
-    m.edit = AsyncMock()
+    m.remove_roles = AsyncMock()
+    m.add_roles = AsyncMock()
     m.send = AsyncMock()
     return m
 
@@ -249,10 +253,12 @@ async def test_apply_jail_persists_jail_and_audit_with_source(tmp_path):
     assert result.jail_id is not None
     assert result.channel_id == 6000
 
-    # Role was applied (target.edit called with the jailed role)
-    target.edit.assert_awaited_once()
-    call_kwargs = target.edit.call_args.kwargs
-    assert call_kwargs["roles"] == [jailed_role]
+    # Roles were swapped: non-managed roles stripped, jailed role added.
+    target.remove_roles.assert_awaited_once()
+    removed = target.remove_roles.call_args.args
+    assert {r.id for r in removed} == {700, 701}
+    target.add_roles.assert_awaited_once()
+    assert target.add_roles.call_args.args == (jailed_role,)
 
     # jails row + audit_log row written, with source recorded
     with open_db(ctx.db_path) as conn:
@@ -340,7 +346,7 @@ async def test_apply_jail_returns_no_member_perms_on_edit_forbidden(tmp_path):
         _db_set(conn, "jailed_role_id", "5000", guild_id=ctx.guild_id)
 
     target = _member(42)
-    target.edit = AsyncMock(side_effect=discord.Forbidden(
+    target.remove_roles = AsyncMock(side_effect=discord.Forbidden(
         MagicMock(status=403, reason="Forbidden"), {"code": 50013}
     ))
 
@@ -376,8 +382,9 @@ async def test_apply_jail_returns_no_channel_perms_on_create_channel_forbidden(t
     )
     assert result.ok is False
     assert result.error_kind == "no_channel_perms"
-    # The role edit DID happen before the channel creation failed.
-    target.edit.assert_awaited_once()
+    # The role swap DID happen before the channel creation failed.
+    target.remove_roles.assert_awaited_once()
+    target.add_roles.assert_awaited_once()
 
 
 async def test_apply_jail_short_circuits_on_precheck_failure(tmp_path):
@@ -394,7 +401,8 @@ async def test_apply_jail_short_circuits_on_precheck_failure(tmp_path):
     assert result.error_kind == "bot_target"
     # No Discord-side calls made
     guild.create_role.assert_not_called()
-    bot_target.edit.assert_not_called()
+    bot_target.remove_roles.assert_not_called()
+    bot_target.add_roles.assert_not_called()
     guild.create_text_channel.assert_not_called()
 
 

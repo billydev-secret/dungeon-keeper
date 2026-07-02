@@ -16,6 +16,16 @@ GUESS_CHANNEL_ID = 8001
 GUILD_ID = 9001
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "bot_modules.cogs.guess_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Colour.default()),
+    )
+
+
 def _cfg(**overrides: Any) -> GuessConfig:
     defaults: dict[str, Any] = dict(
         guild_id=GUILD_ID,

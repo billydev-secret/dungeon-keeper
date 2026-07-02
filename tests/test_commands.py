@@ -1,4 +1,11 @@
-"""Tests for slash command handlers."""
+"""Tests for slash command handlers.
+
+The /grant command lives in ``bot_modules.cogs.role_grant_cog`` (RoleGrantCog),
+which resolves the grant config and delegates to
+``bot_modules.commands.role_grant_commands._execute_grant``. Tests drive the
+cog's command callback directly so both the permission/config gate and the
+shared execution path are covered.
+"""
 
 from __future__ import annotations
 
@@ -8,34 +15,10 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from bot_modules.commands.role_grant_commands import register_role_grant_commands
+from bot_modules.cogs.role_grant_cog import RoleGrantCog
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
-
-class _CommandCapture:
-    """Captures slash command callbacks registered via bot.tree.command."""
-
-    def __init__(self):
-        self.commands: dict[str, Any] = {}
-        self.error_handler = None
-        bot = MagicMock()
-        bot.tree.command = self._capture_command
-        bot.tree.error = self._capture_error
-        self.bot = bot
-
-    def _capture_command(self, name: str, **kwargs):
-        def decorator(fn):
-            self.commands[name] = fn
-            return fn
-        return decorator
-
-    def _capture_error(self, fn):
-        self.error_handler = fn
-        return fn
-
-    def get(self, name: str):
-        return self.commands[name]
 
 
 def _make_interaction(*, user_id: int = 100, guild: Any = None, channel: Any = None) -> MagicMock:
@@ -124,13 +107,12 @@ def _guild_with_role(role):
 
 @pytest.fixture
 def grant_setup():
-    cap = _CommandCapture()
     ctx = _make_ctx(can_grant_any_role=True, denizen_role_id=999)
-    register_role_grant_commands(cap.bot, ctx)
-    cmd = cap.get("grant")
+    cog = RoleGrantCog(MagicMock(), ctx)
+    cmd = RoleGrantCog.grant_cmd.callback
 
     async def grant(interaction, member):
-        return await cmd(interaction, "denizen", member)
+        return await cmd(cog, interaction, "denizen", member)
 
     return ctx, grant
 

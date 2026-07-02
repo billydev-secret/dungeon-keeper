@@ -39,8 +39,10 @@ class _FakeMessage:
     def __init__(self, mid: int):
         self.id = mid
         self.embeds: list = []
+        self.edited = False
 
     async def edit(self, **kwargs):
+        self.edited = True
         return None
 
 
@@ -426,8 +428,18 @@ async def test_ttl_redrives_guessing_skipping_played_subjects(sync_db_path):
         view = await _poll_for(bot, game_id, TTLGuessView)
         assert isinstance(view, TTLGuessView), f"got {type(view).__name__}"
         assert view.subject_id == 222  # 111 already scored -> skipped
-        row = await db.fetchone("SELECT message_id FROM games_active_games WHERE game_id = ?", (game_id,))
-        assert int(row["message_id"]) != stale.id
+        # The loop registers the view *before* posting the fresh message and
+        # persisting its id (games_ttl_cog: active_views[..] = view → send →
+        # update_game_message), so poll rather than read the row once.
+        row = None
+        for _ in range(50):
+            row = await db.fetchone(
+                "SELECT message_id FROM games_active_games WHERE game_id = ?", (game_id,)
+            )
+            if row is not None and int(row["message_id"]) != stale.id:
+                break
+            await asyncio.sleep(0.02)
+        assert row is not None and int(row["message_id"]) != stale.id
     finally:
         _cancel_pending(_baseline)
 

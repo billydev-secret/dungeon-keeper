@@ -1,4 +1,10 @@
-"""Integration tests for /api/games/* endpoints."""
+"""Integration tests for /api/games/* endpoints.
+
+Migration 054 seeds a starter 'ffa' bank into ``games_question_bank`` (51
+rows, 24 nsfw-tagged), so a freshly-migrated DB is never empty. Tests that
+need an empty bank call :func:`_clear_bank` first; count assertions either
+clear the seed or scope by game_type.
+"""
 
 from __future__ import annotations
 
@@ -23,6 +29,13 @@ def _seed_question(db_path, game_type="wyr", category="sfw", text="Test?", tags=
             (game_type, json.dumps(tags), text),
         )
         return cur.lastrowid
+
+
+def _clear_bank(db_path):
+    """Delete the migration-seeded question bank so 'empty' endpoints can be
+    exercised (migration 054 seeds a starter 'ffa' bank)."""
+    with open_db(db_path) as conn:
+        conn.execute("DELETE FROM games_question_bank")
 
 
 def _seed_history(db_path, game_type="wyr", player_count=3, round_count=5):
@@ -70,7 +83,8 @@ def test_unauthenticated_request_returns_401(fake_ctx):
 # ── Stats ─────────────────────────────────────────────────────────────────────
 
 
-def test_stats_empty_db(open_client):
+def test_stats_empty_db(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     resp = open_client.get(f"{BASE}/stats")
     assert resp.status_code == 200
     data = resp.json()
@@ -82,6 +96,7 @@ def test_stats_empty_db(open_client):
 
 
 def test_stats_counts_questions_and_history(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     _seed_question(fake_ctx.db_path, "wyr", "sfw", "Q1?")
     _seed_question(fake_ctx.db_path, "wyr", "nsfw", "Q2?")
     _seed_history(fake_ctx.db_path, "wyr", player_count=4, round_count=10)
@@ -148,7 +163,8 @@ def test_bank_create_invalid_game_type(open_client):
     assert resp.status_code == 400
 
 
-def test_bank_list_empty(open_client):
+def test_bank_list_empty(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     resp = open_client.get(f"{BASE}/bank")
     assert resp.status_code == 200
     data = resp.json()
@@ -158,6 +174,7 @@ def test_bank_list_empty(open_client):
 
 
 def test_bank_list_with_questions(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     _seed_question(fake_ctx.db_path, "wyr", "sfw", "Q1?")
     _seed_question(fake_ctx.db_path, "nhie", "nsfw", "Q2?")
 
@@ -180,6 +197,9 @@ def test_bank_list_filter_by_game_type(open_client, fake_ctx):
 
 
 def test_bank_list_filter_by_tag(open_client, fake_ctx):
+    # Seeded 'ffa' rows include nsfw-tagged ones — clear so the tag filter
+    # result is exactly the row seeded below.
+    _clear_bank(fake_ctx.db_path)
     _seed_question(fake_ctx.db_path, "wyr", text="Safe?", tags=["calm"])
     _seed_question(fake_ctx.db_path, "wyr", text="Spicy?", tags=["nsfw"])
 
@@ -317,6 +337,7 @@ def test_bank_bulk_invalid_game_type(open_client):
 
 
 def test_bank_export_all(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     _seed_question(fake_ctx.db_path, "wyr", "sfw", "Q1?")
     _seed_question(fake_ctx.db_path, "nhie", "nsfw", "Q2?")
 
@@ -339,7 +360,8 @@ def test_bank_export_filtered_by_game_type(open_client, fake_ctx):
     assert items[0]["game_type"] == "wyr"
 
 
-def test_bank_export_empty_returns_list(open_client):
+def test_bank_export_empty_returns_list(open_client, fake_ctx):
+    _clear_bank(fake_ctx.db_path)
     resp = open_client.get(f"{BASE}/bank/export")
     assert resp.status_code == 200
     assert resp.json() == []

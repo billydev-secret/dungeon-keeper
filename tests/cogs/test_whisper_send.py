@@ -16,6 +16,16 @@ SENDER_ID = 1001
 TARGET_ID = 2001
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "bot_modules.cogs.whisper_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Colour.default()),
+    )
+
+
 def _cfg() -> WhisperConfig:
     return WhisperConfig(guild_id=9001, role_id=ROLE, channel_id=FEED, log_channel_id=LOG)
 

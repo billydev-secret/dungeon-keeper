@@ -88,14 +88,26 @@ def test_get_ffa_prompt_kind_drives_label():
     assert _run(get_ffa_prompt(db, kind="dare")) == (DARE, "A dare.")
 
 
-def test_get_ffa_prompt_excludes_nsfw_unless_opted_in():
+def test_get_ffa_prompt_excludes_nsfw_unless_allow_nsfw():
+    """NSFW is gated on the channel's age-restriction flag (``allow_nsfw``);
+    requesting the 'nsfw' tag cannot re-enable it."""
     db = _FakeDB([
         ("ffa", ["truth"], "Tame truth."),
         ("ffa", ["truth", "nsfw"], "Spicy truth."),
     ])
+    # Default (no channel opt-in) → nsfw rows are excluded.
     seen = {_run(get_ffa_prompt(db, kind="truth"))[1] for _ in range(40)}
     assert seen == {"Tame truth."}
+    # Requesting the 'nsfw' tag without allow_nsfw doesn't re-enable NSFW —
+    # only tame content comes back.
     seen = {_run(get_ffa_prompt(db, kind="truth", tags=["nsfw"]))[1] for _ in range(40)}
+    assert seen == {"Tame truth."}
+    # An nsfw-only pool with the tag requested but no channel opt-in is a
+    # filtered miss (no code-bank fallback when a tag filter was supplied).
+    nsfw_only = _FakeDB([("ffa", ["truth", "nsfw"], "Spicy truth.")])
+    assert _run(get_ffa_prompt(nsfw_only, kind="truth", tags=["nsfw"])) is None
+    # Channel opt-in (allow_nsfw=True) → both pools are candidates.
+    seen = {_run(get_ffa_prompt(db, kind="truth", allow_nsfw=True))[1] for _ in range(40)}
     assert seen == {"Tame truth.", "Spicy truth."}
 
 

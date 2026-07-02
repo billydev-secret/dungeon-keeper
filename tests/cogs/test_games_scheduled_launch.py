@@ -97,8 +97,12 @@ async def test_ama_headless_launch(sync_db_path):
 
 
 async def test_clapback_headless_launch(sync_db_path):
-    # Empty bank → source 'both' falls back to 'ai' (no user to prompt headless).
+    # Clapback is bank-only: launch() refuses when the bank is empty, so seed
+    # one prompt first (mirrors the /games play clapback slash pre-check).
     db = GamesDb(sync_db_path)
+    await db.execute(
+        "INSERT INTO games_question_bank (game_type, question_text) VALUES ('clapback', 'Roast me')",
+    )
     bot = _FakeBot(db)
     cog = ClapbackCog(bot)  # type: ignore[arg-type]
     channel = _FakeChannel()

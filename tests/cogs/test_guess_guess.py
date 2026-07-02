@@ -15,6 +15,18 @@ def _patch_count_user_guesses():
     with patch("bot_modules.cogs.guess_cog._do_count_user_guesses", return_value=0) as m:
         yield m
 
+
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    import discord
+
+    monkeypatch.setattr(
+        "bot_modules.cogs.guess_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Colour.default()),
+    )
+
 GUESS_ROLE_ID = 7001
 ROUND_ID = 99
 
@@ -414,7 +426,6 @@ async def test_guess_callback_message_mentions_timer():
 
     guesser = FakeMember(id=9999)
     interaction = fake_interaction(user=guesser)
-    interaction.response.send_message = AsyncMock()
     guess_role = MagicMock()
     guess_role.members = [FakeMember(id=2001, display_name="Alice")]
     interaction.guild.get_role = MagicMock(return_value=guess_role)
@@ -426,7 +437,7 @@ async def test_guess_callback_message_mentions_timer():
          patch("bot_modules.cogs.guess_cog._do_load_round", return_value=round_row):
         await view._guess_callback(interaction)
 
-    msg = interaction.response.send_message.call_args.args[0]
+    msg = interaction.followup.send.call_args.args[0]
     assert "60" in msg or "second" in msg.lower(), f"expected timer hint in: {msg!r}"
 
 
@@ -441,7 +452,6 @@ async def test_game_view_rejects_submitter_guessing_own_round():
 
     submitter = FakeMember(id=1001)
     interaction = fake_interaction(user=submitter)
-    interaction.response.send_message = AsyncMock()
 
     round_row = _make_round(submitter_id=1001)
     config = GuessConfig(guild_id=9001, guess_role_id=GUESS_ROLE_ID)
@@ -450,7 +460,7 @@ async def test_game_view_rejects_submitter_guessing_own_round():
          patch("bot_modules.cogs.guess_cog._do_load_round", return_value=round_row):
         await view._guess_callback(interaction)
 
-    msg = interaction.response.send_message.call_args.args[0]
+    msg = interaction.followup.send.call_args.args[0]
     assert "can't guess" in msg.lower() or "own round" in msg.lower()
 
 

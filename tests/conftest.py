@@ -20,6 +20,42 @@ from migrations import apply_migrations, apply_migrations_sync
 from tests.fakes import FakeGuild, FakeRole, FakeUser, fake_interaction as _fake_interaction
 
 
+@pytest.fixture(autouse=True)
+def _reset_shared_module_state():
+    """Clear process-wide module caches that leak between tests.
+
+    Production keeps small in-memory caches at module level; tests in one
+    xdist worker share the process, so entries left by one test (often keyed
+    by the small fake guild/user ids every file reuses) poison later tests:
+
+    * ``bot_modules.core.branding._avatar_cache`` — avatar-derived accents,
+      keyed by guild id.
+    * ``bot_modules.cogs.guess_cog._submit_history`` — /guess submit
+      rate-limiter (5/hour per user id).
+    * ``web_server.server._buckets`` — per-IP rate-limit token buckets; every
+      TestClient shares the "testclient" IP, so the search/auth tiers drain
+      across tests and start returning 429s.
+
+    Only modules that are already imported are touched — this must not force
+    imports for tests that never load them.
+    """
+
+    def _clear() -> None:
+        branding = sys.modules.get("bot_modules.core.branding")
+        if branding is not None:
+            branding._avatar_cache.clear()
+        guess_cog = sys.modules.get("bot_modules.cogs.guess_cog")
+        if guess_cog is not None:
+            guess_cog._submit_history.clear()
+        web_server = sys.modules.get("web_server.server")
+        if web_server is not None:
+            web_server._buckets.clear()
+
+    _clear()
+    yield
+    _clear()
+
+
 @pytest_asyncio.fixture
 async def temp_db(tmp_path):
     """Open an aiosqlite connection with the full schema applied."""

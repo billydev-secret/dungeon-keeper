@@ -1536,7 +1536,9 @@ def test_panel_metas_for_group_preserve_display_order():
     settings = [m.action for m in panel_metas_for_group("settings")]
     assert settings == ["rename", "limit", "hide", "unhide", "reset"]
     perms = [m.action for m in panel_metas_for_group("permissions")]
-    assert perms == ["lock", "unlock", "invite", "kick", "transfer"]
+    assert perms == [
+        "lock", "unlock", "spectator", "unspectator", "invite", "kick", "transfer",
+    ]
 
 
 def test_panel_group_placeholder_text():

@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
 import pytest
 
 from bot_modules.services.guess_models import GuessRound
@@ -12,6 +13,16 @@ from tests.fakes import FakeGuild, FakeMember, fake_interaction
 GUILD_ID = 9001
 GUESS_CHANNEL_ID = 8001
 ROUND_ID = 42
+
+
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "bot_modules.cogs.guess_cog.resolve_accent_color",
+        AsyncMock(return_value=discord.Colour.default()),
+    )
 
 
 def _make_round() -> GuessRound:

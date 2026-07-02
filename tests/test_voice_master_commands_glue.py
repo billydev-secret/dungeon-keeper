@@ -35,6 +35,16 @@ CONTROL_CH = 6010
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _stub_accent_color(monkeypatch):
+    """resolve_accent_color awaits guild.me.display_avatar.read(), which the
+    mocked guilds here can't satisfy — stub it at the use-site namespace."""
+    monkeypatch.setattr(
+        "bot_modules.commands.voice_master_commands.resolve_accent_color",
+        AsyncMock(return_value=discord.Colour.default()),
+    )
+
+
 @pytest.fixture
 def db(tmp_path):
     db_path = tmp_path / "vm_glue.db"
