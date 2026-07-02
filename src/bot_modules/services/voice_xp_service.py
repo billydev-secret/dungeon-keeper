@@ -182,15 +182,6 @@ async def voice_xp_loop(
             leveled_members = await process_voice_xp_tick(
                 bot, db_path, current_settings, settings_for=settings_for
             )
-            if leveled_members:
-                log.info(
-                    "Voice XP tick awarded XP to %d member(s): %s",
-                    len(leveled_members),
-                    ", ".join(
-                        f"{m.display_name} (+{a.awarded_xp:.1f} XP, total={a.total_xp:.1f}, lvl {a.new_level})"
-                        for m, a in leveled_members.values()
-                    ),
-                )
             for member, award in leveled_members.values():
                 await handle_level_progress_callback(member, award, source="voice_tick")
         except asyncio.CancelledError:
