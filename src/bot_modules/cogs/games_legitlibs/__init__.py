@@ -15,10 +15,6 @@ log = logging.getLogger(__name__)
 
 _SEED_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "templates_seed.json")
 
-# Kill-switch flag — set to True by /legitlibs-admin killswitch
-_MODULE_DISABLED = False
-
-
 class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     def __init__(self, bot):
         self.bot = bot
@@ -58,14 +54,7 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         template_id: str = None,
         tag: str = None,
     ):
-        global _MODULE_DISABLED
         log.info("%s used /games play legitlibs in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
-
-        if _MODULE_DISABLED:
-            await interaction.response.send_message(
-                "LegitLibs is currently disabled. Ask an admin to re-enable it.", ephemeral=True
-            )
-            return
 
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(

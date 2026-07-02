@@ -127,6 +127,32 @@ class BaseGame(commands.Cog):
     async def _before_expire(self) -> None:
         await self.bot.wait_until_ready()
 
+    @commands.Cog.listener()
+    async def on_member_join(self, member: discord.Member) -> None:
+        """Re-apply an unexpired nickname sentence when a sentenced member
+        rejoins, so leaving and coming back can't be used to dodge it."""
+        row = await duels_db.get_active_nick_for_user(self.db, member.guild.id, member.id)
+        # get_active_nick_for_user returns any game's active sentence; only the
+        # owning cog handles it, so all duel cogs don't redundantly re-apply.
+        if not row or row.get("game_type") != self.GAME_KEY:
+            return
+        if float(row.get("expires_at") or 0) <= time.time():
+            return  # already lapsed — the expire loop will revert it
+        imposed = row.get("imposed_nick")
+        if not imposed:
+            return
+        try:
+            await member.edit(
+                nick=imposed,
+                reason=f"{self.GAME_DISPLAY_NAME} sentence still active (rejoined)",
+            )
+            log.info(
+                "Re-applied active nick for rejoining user %d in guild %d",
+                member.id, member.guild.id,
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
     async def _expire_pending(self, game: Any) -> None:
         await self._db_set_state(game.id, "EXPIRED_PENDING")
         await self._edit_message_silent(
