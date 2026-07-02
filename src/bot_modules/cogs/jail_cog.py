@@ -12,6 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.jail.embeds import (
     build_adopted_policies_embed,
     build_modinfo_embed,
@@ -29,9 +30,7 @@ from bot_modules.jail.embeds import (
 from bot_modules.jail.logic import sanitize_channel_name
 
 from bot_modules.commands.jail_commands import (
-    CLR_INFO,
     CLR_POLICY,
-    CLR_TICKET,
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
     PolicyVoteYesButton,
@@ -430,7 +429,8 @@ class JailCog(commands.Cog):
             await interaction.response.send_message("Mod only.", ephemeral=True)
             return
 
-        embed = build_ticket_panel_embed()
+        accent = await resolve_accent_color(ctx.db_path, guild)
+        embed = build_ticket_panel_embed(colour=accent)
         view = discord.ui.View(timeout=None)
         view.add_item(TicketPanelButton())
         msg = await channel.send(embed=embed, view=view)
@@ -463,6 +463,7 @@ class JailCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
         desc_text = description or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{sanitize_channel_name(user.name)[:16]}-{ts}"
@@ -519,6 +520,7 @@ class JailCog(commands.Cog):
             ticket_id=ticket_id,
             description=desc_text,
             opener_mention=user.mention,
+            colour=accent,
         )
         view = discord.ui.View(timeout=None)
         view.add_item(TicketCloseButton(ticket_id))
@@ -531,14 +533,14 @@ class JailCog(commands.Cog):
             user,
             embed=discord.Embed(
                 description=f"Your ticket has been created → [Go to ticket]({channel.jump_url})",
-                color=CLR_TICKET,
+                color=accent,
             ),
         )
 
         audit_embed = discord.Embed(
             title="📩 Ticket Opened",
             description=f"**Ticket #{ticket_id}** by {user.mention} in {channel.mention}",
-            color=CLR_TICKET,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -566,6 +568,7 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
+        accent = await resolve_accent_color(ctx.db_path, guild)
 
         with ctx.open_db() as conn:
             close_ticket(conn, tid, closed_by=member.id, reason=reason_text)
@@ -610,7 +613,7 @@ class JailCog(commands.Cog):
                         description=f"Your ticket in **{guild.name}** has been closed."
                         + (f"\n**Reason:** {reason_text}" if reason_text else "")
                         + "\nYou can still view the channel.",
-                        color=CLR_TICKET,
+                        color=accent,
                     ),
                     fallback_channel=channel,
                 )
@@ -635,6 +638,7 @@ class JailCog(commands.Cog):
         guild = interaction.guild
         if not guild:
             return
+        accent = await resolve_accent_color(ctx.db_path, guild)
         tid = ticket["id"]
         with ctx.open_db() as conn:
             reopen_ticket(conn, tid)
@@ -672,7 +676,7 @@ class JailCog(commands.Cog):
                     creator,
                     embed=discord.Embed(
                         description=f"Your ticket in **{guild.name}** has been reopened.",
-                        color=CLR_TICKET,
+                        color=accent,
                     ),
                 )
 
@@ -703,6 +707,7 @@ class JailCog(commands.Cog):
         tid = ticket["id"]
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
         creator = guild.get_member(ticket["user_id"]) or interaction.user
         await _collect_and_post_transcript(
             ctx,
@@ -726,7 +731,7 @@ class JailCog(commands.Cog):
         audit_embed = discord.Embed(
             title="🗑️ Ticket Deleted",
             description=f"**Ticket #{tid}** deleted by {member.mention}",
-            color=CLR_TICKET,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
         await channel.delete(reason=f"Ticket #{tid} deleted")
@@ -1011,6 +1016,7 @@ class JailCog(commands.Cog):
 
         policy_id = policy["id"]
         reason_text = reason or "Closed without vote"
+        accent = await resolve_accent_color(ctx.db_path, guild)
 
         with ctx.open_db() as conn:
             close_policy_ticket(conn, policy_id)
@@ -1028,6 +1034,7 @@ class JailCog(commands.Cog):
                 title=policy["title"],
                 moderator_mention=member.mention,
                 reason=reason_text,
+                colour=accent,
             )
             await interaction.response.send_message(embed=close_embed)
 
@@ -1077,7 +1084,7 @@ class JailCog(commands.Cog):
             title="📋 Policy Proposal Closed",
             description=f"**{policy['title']}** closed by {member.mention}"
             + (f"\nReason: {reason_text}" if reason_text else ""),
-            color=CLR_INFO,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -1449,6 +1456,7 @@ class JailCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
 
         since_30d = datetime.now(timezone.utc).timestamp() - 30 * 86400
 
@@ -1527,6 +1535,7 @@ class JailCog(commands.Cog):
             top_channels=top_channels,
             msgs_30d_total=sum(msg_counts),
             ts_formatter=_ts_str,
+            colour=accent,
         )
 
         await interaction.followup.send(

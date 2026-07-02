@@ -245,8 +245,13 @@ def build_warnings_list_embed(
 # ── Ticket panel ───────────────────────────────────────────────────────
 
 
-def build_ticket_panel_embed() -> discord.Embed:
+def build_ticket_panel_embed(
+    *,
+    colour: "discord.Colour | None" = None,
+) -> discord.Embed:
     """The static "📩 Support Tickets" embed for ``/ticket panel``."""
+    if colour is None:
+        colour = discord.Colour(MOD_TICKET)
     return discord.Embed(
         title="📩 Support Tickets",
         description=(
@@ -254,7 +259,7 @@ def build_ticket_panel_embed() -> discord.Embed:
             "private ticket.\n\n"
             "A moderator will respond as soon as possible."
         ),
-        color=MOD_TICKET,
+        color=colour,
     )
 
 
@@ -264,12 +269,15 @@ def build_ticket_open_embed(
     description: str,
     opener_mention: str,
     now: datetime | None = None,
+    colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
     """Build the welcome embed posted inside a freshly-opened ticket."""
+    if colour is None:
+        colour = discord.Colour(MOD_TICKET)
     embed = discord.Embed(
         title=f"Ticket #{ticket_id}",
         description=description,
-        color=MOD_TICKET,
+        color=colour,
         timestamp=now or datetime.now(timezone.utc),
     )
     embed.add_field(name="Opened by", value=opener_mention, inline=True)
@@ -287,16 +295,22 @@ def build_ticket_open_embed(
 # ── Setup wizard completion ────────────────────────────────────────────
 
 
-def build_setup_step_embed(step_meta: Mapping[str, str]) -> discord.Embed:
+def build_setup_step_embed(
+    step_meta: Mapping[str, str],
+    *,
+    colour: "discord.Colour | None" = None,
+) -> discord.Embed:
     """Build the per-step embed for the ``/setup`` wizard.
 
     Takes the dict returned by ``jail.logic.setup_step_meta`` so the data
     and the View stay decoupled.
     """
+    if colour is None:
+        colour = discord.Colour(MOD_TICKET)
     return discord.Embed(
         title=step_meta["title"],
         description=step_meta["description"],
-        color=MOD_TICKET,
+        color=colour,
     )
 
 
@@ -329,6 +343,7 @@ def build_modinfo_embed(
     top_channels: Sequence[Mapping[str, Any]],
     msgs_30d_total: int,
     ts_formatter=None,
+    colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
     """Assemble the ``/modinfo`` summary embed.
 
@@ -341,7 +356,9 @@ def build_modinfo_embed(
     """
     formatter = ts_formatter or (lambda ts: f"<t:{int(ts)}:f>" if ts else "N/A")
 
-    embed = discord.Embed(title=f"Mod Info — {user_label}", color=MOD_INFO)
+    if colour is None:
+        colour = discord.Colour(MOD_INFO)
+    embed = discord.Embed(title=f"Mod Info — {user_label}", color=colour)
     if user_avatar_url:
         embed.set_thumbnail(url=user_avatar_url)
 
@@ -542,12 +559,15 @@ def build_policy_close_embed(
     title: str,
     moderator_mention: str,
     reason: str = "",
+    colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
     """Embed posted when an admin closes a policy proposal without voting."""
+    if colour is None:
+        colour = discord.Colour(MOD_INFO)
     embed = discord.Embed(
         title="📋 Policy Proposal Closed",
         description=f"**{title}** was closed by {moderator_mention}.",
-        color=MOD_INFO,
+        color=colour,
     )
     if reason:
         embed.add_field(name="Reason", value=reason, inline=False)

@@ -16,13 +16,12 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_config_value
 from bot_modules.services.embeds import (
-    MOD_INFO as CLR_INFO,
     MOD_JAIL as CLR_JAIL,  # noqa: F401  re-exported for jail_cog
     MOD_POLICY as CLR_POLICY,  # noqa: F401  re-exported for jail_cog
     MOD_SUCCESS as CLR_SUCCESS,
-    MOD_TICKET as CLR_TICKET,
 )
 from bot_modules.services.moderation import (
     add_policy,
@@ -213,10 +212,11 @@ async def _collect_and_post_transcript(
     if transcript_ch_id:
         ch = channel.guild.get_channel(transcript_ch_id)
         if ch and isinstance(ch, discord.TextChannel):
+            accent = await resolve_accent_color(ctx.db_path, channel.guild)
             embed = discord.Embed(
                 title=f"Transcript — {record_type.title()} #{record_id}",
                 description=f"**Channel:** #{channel.name}\n**Messages:** {transcript['message_count']}",
-                color=CLR_INFO,
+                color=accent,
             )
             await ch.send(
                 embed=embed, file=discord.File(io.BytesIO(md_bytes), filename)
@@ -297,7 +297,12 @@ _SETUP_SELECTS: dict[str, type] = {
 }
 
 
-def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.View]:
+def _setup_view(
+    ctx: AppContext,
+    step: int,
+    *,
+    colour: "discord.Colour | None" = None,
+) -> tuple[discord.Embed, discord.ui.View]:
     """Return the embed + view for a given setup step.
 
     The per-step content (title, description, config key, select type,
@@ -305,6 +310,10 @@ def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.V
     be tested without spinning up a View. This function is the glue:
     pick the right ``discord.ui.Select`` subclass, wire up the Next button,
     and return the rendered embed/view pair.
+
+    ``colour`` is the resolved per-guild accent, threaded from the async
+    ``/setup`` entry point (this function is sync, so it can't resolve it
+    itself). Left ``None`` for tests, falling back to the builder default.
     """
     meta = setup_step_meta(step)
     if meta is None:
@@ -315,7 +324,7 @@ def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.V
     view.add_item(select_cls(meta["config_key"], ctx, placeholder=meta["placeholder"]))
 
     async def next_step(interaction: discord.Interaction):
-        e, v = _setup_view(ctx, step + 1)
+        e, v = _setup_view(ctx, step + 1, colour=colour)
         await interaction.response.edit_message(embed=e, view=v)
 
     btn: discord.ui.Button = discord.ui.Button(
@@ -323,7 +332,7 @@ def _setup_view(ctx: AppContext, step: int) -> tuple[discord.Embed, discord.ui.V
     )  # type: ignore[assignment]
     btn.callback = next_step  # type: ignore[method-assign]
     view.add_item(btn)
-    return build_setup_step_embed(meta), view
+    return build_setup_step_embed(meta, colour=colour), view
 
 
 # Kept for backwards compatibility with anything that imported the constant
@@ -432,6 +441,7 @@ class TicketReopenButton(
         # Restore send permission for creator
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
+            accent = await resolve_accent_color(ctx.db_path, channel.guild)
             with ctx.open_db() as conn:
                 ticket = get_ticket_by_channel(conn, channel.id)
             if ticket:
@@ -448,7 +458,7 @@ class TicketReopenButton(
                     creator or interaction.user,
                     embed=discord.Embed(
                         description=f"Your ticket in **{interaction.guild.name}** has been reopened.",  # type: ignore[union-attr]
-                        color=CLR_TICKET,
+                        color=accent,
                     ),
                 )
 
@@ -530,6 +540,7 @@ class TicketDeleteButton(
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
             return
+        accent = await resolve_accent_color(ctx.db_path, channel.guild)
 
         with ctx.open_db() as conn:
             ticket = get_ticket_by_channel(conn, channel.id)
@@ -566,7 +577,7 @@ class TicketDeleteButton(
         audit_embed = discord.Embed(
             title="🗑️ Ticket Deleted",
             description=f"**Ticket #{self.ticket_id}** by <@{ticket['user_id']}> deleted by {member.mention}",
-            color=CLR_TICKET,
+            color=accent,
         )
         await _post_audit(ctx, interaction.guild, audit_embed)  # type: ignore[arg-type]
         await channel.delete(reason=f"Ticket #{self.ticket_id} deleted by {member}")
@@ -960,6 +971,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
             return
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
 
         # Create channel
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
@@ -1018,7 +1030,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         embed = discord.Embed(
             title=f"Ticket #{ticket_id}",
             description=desc_text,
-            color=CLR_TICKET,
+            color=accent,
             timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(name="Opened by", value=user.mention, inline=True)
@@ -1037,7 +1049,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
             user,
             embed=discord.Embed(
                 description=f"Your ticket has been created in **{guild.name}** → [Go to ticket]({channel.jump_url})",
-                color=CLR_TICKET,
+                color=accent,
             ),
         )
 
@@ -1057,7 +1069,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
                         embed=discord.Embed(
                             title="📩 New Ticket",
                             description=f"**{user}** opened a ticket → [Jump to ticket]({channel.jump_url})\n\n{desc_text}",
-                            color=CLR_TICKET,
+                            color=accent,
                         ),
                     )
 
@@ -1065,7 +1077,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         audit_embed = discord.Embed(
             title="📩 Ticket Opened",
             description=f"**Ticket #{ticket_id}** by {user.mention} in {channel.mention}",
-            color=CLR_TICKET,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -1093,6 +1105,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             return
 
         reason = self.reason.value or ""
+        accent = await resolve_accent_color(ctx.db_path, guild)
         with ctx.open_db() as conn:
             ticket = get_ticket_by_channel(conn, interaction.channel_id or 0)
             if not ticket or ticket["status"] != "open":
@@ -1141,7 +1154,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
                     creator,
                     embed=discord.Embed(
                         description=f"Your ticket in **{guild.name}** has been closed.\n{f'**Reason:** {reason}' if reason else ''}\nYou can still view the channel.",
-                        color=CLR_TICKET,
+                        color=accent,
                     ),
                     fallback_channel=channel,
                 )
@@ -1150,7 +1163,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
             title="🔒 Ticket Closed",
             description=f"**Ticket #{self.ticket_id}** closed by {member.mention}"
             + (f"\nReason: {reason}" if reason else ""),
-            color=CLR_TICKET,
+            color=accent,
         )
         await _post_audit(ctx, guild, audit_embed)
 
@@ -1542,6 +1555,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
             return
 
         await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(ctx.db_path, guild)
         desc_text = self.description.value or "(no description)"
         ts = datetime.now(timezone.utc).strftime("%m%d-%H%M")
         name = f"ticket-{user.name[:16]}-{ts}"
@@ -1602,7 +1616,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
         embed = discord.Embed(
             title=f"Ticket #{ticket_id}",
             description=desc_text,
-            color=CLR_TICKET,
+            color=accent,
             timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(name="Opened by", value=user.mention, inline=True)

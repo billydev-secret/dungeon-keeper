@@ -8,6 +8,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.commands.jail_commands import _setup_view
+from bot_modules.core.branding import resolve_accent_color
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -32,7 +33,10 @@ class SetupCog(commands.Cog):
             await interaction.response.send_message("Administrator only.", ephemeral=True)
             return
 
-        embed, view = _setup_view(ctx, 1)
+        accent = None
+        if interaction.guild is not None:
+            accent = await resolve_accent_color(ctx.db_path, interaction.guild)
+        embed, view = _setup_view(ctx, 1, colour=accent)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 

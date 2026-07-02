@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.settings import AUTO_DELETE_SETTINGS
 
@@ -36,8 +37,11 @@ def _get_cog_commands(cog: commands.Cog) -> list[tuple[str, str]]:
     return sorted(result)
 
 
-def _build_cog_pages(bot: "Bot") -> list[discord.Embed]:
+def _build_cog_pages(
+    bot: "Bot", colour: "discord.Colour | None" = None
+) -> list[discord.Embed]:
     pages: list[discord.Embed] = []
+    page_colour = colour if colour is not None else discord.Color.greyple()
     for cog in sorted(bot.cogs.values(), key=lambda c: c.qualified_name.lower()):
         cmds = _get_cog_commands(cog)
         if not cmds:
@@ -50,7 +54,7 @@ def _build_cog_pages(bot: "Bot") -> list[discord.Embed]:
             discord.Embed(
                 title=f"📦  {display}",
                 description=body,
-                color=discord.Color.greyple(),
+                color=page_colour,
             )
         )
     return pages
@@ -78,7 +82,9 @@ def _page(name: str, body: str) -> discord.Embed:
 
 
 def _build_help_pages(
-    ctx: AppContext, interaction: discord.Interaction
+    ctx: AppContext,
+    interaction: discord.Interaction,
+    colour: "discord.Colour | None" = None,
 ) -> list[discord.Embed]:
     pages: list[discord.Embed] = []
 
@@ -264,6 +270,13 @@ def _build_help_pages(
         )
     )
 
+    # Collapse the decorative per-section colours to the shared guild accent
+    # when one is available; the per-section palette in ``_page`` stays as the
+    # fallback for contexts without a resolvable guild (e.g. DMs).
+    if colour is not None:
+        for page in pages:
+            page.colour = colour
+
     return pages
 
 
@@ -337,10 +350,17 @@ class HelpSelect(discord.ui.Select):
 
 
 class HelpView(discord.ui.View):
-    def __init__(self, pages: list[discord.Embed], invoker_id: int, bot: "Bot"):
+    def __init__(
+        self,
+        pages: list[discord.Embed],
+        invoker_id: int,
+        bot: "Bot",
+        colour: "discord.Colour | None" = None,
+    ):
         super().__init__(timeout=120)
         self.bot = bot
         self.invoker_id = invoker_id
+        self._accent = colour
         self.select = HelpSelect(pages, invoker_id)
         self.add_item(self.select)
 
@@ -354,7 +374,7 @@ class HelpView(discord.ui.View):
         if interaction.user.id != self.invoker_id:
             await interaction.response.defer()
             return
-        cog_pages = _build_cog_pages(self.bot)
+        cog_pages = _build_cog_pages(self.bot, self._accent)
         if not cog_pages:
             await interaction.response.send_message("No modules found.", ephemeral=True)
             return
@@ -376,8 +396,13 @@ class ModCog(commands.Cog):
         name="help", description="Browse all available commands organized by category."
     )
     async def help_command(self, interaction: discord.Interaction) -> None:
-        pages = _build_help_pages(self.ctx, interaction)
-        view = HelpView(pages, invoker_id=interaction.user.id, bot=self.bot)
+        accent = None
+        if interaction.guild is not None:
+            accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        pages = _build_help_pages(self.ctx, interaction, accent)
+        view = HelpView(
+            pages, invoker_id=interaction.user.id, bot=self.bot, colour=accent
+        )
         await interaction.response.send_message(
             embed=view.current_embed(), view=view, ephemeral=True
         )

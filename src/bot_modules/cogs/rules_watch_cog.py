@@ -9,6 +9,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_config_value, set_config_value
 
 if TYPE_CHECKING:
@@ -126,7 +127,13 @@ class RulesWatchCog(commands.Cog):
         with self.ctx.open_db() as conn:
             stats = service.get_stats(conn, guild_id)
 
-        embed = discord.Embed(title="Rules Watch — Stats", colour=discord.Colour.blurple())
+        guild = interaction.guild
+        accent = (
+            await resolve_accent_color(self.ctx.db_path, guild)
+            if guild is not None
+            else discord.Colour.blurple()
+        )
+        embed = discord.Embed(title="Rules Watch — Stats", colour=accent)
         embed.add_field(
             name="Events",
             value=f"Total: {stats['total']} | Labeled: {stats['labeled']} | "
