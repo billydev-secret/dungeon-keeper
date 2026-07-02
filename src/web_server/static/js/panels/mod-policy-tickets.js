@@ -24,7 +24,7 @@ export function mount(container) {
 
       <div class="ticket-list-head" style="margin-bottom:8px">
         <h3>Queue</h3>
-        <div class="ctrl-group" role="tablist" data-filter-group>
+        <div class="ctrl-group" role="group" aria-label="Filter policy tickets" data-filter-group>
           <button class="active" data-filter="">All</button>
           <button data-filter="open">Open</button>
           <button data-filter="voting">Voting</button>

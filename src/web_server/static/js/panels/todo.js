@@ -105,7 +105,7 @@ export function mount(container) {
         <div class="ticket-list-wrap">
           <div class="ticket-list-head">
             <h3>Tasks</h3>
-            <div class="ctrl-group" role="tablist" data-filter-group>
+            <div class="ctrl-group" role="group" aria-label="Filter tasks" data-filter-group>
               <button class="active" data-filter="pending">Pending</button>
               <button data-filter="completed">Completed</button>
               <button data-filter="all">All</button>

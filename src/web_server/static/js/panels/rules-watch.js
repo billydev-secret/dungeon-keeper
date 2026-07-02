@@ -131,13 +131,13 @@ export function mount(container) {
         <div class="subtitle">Passive AI moderation monitor — alert queue and label capture</div>
       </header>
 
-      <div class="ctrl-group" role="tablist" data-tabs style="margin-bottom:16px">
+      <div class="ctrl-group" role="group" aria-label="Views" data-tabs style="margin-bottom:16px">
         <button class="active" data-tab="queue">Alert Queue</button>
         <button data-tab="stats">Label Stats</button>
       </div>
 
       <div data-tab-content="queue">
-        <div class="ctrl-group" role="tablist" data-filter-group style="margin-bottom:12px">
+        <div class="ctrl-group" role="group" aria-label="Filter events" data-filter-group style="margin-bottom:12px">
           <button class="active" data-tier="">All</button>
           <button data-tier="immediate">Immediate</button>
           <button data-tier="digest">Digest</button>
