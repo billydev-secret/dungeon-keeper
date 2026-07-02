@@ -671,30 +671,36 @@ class EventsCog(commands.Cog):
             )
 
         if payload.guild_id:
-            with self.ctx.open_db() as conn:
-                adjust_reaction_count(conn, payload.message_id, str(payload.emoji), +1)
-                row = conn.execute(
-                    "SELECT author_id, channel_id FROM messages WHERE message_id = ?",
-                    (payload.message_id,),
-                ).fetchone()
-                if row and payload.user_id != int(row["author_id"]):
-                    record_reaction(
-                        conn,
-                        guild_id=payload.guild_id,
-                        reactor_id=payload.user_id,
-                        author_id=int(row["author_id"]),
-                        channel_id=int(row["channel_id"]),
-                        message_id=payload.message_id,
-                        ts=int(discord.utils.utcnow().timestamp()),
-                    )
+            def _record_reaction_add():
+                with self.ctx.open_db() as conn:
+                    adjust_reaction_count(conn, payload.message_id, str(payload.emoji), +1)
+                    row = conn.execute(
+                        "SELECT author_id, channel_id FROM messages WHERE message_id = ?",
+                        (payload.message_id,),
+                    ).fetchone()
+                    if row and payload.user_id != int(row["author_id"]):
+                        record_reaction(
+                            conn,
+                            guild_id=payload.guild_id,
+                            reactor_id=payload.user_id,
+                            author_id=int(row["author_id"]),
+                            channel_id=int(row["channel_id"]),
+                            message_id=payload.message_id,
+                            ts=int(discord.utils.utcnow().timestamp()),
+                        )
+
+            await asyncio.to_thread(_record_reaction_add)
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(
         self, payload: discord.RawReactionActionEvent
     ) -> None:
         if payload.guild_id:
-            with self.ctx.open_db() as conn:
-                adjust_reaction_count(conn, payload.message_id, str(payload.emoji), -1)
+            def _record_reaction_remove():
+                with self.ctx.open_db() as conn:
+                    adjust_reaction_count(conn, payload.message_id, str(payload.emoji), -1)
+
+            await asyncio.to_thread(_record_reaction_remove)
 
     @commands.Cog.listener()
     async def on_raw_message_delete(

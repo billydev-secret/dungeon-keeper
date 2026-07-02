@@ -414,8 +414,11 @@ class VoiceMasterCog(commands.Cog):
         if member.bot:
             return
 
-        with self.ctx.open_db() as conn:
-            cfg = load_voice_master_config(conn, member.guild.id)
+        def _load_cfg():
+            with self.ctx.open_db() as conn:
+                return load_voice_master_config(conn, member.guild.id)
+
+        cfg = await asyncio.to_thread(_load_cfg)
         if cfg.hub_channel_id == 0:
             return  # feature unconfigured
 
@@ -446,12 +449,19 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if not isinstance(channel, discord.VoiceChannel):
             return
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
-            if row is None:
-                return
-            if member.id == row.owner_id:
-                set_owner_left_at(conn, channel.id, time.time())
+
+        def _mark_left():
+            with self.ctx.open_db() as conn:
+                row = get_active_channel(conn, channel.id)
+                if row is None:
+                    return None
+                if member.id == row.owner_id:
+                    set_owner_left_at(conn, channel.id, time.time())
+                return row
+
+        row = await asyncio.to_thread(_mark_left)
+        if row is None:
+            return
 
         if not any(not m.bot for m in channel.members):
             self._schedule_empty_delete(channel, cfg.empty_grace_s)
@@ -468,15 +478,22 @@ class VoiceMasterCog(commands.Cog):
     ) -> None:
         if not isinstance(channel, discord.VoiceChannel):
             return
-        with self.ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
-            if row is None:
-                return
-            owner_returned = (
-                member.id == row.owner_id and row.owner_left_at is not None
-            )
-            if owner_returned:
-                set_owner_left_at(conn, channel.id, None)
+
+        def _mark_joined():
+            with self.ctx.open_db() as conn:
+                row = get_active_channel(conn, channel.id)
+                if row is None:
+                    return None
+                owner_returned = (
+                    member.id == row.owner_id and row.owner_left_at is not None
+                )
+                if owner_returned:
+                    set_owner_left_at(conn, channel.id, None)
+                return owner_returned
+
+        owner_returned = await asyncio.to_thread(_mark_joined)
+        if owner_returned is None:
+            return
         self._cancel_empty_timer(channel.id)
         # The owner coming back disarms a pending claim prompt; a random member
         # joining does not (the channel is still ownerless).
