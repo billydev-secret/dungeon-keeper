@@ -18,6 +18,28 @@ export const HELP_GROUPS = [
     { page: "help-start",    anchor: "getting-started",   label: "Getting Started" },
     { page: "help-overview", anchor: "functional-blocks", label: "Overview (Feature Map)" },
   ]},
+  // Groups run audience-first — members, then moderators, then admins —
+  // mirroring the manual's section order. (Items alphabetize within a group
+  // in the sidebar, so only group membership/order matters here.)
+  { heading: "Games & Social", items: [
+    { page: "help-games",       anchor: "games",       label: "Games Night" },
+    { page: "help-guess",       anchor: "guess",       label: "Guess Who" },
+    { page: "help-whisper",     anchor: "whisper",     label: "Whisper" },
+    { page: "help-confessions", anchor: "confessions", label: "Confessions" },
+    { page: "help-pen-pals",    anchor: "pen-pals",    label: "Pen Pals" },
+  ]},
+  { heading: "Member Tools", items: [
+    { page: "help-community", anchor: "community",    label: "Community & XP" },
+    { page: "help-wellness",  anchor: "wellness",     label: "Wellness" },
+    { page: "help-dms",       anchor: "dm-perms",     label: "DM Permissions" },
+    { page: "help-self",      anchor: "self-service", label: "Member Self-Service" },
+    { page: "help-privacy",   anchor: "privacy",      label: "Data Erasure" },
+  ]},
+  { heading: "Voice & Music", items: [
+    { page: "help-voice", anchor: "voice",     label: "Voice Channels" },
+    { page: "help-music", anchor: "music",     label: "Music" },
+    { page: "help-247",   anchor: "music-247", label: "24/7 Mode" },
+  ]},
   { heading: "Moderation", items: [
     { page: "help-moderation",  anchor: "moderation",  label: "Moderation Core" },
     { page: "help-jail",        anchor: "jail",        label: "Jail & Release" },
@@ -26,27 +48,6 @@ export const HELP_GROUPS = [
     { page: "help-analytics",   anchor: "analytics",   label: "Analytics & Watch" },
     { page: "help-ai",          anchor: "ai-tools",    label: "AI Moderation" },
     { page: "help-rules-watch", anchor: "rules-watch", label: "Rules Watch" },
-  ]},
-  { heading: "Voice & Music", items: [
-    { page: "help-voice", anchor: "voice",     label: "Voice Channels" },
-    { page: "help-music", anchor: "music",     label: "Music" },
-    { page: "help-247",   anchor: "music-247", label: "24/7 Mode" },
-  ]},
-  { heading: "Community Games", items: [
-    { page: "help-games",       anchor: "games",       label: "Games Night" },
-    { page: "help-guess",       anchor: "guess",       label: "Guess Who" },
-    { page: "help-whisper",     anchor: "whisper",     label: "Whisper" },
-    { page: "help-confessions", anchor: "confessions", label: "Confessions" },
-    { page: "help-pen-pals",    anchor: "pen-pals",    label: "Pen Pals" },
-  ]},
-  { heading: "Community Tools", items: [
-    { page: "help-community", anchor: "community", label: "Community & XP" },
-    { page: "help-wellness",  anchor: "wellness",  label: "Wellness" },
-    { page: "help-dms",       anchor: "dm-perms",  label: "DM Permissions" },
-  ]},
-  { heading: "Self-Service", items: [
-    { page: "help-self",    anchor: "self-service", label: "Member Self-Service" },
-    { page: "help-privacy", anchor: "privacy",      label: "Data Erasure" },
   ]},
   { heading: "Server Admin", items: [
     { page: "help-setup",   anchor: "setup",             label: "Setup & Permissions" },
