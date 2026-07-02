@@ -633,7 +633,9 @@ def main() -> None:
     if os.getenv("DASHBOARD_ENABLED") == "1":
         from web_server.server import serve_forever as _dashboard_serve_forever
 
-        _dashboard_host = os.getenv("DASHBOARD_HOST", "0.0.0.0")
+        # Default to loopback — public access should go through the Cloudflare
+        # tunnel, and open-auth on 0.0.0.0 would expose a full-admin dashboard.
+        _dashboard_host = os.getenv("DASHBOARD_HOST", "127.0.0.1")
         _dashboard_port = int(os.getenv("DASHBOARD_PORT", "8080"))
         bot.startup_task_factories.append(
             lambda: _dashboard_serve_forever(ctx, _dashboard_host, _dashboard_port)

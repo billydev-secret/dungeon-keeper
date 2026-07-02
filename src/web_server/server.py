@@ -108,6 +108,24 @@ def _get_tier(path: str) -> str:
     return "default"
 
 
+def _client_ip(request: Request) -> str:
+    """Real client IP for rate-limiting.
+
+    Behind the Cloudflare tunnel the socket peer is always the loopback origin,
+    so every user would otherwise share one bucket. Cloudflare sets
+    ``CF-Connecting-IP``; trust it (and X-Forwarded-For's first hop as a
+    fallback) since the origin is only reachable through the tunnel. Falls back
+    to the socket peer for direct/LAN access.
+    """
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 class _RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         global _last_prune  # noqa: PLW0603
@@ -117,7 +135,7 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
         if path.startswith("/static/"):
             return await call_next(request)
 
-        ip = request.client.host if request.client else "unknown"
+        ip = _client_ip(request)
         tier = _get_tier(path)
         max_tokens, refill_rate = _RATE_TIERS[tier]
 
@@ -356,6 +374,16 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 async def serve_forever(ctx, host: str, port: int) -> None:  # noqa: ANN001
     """Run the FastAPI app under uvicorn on the current event loop."""
     app = create_app(ctx)
+    # Fail closed: never expose the open (no-auth) backend on a non-loopback
+    # bind. If OAuth env is missing, force loopback so a dropped env var can't
+    # silently publish a full-admin dashboard to all interfaces.
+    if isinstance(app.state.auth, OpenAuth) and host not in ("127.0.0.1", "::1", "localhost"):
+        _log.critical(
+            "Open (no-auth) dashboard requested on %s — forcing 127.0.0.1. Set "
+            "DISCORD_CLIENT_ID + SESSION_SECRET to enable OAuth for public access.",
+            host,
+        )
+        host = "127.0.0.1"
     config = uvicorn.Config(
         app,
         host=host,
