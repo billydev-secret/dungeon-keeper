@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.embeds import XP_PRIMARY
 from bot_modules.services.xp_service import handle_level_progress
 from bot_modules.core.xp_system import (
@@ -242,10 +243,11 @@ class XpCog(commands.Cog):
                 if has_xp
                 else "No XP recorded yet."
             )
+            accent = await resolve_accent_color(ctx.db_path, guild)
             embed = discord.Embed(
                 title="XP Leaderboards",
                 description=description,
-                color=XP_PRIMARY,
+                color=accent,
             )
             embed.add_field(name="💬 Text", value="No tracked text XP yet.", inline=True)
             embed.add_field(

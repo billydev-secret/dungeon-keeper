@@ -19,6 +19,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 from bot_modules.duels.filters import contains_disallowed_content
 from bot_modules.services.guess_models import BoundingBox, GuessConfig, GuessGuess, GuessRound
@@ -296,10 +297,14 @@ def _do_audit(
 
 # ── Embed helpers ─────────────────────────────────────────────────────────────
 
-def _game_embed(round_id: int) -> discord.Embed:
+def _game_embed(
+    round_id: int, colour: "discord.Colour | None" = None
+) -> discord.Embed:
+    if colour is None:
+        colour = discord.Color.from_rgb(80, 20, 100)
     return discord.Embed(
         title=f"Round #{round_id}",
-        color=discord.Color.from_rgb(80, 20, 100),
+        color=colour,
     )
 
 
@@ -970,9 +975,10 @@ class CropEditorView(discord.ui.View):
         crop_file = discord.File(io.BytesIO(crop_bytes), filename="SPOILER_guess_crop.jpg")
         game_view = GameView(self.bot, round_id)
         self.bot.add_view(game_view)
+        accent = await resolve_accent_color(db_path, interaction.guild)
         game_msg = await guess_channel.send(
             content=None,
-            embed=_game_embed(round_id),
+            embed=_game_embed(round_id, colour=accent),
             file=crop_file,
             view=game_view,
         )
@@ -1232,7 +1238,9 @@ class _GuessSubmitModal(discord.ui.Modal, title="Submit a Guess image"):
         )
 
 
-def _prompt_embed() -> discord.Embed:
+def _prompt_embed(colour: "discord.Colour | None" = None) -> discord.Embed:
+    if colour is None:
+        colour = discord.Color.from_rgb(80, 20, 100)
     return discord.Embed(
         title="🎭 Guess",
         description=(
@@ -1240,7 +1248,7 @@ def _prompt_embed() -> discord.Embed:
             "Click below to play.\n\n"
             "📎 To upload a photo directly, use `/guess submit`."
         ),
-        color=discord.Color.from_rgb(80, 20, 100),
+        color=colour,
     )
 
 
@@ -1297,8 +1305,11 @@ async def _repost_prompt(
         except (discord.NotFound, discord.Forbidden):
             pass
 
+    accent = await resolve_accent_color(db_path, channel.guild)
     try:
-        new_msg = await channel.send(embed=_prompt_embed(), view=GuessPromptView(bot))
+        new_msg = await channel.send(
+            embed=_prompt_embed(colour=accent), view=GuessPromptView(bot)
+        )
     except discord.HTTPException:
         log.exception("guess: failed to post channel prompt in guild %d", guild_id)
         return
@@ -1395,9 +1406,10 @@ class ConfessionPreviewView(discord.ui.View):
         card_file = discord.File(io.BytesIO(card_bytes), filename="SPOILER_guess_confession.jpg")
         game_view = GameView(self._bot, round_id)
         self._bot.add_view(game_view)
+        accent = await resolve_accent_color(db_path, interaction.guild)
         game_msg = await guess_channel.send(
             content=None,
-            embed=_game_embed(round_id),
+            embed=_game_embed(round_id, colour=accent),
             file=card_file,
             view=game_view,
         )
@@ -1634,9 +1646,10 @@ class GuessCog(commands.Cog):
         else:
             status = "⏳ Open"
 
+        accent = await resolve_accent_color(db_path, interaction.guild)
         embed = discord.Embed(
             title=f"Round #{round_row.id} — inspector",
-            color=discord.Color.dark_grey(),
+            color=accent,
             description=(
                 f"**Status:** {status}\n"
                 f"**Submitter:** <@{round_row.submitter_id}>\n"
@@ -1853,7 +1866,8 @@ class GuessCog(commands.Cog):
             if guessers else "_No rounds solved yet._"
         )
 
-        embed = discord.Embed(title="Guess Leaderboard", color=discord.Color.purple())
+        accent = await resolve_accent_color(db_path, interaction.guild)
+        embed = discord.Embed(title="Guess Leaderboard", color=accent)
         embed.add_field(name="Top Posters", value=poster_text, inline=False)
         embed.add_field(name="Top Guessers", value=guesser_text, inline=False)
 

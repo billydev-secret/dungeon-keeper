@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
     MAX_NAME_LEN,
@@ -1674,6 +1675,8 @@ class _ClaimButton(
 
 async def post_claim_prompt(
     channel: discord.VoiceChannel,
+    *,
+    colour: "discord.Colour | None" = None,
 ) -> discord.Message | None:
     """Post the claim prompt + button into a channel's side chat.
 
@@ -1684,7 +1687,10 @@ async def post_claim_prompt(
     view.add_item(_ClaimButton(channel.id))
     try:
         return await channel.send(
-            embed=build_claim_prompt_embed(channel_name=channel.name), view=view
+            embed=build_claim_prompt_embed(
+                channel_name=channel.name, colour=colour
+            ),
+            view=view,
         )
     except (discord.Forbidden, discord.HTTPException):
         return None
@@ -1700,9 +1706,11 @@ PANEL_DYNAMIC_ITEM_CLASSES = (_PanelSelect, _ClaimButton)
 # ---------------------------------------------------------------------------
 
 
-def build_panel_embed() -> discord.Embed:
+def build_panel_embed(
+    colour: "discord.Colour | None" = None,
+) -> discord.Embed:
     """Thin wrapper around the pure embed builder; kept for cog import paths."""
-    return _build_panel_embed()
+    return _build_panel_embed(colour=colour)
 
 
 def build_panel_view() -> discord.ui.View:
@@ -1826,10 +1834,12 @@ async def post_knock_request(
     control = channel.guild.get_channel(cfg.control_channel_id)
     if not isinstance(control, discord.TextChannel):
         return False
+    accent = await resolve_accent_color(ctx.db_path, channel.guild)
     embed = build_knock_request_embed(
         requester_mention=requester.mention,
         owner_mention=owner.mention,
         channel_name=channel.name,
+        colour=accent,
     )
     view = _KnockResponseView(
         channel_id=channel.id,
@@ -1847,7 +1857,8 @@ async def post_panel(
     ctx: "AppContext", channel: discord.TextChannel
 ) -> discord.Message:
     """Post (or repost) the persistent panel into the given text channel."""
-    embed = build_panel_embed()
+    accent = await resolve_accent_color(ctx.db_path, channel.guild)
+    embed = build_panel_embed(colour=accent)
     view = build_panel_view()
     msg = await channel.send(embed=embed, view=view)
     with ctx.open_db() as conn:
@@ -1860,13 +1871,18 @@ async def post_panel(
     return msg
 
 
-def build_inline_panel_embed(owner: discord.Member) -> discord.Embed:
+def build_inline_panel_embed(
+    owner: discord.Member, colour: "discord.Colour | None" = None
+) -> discord.Embed:
     """Owner-greeting embed for the panel posted into the new channel's chat."""
-    return _build_inline_panel_embed(owner_mention=owner.mention)
+    return _build_inline_panel_embed(owner_mention=owner.mention, colour=colour)
 
 
 async def post_inline_panel(
-    channel: discord.VoiceChannel, owner: discord.Member
+    channel: discord.VoiceChannel,
+    owner: discord.Member,
+    *,
+    colour: "discord.Colour | None" = None,
 ) -> discord.Message | None:
     """Post the control panel into a voice channel's text chat.
 
@@ -1875,7 +1891,7 @@ async def post_inline_panel(
     central control channel. Returns ``None`` if the bot lacks permission to
     post; caller should treat that as non-fatal.
     """
-    embed = build_inline_panel_embed(owner)
+    embed = build_inline_panel_embed(owner, colour=colour)
     view = build_panel_view()
     try:
         return await channel.send(embed=embed, view=view)

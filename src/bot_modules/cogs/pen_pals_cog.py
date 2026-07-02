@@ -14,6 +14,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.ai_client import generate_text
 
@@ -297,8 +298,11 @@ async def _post_intro(
     user2: discord.Member,
     expiry_at: float,
     question: str,
+    colour: "discord.Colour | None" = None,
 ) -> None:
-    embed = discord.Embed(title="🖊️ Pen Pals", color=discord.Color.blurple())
+    if colour is None:
+        colour = discord.Color.blurple()
+    embed = discord.Embed(title="🖊️ Pen Pals", color=colour)
     embed.add_field(
         name="Matched with",
         value=f"{user1.mention} × {user2.mention}",
@@ -396,8 +400,9 @@ async def _do_pair(
     await asyncio.to_thread(_save)
 
     expiry_at = now + _SESSION_SECS
+    accent = await resolve_accent_color(db_path, guild)
     try:
-        await _post_intro(channel, user1, user2, expiry_at, question)
+        await _post_intro(channel, user1, user2, expiry_at, question, colour=accent)
     except discord.HTTPException as exc:
         log.error("pen_pals: failed to post intro in channel %d: %s", channel.id, exc)
 
@@ -561,7 +566,11 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
 # ── Signup panel ──────────────────────────────────────────────────────────────
 
 
-def _build_panel_embed(pool_size: int) -> discord.Embed:
+def _build_panel_embed(
+    pool_size: int, colour: "discord.Colour | None" = None
+) -> discord.Embed:
+    if colour is None:
+        colour = discord.Color.from_str("#5865F2")
     embed = discord.Embed(
         title="🖊️ Pen Pals",
         description=(
@@ -569,7 +578,7 @@ def _build_panel_embed(pool_size: int) -> discord.Embed:
             "A private channel opens for just the two of you, "
             "with a conversation starter already waiting."
         ),
-        color=discord.Color.from_str("#5865F2"),
+        color=colour,
     )
     label = f"{pool_size} member{'s' if pool_size != 1 else ''} waiting" if pool_size else "No one waiting yet"
     embed.add_field(name="Pool", value=label, inline=True)
@@ -609,7 +618,9 @@ async def _refresh_panel(
     if not isinstance(channel, discord.TextChannel):
         return
 
-    embed = _build_panel_embed(pool_size)
+    guild = bot.get_guild(guild_id)
+    accent = await resolve_accent_color(db_path, guild) if guild else None
+    embed = _build_panel_embed(pool_size, colour=accent)
     view = _build_panel_view()
 
     if not repost and panel_message_id:

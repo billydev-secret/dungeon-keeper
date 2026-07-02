@@ -12,6 +12,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.dm_perms.embeds import (
     build_acceptance_embed,
     build_denial_embed_for_requester,
@@ -521,7 +522,10 @@ class DmPermsCog(commands.Cog):
         return int(ch) if ch else None
 
     async def _post_audit(self, guild: discord.Guild, message: str) -> None:
-        await post_audit_event(guild, self._audit_channel_for(guild.id), message)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        await post_audit_event(
+            guild, self._audit_channel_for(guild.id), message, colour=accent
+        )
 
     # ── Internal helpers ─────────────────────────────────────────────────────
 
@@ -596,6 +600,7 @@ class DmPermsCog(commands.Cog):
             await interaction.response.defer(ephemeral=True)
 
         type_label = request_type_label(req_type)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_request_dm_embed(
             guild_name=guild.name,
             requester_display_name=requester.display_name,
@@ -603,6 +608,7 @@ class DmPermsCog(commands.Cog):
             request_timeout_label=REQUEST_TIMEOUT_LABEL,
             type_label=type_label,
             reason=reason_clean,
+            colour=accent,
         )
 
         message = await _safe_dm(user, embed=embed, view=AskConsentView(self))
@@ -630,6 +636,7 @@ class DmPermsCog(commands.Cog):
             request_timeout_label=REQUEST_TIMEOUT_LABEL,
             type_label=type_label,
             reason=reason_clean,
+            colour=accent,
         )
         await _safe_dm(requester, embed=sender_embed)
 
@@ -654,6 +661,7 @@ class DmPermsCog(commands.Cog):
             if not isinstance(channel, discord.TextChannel):
                 return None
 
+            accent = await resolve_accent_color(self.ctx.db_path, guild)
             settings = self.panel_settings.get(guild.id, {})
             old_msg_id = settings.get("panel_message_id")
 
@@ -670,13 +678,13 @@ class DmPermsCog(commands.Cog):
             if old_msg_id and not force_repost:
                 try:
                     existing = await channel.fetch_message(old_msg_id)
-                    await existing.edit(embed=build_panel_embed(), view=DmRequestPanelView(self))
+                    await existing.edit(embed=build_panel_embed(colour=accent), view=DmRequestPanelView(self))
                     return existing.id
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     pass
 
             try:
-                new_msg = await channel.send(embed=build_panel_embed(), view=DmRequestPanelView(self))
+                new_msg = await channel.send(embed=build_panel_embed(colour=accent), view=DmRequestPanelView(self))
             except (discord.Forbidden, discord.HTTPException):
                 return None
 
@@ -742,7 +750,8 @@ class DmPermsCog(commands.Cog):
     async def dm_help(self, interaction: discord.Interaction) -> None:
         assert interaction.guild
         icon_url = interaction.guild.icon.url if interaction.guild.icon else None
-        embed = build_dm_help_embed(icon_url)
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        embed = build_dm_help_embed(icon_url, colour=accent)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="dm_set_mode", description="Set your DM request mode.")
@@ -761,7 +770,10 @@ class DmPermsCog(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send("I don't have permission to manage roles here.", ephemeral=True)
             return
-        await interaction.followup.send(embed=build_mode_updated_embed(mode.value), ephemeral=True)
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.user.guild)
+        await interaction.followup.send(
+            embed=build_mode_updated_embed(mode.value, colour=accent), ephemeral=True
+        )
 
     @app_commands.command(name="dm_revoke", description="Remove DM permission relationship with another user.")
     @app_commands.guild_only()

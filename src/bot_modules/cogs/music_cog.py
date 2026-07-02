@@ -17,6 +17,7 @@ import wavelink
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.music.embeds import build_247_status_embed, build_queue_embed
 from bot_modules.music.logic import (
     format_247_status_line,
@@ -430,6 +431,7 @@ class MusicCog(commands.Cog):
         start, end, total_pages, normalized_page = paginate_queue(total, page)
         items = list(queue.tracks)[start:end]
 
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_queue_embed(
             current_summary=(
                 self._track_summary(queue.current)
@@ -442,6 +444,7 @@ class MusicCog(commands.Cog):
             page=normalized_page,
             total_pages=total_pages,
             loop_mode_value=queue.loop_mode.value,
+            colour=accent,
         )
         await interaction.response.send_message(embed=embed)
 
@@ -504,7 +507,10 @@ class MusicCog(commands.Cog):
             if queue.requester_for(queue.current)
             else None
         )
-        embed = build_embed(queue.current, queue, requester, paused=player.paused)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = build_embed(
+            queue.current, queue, requester, paused=player.paused, colour=accent
+        )
         view = NowPlayingView()
         view.refresh_for(queue, paused=player.paused)
         await interaction.response.send_message(embed=embed, view=view)
@@ -626,7 +632,8 @@ class MusicCog(commands.Cog):
             lines.append(
                 format_247_status_line(mention, bool(s.autoplay_playlist_url))
             )
-        embed = build_247_status_embed(lines)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = build_247_status_embed(lines, colour=accent)
         await interaction.response.send_message(embed=embed)
 
     # ------------------------------------------------------------------
@@ -762,7 +769,10 @@ class MusicCog(commands.Cog):
 
         requester_id = queue.requester_for(track)
         requester = guild.get_member(requester_id) if requester_id else None
-        embed = build_embed(track, queue, requester, paused=player.paused)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = build_embed(
+            track, queue, requester, paused=player.paused, colour=accent
+        )
         view = NowPlayingView()
         view.refresh_for(queue, paused=player.paused)
         try:
@@ -986,11 +996,13 @@ class MusicCog(commands.Cog):
         await player.pause(new_paused)
         queue = self._queue(guild.id)
         view.refresh_for(queue, paused=new_paused)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_embed(
             queue.current,
             queue,
             guild.get_member(queue.requester_for(queue.current) or 0),
             paused=new_paused,
+            colour=accent,
         ) if queue.current else None
         if embed is not None:
             await interaction.response.edit_message(embed=embed, view=view)
@@ -1056,11 +1068,13 @@ class MusicCog(commands.Cog):
         player = self._player(guild)
         paused = bool(player and player.paused)
         view.refresh_for(queue, paused=paused)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         embed = build_embed(
             queue.current,
             queue,
             guild.get_member(queue.requester_for(queue.current) or 0),
             paused=paused,
+            colour=accent,
         ) if queue.current else None
         if embed is not None:
             await interaction.response.edit_message(embed=embed, view=view)

@@ -33,6 +33,7 @@ from bot_modules.commands.voice_master_commands import (
     post_knock_request,
     post_panel,
 )
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
     CATEGORY_CHANNEL_CAP,
@@ -228,6 +229,7 @@ class VoiceMasterCog(commands.Cog):
         # posted before the restart) is harmless: first claim wins, and the
         # other button then refuses (claiming clears owner_left_at).
         now = time.time()
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
         for row in tracked:
             if (
                 row.channel_id not in present_ids
@@ -240,7 +242,7 @@ class VoiceMasterCog(commands.Cog):
                 continue
             remaining = cfg.owner_grace_s - (now - row.owner_left_at)
             if remaining <= 0:
-                await post_claim_prompt(ch)
+                await post_claim_prompt(ch, colour=accent)
             else:
                 self._schedule_claim_prompt(ch, int(remaining))
 
@@ -529,7 +531,8 @@ class VoiceMasterCog(commands.Cog):
             row = get_active_channel(conn, channel.id)
         if row is None or row.owner_left_at is None:
             return  # owner returned (cancel raced) — nothing to claim
-        await post_claim_prompt(live)
+        accent = await resolve_accent_color(self.ctx.db_path, live.guild)
+        await post_claim_prompt(live, colour=accent)
 
     async def _delete_after_grace(
         self, channel: discord.VoiceChannel, grace_s: int
@@ -731,7 +734,8 @@ class VoiceMasterCog(commands.Cog):
             # owner has the buttons right where they are. Non-fatal on failure
             # (perms missing, channel deleted out from under us, etc.).
             if cfg.post_inline_panel:
-                await post_inline_panel(channel, member)
+                accent = await resolve_accent_color(self.ctx.db_path, guild)
+                await post_inline_panel(channel, member, colour=accent)
 
             # DM the owner about anything we had to skip.
             notes_text = build_hub_join_notes(
@@ -1257,6 +1261,7 @@ class VoiceMasterCog(commands.Cog):
             profile = load_profile(conn, interaction.guild.id, interaction.user.id) or default_profile()
             trusted = list_trusted(conn, interaction.guild.id, interaction.user.id)
             blocked = list_blocked(conn, interaction.guild.id, interaction.user.id)
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
         embed = build_profile_show_embed(
             saved_name=profile.saved_name,
             saved_limit=profile.saved_limit,
@@ -1265,6 +1270,7 @@ class VoiceMasterCog(commands.Cog):
             spectator=profile.spectator,
             trusted_count=len(trusted),
             blocked_count=len(blocked),
+            colour=accent,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 

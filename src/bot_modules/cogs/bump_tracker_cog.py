@@ -13,6 +13,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import open_db
 
 if TYPE_CHECKING:
@@ -220,10 +221,14 @@ class _SiteStatus:
         return max(0.0, remaining)
 
 
-def _build_widget_embed(statuses: list[_SiteStatus]) -> discord.Embed:
+def _build_widget_embed(
+    statuses: list[_SiteStatus], colour: "discord.Colour | None" = None
+) -> discord.Embed:
+    if colour is None:
+        colour = discord.Color.blurple()
     embed = discord.Embed(
         title="Bump Tracker",
-        color=discord.Color.blurple(),
+        color=colour,
     )
     if not statuses:
         embed.description = "No sites configured. Add sites from the web dashboard."
@@ -343,7 +348,9 @@ async def _refresh_widget(
     if not isinstance(channel, discord.TextChannel):
         return
 
-    embed = _build_widget_embed(statuses)
+    guild = bot.get_guild(guild_id)
+    accent = await resolve_accent_color(db_path, guild) if guild else None
+    embed = _build_widget_embed(statuses, colour=accent)
 
     # Edit in place when nothing new was posted to the channel — avoids
     # firing the unread-message indicator unnecessarily.
@@ -498,7 +505,8 @@ class BumpTrackerCog(commands.Cog):
             )
             for r in log_rows
         ]
-        embed = _build_widget_embed(statuses)
+        accent = await resolve_accent_color(self.ctx.db_path, interaction.guild)
+        embed = _build_widget_embed(statuses, colour=accent)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ── on_message — auto-detect bumps ───────────────────────────────────

@@ -9,6 +9,7 @@ import discord
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.moderation import write_audit
 from bot_modules.voice_master.embeds import (
     build_admin_audit_mirror_embed,
@@ -257,7 +258,8 @@ async def post_howto(
 
     hub_id = await run_query(_load_hub)
     hub_mention = f"<#{hub_id}>" if hub_id else None
-    embed = build_howto_embed(hub_mention=hub_mention)
+    accent = await resolve_accent_color(ctx.db_path, guild)
+    embed = build_howto_embed(hub_mention=hub_mention, colour=accent)
     try:
         msg = await channel.send(embed=embed)
     except (discord.Forbidden, discord.HTTPException) as e:
