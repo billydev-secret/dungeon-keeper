@@ -38,4 +38,28 @@ jobs:
           DB_PATH_DEV: dk_dev.db
           AUDIT_CHANNEL_DEV: "0"
         run: |
-          python -m pytest --tb=short -q
+          python -m pytest --tb=short -q --cov=src --cov-report=term-missing
+
+  # Frontend lint. The browser JS/CSS was never linted in CI (the pytest
+  # eslint/stylelint items silently skip when node_modules is absent).
+  # This job runs them for real. Kept non-blocking (continue-on-error) for
+  # now — flip to blocking once it reports clean.
+  js-lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install JS dev deps
+        run: npm install --no-save
+
+      - name: ESLint
+        run: npx eslint src/web_server/static/js
+
+      - name: Stylelint
+        run: npx stylelint "src/web_server/static/**/*.css"
