@@ -27,6 +27,11 @@ addopts = "-n auto"
 parallel = true
 source = ["src"]
 
+[tool.coverage.report]
+# Regression floor, set just under the measured 50% (2026-07-02, 4316 tests).
+# Raise it as coverage grows; don't lower it to make a failing build pass.
+fail_under = 49
+
 [tool.ruff.lint.per-file-ignores]
 "scripts/*.py" = ["E402"]
 "tests/conftest.py" = ["E402"]
