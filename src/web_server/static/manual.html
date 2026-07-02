@@ -556,6 +556,18 @@
       </div>
     </div>
 
+    <h3 id="rename">Nicknames</h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/rename &lt;target&gt; [new_name]</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod — requires Manage Nicknames</span></span>
+      <span class="cmd-desc">Change a member's nickname; leave blank to reset to their username.</span>
+      <div class="cmd-params">
+        <strong>target</strong> — the member to rename.<br>
+        <strong>new_name</strong> — the new nickname (leave blank to reset to their username).
+      </div>
+    </div>
+
     <div class="callout callout-tip" id="context-menus">
       <span class="callout-icon">💡</span>
       <div class="callout-body">
@@ -1318,10 +1330,55 @@
       </div>
     </div>
 
+    <h2 id="pen-pals" class="section-break"><span class="section-num">19</span> Pen Pals</h2>
+    <p>Pen Pals quietly matches members into private one-on-one conversations. Members join a pool; when a pair is matched the bot spins up a private two-person channel, seeds it with a conversation-starter question, and tears it down again after about 72 hours.</p>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/penpals join</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Join the Pen Pals pool. When you're matched the bot opens a private channel with your pen pal and drops a question to break the ice.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/penpals leave</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Leave the pool before you're matched.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/penpals status</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Check your current Pen Pals status — whether you're waiting in the pool or matched, and when your session ends.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/penpals new-question</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">Swap the current conversation-starter for a fresh one when the chat needs a nudge (limited swaps per session).</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/penpals end</span>
+      <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
+      <span class="cmd-desc">End your current pen pal session early and close the shared channel.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/penpals pair &lt;user1&gt; &lt;user2&gt;</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Force-pair two specific members into a Pen Pals channel, bypassing the pool.</span>
+    </div>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/penpals round</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Pair up everyone currently waiting in the pool in one go.</span>
+    </div>
+
     <!-- ══════════════════════════════════════════════════════════
          19. GAMES NIGHT
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="games" class="section-break"><span class="section-num">19</span> Games Night</h2>
+    <h2 id="games" class="section-break"><span class="section-num">20</span> Games Night</h2>
     <p>A suite of party games, duels, and group elimination games for hangouts and game nights. Everything is member-facing — anyone can start a game in an allowed channel. Only one game runs per channel at a time. Type <code>/games help</code> in Discord for the in-app version of this list.</p>
 
     <div class="callout callout-tip">
@@ -1347,6 +1404,7 @@
         <tr><td><code>/games play ama</code></td><td><strong>Anonymous AMA</strong> — one player takes the hot seat, others submit anonymous questions through an approval queue</td></tr>
         <tr><td><code>/games play hottakes</code></td><td><strong>Hot Takes</strong> — submit spicy opinions, then the room votes Agree / Disagree on each</td></tr>
         <tr><td><code>/games play ffa</code></td><td><strong>Truth or Dare Cards</strong> — drop a Truth/Dare prompt card and open a thread for (optionally anonymous) replies</td></tr>
+        <tr><td><code>/games play photo</code></td><td><strong>Photo Challenge</strong> — a host drops a Photo Challenge card and a thread opens for everyone's photo submissions</td></tr>
         <tr><td><code>/games play story</code></td><td><strong>Story Builder</strong> — players take turns adding one sentence each to a collaborative story</td></tr>
         <tr><td><code>/games play price</code></td><td><strong>Name Your Price</strong> — secretly bid what you'd charge for a scenario; reveal, then vote Most Reasonable and Most Unhinged</td></tr>
         <tr><td><code>/games play rushmore</code></td><td><strong>Mt. Rushmore Draft</strong> — snake-draft your top-4 of a topic, then the room votes on the best board</td></tr>
@@ -1411,7 +1469,7 @@
     <!-- ══════════════════════════════════════════════════════════
          (legacy section anchor preserved) SETUP & PERMISSIONS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="setup" class="section-break"><span class="section-num">20</span> Setup &amp; Permissions</h2>
+    <h2 id="setup" class="section-break"><span class="section-num">21</span> Setup &amp; Permissions</h2>
 
     <h3 id="permissions">Permission Levels</h3>
     <p>Most commands require one of these roles or Discord permissions:</p>
@@ -1457,7 +1515,7 @@
     <!-- ══════════════════════════════════════════════════════════
          20. CONFIGURATION REFERENCE
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="config" class="section-break"><span class="section-num">21</span> Configuration Reference</h2>
+    <h2 id="config" class="section-break"><span class="section-num">22</span> Configuration Reference</h2>
     <p>Every persistent bot setting lives on the web dashboard. The retired <code>/config</code> slash command, <code>/welcome_preview</code>, and <code>/leave_preview</code> have all been replaced by interactive dashboard panels with live preview.</p>
 
     <div class="callout callout-info">
@@ -1501,7 +1559,7 @@
     <!-- ══════════════════════════════════════════════════════════
          21. DEVELOPER / OWNER TOOLS
     ═══════════════════════════════════════════════════════════ -->
-    <h2 id="owner-tools" class="section-break"><span class="section-num">22</span> Developer / Owner Tools</h2>
+    <h2 id="owner-tools" class="section-break"><span class="section-num">23</span> Developer / Owner Tools</h2>
     <p>Bot-owner-only utilities. The owner is configured at bot startup; owner status is checked inside the handler regardless of Discord permissions.</p>
 
     <div class="cmd-block">

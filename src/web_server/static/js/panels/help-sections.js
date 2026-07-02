@@ -37,6 +37,7 @@ export const HELP_GROUPS = [
     { page: "help-guess",       anchor: "guess",       label: "Guess Who" },
     { page: "help-whisper",     anchor: "whisper",     label: "Whisper" },
     { page: "help-confessions", anchor: "confessions", label: "Confessions" },
+    { page: "help-pen-pals",    anchor: "pen-pals",    label: "Pen Pals" },
   ]},
   { heading: "Community Tools", items: [
     { page: "help-community", anchor: "community", label: "Community & XP" },

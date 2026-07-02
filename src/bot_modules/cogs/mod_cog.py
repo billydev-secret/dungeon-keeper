@@ -64,6 +64,7 @@ _SECTION_META: dict[str, tuple[str, discord.Color]] = {
     "General": ("🌿", discord.Color.from_str("#5865F2")),
     "Role Grants": ("🎭", discord.Color.from_str("#57F287")),
     "XP Grant": ("⭐", discord.Color.from_str("#FEE75C")),
+    "Moderation": ("🛡️", discord.Color.from_str("#ED4245")),
     "Voice": ("🔊", discord.Color.from_str("#2ECC71")),
     "Music": ("🎵", discord.Color.from_str("#E74C3C")),
     "Whisper": ("🤫", discord.Color.from_str("#E67E22")),
@@ -114,6 +115,11 @@ def _build_help_pages(
                     ("/dm_set_mode", "Set your DM preference (open / ask / closed)."),
                     ("/dm_status @user", "Check whether mutual DM permission exists."),
                     ("/dm_revoke @user", "Revoke a DM permission relationship."),
+                    ("/penpals join", "Enter the Pen Pals pool — you'll be matched into a private 2-person channel with a conversation starter."),
+                    ("/penpals leave", "Leave the pool before you're matched."),
+                    ("/penpals status", "Check your current Pen Pals status."),
+                    ("/penpals new-question", "Swap in a fresh conversation-starter question."),
+                    ("/penpals end", "End your current pen pal chat early."),
                     ("/todo task:...", "Add a task to the server's shared todo list."),
                     ("/support", "Get a link to the support Discord server."),
                     ("/invite", "Get a bot invite link to add DungeonKeeper to another server."),
@@ -145,6 +151,20 @@ def _build_help_pages(
                 "XP Grant",
                 "Award XP for contributions outside normal chat — events, art, helpful DMs, etc.\n\n"
                 + _fmt([("/xp_give member:@user", "Award 20 XP to a member.")]),
+            )
+        )
+
+    if ctx.is_mod(interaction):
+        pages.append(
+            _page(
+                "Moderation",
+                "Moderator-only tools.\n\n"
+                + _fmt(
+                    [
+                        ("/purge count:... after:...", "Bulk-delete messages in this channel by count and/or time."),
+                        ("/rename target:@user new_name:...", "Change a member's nickname (leave blank to reset to their username). Requires Manage Nicknames."),
+                    ]
+                ),
             )
         )
 
@@ -233,30 +253,30 @@ def _build_help_pages(
             "**Vote / react games**\n"
             + _fmt(
                 [
-                    ("/wyr", "Would You Rather."),
-                    ("/nhie", "Never Have I Ever."),
-                    ("/mfk", "Marry, Fornicate, Kiss — pick from three members."),
-                    ("/mlt", "Most Likely To."),
-                    ("/twotruths", "Two Truths and a Lie."),
-                    ("/traditional", "Traditional Truth or Dare."),
+                    ("/games play wyr", "Would You Rather."),
+                    ("/games play nhie", "Never Have I Ever."),
+                    ("/games play mfk", "Marry, Fornicate, Kiss — pick from three members."),
+                    ("/games play mlt", "Most Likely To."),
+                    ("/games play twotruths", "Two Truths and a Lie."),
+                    ("/games play traditional", "Traditional Truth or Dare."),
                 ]
             )
             + "\n\n**Anonymous & themed**\n"
             + _fmt(
                 [
-                    ("/fantasies", "Fantasies & Dealbreakers — anonymous matching."),
-                    ("/ama", "Anonymous Ask Me Anything."),
-                    ("/hottakes", "Hot Takes / Unpopular Opinions debate."),
-                    ("/compliment", "Spin the Compliment — random anonymous pairing."),
+                    ("/games play fantasies", "Fantasies & Dealbreakers — anonymous matching."),
+                    ("/games play ama", "Anonymous Ask Me Anything."),
+                    ("/games play hottakes", "Hot Takes / Unpopular Opinions debate."),
+                    ("/games play compliment", "Spin the Compliment — random anonymous pairing."),
                 ]
             )
             + "\n\n**Creative & strategy**\n"
             + _fmt(
                 [
-                    ("/story", "Story Builder (Exquisite Corpse) — collaborative writing."),
-                    ("/price", "Name Your Price — bidding game."),
-                    ("/rushmore", "Mt. Rushmore Draft — pick your top 4."),
-                    ("/clapback", "Clapback comedy head-to-head."),
+                    ("/games play story", "Story Builder (Exquisite Corpse) — collaborative writing."),
+                    ("/games play price", "Name Your Price — bidding game."),
+                    ("/games play rushmore", "Mt. Rushmore Draft — pick your top 4."),
+                    ("/games play clapback", "Clapback comedy head-to-head."),
                     ("/risky start", "Open a Risky Rolls round — dice-based dare ladder."),
                 ]
             )
