@@ -33,7 +33,6 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     is_game_expired,
-    ConfirmCloseView,
     resolve_name,
 )
 from bot_modules.games.utils.question_source import get_price_scenario, channel_allows_nsfw

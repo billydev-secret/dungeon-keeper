@@ -11,7 +11,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
-from bot_modules.services.embeds import XP_PRIMARY
 from bot_modules.services.xp_service import handle_level_progress
 from bot_modules.core.xp_system import (
     XP_SOURCE_GRANT,

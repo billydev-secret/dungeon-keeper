@@ -12,7 +12,7 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
-from bot_modules.services.embeds import COLOR_GREEN, COLOR_GOLD, COLOR_RED, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
 from . import db as pdb
 from .game import PressureGame, apply_pump

@@ -22,7 +22,6 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
-    ConfirmCloseView,
     resolve_name,
 )
 from bot_modules.core.branding import resolve_accent_color

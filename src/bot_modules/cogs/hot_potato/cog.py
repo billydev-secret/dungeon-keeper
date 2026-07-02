@@ -16,7 +16,7 @@ from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.duels.views import ResultView
-from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
+from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
 
 from . import db as hpdb
 from .game import HotPotatoGame, compute_style_points

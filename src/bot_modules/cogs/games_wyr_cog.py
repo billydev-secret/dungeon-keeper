@@ -16,7 +16,6 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     is_game_expired,
     resolve_name,
-    ConfirmCloseView,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.question_source import (

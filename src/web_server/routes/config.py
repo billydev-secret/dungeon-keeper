@@ -79,7 +79,6 @@ from bot_modules.services.branding_service import (
     ACCENT_MODE_AVATAR,
     ACCENT_MODE_CUSTOM,
     ACCENT_HEX_UNSET,
-    BrandingConfig,
     get_branding_conn,
     upsert_branding,
 )
