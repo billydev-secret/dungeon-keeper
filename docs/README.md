@@ -35,7 +35,7 @@ Discord moderation, community, voice, and analytics bot.
 - **Music** — YouTube and Spotify playback via Lavalink with a persistent now-playing card and queue: `/play`, `/skip`, `/shuffle`, `/loop`, `/queue`, `/pause`, `/resume`, `/stop`, `/nowplaying`, `/disconnect`. Mod-only `/247` keeps the bot parked in a channel and auto-queues from a playlist when idle.
 
 ### Party games
-A 16-game social suite that shares session windows, anonymous audit logging, per-guild
+A 17-game social suite that shares session windows, anonymous audit logging, per-guild
 enable/disable, channel allowlists, and an AI question-bank fallback.
 - **Free For All** — A host poses a question and everyone answers, in chat or through a name-hiding popup modal. Lurk anonymously or jump in as yourself.
 - **Would You Rather** — Multi-round voting where each prompt splits the room between two options. Queue your own scenarios or let the bot generate them, then reveal who picked what.
@@ -53,6 +53,7 @@ enable/disable, channel allowlists, and an AI question-bank fallback.
 - **Mt. Rushmore Draft** — Snake-draft your top four picks for a topic, with no duplicates allowed once a pick is gone. Everyone reveals their board and the room votes on the best lineup.
 - **Clapback** — A prompt drops and everyone writes their funniest anonymous one-liner. Answers go head-to-head for votes, and sweeping every vote earns a "CLAPBACK!" bonus.
 - **LegitLibs** — Mad-Libs–style template fill with reveals in parallel (Quiplash) or round-robin (Classic) mode. Four heat tiers run from Flirty to Unhinged.
+- **Photo Challenge** — A host drops a Photo Challenge card and a thread opens for everyone's photo submissions.
 
 ### Head-to-head & group games
 High-stakes games with server-authoritative hidden state, per-pair cooldowns, audit
@@ -65,6 +66,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 
 ### Engagement & content
 - **Whisper** — Send an anonymous message to an opted-in member who gets three guesses to name the sender. Share publicly, reply back, or reveal yourself once you're guessed.
+- **Pen Pals** — Members join a pool and the bot creates a private 2-person channel for each matched pair, seeded with a conversation-starter question. Channels tear down after ~72 hours, and mods can pair specific members or kick off a new round.
 - **Confessions** — Post an anonymous confession via `/confess` to a channel or forum thread, each with anonymous-reply buttons. Replies use either a stable per-thread identity or a fresh ephemeral one, and everything mirrors to a mod-only log.
 - **Starboard** — Reactions with a configured emoji repost high-engagement messages to a dedicated board once they cross a threshold. Self-stars don't count and an NSFW guard keeps age-gated content out of SFW channels.
 - **Quote** — Right-click any message to render it as a styled quote card over the author's avatar, with theme and font pickers. Post it publicly and the bot auto-reacts so great quotes can reach the starboard themselves.
@@ -190,23 +192,24 @@ Most settings are configured through the web dashboard after the bot is running 
 - `/wellness away on` / `/wellness away off` — Toggle your away auto-reply
 
 **Party Games**
-- `/games play <game>` — Start a party game in an allowed channel. Games: `ffa`, `wyr`, `nhie`, `mlt`, `mfk`, `twotruths`, `traditional` (Truth or Dare), `compliment`, `hottakes`, `story`, `ama`, `fantasies`, `price`, `rushmore`, `clapback`, `legitlibs`
-- `/games recap` — Recap of the current game-night session
-- `/games consent` — Manage your consent settings for game nights
+- `/games play <game>` — Start a party game in an allowed channel. Games: `ffa`, `wyr`, `nhie`, `mlt`, `mfk`, `twotruths`, `traditional` (Truth or Dare), `compliment`, `hottakes`, `story`, `ama`, `fantasies`, `price`, `rushmore`, `clapback`, `legitlibs`, `photo`
+- `/recap` — Recap of the current game-night session
 - `/games help` / `/games support` — Game list and support link
+- *Spicier (NSFW) prompts appear only in channels an admin has marked age-restricted in Discord.*
 - `/games config game-status` / `game-end` — Inspect or force-close the active game (mod)
 - *The games channel allowlist and audit-log channel are managed from the web dashboard's Games Config panel.*
 
 **Head-to-Head & Group Games**
-- `/pressure challenge @user` — Pressure Cooker duel (loser renamed 24h); also `cancel`, `stats`, `revert`, `config`
-- `/quickdraw challenge @user` — Quickdraw duel; also `cancel`, `stats`, `revert`, `config`
-- `/hotpotato challenge @user` — Hot Potato duel; also `cancel`, `stats`, `config`
-- `/hotpotatogroup start` — Hot Potato group free-for-all; also `stats`, `config`
-- `/musicalchairs start` — Musical Chairs, 3+ players; also `stats`, `config`
-- `/chicken start` — Chicken, duel or group; also `stats`, `config`
+- `/games pressure challenge @user` — Pressure Cooker duel (loser renamed 24h)
+- `/games quickdraw challenge @user` — Quickdraw duel
+- `/games hotpotato challenge @user` — Hot Potato duel
+- `/games hotpotatogroup start` — Hot Potato group free-for-all
+- `/games musicalchairs start` — Musical Chairs, 3+ players
+- `/games chicken start` — Chicken, duel or group
 
 **Content & Engagement**
 - `/whisper send @user <message>` — Send an anonymous whisper (recipient gets three guesses); also `optin`, `optout`, `sent`, `forget-me`
+- `/penpals join` / `/penpals leave` — Enter or exit the Pen Pals pool; also `status`, `new-question`, `end`, plus mod `pair <user1> <user2>` and `round`
 - `/bio` — Create or update your profile bio (wizard)
 - `/risky start` — Open a Risky Rolls round in this channel
 - `/guess submit` — Submit an image to start a Guess round; also `optin`, `confess`, `leaderboard`, `prompt`, `round` (mod), `delete`
@@ -276,6 +279,7 @@ Most settings are configured through the web dashboard after the bot is running 
 
 **Utility** (mod)
 - `/purge [count] [after]` — Delete messages by count and/or cutoff time
+- `/rename <target> [new_name]` — Set a member's nickname (requires Manage Nicknames; leave `new_name` blank to reset to their username)
 
 **Owner**
 - `/reload_cog <extension>` — Hot-reload a cog
