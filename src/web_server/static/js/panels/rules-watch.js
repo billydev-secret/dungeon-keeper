@@ -295,6 +295,14 @@ export function mount(container) {
     if (!row) return;
     selectEvent(Number(row.dataset.id));
   });
+  // Rows are role="button" tabindex="0" — activate with Enter/Space too.
+  listEl.addEventListener("keydown", e => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target.closest("[data-id]");
+    if (!row) return;
+    e.preventDefault();
+    selectEvent(Number(row.dataset.id));
+  });
 
   // --- Back to queue (mobile) ---
   detailEl.addEventListener("click", e => {

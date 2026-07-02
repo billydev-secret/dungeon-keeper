@@ -23,8 +23,8 @@ export function mountTimeSlider(parent, { totalPoints, labels, onChange }) {
   el.innerHTML = `
     <div class="time-slider-track">
       <div class="time-slider-fill"></div>
-      <input type="range" class="time-slider-lo" min="0" max="${totalPoints - 1}" value="0" />
-      <input type="range" class="time-slider-hi" min="0" max="${totalPoints - 1}" value="${totalPoints - 1}" />
+      <input type="range" class="time-slider-lo" min="0" max="${totalPoints - 1}" value="0" aria-label="Range start" />
+      <input type="range" class="time-slider-hi" min="0" max="${totalPoints - 1}" value="${totalPoints - 1}" aria-label="Range end" />
     </div>
     <div class="time-slider-labels">
       <span class="time-slider-lo-label"></span>
@@ -48,6 +48,9 @@ export function mountTimeSlider(parent, { totalPoints, labels, onChange }) {
     fill.style.width = `${pctHi - pctLo}%`;
     loLabel.textContent = labels[lo] || lo;
     hiLabel.textContent = labels[hi] || hi;
+    // Announce the human-readable window edge, not the raw index.
+    loInput.setAttribute("aria-valuetext", String(labels[lo] || lo));
+    hiInput.setAttribute("aria-valuetext", String(labels[hi] || hi));
   }
 
   function clampAndEmit() {
