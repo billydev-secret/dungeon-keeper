@@ -180,6 +180,7 @@ class Bot(commands.Bot):
     async def setup_hook(self) -> None:
         from bot_modules.services.command_sync import sync_if_changed
 
+        self._warn_on_extension_drift()
         for ext in self.extension_names:
             await self.load_extension(ext)
 
@@ -238,6 +239,35 @@ class Bot(commands.Bot):
                     print(
                         f"WARNING: could not clear guild commands for {self.guild_id}: {exc}"
                     )
+
+    def _warn_on_extension_drift(self) -> None:
+        """Fail loud (in the logs) when a cog exists on disk but isn't in the
+        hand-maintained ``extension_names`` list — otherwise a new cog is
+        silently never loaded."""
+        _log = logging.getLogger("dungeonkeeper.startup")
+        try:
+            import bot_modules.cogs as _cogs_pkg
+
+            cogs_dir = Path(next(iter(_cogs_pkg.__path__)))
+        except Exception:
+            return
+        discovered: set[str] = set()
+        for f in cogs_dir.glob("*_cog.py"):
+            discovered.add(f"bot_modules.cogs.{f.stem}")
+        for d in cogs_dir.iterdir():
+            init = d / "__init__.py"
+            if d.is_dir() and init.exists() and "async def setup" in init.read_text(
+                encoding="utf-8", errors="ignore"
+            ):
+                discovered.add(f"bot_modules.cogs.{d.name}")
+        missing = sorted(discovered - set(self.extension_names))
+        if missing:
+            _log.error(
+                "Extension drift: %d cog(s) on disk are NOT in extension_names "
+                "and will not load: %s — add them in dungeonkeeper/__main__.py",
+                len(missing),
+                ", ".join(missing),
+            )
 
         for factory in self.startup_task_factories:
             self.startup_tasks.append(asyncio.create_task(
