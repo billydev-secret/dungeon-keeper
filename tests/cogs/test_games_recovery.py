@@ -127,15 +127,17 @@ async def test_traditional_recovers_view_bound_to_message():
     assert bot.active_views[game_id] is view
 
 
-async def test_ffa_recovers_with_question_from_payload():
+async def test_ffa_recovers_with_prompt_from_payload():
+    # Embed mode (/games play ffa) is the stateful, recoverable variant; a custom
+    # prompt skips the DB prompt bank so the test needs no seeded questions.
     bot, game_id, msg_id = await _launch_and_restart(
-        FFACog, "ffa", {"question": "best pizza topping?"}
+        FFACog, "ffa", {"prompt": "best pizza topping?", "kind": "truth"}
     )
 
     assert game_id in bot.active_views
     view, bound_id = bot.added_views[0]
     assert bound_id == msg_id
-    assert view.question == "best pizza topping?", "question not restored from payload"
+    assert view.text == "best pizza topping?", "prompt not restored from payload"
 
 
 async def test_mfk_recovers_view():

@@ -14,10 +14,6 @@ from bot_modules.games.utils.game_manager import (
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
-# Reuse only the confession bot's thread-naming helper so the reply thread is
-# named after the prompt, exactly like the Truth-or-Dare card. Photo Challenge
-# has no anonymous replies — people post their photos straight into the thread.
-from bot_modules.services.confessions_service import thread_name_from_content
 
 log = logging.getLogger(__name__)
 
@@ -66,7 +62,7 @@ class PhotoCog(commands.Cog):
 
     @app_commands.command(
         name="photo",
-        description="Post a Photo Challenge card and open a thread for everyone's photos!",
+        description="Drop a Photo Challenge card in the channel!",
     )
     @app_commands.describe(
         tags="Comma-separated tags to filter the prompt bank",
@@ -91,12 +87,6 @@ class PhotoCog(commands.Cog):
             interaction.user.display_name,
             interaction.channel.name if interaction.channel else "unknown",
         )
-        if isinstance(interaction.channel, discord.Thread):
-            await interaction.response.send_message(
-                "Run this in a regular text channel — I can't open a new thread from inside a thread.",
-                ephemeral=True,
-            )
-            return
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
@@ -136,7 +126,7 @@ class PhotoCog(commands.Cog):
             try:
                 await interaction.followup.send(
                     "I couldn't start the game here. Please grant me **View Channel**, "
-                    "**Send Messages**, **Attach Files**, and **Create Public Threads**.",
+                    "**Send Messages**, and **Attach Files**.",
                     ephemeral=True,
                 )
             except Exception:
@@ -188,30 +178,15 @@ class PhotoCog(commands.Cog):
             log.exception("photo launch failed to render card in channel %s", channel.id)
             return None
 
-        # Post the card (bare image — replies are just photos posted in the thread).
+        # Post the card (bare image — members post their photos in the channel).
         try:
             msg = await channel.send(file=discord.File(io.BytesIO(card_bytes), filename=CARD_FILENAME))
         except discord.Forbidden:
             log.warning("photo launch lacked send perms in channel %s", channel.id)
             return None
 
-        # Open the thread (named after the prompt) where members post their photos.
-        thread = None
-        try:
-            thread = await msg.create_thread(
-                name=thread_name_from_content(text), auto_archive_duration=1440
-            )
-        except (discord.HTTPException, discord.Forbidden):
-            log.warning("photo: could not open reply thread in channel %s", channel.id)
-            try:
-                await channel.send(
-                    "⚠️ I couldn't open a reply thread (I need **Create Public Threads**)."
-                )
-            except Exception:
-                pass
-
         # Record the play to history for stats (fire-and-forget: there's no
-        # interactive game state to keep alive — people just post in the thread).
+        # interactive game state to keep alive — people just post in the channel).
         game_id = await create_game(
             self.db,
             channel.id,
@@ -222,7 +197,6 @@ class PhotoCog(commands.Cog):
             payload={
                 "prompt": text,
                 "tags": tags,
-                "thread_id": thread.id if thread is not None else None,
             },
         )
         log.info("Game %s (photo) posted by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))

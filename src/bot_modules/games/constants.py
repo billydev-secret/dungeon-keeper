@@ -17,6 +17,7 @@ CLAPBACK_TIE_COLOR = 0x99AAB5   # Grey (ties)
 
 GAME_ICONS = {
     'ffa': '🎭',
+    'ffa_banner': '🃏',
     'photo': '📸',
     'traditional': '🎲',
     'compliment': '💛',
@@ -39,7 +40,8 @@ GAME_ICONS = {
 }
 
 GAME_NAMES = {
-    'ffa': 'Truth or Dare Cards',
+    'ffa': 'Anonymous Truth or Dare',
+    'ffa_banner': 'Truth or Dare Card',
     'photo': 'Photo Challenge',
     'traditional': 'Truth or Dare',
     'compliment': 'Spin the Compliment',
@@ -69,10 +71,18 @@ GAME_NAMES = {
 # in its cog setup() (see bot.game_launchers); the startup coverage check warns
 # on drift.
 SCHEDULABLE_GAME_TYPES = [
-    'ffa', 'photo', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
+    'ffa', 'ffa_banner', 'photo', 'traditional', 'compliment', 'mfk', 'wyr', 'nhie', 'mlt', 'ttl',
     'hottakes', 'story', 'ama', 'fantasies', 'price', 'rushmore', 'clapback',
     'legitlibs', 'risky_roll',
 ]
+
+# Some schedulable types are display variants of a base game — they share the
+# question bank, history rows, and the base game's enable/disable toggle. Map a
+# variant to its base so a single games-config toggle governs both. Used by the
+# scheduler's enable check (see scheduled_games_service).
+SCHEDULE_BASE_GAME_TYPE = {
+    'ffa_banner': 'ffa',
+}
 
 # Per-game option fields the scheduler/web UI can collect. Each field:
 #   name    — key in the options dict passed to launch()
@@ -84,6 +94,13 @@ SCHEDULABLE_GAME_TYPES = [
 # Games with no setup options have an empty list. Mirrors each cog's slash params.
 SCHEDULE_OPTION_SCHEMA = {
     'ffa': [
+        {'name': 'kind', 'label': 'Prompt type', 'type': 'choice', 'default': 'random',
+         'choices': [{'value': 'random', 'label': 'Random'},
+                     {'value': 'truth', 'label': 'Truth'},
+                     {'value': 'dare', 'label': 'Dare'}]},
+        {'name': 'prompt', 'label': 'Custom prompt (optional)', 'type': 'str', 'default': ''},
+    ],
+    'ffa_banner': [
         {'name': 'kind', 'label': 'Prompt type', 'type': 'choice', 'default': 'random',
          'choices': [{'value': 'random', 'label': 'Random'},
                      {'value': 'truth', 'label': 'Truth'},
@@ -171,23 +188,24 @@ SCHEDULE_OPTION_SCHEMA = {
 
 HOW_TO_PLAY = {
     'ffa': (
-        "🎭 **Truth or Dare Cards**\n"
-        "The host drops a Truth or Dare card and a thread opens for replies.\n\n"
-        "1. Read the prompt on the card (TRUTH or DARE)\n"
-        "2. Reply right in the thread — or use the thread's buttons:\n"
-        "   • **🎭 Reply Anonymously** — same anon nickname all thread\n"
+        "🎭 **Truth or Dare**\n"
+        "The host drops a Truth or Dare prompt in two flavours:\n\n"
+        "• **/games play ffa** — posts an embed with anonymous reply buttons; "
+        "replies land back in the channel and a live counter tracks them:\n"
+        "   • **🎭 Reply Anonymously** — same anon nickname the whole time\n"
         "   • **🎲 Reply Super Anonymously** — a fresh nickname each time\n"
-        "3. Anonymous replies are posted into the thread with no attribution "
-        "(mods can still see who sent them)\n\n"
+        "   Replies are posted with no attribution (mods can still see who sent them).\n"
+        "• **/games play ffa_banner** — just drops the prompt card in the channel "
+        "for open discussion (no anonymous replies)\n\n"
         "💡 The host picks Truth/Dare/random or writes their own prompt — and can schedule "
         "an automated series from the dashboard. Spicier (NSFW) prompts appear only in "
         "channels marked age-restricted in Discord."
     ),
     'photo': (
         "📸 **Photo Challenge**\n"
-        "The host drops a Photo Challenge card and a thread opens for everyone's shots.\n\n"
+        "The host drops a Photo Challenge card in the channel.\n\n"
         "1. Read the challenge on the card\n"
-        "2. Reply right in the thread with your photo\n"
+        "2. Post your photo right in the channel\n"
         "3. Browse everyone else's takes as they roll in\n\n"
         "💡 Challenges are curated in the **Games Studio** (web dashboard). The host "
         "can write their own challenge or schedule an automated series. Spicier (NSFW) "

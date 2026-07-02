@@ -21,6 +21,7 @@ SUPPORT_INVITE_URL = "https://discord.gg/7gfbYYkH"
 # have their own entry points.
 GAME_COMMANDS: dict[str, str] = {
     "ffa": "/games play ffa",
+    "ffa_banner": "/games play ffa_banner",
     "photo": "/games play photo",
     "traditional": "/games play traditional",
     "compliment": "/games play compliment",
@@ -43,8 +44,9 @@ GAME_COMMANDS: dict[str, str] = {
 
 # Short one-line descriptions for the help list.
 GAME_DESCRIPTIONS: dict[str, str] = {
-    "ffa": "A Truth or Dare card drops — answer in the thread, anonymously if you like.",
-    "photo": "Drop a photo challenge — everyone posts their shot in the thread.",
+    "ffa": "A Truth or Dare prompt drops — reply anonymously right in the channel.",
+    "ffa_banner": "Just drops a Truth or Dare prompt card in the channel for open chat.",
+    "photo": "Drop a photo challenge — everyone posts their shot in the channel.",
     "traditional": "Classic truth or dare with SFW/NSFW categories.",
     "compliment": "Random pairings — give your match a compliment.",
     "mfk": "Assign three names to each player. You know the rest.",

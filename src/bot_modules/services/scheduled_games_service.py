@@ -19,7 +19,7 @@ import sqlite3
 import time
 from datetime import datetime, timedelta
 
-from bot_modules.games.constants import GAME_NAMES, SCHEDULABLE_GAME_TYPES
+from bot_modules.games.constants import GAME_NAMES, SCHEDULABLE_GAME_TYPES, SCHEDULE_BASE_GAME_TYPE
 from bot_modules.games.utils.game_manager import (
     check_game_enabled,
     get_active_game,
@@ -247,7 +247,9 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         return
 
     # 2. Re-check the game is still enabled (scheduler bypasses the slash guards).
-    if not await check_game_enabled(games_db, game_type, guild_id):
+    #    Display variants (e.g. ffa_banner) honour their base game's toggle.
+    enable_type = SCHEDULE_BASE_GAME_TYPE.get(game_type, game_type)
+    if not await check_game_enabled(games_db, enable_type, guild_id):
         await _advance_or_finish(games_db, row, now, "skipped_disabled", offset, recur_days)
         return
 
