@@ -12,6 +12,7 @@ followup, a JSON 200/400 response, etc.).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
@@ -167,8 +168,13 @@ async def apply_jail(
         return precheck
 
     # ── Step 1: ensure @Jailed role ──────────────────────────────────
-    with ctx.open_db() as conn:
-        jailed_role_id_raw = get_config_value(conn, "jailed_role_id", "0", guild.id)
+    guild_id = guild.id
+
+    def _get_jailed_role_id():
+        with ctx.open_db() as conn:
+            return get_config_value(conn, "jailed_role_id", "0", guild_id)
+
+    jailed_role_id_raw = await asyncio.to_thread(_get_jailed_role_id)
     try:
         jailed_role_id = int(jailed_role_id_raw or "0")
     except ValueError:
@@ -239,8 +245,11 @@ async def apply_jail(
         )
 
     # ── Step 3: create private jail channel ─────────────────────────
-    with ctx.open_db() as conn:
-        cat_id_raw = get_config_value(conn, "jail_category_id", "0", guild.id)
+    def _get_cat_id():
+        with ctx.open_db() as conn:
+            return get_config_value(conn, "jail_category_id", "0", guild_id)
+
+    cat_id_raw = await asyncio.to_thread(_get_cat_id)
     try:
         cat_id = int(cat_id_raw or "0")
     except ValueError:
@@ -318,26 +327,34 @@ async def apply_jail(
             if key not in audit_extra:
                 audit_extra[key] = value
 
-    with ctx.open_db() as conn:
-        jail_id = create_jail(
-            conn,
-            guild_id=guild.id,
-            user_id=target.id,
-            moderator_id=moderator.id,
-            reason=reason,
-            stored_roles=stored_roles,
-            channel_id=jail_channel.id,
-            duration_seconds=duration_seconds,
-        )
-        audit_extra["jail_id"] = jail_id
-        write_audit(
-            conn,
-            guild_id=guild.id,
-            action="jail_create",
-            actor_id=moderator.id,
-            target_id=target.id,
-            extra=audit_extra,
-        )
+    target_id = target.id
+    moderator_id = moderator.id
+    jail_channel_id = jail_channel.id
+
+    def _persist():
+        with ctx.open_db() as conn:
+            jid = create_jail(
+                conn,
+                guild_id=guild_id,
+                user_id=target_id,
+                moderator_id=moderator_id,
+                reason=reason,
+                stored_roles=stored_roles,
+                channel_id=jail_channel_id,
+                duration_seconds=duration_seconds,
+            )
+            audit_extra["jail_id"] = jid
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="jail_create",
+                actor_id=moderator_id,
+                target_id=target_id,
+                extra=audit_extra,
+            )
+        return jid
+
+    jail_id = await asyncio.to_thread(_persist)
 
     # ── Step 5: jail-channel welcome embed ───────────────────────────
     duration_text = (
@@ -394,8 +411,11 @@ async def apply_jail(
             pass
 
     # ── Step 7: post audit-log embed ─────────────────────────────────
-    with ctx.open_db() as conn:
-        log_ch_id_raw = get_config_value(conn, "log_channel_id", "0", guild.id)
+    def _get_log_ch():
+        with ctx.open_db() as conn:
+            return get_config_value(conn, "log_channel_id", "0", guild_id)
+
+    log_ch_id_raw = await asyncio.to_thread(_get_log_ch)
     try:
         log_ch_id = int(log_ch_id_raw or "0")
     except ValueError:

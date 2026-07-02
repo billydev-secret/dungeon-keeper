@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import discord
@@ -69,15 +70,22 @@ class _TodoFromMessageModal(discord.ui.Modal, title="Add to Todo"):
             notes=str(self.notes.value or ""),
         )
 
-        with self._ctx.open_db() as conn:
-            todo_id = create_todo(
-                conn,
-                interaction.guild.id,
-                interaction.user.id,
-                task,
-                description=description,
-                source_message_url=self._message.jump_url,
-            )
+        guild_id = interaction.guild.id
+        user_id = interaction.user.id
+        jump_url = self._message.jump_url
+
+        def _do_create_todo():
+            with self._ctx.open_db() as conn:
+                return create_todo(
+                    conn,
+                    guild_id,
+                    user_id,
+                    task,
+                    description=description,
+                    source_message_url=jump_url,
+                )
+
+        todo_id = await asyncio.to_thread(_do_create_todo)
 
         await interaction.response.send_message(
             f"Todo #{todo_id} added.", ephemeral=True
@@ -130,8 +138,14 @@ class TodoCog(commands.Cog):
                 f"Task must be {TASK_MAX_LEN} characters or fewer.", ephemeral=True
             )
             return
-        with self.ctx.open_db() as conn:
-            todo_id = create_todo(conn, interaction.guild.id, interaction.user.id, task)
+        guild_id = interaction.guild.id
+        user_id = interaction.user.id
+
+        def _do_create_todo():
+            with self.ctx.open_db() as conn:
+                return create_todo(conn, guild_id, user_id, task)
+
+        todo_id = await asyncio.to_thread(_do_create_todo)
         await interaction.response.send_message(
             f"Todo #{todo_id} added: {task}", ephemeral=True
         )

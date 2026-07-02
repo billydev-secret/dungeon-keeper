@@ -7,6 +7,7 @@ remains as a slash command.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import discord
@@ -63,8 +64,11 @@ class ReportsCog(commands.Cog):
         guild_id = interaction.guild.id if interaction.guild else ctx.guild_id
         now_ts = discord.utils.utcnow().timestamp()
         end_ts = now_ts + days.value * 86400
-        with ctx.open_db() as conn:
-            add_leave(conn, guild_id, member.id, now_ts, end_ts)
+        def _do_add_leave():
+            with ctx.open_db() as conn:
+                add_leave(conn, guild_id, member.id, now_ts, end_ts)
+
+        await asyncio.to_thread(_do_add_leave)
 
         await interaction.response.send_message(
             f"{member.mention} placed on leave of absence for {days.value} days.",
@@ -88,8 +92,11 @@ class ReportsCog(commands.Cog):
         from bot_modules.services.member_quality_score import remove_leave
 
         guild_id = interaction.guild.id if interaction.guild else ctx.guild_id
-        with ctx.open_db() as conn:
-            removed = remove_leave(conn, guild_id, member.id)
+        def _do_remove_leave():
+            with ctx.open_db() as conn:
+                return remove_leave(conn, guild_id, member.id)
+
+        removed = await asyncio.to_thread(_do_remove_leave)
 
         if removed:
             await interaction.response.send_message(
@@ -120,8 +127,13 @@ class ReportsCog(commands.Cog):
 
         from bot_modules.services.member_quality_score import get_leaves
 
-        with ctx.open_db() as conn:
-            leaves = get_leaves(conn, guild.id)
+        gid = guild.id
+
+        def _do_get_leaves():
+            with ctx.open_db() as conn:
+                return get_leaves(conn, gid)
+
+        leaves = await asyncio.to_thread(_do_get_leaves)
 
         if not leaves:
             await interaction.response.send_message(

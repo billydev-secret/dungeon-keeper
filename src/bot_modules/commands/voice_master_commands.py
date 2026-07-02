@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -109,8 +110,14 @@ async def _resolve_owned_channel(
         )
         return None
 
-    with ctx.open_db() as conn:
-        row = get_owned_channel(conn, interaction.guild.id, interaction.user.id)
+    _ro_guild_id = interaction.guild.id
+    _ro_user_id = interaction.user.id
+
+    def _fetch_owned():
+        with ctx.open_db() as conn:
+            return get_owned_channel(conn, _ro_guild_id, _ro_user_id)
+
+    row = await asyncio.to_thread(_fetch_owned)
     if row is None:
         await _ephemeral(
             interaction,
@@ -206,8 +213,14 @@ async def _gate_and_record_edit(
             ),
         )
         return False
-    with ctx.open_db() as conn:
-        record_edit_in_db(conn, row.channel_id, now=now)
+    _edit_channel_id = row.channel_id
+    _edit_now = now
+
+    def _record_edit():
+        with ctx.open_db() as conn:
+            record_edit_in_db(conn, _edit_channel_id, now=_edit_now)
+
+    await asyncio.to_thread(_record_edit)
     return True
 
 
@@ -255,9 +268,17 @@ async def _sync_lock_member_overwrites(
                 pass
         return
 
-    with ctx.open_db() as conn:
-        trusted_ids = list_trusted(conn, channel.guild.id, row.owner_id)
-        blocked_ids = list_blocked(conn, channel.guild.id, row.owner_id)
+    _lock_sync_guild_id = channel.guild.id
+    _lock_sync_owner_id = row.owner_id
+
+    def _fetch_lock_lists():
+        with ctx.open_db() as conn:
+            return (
+                list_trusted(conn, _lock_sync_guild_id, _lock_sync_owner_id),
+                list_blocked(conn, _lock_sync_guild_id, _lock_sync_owner_id),
+            )
+
+    trusted_ids, blocked_ids = await asyncio.to_thread(_fetch_lock_lists)
     # ``channel.overwrites`` rebuilds its dict on each access, so snapshot once.
     # Keep the resolved Member objects: keys are already Members (we drop any
     # unresolved discord.Object), and set_permissions needs a Role/Member
@@ -331,9 +352,17 @@ async def _sync_hidden_member_overwrites(
                 pass
         return
 
-    with ctx.open_db() as conn:
-        trusted_ids = list_trusted(conn, channel.guild.id, row.owner_id)
-        blocked_ids = list_blocked(conn, channel.guild.id, row.owner_id)
+    _hide_sync_guild_id = channel.guild.id
+    _hide_sync_owner_id = row.owner_id
+
+    def _fetch_hide_lists():
+        with ctx.open_db() as conn:
+            return (
+                list_trusted(conn, _hide_sync_guild_id, _hide_sync_owner_id),
+                list_blocked(conn, _hide_sync_guild_id, _hide_sync_owner_id),
+            )
+
+    trusted_ids, blocked_ids = await asyncio.to_thread(_fetch_hide_lists)
     # Snapshot once — ``channel.overwrites`` rebuilds its dict on each access —
     # and keep the resolved Member objects (set_permissions needs a Member
     # target, not a bare snowflake).
@@ -383,10 +412,15 @@ async def _apply_lock(
     # so its audience deny + speaker grants don't linger under the lock.
     spectator_cleared = False
     if locked:
-        with ctx.open_db() as conn:
-            gate_role_id = load_voice_master_config(
-                conn, channel.guild.id
-            ).spectator_gate_role_id
+        _spectator_gate_guild_id = channel.guild.id
+
+        def _load_gate_role_id():
+            with ctx.open_db() as conn:
+                return load_voice_master_config(
+                    conn, _spectator_gate_guild_id
+                ).spectator_gate_role_id
+
+        gate_role_id = await asyncio.to_thread(_load_gate_role_id)
         gate_role = _resolve_gate_role(channel, gate_role_id)
         if _access_mode_for_channel(channel, gate_role=gate_role) == "spectate":
             await _teardown_spectator_overwrites(
@@ -421,26 +455,33 @@ async def _apply_lock(
         )
     except (discord.Forbidden, discord.HTTPException):
         pass
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, channel.guild.id)
-        _maybe_save_profile_field(
-            conn, cfg,
-            guild_id=channel.guild.id, owner_id=row.owner_id,
-            saveable_key="locked", profile_field="locked", value=locked,
-        )
-        if spectator_cleared:
+    _lock_guild_id = channel.guild.id
+    _lock_owner_id = row.owner_id
+    _lock_channel_id = channel.id
+
+    def _save_lock():
+        with ctx.open_db() as conn:
+            cfg = load_voice_master_config(conn, _lock_guild_id)
             _maybe_save_profile_field(
                 conn, cfg,
-                guild_id=channel.guild.id, owner_id=row.owner_id,
-                saveable_key="spectator", profile_field="spectator", value=False,
+                guild_id=_lock_guild_id, owner_id=_lock_owner_id,
+                saveable_key="locked", profile_field="locked", value=locked,
             )
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_channel_lock" if locked else "vm_channel_unlock",
-            actor_id=interaction.user.id,
-            extra={"channel_id": channel.id},
-        )
+            if spectator_cleared:
+                _maybe_save_profile_field(
+                    conn, cfg,
+                    guild_id=_lock_guild_id, owner_id=_lock_owner_id,
+                    saveable_key="spectator", profile_field="spectator", value=False,
+                )
+            write_audit(
+                conn,
+                guild_id=_lock_guild_id,
+                action="vm_channel_lock" if locked else "vm_channel_unlock",
+                actor_id=interaction.user.id,
+                extra={"channel_id": _lock_channel_id},
+            )
+
+    await asyncio.to_thread(_save_lock)
     await _ephemeral(interaction, format_lock_result(locked=locked))
 
 
@@ -549,9 +590,17 @@ async def _teardown_spectator_overwrites(
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    with ctx.open_db() as conn:
-        trusted_ids = list_trusted(conn, channel.guild.id, row.owner_id)
-        blocked_ids = list_blocked(conn, channel.guild.id, row.owner_id)
+    _spec_sync_guild_id = channel.guild.id
+    _spec_sync_owner_id = row.owner_id
+
+    def _fetch_spec_lists():
+        with ctx.open_db() as conn:
+            return (
+                list_trusted(conn, _spec_sync_guild_id, _spec_sync_owner_id),
+                list_blocked(conn, _spec_sync_guild_id, _spec_sync_owner_id),
+            )
+
+    trusted_ids, blocked_ids = await asyncio.to_thread(_fetch_spec_lists)
     overwrites = channel.overwrites
     overwrite_members = {
         target.id: target
@@ -609,8 +658,13 @@ async def _apply_spectator(
     if ctx is None:
         return
     await _defer_if_needed(interaction)
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, channel.guild.id)
+    _spectator_guild_id = channel.guild.id
+
+    def _load_spectator_cfg():
+        with ctx.open_db() as conn:
+            return load_voice_master_config(conn, _spectator_guild_id)
+
+    cfg = await asyncio.to_thread(_load_spectator_cfg)
     gate_role = _resolve_gate_role(channel, cfg.spectator_gate_role_id)
     gated = spectator and gate_role is not None
     everyone = channel.guild.default_role
@@ -703,26 +757,33 @@ async def _apply_spectator(
     except (discord.Forbidden, discord.HTTPException):
         pass
 
-    with ctx.open_db() as conn:
-        _maybe_save_profile_field(
-            conn, cfg,
-            guild_id=channel.guild.id, owner_id=row.owner_id,
-            saveable_key="spectator", profile_field="spectator", value=spectator,
-        )
-        if spectator:
-            # Mutually exclusive with lock — clear any saved lock state too.
+    _spectator_save_guild_id = channel.guild.id
+    _spectator_save_owner_id = row.owner_id
+    _spectator_save_channel_id = channel.id
+
+    def _save_spectator():
+        with ctx.open_db() as conn:
             _maybe_save_profile_field(
                 conn, cfg,
-                guild_id=channel.guild.id, owner_id=row.owner_id,
-                saveable_key="locked", profile_field="locked", value=False,
+                guild_id=_spectator_save_guild_id, owner_id=_spectator_save_owner_id,
+                saveable_key="spectator", profile_field="spectator", value=spectator,
             )
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_channel_spectate_on" if spectator else "vm_channel_spectate_off",
-            actor_id=interaction.user.id,
-            extra={"channel_id": channel.id, "gated": gated},
-        )
+            if spectator:
+                # Mutually exclusive with lock — clear any saved lock state too.
+                _maybe_save_profile_field(
+                    conn, cfg,
+                    guild_id=_spectator_save_guild_id, owner_id=_spectator_save_owner_id,
+                    saveable_key="locked", profile_field="locked", value=False,
+                )
+            write_audit(
+                conn,
+                guild_id=_spectator_save_guild_id,
+                action="vm_channel_spectate_on" if spectator else "vm_channel_spectate_off",
+                actor_id=interaction.user.id,
+                extra={"channel_id": _spectator_save_channel_id, "gated": gated},
+            )
+
+    await asyncio.to_thread(_save_spectator)
     await _ephemeral(
         interaction, format_spectator_result(spectator=spectator, gated=gated)
     )
@@ -738,8 +799,13 @@ async def _apply_rename(
     ctx = _ctx_from_interaction(interaction)
     if ctx is None:
         return
-    with ctx.open_db() as conn:
-        patterns = list_name_blocklist(conn, channel.guild.id)
+    _rename_guild_id = channel.guild.id
+
+    def _fetch_blocklist():
+        with ctx.open_db() as conn:
+            return list_name_blocklist(conn, _rename_guild_id)
+
+    patterns = await asyncio.to_thread(_fetch_blocklist)
     result = validate_rename_input(
         new_name, max_len=MAX_NAME_LEN, blocklist_patterns=patterns
     )
@@ -761,20 +827,26 @@ async def _apply_rename(
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't rename the channel.")
         return
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, channel.guild.id)
-        _maybe_save_profile_field(
-            conn, cfg,
-            guild_id=channel.guild.id, owner_id=row.owner_id,
-            saveable_key="name", profile_field="saved_name", value=new_name,
-        )
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_channel_rename",
-            actor_id=interaction.user.id,
-            extra={"channel_id": channel.id, "name": new_name},
-        )
+    _rename_owner_id = row.owner_id
+    _rename_channel_id = channel.id
+
+    def _save_rename():
+        with ctx.open_db() as conn:
+            cfg = load_voice_master_config(conn, _rename_guild_id)
+            _maybe_save_profile_field(
+                conn, cfg,
+                guild_id=_rename_guild_id, owner_id=_rename_owner_id,
+                saveable_key="name", profile_field="saved_name", value=new_name,
+            )
+            write_audit(
+                conn,
+                guild_id=_rename_guild_id,
+                action="vm_channel_rename",
+                actor_id=interaction.user.id,
+                extra={"channel_id": _rename_channel_id, "name": new_name},
+            )
+
+    await asyncio.to_thread(_save_rename)
     await _ephemeral(interaction, format_rename_result(new_name=new_name))
 
 
@@ -823,16 +895,23 @@ async def _apply_reset(
     if not ok:
         await _ephemeral(interaction, "Couldn't reset channel permissions.")
         return
-    with ctx.open_db() as conn:
-        if also_profile:
-            delete_profile(conn, channel.guild.id, row.owner_id)
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_reset_profile" if also_profile else "vm_reset_channel",
-            actor_id=interaction.user.id,
-            extra={"channel_id": channel.id},
-        )
+    _reset_guild_id = channel.guild.id
+    _reset_owner_id = row.owner_id
+    _reset_channel_id = channel.id
+
+    def _save_reset():
+        with ctx.open_db() as conn:
+            if also_profile:
+                delete_profile(conn, _reset_guild_id, _reset_owner_id)
+            write_audit(
+                conn,
+                guild_id=_reset_guild_id,
+                action="vm_reset_profile" if also_profile else "vm_reset_channel",
+                actor_id=interaction.user.id,
+                extra={"channel_id": _reset_channel_id},
+            )
+
+    await asyncio.to_thread(_save_reset)
     await _ephemeral(interaction, format_reset_result(also_profile=also_profile))
 
 
@@ -872,16 +951,24 @@ async def _apply_transfer(
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't update channel permissions.")
         return
-    with ctx.open_db() as conn:
-        set_owner(conn, channel.id, new_owner.id)
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_transfer",
-            actor_id=new_owner.id,
-            target_id=row.owner_id,
-            extra={"channel_id": channel.id},
-        )
+    _transfer_guild_id = channel.guild.id
+    _transfer_channel_id = channel.id
+    _transfer_new_owner_id = new_owner.id
+    _transfer_prev_owner_id = row.owner_id
+
+    def _save_transfer():
+        with ctx.open_db() as conn:
+            set_owner(conn, _transfer_channel_id, _transfer_new_owner_id)
+            write_audit(
+                conn,
+                guild_id=_transfer_guild_id,
+                action="vm_transfer",
+                actor_id=_transfer_new_owner_id,
+                target_id=_transfer_prev_owner_id,
+                extra={"channel_id": _transfer_channel_id},
+            )
+
+    await asyncio.to_thread(_save_transfer)
     await _ephemeral(
         interaction,
         format_transfer_result(new_owner_mention=new_owner.mention),
@@ -919,29 +1006,38 @@ async def _apply_invite(
         await _ephemeral(interaction, "Couldn't update channel permissions.")
         return
 
-    cap_evicted: int | None = None
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, channel.guild.id)
-        if remember and should_save_profile_field(
-            saveable_key="trusted",
-            disable_saves=cfg.disable_saves,
-            saveable_fields=cfg.saveable_fields,
-        ):
-            _, cap_evicted = add_trusted(
+    _invite_guild_id = channel.guild.id
+    _invite_owner_id = row.owner_id
+    _invite_target_id = target.id
+    _invite_channel_id = channel.id
+
+    def _save_invite() -> int | None:
+        _evicted: int | None = None
+        with ctx.open_db() as conn:
+            cfg = load_voice_master_config(conn, _invite_guild_id)
+            if remember and should_save_profile_field(
+                saveable_key="trusted",
+                disable_saves=cfg.disable_saves,
+                saveable_fields=cfg.saveable_fields,
+            ):
+                _, _evicted = add_trusted(
+                    conn,
+                    _invite_guild_id,
+                    _invite_owner_id,
+                    _invite_target_id,
+                    cap=cfg.trust_cap,
+                )
+            write_audit(
                 conn,
-                channel.guild.id,
-                row.owner_id,
-                target.id,
-                cap=cfg.trust_cap,
+                guild_id=_invite_guild_id,
+                action="vm_invite",
+                actor_id=interaction.user.id,
+                target_id=_invite_target_id,
+                extra={"channel_id": _invite_channel_id, "remember": remember},
             )
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_invite",
-            actor_id=interaction.user.id,
-            target_id=target.id,
-            extra={"channel_id": channel.id, "remember": remember},
-        )
+        return _evicted
+
+    cap_evicted = await asyncio.to_thread(_save_invite)
 
     # DM the invitee with a clickable jump-into-channel link.
     join_url = build_join_url(
@@ -1003,29 +1099,38 @@ async def _apply_kick(
         except (discord.Forbidden, discord.HTTPException):
             pass
 
-    cap_evicted: int | None = None
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, channel.guild.id)
-        if remember and should_save_profile_field(
-            saveable_key="blocked",
-            disable_saves=cfg.disable_saves,
-            saveable_fields=cfg.saveable_fields,
-        ):
-            _, cap_evicted = add_blocked(
+    _kick_guild_id = channel.guild.id
+    _kick_owner_id = row.owner_id
+    _kick_target_id = target.id
+    _kick_channel_id = channel.id
+
+    def _save_kick() -> int | None:
+        _evicted: int | None = None
+        with ctx.open_db() as conn:
+            cfg = load_voice_master_config(conn, _kick_guild_id)
+            if remember and should_save_profile_field(
+                saveable_key="blocked",
+                disable_saves=cfg.disable_saves,
+                saveable_fields=cfg.saveable_fields,
+            ):
+                _, _evicted = add_blocked(
+                    conn,
+                    _kick_guild_id,
+                    _kick_owner_id,
+                    _kick_target_id,
+                    cap=cfg.block_cap,
+                )
+            write_audit(
                 conn,
-                channel.guild.id,
-                row.owner_id,
-                target.id,
-                cap=cfg.block_cap,
+                guild_id=_kick_guild_id,
+                action="vm_kick",
+                actor_id=interaction.user.id,
+                target_id=_kick_target_id,
+                extra={"channel_id": _kick_channel_id, "remember": remember},
             )
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_kick",
-            actor_id=interaction.user.id,
-            target_id=target.id,
-            extra={"channel_id": channel.id, "remember": remember},
-        )
+        return _evicted
+
+    cap_evicted = await asyncio.to_thread(_save_kick)
 
     await _ephemeral(
         interaction,
@@ -1059,20 +1164,27 @@ async def _apply_limit(
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't update the user limit.")
         return
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, channel.guild.id)
-        _maybe_save_profile_field(
-            conn, cfg,
-            guild_id=channel.guild.id, owner_id=row.owner_id,
-            saveable_key="limit", profile_field="saved_limit", value=new_limit,
-        )
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_channel_limit",
-            actor_id=interaction.user.id,
-            extra={"channel_id": channel.id, "limit": new_limit},
-        )
+    _limit_guild_id = channel.guild.id
+    _limit_owner_id = row.owner_id
+    _limit_channel_id = channel.id
+
+    def _save_limit():
+        with ctx.open_db() as conn:
+            cfg = load_voice_master_config(conn, _limit_guild_id)
+            _maybe_save_profile_field(
+                conn, cfg,
+                guild_id=_limit_guild_id, owner_id=_limit_owner_id,
+                saveable_key="limit", profile_field="saved_limit", value=new_limit,
+            )
+            write_audit(
+                conn,
+                guild_id=_limit_guild_id,
+                action="vm_channel_limit",
+                actor_id=interaction.user.id,
+                extra={"channel_id": _limit_channel_id, "limit": new_limit},
+            )
+
+    await asyncio.to_thread(_save_limit)
     await _ephemeral(interaction, format_limit_result(new_limit=new_limit))
 
 
@@ -1103,20 +1215,27 @@ async def _apply_hide(
     # deny above also cuts side-chat access for the people inside. Restore it
     # with a per-member view grant on hide, and tidy those grants on unhide.
     await _sync_hidden_member_overwrites(ctx, channel, row, hidden=hidden)
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, channel.guild.id)
-        _maybe_save_profile_field(
-            conn, cfg,
-            guild_id=channel.guild.id, owner_id=row.owner_id,
-            saveable_key="hidden", profile_field="hidden", value=hidden,
-        )
-        write_audit(
-            conn,
-            guild_id=channel.guild.id,
-            action="vm_channel_hide" if hidden else "vm_channel_unhide",
-            actor_id=interaction.user.id,
-            extra={"channel_id": channel.id},
-        )
+    _hide_guild_id = channel.guild.id
+    _hide_owner_id = row.owner_id
+    _hide_channel_id = channel.id
+
+    def _save_hide():
+        with ctx.open_db() as conn:
+            cfg = load_voice_master_config(conn, _hide_guild_id)
+            _maybe_save_profile_field(
+                conn, cfg,
+                guild_id=_hide_guild_id, owner_id=_hide_owner_id,
+                saveable_key="hidden", profile_field="hidden", value=hidden,
+            )
+            write_audit(
+                conn,
+                guild_id=_hide_guild_id,
+                action="vm_channel_hide" if hidden else "vm_channel_unhide",
+                actor_id=interaction.user.id,
+                extra={"channel_id": _hide_channel_id},
+            )
+
+    await asyncio.to_thread(_save_hide)
     await _ephemeral(interaction, format_hide_result(hidden=hidden))
 
 
@@ -1204,8 +1323,13 @@ class _RenameModal(discord.ui.Modal, title="Rename voice channel"):
         if not isinstance(channel, discord.VoiceChannel):
             await _ephemeral(interaction, "That channel no longer exists.")
             return
-        with ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
+        _rename_ch_id = channel.id
+
+        def _fetch_rename_row():
+            with ctx.open_db() as conn:
+                return get_active_channel(conn, _rename_ch_id)
+
+        row = await asyncio.to_thread(_fetch_rename_row)
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
             return
@@ -1238,8 +1362,13 @@ class _LimitModal(discord.ui.Modal, title="Set user limit"):
         if not isinstance(channel, discord.VoiceChannel):
             await _ephemeral(interaction, "That channel no longer exists.")
             return
-        with ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
+        _limit_ch_id = channel.id
+
+        def _fetch_limit_row():
+            with ctx.open_db() as conn:
+                return get_active_channel(conn, _limit_ch_id)
+
+        row = await asyncio.to_thread(_fetch_limit_row)
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
             return
@@ -1309,8 +1438,13 @@ class _TransferPickerView(discord.ui.View):
         ctx = _ctx_from_interaction(interaction)
         if ctx is None:
             return
-        with ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
+        _transfer_ch_id = channel.id
+
+        def _fetch_transfer_row():
+            with ctx.open_db() as conn:
+                return get_active_channel(conn, _transfer_ch_id)
+
+        row = await asyncio.to_thread(_fetch_transfer_row)
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
             return
@@ -1369,8 +1503,13 @@ class _UserPickerView(discord.ui.View):
         ctx = _ctx_from_interaction(interaction)
         if ctx is None:
             return
-        with ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
+        _picker_ch_id = channel.id
+
+        def _fetch_picker_row():
+            with ctx.open_db() as conn:
+                return get_active_channel(conn, _picker_ch_id)
+
+        row = await asyncio.to_thread(_fetch_picker_row)
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
             return
@@ -1416,8 +1555,13 @@ class _ResetConfirmView(discord.ui.View):
         ctx = _ctx_from_interaction(interaction)
         if ctx is None:
             return
-        with ctx.open_db() as conn:
-            row = get_active_channel(conn, channel.id)
+        _reset_ch_id = channel.id
+
+        def _fetch_reset_row():
+            with ctx.open_db() as conn:
+                return get_active_channel(conn, _reset_ch_id)
+
+        row = await asyncio.to_thread(_fetch_reset_row)
         if row is None or row.owner_id != interaction.user.id:
             await _ephemeral(interaction, "You no longer own that channel.")
             return
@@ -1589,9 +1733,16 @@ async def _handle_claim_button(
     ):
         await _ephemeral(interaction, "Join the channel first, then claim it.")
         return
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, guild.id)
-        row = get_active_channel(conn, channel_id)
+    _claim_guild_id = guild.id
+
+    def _fetch_claim_state():
+        with ctx.open_db() as conn:
+            return (
+                load_voice_master_config(conn, _claim_guild_id),
+                get_active_channel(conn, channel_id),
+            )
+
+    cfg, row = await asyncio.to_thread(_fetch_claim_state)
     if row is None:
         await _ephemeral(interaction, "This channel isn't managed by Voice Master.")
         return
@@ -1620,16 +1771,22 @@ async def _handle_claim_button(
     except (discord.Forbidden, discord.HTTPException):
         await _ephemeral(interaction, "Couldn't grant you ownership permissions.")
         return
-    with ctx.open_db() as conn:
-        set_owner(conn, channel_id, member.id)
-        write_audit(
-            conn,
-            guild_id=guild.id,
-            action="vm_claim",
-            actor_id=member.id,
-            target_id=row.owner_id,
-            extra={"channel_id": channel_id, "via": "button"},
-        )
+    _claim_member_id = member.id
+    _claim_prev_owner_id = row.owner_id
+
+    def _save_button_claim():
+        with ctx.open_db() as conn:
+            set_owner(conn, channel_id, _claim_member_id)
+            write_audit(
+                conn,
+                guild_id=_claim_guild_id,
+                action="vm_claim",
+                actor_id=_claim_member_id,
+                target_id=_claim_prev_owner_id,
+                extra={"channel_id": channel_id, "via": "button"},
+            )
+
+    await asyncio.to_thread(_save_button_claim)
     # Retire the prompt in place: swap to a 'claimed' embed and drop the button.
     try:
         await interaction.response.edit_message(
@@ -1774,15 +1931,23 @@ class _KnockResponseView(discord.ui.View):
             await _ephemeral(interaction, "Couldn't update channel permissions.")
             return
         if ctx is not None:
-            with ctx.open_db() as conn:
-                write_audit(
-                    conn,
-                    guild_id=channel.guild.id,
-                    action="vm_invite",
-                    actor_id=interaction.user.id,
-                    target_id=requester.id,
-                    extra={"channel_id": channel.id, "via": "knock"},
-                )
+            _knock_guild_id = channel.guild.id
+            _knock_channel_id = channel.id
+            _knock_actor_id = interaction.user.id
+            _knock_requester_id = requester.id
+
+            def _audit_knock():
+                with ctx.open_db() as conn:
+                    write_audit(
+                        conn,
+                        guild_id=_knock_guild_id,
+                        action="vm_invite",
+                        actor_id=_knock_actor_id,
+                        target_id=_knock_requester_id,
+                        extra={"channel_id": _knock_channel_id, "via": "knock"},
+                    )
+
+            await asyncio.to_thread(_audit_knock)
         await try_dm(
             requester,
             content=format_knock_accepted_dm(
@@ -1827,8 +1992,13 @@ async def post_knock_request(
     owner: discord.Member,
 ) -> bool:
     """Post a knock notification in the control channel; returns True on success."""
-    with ctx.open_db() as conn:
-        cfg = load_voice_master_config(conn, channel.guild.id)
+    _knock_req_guild_id = channel.guild.id
+
+    def _load_knock_cfg():
+        with ctx.open_db() as conn:
+            return load_voice_master_config(conn, _knock_req_guild_id)
+
+    cfg = await asyncio.to_thread(_load_knock_cfg)
     if not cfg.control_channel_id:
         return False
     control = channel.guild.get_channel(cfg.control_channel_id)
@@ -1861,13 +2031,19 @@ async def post_panel(
     embed = build_panel_embed(colour=accent)
     view = build_panel_view()
     msg = await channel.send(embed=embed, view=view)
-    with ctx.open_db() as conn:
-        set_voice_master_config_value(
-            conn,
-            channel.guild.id,
-            "voice_master_panel_message_id",
-            str(msg.id),
-        )
+    _panel_guild_id = channel.guild.id
+    _panel_msg_id = msg.id
+
+    def _save_panel():
+        with ctx.open_db() as conn:
+            set_voice_master_config_value(
+                conn,
+                _panel_guild_id,
+                "voice_master_panel_message_id",
+                str(_panel_msg_id),
+            )
+
+    await asyncio.to_thread(_save_panel)
     return msg
 
 

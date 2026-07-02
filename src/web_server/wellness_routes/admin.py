@@ -7,6 +7,7 @@ Discord MANAGE_GUILD bit (see web/auth.py::resolve_discord_perms).
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends
@@ -24,6 +25,7 @@ from bot_modules.services.wellness_service import (
     upsert_wellness_config,
 )
 from web_server.auth import AuthenticatedUser
+from web_server.deps import run_query
 from web_server.wellness_routes.deps import get_ctx, get_guild_id, require_manage_server
 
 log = logging.getLogger("dungeonkeeper.wellness.web.admin")
@@ -48,10 +50,14 @@ async def admin_dashboard_data(
     ctx=Depends(get_ctx),
     guild_id: int = Depends(get_guild_id),
 ):
-    with ctx.open_db() as conn:
-        cfg = get_wellness_config(conn, guild_id)
-        active = list_active_users(conn, guild_id)
-        exempt = list_exempt_channels(conn, guild_id)
+    def _q():
+        with ctx.open_db() as conn:
+            cfg = get_wellness_config(conn, guild_id)
+            active = list_active_users(conn, guild_id)
+            exempt = list_exempt_channels(conn, guild_id)
+            return cfg, active, exempt
+
+    cfg, active, exempt = await run_query(_q)
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
@@ -83,8 +89,11 @@ async def admin_defaults_data(
     ctx=Depends(get_ctx),
     guild_id: int = Depends(get_guild_id),
 ):
-    with ctx.open_db() as conn:
-        cfg = get_wellness_config(conn, guild_id)
+    def _q():
+        with ctx.open_db() as conn:
+            return get_wellness_config(conn, guild_id)
+
+    cfg = await run_query(_q)
     return {
         "config": {
             "default_enforcement": cfg.default_enforcement if cfg else "gradual",
@@ -110,15 +119,18 @@ async def admin_defaults_save(
         and default_enforcement not in ENFORCEMENT_LEVELS
     ):
         return _err("invalid enforcement level")
-    with ctx.open_db() as conn:
-        upsert_wellness_config(
-            conn,
-            guild_id,
-            default_enforcement=default_enforcement,
-            crisis_resource_url=str(crisis_resource_url)
-            if crisis_resource_url is not None
-            else None,
-        )
+    crisis_url = str(crisis_resource_url) if crisis_resource_url is not None else None
+
+    def _write():
+        with ctx.open_db() as conn:
+            upsert_wellness_config(
+                conn,
+                guild_id,
+                default_enforcement=default_enforcement,
+                crisis_resource_url=crisis_url,
+            )
+
+    await run_query(_write)
     return _ok()
 
 
@@ -128,8 +140,11 @@ async def admin_users_data(
     ctx=Depends(get_ctx),
     guild_id: int = Depends(get_guild_id),
 ):
-    with ctx.open_db() as conn:
-        active = list_active_users(conn, guild_id)
+    def _q():
+        with ctx.open_db() as conn:
+            return list_active_users(conn, guild_id)
+
+    active = await run_query(_q)
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
@@ -163,16 +178,19 @@ async def admin_pause_user(
     ctx=Depends(get_ctx),
     guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    import time
-
     try:
         minutes = int(payload.get("minutes", 0))
     except (TypeError, ValueError):
         return _err("minutes must be an integer")
     if minutes < 1 or minutes > 7 * 24 * 60:
         return _err("minutes must be between 1 and 10080")
-    with ctx.open_db() as conn:
-        pause_user(conn, guild_id, user_id, time.time() + minutes * 60)
+    until = time.time() + minutes * 60
+
+    def _write():
+        with ctx.open_db() as conn:
+            pause_user(conn, guild_id, user_id, until)
+
+    await run_query(_write)
     return _ok()
 
 
@@ -183,8 +201,11 @@ async def admin_resume_user(
     ctx=Depends(get_ctx),
     guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    with ctx.open_db() as conn:
-        resume_user(conn, guild_id, user_id)
+    def _write():
+        with ctx.open_db() as conn:
+            resume_user(conn, guild_id, user_id)
+
+    await run_query(_write)
     return _ok()
 
 
@@ -197,8 +218,11 @@ async def admin_exempt_data(
     ctx=Depends(get_ctx),
     guild_id: int = Depends(get_guild_id),
 ):
-    with ctx.open_db() as conn:
-        exempt = list_exempt_channels(conn, guild_id)
+    def _q():
+        with ctx.open_db() as conn:
+            return list_exempt_channels(conn, guild_id)
+
+    exempt = await run_query(_q)
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
@@ -235,8 +259,12 @@ async def admin_exempt_add(
     if channel_id <= 0:
         return _err("channel_id is required")
     label = str(payload.get("label", "")).strip() or f"#{channel_id}"
-    with ctx.open_db() as conn:
-        add_exempt_channel(conn, guild_id, channel_id, label)
+
+    def _write():
+        with ctx.open_db() as conn:
+            add_exempt_channel(conn, guild_id, channel_id, label)
+
+    await run_query(_write)
     return _ok()
 
 
@@ -247,8 +275,11 @@ async def admin_exempt_remove(
     ctx=Depends(get_ctx),
     guild_id: int = Depends(get_guild_id),
 ) -> JSONResponse:
-    with ctx.open_db() as conn:
-        ok = remove_exempt_channel(conn, guild_id, channel_id)
+    def _write():
+        with ctx.open_db() as conn:
+            return remove_exempt_channel(conn, guild_id, channel_id)
+
+    ok = await run_query(_write)
     if not ok:
         return _err("channel was not exempt", status=404)
     return _ok()

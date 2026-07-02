@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -40,8 +41,12 @@ class RulesWatchCog(commands.Cog):
             await interaction.response.send_message("Permission denied.", ephemeral=True)
             return
         guild_id = interaction.guild_id or 0
-        with self.ctx.open_db() as conn:
-            set_config_value(conn, "rules_watch_enabled", "1", guild_id)
+
+        def _do_enable():
+            with self.ctx.open_db() as conn:
+                set_config_value(conn, "rules_watch_enabled", "1", guild_id)
+
+        await asyncio.to_thread(_do_enable)
         await interaction.response.send_message(
             "✅ Rules Watch enabled. The monitor will start screening public messages.\n"
             "Use `/rules-watch set-channel` to configure where immediate alerts go.",
@@ -54,8 +59,12 @@ class RulesWatchCog(commands.Cog):
             await interaction.response.send_message("Permission denied.", ephemeral=True)
             return
         guild_id = interaction.guild_id or 0
-        with self.ctx.open_db() as conn:
-            set_config_value(conn, "rules_watch_enabled", "0", guild_id)
+
+        def _do_disable():
+            with self.ctx.open_db() as conn:
+                set_config_value(conn, "rules_watch_enabled", "0", guild_id)
+
+        await asyncio.to_thread(_do_disable)
         await interaction.response.send_message("Rules Watch disabled.", ephemeral=True)
 
     # ------------------------------------------------------------------
@@ -74,8 +83,13 @@ class RulesWatchCog(commands.Cog):
             await interaction.response.send_message("Permission denied.", ephemeral=True)
             return
         guild_id = interaction.guild_id or 0
-        with self.ctx.open_db() as conn:
-            set_config_value(conn, "rules_watch_channel_id", str(channel.id), guild_id)
+        channel_id = channel.id
+
+        def _do_set_channel():
+            with self.ctx.open_db() as conn:
+                set_config_value(conn, "rules_watch_channel_id", str(channel_id), guild_id)
+
+        await asyncio.to_thread(_do_set_channel)
         await interaction.response.send_message(
             f"Immediate alerts will be posted to {channel.mention}.", ephemeral=True
         )
@@ -96,9 +110,12 @@ class RulesWatchCog(commands.Cog):
         guild = interaction.guild
 
         from bot_modules.rules_watch import service
-        with self.ctx.open_db() as conn:
-            events = service.get_pending_events(conn, guild_id, tier="digest", limit=25)
 
+        def _do_get_events():
+            with self.ctx.open_db() as conn:
+                return service.get_pending_events(conn, guild_id, tier="digest", limit=25)
+
+        events = await asyncio.to_thread(_do_get_events)
         if not events:
             await interaction.response.send_message(
                 "No pending digest events.", ephemeral=True
@@ -124,9 +141,12 @@ class RulesWatchCog(commands.Cog):
         guild_id = interaction.guild_id or 0
 
         from bot_modules.rules_watch import service
-        with self.ctx.open_db() as conn:
-            stats = service.get_stats(conn, guild_id)
 
+        def _do_get_stats():
+            with self.ctx.open_db() as conn:
+                return service.get_stats(conn, guild_id)
+
+        stats = await asyncio.to_thread(_do_get_stats)
         guild = interaction.guild
         accent = (
             await resolve_accent_color(self.ctx.db_path, guild)
@@ -210,9 +230,14 @@ class RulesWatchCog(commands.Cog):
             await interaction.response.send_message("Permission denied.", ephemeral=True)
             return
         guild_id = interaction.guild_id or 0
-        with self.ctx.open_db() as conn:
-            enabled = get_config_value(conn, "rules_watch_enabled", "0", guild_id).strip() == "1"
-            ch_raw = get_config_value(conn, "rules_watch_channel_id", "0", guild_id)
+
+        def _do_get_status():
+            with self.ctx.open_db() as conn:
+                _enabled = get_config_value(conn, "rules_watch_enabled", "0", guild_id).strip() == "1"
+                _ch_raw = get_config_value(conn, "rules_watch_channel_id", "0", guild_id)
+            return _enabled, _ch_raw
+
+        enabled, ch_raw = await asyncio.to_thread(_do_get_status)
         ch_id = int(ch_raw.strip()) if ch_raw.strip().isdigit() else 0
         ch_mention = f"<#{ch_id}>" if ch_id else "*(not set)*"
         status = "✅ Enabled" if enabled else "⏸ Disabled"

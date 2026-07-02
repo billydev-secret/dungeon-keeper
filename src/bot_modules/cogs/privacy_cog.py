@@ -255,8 +255,11 @@ async def _run_deletion(
     total = len(msg_rows)
 
     if total == 0:
-        with ctx.open_db() as conn:
-            purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
+        def _do_purge_empty():
+            with ctx.open_db() as conn:
+                purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
+
+        await asyncio.to_thread(_do_purge_empty)
         await _edit_or_send(
             original_interaction,
             render_empty_summary(keep_messages=keep_messages),
@@ -283,8 +286,11 @@ async def _run_deletion(
         guild, user_id, msg_rows, on_progress=_delete_progress
     )
 
-    with ctx.open_db() as conn:
-        purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
+    def _do_purge():
+        with ctx.open_db() as conn:
+            purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
+
+    await asyncio.to_thread(_do_purge)
 
     await _edit_or_send(
         original_interaction,

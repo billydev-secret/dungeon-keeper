@@ -537,8 +537,15 @@ class MusicCog(commands.Cog):
         if ch_id is not None:
             settings = self._get_settings(guild.id, ch_id)
             if settings and settings.always_on:
-                with self.ctx.open_db() as conn:
-                    set_always_on(conn, guild.id, ch_id, False, interaction.user.id)
+                _guild_id = guild.id
+                _ch_id = ch_id
+                _user_id = interaction.user.id
+
+                def _do_disable_always_on():
+                    with self.ctx.open_db() as conn:
+                        set_always_on(conn, _guild_id, _ch_id, False, _user_id)
+
+                await asyncio.to_thread(_do_disable_always_on)
                 await interaction.response.send_message(
                     "Disconnected. 24/7 disabled for this channel."
                 )
@@ -578,17 +585,21 @@ class MusicCog(commands.Cog):
             await self._ephemeral(interaction, "autoplay_playlist must be a Spotify URL.")
             return
 
-        with self.ctx.open_db() as conn:
-            previous = list_always_on_channels(conn, guild.id)
-            cleared = [s for s in previous if s.voice_channel_id != ch_id and s.always_on]
-            for s in cleared:
-                set_always_on(conn, guild.id, s.voice_channel_id, False, interaction.user.id)
-            set_always_on(conn, guild.id, ch_id, enabled, interaction.user.id)
-            if autoplay_playlist:
-                set_autoplay_playlist(
-                    conn, guild.id, ch_id, autoplay_playlist, interaction.user.id
-                )
+        _guild_id = guild.id
+        _user_id = interaction.user.id
 
+        def _do_247_toggle():
+            with self.ctx.open_db() as conn:
+                _previous = list_always_on_channels(conn, _guild_id)
+                _cleared = [s for s in _previous if s.voice_channel_id != ch_id and s.always_on]
+                for s in _cleared:
+                    set_always_on(conn, _guild_id, s.voice_channel_id, False, _user_id)
+                set_always_on(conn, _guild_id, ch_id, enabled, _user_id)
+                if autoplay_playlist:
+                    set_autoplay_playlist(conn, _guild_id, ch_id, autoplay_playlist, _user_id)
+            return _cleared
+
+        cleared = await asyncio.to_thread(_do_247_toggle)
         cleared_mentions: list[str] = []
         join_error: str | None = None
         if enabled:
@@ -620,8 +631,13 @@ class MusicCog(commands.Cog):
         if guild is None:
             await self._ephemeral(interaction, "Use in a server.")
             return
-        with self.ctx.open_db() as conn:
-            entries = list_always_on_channels(conn, guild.id)
+        _guild_id = guild.id
+
+        def _do_list_always_on():
+            with self.ctx.open_db() as conn:
+                return list_always_on_channels(conn, _guild_id)
+
+        entries = await asyncio.to_thread(_do_list_always_on)
         if not entries:
             await interaction.response.send_message("No 24/7 channels configured.")
             return
@@ -852,13 +868,19 @@ class MusicCog(commands.Cog):
         if not isinstance(channel, discord.VoiceChannel):
             return
         guild = channel.guild
-        with self.ctx.open_db() as conn:
-            settings = get_channel_settings(conn, guild.id, channel.id)
-            if settings:
-                clear_channel(conn, guild.id, channel.id)
-                log.info(
-                    "cleared music settings for deleted voice channel %s", channel.id
-                )
+        _guild_id = guild.id
+        _channel_id = channel.id
+
+        def _do_clear_channel():
+            with self.ctx.open_db() as conn:
+                _settings = get_channel_settings(conn, _guild_id, _channel_id)
+                if _settings:
+                    clear_channel(conn, _guild_id, _channel_id)
+                    log.info(
+                        "cleared music settings for deleted voice channel %s", _channel_id
+                    )
+
+        await asyncio.to_thread(_do_clear_channel)
         player = self._player(guild)
         if player is not None and player.channel and player.channel.id == channel.id:
             with contextlib.suppress(Exception):
@@ -921,15 +943,17 @@ class MusicCog(commands.Cog):
                 if any(node.status == wavelink.NodeStatus.CONNECTED for node in wavelink.Pool.nodes.values()):
                     break
             except Exception:
-                pass
+                log.exception("wavelink node status check")
             await asyncio.sleep(1.0)
         else:
             log.warning("no wavelink node connected after %ss; aborting 24/7 rejoin", _REJOIN_NODE_WAIT_S)
             return
 
-        with self.ctx.open_db() as conn:
-            entries = list_all_always_on(conn)
+        def _do_list_all_always_on():
+            with self.ctx.open_db() as conn:
+                return list_all_always_on(conn)
 
+        entries = await asyncio.to_thread(_do_list_all_always_on)
         for s in entries:
             try:
                 guild = self.bot.get_guild(s.guild_id)

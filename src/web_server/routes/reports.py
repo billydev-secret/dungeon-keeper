@@ -78,14 +78,13 @@ async def role_growth(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
     role_filter: set[str] | None = None
     if roles is not None:
         role_filter = {r.strip().lower() for r in roles.split(",") if r.strip()}
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_role_growth_data(
                 conn, guild_id, resolution, role_filter, utc_offset_hours=tz
             )
@@ -113,11 +112,10 @@ async def message_cadence(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     ch_id = int(channel_id) if channel_id else None
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_message_cadence_data(
                 conn,
                 guild_id,
@@ -145,8 +143,12 @@ async def join_times(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
+
+    def _get_tz():
+        with ctx.open_db() as conn:
+            return get_tz_offset_hours(conn, guild_id)
+
+    tz = await run_query(_get_tz)
 
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
@@ -227,8 +229,6 @@ async def nsfw_gender(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
 
     if channel_id:
         target_ids = [int(channel_id)]
@@ -268,6 +268,7 @@ async def nsfw_gender(
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_nsfw_gender_data(
                 conn,
                 guild_id,
@@ -298,11 +299,10 @@ async def message_rate(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     days = max(1, min(365, days))
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_message_rate_data(
                 conn,
                 guild_id,
@@ -460,8 +460,6 @@ async def activity(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
     uid = int(user_id) if user_id else None
     cid = int(channel_id) if channel_id else None
 
@@ -485,6 +483,7 @@ async def activity(
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_activity_data(
                 conn,
                 guild_id,
@@ -656,13 +655,12 @@ async def voice_activity(
 ):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    with ctx.open_db() as conn:
-        tz = get_tz_offset_hours(conn, guild_id)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
         with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
             return reports_data.get_voice_activity_data(
                 conn,
                 guild_id,
@@ -850,8 +848,11 @@ async def channel_comparison(
                     continue
             unresolved_ids.append(int(ch_row["channel_id"]))
         if unresolved_ids:
-            with ctx.open_db() as conn:
-                known = get_known_channels_bulk(conn, guild_id, unresolved_ids)
+            def _fetch_known():
+                with ctx.open_db() as conn:
+                    return get_known_channels_bulk(conn, guild_id, unresolved_ids)
+
+            known = await run_query(_fetch_known)
             for ch_row in result["channels"]:
                 if not ch_row.get("channel_name"):
                     cid = int(ch_row["channel_id"])

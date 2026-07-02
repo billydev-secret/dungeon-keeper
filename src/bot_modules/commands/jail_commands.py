@@ -192,14 +192,17 @@ async def _collect_and_post_transcript(
         record_id=record_id,
         extra_meta=extra_meta,
     )
-    with ctx.open_db() as conn:
-        store_transcript(
-            conn,
-            guild_id=channel.guild.id,
-            record_type=record_type,
-            record_id=record_id,
-            content=transcript,
-        )
+    def _store():
+        with ctx.open_db() as conn:
+            store_transcript(
+                conn,
+                guild_id=channel.guild.id,
+                record_type=record_type,
+                record_id=record_id,
+                content=transcript,
+            )
+
+    await asyncio.to_thread(_store)
 
     # Build Markdown file
     md_bytes = render_transcript_markdown(transcript).encode("utf-8")
@@ -428,22 +431,34 @@ class TicketReopenButton(
             )
             return
 
-        with ctx.open_db() as conn:
-            reopen_ticket(conn, self.ticket_id)
-            write_audit(
-                conn,
-                guild_id=interaction.guild_id or 0,
-                action="ticket_reopen",
-                actor_id=member.id,
-                extra={"ticket_id": self.ticket_id},
-            )
+        ticket_id = self.ticket_id
+        guild_id = interaction.guild_id or 0
+        member_id = member.id
+
+        def _reopen():
+            with ctx.open_db() as conn:
+                reopen_ticket(conn, ticket_id)
+                write_audit(
+                    conn,
+                    guild_id=guild_id,
+                    action="ticket_reopen",
+                    actor_id=member_id,
+                    extra={"ticket_id": ticket_id},
+                )
+
+        await asyncio.to_thread(_reopen)
 
         # Restore send permission for creator
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
             accent = await resolve_accent_color(ctx.db_path, channel.guild)
-            with ctx.open_db() as conn:
-                ticket = get_ticket_by_channel(conn, channel.id)
+            reopen_ch_id = channel.id
+
+            def _fetch_reopened_ticket():
+                with ctx.open_db() as conn:
+                    return get_ticket_by_channel(conn, reopen_ch_id)
+
+            ticket = await asyncio.to_thread(_fetch_reopened_ticket)
             if ticket:
                 creator = interaction.guild.get_member(ticket["user_id"])  # type: ignore[union-attr]
                 if creator:
@@ -541,9 +556,16 @@ class TicketDeleteButton(
         if not isinstance(channel, discord.TextChannel):
             return
         accent = await resolve_accent_color(ctx.db_path, channel.guild)
+        del_ch_id = channel.id
+        del_guild_id = interaction.guild_id or 0
+        del_member_id = member.id
+        del_ticket_id = self.ticket_id
 
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, channel.id)
+        def _fetch_del_ticket():
+            with ctx.open_db() as conn:
+                return get_ticket_by_channel(conn, del_ch_id)
+
+        ticket = await asyncio.to_thread(_fetch_del_ticket)
 
         if not ticket:
             return
@@ -563,16 +585,21 @@ class TicketDeleteButton(
             },
         )
 
-        with ctx.open_db() as conn:
-            delete_ticket(conn, self.ticket_id)
-            write_audit(
-                conn,
-                guild_id=interaction.guild_id or 0,
-                action="ticket_delete",
-                actor_id=member.id,
-                target_id=ticket["user_id"],
-                extra={"ticket_id": self.ticket_id, "message_count": 0},
-            )
+        del_ticket_user_id = ticket["user_id"]
+
+        def _delete_ticket():
+            with ctx.open_db() as conn:
+                delete_ticket(conn, del_ticket_id)
+                write_audit(
+                    conn,
+                    guild_id=del_guild_id,
+                    action="ticket_delete",
+                    actor_id=del_member_id,
+                    target_id=del_ticket_user_id,
+                    extra={"ticket_id": del_ticket_id, "message_count": 0},
+                )
+
+        await asyncio.to_thread(_delete_ticket)
 
         audit_embed = discord.Embed(
             title="🗑️ Ticket Deleted",
@@ -613,46 +640,55 @@ async def finalize_policy_vote(
     'rejected_no_quorum' only makes sense when ``timed_out=True``.
     """
     db_status = "passed" if outcome == "adopted" else "failed"
+    guild_id = guild.id
 
-    with ctx.open_db() as conn:
-        won = resolve_policy_vote(conn, policy_id, status=db_status)
-        if not won:
-            return False
-        policy = get_policy_ticket(conn, policy_id)
-        if policy is None:
-            return False
-        policy_row_id: int | None = None
-        adopted_text = policy["vote_text"] or policy["description"]
-        if outcome == "adopted":
-            policy_row_id = add_policy(
+    def _db_commit():
+        with ctx.open_db() as conn:
+            won = resolve_policy_vote(conn, policy_id, status=db_status)
+            if not won:
+                return None
+            pol = get_policy_ticket(conn, policy_id)
+            if pol is None:
+                return None
+            pol_row_id: int | None = None
+            pol_adopted_text = pol["vote_text"] or pol["description"]
+            if outcome == "adopted":
+                pol_row_id = add_policy(
+                    conn,
+                    guild_id=guild_id,
+                    policy_ticket_id=policy_id,
+                    title=pol["title"],
+                    description=pol_adopted_text,
+                )
+            pol_audit_extra: dict = {
+                "policy_id": policy_id,
+                "yes": len(yes_ids),
+                "no": len(no_ids),
+                "abstain": len(abstain_ids),
+                "timed_out": timed_out,
+            }
+            if outcome == "rejected_no_quorum":
+                pol_audit_extra["no_quorum"] = True
+            if outcome == "adopted":
+                pol_audit_extra["policy_row_id"] = pol_row_id
+                pol_audit_extra["vote_text"] = pol_adopted_text
+                pol_audit_action = "policy_passed"
+            else:
+                pol_audit_action = "policy_vote_failed"
+            write_audit(
                 conn,
-                guild_id=guild.id,
-                policy_ticket_id=policy_id,
-                title=policy["title"],
-                description=adopted_text,
+                guild_id=guild_id,
+                action=pol_audit_action,
+                actor_id=actor_id,
+                extra=pol_audit_extra,
             )
-        audit_extra: dict = {
-            "policy_id": policy_id,
-            "yes": len(yes_ids),
-            "no": len(no_ids),
-            "abstain": len(abstain_ids),
-            "timed_out": timed_out,
-        }
-        if outcome == "rejected_no_quorum":
-            audit_extra["no_quorum"] = True
-        if outcome == "adopted":
-            audit_extra["policy_row_id"] = policy_row_id
-            audit_extra["vote_text"] = adopted_text
-            audit_action = "policy_passed"
-        else:
-            audit_action = "policy_vote_failed"
-        write_audit(
-            conn,
-            guild_id=guild.id,
-            action=audit_action,
-            actor_id=actor_id,
-            extra=audit_extra,
-        )
+        return {"policy": pol, "adopted_text": pol_adopted_text}
+
+    commit = await asyncio.to_thread(_db_commit)
+    if commit is None:
+        return False
+    policy = commit["policy"]
+    adopted_text = commit["adopted_text"]
 
     vote_text = policy["vote_text"] or policy["title"]
 
@@ -668,8 +704,11 @@ async def finalize_policy_vote(
                 f"**Adopted policy:** {adopted_text}\n"
                 f"{adopted_suffix}"
             )
-            with ctx.open_db() as conn:
-                adopted_policies = get_policies_by_ticket_id(conn, policy_id)
+            def _get_adopted():
+                with ctx.open_db() as conn:
+                    return get_policies_by_ticket_id(conn, policy_id)
+
+            adopted_policies = await asyncio.to_thread(_get_adopted)
             if adopted_policies:
                 adopted_embed = discord.Embed(
                     title="Adopted Policies",
@@ -785,8 +824,11 @@ async def _handle_policy_vote(
         )
         return
 
-    with ctx.open_db() as conn:
-        policy = get_policy_ticket(conn, policy_id)
+    def _get_policy():
+        with ctx.open_db() as conn:
+            return get_policy_ticket(conn, policy_id)
+
+    policy = await asyncio.to_thread(_get_policy)
     if not policy or policy["status"] != "voting":
         await interaction.response.send_message(
             "This vote is no longer active.", ephemeral=True
@@ -794,9 +836,14 @@ async def _handle_policy_vote(
         return
 
     # Cast or update vote
-    with ctx.open_db() as conn:
-        cast_policy_vote(conn, policy_id=policy_id, user_id=member.id, vote=vote)
-        votes = get_policy_votes(conn, policy_id)
+    member_id = member.id
+
+    def _cast_vote():
+        with ctx.open_db() as conn:
+            cast_policy_vote(conn, policy_id=policy_id, user_id=member_id, vote=vote)
+            return get_policy_votes(conn, policy_id)
+
+    votes = await asyncio.to_thread(_cast_vote)
 
     # Build eligible voter set
     mod_role_ids = _get_mod_role_ids(ctx, guild.id)
@@ -1010,21 +1057,27 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         )
 
         desc_text = self.description.value or "(no description)"
-        with ctx.open_db() as conn:
-            ticket_id = create_ticket(
-                conn,
-                guild_id=guild.id,
-                user_id=user.id,
-                channel_id=channel.id,
-                description=desc_text,
-            )
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_open",
-                actor_id=user.id,
-                extra={"ticket_id": ticket_id, "description": desc_text},
-            )
+        guild_id = guild.id
+
+        def _create_ticket():
+            with ctx.open_db() as conn:
+                tid = create_ticket(
+                    conn,
+                    guild_id=guild_id,
+                    user_id=user.id,
+                    channel_id=channel.id,
+                    description=desc_text,
+                )
+                write_audit(
+                    conn,
+                    guild_id=guild_id,
+                    action="ticket_open",
+                    actor_id=user.id,
+                    extra={"ticket_id": tid, "description": desc_text},
+                )
+            return tid
+
+        ticket_id = await asyncio.to_thread(_create_ticket)
 
         # Post ticket embed
         embed = discord.Embed(
@@ -1054,8 +1107,11 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         )
 
         # Notify mods
-        with ctx.open_db() as conn:
-            notify = get_config_value(conn, "ticket_notify_on_create", "1")
+        def _get_notify():
+            with ctx.open_db() as conn:
+                return get_config_value(conn, "ticket_notify_on_create", "1")
+
+        notify = await asyncio.to_thread(_get_notify)
         if notify != "0":
             for rid in mod_role_ids:
                 role = guild.get_role(rid)
@@ -1106,22 +1162,33 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
 
         reason = self.reason.value or ""
         accent = await resolve_accent_color(ctx.db_path, guild)
-        with ctx.open_db() as conn:
-            ticket = get_ticket_by_channel(conn, interaction.channel_id or 0)
-            if not ticket or ticket["status"] != "open":
-                await interaction.response.send_message(
-                    "This ticket is not open.", ephemeral=True
+        close_guild_id = guild.id
+        close_channel_id = interaction.channel_id or 0
+        close_ticket_id = self.ticket_id
+        close_member_id = member.id
+
+        def _close():
+            with ctx.open_db() as conn:
+                t = get_ticket_by_channel(conn, close_channel_id)
+                if not t or t["status"] != "open":
+                    return None
+                close_ticket(conn, close_ticket_id, closed_by=close_member_id, reason=reason)
+                write_audit(
+                    conn,
+                    guild_id=close_guild_id,
+                    action="ticket_close",
+                    actor_id=close_member_id,
+                    target_id=t["user_id"],
+                    extra={"ticket_id": close_ticket_id, "reason": reason},
                 )
-                return
-            close_ticket(conn, self.ticket_id, closed_by=member.id, reason=reason)
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_close",
-                actor_id=member.id,
-                target_id=ticket["user_id"],
-                extra={"ticket_id": self.ticket_id, "reason": reason},
+                return t
+
+        ticket = await asyncio.to_thread(_close)
+        if ticket is None:
+            await interaction.response.send_message(
+                "This ticket is not open.", ephemeral=True
             )
+            return
 
         channel = interaction.channel
         if isinstance(channel, discord.TextChannel):
@@ -1269,8 +1336,12 @@ async def _do_unjail(
     actor: discord.Member | None = None,
 ) -> str:
     """Core unjail logic.  Returns a status message."""
-    with ctx.open_db() as conn:
-        jail = get_active_jail(conn, guild.id, target.id)
+
+    def _fetch_jail():
+        with ctx.open_db() as conn:
+            return get_active_jail(conn, guild.id, target.id)
+
+    jail = await asyncio.to_thread(_fetch_jail)
     if not jail:
         return f"{target} is not currently jailed."
 
@@ -1313,16 +1384,21 @@ async def _do_unjail(
 
     # Update DB
     actor_id = actor.id if actor else 0
-    with ctx.open_db() as conn:
-        release_jail(conn, jail["id"], reason=reason)
-        write_audit(
-            conn,
-            guild_id=guild.id,
-            action="jail_release",
-            actor_id=actor_id,
-            target_id=target.id,
-            extra={"jail_id": jail["id"], "reason": reason},
-        )
+    jail_id_rel = jail["id"]
+
+    def _release():
+        with ctx.open_db() as conn:
+            release_jail(conn, jail_id_rel, reason=reason)
+            write_audit(
+                conn,
+                guild_id=guild.id,
+                action="jail_release",
+                actor_id=actor_id,
+                target_id=target.id,
+                extra={"jail_id": jail_id_rel, "reason": reason},
+            )
+
+    await asyncio.to_thread(_release)
 
     # DM
     dm_embed = discord.Embed(
@@ -1356,8 +1432,12 @@ async def _do_unjail(
 
 async def check_jail_rejoin(ctx: AppContext, member: discord.Member) -> bool:
     """If the member has an active jail, re-apply it. Returns True if jailed."""
-    with ctx.open_db() as conn:
-        jail = get_active_jail(conn, member.guild.id, member.id)
+
+    def _fetch_rejoin_jail():
+        with ctx.open_db() as conn:
+            return get_active_jail(conn, member.guild.id, member.id)
+
+    jail = await asyncio.to_thread(_fetch_rejoin_jail)
     if not jail:
         return False
 
@@ -1398,8 +1478,13 @@ async def jail_expiry_loop(bot: discord.Client, ctx: AppContext) -> None:
         try:
             guild = bot.get_guild(ctx.guild_id)
             if guild:
-                with ctx.open_db() as conn:
-                    expired = get_expired_jails(conn, guild.id)
+                el_guild_id = guild.id
+
+                def _get_expired():
+                    with ctx.open_db() as conn:
+                        return get_expired_jails(conn, el_guild_id)
+
+                expired = await asyncio.to_thread(_get_expired)
                 for jail in expired:
                     member = guild.get_member(jail["user_id"])
                     if member:
@@ -1408,12 +1493,17 @@ async def jail_expiry_loop(bot: discord.Client, ctx: AppContext) -> None:
                         )
                     else:
                         # User left — just release the record
-                        with ctx.open_db() as conn:
-                            release_jail(
-                                conn,
-                                jail["id"],
-                                reason="Jail duration expired (user left)",
-                            )
+                        expired_jail_id = jail["id"]
+
+                        def _release_left(jid: int = expired_jail_id) -> None:
+                            with ctx.open_db() as conn:
+                                release_jail(
+                                    conn,
+                                    jid,
+                                    reason="Jail duration expired (user left)",
+                                )
+
+                        await asyncio.to_thread(_release_left)
         except Exception:
             log.exception("Error in jail expiry loop")
         await asyncio.sleep(60)
@@ -1447,11 +1537,15 @@ async def policy_vote_timeout_loop(bot: discord.Client, ctx: AppContext) -> None
             guild = bot.get_guild(ctx.guild_id)
             if guild is not None:
                 timeout_secs = _policy_vote_timeout_seconds(ctx, guild.id)
+                pvt_guild_id = guild.id
                 if timeout_secs > 0:
-                    with ctx.open_db() as conn:
-                        expired = find_expired_policy_votes(
-                            conn, guild.id, timeout_seconds=timeout_secs
-                        )
+                    def _get_expired_votes():
+                        with ctx.open_db() as conn:
+                            return find_expired_policy_votes(
+                                conn, pvt_guild_id, timeout_seconds=timeout_secs
+                            )
+
+                    expired = await asyncio.to_thread(_get_expired_votes)
                     for policy in expired:
                         try:
                             await _resolve_expired_policy(bot, ctx, guild, policy)
@@ -1485,8 +1579,11 @@ async def _resolve_expired_policy(
         if all_role_ids & {r.id for r in m.roles}:
             eligible.add(m.id)
 
-    with ctx.open_db() as conn:
-        votes = get_policy_votes(conn, policy_id)
+    def _get_votes():
+        with ctx.open_db() as conn:
+            return get_policy_votes(conn, policy_id)
+
+    votes = await asyncio.to_thread(_get_votes)
     vote_map = {v["user_id"]: v["vote"] for v in votes}
     voted_ids = set(vote_map.keys()) & eligible
     yes_ids = [uid for uid in voted_ids if vote_map[uid] == "yes"]
@@ -1592,26 +1689,33 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
             name, category=category, overwrites=overwrites  # type: ignore[arg-type]
         )
 
-        with ctx.open_db() as conn:
-            ticket_id = create_ticket(
-                conn,
-                guild_id=guild.id,
-                user_id=user.id,
-                channel_id=channel.id,
-                description=desc_text,
-                source_message_url=self.source_message.jump_url,
-            )
-            write_audit(
-                conn,
-                guild_id=guild.id,
-                action="ticket_open",
-                actor_id=user.id,
-                extra={
-                    "ticket_id": ticket_id,
-                    "description": desc_text,
-                    "source": self.source_message.jump_url,
-                },
-            )
+        fm_guild_id = guild.id
+        fm_source_url = self.source_message.jump_url
+
+        def _create_fm_ticket():
+            with ctx.open_db() as conn:
+                tid = create_ticket(
+                    conn,
+                    guild_id=fm_guild_id,
+                    user_id=user.id,
+                    channel_id=channel.id,
+                    description=desc_text,
+                    source_message_url=fm_source_url,
+                )
+                write_audit(
+                    conn,
+                    guild_id=fm_guild_id,
+                    action="ticket_open",
+                    actor_id=user.id,
+                    extra={
+                        "ticket_id": tid,
+                        "description": desc_text,
+                        "source": fm_source_url,
+                    },
+                )
+            return tid
+
+        ticket_id = await asyncio.to_thread(_create_fm_ticket)
 
         embed = discord.Embed(
             title=f"Ticket #{ticket_id}",

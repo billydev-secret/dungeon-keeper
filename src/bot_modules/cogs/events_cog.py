@@ -94,14 +94,19 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
         me = g.me
         guild_count = 0
         for channel in await _collect_backfill_channels(g, me):
-            with ctx.open_db() as conn:
-                row = conn.execute(
-                    "SELECT MAX(message_id) FROM messages WHERE guild_id = ? AND channel_id = ?",
-                    (g.id, channel.id),
-                ).fetchone()
-                channel_has_auto_delete_rule = auto_delete_rule_exists(
-                    conn, g.id, channel.id
-                )
+            _g_id = g.id
+            _ch_id = channel.id
+
+            def _do_channel_query():
+                with ctx.open_db() as conn:
+                    _row = conn.execute(
+                        "SELECT MAX(message_id) FROM messages WHERE guild_id = ? AND channel_id = ?",
+                        (_g_id, _ch_id),
+                    ).fetchone()
+                    _has_rule = auto_delete_rule_exists(conn, _g_id, _ch_id)
+                return _row, _has_rule
+
+            row, channel_has_auto_delete_rule = await asyncio.to_thread(_do_channel_query)
             max_id = row[0] if row and row[0] else None
             history_kwargs: dict = {"limit": None, "oldest_first": True}
             if max_id:
@@ -312,32 +317,39 @@ class EventsCog(commands.Cog):
         now_ts = time.time()
         for g in self.bot.guilds:
             await refresh_invite_cache(g)
-            with self.ctx.open_db() as conn:
-                for m in g.members:
-                    upsert_known_user(
-                        conn,
-                        guild_id=g.id,
-                        user_id=m.id,
-                        username=str(m),
-                        display_name=m.display_name,
-                        ts=now_ts,
-                        is_bot=m.bot,
-                        current_member=True,
-                    )
-                for ch in g.channels:
-                    if hasattr(ch, "name"):
+            _guild_members = [(m.id, str(m), m.display_name, m.bot) for m in g.members]
+            _guild_channels = [(ch.id, ch.name) for ch in g.channels if hasattr(ch, "name")]
+            _guild_id = g.id
+            _guild_log = format_guild_for_log(g)
+
+            def _do_upserts():
+                with self.ctx.open_db() as conn:
+                    for uid, uname, dname, is_bot in _guild_members:
+                        upsert_known_user(
+                            conn,
+                            guild_id=_guild_id,
+                            user_id=uid,
+                            username=uname,
+                            display_name=dname,
+                            ts=now_ts,
+                            is_bot=is_bot,
+                            current_member=True,
+                        )
+                    for ch_id, ch_name in _guild_channels:
                         upsert_known_channel(
                             conn,
-                            guild_id=g.id,
-                            channel_id=ch.id,
-                            channel_name=ch.name,
+                            guild_id=_guild_id,
+                            channel_id=ch_id,
+                            channel_name=ch_name,
                             ts=now_ts,
                         )
-                log.debug(
-                    "XP event rows for guild %s: %s",
-                    format_guild_for_log(g),
-                    count_xp_events(conn, g.id),
-                )
+                    log.debug(
+                        "XP event rows for guild %s: %s",
+                        _guild_log,
+                        count_xp_events(conn, _guild_id),
+                    )
+
+            await asyncio.to_thread(_do_upserts)
             log.info(
                 "Backfilled guild %s: %d known users, %d known channels.",
                 g.name,
@@ -747,18 +759,20 @@ class EventsCog(commands.Cog):
         channel = member.guild.get_channel(cfg.welcome_channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
-        with self.ctx.open_db() as conn:
-            bio_link, bios_channel_mention = resolve_bio_placeholders(
-                conn, member.guild.id
-            )
-            try:
-                server_guide_channel_id = int(
-                    get_config_value(
-                        conn, "server_guide_channel_id", "0", member.guild.id
+        _guild_id = member.guild.id
+
+        def _do_welcome_db():
+            with self.ctx.open_db() as conn:
+                _bio_link, _bios_ch_mention = resolve_bio_placeholders(conn, _guild_id)
+                try:
+                    _sg_channel_id = int(
+                        get_config_value(conn, "server_guide_channel_id", "0", _guild_id)
                     )
-                )
-            except (TypeError, ValueError):
-                server_guide_channel_id = 0
+                except (TypeError, ValueError):
+                    _sg_channel_id = 0
+            return _bio_link, _bios_ch_mention, _sg_channel_id
+
+        bio_link, bios_channel_mention, server_guide_channel_id = await asyncio.to_thread(_do_welcome_db)
         try:
             member_bio_link = await resolve_member_bio_link(self.ctx, member)
         except Exception:
@@ -807,18 +821,19 @@ class EventsCog(commands.Cog):
         if before_ids == after_ids:
             return
         now = time.time()
-        with self.ctx.open_db() as conn:
-            for role in after.roles:
-                if role.id not in before_ids:
-                    log_role_event(
-                        conn, after.guild.id, after.id, role.name, "grant", ts=now
-                    )
-            for role in before.roles:
-                if role.id not in after_ids:
-                    log_role_event(
-                        conn, after.guild.id, after.id, role.name, "remove", ts=now
-                    )
+        _guild_id = after.guild.id
+        _member_id = after.id
+        _granted = [r.name for r in after.roles if r.id not in before_ids]
+        _removed = [r.name for r in before.roles if r.id not in after_ids]
 
+        def _do_log_role_events():
+            with self.ctx.open_db() as conn:
+                for name in _granted:
+                    log_role_event(conn, _guild_id, _member_id, name, "grant", ts=now)
+                for name in _removed:
+                    log_role_event(conn, _guild_id, _member_id, name, "remove", ts=now)
+
+        await asyncio.to_thread(_do_log_role_events)
         cfg = self.ctx.guild_config(after.guild.id)
         # Welcome fires the moment the unverified role is stripped (e.g. once
         # DoubleCounter finishes its alt scan and lifts the gate). No bio is
@@ -847,19 +862,28 @@ class EventsCog(commands.Cog):
     async def on_member_join(self, member: discord.Member) -> None:
         is_jailed = await check_jail_rejoin(self.ctx, member)
 
-        with self.ctx.open_db() as conn:
-            now = time.time()
-            upsert_known_user(
-                conn,
-                guild_id=member.guild.id,
-                user_id=member.id,
-                username=str(member),
-                display_name=member.display_name,
-                ts=now,
-                is_bot=member.bot,
-                current_member=True,
-            )
-            record_member_event(conn, member.guild.id, member.id, "join", now)
+        _guild_id = member.guild.id
+        _member_id = member.id
+        _username = str(member)
+        _display_name = member.display_name
+        _is_bot = member.bot
+
+        def _do_member_join():
+            _now = time.time()
+            with self.ctx.open_db() as conn:
+                upsert_known_user(
+                    conn,
+                    guild_id=_guild_id,
+                    user_id=_member_id,
+                    username=_username,
+                    display_name=_display_name,
+                    ts=_now,
+                    is_bot=_is_bot,
+                    current_member=True,
+                )
+                record_member_event(conn, _guild_id, _member_id, "join", _now)
+
+        await asyncio.to_thread(_do_member_join)
 
         try:
             inviter_id, invite_code = await detect_inviter(member.guild)
@@ -867,8 +891,14 @@ class EventsCog(commands.Cog):
             log.exception("detect_inviter failed for %s in guild %s", member, member.guild.id)
             inviter_id, invite_code = None, None
         if inviter_id is not None:
-            with self.ctx.open_db() as conn:
-                record_invite(conn, member.guild.id, inviter_id, member.id, invite_code)
+            _inv_id: int = inviter_id
+            _inv_code = invite_code
+
+            def _do_record_invite():
+                with self.ctx.open_db() as conn:
+                    record_invite(conn, _guild_id, _inv_id, _member_id, _inv_code)
+
+            await asyncio.to_thread(_do_record_invite)
             log.info(
                 "Invite tracked: %s invited by %s (code: %s)",
                 member,
@@ -925,10 +955,16 @@ class EventsCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member: discord.Member) -> None:
-        with self.ctx.open_db() as conn:
-            now = time.time()
-            mark_member_left(conn, member.guild.id, member.id)
-            record_member_event(conn, member.guild.id, member.id, "leave", now)
+        _guild_id = member.guild.id
+        _member_id = member.id
+
+        def _do_member_leave():
+            _now = time.time()
+            with self.ctx.open_db() as conn:
+                mark_member_left(conn, _guild_id, _member_id)
+                record_member_event(conn, _guild_id, _member_id, "leave", _now)
+
+        await asyncio.to_thread(_do_member_leave)
 
         cfg = self.ctx.guild_config(member.guild.id)
         if cfg.leave_channel_id <= 0:
@@ -941,19 +977,19 @@ class EventsCog(commands.Cog):
         from bot_modules.core.db_utils import get_config_value
         from bot_modules.services.welcome_service import server_guide_mention_for
 
-        with self.ctx.open_db() as conn:
-            bio_link, bios_channel_mention = resolve_bio_placeholders(
-                conn, member.guild.id
-            )
-            stored = bios_db.get_user_bio(conn, member.guild.id, member.id)
-            try:
-                server_guide_channel_id = int(
-                    get_config_value(
-                        conn, "server_guide_channel_id", "0", member.guild.id
+        def _do_leave_db():
+            with self.ctx.open_db() as conn:
+                _bio_link, _bios_ch_mention = resolve_bio_placeholders(conn, _guild_id)
+                _stored = bios_db.get_user_bio(conn, _guild_id, _member_id)
+                try:
+                    _sg_channel_id = int(
+                        get_config_value(conn, "server_guide_channel_id", "0", _guild_id)
                     )
-                )
-            except (TypeError, ValueError):
-                server_guide_channel_id = 0
+                except (TypeError, ValueError):
+                    _sg_channel_id = 0
+            return _bio_link, _bios_ch_mention, _stored, _sg_channel_id
+
+        bio_link, bios_channel_mention, stored, server_guide_channel_id = await asyncio.to_thread(_do_leave_db)
 
         # If the member has a still-live bio embed (BiosCog may or may
         # not have archived it yet — listener order is undefined), the

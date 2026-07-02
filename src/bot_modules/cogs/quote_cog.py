@@ -12,6 +12,7 @@ Flow:
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import re
@@ -265,36 +266,52 @@ class QuotePreviewView(discord.ui.View):
             return
 
         if self.channel.guild:
+            guild_id = self.channel.guild.id
+
             try:
-                with self.bot.ctx.open_db() as conn:
-                    cfg = get_starboard_config(conn, self.channel.guild.id)
+                def _do_get_starboard_cfg():
+                    with self.bot.ctx.open_db() as conn:
+                        return get_starboard_config(conn, guild_id)
+
+                cfg = await asyncio.to_thread(_do_get_starboard_cfg)
                 emoji = cfg["emoji"] if cfg else "⭐"
                 await posted_msg.add_reaction(emoji)
             except Exception:
                 log.warning("quote: could not add starboard reaction", exc_info=True)
 
+            channel_id = self.channel.id
+            quoter_id = self.quoter_id
+            quoted_user_id = self.quoted_user_id
+            quoted_message_id = self.quoted_message_id
+            posted_msg_id = posted_msg.id
+            theme_key = self.theme_key
+            font_key = self.font_key
+            border_key = self.border_key
             try:
-                with self.bot.ctx.open_db() as conn:
-                    conn.execute(
-                        """
-                        INSERT INTO quote_audit_log
-                            (ts, guild_id, channel_id, quoter_id, quoted_user_id,
-                             quoted_message_id, posted_message_id, theme, font, border)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            time.time(),
-                            self.channel.guild.id,
-                            self.channel.id,
-                            self.quoter_id,
-                            self.quoted_user_id,
-                            self.quoted_message_id,
-                            posted_msg.id,
-                            self.theme_key,
-                            self.font_key,
-                            self.border_key,
-                        ),
-                    )
+                def _do_write_audit_log():
+                    with self.bot.ctx.open_db() as conn:
+                        conn.execute(
+                            """
+                            INSERT INTO quote_audit_log
+                                (ts, guild_id, channel_id, quoter_id, quoted_user_id,
+                                 quoted_message_id, posted_message_id, theme, font, border)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                time.time(),
+                                guild_id,
+                                channel_id,
+                                quoter_id,
+                                quoted_user_id,
+                                quoted_message_id,
+                                posted_msg_id,
+                                theme_key,
+                                font_key,
+                                border_key,
+                            ),
+                        )
+
+                await asyncio.to_thread(_do_write_audit_log)
             except Exception:
                 log.warning("quote: could not write audit log", exc_info=True)
 
