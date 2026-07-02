@@ -155,7 +155,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                     dm_sent = True
             except discord.Forbidden:
                 pass
-            except Exception:
+            except discord.HTTPException:
                 pass
             if dm_sent:
                 await interaction.response.send_message(
@@ -551,7 +551,7 @@ class AMAView(discord.ui.View):
         label = bottom_bar_label(self._hot_seat_name, len(self.queue))
         try:
             await self._bottom_msg.edit(content=label)
-        except Exception:
+        except discord.HTTPException:
             pass
 
     async def check_turn_rotation(self, channel):
@@ -732,7 +732,7 @@ class AMAView(discord.ui.View):
         if self._game_msg:
             try:
                 await self._game_msg.edit(view=self)
-            except Exception:
+            except discord.HTTPException:
                 pass
         await channel.send(embed=embed)
 
@@ -862,7 +862,7 @@ async def _resend_ama_bottom(bot, game_id: str, channel):
     try:
         try:
             await ama_view._bottom_msg.delete()
-        except Exception:
+        except discord.HTTPException:
             pass
 
         hot_seat_name = getattr(ama_view, '_hot_seat_name', None)
@@ -916,7 +916,7 @@ class AMACog(commands.Cog):
             try:
                 ama_view.stop()
             except Exception:
-                pass
+                log.exception("ama: failed to stop AMA view during cleanup")
 
         if bottom_view:
             try:
@@ -924,13 +924,13 @@ class AMACog(commands.Cog):
                 for item in bottom_view.children:
                     item.disabled = True
             except Exception:
-                pass
+                log.exception("ama: failed to stop bottom view during cleanup")
 
         if channel and ama_view and getattr(ama_view, "_bottom_msg", None):
             try:
                 await ama_view._bottom_msg.delete()
                 deleted = True
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         if channel and (not deleted) and bottom_view and getattr(bottom_view, "message_id", None):
@@ -938,7 +938,7 @@ class AMACog(commands.Cog):
                 msg = await channel.fetch_message(int(bottom_view.message_id))
                 await msg.delete()
                 deleted = True
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         # Last resort: edit the bottom bar to show disabled buttons
@@ -947,7 +947,7 @@ class AMACog(commands.Cog):
             if bottom_msg:
                 try:
                     await bottom_msg.edit(content="🛑 AMA ended", view=bottom_view)
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         self.bot.active_views.pop(f"{game_id}_bottom", None)
@@ -1188,7 +1188,7 @@ class AMACog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(

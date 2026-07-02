@@ -181,7 +181,7 @@ class PoseMLTModal(discord.ui.Modal, title="Pose a Prompt"):
         self._view.next_btn.label = f"⏭️ Next ({count} queued)"
         try:
             await self._message.edit(view=self._view)
-        except Exception:
+        except discord.HTTPException:
             pass
         await interaction.response.send_message("✅ Your prompt has been queued!", ephemeral=True)
 
@@ -357,7 +357,7 @@ class MLTCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -472,7 +472,7 @@ class MLTCog(commands.Cog):
                     "Please grant me **Send Messages** and **Embed Links** permissions.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
             return
         await update_game_message(self.db, game_id, msg.id)
@@ -508,7 +508,7 @@ class MLTCog(commands.Cog):
                 item.disabled = True
             try:
                 await message.edit(embed=view._build_embed(closed=True), view=view)
-            except Exception:
+            except discord.HTTPException:
                 pass
             await channel.send(embed=results_embed)
 
@@ -557,7 +557,7 @@ class MLTCog(commands.Cog):
                 self.bot.active_views.pop(game_id, None)
                 try:
                     await channel.send("❌ Something went wrong advancing the round. Game ended.")
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         view = MLTVoteView(

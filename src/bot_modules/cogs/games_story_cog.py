@@ -274,7 +274,7 @@ class StoryCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -403,7 +403,7 @@ class StoryCog(commands.Cog):
                 item.disabled = True
             try:
                 await turn_msg.edit(view=turn_view)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             # Check if game was closed via the close button
@@ -483,7 +483,7 @@ class StoryCog(commands.Cog):
                     "📖 This Story game was interrupted by a bot restart and can't be "
                     "resumed — start a new one with `/games play story`."
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
             await end_game(self.db, row["game_id"])
             self.bot.active_views.pop(row["game_id"], None)

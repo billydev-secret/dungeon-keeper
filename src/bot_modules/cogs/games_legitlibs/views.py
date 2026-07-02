@@ -32,7 +32,7 @@ class _CancelConfirmView(discord.ui.View):
             item.disabled = True
         try:
             await interaction.response.edit_message(content="🛑 Cancelling…", view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
         await self._on_confirm(interaction)
 

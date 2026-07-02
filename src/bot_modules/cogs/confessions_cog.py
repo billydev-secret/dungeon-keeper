@@ -595,14 +595,14 @@ class ConfessionsCog(commands.Cog):
                 await interaction.followup.send(message, ephemeral=True)
             else:
                 await interaction.response.send_message(message, ephemeral=True)
-        except Exception:
+        except discord.HTTPException:
             pass
 
     async def _safe_complete(self, interaction: discord.Interaction) -> None:
         if interaction.response.is_done():
             try:
                 await interaction.delete_original_response()
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     def is_valid_reply_target_message(self, guild_id: int, msg: discord.Message) -> bool:

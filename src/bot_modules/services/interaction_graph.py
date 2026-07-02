@@ -9,6 +9,7 @@ Stores pairwise interaction weights and renders network charts:
 from __future__ import annotations
 
 import io
+import logging
 import math
 import random as _random
 import re
@@ -20,6 +21,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 matplotlib.use("Agg")
+
+log = logging.getLogger(__name__)
 
 # Persistent pool — avoids spawning 4 threads on every /connection_web call.
 _layout_executor = ThreadPoolExecutor(max_workers=4)
@@ -107,7 +110,7 @@ def init_interaction_tables(conn: sqlite3.Connection) -> None:
     try:
         conn.execute("ALTER TABLE user_interactions_log ADD COLUMN message_id INTEGER")
     except Exception:
-        pass  # Column already exists
+        log.exception("interaction_graph: message_id column may already exist")
 
 
 def clear_interaction_data(conn: sqlite3.Connection, guild_id: int) -> None:

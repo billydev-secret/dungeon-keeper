@@ -10,9 +10,12 @@ so the problem is immediately visible rather than silently degrading.
 from __future__ import annotations
 
 import io
+import logging
 import re as _re
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 _ASSETS = Path("assets") / "fonts"
 _INTER = _ASSETS / "Inter-Regular.ttf"
@@ -233,7 +236,7 @@ def _render_line_mixed(
                 )
                 bg.paste(ei, (cx, y), mask=ei.split()[3])
             except Exception:
-                pass
+                log.exception("quote_renderer: emoji paste")
         cx += emoji_size
         pos = m.end()
 

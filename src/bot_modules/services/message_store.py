@@ -10,8 +10,11 @@ and the /interaction_scan backfill without creating duplicates.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from collections.abc import Sequence
+
+log = logging.getLogger(__name__)
 
 # ── Per-guild message-content storage levels ──────────────────────────
 # Stored in the ``config`` table under STORAGE_LEVEL_KEY, scoped per guild.
@@ -248,7 +251,7 @@ def init_known_users_table(conn: sqlite3.Connection) -> None:
         try:
             conn.execute(f"ALTER TABLE known_users ADD COLUMN {col} {definition}")
         except Exception:
-            pass
+            log.exception("message_store: add column may already exist")
 
 
 def upsert_known_user(

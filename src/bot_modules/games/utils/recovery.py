@@ -29,6 +29,8 @@ import asyncio
 import json
 import logging
 
+import discord
+
 from bot_modules.games.utils.game_manager import is_game_expired
 
 log = logging.getLogger(__name__)
@@ -50,7 +52,7 @@ async def start_redrive(bot, game_id, message, coro, *, channel, log_label):
     """
     try:
         await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
-    except Exception:
+    except discord.HTTPException:
         pass
     bot.active_views[game_id] = RecoverySentinel()
     asyncio.create_task(coro)

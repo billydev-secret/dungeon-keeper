@@ -129,7 +129,7 @@ class PhotoCog(commands.Cog):
                     "**Send Messages**, and **Attach Files**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(

@@ -249,7 +249,7 @@ async def force_end_active_game(bot, db, game_id: str) -> None:
                 try:
                     timer.skip()
                 except Exception:
-                    pass
+                    log.exception("force_end: timer.skip failed")
         # Wake any phase event the loop stashed on the view.
         for eattr in ("_advanced_event", "_pick_event", "_done_event", "_submitted_event"):
             ev = getattr(view, eattr, None)
@@ -261,11 +261,11 @@ async def force_end_active_game(bot, db, game_id: str) -> None:
             try:
                 sub.stop()
             except Exception:
-                pass
+                log.exception("force_end: sub-view stop failed")
         try:
             view.stop()
         except Exception:
-            pass
+            log.exception("force_end: view.stop failed")
     await end_game(db, game_id)
 
 

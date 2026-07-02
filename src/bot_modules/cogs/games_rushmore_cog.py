@@ -259,7 +259,7 @@ class RushmoreJoinView(discord.ui.View):
                 if not topic:
                     try:
                         await interaction.followup.send("Topic entry timed out. Try again.", ephemeral=True)
-                    except Exception:
+                    except discord.HTTPException:
                         pass
                     return
             elif self.source == "ai":
@@ -297,7 +297,7 @@ class RushmoreJoinView(discord.ui.View):
             item.disabled = True
         try:
             await self._msg.edit(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # Start the draft
@@ -463,7 +463,7 @@ class RushmoreRecapView(discord.ui.View):
             item.disabled = True
         try:
             await interaction.message.edit(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
         self.stop()
         await interaction.response.defer()
@@ -494,7 +494,7 @@ class RushmoreRecapView(discord.ui.View):
             item.disabled = True
         try:
             await interaction.message.edit(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
         self.stop()
 
@@ -540,14 +540,14 @@ class RushmoreCog(commands.Cog):
         # Drafting/voting underway — end gracefully.
         try:
             await message.edit(view=None)
-        except Exception:
+        except discord.HTTPException:
             pass
         try:
             await channel.send(
                 "🗿 This Rushmore game was interrupted by a bot restart and can't be "
                 "resumed — start a new one with `/games play rushmore`."
             )
-        except Exception:
+        except discord.HTTPException:
             pass
         await end_game(self.db, game_id)
         self.bot.active_views.pop(game_id, None)
@@ -608,7 +608,7 @@ class RushmoreCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -729,7 +729,7 @@ class RushmoreCog(commands.Cog):
             embed = draft_view._build_embed()
             try:
                 await draft_view._msg.edit(embed=embed, view=draft_view)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             # Ping the player
@@ -740,7 +740,7 @@ class RushmoreCog(commands.Cog):
             )
             try:
                 await channel.send(ping_text, delete_after=timer_secs)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             # Wait for pick or timeout
@@ -756,7 +756,7 @@ class RushmoreCog(commands.Cog):
                         try:
                             m = member.mention if member else player_name
                             await channel.send(f"{m} ⏰ 10 seconds left to pick!", delete_after=10)
-                        except Exception:
+                        except discord.HTTPException:
                             pass
                 nudge_task = asyncio.create_task(_nudge())
 
@@ -772,7 +772,7 @@ class RushmoreCog(commands.Cog):
                     try:
                         m = member.mention if member else player_name
                         await channel.send(f"{m} ⏱️ Time's up! Your pick was skipped.", delete_after=10)
-                    except Exception:
+                    except discord.HTTPException:
                         pass
 
             if nudge_task and not nudge_task.done():
@@ -798,7 +798,7 @@ class RushmoreCog(commands.Cog):
                 embed = draft_view._build_embed()
                 try:
                     await draft_view._msg.edit(embed=embed, view=draft_view)
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         # Draft complete — disable draft view
@@ -807,7 +807,7 @@ class RushmoreCog(commands.Cog):
             item.disabled = True
         try:
             await draft_view._msg.edit(view=draft_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # Show final boards
@@ -822,7 +822,7 @@ class RushmoreCog(commands.Cog):
         )
         try:
             await channel.send(embed=final_embed)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # Determine eligible voters (players with at least 1 real pick)
@@ -881,7 +881,7 @@ class RushmoreCog(commands.Cog):
             item.disabled = True
         try:
             await vote_msg.edit(view=vote_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # Tally
@@ -899,7 +899,7 @@ class RushmoreCog(commands.Cog):
         )
         try:
             await vote_msg.edit(embed=winner_embed, view=None)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         await asyncio.sleep(5)
@@ -944,7 +944,7 @@ class RushmoreCog(commands.Cog):
 
         try:
             await channel.send(embed=recap_embed, view=recap_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # End game

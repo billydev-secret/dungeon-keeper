@@ -102,7 +102,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             )
             try:
                 await action_interaction.message.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         elif action == "start":
@@ -125,7 +125,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 item.disabled = True
             try:
                 await action_interaction.message.edit(view=join_view)
-            except Exception:
+            except discord.HTTPException:
                 pass
             await _run_fill_phase(action_interaction, payload)
 
@@ -202,7 +202,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             )
             try:
                 await fill_msg.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             # Early exit if everyone submitted
@@ -218,7 +218,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             item.disabled = True
         try:
             await fill_msg.edit(view=fill_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         await _run_reveal_phase(fill_msg)

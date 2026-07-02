@@ -424,7 +424,7 @@ class FFACog(commands.Cog):
                     f"I couldn't start the game here. Please grant me {perms}",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def _resolve_prompt(self, channel, options: dict):

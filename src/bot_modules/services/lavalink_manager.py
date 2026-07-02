@@ -191,7 +191,7 @@ class LavalinkManager:
         w.close()
         try:
             await w.wait_closed()
-        except Exception:
+        except OSError:
             pass
         return True
 
@@ -210,7 +210,7 @@ class LavalinkManager:
                 writer.close()
                 try:
                     await writer.wait_closed()
-                except Exception:
+                except OSError:
                     pass
                 return
             except (OSError, asyncio.TimeoutError):
@@ -274,7 +274,7 @@ class LavalinkManager:
         if self._log_handle is not None:
             try:
                 self._log_handle.close()
-            except Exception:
+            except OSError:
                 pass
             self._log_handle = None
 

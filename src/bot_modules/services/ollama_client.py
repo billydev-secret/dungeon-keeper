@@ -138,7 +138,7 @@ def _download(model_path: str, hf_repo: str, hf_file: str) -> str:
             mb = size / 1_048_576
             size_hint = f" ({mb:.0f} MB)"
     except Exception:
-        pass
+        log.exception("ollama_client: HuggingFace size check")
 
     log.info("Downloading %s/%s%s from HuggingFace → %s", hf_repo, hf_file, size_hint, local_dir or ".")
 

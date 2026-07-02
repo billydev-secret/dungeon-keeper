@@ -56,7 +56,7 @@ class GamesConfigCog(commands.Cog):
             try:
                 msg = await channel.fetch_message(row["message_id"])
                 await msg.edit(view=None)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     @app_commands.command(name="end", description="End the active game in this channel (host or mod).")
@@ -85,7 +85,7 @@ class GamesConfigCog(commands.Cog):
             await self._teardown_active_game(row, channel)
             try:
                 await channel.send(embed=build_force_end_embed(row["game_type"]))
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         view = ConfirmCloseView(_confirmed)

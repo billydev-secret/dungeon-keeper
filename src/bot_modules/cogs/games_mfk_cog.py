@@ -181,7 +181,7 @@ class MFKCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(

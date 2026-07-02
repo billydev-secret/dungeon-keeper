@@ -81,7 +81,7 @@ def channel_allows_nsfw(channel) -> bool:
         if parent is not None and hasattr(parent, "is_nsfw"):
             return bool(parent.is_nsfw())
     except Exception:
-        pass
+        log.exception("channel_allows_nsfw check")
     return False
 
 

@@ -126,7 +126,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             )
             try:
                 await action_interaction.message.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         elif action == "leave":
@@ -152,7 +152,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             )
             try:
                 await action_interaction.message.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         elif action == "start":
@@ -178,7 +178,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 item.disabled = True
             try:
                 await action_interaction.message.edit(view=join_view)
-            except Exception:
+            except discord.HTTPException:
                 pass
             await _run_fill_phase(payload)
 
@@ -256,7 +256,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             )
             try:
                 await fill_msg.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             if done >= len(player_ids):
@@ -270,7 +270,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             item.disabled = True
         try:
             await fill_msg.edit(view=fill_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         cur_payload = await get_game_payload(db, game_id)
@@ -347,7 +347,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 )
                 try:
                     await fill_msg.edit(embed=new_embed)
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         modal = make_fill_modal(
@@ -414,7 +414,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             )
             try:
                 await rescue_claim_msg.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
         if game_id in cog._game_canceled:
@@ -425,7 +425,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             item.disabled = True
         try:
             await rescue_claim_msg.edit(view=rescue_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         cur_payload = await get_game_payload(db, game_id)
@@ -516,7 +516,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             )
             try:
                 await rescue_fill_msg.edit(embed=new_embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
             if done >= len(rescuers):
                 break
@@ -529,7 +529,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             item.disabled = True
         try:
             await rescue_fill_msg.edit(view=rescue_fill_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         await _run_reveal_phase()

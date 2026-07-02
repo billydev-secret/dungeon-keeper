@@ -86,7 +86,7 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
                     "or I'm missing permission to post here.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(self, *, channel, host_id, host_name, guild_id, options) -> str | None:

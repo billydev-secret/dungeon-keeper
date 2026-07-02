@@ -88,7 +88,7 @@ class SubmitStatementsModal(discord.ui.Modal):
             )
             try:
                 await msg.edit(embed=embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
 
@@ -308,7 +308,7 @@ class TTLCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -420,7 +420,7 @@ class TTLCog(commands.Cog):
                     item.disabled = True
                 try:
                     await message.edit(embed=view._build_embed(_sub_name, closed=True), view=view)
-                except Exception:
+                except discord.HTTPException:
                     pass
 
                 await channel.send(embed=reveal_embed)

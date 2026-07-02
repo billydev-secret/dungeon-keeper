@@ -63,7 +63,7 @@ class PoseStatementModal(discord.ui.Modal, title="Pose a Statement"):
         self._view.next_btn.label = f"⏭️ Next ({count} queued)"
         try:
             await self._message.edit(view=self._view)
-        except Exception:
+        except discord.HTTPException:
             pass
         await interaction.response.send_message("✅ Your statement has been queued!", ephemeral=True)
 
@@ -241,7 +241,7 @@ class NHIECog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -391,7 +391,7 @@ class NHIECog(commands.Cog):
                 item.disabled = True
             try:
                 await message.edit(embed=final_embed, view=view)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             if await is_game_expired(self.db, game_id):
@@ -427,7 +427,7 @@ class NHIECog(commands.Cog):
                 name = resolve_name(guild, uid)
                 try:
                     await channel.send(f"💀 **{discord.utils.escape_markdown(name)}** has been eliminated!")
-                except Exception:
+                except discord.HTTPException:
                     pass
 
             if max_lives > 0:
@@ -445,7 +445,7 @@ class NHIECog(commands.Cog):
                             await channel.send(
                                 f"{GAME_ICONS['nhie']} Everyone's been eliminated! No winner this time."
                             )
-                    except Exception:
+                    except discord.HTTPException:
                         pass
                     await end_game(self.db, game_id, player_count=len(current_lives), round_count=round_num, payload=payload)
                     if game_id in self.bot.active_views:
@@ -475,7 +475,7 @@ class NHIECog(commands.Cog):
                 self.bot.active_views.pop(game_id, None)
                 try:
                     await channel.send("❌ Something went wrong advancing the round. Game ended.")
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         view = NHIERoundView(

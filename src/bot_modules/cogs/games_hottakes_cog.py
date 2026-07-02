@@ -86,7 +86,7 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
                     break
             try:
                 await msg.edit(embed=embed)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
 
@@ -304,7 +304,7 @@ class HotTakesCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -408,7 +408,7 @@ class HotTakesCog(commands.Cog):
                     item.disabled = True
                 try:
                     await message.edit(embed=final_embed, view=view)
-                except Exception:
+                except discord.HTTPException:
                     pass
                 advanced.set()
 

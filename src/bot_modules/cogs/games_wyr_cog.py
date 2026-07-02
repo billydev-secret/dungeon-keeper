@@ -76,7 +76,7 @@ class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
         self._view.next_btn.label = next_button_label(count)
         try:
             await self._message.edit(view=self._view)
-        except Exception:
+        except discord.HTTPException:
             pass
         await interaction.response.send_message("✅ Your question has been queued!", ephemeral=True)
 
@@ -254,7 +254,7 @@ class WYRCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -391,7 +391,7 @@ class WYRCog(commands.Cog):
                 item.disabled = True
             try:
                 await message.edit(embed=final_embed, view=view)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
             if await is_game_expired(self.db, game_id):
@@ -424,7 +424,7 @@ class WYRCog(commands.Cog):
                 self.bot.active_views.pop(game_id, None)
                 try:
                     await channel.send("❌ Something went wrong advancing the round. Game ended.")
-                except Exception:
+                except discord.HTTPException:
                     pass
 
         view = WYRRoundView(

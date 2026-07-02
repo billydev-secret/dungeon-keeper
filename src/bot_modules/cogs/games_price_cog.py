@@ -268,7 +268,7 @@ class HostWriteView(discord.ui.View):
         button.disabled = True
         try:
             await interaction.edit_original_response(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
 
 
@@ -290,7 +290,7 @@ class PlayerWriteView(discord.ui.View):
         button.disabled = True
         try:
             await interaction.edit_original_response(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
 
 
@@ -477,7 +477,7 @@ class PriceRecapView(discord.ui.View):
             item.disabled = True
         try:
             await interaction.message.edit(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
         self.stop()
         await interaction.response.defer()
@@ -508,7 +508,7 @@ class PriceRecapView(discord.ui.View):
             item.disabled = True
         try:
             await interaction.message.edit(view=self)
-        except Exception:
+        except discord.HTTPException:
             pass
         self.stop()
 
@@ -550,7 +550,7 @@ class PriceCog(commands.Cog):
 
         try:
             await message.edit(content="↻ Picking up where we left off after a restart…", view=None)
-        except Exception:
+        except discord.HTTPException:
             pass
         if start_round > total_rounds:
             asyncio.create_task(self._show_recap(game_id, host_id, host_name, channel, guild, settings))
@@ -639,7 +639,7 @@ class PriceCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -761,7 +761,7 @@ class PriceCog(commands.Cog):
         # Clean up prompt message
         try:
             await prompt_msg.delete()
-        except Exception:
+        except discord.HTTPException:
             pass
 
         if not result:
@@ -786,7 +786,7 @@ class PriceCog(commands.Cog):
 
         try:
             await prompt_msg.delete()
-        except Exception:
+        except discord.HTTPException:
             pass
 
         if not result:
@@ -827,7 +827,7 @@ class PriceCog(commands.Cog):
         if not scenario:
             try:
                 await channel.send("❌ Couldn't generate a scenario. Skipping round.")
-            except Exception:
+            except discord.HTTPException:
                 pass
             # Advance to next round or end
             await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=2)
@@ -883,7 +883,7 @@ class PriceCog(commands.Cog):
             item.disabled = True
         try:
             await msg.edit(view=game_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         prices = dict(game_view.prices)
@@ -903,7 +903,7 @@ class PriceCog(commands.Cog):
         if len(prices) == 0:
             try:
                 await channel.send("Nobody submitted a price this round. Moving on...")
-            except Exception:
+            except discord.HTTPException:
                 pass
             await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=3)
             return
@@ -915,13 +915,13 @@ class PriceCog(commands.Cog):
 
         try:
             await msg.edit(embed=reveal_embed, view=None)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         if len(prices) == 1:
             try:
                 await channel.send("Only one price submitted — skipping the vote.")
-            except Exception:
+            except discord.HTTPException:
                 pass
             await asyncio.sleep(3)
             await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg)
@@ -984,7 +984,7 @@ class PriceCog(commands.Cog):
             item.disabled = True
         try:
             await vote_msg.edit(view=vote_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # ── Tally votes ──
@@ -1032,7 +1032,7 @@ class PriceCog(commands.Cog):
         )
         try:
             await vote_msg.edit(embed=results_embed, view=None)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # ── Next round or recap ──
@@ -1071,7 +1071,7 @@ class PriceCog(commands.Cog):
 
         try:
             await channel.send(embed=recap_embed, view=recap_view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         # End the game
@@ -1099,7 +1099,7 @@ class PriceCog(commands.Cog):
                 )
                 await game_msg.edit(embed=embed, view=None)
             except Exception:
-                pass
+                log.exception("price: failed to edit closed-game message")
 
 
 async def setup(bot: commands.Bot):

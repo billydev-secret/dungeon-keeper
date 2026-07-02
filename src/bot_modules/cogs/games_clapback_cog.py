@@ -537,7 +537,7 @@ class ClapbackCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -822,7 +822,7 @@ class ClapbackCog(commands.Cog):
                 embed.set_field_at(1, name="Answers In", value=f"{count}/{len(players)}", inline=True)
                 try:
                     await msg.edit(embed=embed)
-                except Exception:
+                except discord.HTTPException:
                     pass
 
             if count >= len(players):
@@ -840,7 +840,7 @@ class ClapbackCog(commands.Cog):
             embed.set_field_at(0, name="Timer", value="⏱️ Closed", inline=True)
             embed.set_field_at(1, name="Answers In", value=f"{count}/{len(players)}", inline=True)
             await msg.edit(embed=embed, view=view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         payload = await get_game_payload(self.db, game_id)
@@ -915,7 +915,7 @@ class ClapbackCog(commands.Cog):
                     embed.set_field_at(1, name="Votes", value=str(vcount), inline=True)
                     try:
                         await msg.edit(embed=embed)
-                    except Exception:
+                    except discord.HTTPException:
                         pass
 
         # Voting is open to everyone, so "all eligible voters have voted" is
@@ -959,7 +959,7 @@ class ClapbackCog(commands.Cog):
             item.disabled = True
         try:
             await msg.edit(embed=reveal, view=view)
-        except Exception:
+        except discord.HTTPException:
             pass
 
         await asyncio.sleep(4)  # Let players read the reveal
@@ -1002,7 +1002,7 @@ class ClapbackCog(commands.Cog):
             item.disabled = True
         try:
             await msg.edit(view=view)
-        except Exception:
+        except discord.HTTPException:
             pass
         return True
 

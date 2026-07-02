@@ -117,7 +117,7 @@ class TraditionalHostView(discord.ui.View):
         if hasattr(self, '_message') and self._message:
             try:
                 await self._message.edit(embed=embed, view=self)
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def _update_embed(self, interaction: discord.Interaction, payload: dict):
@@ -212,7 +212,7 @@ class TraditionalHostView(discord.ui.View):
         if game_msg:
             try:
                 await game_msg.edit(view=self)
-            except Exception:
+            except discord.HTTPException:
                 pass
             await channel.send(embed=embed)
         else:
@@ -258,7 +258,7 @@ class TraditionalCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(

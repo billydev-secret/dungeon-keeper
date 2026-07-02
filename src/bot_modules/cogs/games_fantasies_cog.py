@@ -298,7 +298,7 @@ class FantasiesCog(commands.Cog):
                     "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
                     ephemeral=True,
                 )
-            except Exception:
+            except discord.HTTPException:
                 pass
 
     async def launch(
@@ -404,7 +404,7 @@ class FantasiesCog(commands.Cog):
                     item.disabled = True
                 try:
                     await message.edit(embed=view._build_embed(closed=True), view=view)
-                except Exception:
+                except discord.HTTPException:
                     pass
                 advanced.set()
 
