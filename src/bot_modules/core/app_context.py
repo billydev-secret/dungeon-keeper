@@ -409,6 +409,7 @@ class GuildConfig:
     welcome_ping_member: bool
     welcome_trigger: str
     unverified_role_id: int
+    greeter_role_id: int
     greeter_chat_channel_id: int
     leave_channel_id: int
     leave_message: str
@@ -480,6 +481,7 @@ class GuildConfig:
             welcome_ping_member=parse_bool(_val("welcome_ping_member", "false")),
             welcome_trigger=_val("welcome_trigger", "join"),
             unverified_role_id=_int("unverified_role_id"),
+            greeter_role_id=_int("greeter_role_id"),
             greeter_chat_channel_id=_int("greeter_chat_channel_id"),
             leave_channel_id=leave_channel_id,
             leave_message=_val("leave_message", DEFAULT_LEAVE_MESSAGE),

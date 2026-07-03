@@ -333,15 +333,10 @@ async def greeter_response(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
 
-    greeter_channel_id = (
-        getattr(ctx, "greeter_chat_channel_id", 0)
-        or getattr(ctx, "welcome_channel_id", 0)
-    )
-    log_channel_id = (
-        getattr(ctx, "join_leave_log_channel_id", 0)
-        or getattr(ctx, "leave_channel_id", 0)
-    )
-    greeter_role_id = getattr(ctx, "greeter_role_id", 0)
+    cfg = ctx.guild_config(guild_id)
+    greeter_channel_id = cfg.greeter_chat_channel_id or cfg.welcome_channel_id
+    log_channel_id = cfg.join_leave_log_channel_id or cfg.leave_channel_id
+    greeter_role_id = cfg.greeter_role_id
 
     from datetime import datetime, timedelta, timezone
 
@@ -479,7 +474,7 @@ async def activity(
         guild = bot.get_guild(guild_id) if bot is not None else None
         if guild is not None:
             excluded_users.update(m.id for m in guild.members if m.bot)
-        excluded_users.update(getattr(ctx, "recorded_bot_user_ids", set()))
+        excluded_users.update(ctx.guild_config(guild_id).recorded_bot_user_ids)
 
     def _q():
         with ctx.open_db() as conn:

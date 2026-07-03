@@ -298,21 +298,22 @@ class EventsCog(commands.Cog):
             r = _primary_guild.get_role(rid) if _primary_guild else None
             return f"@{r.name}" if r else str(rid)
 
+        cfg = self.ctx.guild_config(self.ctx.guild_id)
         log.info(
             "Primary guild %s (ID: %s, guarding: %s)",
             _primary_guild.name if _primary_guild else self.ctx.guild_id,
             self.ctx.guild_id,
-            [_ch(c) for c in self.ctx.spoiler_required_channels],
+            [_ch(c) for c in cfg.spoiler_required_channels],
         )
         log.info(
             "XP config loaded: level-%s role=%s level-up-log=%s level-%s-log=%s.",
-            self.ctx.xp_settings.role_grant_level,
-            _ro(self.ctx.level_5_role_id),
-            _ch(self.ctx.level_up_log_channel_id),
-            self.ctx.xp_settings.role_grant_level,
-            _ch(self.ctx.level_5_log_channel_id),
+            cfg.xp_settings.role_grant_level,
+            _ro(cfg.level_5_role_id),
+            _ch(cfg.level_up_log_channel_id),
+            cfg.xp_settings.role_grant_level,
+            _ch(cfg.level_5_log_channel_id),
         )
-        log.debug("XP excluded channels: %s", sorted(self.ctx.xp_excluded_channel_ids))
+        log.debug("XP excluded channels: %s", sorted(cfg.xp_excluded_channel_ids))
 
         now_ts = time.time()
         for g in self.bot.guilds:

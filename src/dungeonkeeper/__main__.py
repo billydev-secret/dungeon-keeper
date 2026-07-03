@@ -15,7 +15,7 @@ from bot_modules.core.id_remap import build_remap
 from migrations import apply_migrations_sync
 from bot_modules.core.safety import check_bot_identity, check_db_path, check_guild_membership, print_startup_banner
 from bot_modules.services.watch_service import load_watched_users
-from bot_modules.core.db_utils import migrate_grant_roles, open_db
+from bot_modules.core.db_utils import get_tz_offset_hours, migrate_grant_roles, open_db
 from bot_modules.services.auto_delete_service import auto_delete_loop
 from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
@@ -493,7 +493,8 @@ def main() -> None:
                     from bot_modules.services.reports_data import MemberSnapshot
 
                     gid = guild.id
-                    tz = getattr(ctx, "tz_offset_hours", 0.0)
+                    with open_db(db_path) as conn:
+                        tz = get_tz_offset_hours(conn, gid)
                     nsfw_ids: list[int] = [
                         ch.id for ch in guild.channels if getattr(ch, "nsfw", False)
                     ]

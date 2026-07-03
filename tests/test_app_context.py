@@ -116,6 +116,7 @@ def test_guild_config_load_reads_guild_specific_values(tmp_path):
         _db_set(conn, "mod_role_ids", "500,501", guild_id=42)
         _db_set(conn, "admin_role_ids", "600,601", guild_id=42)
         _db_set(conn, "mod_channel_id", "777", guild_id=42)
+        _db_set(conn, "greeter_role_id", "444", guild_id=42)
 
         cfg = GuildConfig.load(conn, guild_id=42, allow_legacy_fallback=False)
 
@@ -127,6 +128,7 @@ def test_guild_config_load_reads_guild_specific_values(tmp_path):
     assert cfg.mod_role_ids == frozenset({500, 501})
     assert cfg.admin_role_ids == frozenset({600, 601})
     assert cfg.mod_channel_id == 777
+    assert cfg.greeter_role_id == 444
 
 
 def test_guild_config_load_strict_mode_ignores_legacy(tmp_path):
@@ -173,6 +175,7 @@ def test_guild_config_member_is_mod_matches_mod_or_admin_role():
         welcome_ping_member=False,
         welcome_trigger="join",
         unverified_role_id=0,
+        greeter_role_id=0,
         greeter_chat_channel_id=0,
         leave_channel_id=0,
         leave_message="",
