@@ -228,16 +228,6 @@ def test_update_welcome_invalidates_guild_config_cache(authed_client, fake_ctx):
     assert fresh.welcome_channel_id == 8888
 
 
-def test_update_welcome_syncs_flat_field_for_home_guild(authed_client, fake_ctx):
-    """For the home guild, ``ctx.welcome_channel_id`` must track the edit so
-    legacy readers stay consistent with the per-guild snapshot."""
-    resp = authed_client.put(
-        "/api/config/welcome", json={"welcome_channel_id": "7777"}
-    )
-    assert resp.status_code == 200
-    assert fake_ctx.welcome_channel_id == 7777
-
-
 # ── PUT /api/config/xp ────────────────────────────────────────────────
 
 
@@ -270,12 +260,6 @@ def test_update_xp_coefficient(authed_client, fake_ctx):
         from bot_modules.core.xp_system import _XP_COEFF_PREFIX
         val = get_config_value(conn, f"{_XP_COEFF_PREFIX}message_word_xp", "0", fake_ctx.guild_id)
     assert float(val) == 0.75
-
-
-def test_xp_triggers_reload(authed_client, fake_ctx):
-    before = fake_ctx._xp_reload_count
-    authed_client.put("/api/config/xp", json={"message_word_xp": 1.0})
-    assert fake_ctx._xp_reload_count == before + 1
 
 
 # ── PUT /api/config/prune ─────────────────────────────────────────────
@@ -343,20 +327,6 @@ def test_update_moderation_invalidates_guild_config_cache(authed_client, fake_ct
     assert fresh is not primed
     assert fresh.mod_role_ids == frozenset({100, 101})
     assert fresh.admin_role_ids == frozenset({200})
-
-
-def test_update_moderation_syncs_flat_role_caches_for_home_guild(
-    authed_client, fake_ctx
-):
-    """For the home guild, ``ctx.mod_role_ids``/``ctx.admin_role_ids`` must
-    track the edit (reload_permission_roles is called)."""
-    resp = authed_client.put(
-        "/api/config/moderation",
-        json={"mod_role_ids": "555,556", "admin_role_ids": "777"},
-    )
-    assert resp.status_code == 200
-    assert fake_ctx.mod_role_ids == {555, 556}
-    assert fake_ctx.admin_role_ids == {777}
 
 
 # ── PUT /api/config/roles/{grant_name} ───────────────────────────────

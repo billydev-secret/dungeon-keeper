@@ -9,7 +9,7 @@ from pathlib import Path
 import discord
 from dotenv import load_dotenv
 
-from bot_modules.core.app_context import AppContext, Bot, load_runtime_config
+from bot_modules.core.app_context import AppContext, Bot, resolve_guild_id
 from bot_modules.core.config import load_config
 from bot_modules.core.id_remap import build_remap
 from migrations import apply_migrations_sync
@@ -103,51 +103,29 @@ def main() -> None:
     # ==============================
     # Runtime config + context
     # ==============================
-    cfg = load_runtime_config(db_path, debug=args.debug, default_guild_id=boot_cfg.guild_id)
+    guild_id = resolve_guild_id(db_path, default_guild_id=boot_cfg.guild_id)
 
     intents = discord.Intents.default()
     intents.members = True
     intents.presences = True
     intents.message_content = True
 
-    bot = Bot(intents=intents, debug=cfg["debug"], guild_id=cfg["guild_id"])
+    bot = Bot(intents=intents, debug=args.debug, guild_id=guild_id)
 
     ctx = AppContext(
         bot=bot,
         log=log,
         db_path=db_path,
-        guild_id=cfg["guild_id"],
-        debug=cfg["debug"],
-        mod_channel_id=cfg["mod_channel_id"],
-        spoiler_required_channels=cfg["spoiler_required_channels"],
-        bypass_role_ids=cfg["bypass_role_ids"],
-        xp_grant_allowed_user_ids=cfg["xp_grant_allowed_user_ids"],
-        xp_excluded_channel_ids=cfg["xp_excluded_channel_ids"],
-        recorded_bot_user_ids=cfg["recorded_bot_user_ids"],
-        level_5_role_id=cfg["xp_level_5_role_id"],
-        level_5_log_channel_id=cfg["xp_level_5_log_channel_id"],
-        level_up_log_channel_id=cfg["xp_level_up_log_channel_id"],
-        greeter_role_id=cfg["greeter_role_id"],
-        greeter_chat_channel_id=cfg["greeter_chat_channel_id"],
-        join_leave_log_channel_id=cfg["join_leave_log_channel_id"],
-        welcome_channel_id=cfg["welcome_channel_id"],
-        welcome_message=cfg["welcome_message"],
-        welcome_ping_role_id=cfg["welcome_ping_role_id"],
-        leave_channel_id=cfg["leave_channel_id"],
-        leave_message=cfg["leave_message"],
-        tz_offset_hours=cfg["tz_offset_hours"],
+        guild_id=guild_id,
+        debug=args.debug,
     )
 
     # ==============================
     # Populate runtime state from DB
     # ==============================
     with open_db(db_path) as conn:
-        migrate_grant_roles(conn, cfg["guild_id"])
-        ctx.watched_users = load_watched_users(conn, cfg["guild_id"])
-
-    ctx.reload_grant_roles()
-    ctx.reload_xp_settings()
-    ctx.reload_permission_roles()
+        migrate_grant_roles(conn, guild_id)
+        ctx.watched_users = load_watched_users(conn, guild_id)
 
     # ==============================
     # Cog extensions

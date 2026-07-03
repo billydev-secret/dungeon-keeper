@@ -32,23 +32,6 @@ def _make_ctx(db_path, guild_id: int = 10) -> AppContext:
         db_path=db_path,
         guild_id=guild_id,
         debug=True,
-        mod_channel_id=0,
-        spoiler_required_channels=set(),
-        bypass_role_ids=set(),
-        xp_grant_allowed_user_ids=set(),
-        xp_excluded_channel_ids=set(),
-        recorded_bot_user_ids=set(),
-        level_5_role_id=0,
-        level_5_log_channel_id=0,
-        level_up_log_channel_id=0,
-        greeter_role_id=0,
-        greeter_chat_channel_id=0,
-        join_leave_log_channel_id=0,
-        welcome_channel_id=0,
-        welcome_message="",
-        welcome_ping_role_id=0,
-        leave_channel_id=0,
-        leave_message="",
     )
 
 

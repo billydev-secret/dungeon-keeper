@@ -24,23 +24,6 @@ def _make_ctx(db_path, guild_id: int = 123) -> AppContext:
         db_path=db_path,
         guild_id=guild_id,
         debug=True,
-        mod_channel_id=0,
-        spoiler_required_channels=set(),
-        bypass_role_ids=set(),
-        xp_grant_allowed_user_ids=set(),
-        xp_excluded_channel_ids=set(),
-        recorded_bot_user_ids=set(),
-        level_5_role_id=0,
-        level_5_log_channel_id=0,
-        level_up_log_channel_id=0,
-        greeter_role_id=0,
-        greeter_chat_channel_id=0,
-        join_leave_log_channel_id=0,
-        welcome_channel_id=0,
-        welcome_message="",
-        welcome_ping_role_id=0,
-        leave_channel_id=0,
-        leave_message="",
     )
 
 
@@ -54,10 +37,8 @@ def test_set_config_value_invalidates_guild_config_cache(tmp_path):
     # Write mod roles the way an in-Discord setup flow does.
     ctx.set_config_value("mod_role_ids", "900,901")
 
-    # The next read must reflect the write (cache was invalidated), and agree
-    # with the flat cache that set_config_value maintains.
+    # The next read must reflect the write (cache was invalidated).
     assert ctx.guild_config(ctx.guild_id).mod_role_ids == frozenset({900, 901})
-    assert ctx.mod_role_ids == {900, 901}
 
 
 def test_delete_config_value_invalidates_guild_config_cache(tmp_path):
@@ -251,15 +232,15 @@ def test_invalidate_guild_config_drops_only_target_guild(tmp_path):
     assert ctx.guild_config(20) is cfg_20
 
 
-def test_reload_permission_roles_scoped_to_home_guild(tmp_path):
-    """reload_permission_roles must NOT pick up another guild's role IDs."""
+def test_guild_config_mod_roles_scoped_per_guild(tmp_path):
+    """Per-guild snapshots must NOT leak another guild's role IDs."""
     ctx = _make_ctx(tmp_path / "ctx_reload.db", guild_id=10)
     with open_db(ctx.db_path) as conn:
         _db_set(conn, "mod_role_ids", "100,101", guild_id=10)
         _db_set(conn, "mod_role_ids", "200,201", guild_id=20)
 
-    ctx.reload_permission_roles()
-    assert ctx.mod_role_ids == {100, 101}
+    assert ctx.guild_config(10).mod_role_ids == frozenset({100, 101})
+    assert ctx.guild_config(20).mod_role_ids == frozenset({200, 201})
 
 
 async def test_is_mod_uses_per_guild_config(tmp_path):

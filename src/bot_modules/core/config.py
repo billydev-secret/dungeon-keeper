@@ -1,8 +1,8 @@
 """Bootstrap-level configuration for Dungeon Keeper.
 
 Handles BOT_ENV selection and per-environment token/guild/db resolution.
-Separate from app_context.RuntimeConfig, which manages guild-scoped runtime
-settings (mod channels, XP coefficients, etc.) loaded from the database.
+Separate from app_context.resolve_guild_id (which resolves the home guild id
+from the database) and GuildConfig (which loads per-guild runtime settings).
 """
 
 from __future__ import annotations

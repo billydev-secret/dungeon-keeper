@@ -7,7 +7,7 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 from collections.abc import Callable, Coroutine
 
 import discord
@@ -27,7 +27,7 @@ from bot_modules.core.db_utils import (
     remove_config_id,
     set_config_value as _db_set_config_value,
 )
-from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS, XpSettings, load_xp_settings
+from bot_modules.core.xp_system import XpSettings, load_xp_settings
 
 if TYPE_CHECKING:
     from bot_modules.games.utils.recovery import RecoverySentinel
@@ -50,124 +50,18 @@ def _parse_int_config(raw_value: str, *, key: str, default: int = 0) -> int:
         return default
 
 
-def _parse_float_config(raw_value: str, *, key: str, default: float = 0.0) -> float:
-    """Parse float config values safely with fallback."""
-    normalized = raw_value.strip()
-    if not normalized:
-        return default
-    try:
-        return float(normalized)
-    except ValueError:
-        logging.warning(
-            "Invalid float config for %s: %r; using %s.", key, raw_value, default
-        )
-        return default
-
-
-class RuntimeConfig(TypedDict):
-    guild_id: int
-    mod_channel_id: int
-    debug: bool
-    xp_level_5_role_id: int
-    xp_level_5_log_channel_id: int
-    xp_level_up_log_channel_id: int
-    greeter_role_id: int
-    greeter_chat_channel_id: int
-    join_leave_log_channel_id: int
-    spoiler_required_channels: set[int]
-    bypass_role_ids: set[int]
-    xp_grant_allowed_user_ids: set[int]
-    xp_excluded_channel_ids: set[int]
-    recorded_bot_user_ids: set[int]
-    welcome_channel_id: int
-    welcome_message: str
-    welcome_ping_role_id: int
-    leave_channel_id: int
-    leave_message: str
-    tz_offset_hours: float
-
-
-def load_runtime_config(db_path: Path, *, debug: bool, default_guild_id: int = 0) -> RuntimeConfig:
-    from bot_modules.services.welcome_service import DEFAULT_LEAVE_MESSAGE, DEFAULT_WELCOME_MESSAGE
-
+def resolve_guild_id(db_path: Path, *, default_guild_id: int = 0) -> int:
+    """Resolve the home guild id: config-table row, then caller default,
+    then the ``GUILD_ID`` environment variable."""
     with open_db(db_path) as conn:
         guild_id = _parse_int_config(
             get_config_value(conn, "guild_id", "0"), key="guild_id"
         )
-        if guild_id == 0:
-            guild_id = default_guild_id or _parse_int_config(
-                os.environ.get("GUILD_ID", "0"), key="GUILD_ID"
-            )
-        leave_channel_id = _parse_int_config(
-            get_config_value(conn, "leave_channel_id", "0"), key="leave_channel_id"
+    if guild_id == 0:
+        guild_id = default_guild_id or _parse_int_config(
+            os.environ.get("GUILD_ID", "0"), key="GUILD_ID"
         )
-
-        return {
-            "guild_id": guild_id,
-            "debug": debug,
-            "mod_channel_id": _parse_int_config(
-                get_config_value(conn, "mod_channel_id", "0"), key="mod_channel_id"
-            ),
-            "xp_level_5_role_id": _parse_int_config(
-                get_config_value(conn, "xp_level_5_role_id", "0"),
-                key="xp_level_5_role_id",
-            ),
-            "xp_level_5_log_channel_id": _parse_int_config(
-                get_config_value(conn, "xp_level_5_log_channel_id", "0"),
-                key="xp_level_5_log_channel_id",
-            ),
-            "xp_level_up_log_channel_id": _parse_int_config(
-                get_config_value(conn, "xp_level_up_log_channel_id", "0"),
-                key="xp_level_up_log_channel_id",
-            ),
-            "greeter_role_id": _parse_int_config(
-                get_config_value(conn, "greeter_role_id", "0"), key="greeter_role_id"
-            ),
-            "greeter_chat_channel_id": _parse_int_config(
-                get_config_value(conn, "greeter_chat_channel_id", "0"),
-                key="greeter_chat_channel_id",
-            ),
-            "join_leave_log_channel_id": _parse_int_config(
-                get_config_value(
-                    conn,
-                    "join_leave_log_channel_id",
-                    str(leave_channel_id),
-                ),
-                key="join_leave_log_channel_id",
-                default=leave_channel_id,
-            ),
-            "spoiler_required_channels": get_config_id_set(
-                conn, "spoiler_required_channels"
-            ),
-            "bypass_role_ids": get_config_id_set(conn, "bypass_role_ids"),
-            "xp_grant_allowed_user_ids": get_config_id_set(
-                conn, "xp_grant_allowed_user_ids"
-            ),
-            "xp_excluded_channel_ids": get_config_id_set(
-                conn, "xp_excluded_channel_ids"
-            ),
-            "recorded_bot_user_ids": get_config_id_set(
-                conn, "recorded_bot_user_ids"
-            ),
-            "welcome_channel_id": _parse_int_config(
-                get_config_value(conn, "welcome_channel_id", "0"),
-                key="welcome_channel_id",
-            ),
-            "welcome_message": get_config_value(
-                conn, "welcome_message", DEFAULT_WELCOME_MESSAGE
-            ),
-            "welcome_ping_role_id": _parse_int_config(
-                get_config_value(conn, "welcome_ping_role_id", "0"),
-                key="welcome_ping_role_id",
-            ),
-            "leave_channel_id": leave_channel_id,
-            "leave_message": get_config_value(
-                conn, "leave_message", DEFAULT_LEAVE_MESSAGE
-            ),
-            "tz_offset_hours": _parse_float_config(
-                get_config_value(conn, "tz_offset_hours", "0"), key="tz_offset_hours"
-            ),
-        }
+    return guild_id
 
 
 # ---------------------------------------------------------------------------
@@ -537,35 +431,16 @@ class GuildConfig:
 
 @dataclass
 class AppContext:
+    """Process-global runtime state. All guild-scoped config is read via
+    :meth:`guild_config`; there are deliberately no per-guild fields here."""
+
     bot: Bot
     log: logging.Logger
     db_path: Path
     guild_id: int
     debug: bool
-    mod_channel_id: int
-    spoiler_required_channels: set[int]
-    bypass_role_ids: set[int]
-    xp_grant_allowed_user_ids: set[int]
-    xp_excluded_channel_ids: set[int]
-    recorded_bot_user_ids: set[int]
-    level_5_role_id: int
-    level_5_log_channel_id: int
-    level_up_log_channel_id: int
-    greeter_role_id: int
-    greeter_chat_channel_id: int
-    join_leave_log_channel_id: int
-    welcome_channel_id: int
-    welcome_message: str
-    welcome_ping_role_id: int
-    leave_channel_id: int
-    leave_message: str
-    tz_offset_hours: float = 0.0
-    xp_settings: XpSettings = field(default_factory=lambda: DEFAULT_XP_SETTINGS)
-    grant_roles: dict[str, GrantRoleConfig] = field(default_factory=dict)
     xp_pair_states: dict[int, Any] = field(default_factory=dict)
     watched_users: dict[int, set[int]] = field(default_factory=dict)
-    mod_role_ids: set[int] = field(default_factory=set)
-    admin_role_ids: set[int] = field(default_factory=set)
     _guild_config_cache: dict[int, GuildConfig] = field(default_factory=dict)
 
     def open_db(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
@@ -595,24 +470,6 @@ class AppContext:
         """
         self._guild_config_cache.pop(guild_id, None)
 
-    def reload_xp_settings(self) -> None:
-        """Reload XP algorithm coefficients from the config DB."""
-        with self.open_db() as conn:
-            self.xp_settings = load_xp_settings(conn, self.guild_id)
-
-    def reload_permission_roles(self) -> None:
-        """Reload the home guild's mod/admin role ID caches from the config DB.
-
-        Scoped to ``self.guild_id`` (with legacy ``guild_id=0`` fallback) so the
-        flat caches agree with ``guild_config(self.guild_id)``; other guilds are
-        resolved per-event via ``guild_config``.
-        """
-        with self.open_db() as conn:
-            mod_raw = get_config_value(conn, "mod_role_ids", "", self.guild_id)
-            admin_raw = get_config_value(conn, "admin_role_ids", "", self.guild_id)
-        self.mod_role_ids = {int(x) for x in mod_raw.split(",") if x.strip().isdigit()}
-        self.admin_role_ids = {int(x) for x in admin_raw.split(",") if x.strip().isdigit()}
-
     def add_config_id_value(self, bucket: str, value: int) -> set[int]:
         with self.open_db() as conn:
             add_config_id(conn, bucket, value, self.guild_id)
@@ -639,28 +496,19 @@ class AppContext:
     ) -> str:
         """Write a config value for ``guild_id`` (defaults to the home guild).
 
-        Keeps the home flat caches consistent and invalidates the per-guild
-        snapshot so ``guild_config()`` readers see the write.
+        Invalidates the per-guild snapshot so ``guild_config()`` readers see
+        the write.
         """
         gid = self.guild_id if guild_id is None else guild_id
         with self.open_db() as conn:
             _db_set_config_value(conn, key, value, gid)
             result = get_config_value(conn, key, value, gid)
-        if gid == self.guild_id:
-            if key == "mod_role_ids":
-                self.mod_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
-            elif key == "admin_role_ids":
-                self.admin_role_ids = {int(x) for x in result.split(",") if x.strip().isdigit()}
         self.invalidate_guild_config(gid)
         return result
 
     def delete_config_value(self, key: str) -> None:
         with self.open_db() as conn:
             delete_config_value(conn, key, self.guild_id)
-        if key == "mod_role_ids":
-            self.mod_role_ids = set()
-        elif key == "admin_role_ids":
-            self.admin_role_ids = set()
         self.invalidate_guild_config(self.guild_id)
 
     def get_interaction_member(
@@ -714,10 +562,6 @@ class AppContext:
         if member is None or interaction.guild_id is None:
             return False
         return self.guild_config(interaction.guild_id).member_is_admin(member)
-
-    def reload_grant_roles(self) -> None:
-        with self.open_db() as conn:
-            self.grant_roles = get_grant_roles(conn, self.guild_id)
 
     def can_grant_any_role(self, interaction: discord.Interaction) -> bool:
         """Returns True if user can grant ANY configured grant role."""
