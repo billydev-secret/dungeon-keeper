@@ -1,6 +1,7 @@
 import { api, esc } from "../api.js";
 import { WIDGET_MAP, DEFAULT_HOME, DEFAULT_MOD, DEFAULT_ADMIN } from "../widget-registry.js";
 import { renderGrid, showWidgetPicker } from "../widget-grid.js";
+import { renderError } from "../states.js";
 
 const STORAGE_VERSION = 3;
 
@@ -162,7 +163,7 @@ export function mount(container) {
     } catch (err) {
       console.error("[home] load/render error:", err);
       const panel = container.querySelector(".panel");
-      if (panel) panel.innerHTML = `<div class="error">${esc(String(err))}</div>`;
+      if (panel) panel.innerHTML = renderError(err);
     }
   }
 

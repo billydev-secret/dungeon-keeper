@@ -30,7 +30,7 @@ export function mount(container) {
       <section>
         <div class="section-label">Filters</div>
         <div class="controls">
-          <div class="field" style="margin:0;">
+          <div class="field m-0">
             <label>Tier
               <select data-ctrl="filter-tier">
                 <option value="">All</option>
@@ -38,7 +38,7 @@ export function mount(container) {
               </select>
             </label>
           </div>
-          <div class="field" style="margin:0;">
+          <div class="field m-0">
             <label>Status
               <select data-ctrl="filter-status">
                 <option value="">All</option>
@@ -46,7 +46,7 @@ export function mount(container) {
               </select>
             </label>
           </div>
-          <div class="field" style="margin:0;">
+          <div class="field m-0">
             <label>Tag / title
               <input type="text" data-ctrl="filter-tag" placeholder="search..." style="width:120px;" />
             </label>
@@ -375,7 +375,7 @@ export function mount(container) {
     for (const t of templates) counts[t.status] = (counts[t.status] || 0) + 1;
 
     const statsHtml = `<div class="ll-stats-bar">
-      <span class="field-hint" style="margin:0;">${templates.length} template${templates.length === 1 ? "" : "s"}</span>
+      <span class="field-hint m-0">${templates.length} template${templates.length === 1 ? "" : "s"}</span>
       <span class="chip chip-success" style="font-size:11px;">&#10003; ${counts.published} published</span>
       ${counts.draft ? `<span class="chip chip-neutral" style="font-size:11px;">${counts.draft} draft</span>` : ""}
       ${counts.archived ? `<span class="chip chip-neutral" style="font-size:11px;">${counts.archived} archived</span>` : ""}
@@ -569,7 +569,7 @@ function buildTemplateFormHtml(prefix, tierOptions, statusOptions) {
   return `<div class="form">
     <div class="field-row">
       <div class="field" style="flex:2;min-width:200px;">
-        <label>Title<input type="text" data-ctrl="${prefix}-title" style="width:100%;" /></label>
+        <label>Title<input class="w-full" type="text" data-ctrl="${prefix}-title" /></label>
       </div>
       <div class="field">
         <label>Tier<select data-ctrl="${prefix}-tier">${tierOptions}</select></label>
@@ -622,18 +622,18 @@ function buildTemplateFormHtml(prefix, tierOptions, statusOptions) {
       </p>
       <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--rule);">
         <button type="button" class="btn btn-sm" data-action="check-resolutions">Check Resolutions</button>
-        <div class="resolution-results" style="margin-top:8px;"></div>
+        <div class="resolution-results mt-8"></div>
       </div>
     </div>
     <div class="field-row">
       <div class="field" style="flex:2;">
         <label>Tags <small style="font-weight:normal;color:var(--ink-dim,#888);">comma-separated</small>
-          <input type="text" data-ctrl="${prefix}-tags" style="width:100%;" />
+          <input class="w-full" type="text" data-ctrl="${prefix}-tags" />
         </label>
       </div>
       <div class="field" style="flex:1;">
         <label>Notes
-          <textarea data-ctrl="${prefix}-notes" rows="2" style="width:100%;"></textarea>
+          <textarea class="w-full" data-ctrl="${prefix}-notes" rows="2"></textarea>
         </label>
       </div>
     </div>

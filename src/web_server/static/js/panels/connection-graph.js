@@ -64,7 +64,7 @@ export function mount(container, initialParams) {
         </div>
       </details>
 
-      <div data-scorecard class="home-grid" style="margin-bottom:10px;"></div>
+      <div data-scorecard class="home-grid mb-10"></div>
 
       <div class="controls" style="flex-wrap:wrap;">
         <label>Layout
@@ -124,9 +124,9 @@ export function mount(container, initialParams) {
       <div data-legend style="margin-top:4px; font-size:11px; color:#949ba4;">
         Drag nodes · Scroll to zoom · Pan background · Node size = interactions · Edge width = weight · Node color = detected community
       </div>
-      <div data-isolates style="margin-top:8px;"></div>
-      <div data-metrics-tables class="home-grid" style="margin-top:14px;"></div>
-      <div data-heatmap style="margin-top:14px;"></div>
+      <div class="mt-8" data-isolates></div>
+      <div data-metrics-tables class="home-grid mt-14"></div>
+      <div class="mt-14" data-heatmap></div>
     </div>
   `;
 

@@ -56,12 +56,12 @@ export function mount(container) {
           <div style="display:flex;flex-wrap:wrap;gap:12px;">
             <div class="field" style="flex:1;min-width:200px;">
               <label>Game
-                <select data-ctrl="game" style="width:100%;"></select>
+                <select class="w-full" data-ctrl="game"></select>
               </label>
             </div>
             <div class="field" style="flex:1;min-width:200px;">
               <label>Channel
-                <select data-ctrl="channel" style="width:100%;"></select>
+                <select class="w-full" data-ctrl="channel"></select>
               </label>
             </div>
           </div>
@@ -71,7 +71,7 @@ export function mount(container) {
           <div style="display:flex;flex-wrap:wrap;gap:12px;">
             <div class="field" style="flex:1;min-width:160px;">
               <label>Repeat
-                <select data-ctrl="recurrence" style="width:100%;">
+                <select class="w-full" data-ctrl="recurrence">
                   <option value="once">Once</option>
                   <option value="daily">Daily</option>
                   <option value="weekly">Weekly</option>
@@ -80,12 +80,12 @@ export function mount(container) {
             </div>
             <div class="field" style="flex:1;min-width:140px;">
               <label>Time (server-local)
-                <input type="time" data-ctrl="time" value="20:00" style="width:100%;" />
+                <input class="w-full" type="time" data-ctrl="time" value="20:00" />
               </label>
             </div>
             <div class="field" data-region="date-field" style="flex:1;min-width:160px;display:none;">
               <label>Date
-                <input type="date" data-ctrl="date" style="width:100%;" />
+                <input class="w-full" type="date" data-ctrl="date" />
               </label>
             </div>
           </div>
@@ -96,14 +96,14 @@ export function mount(container) {
           </div>
 
           <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;">
-            <div class="field" style="margin:0;">
+            <div class="field m-0">
               <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
                 <input type="checkbox" data-ctrl="announce" /> Announce before launch
               </label>
             </div>
             <div class="field" data-region="role-field" style="flex:1;min-width:200px;display:none;">
               <label>Ping role (optional)
-                <select data-ctrl="role" style="width:100%;"></select>
+                <select class="w-full" data-ctrl="role"></select>
               </label>
             </div>
           </div>
@@ -179,7 +179,7 @@ function renderGameOptions(root, values = {}) {
       const opts = (f.choices || [])
         .map((c) => `<option value="${esc(c.value)}"${String(v) === String(c.value) ? " selected" : ""}>${esc(c.label)}</option>`)
         .join("");
-      control = `<select data-opt="${esc(f.name)}" data-opt-type="choice" style="width:100%;">${opts}</select>`;
+      control = `<select class="w-full" data-opt="${esc(f.name)}" data-opt-type="choice">${opts}</select>`;
     } else if (f.type === "bool") {
       control = `<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;">
         <input type="checkbox" data-opt="${esc(f.name)}" data-opt-type="bool"${v ? " checked" : ""} /> enable
@@ -187,9 +187,9 @@ function renderGameOptions(root, values = {}) {
     } else if (f.type === "int") {
       const minA = f.min !== undefined ? ` min="${f.min}"` : "";
       const maxA = f.max !== undefined ? ` max="${f.max}"` : "";
-      control = `<input type="number"${minA}${maxA} data-opt="${esc(f.name)}" data-opt-type="int" value="${esc(String(v ?? ""))}" style="width:100%;" />`;
+      control = `<input class="w-full" type="number"${minA}${maxA} data-opt="${esc(f.name)}" data-opt-type="int" value="${esc(String(v ?? ""))}" />`;
     } else {
-      control = `<input type="text" data-opt="${esc(f.name)}" data-opt-type="str" value="${esc(String(v ?? ""))}" style="width:100%;" />`;
+      control = `<input class="w-full" type="text" data-opt="${esc(f.name)}" data-opt-type="str" value="${esc(String(v ?? ""))}" />`;
     }
     html += `<div class="field" style="flex:1;min-width:180px;margin:0;">
       <label>${esc(f.label)}</label>${control}

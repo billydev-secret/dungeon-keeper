@@ -1,5 +1,6 @@
 import { api, esc, fmtTs } from "../api.js";
 import { filterSelect, multiFilterSelect } from "../filter-select.js";
+import { renderEmpty, renderError } from "../states.js";
 
 /** Format a sentiment score as a short label with emoji. */
 function sentimentBadge(val) {
@@ -258,13 +259,13 @@ export function mount(container) {
       renderResults(data);
       if (data.total > 0) downloadBtn.style.display = "";
     } catch (err) {
-      resultsEl.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      resultsEl.innerHTML = renderError(err);
     }
   }
 
   function renderResults(data) {
     if (!data.messages.length) {
-      resultsEl.innerHTML = `<div class="empty">No messages found</div>`;
+      resultsEl.innerHTML = renderEmpty("No messages found");
       pagerEl.innerHTML = "";
       return;
     }

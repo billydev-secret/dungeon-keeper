@@ -1,6 +1,8 @@
 import { api, apiPost, esc, fmtTs, fmtAge } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
 import { toast, promptDialog, confirmDialog } from "../ui.js";
+import { makeFilterStrip } from "../tab-strip.js";
+import { renderLoading, renderEmpty } from "../states.js";
 
 const AVATAR_COLORS = ["#c07aa1", "#5865f2", "#23a55a", "#e6b84c", "#f23f43", "#7F8F3A"];
 
@@ -59,7 +61,7 @@ function ticketSubject(t) {
 
 function renderList(tickets, activeId) {
   if (!tickets.length) {
-    return '<div class="empty">No tickets match this filter.</div>';
+    return renderEmpty("No tickets match this filter.");
   }
   return tickets.map((t) => {
     const cls = priorityClass(t) + (t.id === activeId ? " active" : "");
@@ -295,12 +297,12 @@ export function mount(container) {
             </div>
           </div>
           <div class="ticket-list" data-list>
-            <div class="empty">Loading…</div>
+            ${renderLoading("Loading…")}
           </div>
         </div>
 
         <div class="ticket-detail" data-detail>
-          <div class="empty">Loading…</div>
+          ${renderLoading("Loading…")}
         </div>
       </section>
     </div>
@@ -416,7 +418,7 @@ export function mount(container) {
   }
 
   async function refreshClosed() {
-    listEl.innerHTML = '<div class="empty">Loading…</div>';
+    listEl.innerHTML = renderLoading("Loading…");
     try {
       const data = await api("/api/moderation/tickets?status=closed");
       state.closedTickets = data.tickets || [];
@@ -426,11 +428,8 @@ export function mount(container) {
     }
   }
 
-  filterGroup.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-filter]");
-    if (!btn) return;
-    filterGroup.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
-    state.filter = btn.dataset.filter;
+  makeFilterStrip(filterGroup, (value) => {
+    state.filter = value;
     state.activeId = null;
     if (state.filter === "closed" && state.closedTickets === null) {
       refreshClosed();

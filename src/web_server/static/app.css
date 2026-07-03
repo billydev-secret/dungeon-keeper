@@ -3420,3 +3420,18 @@ select option { background: var(--bg-input); color: var(--ink); }
   border-color: var(--ink-mute);
   color: var(--ink-bright);
 }
+
+/* ── Utilities ───────────────────────────────────────────────────────────
+   Single-purpose classes for the most-repeated inline styles (audited
+   2026-07: width:100% ×27, margin-top:14px ×22, margin-bottom:10px ×14, …).
+   Keep this list short — add a utility only when the same declaration
+   repeats ~8+ times; anything richer deserves a component class. */
+.w-full { width: 100%; }
+.m-0 { margin: 0; }
+.mt-8 { margin-top: 8px; }
+.mt-14 { margin-top: 14px; }
+.mb-8 { margin-bottom: 8px; }
+.mb-10 { margin-bottom: 10px; }
+.mb-16 { margin-bottom: 16px; }
+/* Horizontal control row: flex, 8px gap, vertically centered. */
+.row-8 { display: flex; gap: 8px; align-items: center; }

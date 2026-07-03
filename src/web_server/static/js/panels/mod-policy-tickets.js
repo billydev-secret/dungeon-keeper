@@ -1,5 +1,7 @@
 import { api, esc, fmtTs, fmtAge } from "../api.js";
 import { showTranscript } from "../transcript-modal.js";
+import { makeFilterStrip } from "../tab-strip.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 const STATUS_BADGE = {
   open:   '<span class="badge badge-info">Open</span>',
@@ -33,7 +35,7 @@ export function mount(container) {
       </div>
 
       <div class="table-scroll" data-table-wrap>
-        <div class="empty">Loading...</div>
+        ${renderLoading("Loading...")}
       </div>
     </div>
   `;
@@ -75,7 +77,7 @@ export function mount(container) {
       `;
 
       if (!data.policy_tickets.length) {
-        tableWrap.innerHTML = '<div class="empty">No policy tickets found.</div>';
+        tableWrap.innerHTML = renderEmpty("No policy tickets found.");
         return;
       }
 
@@ -115,15 +117,12 @@ export function mount(container) {
         if (row) showTranscript(row.dataset.recordType, row.dataset.recordId);
       });
     } catch (err) {
-      tableWrap.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      tableWrap.innerHTML = renderError(err);
     }
   }
 
-  filterGroup.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-filter]");
-    if (!btn) return;
-    filterGroup.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
-    currentFilter = btn.dataset.filter;
+  makeFilterStrip(filterGroup, (value) => {
+    currentFilter = value;
     refresh();
   });
 

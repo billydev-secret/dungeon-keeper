@@ -2,6 +2,7 @@ import { api, esc } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import { makeBarChart } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
+import { renderEmpty, renderError } from "../states.js";
 
 const RESOLUTIONS = [
   { value: "hour",        label: "Hourly (24h)" },
@@ -246,7 +247,7 @@ export function mount(container, initialParams) {
       if (slider) { slider.destroy(); slider = null; }
 
       if (!data.labels.length || !data.counts.some((c) => c > 0)) {
-        wrap.innerHTML = `<div class="empty">No ${data.mode} activity for this period.</div>`;
+        wrap.innerHTML = renderEmpty(`No ${data.mode} activity for this period.`);
         sliderWrap.innerHTML = "";
         return;
       }
@@ -283,7 +284,7 @@ export function mount(container, initialParams) {
         onChange: renderChart,
       });
     } catch (err) {
-      container.querySelector(".chart-wrap").innerHTML = `<div class="error">${esc(err.message)}</div>`;
+      container.querySelector(".chart-wrap").innerHTML = renderError(err);
       sliderWrap.innerHTML = "";
     }
   }

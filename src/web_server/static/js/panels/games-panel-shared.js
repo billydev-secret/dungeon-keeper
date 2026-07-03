@@ -1,6 +1,7 @@
 ﻿import { api, apiPost, esc } from "../api.js";
 import { apiPut, apiDelete, showStatus } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
+import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
@@ -14,7 +15,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
   const optFieldsHtml = optSchema.map(opt => {
     if (opt.type === "bool") {
-      return '<div class="field" style="margin-bottom:8px;"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;">' +
+      return '<div class="field mb-8"><label style="display:flex;align-items:center;gap:8px;cursor:pointer;">' +
         '<input type="checkbox" data-opt="' + esc(opt.key) + '" style="width:16px;height:16px;cursor:pointer;" />' +
         "<span>" + esc(opt.label) + "</span></label></div>";
     }
@@ -163,25 +164,25 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div style="flex:1;min-width:260px;">' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
       '<div class="field" style="margin:0;min-width:180px;"><label>Tags<div data-ctrl="filter-tags"></div></label></div>' +
-      '<div class="field" style="margin:0;"><label>Match<select data-ctrl="filter-match" style="width:80px;"><option value="all">All</option><option value="any">Any</option></select></label></div>' +
-      '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input type="text" data-ctrl="search" placeholder="Filter..." style="width:100%;" /></label></div>' +
+      '<div class="field m-0"><label>Match<select data-ctrl="filter-match" style="width:80px;"><option value="all">All</option><option value="any">Any</option></select></label></div>' +
+      '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="search" placeholder="Filter..." /></label></div>' +
       '<button class="btn" data-action="search-btn">Search</button>' +
       "</div>" +
-      '<div data-region="bank-list"><div class="empty">Loading...</div></div>' +
+      '<div data-region="bank-list">' + renderLoading("Loading...") + "</div>" +
       '<div data-region="bank-pagination" style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap;"></div>' +
       "</div>" +
       '<div style="width:300px;flex-shrink:0;">' +
       '<section style="background:var(--bg);border:1px solid var(--rule);border-radius:var(--r);padding:16px;">' +
-      '<div class="section-label" style="margin-bottom:10px;">Add Question</div>' +
+      '<div class="section-label mb-10">Add Question</div>' +
       '<div class="field"><label>Tags<div data-ctrl="add-tags"></div></label></div>' +
-      '<div class="field"><label>Question<textarea data-ctrl="add-text" rows="3" style="width:100%;"></textarea></label></div>' +
-      '<div style="display:flex;gap:8px;align-items:center;"><button class="btn btn-primary" data-action="add-question">Add</button><span data-status="add" class="save-status"></span></div>' +
+      '<div class="field"><label>Question<textarea class="w-full" data-ctrl="add-text" rows="3"></textarea></label></div>' +
+      '<div class="row-8"><button class="btn btn-primary" data-action="add-question">Add</button><span data-status="add" class="save-status"></span></div>' +
       "</section>" +
       '<section style="background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);padding:16px;margin-top:12px;">' +
-      '<div class="section-label" style="margin-bottom:10px;">Bulk Import</div>' +
+      '<div class="section-label mb-10">Bulk Import</div>' +
       '<div class="field"><label>Tags (applied to all)<div data-ctrl="bulk-tags"></div></label></div>' +
       '<div class="field"><label>Lines (one per line)<textarea data-ctrl="bulk-text" rows="6" style="width:100%;font-size:12px;"></textarea></label></div>' +
-      '<div style="display:flex;gap:8px;align-items:center;"><button class="btn btn-primary" data-action="bulk-import">Import</button><span data-status="bulk" class="save-status"></span></div>' +
+      '<div class="row-8"><button class="btn btn-primary" data-action="bulk-import">Import</button><span data-status="bulk" class="save-status"></span></div>' +
       "</section></div></div></section>";
   }
 
@@ -207,7 +208,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
     async function loadBank() {
       const el = region("bank-list");
-      el.innerHTML = '<div class="empty">Loading...</div>';
+      el.innerHTML = renderLoading("Loading...");
       const params = new URLSearchParams({ game_type: gameType, page: currentPage, per_page: 50 });
       currentTags.forEach(t => params.append("tag", t));
       if (currentTags.length > 1) params.set("match", ctrl("filter-match").value);
@@ -216,7 +217,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const data = await api("/api/games/bank?" + params);
         const qs = data.questions || [];
         if (!qs.length) {
-          el.innerHTML = '<div class="empty">No questions found.</div>';
+          el.innerHTML = renderEmpty("No questions found.");
           region("bank-pagination").innerHTML = "";
           return;
         }
@@ -251,7 +252,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
           b.addEventListener("click", () => { currentPage = parseInt(b.dataset.page, 10); loadBank(); });
         });
       } catch (err) {
-        el.innerHTML = '<div class="empty">Error: ' + esc(err.message) + "</div>";
+        el.innerHTML = renderError(err);
       }
     }
 

@@ -1,5 +1,7 @@
 import { api, apiPost, esc, fmtTs } from "../api.js";
 import { toast } from "../ui.js";
+import { makeFilterStrip } from "../tab-strip.js";
+import { renderLoading, renderEmpty } from "../states.js";
 
 const TIER_BADGE = {
   immediate: '<span class="badge badge-danger">Immediate</span>',
@@ -102,7 +104,7 @@ function renderDetail(ev) {
 }
 
 function renderStatsTab(stats) {
-  if (!stats) return '<div class="empty">No stats yet.</div>';
+  if (!stats) return renderEmpty("No stats yet.");
   const fpPct = stats.fp_rate != null ? `${(stats.fp_rate * 100).toFixed(0)}%` : "—";
   const tierRows = Object.entries(stats.by_tier || {})
     .map(([t, n]) => `<tr><td>${esc(t)}</td><td>${n}</td></tr>`).join("");
@@ -149,7 +151,7 @@ export function mount(container) {
 
         <div class="rw-layout">
           <div class="rw-list" data-list>
-            <div class="empty">Loading…</div>
+            ${renderLoading("Loading…")}
           </div>
           <div class="rw-detail-pane" data-detail>
             <div class="empty">Select an event to review.</div>
@@ -158,7 +160,7 @@ export function mount(container) {
       </div>
 
       <div data-tab-content="stats" style="display:none">
-        <div data-stats-content><div class="empty">Loading…</div></div>
+        <div data-stats-content>${renderLoading("Loading…")}</div>
       </div>
     </div>
 
@@ -216,7 +218,6 @@ export function mount(container) {
     </style>
   `;
 
-  const tabBtns = container.querySelectorAll("[data-tabs] button");
   const queuePane = container.querySelector('[data-tab-content="queue"]');
   const statsPane = container.querySelector('[data-tab-content="stats"]');
   const filterGroup = container.querySelector("[data-filter-group]");
@@ -233,26 +234,18 @@ export function mount(container) {
   let activeTab = "queue";
 
   // --- Tab switching ---
-  tabBtns.forEach(btn => {
-    btn.addEventListener("click", () => {
-      tabBtns.forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      activeTab = btn.dataset.tab;
-      queuePane.style.display = activeTab === "queue" ? "" : "none";
-      statsPane.style.display = activeTab === "stats" ? "" : "none";
-      if (activeTab === "stats") loadStats();
-    });
-  });
+  makeFilterStrip(container.querySelector("[data-tabs]"), (tab) => {
+    activeTab = tab;
+    queuePane.style.display = activeTab === "queue" ? "" : "none";
+    statsPane.style.display = activeTab === "stats" ? "" : "none";
+    if (activeTab === "stats") loadStats();
+  }, { attr: "data-tab" });
 
   // --- Tier filter ---
-  filterGroup.addEventListener("click", e => {
-    const btn = e.target.closest("[data-tier]");
-    if (!btn) return;
-    filterGroup.querySelectorAll("button").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    currentTier = btn.dataset.tier;
+  makeFilterStrip(filterGroup, (tier) => {
+    currentTier = tier;
     loadQueue();
-  });
+  }, { attr: "data-tier" });
 
   pendingOnlyEl.addEventListener("change", () => {
     pendingOnly = pendingOnlyEl.checked;
@@ -360,7 +353,7 @@ export function mount(container) {
   }
 
   async function loadStats() {
-    statsContent.innerHTML = '<div class="empty">Loading…</div>';
+    statsContent.innerHTML = renderLoading("Loading…");
     try {
       const stats = await api("/api/rules-watch/stats");
       statsContent.innerHTML = renderStatsTab(stats);
