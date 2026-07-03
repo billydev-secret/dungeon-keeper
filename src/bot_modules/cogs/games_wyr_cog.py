@@ -20,6 +20,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     is_game_expired,
     resolve_name,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.question_source import (
@@ -60,7 +61,7 @@ class PoseWYRModal(discord.ui.Modal, title="Pose a Question"):
         self._message = message
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Question", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Question", channel_name(interaction.channel))
         if self._view._closed:
             await interaction.response.send_message("This round already ended.", ephemeral=True)
             return
@@ -120,7 +121,7 @@ class WYRRoundView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -140,7 +141,7 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="🅰️ Option A", style=discord.ButtonStyle.primary, custom_id="wyr_a", row=0)
     async def vote_a(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -151,7 +152,7 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="🅱️ Option B", style=discord.ButtonStyle.primary, custom_id="wyr_b", row=0)
     async def vote_b(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -162,7 +163,7 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="✍️ Pose Question", style=discord.ButtonStyle.primary, custom_id="wyr_pose", row=1)
     async def pose_question(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -170,7 +171,7 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="wyr_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -182,7 +183,7 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="👀 Reveal Voters", style=discord.ButtonStyle.secondary, custom_id="wyr_reveal", row=2)
     async def reveal_voters(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can reveal voters.", ephemeral=True)
             return
@@ -192,7 +193,7 @@ class WYRRoundView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="wyr_htp", row=3)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["wyr"], ephemeral=True)
 
 
@@ -215,7 +216,7 @@ class WYRCog(commands.Cog):
         question: str = "",
         tags: str = "",
     ):
-        log.info("%s used /wyr in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /wyr in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

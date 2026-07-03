@@ -3,7 +3,7 @@ import logging
 import discord
 from .data import resolve_blank
 from .validation import validate_fill, strip_mass_mentions
-from bot_modules.games.utils.game_manager import modify_payload
+from bot_modules.games.utils.game_manager import channel_name, modify_payload
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class FillModal(discord.ui.Modal):
             self.add_item(field)
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted Fill modal in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted Fill modal in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
         fills = {}
         errors = []
@@ -134,7 +134,7 @@ class FillModalPage(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted Fill modal page %d/%d in #%s",
                  interaction.user.display_name, self._page_num, self._total_pages,
-                 interaction.channel.name if interaction.channel else "unknown")
+                 channel_name(interaction.channel))
 
         fills_this_page = {}
         errors = []
@@ -194,6 +194,6 @@ class _ContinueView(discord.ui.View):
     @discord.ui.button(label="Continue →", style=discord.ButtonStyle.primary)
     async def continue_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s clicked Continue in fill modal flow in #%s",
-                 interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+                 interaction.user.display_name, channel_name(interaction.channel))
         self.stop()
         await interaction.response.send_modal(self._next_modal)

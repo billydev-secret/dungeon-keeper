@@ -19,6 +19,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     modify_payload,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.core.branding import resolve_accent_color
@@ -58,7 +59,7 @@ class SubmitEntryModal(discord.ui.Modal, title="Submit a Fantasy or Dealbreaker"
         self.round_num = round_num
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Submit Entry", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Submit Entry", channel_name(interaction.channel))
         category = normalize_category(self.category.value)
         if category is None:
             await interaction.response.send_message(
@@ -104,14 +105,14 @@ class FantasiesMainView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Start Round", style=discord.ButtonStyle.primary, custom_id="fan_start_round")
     async def start_round(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start rounds.", ephemeral=True)
             return
@@ -129,7 +130,7 @@ class FantasiesMainView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="fan_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["fantasies"], ephemeral=True)
 
 
@@ -145,20 +146,20 @@ class SubmitRoundView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Submit", style=discord.ButtonStyle.primary, custom_id="fan_submit_entry")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         modal = SubmitEntryModal(self.game_id, self.db, self.round_num)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Close Submissions", style=discord.ButtonStyle.secondary, custom_id="fan_close_sub")
     async def close_submissions(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can close submissions.", ephemeral=True)
             return
@@ -206,7 +207,7 @@ class FantasiesVoteView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -225,7 +226,7 @@ class FantasiesVoteView(discord.ui.View):
 
     @discord.ui.button(label="✅ Same", style=discord.ButtonStyle.success, custom_id="fan_same", row=0)
     async def vote_same(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
             return
@@ -243,7 +244,7 @@ class FantasiesVoteView(discord.ui.View):
 
     @discord.ui.button(label="❌ Not for me", style=discord.ButtonStyle.danger, custom_id="fan_nope", row=0)
     async def vote_nope(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("Voting is closed.", ephemeral=True)
             return
@@ -261,7 +262,7 @@ class FantasiesVoteView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="fan_next", row=1)
     async def next_entry(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -279,7 +280,7 @@ class FantasiesCog(commands.Cog):
 
     @app_commands.command(name="fantasies", description="Start a Fantasies & Dealbreakers game!")
     async def fantasies(self, interaction: discord.Interaction):
-        log.info("%s used /games play fantasies in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play fantasies in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

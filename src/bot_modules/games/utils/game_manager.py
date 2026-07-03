@@ -4,10 +4,17 @@ import uuid
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
+from typing import Any
 
 import discord
 
 log = logging.getLogger(__name__)
+
+
+def channel_name(channel: Any) -> str:
+    """Channel name for log lines; DMs and unresolved channels render as 'DM'."""
+    return getattr(channel, "name", "DM") if channel else "unknown"
+
 
 # ── Fake/test user name resolution ──────────────────────────────────
 _FAKE_BASE = 900_000_001
@@ -67,7 +74,9 @@ class ConfirmCloseView(discord.ui.View):
         await interaction.response.edit_message(content="Close cancelled.", view=None)
 
 
-async def check_allowed_channel(db, channel_id: int) -> bool:
+async def check_allowed_channel(db, channel_id: int | None) -> bool:
+    if channel_id is None:
+        return False
     row = await db.fetchone(
         "SELECT channel_id FROM games_allowed_channels WHERE channel_id = ?", (channel_id,)
     )
@@ -95,7 +104,9 @@ async def get_game_options(db, game_type: str, guild_id: int) -> dict:
         return {}
 
 
-async def get_active_game(db, channel_id: int):
+async def get_active_game(db, channel_id: int | None):
+    if channel_id is None:
+        return None
     return await db.fetchone(
         "SELECT * FROM games_active_games WHERE channel_id = ?", (channel_id,)
     )

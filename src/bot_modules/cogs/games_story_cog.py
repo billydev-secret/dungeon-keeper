@@ -22,6 +22,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     resolve_name,
     resolve_names,
+    channel_name,
 )
 from bot_modules.games_story.embeds import (
     build_attribution_embed,
@@ -72,7 +73,7 @@ class StorySentenceModal(discord.ui.Modal, title="Add Your Sentence"):
             self.context_field._underlying.value = context_text[:4000]
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted story sentence in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted story sentence in #%s", interaction.user.display_name, channel_name(interaction.channel))
         self._submitted = True
         self._value = self.sentence.value
         await interaction.response.send_message("✅ Your sentence has been added!", ephemeral=True)
@@ -96,14 +97,14 @@ class StoryTurnView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="✍️ Write Your Sentence", style=discord.ButtonStyle.primary, custom_id="story_write")
     async def write(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.current_player_id:
             await interaction.response.send_message("It's not your turn!", ephemeral=True)
             return
@@ -122,7 +123,7 @@ class StoryTurnView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="story_skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
@@ -144,14 +145,14 @@ class StoryJoinView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="story_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
 
         def _add(payload):
@@ -169,7 +170,7 @@ class StoryJoinView(discord.ui.View):
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="story_leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
 
         def _remove(payload):
@@ -187,7 +188,7 @@ class StoryJoinView(discord.ui.View):
 
     @discord.ui.button(label="Start Story", style=discord.ButtonStyle.primary, custom_id="story_start")
     async def start_story(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
@@ -220,7 +221,7 @@ class StoryJoinView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="story_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["story"], ephemeral=True)
 
 
@@ -251,7 +252,7 @@ class StoryCog(commands.Cog):
         visibility: str = "blind",
         starter: str = "",
     ):
-        log.info("%s used /games play story in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play story in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

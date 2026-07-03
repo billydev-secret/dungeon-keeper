@@ -38,6 +38,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     is_game_expired,
     resolve_name,
+    channel_name,
 )
 from bot_modules.games.utils.question_source import get_price_scenario, channel_allows_nsfw
 from bot_modules.games.utils.ai_client import generate_text
@@ -103,7 +104,7 @@ class PriceModal(discord.ui.Modal, title="Name Your Price"):
         log.info(
             "%s submitted price modal in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         amount = parse_price(self.price.value)
         if amount is None:
@@ -148,7 +149,7 @@ class HostScenarioModal(discord.ui.Modal, title="Write a Scenario"):
         log.info(
             "%s submitted scenario modal in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         self._result = self.scenario.value.strip()
         await interaction.response.send_message("✅ Scenario submitted!", ephemeral=True, delete_after=5)
@@ -335,7 +336,7 @@ class PriceGameView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -364,7 +365,7 @@ class PriceGameView(discord.ui.View):
 
     @discord.ui.button(label="💵 Name Your Price", style=discord.ButtonStyle.success, custom_id="price_submit", row=0)
     async def submit_price(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -372,7 +373,7 @@ class PriceGameView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="price_skip", row=1)
     async def skip_round(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
@@ -381,7 +382,7 @@ class PriceGameView(discord.ui.View):
 
     @discord.ui.button(label="➕ Add", style=discord.ButtonStyle.secondary, custom_id="price_add_rounds", row=1)
     async def add_rounds(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can add rounds.", ephemeral=True)
             return
@@ -389,7 +390,7 @@ class PriceGameView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="price_htp", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["price"], ephemeral=True)
 
 
@@ -465,14 +466,14 @@ class PriceRecapView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="🔁 Run Again", style=discord.ButtonStyle.primary, custom_id="price_run_again")
     async def run_again(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
             return
@@ -500,7 +501,7 @@ class PriceRecapView(discord.ui.View):
 
     @discord.ui.button(label="🔄 Hand Off", style=discord.ButtonStyle.secondary, custom_id="price_hand_off")
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
             return
@@ -616,7 +617,7 @@ class PriceCog(commands.Cog):
         log.info(
             "%s used /games play price in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(

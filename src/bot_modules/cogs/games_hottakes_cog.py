@@ -21,6 +21,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     resolve_name,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
@@ -56,7 +57,7 @@ class SubmitHotTakeModal(discord.ui.Modal, title="Your Hot Take"):
         self.queue_mode = queue_mode
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Hot Take", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Hot Take", channel_name(interaction.channel))
 
         def _add_take(payload):
             add_take(payload, interaction.user.id, self.take.value)
@@ -107,20 +108,20 @@ class HotTakesSubmitView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Submit Hot Take", style=discord.ButtonStyle.primary, custom_id="ht_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         modal = SubmitHotTakeModal(self.game_id, self.db, origin_message=interaction.message)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Start Voting", style=discord.ButtonStyle.success, custom_id="ht_start")
     async def start_voting(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start voting.", ephemeral=True)
             return
@@ -168,7 +169,7 @@ class HotTakesSubmitView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ht_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["hottakes"], ephemeral=True)
 
 
@@ -203,7 +204,7 @@ class HotTakeVoteView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -238,7 +239,7 @@ class HotTakeVoteView(discord.ui.View):
         await self._do_vote(interaction, 4)
 
     async def _do_vote(self, interaction: discord.Interaction, idx: int):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This vote is closed.", ephemeral=True)
             return
@@ -252,7 +253,7 @@ class HotTakeVoteView(discord.ui.View):
 
     @discord.ui.button(label="📝 Submit Take", style=discord.ButtonStyle.secondary, custom_id="ht_v_submit", row=1)
     async def submit_take(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self.game_id not in self.bot.active_views:
             await interaction.response.send_message("This game has already ended.", ephemeral=True)
             return
@@ -261,7 +262,7 @@ class HotTakeVoteView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next Take", style=discord.ButtonStyle.secondary, custom_id="ht_next", row=1)
     async def next_take(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -286,7 +287,7 @@ class HotTakesCog(commands.Cog):
 
     @app_commands.command(name="hottakes", description="Start a Hot Takes / Unpopular Opinions game!")
     async def hottakes(self, interaction: discord.Interaction):
-        log.info("%s used /games play hottakes in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play hottakes in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

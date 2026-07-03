@@ -20,6 +20,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     end_game,
     ConfirmCloseView,
+    channel_name,
 )
 from bot_modules.games.command_groups import play
 from bot_modules.games_ffa.prompts import label_for_kind
@@ -300,7 +301,7 @@ class FFAEmbedView(discord.ui.View):
     async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed Close Game in #%s", interaction.user.display_name, getattr(interaction.channel, "name", "?"))
         if interaction.user.id != self.host_id:
-            perms = interaction.user.guild_permissions if interaction.guild else None
+            perms = interaction.user.guild_permissions if interaction.guild and isinstance(interaction.user, discord.Member) else None
             if not (perms and (perms.administrator or perms.manage_guild)):
                 await interaction.response.send_message(
                     "Only the host or a mod can close this game.", ephemeral=True
@@ -389,7 +390,7 @@ class FFACog(commands.Cog):
         banner: bool = False,
     ):
         cmd = "ffa_banner" if banner else "ffa"
-        log.info("%s used /games play %s in #%s", interaction.user.display_name, cmd, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play %s in #%s", interaction.user.display_name, cmd, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

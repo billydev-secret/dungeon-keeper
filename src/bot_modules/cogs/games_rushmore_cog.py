@@ -38,6 +38,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     resolve_name,
+    channel_name,
 )
 from bot_modules.games.utils.question_source import get_rushmore_topic, channel_allows_nsfw
 from bot_modules.games.utils.ai_client import generate_text
@@ -130,7 +131,7 @@ class PickModal(discord.ui.Modal):
         log.info(
             "%s submitted pick modal in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         view = self._draft_view
         if view._closed:
@@ -206,7 +207,7 @@ class RushmoreJoinView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -216,7 +217,7 @@ class RushmoreJoinView(discord.ui.View):
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="rushmore_join", row=0)
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
         def _add(p):
             if uid not in p.get("players", []):
@@ -230,7 +231,7 @@ class RushmoreJoinView(discord.ui.View):
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="rushmore_leave", row=0)
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
         def _remove(p):
             players = p.get("players", [])
@@ -245,7 +246,7 @@ class RushmoreJoinView(discord.ui.View):
 
     @discord.ui.button(label="Start Draft", style=discord.ButtonStyle.primary, custom_id="rushmore_start", row=1)
     async def start_draft(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
@@ -319,7 +320,7 @@ class RushmoreJoinView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="rushmore_htp", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["rushmore"], ephemeral=True)
 
 
@@ -378,7 +379,7 @@ class RushmoreDraftView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -396,7 +397,7 @@ class RushmoreDraftView(discord.ui.View):
 
     @discord.ui.button(label="\U0001f5ff Make Your Pick", style=discord.ButtonStyle.success, custom_id="rushmore_pick", row=0)
     async def make_pick(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("The draft is over.", ephemeral=True)
             return
@@ -452,14 +453,14 @@ class RushmoreRecapView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="\U0001f501 Run Again", style=discord.ButtonStyle.primary, custom_id="rushmore_run_again")
     async def run_again(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
             return
@@ -486,7 +487,7 @@ class RushmoreRecapView(discord.ui.View):
 
     @discord.ui.button(label="\U0001f504 Hand Off", style=discord.ButtonStyle.secondary, custom_id="rushmore_hand_off")
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
             return
@@ -585,7 +586,7 @@ class RushmoreCog(commands.Cog):
         log.info(
             "%s used /games play rushmore in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(

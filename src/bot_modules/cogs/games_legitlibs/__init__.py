@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.utils.game_manager import check_allowed_channel, get_active_game
+from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, get_active_game
 from bot_modules.games.command_groups import play
 from .data import seed_templates_from_file
 from .modes.quiplash import run_quiplash
@@ -54,7 +54,7 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         template_id: str = None,
         tag: str = None,
     ):
-        log.info("%s used /games play legitlibs in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play legitlibs in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(

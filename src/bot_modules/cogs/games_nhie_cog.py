@@ -20,6 +20,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     is_game_expired,
     resolve_name,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.question_source import (
@@ -58,7 +59,7 @@ class PoseStatementModal(discord.ui.Modal, title="Pose a Statement"):
         self._message = message
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Statement", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Statement", channel_name(interaction.channel))
         if self._view._closed:
             await interaction.response.send_message("This round already ended.", ephemeral=True)
             return
@@ -110,7 +111,7 @@ class NHIERoundView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -130,7 +131,7 @@ class NHIERoundView(discord.ui.View):
 
     @discord.ui.button(label="😈 Guilty", style=discord.ButtonStyle.danger, custom_id="nhie_guilty", row=0)
     async def vote_guilty(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -147,7 +148,7 @@ class NHIERoundView(discord.ui.View):
 
     @discord.ui.button(label="😇 Innocent", style=discord.ButtonStyle.success, custom_id="nhie_innocent", row=0)
     async def vote_innocent(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -164,7 +165,7 @@ class NHIERoundView(discord.ui.View):
 
     @discord.ui.button(label="✍️ Pose Statement", style=discord.ButtonStyle.primary, custom_id="nhie_pose", row=1)
     async def pose_statement(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -172,7 +173,7 @@ class NHIERoundView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="nhie_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -184,7 +185,7 @@ class NHIERoundView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="nhie_htp", row=3)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["nhie"], ephemeral=True)
 
 
@@ -209,7 +210,7 @@ class NHIECog(commands.Cog):
         lives: int = DEFAULT_LIVES,
         tags: str = "",
     ):
-        log.info("%s used /games play nhie in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play nhie in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

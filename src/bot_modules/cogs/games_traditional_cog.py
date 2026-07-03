@@ -20,6 +20,7 @@ from bot_modules.games.utils.game_manager import (
     update_game_message,
     update_game_payload,
     update_session,
+    channel_name,
 )
 from bot_modules.games_traditional.embeds import (
     build_lobby_embed,
@@ -56,7 +57,7 @@ class AskQuestionModal(discord.ui.Modal):
         self.cat = category
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, self.title, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, self.title, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
 
         # Record the question (pure dict transform)
@@ -91,7 +92,7 @@ class TraditionalHostView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -131,22 +132,22 @@ class TraditionalHostView(discord.ui.View):
 
     @discord.ui.button(label="SFW Truth", style=discord.ButtonStyle.primary, custom_id="tod_sfw_truth", row=0)
     async def sfw_truth(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._toggle_pref(interaction, "sfw_truth")
 
     @discord.ui.button(label="SFW Dare", style=discord.ButtonStyle.primary, custom_id="tod_sfw_dare", row=0)
     async def sfw_dare(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._toggle_pref(interaction, "sfw_dare")
 
     @discord.ui.button(label="NSFW Truth", style=discord.ButtonStyle.danger, custom_id="tod_nsfw_truth", row=0)
     async def nsfw_truth(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._toggle_pref(interaction, "nsfw_truth")
 
     @discord.ui.button(label="NSFW Dare", style=discord.ButtonStyle.danger, custom_id="tod_nsfw_dare", row=0)
     async def nsfw_dare(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._toggle_pref(interaction, "nsfw_dare")
 
     async def _toggle_pref(self, interaction: discord.Interaction, category: str):
@@ -166,7 +167,7 @@ class TraditionalHostView(discord.ui.View):
 
     @discord.ui.button(label="Ask Question", style=discord.ButtonStyle.success, custom_id="tod_ask", row=1)
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can ask questions.", ephemeral=True)
             return
@@ -196,7 +197,7 @@ class TraditionalHostView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="tod_htp", row=1)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["traditional"], ephemeral=True)
 
     async def _do_close(self, interaction: discord.Interaction, game_msg=None, channel=None):
@@ -239,7 +240,7 @@ class TraditionalCog(commands.Cog):
 
     @app_commands.command(name="traditional", description="Start a Traditional Truth or Dare game!")
     async def traditional(self, interaction: discord.Interaction):
-        log.info("%s used /games play traditional in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play traditional in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

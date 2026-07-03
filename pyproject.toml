@@ -47,7 +47,7 @@ venvPath = "."
 venv = ".venv"
 useLibraryCodeForTypes = false
 reportMissingModuleSource = "none"
-exclude = [
+ignore = [
   "src/bot_modules/cogs/games_*",
   "src/bot_modules/cogs/games_legitlibs",
   "src/bot_modules/games",

@@ -14,6 +14,7 @@ from bot_modules.games.utils.game_manager import (
     create_game,
     update_session,
     end_game,
+    channel_name,
 )
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
@@ -89,7 +90,7 @@ class PhotoCog(commands.Cog):
         log.info(
             "%s used /games play photo in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(

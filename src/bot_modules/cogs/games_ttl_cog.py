@@ -19,6 +19,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     resolve_name,
+    channel_name,
 )
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
@@ -61,7 +62,7 @@ class SubmitStatementsModal(discord.ui.Modal):
         self._origin_message = origin_message
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Statements", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Statements", channel_name(interaction.channel))
         lie_idx = parse_lie_index(self.lie_index.value)
         if lie_idx is None:
             await interaction.response.send_message(
@@ -109,20 +110,20 @@ class TTLSubmitView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Submit Statements", style=discord.ButtonStyle.primary, custom_id="ttl_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         modal = SubmitStatementsModal(self.game_id, self.db, prompt=self.prompt, origin_message=interaction.message)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Start Guessing", style=discord.ButtonStyle.success, custom_id="ttl_start")
     async def start_guessing(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start guessing.", ephemeral=True)
             return
@@ -160,7 +161,7 @@ class TTLSubmitView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ttl_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["ttl"], ephemeral=True)
 
 
@@ -197,7 +198,7 @@ class TTLGuessView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -237,7 +238,7 @@ class TTLGuessView(discord.ui.View):
         await self._vote(interaction, 2)
 
     async def _vote(self, interaction: discord.Interaction, idx: int):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -259,7 +260,7 @@ class TTLGuessView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="ttl_next", row=1)
     async def advance_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -268,7 +269,7 @@ class TTLGuessView(discord.ui.View):
 
     @discord.ui.button(label="📝 Join", style=discord.ButtonStyle.primary, custom_id="ttl_join", row=1)
     async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
         submissions = payload.get("submissions", {})
         if str(interaction.user.id) in submissions:
@@ -289,7 +290,7 @@ class TTLCog(commands.Cog):
     @app_commands.command(name="twotruths", description="Start a Two Truths and a Lie game!")
     @app_commands.describe(prompt="Optional topic prompt for players' statements")
     async def twotruths(self, interaction: discord.Interaction, prompt: str | None = None):
-        log.info("%s used /games play twotruths in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play twotruths in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

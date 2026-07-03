@@ -19,6 +19,7 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     force_end_active_game,
     get_active_game,
+    channel_name,
 )
 
 log = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ log = logging.getLogger(__name__)
 
 def is_mod_or_admin():
     async def predicate(interaction: discord.Interaction) -> bool:
-        if not interaction.guild:
+        if not interaction.guild or not isinstance(interaction.user, discord.Member):
             return False
         return has_mod_or_admin_permissions(interaction.user.guild_permissions)
     return app_commands.check(predicate)
@@ -65,7 +66,7 @@ class GamesConfigCog(commands.Cog):
 
     @app_commands.command(name="end", description="End the active game in this channel (host or mod).")
     async def games_end(self, interaction: discord.Interaction):
-        log.info("%s used /games end in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games end in #%s", interaction.user.display_name, channel_name(interaction.channel))
         row = await get_active_game(self.db, interaction.channel_id)
         if not row:
             await interaction.response.send_message(
@@ -74,7 +75,7 @@ class GamesConfigCog(commands.Cog):
             return
 
         is_host = interaction.user.id == row["host_id"]
-        is_mod = bool(interaction.guild) and has_mod_or_admin_permissions(
+        is_mod = bool(interaction.guild) and isinstance(interaction.user, discord.Member) and has_mod_or_admin_permissions(
             interaction.user.guild_permissions
         )
         if not (is_host or is_mod):
@@ -122,7 +123,7 @@ class GamesConfigCog(commands.Cog):
 
     async def _membership_command(self, interaction: discord.Interaction, user, joining: bool):
         verb = "join" if joining else "leave"
-        log.info("%s used /games %s in #%s", interaction.user.display_name, verb, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games %s in #%s", interaction.user.display_name, verb, channel_name(interaction.channel))
         row = await get_active_game(self.db, interaction.channel_id)
         if not row:
             await interaction.response.send_message(
@@ -179,7 +180,7 @@ class GamesConfigCog(commands.Cog):
     @config_group.command(name="game-status", description="Show the active game in this channel.")
     @is_mod_or_admin()
     async def game_status(self, interaction: discord.Interaction):
-        log.info("%s used /games config game-status in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games config game-status in #%s", interaction.user.display_name, channel_name(interaction.channel))
         from bot_modules.games.utils.game_manager import get_active_game
         row = await get_active_game(self.db, interaction.channel_id)
         guild = interaction.guild
@@ -190,7 +191,7 @@ class GamesConfigCog(commands.Cog):
     @config_group.command(name="game-end", description="Force-close the active game in this channel.")
     @is_mod_or_admin()
     async def game_end(self, interaction: discord.Interaction):
-        log.info("%s used /games config game-end in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games config game-end in #%s", interaction.user.display_name, channel_name(interaction.channel))
         await interaction.response.defer(ephemeral=True)
         row = await get_active_game(self.db, interaction.channel_id)
         if not row:
@@ -206,7 +207,7 @@ class GamesConfigCog(commands.Cog):
     @game_end.error
     async def mod_error(self, interaction: discord.Interaction, error):
         if isinstance(error, app_commands.CheckFailure):
-            log.error("Permission denied for %s on mod command in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+            log.error("Permission denied for %s on mod command in #%s", interaction.user.display_name, channel_name(interaction.channel))
             try:
                 await interaction.response.send_message(
                     "❌ You need moderator or admin permissions to use this command.", ephemeral=True

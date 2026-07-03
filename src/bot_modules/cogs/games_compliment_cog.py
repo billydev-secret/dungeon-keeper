@@ -19,6 +19,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     resolve_names,
+    channel_name,
 )
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games_compliment.embeds import (
@@ -47,14 +48,14 @@ class ComplimentView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Add Me!", style=discord.ButtonStyle.success, custom_id="comp_addme")
     async def add_me(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         user_id = interaction.user.id
         action_holder: dict[str, str] = {}
 
@@ -63,7 +64,7 @@ class ComplimentView(discord.ui.View):
 
         payload = await modify_payload(self.db, self.game_id, _toggle)
         action = action_holder["action"]
-        log.info("%s %s game %s in #%s", interaction.user.display_name, action.split()[0], self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s %s game %s in #%s", interaction.user.display_name, action.split()[0], self.game_id, channel_name(interaction.channel))
 
         names = resolve_names(interaction.guild, payload.get("participants", []))
         host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
@@ -81,7 +82,7 @@ class ComplimentView(discord.ui.View):
 
     @discord.ui.button(label="Close & Generate", style=discord.ButtonStyle.primary, custom_id="comp_generate")
     async def close_generate(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can generate pairings.", ephemeral=True)
             return
@@ -142,7 +143,7 @@ class ComplimentView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="comp_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["compliment"], ephemeral=True)
 
 
@@ -166,7 +167,7 @@ class ComplimentCog(commands.Cog):
 
     @app_commands.command(name="compliment", description="Start Spin the Compliment — random anonymous pairing!")
     async def compliment(self, interaction: discord.Interaction):
-        log.info("%s used /games play compliment in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play compliment in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

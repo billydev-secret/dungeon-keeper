@@ -22,6 +22,7 @@ from bot_modules.games.utils.game_manager import (
     is_game_expired,
     resolve_name,
     resolve_names,
+    channel_name,
 )
 from bot_modules.games.utils.question_source import (
     get_mlt_prompt,
@@ -67,15 +68,15 @@ class MLTJoinView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="mlt_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        log.info("%s joined game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        log.info("%s joined game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.setdefault("players", [])
         add_player(players, interaction.user.id)
@@ -92,8 +93,8 @@ class MLTJoinView(discord.ui.View):
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="mlt_leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
-        log.info("%s left game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        log.info("%s left game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.setdefault("players", [])
         remove_player(players, interaction.user.id)
@@ -110,7 +111,7 @@ class MLTJoinView(discord.ui.View):
 
     @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="mlt_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
@@ -153,7 +154,7 @@ class MLTJoinView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="mlt_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["mlt"], ephemeral=True)
 
 
@@ -171,7 +172,7 @@ class PoseMLTModal(discord.ui.Modal, title="Pose a Prompt"):
         self._message = message
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Prompt", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Pose a Prompt", channel_name(interaction.channel))
         if self._view._closed:
             await interaction.response.send_message("This round already ended.", ephemeral=True)
             return
@@ -235,13 +236,13 @@ class MLTVoteView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     async def _vote_select_callback(self, interaction: discord.Interaction):
-        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -282,7 +283,7 @@ class MLTVoteView(discord.ui.View):
 
     @discord.ui.button(label="✍️ Pose Prompt", style=discord.ButtonStyle.primary, custom_id="mlt_pose", row=1)
     async def pose_prompt(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
@@ -290,7 +291,7 @@ class MLTVoteView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="mlt_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -302,7 +303,7 @@ class MLTVoteView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="mlt_htp2", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["mlt"], ephemeral=True)
 
 
@@ -325,7 +326,7 @@ class MLTCog(commands.Cog):
         question: str = "",
         tags: str = "",
     ):
-        log.info("%s used /games play mlt in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play mlt in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

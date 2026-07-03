@@ -21,6 +21,7 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     end_game,
     update_session,
+    channel_name,
 )
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.audit import send_audit_log
@@ -78,7 +79,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         self.ama_view = ama_view
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Question", interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Your Question", channel_name(interaction.channel))
 
         # Guard: game was closed while the modal was open
         if self.ama_view._closed:
@@ -192,7 +193,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
         self.question_text = question_text
 
     async def on_submit(self, interaction: discord.Interaction):
-        log.info("%s submitted reply modal in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s submitted reply modal in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
         colour = await resolve_accent_color(interaction.client.ctx.db_path, interaction.guild) if interaction.guild else None
         answered_embed = build_answered_embed(
@@ -245,7 +246,7 @@ class ScreenedQuestionView(discord.ui.View):
 
     @discord.ui.button(label="✅ Approve", style=discord.ButtonStyle.success)
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.ama_view.host_id:
             await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
             return
@@ -277,7 +278,7 @@ class ScreenedQuestionView(discord.ui.View):
 
     @discord.ui.button(label="❌ Reject", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.ama_view.host_id:
             await interaction.response.send_message("Only the host can reject questions.", ephemeral=True)
             return
@@ -304,7 +305,7 @@ class QuestionView(discord.ui.View):
 
     @discord.ui.button(label="💬 Reply", style=discord.ButtonStyle.primary, custom_id="ama_reply")
     async def reply_question(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.hot_seat_id:
             await interaction.response.send_message("Only the hot seat player can reply.", ephemeral=True)
             return
@@ -313,7 +314,7 @@ class QuestionView(discord.ui.View):
 
     @discord.ui.button(label="Pass", style=discord.ButtonStyle.secondary, custom_id="ama_pass")
     async def pass_question(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.hot_seat_id:
             await interaction.response.send_message("Only the hot seat player can pass.", ephemeral=True)
             return
@@ -357,7 +358,7 @@ class AMAView(discord.ui.View):
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -610,7 +611,7 @@ class AMAView(discord.ui.View):
 
     @discord.ui.button(label="Volunteer for Hot Seat", style=discord.ButtonStyle.primary, custom_id="ama_volunteer")
     async def volunteer(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This game is closing — no new volunteers.", ephemeral=True)
             return
@@ -647,7 +648,7 @@ class AMAView(discord.ui.View):
 
     @discord.ui.button(label="Ask a Question", style=discord.ButtonStyle.secondary, custom_id="ama_ask")
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
             await interaction.response.send_message("This game is closing — no new questions.", ephemeral=True)
             return
@@ -661,7 +662,7 @@ class AMAView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="ama_skip", row=1)
     async def skip_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
             return
@@ -675,7 +676,7 @@ class AMAView(discord.ui.View):
 
     @discord.ui.button(label="🔄 New Hot Seat", style=discord.ButtonStyle.secondary, custom_id="ama_new_hs", row=1)
     async def new_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can select the hot seat.", ephemeral=True)
             return
@@ -701,7 +702,7 @@ class AMAView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ama_htp", row=1)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["ama"], ephemeral=True)
 
     async def _do_close(self, channel):
@@ -797,7 +798,7 @@ class AMABottomView(discord.ui.View):
 
     @discord.ui.button(label="Ask Question", style=discord.ButtonStyle.primary, custom_id="ama_bottom_ask")
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self.ama_view._closed:
             await interaction.response.send_message("This game is closing — no new questions.", ephemeral=True)
             return
@@ -812,7 +813,7 @@ class AMABottomView(discord.ui.View):
 
     @discord.ui.button(label="🔔 Notify Me", style=discord.ButtonStyle.secondary, custom_id="ama_notify_toggle")
     async def toggle_notify(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         user_id = interaction.user.id
         if user_id in self.ama_view._ping_subscribers:
             self.ama_view._ping_subscribers.discard(user_id)
@@ -823,7 +824,7 @@ class AMABottomView(discord.ui.View):
 
     @discord.ui.button(label="🙋 Volunteer", style=discord.ButtonStyle.success, custom_id="ama_bottom_volunteer")
     async def volunteer(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self.ama_view._closed:
             await interaction.response.send_message("This game is closing — no new volunteers.", ephemeral=True)
             return
@@ -1166,7 +1167,7 @@ class AMACog(commands.Cog):
         ]
     )
     async def ama(self, interaction: discord.Interaction, mode: str = "unfiltered"):
-        log.info("%s used /games play ama in #%s", interaction.user.display_name, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s used /games play ama in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",

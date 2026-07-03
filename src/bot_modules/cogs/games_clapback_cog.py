@@ -27,6 +27,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     update_session,
     resolve_name,
+    channel_name,
 )
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.recovery import start_redrive
@@ -134,7 +135,7 @@ class ClapbackJoinView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -144,7 +145,7 @@ class ClapbackJoinView(discord.ui.View):
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="ql_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
 
         def _add(payload):
@@ -158,7 +159,7 @@ class ClapbackJoinView(discord.ui.View):
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.secondary, custom_id="ql_leave")
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
 
         if uid == self.host_id:
@@ -180,7 +181,7 @@ class ClapbackJoinView(discord.ui.View):
 
     @discord.ui.button(label="▶️ Start", style=discord.ButtonStyle.primary, custom_id="ql_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
@@ -233,7 +234,7 @@ class ClapbackJoinView(discord.ui.View):
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ql_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         cfg = self.config
         text = HOW_TO_PLAY["clapback"] + (
             f"\n\n⏱️ **{cfg['timer']}s** to write each answer\n"
@@ -274,14 +275,14 @@ class ClapbackSubmitView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="✏️ Submit", style=discord.ButtonStyle.primary, custom_id="ql_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
         if interaction.user.id not in players:
@@ -314,7 +315,7 @@ class ClapbackVoteView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -371,7 +372,7 @@ class ClapbackRoundSummaryView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
@@ -381,7 +382,7 @@ class ClapbackRoundSummaryView(discord.ui.View):
 
     @discord.ui.button(label="▶️ Next Round", style=discord.ButtonStyle.primary, custom_id="ql_next")
     async def next_round(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
@@ -405,14 +406,14 @@ class ClapbackRecapView(discord.ui.View):
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
             return True
-        if interaction.guild:
+        if interaction.guild and isinstance(interaction.user, discord.Member):
             perms = interaction.user.guild_permissions
             return perms.administrator or perms.manage_guild
         return False
 
     @discord.ui.button(label="🔄 Play Again", style=discord.ButtonStyle.primary, custom_id="ql_replay")
     async def play_again(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
@@ -430,7 +431,7 @@ class ClapbackRecapView(discord.ui.View):
 
     @discord.ui.button(label="🔀 Play Again (Shuffled)", style=discord.ButtonStyle.secondary, custom_id="ql_replay_shuffle")
     async def play_again_shuffled(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, interaction.channel.name if interaction.channel else "unknown")
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
@@ -503,7 +504,7 @@ class ClapbackCog(commands.Cog):
         log.info(
             "%s used /games play clapback in #%s",
             interaction.user.display_name,
-            interaction.channel.name if interaction.channel else "unknown",
+            channel_name(interaction.channel),
         )
 
         # Pre-flight checks
