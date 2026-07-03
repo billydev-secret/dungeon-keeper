@@ -1,4 +1,8 @@
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -29,7 +33,7 @@ def is_mod_or_admin():
 
 
 class GamesConfigCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -213,7 +217,7 @@ class GamesConfigCog(commands.Cog):
             log.error("Error in config command: %s", error, exc_info=True)
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = GamesConfigCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("config")

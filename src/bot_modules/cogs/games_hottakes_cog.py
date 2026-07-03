@@ -1,5 +1,10 @@
 import asyncio
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
+
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -272,7 +277,7 @@ class HotTakeVoteView(discord.ui.View):
 
 
 class HotTakesCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -480,7 +485,7 @@ class HotTakesCog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = HotTakesCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("hottakes")

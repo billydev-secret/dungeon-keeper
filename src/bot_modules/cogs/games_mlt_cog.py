@@ -1,4 +1,8 @@
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -303,7 +307,7 @@ class MLTVoteView(discord.ui.View):
 
 
 class MLTCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -644,7 +648,7 @@ class MLTCog(commands.Cog):
         return True, f"🎲 **{member.display_name}** left Most Likely To — their crowns stay on the board."
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = MLTCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("mlt")

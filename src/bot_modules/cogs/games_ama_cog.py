@@ -1,6 +1,10 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -876,7 +880,7 @@ async def _resend_ama_bottom(bot, game_id: str, channel):
 
 
 class AMACog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
         self._active_channels: dict[int, str] = {}
         self._question_views_rehydrated: bool = False
@@ -1250,7 +1254,7 @@ class AMACog(commands.Cog):
         return game_id
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = AMACog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("ama")

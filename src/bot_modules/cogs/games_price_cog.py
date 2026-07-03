@@ -15,6 +15,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -516,7 +520,7 @@ class PriceRecapView(discord.ui.View):
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class PriceCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -1102,7 +1106,7 @@ class PriceCog(commands.Cog):
                 log.exception("price: failed to edit closed-game message")
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = PriceCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("price")

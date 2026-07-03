@@ -1,7 +1,10 @@
 import asyncio
 import io
 import logging
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -327,7 +330,7 @@ class FFAEmbedView(discord.ui.View):
 
 
 class FFACog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -581,7 +584,7 @@ class FFACog(commands.Cog):
         return True
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = FFACog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("ffa")

@@ -1,5 +1,9 @@
 import json
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -11,7 +15,7 @@ from bot_modules.games_session.logic import build_highlights, format_duration
 
 
 class SessionCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -98,5 +102,5 @@ class SessionCog(commands.Cog):
         await interaction.followup.send(embed=embed)
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     await bot.add_cog(SessionCog(bot))

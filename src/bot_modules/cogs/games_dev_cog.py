@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
 
 import discord
 from discord import app_commands
@@ -45,7 +49,7 @@ _FAKE_ANSWERS = [
 
 
 class GamesDevCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: Bot):
         self.bot = bot
 
     @property
@@ -185,7 +189,7 @@ class GamesDevCog(commands.Cog):
         )
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: Bot):
     cog = GamesDevCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("fill")

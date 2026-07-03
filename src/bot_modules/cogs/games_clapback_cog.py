@@ -2,6 +2,10 @@ import asyncio
 import logging
 import re
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -453,7 +457,7 @@ class ClapbackRecapView(discord.ui.View):
 
 
 class ClapbackCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
         # Events used to signal early completion of submit / vote phases
         self._submit_events: dict[str, asyncio.Event] = {}
@@ -1098,7 +1102,7 @@ class ClapbackCog(commands.Cog):
         return True, f"{ICON} **{member.display_name}** left Clapback — their score stays on the board."
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = ClapbackCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("clapback")

@@ -14,6 +14,10 @@ import asyncio
 import logging
 import random
 import time as _time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -502,7 +506,7 @@ class RushmoreRecapView(discord.ui.View):
 # ── Cog ──────────────────────────────────────────────────────────────────────
 
 class RushmoreCog(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: "Bot"):
         self.bot = bot
 
     @property
@@ -960,7 +964,7 @@ class RushmoreCog(commands.Cog):
             del self.bot.active_views[game_id]
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: "Bot"):
     cog = RushmoreCog(bot)
     await bot.add_cog(cog)
     bot.tree.remove_command("rushmore")
