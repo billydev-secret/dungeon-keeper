@@ -179,7 +179,7 @@ class ClapbackJoinView(discord.ui.View):
         log.info("%s left game %s", interaction.user.display_name, self.game_id)
         await self._update_embed(interaction, payload)
 
-    @discord.ui.button(label="▶️ Start", style=discord.ButtonStyle.primary, custom_id="ql_start")
+    @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="ql_start")
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):
@@ -411,7 +411,7 @@ class ClapbackRecapView(discord.ui.View):
             return perms.administrator or perms.manage_guild
         return False
 
-    @discord.ui.button(label="🔄 Play Again", style=discord.ButtonStyle.primary, custom_id="ql_replay")
+    @discord.ui.button(label="🔁 Play Again", style=discord.ButtonStyle.primary, custom_id="ql_replay")
     async def play_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self._is_host_or_mod(interaction):

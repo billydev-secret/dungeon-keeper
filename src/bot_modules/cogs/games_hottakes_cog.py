@@ -119,7 +119,7 @@ class HotTakesSubmitView(discord.ui.View):
         modal = SubmitHotTakeModal(self.game_id, self.db, origin_message=interaction.message)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Start Voting", style=discord.ButtonStyle.success, custom_id="ht_start")
+    @discord.ui.button(label="Start Voting", style=discord.ButtonStyle.primary, custom_id="ht_start")
     async def start_voting(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):

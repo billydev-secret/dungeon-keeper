@@ -326,7 +326,7 @@ class RiskyRollView(BaseRiskyRollView):
                 )
 
     @discord.ui.button(
-        label="How to Play",
+        label="Help",
         style=discord.ButtonStyle.secondary,
         custom_id="rr:help",
         emoji="❓",

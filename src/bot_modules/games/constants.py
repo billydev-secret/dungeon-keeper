@@ -193,7 +193,7 @@ HOW_TO_PLAY = {
         "• **/games play ffa** — posts an embed with anonymous reply buttons; "
         "replies land back in the channel and a live counter tracks them:\n"
         "   • **🎭 Reply Anonymously** — same anon nickname the whole time\n"
-        "   • **🎲 Reply Super Anonymously** — a fresh nickname each time\n"
+        "   • **🎲 Reply as Someone New** — a fresh nickname each time\n"
         "   Replies are posted with no attribution (mods can still see who sent them).\n"
         "• **/games play ffa_banner** — just drops the prompt card in the channel "
         "for open discussion (no anonymous replies)\n\n"
@@ -224,7 +224,7 @@ HOW_TO_PLAY = {
     'compliment': (
         "💛 **Spin the Compliment**\n"
         "Random pairings — everyone gives one person a compliment.\n\n"
-        "1. Click **Add Me!** to join the pool\n"
+        "1. Click **Join** to enter the pool\n"
         "2. The host clicks **Close & Generate** when the pool is ready\n"
         "3. Pairings are revealed publicly — each player sees who they're giving to\n"
         "4. Reply in the channel with a compliment for your assigned partner\n\n"
@@ -233,7 +233,7 @@ HOW_TO_PLAY = {
     'mfk': (
         "💍 **Marry, Fornicate, Kiss**\n"
         "Join the pool, get assigned three names, slot them into the categories.\n\n"
-        "1. Click **Join the Pool** to enter\n"
+        "1. Click **Join** to enter the pool\n"
         "2. The host clicks **Close & Assign** when ready (need 4+ players)\n"
         "3. Each player is given 3 random names from the pool — never themselves\n"
         "4. Reply in the channel saying who you'd Marry, Fornicate, and Kiss\n\n"

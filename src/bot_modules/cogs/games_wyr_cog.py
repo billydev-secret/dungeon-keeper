@@ -191,7 +191,7 @@ class WYRRoundView(discord.ui.View):
         button.disabled = True
         await interaction.response.edit_message(embed=self._build_embed(), view=self)
 
-    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="wyr_htp", row=3)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="wyr_htp", row=2)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["wyr"], ephemeral=True)

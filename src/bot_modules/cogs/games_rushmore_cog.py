@@ -244,7 +244,7 @@ class RushmoreJoinView(discord.ui.View):
         await interaction.response.edit_message(embed=embed, view=self)
         await interaction.followup.send("You've left.", ephemeral=True)
 
-    @discord.ui.button(label="Start Draft", style=discord.ButtonStyle.primary, custom_id="rushmore_start", row=1)
+    @discord.ui.button(label="Start Draft", style=discord.ButtonStyle.primary, custom_id="rushmore_start", row=0)
     async def start_draft(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
@@ -318,7 +318,7 @@ class RushmoreJoinView(discord.ui.View):
             settings=await self.cog._get_settings(self.game_id),
         )
 
-    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="rushmore_htp", row=2)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="rushmore_htp", row=0)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["rushmore"], ephemeral=True)

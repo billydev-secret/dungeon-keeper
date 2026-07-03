@@ -1268,7 +1268,7 @@ class GuessPromptView(discord.ui.View):
         self.add_item(submit_btn)
 
         help_btn: discord.ui.Button = discord.ui.Button(  # type: ignore[type-arg]
-            label="❓ How to Play",
+            label="❓ Help",
             style=discord.ButtonStyle.secondary,
             custom_id="guess_prompt_help",
         )

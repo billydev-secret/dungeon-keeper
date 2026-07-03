@@ -65,7 +65,7 @@ REPLY_HELP = (
     "Your reply is posted by the bot with no name attached.\n\n"
     "• **Reply Anonymously** — you keep the *same* anonymous nickname for this "
     "prompt, so people can follow your back-and-forth.\n"
-    "• **Reply Super Anonymously** — you get a *fresh* nickname every time, so "
+    "• **Reply as Someone New** — you get a *fresh* nickname every time, so "
     "even your own replies can't be linked together.\n\n"
     "Mods can still see who actually sent a reply (logged for safety)."
 )
@@ -266,6 +266,7 @@ class FFAEmbedView(discord.ui.View):
         emoji="🎭",
         style=discord.ButtonStyle.secondary,
         custom_id="ffa_embed_reply_anon",
+        row=0,
     )
     async def reply_anon(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._guard_active(interaction):
@@ -273,10 +274,11 @@ class FFAEmbedView(discord.ui.View):
         await interaction.response.send_modal(FFAEmbedReplyModal(self, ephemeral_identity=False))
 
     @discord.ui.button(
-        label="Reply Super Anonymously",
+        label="Reply as Someone New",
         emoji="🎲",
         style=discord.ButtonStyle.secondary,
         custom_id="ffa_embed_reply_super",
+        row=0,
     )
     async def reply_super(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._guard_active(interaction):
@@ -288,6 +290,7 @@ class FFAEmbedView(discord.ui.View):
         emoji="❓",
         style=discord.ButtonStyle.secondary,
         custom_id="ffa_embed_help",
+        row=1,
     )
     async def reply_help(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(REPLY_HELP, ephemeral=True)
@@ -297,6 +300,7 @@ class FFAEmbedView(discord.ui.View):
         emoji="🛑",
         style=discord.ButtonStyle.danger,
         custom_id="ffa_embed_close",
+        row=1,
     )
     async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed Close Game in #%s", interaction.user.display_name, getattr(interaction.channel, "name", "?"))

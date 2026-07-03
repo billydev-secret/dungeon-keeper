@@ -380,7 +380,7 @@ class PriceGameView(discord.ui.View):
         await interaction.response.defer()
         self.skip_timer()
 
-    @discord.ui.button(label="➕ Add", style=discord.ButtonStyle.secondary, custom_id="price_add_rounds", row=1)
+    @discord.ui.button(label="➕ Add Rounds", style=discord.ButtonStyle.secondary, custom_id="price_add_rounds", row=1)
     async def add_rounds(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
@@ -388,7 +388,7 @@ class PriceGameView(discord.ui.View):
             return
         await interaction.response.send_modal(AddRoundsModal(self.cog, self.game_id))
 
-    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="price_htp", row=2)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="price_htp", row=1)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["price"], ephemeral=True)

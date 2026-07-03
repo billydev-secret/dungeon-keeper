@@ -53,7 +53,7 @@ class MFKView(discord.ui.View):
             return perms.administrator or perms.manage_guild
         return False
 
-    @discord.ui.button(label="Join the Pool", style=discord.ButtonStyle.success, custom_id="mfk_join")
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="mfk_join")
     async def join_pool(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         user_id = interaction.user.id

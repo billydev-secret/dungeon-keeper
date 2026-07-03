@@ -121,7 +121,7 @@ class TTLSubmitView(discord.ui.View):
         modal = SubmitStatementsModal(self.game_id, self.db, prompt=self.prompt, origin_message=interaction.message)
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Start Guessing", style=discord.ButtonStyle.success, custom_id="ttl_start")
+    @discord.ui.button(label="Start Guessing", style=discord.ButtonStyle.primary, custom_id="ttl_start")
     async def start_guessing(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
@@ -267,7 +267,7 @@ class TTLGuessView(discord.ui.View):
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
 
-    @discord.ui.button(label="📝 Join", style=discord.ButtonStyle.primary, custom_id="ttl_join", row=1)
+    @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="ttl_join", row=1)
     async def join_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)

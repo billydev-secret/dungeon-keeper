@@ -609,7 +609,7 @@ class AMAView(discord.ui.View):
         finally:
             self._suppress_resend = False
 
-    @discord.ui.button(label="Volunteer for Hot Seat", style=discord.ButtonStyle.primary, custom_id="ama_volunteer")
+    @discord.ui.button(label="🙋 Volunteer", style=discord.ButtonStyle.success, custom_id="ama_volunteer")
     async def volunteer(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
@@ -646,7 +646,7 @@ class AMAView(discord.ui.View):
         await self.refresh_status(interaction.channel)
         await self._update_bottom_bar()
 
-    @discord.ui.button(label="Ask a Question", style=discord.ButtonStyle.secondary, custom_id="ama_ask")
+    @discord.ui.button(label="Ask a Question", style=discord.ButtonStyle.primary, custom_id="ama_ask")
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self._closed:
@@ -688,7 +688,7 @@ class AMAView(discord.ui.View):
         ]
         if not candidates:
             await interaction.response.send_message(
-                "No one is waiting in the queue. Members can tap **Volunteer for Hot Seat** "
+                "No one is waiting in the queue. Members can tap **🙋 Volunteer** "
                 "to opt in, then you can pick them here.",
                 ephemeral=True,
             )
@@ -796,7 +796,7 @@ class AMABottomView(discord.ui.View):
             url=game_msg_url,
         ))
 
-    @discord.ui.button(label="Ask Question", style=discord.ButtonStyle.primary, custom_id="ama_bottom_ask")
+    @discord.ui.button(label="Ask a Question", style=discord.ButtonStyle.primary, custom_id="ama_bottom_ask")
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if self.ama_view._closed:

@@ -7,7 +7,7 @@ button callbacks; the Discord glue (sending the message, persisting via
 
 Two reusable pieces are extracted:
 
-* :func:`toggle_participant` — the "Add Me!" button spine. Adds or
+* :func:`toggle_participant` — the "Join" button spine. Adds or
   removes ``user_id`` from the lobby's participant list and returns the
   human-readable action ("added to" / "removed from") that the cog
   echoes back in an ephemeral reply.

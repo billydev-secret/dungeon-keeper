@@ -65,7 +65,7 @@ class JoinView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._on_start(interaction, action="leave")
 
-    @discord.ui.button(label="▶ Start", style=discord.ButtonStyle.primary, custom_id="ml_start", row=0)
+    @discord.ui.button(label="Start", style=discord.ButtonStyle.primary, custom_id="ml_start", row=0)
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not _is_host_or_mod(interaction, self.host_id):
@@ -85,7 +85,7 @@ class JoinView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ml_htp_lobby", row=1)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ml_htp_lobby", row=0)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY.get("legitlibs", ""), ephemeral=True)
@@ -120,7 +120,7 @@ class QuiplashFillView(discord.ui.View):
             ephemeral=True,
         )
 
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary, custom_id="ml_htp_fill", row=1)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ml_htp_fill", row=0)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY.get("legitlibs", ""), ephemeral=True)
@@ -157,8 +157,8 @@ class ClassicFillView(discord.ui.View):
             return
         await self._on_cancel(interaction)
 
-    @discord.ui.button(label="❓ How to Play", style=discord.ButtonStyle.secondary,
-                       custom_id="ml_cl_htp_fill", row=1)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary,
+                       custom_id="ml_cl_htp_fill", row=0)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label,
                  channel_name(interaction.channel))
