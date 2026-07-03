@@ -1,3 +1,4 @@
+import { api, apiPost } from "../api.js";
 import { loadConfig, loadRoles, loadChannels, channelSelect, roleSelect, apiPut, apiDelete, showStatus } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
 
@@ -262,11 +263,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
 
   async function loadSwatches() {
     try {
-      const res = await fetch("/api/config/booster-roles/swatches", {
-        credentials: "same-origin",
-      });
-      if (!res.ok) throw new Error(res.statusText);
-      renderSwatchList(await res.json());
+      renderSwatchList(await api("/api/config/booster-roles/swatches"));
     } catch (err) {
       swatchList.innerHTML = `<div class="error">${_esc(err.message)}</div>`;
     }
@@ -289,16 +286,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     uploadBtn.disabled = true;
     showStatus(uploadStatus, true, "Uploading…");
     try {
-      const res = await fetch("/api/config/booster-roles/swatches", {
-        method: "POST",
-        credentials: "same-origin",
-        body: fd,
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || res.statusText);
-      }
-      const data = await res.json();
+      const data = await apiPost("/api/config/booster-roles/swatches", fd);
       renderSwatchList(data);
       swatchInput.value = "";
       showStatus(uploadStatus, true, `Uploaded ${data.saved?.length || 0}`);
@@ -318,16 +306,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     syncBtn.disabled = true;
     showStatus(syncStatus, true, "Syncing…");
     try {
-      const res = await fetch("/api/config/booster-roles/sync-swatches", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || res.statusText);
-      }
-      const data = await res.json();
+      const data = await apiPost("/api/config/booster-roles/sync-swatches");
       const parts = [];
       if (data.created?.length) parts.push(`created ${data.created.length}`);
       if (data.removed?.length) parts.push(`removed ${data.removed.length}`);
@@ -363,17 +342,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     if (!(await confirmDialog("Repost the booster panel? The previously posted panel messages will be deleted.", { danger: true, confirmLabel: "Repost" }))) return;
     repostBtn.disabled = true;
     try {
-      const res = await fetch("/api/config/booster-roles/post-panel", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channel_id: channelId }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || res.statusText);
-      }
-      const data = await res.json();
+      const data = await apiPost("/api/config/booster-roles/post-panel", { channel_id: channelId });
       showStatus(repostStatus, true, `Posted ${data.message_count || ""} message(s)`);
     } catch (err) {
       showStatus(repostStatus, false, err.message);

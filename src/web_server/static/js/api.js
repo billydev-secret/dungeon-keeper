@@ -1,7 +1,10 @@
 // Tiny fetch wrapper. All endpoints are same-origin JSON.
 
-/** Escape a string for safe insertion into innerHTML, including attributes. */
+/** Escape a string for safe insertion into innerHTML, including attributes.
+ *  null/undefined render as "" (matches every panel-local variant this
+ *  replaced; nobody wants a literal "null" in the page). */
 export function esc(s) {
+  if (s == null) return "";
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[c]);
@@ -33,7 +36,22 @@ export function fmtAge(seconds) {
   return `${s}s`;
 }
 
-export async function api(path, params) {
+/**
+ * The one fetch core. Everything HTTP in the dashboard goes through here
+ * (help.js's HTML fetch is the sole exception).
+ *
+ * - `params`: query-string object; null/undefined/"" entries are skipped.
+ * - `body`: JSON-encoded with a Content-Type header. A FormData body is
+ *   passed through untouched (the browser sets the multipart boundary).
+ *   `body === undefined` sends no body and no Content-Type.
+ * - `on401`: override the default `/login` redirect (wellness pages
+ *   redirect to Discord OAuth instead).
+ *
+ * Errors throw `Error("<status>: <detail>")`, preferring the body's
+ * `error` field (wellness endpoints), then `detail` (FastAPI — arrays of
+ * validation errors are joined), then statusText.
+ */
+export async function request(method, path, { params, body, on401 } = {}) {
   const url = new URL(path, window.location.origin);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -41,44 +59,33 @@ export async function api(path, params) {
       url.searchParams.set(k, v);
     }
   }
-  const res = await fetch(url, { credentials: "same-origin" });
+  const opts = { method, credentials: "same-origin" };
+  if (body instanceof FormData) {
+    opts.body = body;
+  } else if (body !== undefined) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
   if (res.status === 401) {
-    window.location = "/login";
+    if (on401) on401(); else window.location = "/login";
     return new Promise(() => {}); // hang — page is navigating away
   }
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const body = await res.json();
-      if (body.detail) detail = Array.isArray(body.detail)
-        ? body.detail.map(e => e.msg || JSON.stringify(e)).join("; ")
-        : String(body.detail);
-    } catch (_) {}
-    throw new Error(`${res.status}: ${detail}`);
-  }
-  return res.json();
-}
-
-export async function apiPost(path, body) {
-  const res = await fetch(path, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
-  if (res.status === 401) {
-    window.location = "/login";
-    return new Promise(() => {});
-  }
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
       const b = await res.json();
-      if (b.detail) detail = Array.isArray(b.detail)
-        ? b.detail.map(e => e.msg || JSON.stringify(e)).join("; ")
+      if (b.error) detail = String(b.error);
+      else if (b.detail) detail = Array.isArray(b.detail)
+        ? b.detail.map((e) => e.msg || JSON.stringify(e)).join("; ")
         : String(b.detail);
     } catch (_) {}
     throw new Error(`${res.status}: ${detail}`);
   }
   return res.json();
 }
+
+export function api(path, params) { return request("GET", path, { params }); }
+export function apiPost(path, body) { return request("POST", path, { body: body || {} }); }
+export function apiPut(path, body) { return request("PUT", path, { body }); }
+export function apiDelete(path) { return request("DELETE", path); }

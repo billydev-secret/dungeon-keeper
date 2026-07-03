@@ -1,3 +1,4 @@
+import { api } from "../api.js";
 import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
 
 function _esc(str) {
@@ -14,7 +15,7 @@ export function mount(container) {
   (async () => {
     const [config, channels, roles, supportResp] = await Promise.all([
       loadConfig(), loadChannels(), loadRoles(),
-      fetch("/api/config/support-access", { credentials: "same-origin" }).then(r => r.ok ? r.json() : { enabled: false }),
+      api("/api/config/support-access").catch(() => ({ enabled: false })),
     ]);
     const g = config.global;
 

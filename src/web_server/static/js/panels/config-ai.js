@@ -1,5 +1,5 @@
 import { apiPut, showStatus } from "../config-helpers.js";
-import { api, esc } from "../api.js";
+import { api, esc, apiPost, apiDelete } from "../api.js";
 import { confirmDialog } from "../ui.js";
 
 export function mount(container) {
@@ -232,7 +232,7 @@ export function mount(container) {
     reloadBtn.addEventListener("click", async () => {
       reloadBtn.disabled = true;
       try {
-        await fetch("/api/config/ai/model-reload", { method: "POST", credentials: "same-origin" });
+        await apiPost("/api/config/ai/model-reload");
         _startPolling();
         showStatus(msStatus, true, "Reload started");
       } catch (err) {
@@ -311,11 +311,7 @@ export function mount(container) {
         if (action === "reset") {
           if (!(await confirmDialog("Reset this prompt to the default text? Any custom prompt will be discarded.", { danger: true, confirmLabel: "Reset" }))) return;
           try {
-            const res = await fetch(`/api/config/ai/prompts/${key}`, {
-              method: "DELETE",
-              credentials: "same-origin",
-            });
-            if (!res.ok) throw new Error(`${res.status}`);
+            await apiDelete(`/api/config/ai/prompts/${key}`);
             const fresh = await api("/api/config/ai");
             const p = fresh.prompts.find((x) => x.key === key);
             if (p) {
@@ -338,23 +334,12 @@ export function mount(container) {
           testStatus.textContent = "Running…";
           testOutput.textContent = "";
           try {
-            const res = await fetch(`/api/config/ai/prompts/${key}/test`, {
-              method: "POST",
-              credentials: "same-origin",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ user_input: testInput.value }),
-            });
-            const result = await res.json();
-            if (res.ok) {
-              testStatus.textContent = "Done";
-              testOutput.textContent = result.result;
-            } else {
-              testStatus.textContent = "";
-              testOutput.textContent = `Error: ${result.detail}`;
-            }
+            const result = await apiPost(`/api/config/ai/prompts/${key}/test`, { user_input: testInput.value });
+            testStatus.textContent = "Done";
+            testOutput.textContent = result.result;
           } catch (err) {
             testStatus.textContent = "";
-            testOutput.textContent = `Error: ${esc(err.message)}`;
+            testOutput.textContent = `Error: ${err.message}`;
           }
         }
       });

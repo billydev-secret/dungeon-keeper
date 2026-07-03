@@ -1,20 +1,10 @@
 // Shared helpers for config panels.
-import { api } from "./api.js";
+import { api, apiPut, esc } from "./api.js";
 import { filterSelect, multiFilterSelect } from "./filter-select.js";
 
-// HTML-escape a value before interpolating it into innerHTML.
-// Use this whenever a Discord name (channel, role, category) goes into a template string.
-export function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// Module-local alias so the select builders below stay readable.
-const esc = escapeHtml;
+// Canonical escaping + write verbs live in api.js; re-exported here so the
+// 35 existing panel importers keep working unchanged.
+export { esc, esc as escapeHtml, apiPut, apiDelete } from "./api.js";
 
 let _configCache = null;
 let _channels = null;
@@ -204,35 +194,6 @@ export function multiIdList(ids, nameMap) {
 
 export async function saveSection(section, body) {
   return apiPut(`/api/config/${section}`, body);
-}
-
-// Patched api() that supports PUT with JSON body
-export async function apiPut(path, body) {
-  const res = await fetch(path, {
-    method: "PUT",
-    credentials: "same-origin",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try { const b = await res.json(); if (b.detail) detail = b.detail; } catch (_) {}
-    throw new Error(`${res.status}: ${detail}`);
-  }
-  return res.json();
-}
-
-export async function apiDelete(path) {
-  const res = await fetch(path, {
-    method: "DELETE",
-    credentials: "same-origin",
-  });
-  if (!res.ok) {
-    let detail = res.statusText;
-    try { const b = await res.json(); if (b.detail) detail = b.detail; } catch (_) {}
-    throw new Error(`${res.status}: ${detail}`);
-  }
-  return res.json();
 }
 
 export function showStatus(el, ok, msg) {

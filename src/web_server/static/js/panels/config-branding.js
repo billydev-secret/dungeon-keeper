@@ -1,3 +1,4 @@
+import { apiPost } from "../api.js";
 import { loadConfig, apiPut, showStatus, escapeHtml } from "../config-helpers.js";
 
 const DEFAULT_ACCENT = "#5865F2";
@@ -83,17 +84,7 @@ export function mount(container) {
       }
 
       try {
-        const res = await fetch("/api/config/bot-identity", {
-          method: "POST",
-          credentials: "same-origin",
-          body: fd,
-        });
-        if (!res.ok) {
-          let detail = res.statusText;
-          try { const b = await res.json(); if (b.detail) detail = b.detail; } catch (_) {}
-          throw new Error(`${res.status}: ${detail}`);
-        }
-        const data = await res.json();
+        const data = await apiPost("/api/config/bot-identity", fd);
         if (data.avatar_url) {
           avatarPreview.src = data.avatar_url;
           avatarPreview.style.display = "block";

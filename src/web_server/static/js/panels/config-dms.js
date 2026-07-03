@@ -1,3 +1,4 @@
+import { apiPost } from "../api.js";
 import { loadConfig, loadChannels, apiPut, showStatus, buildField } from "../config-helpers.js";
 
 function buildChannelInput(name, channels, selectedId) {
@@ -179,16 +180,7 @@ export function mount(container) {
       if (!channelId || channelId === "0") return;
       pbBtn.disabled = true;
       try {
-        const res = await fetch("/api/config/dms/post-panel", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ channel_id: channelId }),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || res.statusText);
-        }
+        await apiPost("/api/config/dms/post-panel", { channel_id: channelId });
         showStatus(pbStatus, true, "Panel posted");
         setTimeout(() => mount(container), 1500);
       } catch (err) {
