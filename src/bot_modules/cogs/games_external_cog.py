@@ -283,4 +283,9 @@ class GamesExternalCog(commands.Cog):
 async def setup(bot: "Bot"):
     cog = GamesExternalCog(bot)
     await bot.add_cog(cog)
+    # add_cog auto-registers the `track` group at the top level of the tree;
+    # pull it off so it only lives under /games (same pattern as the other
+    # games subgroup cogs). Leaving it top-level registers an empty /track
+    # group, which Discord rejects on sync.
+    bot.tree.remove_command("track")
     games.add_command(cog.track, override=True)
