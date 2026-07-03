@@ -12,7 +12,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 
@@ -61,7 +61,7 @@ from bot_modules.jail.logic import (
 )
 
 if TYPE_CHECKING:
-    from bot_modules.core.app_context import AppContext
+    from bot_modules.core.app_context import AppContext, Bot
 
 log = logging.getLogger("dungeonkeeper.jail_commands")
 
@@ -423,7 +423,7 @@ class TicketReopenButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         # Get ctx from bot
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
@@ -511,7 +511,7 @@ class TicketDeleteButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         member = interaction.user
         if not isinstance(member, discord.Member) or not _is_mod(member, ctx):
             await interaction.response.send_message(
@@ -812,7 +812,7 @@ async def _handle_policy_vote(
 ) -> None:
     """Shared handler for all three policy vote buttons."""
     bot = interaction.client
-    ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+    ctx: AppContext = cast("Bot", bot).ctx
     member = interaction.user
     guild = interaction.guild
     if not isinstance(member, discord.Member) or not guild:
@@ -999,7 +999,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):
@@ -1149,7 +1149,7 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         member = interaction.user
         guild = interaction.guild
         if not isinstance(member, discord.Member) or guild is None:
@@ -1636,7 +1636,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        ctx: AppContext = bot._mod_ctx  # type: ignore[attr-defined]
+        ctx: AppContext = cast("Bot", bot).ctx
         guild = interaction.guild
         user = interaction.user
         if guild is None or not isinstance(user, discord.Member):

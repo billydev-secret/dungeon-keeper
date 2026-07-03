@@ -117,7 +117,7 @@ def _wire_interaction(ctx, *, user_id: int = OWNER):
     inter.guild.id = GUILD
     inter.guild.name = "Guild"
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", ctx)
+    setattr(inter.client, "ctx", ctx)
     return inter
 
 
@@ -130,7 +130,7 @@ async def test_resolve_owned_channel_no_ctx_errors():
 
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     out = await _resolve_owned_channel(inter)
     assert out is None
     inter.response.send_message.assert_awaited_once()
@@ -1464,7 +1464,7 @@ async def test_apply_lock_no_ctx_short_circuits(voice_channel):
     row.last_edit_at_2 = 0.0
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_lock(inter, voice_channel, row, locked=True)
     voice_channel.set_permissions.assert_not_called()
 
@@ -1477,7 +1477,7 @@ async def test_apply_hide_no_ctx_short_circuits(voice_channel):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_hide(inter, voice_channel, row, hidden=True)
     voice_channel.set_permissions.assert_not_called()
 
@@ -1490,7 +1490,7 @@ async def test_apply_rename_no_ctx_short_circuits(voice_channel):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_rename(inter, voice_channel, row, new_name="x")
     voice_channel.edit.assert_not_called()
 
@@ -1503,7 +1503,7 @@ async def test_apply_limit_no_ctx_short_circuits(voice_channel):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_limit(inter, voice_channel, row, new_limit=5)
     voice_channel.edit.assert_not_called()
 
@@ -1516,7 +1516,7 @@ async def test_apply_invite_no_ctx_short_circuits(voice_channel, other_member):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_invite(inter, voice_channel, row, target=other_member, remember=False)
     voice_channel.set_permissions.assert_not_called()
 
@@ -1529,7 +1529,7 @@ async def test_apply_kick_no_ctx_short_circuits(voice_channel, other_member):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_kick(inter, voice_channel, row, target=other_member, remember=False)
     voice_channel.set_permissions.assert_not_called()
 
@@ -1542,7 +1542,7 @@ async def test_apply_reset_no_ctx_short_circuits(voice_channel):
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_reset(inter, voice_channel, row, also_profile=False)
     voice_channel.edit.assert_not_called()
 
@@ -1555,7 +1555,7 @@ async def test_apply_transfer_no_ctx_short_circuits(voice_channel, other_member)
     row.owner_id = OWNER
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     await _apply_transfer(inter, voice_channel, row, new_owner=other_member)
     voice_channel.set_permissions.assert_not_called()
 
@@ -1569,6 +1569,6 @@ async def test_gate_and_record_edit_no_ctx_returns_false():
     row.last_edit_at_2 = 0.0
     inter = fake_interaction()
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", None)
+    setattr(inter.client, "ctx", None)
     out = await _gate_and_record_edit(inter, row)
     assert out is False

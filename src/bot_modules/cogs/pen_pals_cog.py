@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 from discord import app_commands
@@ -670,7 +670,7 @@ class _PenPalsPanelJoinButton(
             await interaction.response.send_message("This only works in a server.", ephemeral=True)
             return
 
-        ctx = interaction.client._pen_pals_ctx  # type: ignore[attr-defined]
+        ctx = cast("Bot", interaction.client).ctx
         db_path = ctx.db_path
         guild = interaction.guild
         guild_id = guild.id
@@ -768,7 +768,7 @@ class _PenPalsPanelLeaveButton(
             await interaction.response.send_message("This only works in a server.", ephemeral=True)
             return
 
-        ctx = interaction.client._pen_pals_ctx  # type: ignore[attr-defined]
+        ctx = cast("Bot", interaction.client).ctx
         db_path = ctx.db_path
         guild_id = interaction.guild.id
         user_id = interaction.user.id
@@ -876,7 +876,6 @@ class PenPalsCog(commands.Cog):
 
         bot.add_dynamic_items(_PenPalsPanelJoinButton)
         bot.add_dynamic_items(_PenPalsPanelLeaveButton)
-        bot._pen_pals_ctx = self.ctx  # type: ignore[attr-defined]
 
         def _load_panels():
             with open_db(db_path) as conn:

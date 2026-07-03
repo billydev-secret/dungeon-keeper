@@ -92,7 +92,7 @@ def _wire_interaction(ctx, *, user_id: int = OWNER) -> MagicMock:
     inter.guild = MagicMock()
     inter.guild.id = GUILD
     inter.client = MagicMock()
-    setattr(inter.client, "_vm_ctx", ctx)
+    setattr(inter.client, "ctx", ctx)
     return inter
 
 

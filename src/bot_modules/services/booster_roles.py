@@ -9,11 +9,14 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import discord
 
 from bot_modules.core.db_utils import get_config_value, open_db
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 
@@ -197,7 +200,7 @@ class BoosterRoleDynamicButton(
             )
             return
 
-        ctx = interaction.client._booster_ctx  # type: ignore[attr-defined]
+        ctx = cast("Bot", interaction.client).ctx
         guild_id = guild.id
 
         def _do_roles():

@@ -92,7 +92,10 @@ log = logging.getLogger("dungeonkeeper.voice_master.commands")
 
 
 def _ctx_from_interaction(interaction: discord.Interaction) -> "AppContext | None":
-    return getattr(interaction.client, "_vm_ctx", None)
+    # DynamicItem callbacks only see ``interaction.client: discord.Client``;
+    # duck-typed getattr (rather than a cast) keeps the None fallback and
+    # lets tests inject fake clients.
+    return getattr(interaction.client, "ctx", None)
 
 
 async def _resolve_owned_channel(
@@ -1823,7 +1826,7 @@ class _ClaimButton(
         return cls(int(match["cid"]))
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        ctx = getattr(interaction.client, "_vm_ctx", None)
+        ctx = getattr(interaction.client, "ctx", None)
         if ctx is None:
             await _ephemeral(interaction, "Voice Master is unavailable right now.")
             return

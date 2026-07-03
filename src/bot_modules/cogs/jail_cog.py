@@ -286,9 +286,6 @@ class JailCog(commands.Cog):
         bot = self.bot
         ctx = self.ctx
 
-        # Store ctx on bot so persistent view callbacks can reach it
-        bot._mod_ctx = ctx  # type: ignore[attr-defined]
-
         # Register persistent dynamic items
         bot.add_dynamic_items(TicketPanelButton)
         bot.add_dynamic_items(TicketCloseButton)
