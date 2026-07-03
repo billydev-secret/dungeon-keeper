@@ -1,4 +1,4 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 
 // Force-directed network graph rendered on a <canvas>.
 // Mirrors /connection_web command options.
@@ -16,7 +16,6 @@ const COMMUNITY_COLORS = [
   "#c9a84c", "#8a6b7d", "#6b7a3a", "#7e3028", "#d4a84c", "#a89470",
 ];
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 function filterSelect(placeholder, options) {
   const wrap = document.createElement("div");

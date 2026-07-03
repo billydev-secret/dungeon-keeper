@@ -47,13 +47,11 @@ function filterSelect(placeholder, options) {
   wrap.appendChild(list);
   let selectedId = "";
 
-  function escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-
   function render(filter) {
     const lc = filter.toLowerCase();
     const matches = lc ? options.filter((o) => o.label.toLowerCase().includes(lc)) : options;
     list.innerHTML = `<div class="filter-select-item" data-id=""><em style="color:var(--ink-dim)">(all)</em></div>` +
-      (lc ? matches : matches.slice(0, 300)).map((o) => `<div class="filter-select-item" data-id="${escHtml(o.id)}">${escHtml(o.label)}</div>`).join("");
+      (lc ? matches : matches.slice(0, 300)).map((o) => `<div class="filter-select-item" data-id="${esc(o.id)}">${esc(o.label)}</div>`).join("");
   }
 
   input.addEventListener("focus", () => { render(input.value); list.style.display = "block"; });

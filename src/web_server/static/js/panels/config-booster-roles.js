@@ -1,14 +1,6 @@
-import { api, apiPost } from "../api.js";
+import { api, apiPost, esc } from "../api.js";
 import { loadConfig, loadRoles, loadChannels, channelSelect, roleSelect, apiPut, apiDelete, showStatus } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
-
-function _esc(str) {
-  return String(str ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config…</div></div>`;
@@ -224,17 +216,17 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
       swatchList.innerHTML = files
         .map((f) => {
           const chip = f.valid
-            ? `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:linear-gradient(135deg,#${_esc(f.hex1)},#${_esc(f.hex2)});flex:none;"></span>`
+            ? `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:linear-gradient(135deg,#${esc(f.hex1)},#${esc(f.hex2)});flex:none;"></span>`
             : `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--border,#333);background:repeating-linear-gradient(45deg,#555,#555 4px,#333 4px,#333 8px);flex:none;"></span>`;
           const meta = f.valid
-            ? `<span>${_esc(f.label)}</span>`
+            ? `<span>${esc(f.label)}</span>`
             : `<span style="color:var(--danger,#e55)">⚠ rename to ColorName_HEX1_HEX2.ext — won't sync</span>`;
           return `
             <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--border,#2a2a2a);">
               ${chip}
-              <span style="flex:none;font-family:monospace;opacity:.85;">${_esc(f.name)}</span>
+              <span style="flex:none;font-family:monospace;opacity:.85;">${esc(f.name)}</span>
               ${meta}
-              <button type="button" class="btn btn-danger" style="margin-left:auto;padding:2px 8px;" data-swatch-del="${_esc(f.name)}">Delete</button>
+              <button type="button" class="btn btn-danger" style="margin-left:auto;padding:2px 8px;" data-swatch-del="${esc(f.name)}">Delete</button>
             </div>`;
         })
         .join("");
@@ -242,7 +234,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     if (data.using_managed) {
       swatchActive.textContent = "";
     } else {
-      swatchActive.innerHTML = `<strong>Sync currently scans an external folder:</strong> <code>${_esc(data.active_dir)}</code>. Upload at least one validly named swatch to switch syncing to this server's uploaded set.`;
+      swatchActive.innerHTML = `<strong>Sync currently scans an external folder:</strong> <code>${esc(data.active_dir)}</code>. Upload at least one validly named swatch to switch syncing to this server's uploaded set.`;
     }
     // Delete handlers
     swatchList.querySelectorAll("[data-swatch-del]").forEach((btn) => {
@@ -265,7 +257,7 @@ function render(container, boosterRoles, panelChannelId, roles, channels) {
     try {
       renderSwatchList(await api("/api/config/booster-roles/swatches"));
     } catch (err) {
-      swatchList.innerHTML = `<div class="error">${_esc(err.message)}</div>`;
+      swatchList.innerHTML = `<div class="error">${esc(err.message)}</div>`;
     }
   }
 

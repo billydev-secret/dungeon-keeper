@@ -1,5 +1,4 @@
-import { api } from "../api.js";
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+import { api, esc } from "../api.js";
 
 const DIM_COLORS = ["#E6B84C", "#B88A2C", "#7F8F3A", "#B36A92", "#9E3B2E", "#949ba4"];
 

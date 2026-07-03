@@ -1,4 +1,6 @@
 // Shared helpers for tile renderers.
+import { esc } from "../api.js";
+export { esc };
 
 const BADGE_COLORS = {
   excellent: "var(--green)",
@@ -44,13 +46,6 @@ export function miniBarHTML(items, { maxVal, color = "var(--gold-solid)" } = {})
       <span class="health-mini-bar-val">${i.value}</span>
     </div>`;
   }).join("");
-}
-
-export function esc(s) {
-  if (!s) return "";
-  const d = document.createElement("div");
-  d.textContent = s;
-  return d.innerHTML;
 }
 
 export function fmtNum(n) {

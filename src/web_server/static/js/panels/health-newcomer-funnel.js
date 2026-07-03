@@ -1,6 +1,5 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
 export function mount(container) {
   container.innerHTML = '<div class="panel"><div class="panel-loading">Loading newcomer data...</div></div>';

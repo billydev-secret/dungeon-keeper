@@ -1,13 +1,5 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { loadConfig, loadChannels, loadRoles, channelSelect, roleSelectMulti, apiPut, showStatus } from "../config-helpers.js";
-
-function _esc(str) {
-  return String(str ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading config...</div></div>`;
@@ -28,7 +20,7 @@ export function mount(container) {
         <form class="form" data-form>
           <div class="field">
             <label>Timezone Offset (hours from UTC)</label>
-            <input type="number" step="0.5" name="tz_offset_hours" value="${_esc(g.tz_offset_hours)}" />
+            <input type="number" step="0.5" name="tz_offset_hours" value="${esc(g.tz_offset_hours)}" />
             <div class="field-hint">e.g. -5 for EST, 1 for CET</div>
           </div>
           <div class="field">
@@ -42,12 +34,12 @@ export function mount(container) {
           </div>
           <div class="field">
             <label>Recorded Bot User IDs</label>
-            <input type="text" name="recorded_bot_user_ids" value="${_esc((g.recorded_bot_user_ids || []).join(", "))}" />
+            <input type="text" name="recorded_bot_user_ids" value="${esc((g.recorded_bot_user_ids || []).join(", "))}" />
             <div class="field-hint">Bot accounts whose messages should be stored (e.g. Risky Roller). Comma-separated user IDs. These bots still don't earn XP or trigger wellness/moderation.</div>
           </div>
           <div class="field">
             <label>Booster Swatch Directory</label>
-            <input type="text" name="booster_swatch_dir" value="${_esc(g.booster_swatch_dir || "")}" />
+            <input type="text" name="booster_swatch_dir" value="${esc(g.booster_swatch_dir || "")}" />
             <div class="field-hint">Folder with booster color swatch images</div>
           </div>
           <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>

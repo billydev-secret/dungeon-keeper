@@ -1,7 +1,6 @@
-import { api } from "../api.js";
+import { api, esc } from "../api.js";
 import { WIDGET_MAP, DEFAULT_HOME, DEFAULT_MOD, DEFAULT_ADMIN } from "../widget-registry.js";
 import { renderGrid, showWidgetPicker } from "../widget-grid.js";
-import { esc } from "../tiles/tile-helpers.js";
 
 const STORAGE_VERSION = 3;
 
