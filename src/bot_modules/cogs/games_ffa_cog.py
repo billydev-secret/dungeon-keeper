@@ -124,9 +124,10 @@ def build_ffa_embed(
 
 # ---------------------------------------------------------------------------
 # Embed mode (── /games play ffa ──)
-# Standard embed with anonymous replies posted back into the channel, a live
-# reply-count footer, and a host Close button. Stateful: the view is bound to
-# the embed message and re-registered on restart via recover_game.
+# Standard embed with anonymous replies posted back into the channel and a
+# live reply-count footer. Stateful: the view is bound to the embed message
+# and re-registered on restart via recover_game. Games auto-close after 24h
+# (see the cleanup sweep in __main__) or via /games config game-end.
 # ---------------------------------------------------------------------------
 
 class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
@@ -241,8 +242,9 @@ class FFAEmbedView(discord.ui.View):
     """Stateful persistent view bound to a single FFA embed message.
 
     Carries the anonymous-reply buttons (identity keyed by the embed message
-    id), a host/mod Close button, and the state needed to keep the reply-count
-    footer in sync. Re-registered after a restart by :meth:`FFACog.recover_game`.
+    id) and the state needed to keep the reply-count footer in sync. Games are
+    closed by the 24h cleanup sweep or /games config game-end, not a button.
+    Re-registered after a restart by :meth:`FFACog.recover_game`.
     """
 
     def __init__(self, game_id: str, host_id: int, text: str, label: str,
