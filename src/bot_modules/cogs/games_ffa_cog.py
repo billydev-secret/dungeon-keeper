@@ -364,7 +364,7 @@ class FFACog(commands.Cog):
         tags: str = "",
         prompt: str | None = None,
     ):
-        await self.start_ffa(interaction, kind, tags, prompt, threaded=False)
+        await self.start_ffa(interaction, kind, tags, prompt, banner=False)
 
     @app_commands.command(
         name="ffa_banner",
