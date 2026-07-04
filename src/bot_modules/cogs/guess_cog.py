@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse, urlunparse
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
@@ -484,8 +486,7 @@ class GuessSelectView(discord.ui.View):
             self.add_item(clear_btn)
 
     def _disable_all(self) -> None:
-        for item in self.children:
-            item.disabled = True  # type: ignore[union-attr]
+        disable_all_items(self)
 
     async def _on_prev(self, interaction: discord.Interaction) -> None:
         self._page = max(0, self._page - 1)

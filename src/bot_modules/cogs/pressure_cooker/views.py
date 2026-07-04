@@ -6,6 +6,8 @@ from typing import Awaitable, Callable
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 log = logging.getLogger("dungeonkeeper.pressure")
 
 
@@ -41,9 +43,7 @@ class GameView(discord.ui.View):
         await self._on_pump(interaction, self.game_id)
 
     def disable(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(self)
 
     async def on_error(
         self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item

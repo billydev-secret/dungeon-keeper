@@ -5,6 +5,8 @@ from typing import Callable
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 
 class FireView(discord.ui.View):
     def __init__(self, game_id: int, on_fire: Callable) -> None:
@@ -22,6 +24,4 @@ class FireView(discord.ui.View):
         self.add_item(btn)
 
     def disable(self) -> None:
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
+        disable_all_items(self)

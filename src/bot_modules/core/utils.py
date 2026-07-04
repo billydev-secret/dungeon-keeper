@@ -9,6 +9,14 @@ import discord
 GuildTextLike: TypeAlias = discord.TextChannel | discord.Thread
 
 
+def disable_all_items(view: discord.ui.View) -> None:
+    """Disable every button and select on ``view`` — used to retire a
+    message's controls when the interaction it drove is finished."""
+    for item in view.children:
+        if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+            item.disabled = True
+
+
 def get_interaction_member(interaction: discord.Interaction) -> discord.Member | None:
     """Get the member from an interaction, resolving from guild if needed."""
     user = interaction.user

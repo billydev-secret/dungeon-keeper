@@ -8,6 +8,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 
@@ -207,9 +209,7 @@ class ClapbackJoinView(discord.ui.View):
         assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
 
         self.stop()
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
         # Players are pinged per-round when each round's prompt is posted
@@ -391,9 +391,7 @@ class ClapbackRoundSummaryView(discord.ui.View):
             await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
             return
         self.stop()
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
         self._advanced.set()
 
@@ -423,9 +421,7 @@ class ClapbackRecapView(discord.ui.View):
             await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
             return
         self.stop()
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
         await self.cog._start_new_game(
             channel=interaction.channel,
@@ -444,9 +440,7 @@ class ClapbackRecapView(discord.ui.View):
         channel = interaction.channel
         assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
         self.stop()
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
         shuffled = shuffled_replay_config(self.config)
@@ -846,9 +840,7 @@ class ClapbackCog(commands.Cog):
 
         # Disable submit view
         view.stop()
-        for item in view.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(view)
         try:
             p = await get_game_payload(self.db, game_id)
             count = len(p.get("answers", {}))
@@ -970,9 +962,7 @@ class ClapbackCog(commands.Cog):
         )
 
         # Edit message with reveal (buttons disabled)
-        for item in view.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(view)
         try:
             await msg.edit(embed=reveal, view=view)
         except discord.HTTPException:
@@ -1014,9 +1004,7 @@ class ClapbackCog(commands.Cog):
             return False
 
         view.stop()
-        for item in view.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(view)
         try:
             await msg.edit(view=view)
         except discord.HTTPException:

@@ -6,6 +6,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -165,9 +167,7 @@ class SubmitRoundView(discord.ui.View):
             return
         self._closed = True
         self.stop()
-        for item in self.children:
-            assert isinstance(item, discord.ui.Button)  # view only holds buttons
-            item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(content=f"✅ Submissions closed for Round {self.round_num}!", view=self)
 
 
@@ -241,7 +241,6 @@ class FantasiesVoteView(discord.ui.View):
         )
         msg = f"✅ Voted **Same**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
-        assert interaction.message  # component interactions always carry their message
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="❌ Not for me", style=discord.ButtonStyle.danger, custom_id="fan_nope", row=0)
@@ -260,7 +259,6 @@ class FantasiesVoteView(discord.ui.View):
         )
         msg = f"✅ Voted **Not for me**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
-        assert interaction.message  # component interactions always carry their message
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="fan_next", row=1)
@@ -408,9 +406,7 @@ class FantasiesCog(commands.Cog):
                     payload.setdefault("results", []).append(_entry)
                 await modify_payload(self.db, game_id, _save_result)
 
-                for item in view.children:
-                    assert isinstance(item, discord.ui.Button)  # view only holds buttons
-                    item.disabled = True
+                disable_all_items(view)
                 try:
                     await message.edit(embed=view._build_embed(closed=True), view=view)
                 except discord.HTTPException:

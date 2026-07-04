@@ -6,6 +6,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -134,9 +136,7 @@ class TTLSubmitView(discord.ui.View):
             return
 
         self.stop()
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
         # Ping all submitters
@@ -259,7 +259,6 @@ class TTLGuessView(discord.ui.View):
         guild = interaction.guild
         member = guild.get_member(self.subject_id) if guild else None
         subject_name = member.display_name if member else str(self.subject_id)
-        assert interaction.message is not None
         await self._updater.schedule_update(
             interaction.message, lambda: self._build_embed(subject_name)
         )
@@ -427,9 +426,7 @@ class TTLCog(commands.Cog):
                 await modify_payload(self.db, game_id, _flush_scores)
 
                 reveal_embed = view._build_reveal_embed(_sub_name, correct, fooled, guild)
-                for item in view.children:
-                    if isinstance(item, discord.ui.Button):
-                        item.disabled = True
+                disable_all_items(view)
                 try:
                     await message.edit(embed=view._build_embed(_sub_name, closed=True), view=view)
                 except discord.HTTPException:

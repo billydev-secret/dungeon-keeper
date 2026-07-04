@@ -5,6 +5,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
@@ -212,9 +214,7 @@ class TraditionalHostView(discord.ui.View):
         embed = build_recap_embed(payload, colour=colour)
 
         self.stop()
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(self)
 
         if game_msg:
             try:

@@ -6,6 +6,8 @@ from typing import Awaitable, Callable
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 log = logging.getLogger("dungeonkeeper.chicken")
 
 
@@ -29,9 +31,7 @@ class ChickenView(discord.ui.View):
         self.add_item(btn)
 
     def disable(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(self)
 
     async def _press_cb(self, interaction: discord.Interaction) -> None:
         await self._on_press(interaction, self.game_id)

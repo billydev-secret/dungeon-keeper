@@ -11,6 +11,8 @@ from typing import Awaitable, Callable
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 log = logging.getLogger("dungeonkeeper.duels")
 
 _Handler = Callable[[discord.Interaction, int], Awaitable[None]]
@@ -67,9 +69,7 @@ class LobbyView(discord.ui.View):
         self.add_item(cancel_btn)
 
     def disable(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(self)
 
     async def _join_cb(self, interaction: discord.Interaction) -> None:
         await self._on_join(interaction, self.game_id)

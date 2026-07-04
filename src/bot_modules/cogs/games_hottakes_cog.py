@@ -6,6 +6,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -136,9 +138,7 @@ class HotTakesSubmitView(discord.ui.View):
         await update_game_payload(self.db, self.game_id, payload)
 
         self.stop()
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
         channel = interaction.channel
@@ -254,7 +254,6 @@ class HotTakeVoteView(discord.ui.View):
         changed = prev is not None and prev != idx
         msg = f"✅ Voted **{label}**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
-        assert interaction.message is not None
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="📝 Submit Take", style=discord.ButtonStyle.secondary, custom_id="ht_v_submit", row=1)
@@ -418,9 +417,7 @@ class HotTakesCog(commands.Cog):
                 await modify_payload(self.db, game_id, _save_result)
 
                 final_embed = view._build_embed(closed=True)
-                for item in view.children:
-                    if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                        item.disabled = True
+                disable_all_items(view)
                 try:
                     await message.edit(embed=final_embed, view=view)
                 except discord.HTTPException:

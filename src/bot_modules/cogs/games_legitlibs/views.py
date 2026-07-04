@@ -3,6 +3,8 @@ import logging
 import uuid
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from bot_modules.games.constants import HOW_TO_PLAY, GAME_ICONS
 from bot_modules.games.utils.game_manager import channel_name
 
@@ -29,9 +31,7 @@ class _CancelConfirmView(discord.ui.View):
     @discord.ui.button(label="Yes, cancel round", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(self)
         try:
             await interaction.response.edit_message(content="🛑 Cancelling…", view=self)
         except discord.HTTPException:

@@ -5,6 +5,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -118,9 +120,7 @@ class MFKView(discord.ui.View):
         embed = build_assignments_embed(player_assignments, labels=self.labels, colour=colour)
 
         self.stop()
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(self)
 
         await interaction.edit_original_response(view=self)
 

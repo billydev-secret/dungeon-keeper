@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 
@@ -478,9 +480,7 @@ class PriceRecapView(discord.ui.View):
             await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
             return
         # Disable buttons on old recap
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         assert interaction.message  # component interactions always carry their message
         try:
             await interaction.message.edit(view=self)
@@ -511,9 +511,7 @@ class PriceRecapView(discord.ui.View):
             "Type the **/price** command to start a new game as the new host!",
             ephemeral=True,
         )
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         assert interaction.message  # component interactions always carry their message
         try:
             await interaction.message.edit(view=self)
@@ -888,9 +886,7 @@ class PriceCog(commands.Cog):
 
         # Disable submission view
         game_view._closed = True
-        for item in game_view.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(game_view)
         try:
             await msg.edit(view=game_view)
         except discord.HTTPException:
@@ -990,9 +986,7 @@ class PriceCog(commands.Cog):
 
         # Disable vote view
         vote_view._closed = True
-        for item in vote_view.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(vote_view)
         try:
             await vote_msg.edit(view=vote_view)
         except discord.HTTPException:

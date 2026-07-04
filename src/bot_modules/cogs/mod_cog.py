@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
@@ -341,8 +343,7 @@ class CogPager(discord.ui.View):
         await interaction.response.edit_message(embed=self.current_embed(), view=self)
 
     async def on_timeout(self) -> None:
-        for item in self.children:
-            item.disabled = True  # type: ignore[union-attr]
+        disable_all_items(self)
 
 
 class HelpSelect(discord.ui.Select):

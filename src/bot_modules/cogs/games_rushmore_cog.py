@@ -21,6 +21,8 @@ if TYPE_CHECKING:
     from bot_modules.games.utils.timer import GameTimer  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 
@@ -300,9 +302,7 @@ class RushmoreJoinView(discord.ui.View):
 
         self.topic = topic
         # Disable join view
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         assert self._msg
         try:
             await self._msg.edit(view=self)
@@ -468,9 +468,7 @@ class RushmoreRecapView(discord.ui.View):
         if not self.is_host_or_mod(interaction):
             await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
             return
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         assert interaction.message
         try:
             await interaction.message.edit(view=self)
@@ -501,9 +499,7 @@ class RushmoreRecapView(discord.ui.View):
             "Type the **/rushmore** command to start a new game as the new host!",
             ephemeral=True,
         )
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         assert interaction.message
         try:
             await interaction.message.edit(view=self)
@@ -818,9 +814,7 @@ class RushmoreCog(commands.Cog):
 
         # Draft complete — disable draft view
         draft_view._closed = True
-        for item in draft_view.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(draft_view)
         try:
             await draft_view._msg.edit(view=draft_view)
         except discord.HTTPException:
@@ -893,9 +887,7 @@ class RushmoreCog(commands.Cog):
             return
 
         # Disable vote view
-        for item in vote_view.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(vote_view)
         try:
             await vote_msg.edit(view=vote_view)
         except discord.HTTPException:

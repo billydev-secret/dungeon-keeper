@@ -8,6 +8,8 @@ from typing import Any
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 log = logging.getLogger(__name__)
 
 
@@ -63,9 +65,7 @@ class ConfirmCloseView(discord.ui.View):
     @discord.ui.button(label="Yes, end game", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(content="🛑 Closing game…", view=self)
         await self._callback(interaction)
 

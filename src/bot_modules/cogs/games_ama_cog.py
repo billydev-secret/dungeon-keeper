@@ -7,6 +7,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -737,8 +739,7 @@ class AMAView(discord.ui.View):
         embed = build_recap_embed(self.mode, stats, colour=colour)
 
         self.stop()
-        for item in self.children:
-            item.disabled = True  # type: ignore[union-attr]
+        disable_all_items(self)
 
         if self._game_msg:
             try:
@@ -935,8 +936,7 @@ class AMACog(commands.Cog):
         if bottom_view:
             try:
                 bottom_view.stop()
-                for item in bottom_view.children:
-                    item.disabled = True  # type: ignore[union-attr]
+                disable_all_items(bottom_view)
             except Exception:
                 log.exception("ama: failed to stop bottom view during cleanup")
 

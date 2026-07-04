@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 from bot_modules.games.utils.game_manager import (
     create_game, update_game_message, update_game_state,
     modify_payload, get_game_payload, end_game, update_session,
@@ -122,9 +124,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 return
             await action_interaction.response.defer()
             join_view.stop()
-            for item in join_view.children:
-                if isinstance(item, discord.ui.Button):
-                    item.disabled = True
+            disable_all_items(join_view)
             assert action_interaction.message is not None
             try:
                 await action_interaction.message.edit(view=join_view)
@@ -137,9 +137,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
         await end_game(db, game_id)
         cog._game_canceled.discard(game_id)
         join_view.stop()
-        for item in join_view.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(join_view)
         cog.bot.active_views.pop(game_id, None)
         try:
             await action_interaction.response.edit_message(
@@ -218,9 +216,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
 
         # Disable fill view
         fill_view.stop()
-        for item in fill_view.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
+        disable_all_items(fill_view)
         try:
             await fill_msg.edit(view=fill_view)
         except discord.HTTPException:
@@ -264,8 +260,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
         view = cog.bot.active_views.pop(game_id, None)
         if view:
             view.stop()
-            for item in view.children:
-                item.disabled = True
+            disable_all_items(view)
         try:
             await cancel_interaction.response.edit_message(
                 embed=discord.Embed(title="📝 LegitLibs — Cancelled", color=0x99AAB5),

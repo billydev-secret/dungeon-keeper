@@ -6,6 +6,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -201,9 +203,7 @@ class StoryJoinView(discord.ui.View):
             return
 
         self.stop()
-        for item in self.children:
-            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                item.disabled = True
+        disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
         # Ping joined players
@@ -408,9 +408,7 @@ class StoryCog(commands.Cog):
                 turn_view._skipped = True
 
             # Disable turn buttons
-            for item in turn_view.children:
-                if isinstance(item, (discord.ui.Button, discord.ui.Select)):
-                    item.disabled = True
+            disable_all_items(turn_view)
             try:
                 await turn_msg.edit(view=turn_view)
             except discord.HTTPException:

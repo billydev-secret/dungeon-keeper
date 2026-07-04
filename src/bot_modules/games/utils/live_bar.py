@@ -42,11 +42,14 @@ class LiveBarUpdater:
         self._min_interval = min_interval
         self._lock = asyncio.Lock()
 
-    async def schedule_update(self, message: discord.Message, build_embed_fn):
+    async def schedule_update(self, message: discord.Message | None, build_embed_fn):
         """
         Call build_embed_fn() to get the new embed and edit the message.
-        Rate-limited to once per min_interval seconds.
+        Rate-limited to once per min_interval seconds. Accepts None (no-op)
+        so callers can pass interaction.message without narrowing.
         """
+        if message is None:
+            return
         async with self._lock:
             now = time.monotonic()
             gap = now - self._last_update

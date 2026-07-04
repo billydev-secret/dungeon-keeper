@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 from bot_modules.rules_watch import service
 from bot_modules.rules_watch.scorer import PriorityResult, Signals, TargetResult
 
@@ -145,9 +147,7 @@ async def _disable_view(
     """Grey out all buttons after labeling."""
     if msg is None:
         return
-    for item in view.children:
-        if isinstance(item, discord.ui.Button):
-            item.disabled = True
+    disable_all_items(view)
     try:
         await msg.edit(view=view)
     except discord.HTTPException:

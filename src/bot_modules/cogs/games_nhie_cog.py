@@ -5,6 +5,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY
@@ -144,7 +146,6 @@ class NHIERoundView(discord.ui.View):
         )
         msg = f"✅ Voted **😈 Guilty**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
-        assert interaction.message  # component interactions always carry their message
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="😇 Innocent", style=discord.ButtonStyle.success, custom_id="nhie_innocent", row=0)
@@ -162,7 +163,6 @@ class NHIERoundView(discord.ui.View):
         )
         msg = f"✅ Voted **😇 Innocent**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
-        assert interaction.message  # component interactions always carry their message
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="✍️ Pose Statement", style=discord.ButtonStyle.primary, custom_id="nhie_pose", row=1)
@@ -395,9 +395,7 @@ class NHIECog(commands.Cog):
             view._closed = True
 
             final_embed = view._build_embed(closed=True)
-            for item in view.children:
-                assert isinstance(item, discord.ui.Button)  # view only holds buttons
-                item.disabled = True
+            disable_all_items(view)
             try:
                 await message.edit(embed=final_embed, view=view)
             except discord.HTTPException:

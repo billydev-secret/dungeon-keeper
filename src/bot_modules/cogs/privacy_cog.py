@@ -7,6 +7,8 @@ import logging
 from typing import TYPE_CHECKING
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord import app_commands
 from discord.ext import commands
 
@@ -45,8 +47,7 @@ class _ConfirmDeleteView(discord.ui.View):
             await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
             return
         self.confirmed = True
-        for item in self.children:
-            item.disabled = True  # type: ignore[attr-defined]
+        disable_all_items(self)
         await interaction.response.edit_message(
             content="Deleting your data — this may take a moment…", view=self
         )

@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 import discord
 
+from bot_modules.core.utils import disable_all_items
+
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
@@ -1960,9 +1962,7 @@ class _KnockResponseView(discord.ui.View):
                 ),
             ),
         )
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
+        disable_all_items(self)
         try:
             await interaction.response.edit_message(
                 content=f"✅ Accepted by {interaction.user.mention}",
@@ -1975,9 +1975,7 @@ class _KnockResponseView(discord.ui.View):
     async def deny(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        for child in self.children:
-            if isinstance(child, discord.ui.Button):
-                child.disabled = True
+        disable_all_items(self)
         try:
             await interaction.response.edit_message(
                 content=f"❌ Denied by {interaction.user.mention}",

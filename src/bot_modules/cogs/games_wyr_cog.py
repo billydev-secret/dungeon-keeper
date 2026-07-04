@@ -5,6 +5,8 @@ if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
 
 import discord
+
+from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.command_groups import play
@@ -148,7 +150,6 @@ class WYRRoundView(discord.ui.View):
         changed = toggle_vote(self.votes_a, self.votes_b, interaction.user.id, "a")
         msg = f"✅ Voted **🅰️ Option A**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
-        assert interaction.message  # component interactions always carry their message
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="🅱️ Option B", style=discord.ButtonStyle.primary, custom_id="wyr_b", row=0)
@@ -160,7 +161,6 @@ class WYRRoundView(discord.ui.View):
         changed = toggle_vote(self.votes_a, self.votes_b, interaction.user.id, "b")
         msg = f"✅ Voted **🅱️ Option B**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
-        assert interaction.message  # component interactions always carry their message
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="✍️ Pose Question", style=discord.ButtonStyle.primary, custom_id="wyr_pose", row=1)
@@ -395,9 +395,7 @@ class WYRCog(commands.Cog):
             view._closed = True
 
             final_embed = view._build_embed(closed=True)
-            for item in view.children:
-                assert isinstance(item, discord.ui.Button)  # view only holds buttons
-                item.disabled = True
+            disable_all_items(view)
             try:
                 await message.edit(embed=final_embed, view=view)
             except discord.HTTPException:
