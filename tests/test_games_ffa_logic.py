@@ -120,3 +120,22 @@ def test_get_ffa_prompt_empty_bank_falls_back_to_code():
     db = _FakeDB([])
     label, text = _run(get_ffa_prompt(db, kind="truth"))
     assert label == TRUTH and isinstance(text, str) and text
+
+
+# ── exclude (the Next button's seen-set) ──────────────────────────────────────
+
+def test_get_ffa_prompt_exclude_skips_seen():
+    db = _FakeDB([
+        ("ffa", ["truth"], "First truth."),
+        ("ffa", ["truth"], "Second truth."),
+    ])
+    # With one shown, only the other can come back.
+    seen = {_run(get_ffa_prompt(db, kind="truth", exclude=["First truth."]))[1] for _ in range(30)}
+    assert seen == {"Second truth."}
+
+
+def test_get_ffa_prompt_exclude_exhausted_returns_none():
+    """When every match is excluded the set is exhausted → None (no code fallback,
+    even unfiltered), signalling the caller to reset the seen-set."""
+    db = _FakeDB([("ffa", ["truth"], "Only truth.")])
+    assert _run(get_ffa_prompt(db, kind="truth", exclude=["Only truth."])) is None

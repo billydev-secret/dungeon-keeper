@@ -15,6 +15,7 @@ from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     create_game,
     get_active_game_by_id,
+    get_game_payload,
     modify_payload,
     update_game_message,
     update_session,
@@ -248,7 +249,8 @@ class FFAEmbedView(discord.ui.View):
     """
 
     def __init__(self, game_id: str, host_id: int, text: str, label: str,
-                 colour: discord.Colour, db, bot):
+                 colour: discord.Colour, db, bot, kind: str = "random",
+                 tags: list[str] | None = None):
         super().__init__(timeout=None)
         self.game_id = game_id
         self.host_id = host_id
@@ -257,6 +259,11 @@ class FFAEmbedView(discord.ui.View):
         self.colour = colour
         self.db = db
         self.bot = bot
+        # Immutable launch filter — replayed by the Next button to re-roll from
+        # the same selected set. Mutable per-game progress (the shown-prompt
+        # "seen" set, reply_count) lives in the payload, not on the view.
+        self.kind = kind
+        self.tags = list(tags or [])
         self._game_msg: discord.Message | None = None
 
     async def _guard_active(self, interaction: discord.Interaction) -> bool:
@@ -268,8 +275,16 @@ class FFAEmbedView(discord.ui.View):
             return False
         return True
 
+    def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id == self.host_id:
+            return True
+        if interaction.guild and isinstance(interaction.user, discord.Member):
+            perms = interaction.user.guild_permissions
+            return perms.administrator or perms.manage_guild
+        return False
+
     @discord.ui.button(
-        label="Reply Anonymously",
+        label="Reply",
         emoji="🎭",
         style=discord.ButtonStyle.secondary,
         custom_id="ffa_embed_reply_anon",
@@ -281,7 +296,7 @@ class FFAEmbedView(discord.ui.View):
         await interaction.response.send_modal(FFAEmbedReplyModal(self, ephemeral_identity=False))
 
     @discord.ui.button(
-        label="Reply as Someone New",
+        label="New Alias",
         emoji="🎲",
         style=discord.ButtonStyle.secondary,
         custom_id="ffa_embed_reply_super",
@@ -293,7 +308,68 @@ class FFAEmbedView(discord.ui.View):
         await interaction.response.send_modal(FFAEmbedReplyModal(self, ephemeral_identity=True))
 
     @discord.ui.button(
-        label="What's this?",
+        label="Next",
+        emoji="⏭️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="ffa_embed_next",
+        row=0,
+    )
+    async def next_prompt(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log.info("%s pressed Next in #%s", interaction.user.display_name, channel_name(interaction.channel))
+        if not self._is_host_or_mod(interaction):
+            await interaction.response.send_message(
+                "Only the host or a mod can pull the next prompt.", ephemeral=True
+            )
+            return
+        if not await self._guard_active(interaction):
+            return
+        await interaction.response.defer()
+
+        allow_nsfw = channel_allows_nsfw(self._game_msg.channel if self._game_msg else interaction.channel)
+        payload = await get_game_payload(self.db, self.game_id)
+        # Games posted before the Next button existed have no "seen" key — seed
+        # it with the current prompt so the first advance can't repeat it.
+        seen = list(payload.get("seen") or [self.text])
+
+        picked = await get_ffa_prompt(
+            self.db, kind=self.kind, tags=self.tags or None,
+            allow_nsfw=allow_nsfw, exclude=seen,
+        )
+        if picked is None:
+            # Selected set exhausted — reset and re-roll, skipping only the
+            # current prompt so the reset boundary doesn't immediately repeat.
+            seen = [self.text]
+            picked = await get_ffa_prompt(
+                self.db, kind=self.kind, tags=self.tags or None,
+                allow_nsfw=allow_nsfw, exclude=seen,
+            )
+        if picked is None:  # single-prompt set — nothing else to show
+            await interaction.followup.send(
+                "That's the only prompt in this set — nothing new to pull.", ephemeral=True
+            )
+            return
+
+        label, text = picked
+        self.label = label
+        self.text = text
+        self.colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
+
+        def _advance(p):
+            p["prompt"] = text
+            p["label"] = label
+            p["reply_count"] = 0
+            p["seen"] = [*seen, text]
+
+        await modify_payload(self.db, self.game_id, _advance)
+        try:
+            if self._game_msg:
+                embed = build_ffa_embed(self.text, self.label, colour=self.colour, reply_count=0)
+                await self._game_msg.edit(embed=embed, view=self)
+        except Exception:
+            log.debug("ffa: failed to advance prompt embed", exc_info=True)
+
+    @discord.ui.button(
+        label="Info",
         emoji="❓",
         style=discord.ButtonStyle.secondary,
         custom_id="ffa_embed_help",
@@ -450,10 +526,11 @@ class FFACog(commands.Cog):
                 "tags": tags,
                 "mode": "embed",
                 "reply_count": 0,
+                "seen": [text],
             },
         )
         embed = build_ffa_embed(text, label, colour=colour, reply_count=0)
-        view = FFAEmbedView(game_id, host_id, text, label, colour, self.db, self.bot)
+        view = FFAEmbedView(game_id, host_id, text, label, colour, self.db, self.bot, kind=kind, tags=tags)
         self.bot.active_views[game_id] = view
 
         try:
@@ -550,7 +627,10 @@ class FFACog(commands.Cog):
         label = payload.get("label") or "TRUTH"
         text = payload.get("prompt", "") or ""
         colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
-        view = FFAEmbedView(game_id, int(row["host_id"]), text, label, colour, self.db, self.bot)
+        view = FFAEmbedView(
+            game_id, int(row["host_id"]), text, label, colour, self.db, self.bot,
+            kind=payload.get("kind") or "random", tags=list(payload.get("tags") or []),
+        )
         view._game_msg = message
         self.bot.active_views[game_id] = view
         self.bot.add_view(view, message_id=message.id)

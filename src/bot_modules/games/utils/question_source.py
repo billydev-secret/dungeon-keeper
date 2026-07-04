@@ -252,13 +252,18 @@ async def has_matching_questions(
 
 
 async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None,
-                         allow_nsfw: bool = False):
+                         allow_nsfw: bool = False, exclude: list[str] | None = None):
     """Return (label, text) for an FFA Truth-or-Dare card, or None on a filtered miss.
 
     'truth'/'dare'/'nsfw' are reserved tags. *kind* ('truth'|'dare'|'random') is a
     required dimension; the host's remaining (free) tags are ANY-match. NSFW cards
     are included by default (*allow_nsfw*); pass ``allow_nsfw=False`` for a clean
     game. Falls back to the code prompt bank only when no tag filter was supplied.
+
+    *exclude* holds prompt texts already shown this game (the "Next" button's
+    seen-set); matching bank rows are dropped so a game walks its selected set
+    without repeats. When every match is excluded the set is exhausted and this
+    returns None — the caller resets the seen-set and re-rolls.
     """
     from bot_modules.games_ffa.prompts import pick_prompt, TRUTH, DARE
 
@@ -270,6 +275,7 @@ async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None
     opted_nsfw = allow_nsfw  # channel age-restriction is authoritative
     free = requested - {"truth", "dare", "nsfw"}    # host's non-reserved filter terms
     want = {"truth"} if kind == "truth" else {"dare"} if kind == "dare" else set()
+    seen = set(exclude or ())
 
     candidates: list[tuple[str, str]] = []
     for text, tags_json in rows:
@@ -280,10 +286,12 @@ async def get_ffa_prompt(db, kind: str = "random", tags: list[str] | None = None
             continue
         if free and not (free & row_tags):           # host free tags (ANY-match)
             continue
+        if text in seen:                             # already shown this game
+            continue
         candidates.append((DARE if "dare" in row_tags else TRUTH, text))
 
     if candidates:
         return random.choice(candidates)
-    if requested:                                    # host set a tag filter → refuse
+    if requested or seen:            # tag filter OR exhausted seen-set → refuse (no code fallback)
         return None
     return pick_prompt(kind, False)                  # unfiltered empty → code fallback
