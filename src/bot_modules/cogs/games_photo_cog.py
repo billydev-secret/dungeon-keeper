@@ -30,7 +30,7 @@ CARD_FILENAME = "photo.png"
 LABEL = "PHOTO CHALLENGE"
 
 
-async def _resolve_card_image(guild: discord.Guild, bot, host_id: int) -> bytes | None:
+async def _resolve_card_image(guild: discord.Guild | None, bot, host_id: int) -> bytes | None:
     """Bytes for the card background — the server avatar, host avatar fallback.
 
     The card *is* the deliverable, so this tries hard to return something:

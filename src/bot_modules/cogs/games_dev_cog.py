@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
+    from bot_modules.cogs.games_clapback_cog import ClapbackCog
 
 import discord
 from discord import app_commands
@@ -117,7 +118,10 @@ class GamesDevCog(commands.Cog):
                     start_at=config.get("start_epoch"),
                     colour=colour,
                 )
-                msg = await interaction.channel.fetch_message(row["message_id"])
+                channel = interaction.channel
+                # A channel hosting an active game is always sendable.
+                assert isinstance(channel, discord.abc.Messageable)
+                msg = await channel.fetch_message(row["message_id"])
                 await msg.edit(embed=embed)
             except Exception as e:
                 log.warning("dev fill: embed update failed: %s", e)
@@ -179,9 +183,11 @@ class GamesDevCog(commands.Cog):
 
         # Wake up the submit phase loop so it sees all answers
         for cog in self.bot.cogs.values():
-            if hasattr(cog, "_submit_events") and game_id in cog._submit_events:
-                cog._submit_events[game_id].set()
-                break
+            if hasattr(cog, "_submit_events"):
+                events = cast("ClapbackCog", cog)._submit_events
+                if game_id in events:
+                    events[game_id].set()
+                    break
 
         await interaction.response.send_message(
             f"Submitted fake answers for {filled} fake player(s).",

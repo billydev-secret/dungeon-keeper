@@ -135,18 +135,23 @@ class TTLSubmitView(discord.ui.View):
 
         self.stop()
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
         await interaction.response.edit_message(view=self)
 
         # Ping all submitters
         if interaction.guild:
             mentions = [
-                interaction.guild.get_member(int(uid)).mention
+                member.mention
                 for uid in submissions
-                if interaction.guild.get_member(int(uid))
+                if (member := interaction.guild.get_member(int(uid)))
             ]
             if mentions:
-                await interaction.channel.send(
+                channel = interaction.channel
+                assert channel is not None and not isinstance(
+                    channel, (discord.ForumChannel, discord.CategoryChannel)
+                )
+                await channel.send(
                     f"🎮 **Two Truths and a Lie is starting!** {' '.join(mentions)} — get ready!",
                     delete_after=15,
                 )
@@ -254,6 +259,7 @@ class TTLGuessView(discord.ui.View):
         guild = interaction.guild
         member = guild.get_member(self.subject_id) if guild else None
         subject_name = member.display_name if member else str(self.subject_id)
+        assert interaction.message is not None
         await self._updater.schedule_update(
             interaction.message, lambda: self._build_embed(subject_name)
         )
@@ -404,11 +410,11 @@ class TTLCog(commands.Cog):
 
             async def advance(
                 message: discord.Message,
-                _sub_id=subject_id,
-                _sub_name=subject_name,
-                _lie=lie_index,
-                _round=round_num,
-            ):
+                _sub_id: int = subject_id,
+                _sub_name: str = subject_name,
+                _lie: int = lie_index,
+                _round: int = round_num,
+            ) -> None:
                 if view._closed:
                     return
                 view._closed = True
@@ -422,7 +428,8 @@ class TTLCog(commands.Cog):
 
                 reveal_embed = view._build_reveal_embed(_sub_name, correct, fooled, guild)
                 for item in view.children:
-                    item.disabled = True
+                    if isinstance(item, discord.ui.Button):
+                        item.disabled = True
                 try:
                     await message.edit(embed=view._build_embed(_sub_name, closed=True), view=view)
                 except discord.HTTPException:
@@ -441,7 +448,10 @@ class TTLCog(commands.Cog):
                 db=self.db,
                 bot=self.bot,
                 host_name=host_name,
-                advance_callback=advance,
+                # pyright's flow analysis reports a circular inference here
+                # (advance captures `view`, whose initializer takes `advance`);
+                # the closure itself is fully annotated above.
+                advance_callback=advance,  # pyright: ignore[reportGeneralTypeIssues]
                 prompt=payload.get("prompt"),
             )
             view._advanced_event = advanced

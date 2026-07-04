@@ -1,7 +1,7 @@
 import asyncio
 import io
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
@@ -19,7 +19,6 @@ from bot_modules.games.utils.game_manager import (
     update_game_message,
     update_session,
     end_game,
-    ConfirmCloseView,
     channel_name,
 )
 from bot_modules.games.command_groups import play
@@ -71,7 +70,7 @@ REPLY_HELP = (
 )
 
 
-async def _resolve_card_image(guild: discord.Guild, bot, host_id: int) -> bytes | None:
+async def _resolve_card_image(guild: discord.Guild | None, bot, host_id: int) -> bytes | None:
     """Bytes for the card background — the server avatar, host avatar fallback.
 
     The card *is* the deliverable, so this tries hard to return something:
@@ -145,7 +144,11 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
 
     async def on_submit(self, interaction: discord.Interaction):
         view = self.game_view
-        if interaction.guild is None or interaction.channel is None:
+        if (
+            interaction.guild is None
+            or interaction.channel is None
+            or isinstance(interaction.channel, (discord.ForumChannel, discord.CategoryChannel))
+        ):
             await interaction.response.send_message(
                 "These reply buttons only work inside a server channel.", ephemeral=True
             )
@@ -166,7 +169,8 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             await interaction.followup.send("This game has already been closed.", ephemeral=True)
             return
 
-        db_path = interaction.client.ctx.db_path
+        bot = cast("Bot", interaction.client)
+        db_path = bot.ctx.db_path
         guild_id = interaction.guild.id
         # Identity keyed by the EMBED MESSAGE id: stable per-user for
         # "anonymous", fresh each time for "super anonymous".
@@ -187,6 +191,7 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         # Post as a Discord reply to the prompt embed so it's clear which prompt
         # this answers (multiple FFAs can share a channel). fail_if_not_exists
         # keeps a deleted embed from erroring the reply.
+        assert interaction.channel_id is not None
         try:
             await interaction.channel.send(
                 body,
@@ -222,7 +227,7 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         # Audit log records the real user behind the pseudonym.
         try:
             await send_audit_log(
-                interaction.client, interaction.client.games_db, interaction.guild,
+                bot, bot.games_db, interaction.guild,
                 game_type="ffa", user=interaction.user,
                 content=content, label="FFA Anonymous Reply",
             )
@@ -290,48 +295,10 @@ class FFAEmbedView(discord.ui.View):
         emoji="❓",
         style=discord.ButtonStyle.secondary,
         custom_id="ffa_embed_help",
-        row=1,
+        row=0,
     )
     async def reply_help(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(REPLY_HELP, ephemeral=True)
-
-    @discord.ui.button(
-        label="Close Game",
-        emoji="🛑",
-        style=discord.ButtonStyle.danger,
-        custom_id="ffa_embed_close",
-        row=1,
-    )
-    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed Close Game in #%s", interaction.user.display_name, getattr(interaction.channel, "name", "?"))
-        if interaction.user.id != self.host_id:
-            perms = interaction.user.guild_permissions if interaction.guild and isinstance(interaction.user, discord.Member) else None
-            if not (perms and (perms.administrator or perms.manage_guild)):
-                await interaction.response.send_message(
-                    "Only the host or a mod can close this game.", ephemeral=True
-                )
-                return
-        game_msg = self._game_msg
-
-        async def _confirmed(confirm_interaction: discord.Interaction):
-            await end_game(self.db, self.game_id)
-            self.stop()
-            for item in self.children:
-                item.disabled = True
-            self.bot.active_views.pop(self.game_id, None)
-            try:
-                if game_msg:
-                    embed = game_msg.embeds[0] if game_msg.embeds else None
-                    if embed:
-                        embed.title = f"{GAME_ICONS['ffa']} {self.label} — CLOSED"
-                    await game_msg.edit(embed=embed, view=self)
-            except Exception:
-                log.debug("ffa: failed to mark embed closed", exc_info=True)
-
-        view = ConfirmCloseView(_confirmed)
-        await interaction.response.send_message(
-            "⚠️ Are you sure you want to end this game?", view=view, ephemeral=True
-        )
 
 
 class FFACog(commands.Cog):

@@ -104,6 +104,7 @@ class HotTakesSubmitView(discord.ui.View):
         self.db = db
         self.bot = bot
         self.cog = cog
+        self._message: discord.Message | None = None
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
@@ -136,19 +137,23 @@ class HotTakesSubmitView(discord.ui.View):
 
         self.stop()
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
         await interaction.response.edit_message(view=self)
+
+        channel = interaction.channel
+        assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
 
         # Ping submitters
         if interaction.guild:
             submitter_ids = {t["user_id"] for t in takes}
             mentions = [
-                interaction.guild.get_member(uid).mention
+                member.mention
                 for uid in submitter_ids
-                if interaction.guild.get_member(uid)
+                if (member := interaction.guild.get_member(uid))
             ]
             if mentions:
-                await interaction.channel.send(
+                await channel.send(
                     f"🔥 **Hot Takes voting is starting!** {' '.join(mentions)} — get ready to vote!",
                     delete_after=15,
                 )
@@ -159,11 +164,11 @@ class HotTakesSubmitView(discord.ui.View):
                 game_id=self.game_id,
                 host_id=self.host_id,
                 host_name=interaction.user.display_name,
-                channel=interaction.channel,
+                channel=channel,
             )
         except Exception as e:
             log.error("Failed to start voting for game %s: %s", self.game_id, e, exc_info=True)
-            await interaction.channel.send("❌ Something went wrong starting the vote. Game ended.")
+            await channel.send("❌ Something went wrong starting the vote. Game ended.")
             await end_game(self.db, self.game_id)
             self.bot.active_views.pop(self.game_id, None)
 
@@ -249,6 +254,7 @@ class HotTakeVoteView(discord.ui.View):
         changed = prev is not None and prev != idx
         msg = f"✅ Voted **{label}**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
+        assert interaction.message is not None
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="📝 Submit Take", style=discord.ButtonStyle.secondary, custom_id="ht_v_submit", row=1)
@@ -369,6 +375,7 @@ class HotTakesCog(commands.Cog):
             results = []
             processed = 0
 
+        view: HotTakeVoteView | None = None
         while True:
             payload = await get_game_payload(self.db, game_id)
             if game_id not in self.bot.active_views:
@@ -386,7 +393,8 @@ class HotTakesCog(commands.Cog):
 
             advanced = asyncio.Event()
 
-            async def advance(message: discord.Message, _take=take_text, _num=take_num, _taker_id=take_data["user_id"]):
+            async def advance(message: discord.Message, _take=take_text, _num=take_num, _taker_id=take_data["user_id"]) -> None:
+                assert view is not None
                 if view._closed:
                     return
                 view._closed = True
@@ -411,7 +419,8 @@ class HotTakesCog(commands.Cog):
 
                 final_embed = view._build_embed(closed=True)
                 for item in view.children:
-                    item.disabled = True
+                    if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                        item.disabled = True
                 try:
                     await message.edit(embed=final_embed, view=view)
                 except discord.HTTPException:
@@ -450,6 +459,7 @@ class HotTakesCog(commands.Cog):
         payload = await get_game_payload(self.db, game_id)
 
         if processed > 0:
+            assert view is not None
             await view._post_recap(channel, payload)
         await end_game(
             self.db, game_id,

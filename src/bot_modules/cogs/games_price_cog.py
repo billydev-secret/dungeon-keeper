@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
@@ -191,7 +191,7 @@ class AddRoundsModal(discord.ui.Modal, title="Add Rounds"):
 
         # Update view if tracked
         view = self._cog.bot.active_views.get(self._game_id)
-        if view and hasattr(view, "total_rounds"):
+        if isinstance(view, (PriceGameView, PriceVoteView)):
             view.total_rounds += n
 
         await interaction.response.send_message(
@@ -212,7 +212,7 @@ class ReasonableSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        view: PriceVoteView = self.view
+        view = cast("PriceVoteView", self.view)
         uid = interaction.user.id
         target = int(self.values[0])
         if uid == target:
@@ -240,7 +240,7 @@ class UnhingedSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        view: PriceVoteView = self.view
+        view = cast("PriceVoteView", self.view)
         uid = interaction.user.id
         target = int(self.values[0])
         if uid == target:
@@ -479,7 +479,9 @@ class PriceRecapView(discord.ui.View):
             return
         # Disable buttons on old recap
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
+        assert interaction.message  # component interactions always carry their message
         try:
             await interaction.message.edit(view=self)
         except discord.HTTPException:
@@ -510,7 +512,9 @@ class PriceRecapView(discord.ui.View):
             ephemeral=True,
         )
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
+        assert interaction.message  # component interactions always carry their message
         try:
             await interaction.message.edit(view=self)
         except discord.HTTPException:
@@ -885,7 +889,8 @@ class PriceCog(commands.Cog):
         # Disable submission view
         game_view._closed = True
         for item in game_view.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
         try:
             await msg.edit(view=game_view)
         except discord.HTTPException:
@@ -986,7 +991,8 @@ class PriceCog(commands.Cog):
         # Disable vote view
         vote_view._closed = True
         for item in vote_view.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
         try:
             await vote_msg.edit(view=vote_view)
         except discord.HTTPException:

@@ -163,6 +163,7 @@ class StoryJoinView(discord.ui.View):
 
         players = payload.get("players", [])
         names = resolve_names(interaction.guild, players)
+        assert interaction.message  # component interactions always carry their message
         embed = interaction.message.embeds[0]
         embed.set_field_at(0, name=f"Writers ({len(players)})", value=", ".join(names) or "—", inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -181,6 +182,7 @@ class StoryJoinView(discord.ui.View):
 
         players = payload.get("players", [])
         names = resolve_names(interaction.guild, players)
+        assert interaction.message  # component interactions always carry their message
         embed = interaction.message.embeds[0]
         embed.set_field_at(0, name=f"Writers ({len(players)})", value=", ".join(names) or "—", inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
@@ -200,17 +202,19 @@ class StoryJoinView(discord.ui.View):
 
         self.stop()
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
         await interaction.response.edit_message(view=self)
 
         # Ping joined players
         if interaction.guild:
             mentions = [
-                interaction.guild.get_member(uid).mention
+                member.mention
                 for uid in players
-                if interaction.guild.get_member(uid)
+                if (member := interaction.guild.get_member(uid))
             ]
             if mentions:
+                assert isinstance(interaction.channel, discord.abc.Messageable)  # games run in text channels
                 await interaction.channel.send(
                     f"📖 **Story Builder is starting!** {' '.join(mentions)} — get ready to write!",
                     delete_after=15,
@@ -405,7 +409,8 @@ class StoryCog(commands.Cog):
 
             # Disable turn buttons
             for item in turn_view.children:
-                item.disabled = True
+                if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                    item.disabled = True
             try:
                 await turn_msg.edit(view=turn_view)
             except discord.HTTPException:
@@ -427,6 +432,7 @@ class StoryCog(commands.Cog):
 
             consecutive_skips = 0  # reset on successful submission
             new_sentence = turn_view._submitted_text
+            assert new_sentence is not None  # not skipped ⇒ a sentence was submitted
             append_sentence(payload, current_player_id, new_sentence)
             sentences = payload["sentences"]
             await update_game_payload(self.db, game_id, payload)

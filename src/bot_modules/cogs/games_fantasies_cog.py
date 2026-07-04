@@ -166,6 +166,7 @@ class SubmitRoundView(discord.ui.View):
         self._closed = True
         self.stop()
         for item in self.children:
+            assert isinstance(item, discord.ui.Button)  # view only holds buttons
             item.disabled = True
         await interaction.response.edit_message(content=f"✅ Submissions closed for Round {self.round_num}!", view=self)
 
@@ -240,6 +241,7 @@ class FantasiesVoteView(discord.ui.View):
         )
         msg = f"✅ Voted **Same**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
+        assert interaction.message  # component interactions always carry their message
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="❌ Not for me", style=discord.ButtonStyle.danger, custom_id="fan_nope", row=0)
@@ -258,6 +260,7 @@ class FantasiesVoteView(discord.ui.View):
         )
         msg = f"✅ Voted **Not for me**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
+        assert interaction.message  # component interactions always carry their message
         await self._updater.schedule_update(interaction.message, self._build_embed)
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="fan_next", row=1)
@@ -386,7 +389,7 @@ class FantasiesCog(commands.Cog):
             entry_num = i + 1
             advanced = asyncio.Event()
 
-            async def advance(message: discord.Message, _text=entry_text, _num=entry_num, _author=entry_data["user_id"], _cat=entry_category):
+            async def advance(message: discord.Message, _text=entry_text, _num=entry_num, _author=entry_data["user_id"], _cat=entry_category) -> None:
                 if view._closed:
                     return
                 view._closed = True
@@ -406,6 +409,7 @@ class FantasiesCog(commands.Cog):
                 await modify_payload(self.db, game_id, _save_result)
 
                 for item in view.children:
+                    assert isinstance(item, discord.ui.Button)  # view only holds buttons
                     item.disabled = True
                 try:
                     await message.edit(embed=view._build_embed(closed=True), view=view)

@@ -125,18 +125,21 @@ class MLTJoinView(discord.ui.View):
 
         self.stop()
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
         await interaction.response.edit_message(view=self)
 
         # Ping joined players
         if interaction.guild:
             mentions = [
-                interaction.guild.get_member(uid).mention
+                member.mention
                 for uid in players
-                if interaction.guild.get_member(uid)
+                if (member := interaction.guild.get_member(uid)) is not None
             ]
             if mentions:
-                await interaction.channel.send(
+                channel = interaction.channel
+                assert isinstance(channel, discord.abc.Messageable)
+                await channel.send(
                     f"👑 **Most Likely To is starting!** {' '.join(mentions)} — get ready!",
                     delete_after=15,
                 )
@@ -249,7 +252,8 @@ class MLTVoteView(discord.ui.View):
         if not is_eligible_voter(interaction.user.id, self.players):
             await interaction.response.send_message("You're not in the player pool.", ephemeral=True)
             return
-        target_id = int(interaction.data["values"][0])
+        values = (interaction.data or {}).get("values") or []
+        target_id = int(values[0])
         changed = apply_vote(self.votes, interaction.user.id, target_id)
 
         # Persist live votes so a crash mid-round doesn't lose them.
@@ -287,6 +291,7 @@ class MLTVoteView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
+        assert interaction.message
         await interaction.response.send_modal(PoseMLTModal(self, interaction.message))
 
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="mlt_next", row=1)
@@ -510,7 +515,8 @@ class MLTCog(commands.Cog):
 
             results_embed = view._build_results_embed(tally)
             for item in view.children:
-                item.disabled = True
+                if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                    item.disabled = True
             try:
                 await message.edit(embed=view._build_embed(closed=True), view=view)
             except discord.HTTPException:

@@ -88,6 +88,7 @@ class TraditionalHostView(discord.ui.View):
         self.host_id = host_id
         self.db = db
         self.bot = bot
+        self._message: discord.Message | None = None
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
@@ -212,13 +213,15 @@ class TraditionalHostView(discord.ui.View):
 
         self.stop()
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
 
         if game_msg:
             try:
                 await game_msg.edit(view=self)
             except discord.HTTPException:
                 pass
+            assert channel is not None
             await channel.send(embed=embed)
         else:
             await interaction.response.edit_message(view=self)

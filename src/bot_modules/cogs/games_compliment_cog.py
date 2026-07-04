@@ -117,7 +117,8 @@ class ComplimentView(discord.ui.View):
 
         self.stop()
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
 
         await interaction.edit_original_response(view=self)
         if unique_mentions:

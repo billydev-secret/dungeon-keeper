@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
+    from bot_modules.games.utils.timer import GameTimer  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -171,7 +172,8 @@ class RushmoreVoteSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        view: RushmoreVoteView = self.view
+        view = self.view
+        assert isinstance(view, RushmoreVoteView)
         uid = interaction.user.id
         target = int(self.values[0])
         if target == uid:
@@ -299,7 +301,9 @@ class RushmoreJoinView(discord.ui.View):
         self.topic = topic
         # Disable join view
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
+        assert self._msg
         try:
             await self._msg.edit(view=self)
         except discord.HTTPException:
@@ -422,7 +426,7 @@ class RushmoreVoteView(discord.ui.View):
         self.bot = bot
         self.votes: dict[int, int] = {}
         self._msg: discord.Message | None = None
-        self._timer_obj = None
+        self._timer_obj: "GameTimer | None" = None
         self._done_event: asyncio.Event | None = None
 
         options = []
@@ -465,7 +469,9 @@ class RushmoreRecapView(discord.ui.View):
             await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
             return
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
+        assert interaction.message
         try:
             await interaction.message.edit(view=self)
         except discord.HTTPException:
@@ -496,7 +502,9 @@ class RushmoreRecapView(discord.ui.View):
             ephemeral=True,
         )
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
+        assert interaction.message
         try:
             await interaction.message.edit(view=self)
         except discord.HTTPException:
@@ -721,6 +729,7 @@ class RushmoreCog(commands.Cog):
 
     async def _run_draft_loop(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
         timer_secs = settings.get("timer", 30)
+        assert draft_view._msg  # set by _start_draft before this loop runs
 
         while draft_view.current_pick_index < len(draft_view.draft_order):
             if draft_view._closed:
@@ -749,7 +758,8 @@ class RushmoreCog(commands.Cog):
                 pass
 
             # Wait for pick or timeout
-            draft_view._pick_event = asyncio.Event()
+            pick_event = asyncio.Event()
+            draft_view._pick_event = pick_event
             draft_view._pick_start = _time.time()
 
             # Schedule nudge
@@ -757,7 +767,7 @@ class RushmoreCog(commands.Cog):
             if timer_secs > 15:
                 async def _nudge():
                     await asyncio.sleep(timer_secs - 10)
-                    if not draft_view._pick_event.is_set() and not draft_view._closed:
+                    if not pick_event.is_set() and not draft_view._closed:
                         try:
                             m = member.mention if member else player_name
                             await channel.send(f"{m} ⏰ 10 seconds left to pick!", delete_after=10)
@@ -809,7 +819,8 @@ class RushmoreCog(commands.Cog):
         # Draft complete — disable draft view
         draft_view._closed = True
         for item in draft_view.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
         try:
             await draft_view._msg.edit(view=draft_view)
         except discord.HTTPException:
@@ -883,7 +894,8 @@ class RushmoreCog(commands.Cog):
 
         # Disable vote view
         for item in vote_view.children:
-            item.disabled = True
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
         try:
             await vote_msg.edit(view=vote_view)
         except discord.HTTPException:

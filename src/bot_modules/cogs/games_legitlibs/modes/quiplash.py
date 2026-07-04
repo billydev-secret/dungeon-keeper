@@ -100,6 +100,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 host_name, template["title"], tier, "quiplash",
                 len(payload["players"]), template["player_min"],
             )
+            assert action_interaction.message is not None
             try:
                 await action_interaction.message.edit(embed=new_embed)
             except discord.HTTPException:
@@ -122,20 +123,23 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             await action_interaction.response.defer()
             join_view.stop()
             for item in join_view.children:
-                item.disabled = True
+                if isinstance(item, discord.ui.Button):
+                    item.disabled = True
+            assert action_interaction.message is not None
             try:
                 await action_interaction.message.edit(view=join_view)
             except discord.HTTPException:
                 pass
             await _run_fill_phase(action_interaction, payload)
 
-    async def handle_cancel(action_interaction: discord.Interaction):
+    async def handle_cancel(action_interaction: discord.Interaction) -> None:
         cog._game_canceled.add(game_id)
         await end_game(db, game_id)
         cog._game_canceled.discard(game_id)
         join_view.stop()
         for item in join_view.children:
-            item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
         cog.bot.active_views.pop(game_id, None)
         try:
             await action_interaction.response.edit_message(
@@ -215,7 +219,8 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
         # Disable fill view
         fill_view.stop()
         for item in fill_view.children:
-            item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
         try:
             await fill_msg.edit(view=fill_view)
         except discord.HTTPException:

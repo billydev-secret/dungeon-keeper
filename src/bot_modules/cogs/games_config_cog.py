@@ -1,8 +1,9 @@
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
+    from bot_modules.cogs.games_ama_cog import AMACog  # noqa: F401
 
 import discord
 from discord.ext import commands
@@ -52,7 +53,7 @@ class GamesConfigCog(commands.Cog):
         if row["game_type"] == "ama":
             ama_cog = self.bot.get_cog("AMACog")
             if ama_cog and hasattr(ama_cog, "cleanup_ended_game"):
-                await ama_cog.cleanup_ended_game(
+                await cast("AMACog", ama_cog).cleanup_ended_game(
                     row["channel_id"], game_id, channel=channel,
                 )
         await force_end_active_game(self.bot, self.db, game_id)
@@ -85,6 +86,8 @@ class GamesConfigCog(commands.Cog):
             return
 
         channel = interaction.channel
+        # Slash commands with an active game always run in a sendable channel.
+        assert isinstance(channel, discord.abc.Messageable)
 
         async def _confirmed(confirm_interaction):
             await self._teardown_active_game(row, channel)
@@ -157,6 +160,7 @@ class GamesConfigCog(commands.Cog):
                 )
             return
 
+        assert isinstance(target, discord.Member)  # game channels are guild channels
         ok, message = await handler(interaction.channel, row["game_id"], target)
         # Announce successes in-channel so the room sees the roster change;
         # keep failures (already in/not in) private to the caller.

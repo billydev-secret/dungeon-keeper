@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
@@ -118,7 +118,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             )
 
         if self.mode == "unfiltered":
-            colour = await resolve_accent_color(interaction.client.ctx.db_path, interaction.guild) if interaction.guild else None
+            colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
             embed = build_question_embed(self.question.value, colour=colour)
             hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
             question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, q_idx, interaction.user.id, self.ama_view, self.question.value)
@@ -149,10 +149,11 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             )
             dm_sent = False
             try:
-                host_member = interaction.guild.get_member(self.host_id) if interaction.guild else None
-                if host_member:
-                    hot_seat_name = (interaction.guild.get_member(self.hot_seat_id).display_name
-                                     if interaction.guild.get_member(self.hot_seat_id) else "the hot seat")
+                guild = interaction.guild
+                host_member = guild.get_member(self.host_id) if guild else None
+                if host_member and guild:
+                    hot_seat_member = guild.get_member(self.hot_seat_id)
+                    hot_seat_name = hot_seat_member.display_name if hot_seat_member else "the hot seat"
                     await host_member.send(
                         f"📨 New screened question for **{hot_seat_name}** (in {self.channel.mention}):",
                         view=approve_view,
@@ -195,7 +196,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted reply modal in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
-        colour = await resolve_accent_color(interaction.client.ctx.db_path, interaction.guild) if interaction.guild else None
+        colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
         answered_embed = build_answered_embed(
             self.question_text,
             self.reply.value,
@@ -207,8 +208,9 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
         # DM the anonymous asker so they know their question was answered
         try:
             asker = interaction.guild.get_member(self.asker_id) if interaction.guild else None
-            if asker:
-                dm_embed = build_asker_dm_embed(interaction.channel.mention, colour=colour)
+            channel = interaction.channel
+            if asker and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
+                dm_embed = build_asker_dm_embed(channel.mention, colour=colour)
                 await asker.send(embed=dm_embed)
         except discord.Forbidden:
             pass  # DMs disabled
@@ -217,6 +219,7 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
 
         # Mark question as answered in payload — does NOT increment game tallies
         payload = await get_game_payload(self.db, self.game_id)
+        assert interaction.message
         mark_question_answered(
             payload,
             self.question_idx,
@@ -250,7 +253,7 @@ class ScreenedQuestionView(discord.ui.View):
         if interaction.user.id != self.ama_view.host_id:
             await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
             return
-        colour = await resolve_accent_color(interaction.client.ctx.db_path, interaction.guild) if interaction.guild else None
+        colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
         embed = build_question_embed(self.question_text, colour=colour)
         hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
         question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, self.question_idx, self.asker_id, self.ama_view, self.question_text)
@@ -318,6 +321,7 @@ class QuestionView(discord.ui.View):
         if interaction.user.id != self.hot_seat_id:
             await interaction.response.send_message("Only the hot seat player can pass.", ephemeral=True)
             return
+        assert interaction.message
         embed = interaction.message.embeds[0] if interaction.message.embeds else None
         if embed:
             embed.set_footer(text="⏩ Passed")
@@ -346,6 +350,7 @@ class AMAView(discord.ui.View):
         self.bot = bot
         self.hot_seat_id: int | None = None
         self._game_msg: discord.Message | None = None
+        self._bottom_msg: discord.Message | None = None
         self._hot_seat_name: str | None = None
         self.queue: list[int] = []          # user IDs waiting for hot seat
         self.questions_this_turn: int = 0   # answered questions for current hot seat
@@ -551,7 +556,7 @@ class AMAView(discord.ui.View):
 
     async def _update_bottom_bar(self):
         """Update bottom bar text with current hot seat and queue info."""
-        if not getattr(self, '_bottom_msg', None):
+        if not self._bottom_msg:
             return
         label = bottom_bar_label(self._hot_seat_name, len(self.queue))
         try:
@@ -632,6 +637,7 @@ class AMAView(discord.ui.View):
 
         # No one in hot seat — go straight in
         if self.hot_seat_id is None:
+            assert isinstance(interaction.user, discord.Member)
             await interaction.response.defer()
             await self._set_hot_seat(interaction.user, interaction.channel, announce=True)
             return
@@ -732,7 +738,7 @@ class AMAView(discord.ui.View):
 
         self.stop()
         for item in self.children:
-            item.disabled = True
+            item.disabled = True  # type: ignore[union-attr]
 
         if self._game_msg:
             try:
@@ -842,6 +848,7 @@ class AMABottomView(discord.ui.View):
             return
 
         if self.ama_view.hot_seat_id is None:
+            assert isinstance(interaction.user, discord.Member)
             await interaction.response.defer()
             await self.ama_view._set_hot_seat(interaction.user, interaction.channel, announce=True)
             return
@@ -892,7 +899,7 @@ class AMACog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    def cog_unload(self):
+    async def cog_unload(self) -> None:
         if self._question_maintenance_task and not self._question_maintenance_task.done():
             self._question_maintenance_task.cancel()
         for task in self._resend_tasks.values():
@@ -913,8 +920,10 @@ class AMACog(commands.Cog):
         if channel is None:
             channel = await self._resolve_channel(channel_id)
 
-        ama_view = self.bot.active_views.get(game_id)
-        bottom_view = self.bot.active_views.get(f"{game_id}_bottom")
+        ama_view_raw = self.bot.active_views.get(game_id)
+        ama_view = ama_view_raw if isinstance(ama_view_raw, AMAView) else None
+        bottom_view_raw = self.bot.active_views.get(f"{game_id}_bottom")
+        bottom_view = bottom_view_raw if isinstance(bottom_view_raw, AMABottomView) else None
         deleted = False
 
         if ama_view:
@@ -927,18 +936,18 @@ class AMACog(commands.Cog):
             try:
                 bottom_view.stop()
                 for item in bottom_view.children:
-                    item.disabled = True
+                    item.disabled = True  # type: ignore[union-attr]
             except Exception:
                 log.exception("ama: failed to stop bottom view during cleanup")
 
-        if channel and ama_view and getattr(ama_view, "_bottom_msg", None):
+        if channel and ama_view and ama_view._bottom_msg:
             try:
                 await ama_view._bottom_msg.delete()
                 deleted = True
             except discord.HTTPException:
                 pass
 
-        if channel and (not deleted) and bottom_view and getattr(bottom_view, "message_id", None):
+        if channel and (not deleted) and bottom_view and bottom_view.message_id and isinstance(channel, discord.abc.Messageable):
             try:
                 msg = await channel.fetch_message(int(bottom_view.message_id))
                 await msg.delete()
@@ -1134,7 +1143,7 @@ class AMACog(commands.Cog):
             await self.cleanup_ended_game(message.channel.id, game_id, channel=message.channel)
             return
         ama_view = self.bot.active_views.get(game_id)
-        if not ama_view or not getattr(ama_view, '_bottom_msg', None):
+        if not isinstance(ama_view, AMAView) or not ama_view._bottom_msg:
             self._active_channels.pop(message.channel.id, None)
             return
         # Skip while the AMA system is posting its own messages (rotation, etc.)

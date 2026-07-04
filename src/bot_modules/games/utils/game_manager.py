@@ -64,7 +64,8 @@ class ConfirmCloseView(discord.ui.View):
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         self.stop()
         for item in self.children:
-            item.disabled = True
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
         await interaction.response.edit_message(content="🛑 Closing game…", view=self)
         await self._callback(interaction)
 
@@ -123,9 +124,9 @@ async def create_game(
     channel_id: int,
     host_id: int,
     game_type: str,
-    message_id: int = None,
+    message_id: int | None = None,
     state: str = "open",
-    payload: dict = None,
+    payload: dict | None = None,
 ) -> str:
     game_id = str(uuid.uuid4())
     payload_json = json.dumps(payload or {})
@@ -197,7 +198,7 @@ async def end_game(
     game_id: str,
     player_count: int = 0,
     round_count: int = 0,
-    payload: dict = None,
+    payload: dict | None = None,
 ):
     """Write game to history and remove from games_active_games."""
     row = await db.fetchone(

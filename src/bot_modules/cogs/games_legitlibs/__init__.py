@@ -51,8 +51,8 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         interaction: discord.Interaction,
         mode: str = "classic",
         tier: int = 2,
-        template_id: str = None,
-        tag: str = None,
+        template_id: str | None = None,
+        tag: str | None = None,
     ):
         log.info("%s used /games play legitlibs in #%s", interaction.user.display_name, channel_name(interaction.channel))
 

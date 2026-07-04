@@ -91,9 +91,10 @@ class FillModal(discord.ui.Modal):
         errors = []
         for blank in self._blanks:
             child = discord.utils.get(self.children, custom_id=blank["id"])
-            if child is None:
+            if not isinstance(child, discord.ui.TextInput):
                 continue
             val = strip_mass_mentions(child.value)
+            assert child.max_length is not None  # _make_text_input always sets it
             err = validate_fill(val, child.max_length)
             if err:
                 errors.append(f"Blank '{blank['id']}': {err}")
@@ -140,9 +141,10 @@ class FillModalPage(discord.ui.Modal):
         errors = []
         for blank in self._page_blanks:
             child = discord.utils.get(self.children, custom_id=blank["id"])
-            if child is None:
+            if not isinstance(child, discord.ui.TextInput):
                 continue
             val = strip_mass_mentions(child.value)
+            assert child.max_length is not None  # _make_text_input always sets it
             err = validate_fill(val, child.max_length)
             if err:
                 errors.append(f"Blank '{blank['id']}': {err}")
