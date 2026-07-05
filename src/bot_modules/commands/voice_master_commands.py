@@ -449,12 +449,15 @@ async def _apply_lock(
     # them online by granting per-member Connect on lock, and tidy those grants
     # away on unlock.
     await _sync_lock_member_overwrites(ctx, channel, row, locked=locked)
-    # Advertise the new state on the channel's status line. This rides a
-    # separate endpoint from the name edit, so it isn't subject to the
-    # 2-per-10-minutes name rate limit and can toggle freely. Cosmetic: a
-    # failed status edit must not undo the lock above.
+    # Advertise the new state on the channel's status line, and mirror it onto
+    # the age-restricted flag — locked rooms are private spaces, so they get
+    # Discord's age gate too (cleared again on unlock). Status rides a separate
+    # endpoint from the name edit, so it isn't subject to the 2-per-10-minutes
+    # name rate limit and can toggle freely. Best-effort: a failed edit must
+    # not undo the lock above.
     try:
         await channel.edit(
+            nsfw=locked,
             status=lock_status_text(locked=locked),
             reason=f"Voice Master: {'lock' if locked else 'unlock'} status marker",
         )
@@ -673,6 +676,7 @@ async def _apply_spectator(
     gate_role = _resolve_gate_role(channel, cfg.spectator_gate_role_id)
     gated = spectator and gate_role is not None
     everyone = channel.guild.default_role
+    lock_cleared = False
 
     if not spectator:
         await _teardown_spectator_overwrites(ctx, channel, row, gate_role=gate_role)
@@ -690,6 +694,7 @@ async def _apply_spectator(
             except (discord.Forbidden, discord.HTTPException):
                 pass
             await _sync_lock_member_overwrites(ctx, channel, row, locked=False)
+            lock_cleared = True
 
         # Apply the audience deny.
         everyone_ow = channel.overwrites_for(everyone)
@@ -756,6 +761,9 @@ async def _apply_spectator(
     # Status line (cosmetic — a failure must not undo the overwrites).
     try:
         await channel.edit(
+            # A cleared lock takes its age gate with it; otherwise leave the
+            # flag alone (the owner may have set it themselves).
+            nsfw=False if lock_cleared else discord.utils.MISSING,
             status=access_status_text(mode="spectate" if spectator else "open"),
             reason="Voice Master: spectator status marker",
         )

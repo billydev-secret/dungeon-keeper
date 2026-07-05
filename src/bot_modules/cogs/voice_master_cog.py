@@ -757,6 +757,10 @@ class VoiceMasterCog(commands.Cog):
                 create_kwargs["user_limit"] = limit
             if bitrate > 0:
                 create_kwargs["bitrate"] = bitrate
+            # Locked rooms carry Discord's age gate (mirrors _apply_lock).
+            # Spectate wins over a stale saved lock, same as the status below.
+            if profile.locked and not profile.spectator:
+                create_kwargs["nsfw"] = True
 
             try:
                 channel = await guild.create_voice_channel(**create_kwargs)
