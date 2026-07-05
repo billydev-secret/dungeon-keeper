@@ -24,7 +24,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.services.quote_renderer import BORDERS, FONT_STYLES, THEMES, render_quote_card
+from bot_modules.services.quote_renderer import (
+    BORDERS,
+    FONT_STYLES,
+    QUOTE_MAX_CHARS,
+    THEMES,
+    render_quote_card,
+)
 from bot_modules.services.starboard_service import get_starboard_config
 
 if TYPE_CHECKING:
@@ -356,6 +362,114 @@ class QuoteCog(commands.Cog):
             view=QuoteStyleView(self.bot, message),
             ephemeral=True,
         )
+
+    @app_commands.command(
+        name="banner",
+        description="Render a string as a banner-style quote card and post it here.",
+    )
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.guild_only()
+    @app_commands.describe(
+        text="The quote to put on the banner.",
+        theme="Colour grading for the card (default: Golden Meadow).",
+        font="Typeface for the quote (default: Inter).",
+        title="Optional heading shown above the quote.",
+    )
+    @app_commands.choices(
+        theme=[app_commands.Choice(name=t.name, value=k) for k, t in THEMES.items()],
+        font=[
+            app_commands.Choice(name=k.title(), value=k) for k in FONT_STYLES
+        ],
+    )
+    async def banner(
+        self,
+        interaction: discord.Interaction,
+        text: str,
+        theme: str | None = None,
+        font: str | None = None,
+        title: str | None = None,
+    ) -> None:
+        ctx = self.bot.ctx
+        if not ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+
+        guild = interaction.guild
+        channel = interaction.channel
+        if guild is None or not isinstance(
+            channel, discord.TextChannel | discord.Thread | discord.VoiceChannel
+        ):
+            await interaction.response.send_message(
+                "This command can only be used in a server text channel.", ephemeral=True
+            )
+            return
+
+        text = text.strip()
+        if not text:
+            await interaction.response.send_message(
+                "Give me some text to put on the banner.", ephemeral=True
+            )
+            return
+
+        theme_obj = THEMES.get(theme or "", THEMES["golden_meadow"])
+        font_style = font if font in FONT_STYLES else "inter"
+
+        await interaction.response.defer(ephemeral=True)
+
+        # Background image: guild icon first, then the invoker's avatar. The card
+        # colour-grades whatever it gets, so both look fine — the icon just keeps
+        # the banner on-brand.
+        avatar_bytes: bytes | None = None
+        if guild.icon is not None:
+            try:
+                avatar_bytes = await guild.icon.replace(size=512).read()
+            except discord.HTTPException:
+                log.warning("banner: failed to read guild icon for %s", guild.id)
+        if avatar_bytes is None:
+            try:
+                avatar_bytes = await interaction.user.display_avatar.with_size(512).read()
+            except discord.HTTPException:
+                avatar_bytes = None
+        if avatar_bytes is None:
+            await interaction.followup.send(
+                content="Couldn't fetch an image to use as the banner background.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            card_bytes = await asyncio.to_thread(
+                render_quote_card,
+                text,
+                author_name=(title or "").strip(),
+                avatar_bytes=avatar_bytes,
+                theme=theme_obj,
+                font_style=font_style,
+                pfp_shape="none",
+            )
+        except Exception:
+            log.exception("banner: render_quote_card failed")
+            await interaction.followup.send(
+                content="Failed to render the banner.", ephemeral=True
+            )
+            return
+
+        file = discord.File(io.BytesIO(card_bytes), filename="banner.png")
+        try:
+            await channel.send(file=file)
+        except discord.HTTPException:
+            log.exception("banner: failed to post card to channel")
+            await interaction.followup.send(
+                content="Couldn't post the banner in this channel.", ephemeral=True
+            )
+            return
+
+        note = "Posted."
+        if len(text) > QUOTE_MAX_CHARS:
+            note = f"Posted (trimmed to {QUOTE_MAX_CHARS} characters)."
+        await interaction.followup.send(content=note, ephemeral=True)
 
 
 async def setup(bot: "Bot") -> None:
