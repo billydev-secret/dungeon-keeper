@@ -20,6 +20,13 @@ log = logging.getLogger(__name__)
 _ASSETS = Path("assets") / "fonts"
 _INTER = _ASSETS / "Inter-Regular.ttf"
 _LORA = _ASSETS / "Lora-Regular.ttf"
+_PLAYFAIR = _ASSETS / "PlayfairDisplay-Regular.ttf"
+_OSWALD = _ASSETS / "Oswald-Regular.ttf"
+_CAVEAT = _ASSETS / "Caveat-Regular.ttf"
+_BEBAS = _ASSETS / "BebasNeue-Regular.ttf"
+# Arimo is the OFL, metric-compatible stand-in for Helvetica/Arial — Helvetica
+# itself is proprietary and can't be bundled. Exposed to users as "Helvetica".
+_HELVETICA = _ASSETS / "Arimo-Regular.ttf"
 
 try:
     from pilmoji import Pilmoji as _Pilmoji
@@ -88,6 +95,11 @@ THEMES: dict[str, QuoteTheme] = {
 FONT_STYLES: dict[str, Path] = {
     "inter": _INTER,
     "lora": _LORA,
+    "playfair": _PLAYFAIR,
+    "oswald": _OSWALD,
+    "caveat": _CAVEAT,
+    "bebas": _BEBAS,
+    "helvetica": _HELVETICA,
 }
 
 
