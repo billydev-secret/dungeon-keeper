@@ -29,6 +29,8 @@ from bot_modules.services.quote_renderer import (
     FONT_STYLES,
     QUOTE_MAX_CHARS,
     THEMES,
+    BorderStyle,
+    QuoteTheme,
     render_quote_card,
 )
 from bot_modules.services.starboard_service import get_starboard_config
@@ -41,6 +43,65 @@ log = logging.getLogger("dungeonkeeper.quote")
 _STYLE_TIMEOUT = 120
 _EMOJI_RE = re.compile(r'<(a?):([^:]+):(\d+)>')
 _PREVIEW_TIMEOUT = 120
+
+# Reply to a message and ping a role whose name normalizes to this, and the bot
+# renders a quote card of the replied-to message (MakeItAQuote-style trigger).
+_TRIGGER_ROLE_NAME = "make_it_a_quote"
+
+
+def _normalize_role_name(name: str) -> str:
+    return name.strip().lower().replace(" ", "_")
+
+
+# ── Shared render path ────────────────────────────────────────────────────────
+
+async def _fetch_custom_emojis(text: str) -> dict[str, bytes]:
+    """Download the PNG/GIF bytes for each Discord custom-emoji token in ``text``."""
+    custom_emojis: dict[str, bytes] = {}
+    emoji_matches = _EMOJI_RE.findall(text)
+    if not emoji_matches:
+        return custom_emojis
+    async with aiohttp.ClientSession() as _session:
+        for animated, _name, eid in emoji_matches:
+            if eid in custom_emojis:
+                continue
+            ext = "gif" if animated else "png"
+            try:
+                async with _session.get(
+                    f"https://cdn.discordapp.com/emojis/{eid}.{ext}",
+                    headers={"User-Agent": "DungeonKeeper/1.0"},
+                ) as resp:
+                    if resp.status == 200:
+                        custom_emojis[eid] = await resp.read()
+            except Exception:
+                log.warning("quote: failed to fetch emoji %s", eid)
+    return custom_emojis
+
+
+async def _build_card_for_message(
+    message: discord.Message,
+    *,
+    theme: QuoteTheme,
+    font_style: str,
+    border_style: BorderStyle,
+) -> bytes:
+    """Fetch avatar + custom emojis for ``message`` and render its quote card.
+
+    Raises ``discord.HTTPException`` if the avatar can't be fetched and whatever
+    the renderer raises on failure — callers handle both.
+    """
+    avatar_bytes = await message.author.display_avatar.with_size(512).read()
+    custom_emojis = await _fetch_custom_emojis(message.content.strip())
+    return await asyncio.to_thread(
+        render_quote_card,
+        message.content.strip(),
+        author_name=message.author.display_name,
+        avatar_bytes=avatar_bytes,
+        theme=theme,
+        font_style=font_style,
+        border_style=border_style,
+        custom_emojis=custom_emojis or None,
+    )
 
 
 # ── Style selector view ───────────────────────────────────────────────────────
@@ -141,52 +202,20 @@ class QuoteStyleView(discord.ui.View):
     async def _on_generate(self, interaction: discord.Interaction) -> None:
         await interaction.response.defer(ephemeral=True)
 
-        theme = THEMES[self._theme_key]
-        font_style = self._font_key
-        border_style = BORDERS[self._border_key]
         msg = self.message
 
         try:
-            avatar_bytes = await msg.author.display_avatar.with_size(512).read()
+            card_bytes = await _build_card_for_message(
+                msg,
+                theme=THEMES[self._theme_key],
+                font_style=self._font_key,
+                border_style=BORDERS[self._border_key],
+            )
         except discord.HTTPException:
             await interaction.edit_original_response(
                 content="Couldn't fetch the author's avatar.", view=None
             )
             return
-
-        text = msg.content.strip()
-        author_name = msg.author.display_name
-
-        custom_emojis: dict[str, bytes] = {}
-        emoji_matches = _EMOJI_RE.findall(text)
-        if emoji_matches:
-            async with aiohttp.ClientSession() as _session:
-                for animated, _name, eid in emoji_matches:
-                    if eid in custom_emojis:
-                        continue
-                    ext = "gif" if animated else "png"
-                    try:
-                        async with _session.get(
-                            f"https://cdn.discordapp.com/emojis/{eid}.{ext}",
-                            headers={"User-Agent": "DungeonKeeper/1.0"},
-                        ) as resp:
-                            if resp.status == 200:
-                                custom_emojis[eid] = await resp.read()
-                    except Exception:
-                        log.warning("quote: failed to fetch emoji %s", eid)
-
-        try:
-            import asyncio  # noqa: PLC0415
-            card_bytes = await asyncio.to_thread(
-                render_quote_card,
-                text,
-                author_name=author_name,
-                avatar_bytes=avatar_bytes,
-                theme=theme,
-                font_style=font_style,
-                border_style=border_style,
-                custom_emojis=custom_emojis or None,
-            )
         except Exception:
             log.exception("quote: render_quote_card failed")
             await interaction.edit_original_response(
@@ -470,6 +499,134 @@ class QuoteCog(commands.Cog):
         if len(text) > QUOTE_MAX_CHARS:
             note = f"Posted (trimmed to {QUOTE_MAX_CHARS} characters)."
         await interaction.followup.send(content=note, ephemeral=True)
+
+    @app_commands.command(
+        name="quote-role",
+        description='Create the mentionable "make_it_a_quote" reply-to-quote role.',
+    )
+    @app_commands.default_permissions(manage_roles=True)
+    @app_commands.guild_only()
+    async def quote_role(self, interaction: discord.Interaction) -> None:
+        if not self.bot.ctx.is_mod(interaction):
+            await interaction.response.send_message(
+                "You don't have permission to use this command.", ephemeral=True
+            )
+            return
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "This command can only be used in a server.", ephemeral=True
+            )
+            return
+
+        existing = discord.utils.find(
+            lambda r: _normalize_role_name(r.name) == _TRIGGER_ROLE_NAME, guild.roles
+        )
+        if existing is not None:
+            if not existing.mentionable:
+                try:
+                    await existing.edit(
+                        mentionable=True, reason="Enable reply-to-quote trigger"
+                    )
+                except discord.HTTPException:
+                    await interaction.response.send_message(
+                        f"The {existing.mention} role exists but I couldn't make it "
+                        "mentionable — check that my role sits above it and I have "
+                        "**Manage Roles**.",
+                        ephemeral=True,
+                    )
+                    return
+            await interaction.response.send_message(
+                f"Ready — reply to any message and ping {existing.mention} to "
+                "turn it into a quote card.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            role = await guild.create_role(
+                name="make_it_a_quote",
+                mentionable=True,
+                reason=f"Reply-to-quote trigger (by {interaction.user})",
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "I need the **Manage Roles** permission to create the role.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "Couldn't create the role — please try again.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message(
+            f"Created {role.mention}. Reply to any message and ping it to turn "
+            "that message into a quote card.",
+            ephemeral=True,
+        )
+
+    @commands.Cog.listener("on_message")
+    async def _on_quote_trigger(self, message: discord.Message) -> None:
+        # Reply + ping the make_it_a_quote role → quote the replied-to message.
+        if message.author.bot or message.guild is None:
+            return
+        if message.reference is None or message.reference.message_id is None:
+            return
+        if not any(
+            _normalize_role_name(r.name) == _TRIGGER_ROLE_NAME
+            for r in message.role_mentions
+        ):
+            return
+
+        channel = message.channel
+        if not isinstance(
+            channel, discord.TextChannel | discord.Thread | discord.VoiceChannel
+        ):
+            return
+
+        # Resolve the replied-to message: use the cached one if it's a full
+        # Message, otherwise fetch it; a deleted/unfetchable target → bail.
+        ref = message.reference.resolved
+        target: discord.Message | None = None
+        if isinstance(ref, discord.Message):
+            target = ref
+        else:
+            try:
+                target = await channel.fetch_message(message.reference.message_id)
+            except discord.HTTPException:
+                target = None
+        if target is None:
+            return
+
+        if not target.content or not target.content.strip():
+            return
+        if target.type not in (
+            discord.MessageType.default,
+            discord.MessageType.reply,
+        ):
+            return
+
+        try:
+            card_bytes = await _build_card_for_message(
+                target,
+                theme=THEMES["golden_meadow"],
+                font_style="inter",
+                border_style=BORDERS["golden_poppy"],
+            )
+        except Exception:
+            log.exception("quote: reply-trigger render failed")
+            return
+
+        try:
+            await channel.send(
+                file=discord.File(io.BytesIO(card_bytes), filename="quote.png"),
+                reference=target,
+                mention_author=False,
+            )
+        except discord.HTTPException:
+            log.warning("quote: reply-trigger failed to post card in %s", channel.id)
 
 
 async def setup(bot: "Bot") -> None:
