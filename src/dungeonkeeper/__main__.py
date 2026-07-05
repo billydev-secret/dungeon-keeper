@@ -139,6 +139,7 @@ def main() -> None:
         "bot_modules.cogs.support_cog",
         "bot_modules.cogs.jail_cog",
         "bot_modules.cogs.mod_cog",
+        "bot_modules.cogs.hidden_channels_cog",
         "bot_modules.cogs.rename_cog",
         "bot_modules.cogs.privacy_cog",
         "bot_modules.cogs.reports_cog",
