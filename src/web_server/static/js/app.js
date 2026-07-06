@@ -129,7 +129,6 @@ const SECTIONS = [
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
       { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
-      { id: "config-pen-pals",  label: "Pen Pals",          module: "./panels/config-pen-pals.js", adminOnly: true },
       { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true },
       { id: "config-ai",         label: "AI (Local LLM)",    module: "./panels/config-ai.js", primaryOnly: true, adminOnly: true },
@@ -204,6 +203,9 @@ const SECTIONS = [
       ]},
       { heading: "Confessions", items: [
         { id: "config-confessions",  label: "Config",     module: "./panels/config-confessions.js", adminOnly: true },
+      ]},
+      { heading: "Pen Pals", items: [
+        { id: "config-pen-pals",  label: "Config",     module: "./panels/config-pen-pals.js", adminOnly: true },
       ]},
     ],
   },
