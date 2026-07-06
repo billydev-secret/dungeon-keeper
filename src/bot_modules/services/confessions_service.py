@@ -172,16 +172,14 @@ def build_confession_embed(content: str, *, colour: "discord.Colour") -> "discor
     """Build the public embed for a posted confession.
 
     Titled a plain ``Anonymous Confession`` (no sequential number). The
-    body is rendered as a markdown blockquote to match the quoted look
-    without mangling text the user may have quoted themselves.
-    ``@everyone``/``@here`` are defanged for safety even though embed
-    descriptions can't ping.
+    body is rendered as-is (no blockquote) so the user's own formatting
+    is preserved. ``@everyone``/``@here`` are defanged for safety even
+    though embed descriptions can't ping.
     """
     safe = defang_everyone_here(content)
-    quoted = "\n".join(f"> {line}" for line in safe.split("\n"))
-    if len(quoted) > MAX_EMBED_DESCRIPTION_LENGTH:
-        quoted = quoted[:MAX_EMBED_DESCRIPTION_LENGTH - 1].rstrip() + "…"
-    return discord.Embed(title="Anonymous Confession", description=quoted, colour=colour)
+    if len(safe) > MAX_EMBED_DESCRIPTION_LENGTH:
+        safe = safe[:MAX_EMBED_DESCRIPTION_LENGTH - 1].rstrip() + "…"
+    return discord.Embed(title="Anonymous Confession", description=safe, colour=colour)
 
 
 def build_anon_reply(

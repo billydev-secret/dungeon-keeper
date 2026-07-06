@@ -145,6 +145,7 @@ def main() -> None:
         "bot_modules.cogs.privacy_cog",
         "bot_modules.cogs.reports_cog",
         "bot_modules.cogs.todo_cog",
+        "bot_modules.cogs.docs_cog",
         "bot_modules.cogs.ai_mod_cog",
         "bot_modules.cogs.watch_cog",
         "bot_modules.cogs.rules_watch_cog",
