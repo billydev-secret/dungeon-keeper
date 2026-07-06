@@ -3435,3 +3435,70 @@ select option { background: var(--bg-input); color: var(--ink); }
 .mb-16 { margin-bottom: 16px; }
 /* Horizontal control row: flex, 8px gap, vertically centered. */
 .row-8 { display: flex; gap: 8px; align-items: center; }
+
+/* ── Docs editor (panels/docs.js) ─────────────────────────────────── */
+.doc-ed { display: flex; flex-direction: column; gap: 14px; padding: 4px 2px; }
+.doc-ed-head { display: flex; gap: 8px; align-items: center; }
+.doc-ed-title {
+  flex: 1; padding: 8px 10px; font-size: 15px; font-weight: 600;
+  border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--bg-input); color: var(--ink-bright);
+}
+.doc-key-badge {
+  font-family: ui-monospace, monospace; font-size: 12px; color: var(--ink-mute);
+  background: var(--bg-rail); border: 1px solid var(--rule);
+  border-radius: 4px; padding: 4px 8px; white-space: nowrap;
+}
+.doc-ed-accent {
+  width: 84px; padding: 8px 8px; font-size: 13px; text-align: center;
+  border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--bg-input); color: var(--ink);
+}
+.doc-ed-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 900px) { .doc-ed-grid { grid-template-columns: 1fr; } }
+.doc-ed-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.doc-ed-lbl { font-size: 12px; font-weight: 600; color: var(--ink-dim); display: flex; flex-direction: column; gap: 2px; }
+.doc-ed-area {
+  min-height: 360px; resize: vertical; padding: 10px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5;
+  border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--bg-input); color: var(--ink); tab-size: 2;
+}
+.doc-ed-actions { display: flex; gap: 10px; align-items: center; }
+.doc-danger {
+  background: transparent; color: var(--red); border: 1px solid var(--red-soft);
+  border-radius: 4px; padding: 6px 12px; font-size: 12px; cursor: pointer;
+}
+.doc-danger:hover { background: var(--red-soft); }
+.act-btn.ghost { background: transparent; border: 1px solid var(--rule); color: var(--ink-dim); }
+
+/* preview column — approximate a Discord embed */
+.doc-preview {
+  min-height: 360px; max-height: 620px; overflow-y: auto; padding: 8px;
+  border: 1px solid var(--rule); border-radius: 4px; background: var(--bg-floor);
+}
+.dp-embed {
+  background: var(--bg-card); border-left: 4px solid var(--gold-solid);
+  border-radius: 4px; padding: 10px 14px; margin-bottom: 10px;
+}
+.dp-title { font-size: 15px; font-weight: 700; color: var(--ink-bright); margin-bottom: 6px; }
+.dp-desc { font-size: 14px; color: var(--ink); line-height: 1.5; word-break: break-word; }
+.dp-desc code { font-family: ui-monospace, monospace; font-size: 12px; background: var(--bg-rail); padding: 1px 4px; border-radius: 3px; }
+.dp-desc pre { background: var(--bg-rail); border: 1px solid var(--rule); border-radius: 4px; padding: 8px; overflow-x: auto; margin: 6px 0; }
+.dp-desc pre code { background: none; padding: 0; }
+.dp-desc blockquote { border-left: 3px solid var(--rule); margin: 4px 0; padding: 0 10px; color: var(--ink-dim); }
+.dp-desc ul, .dp-desc ol { margin: 4px 0; padding-left: 22px; }
+.dp-desc a { color: var(--gold); }
+.dp-h { font-weight: 700; color: var(--ink-bright); margin: 6px 0 2px; }
+.dp-h1 { font-size: 18px; } .dp-h2 { font-size: 16px; } .dp-h3 { font-size: 14px; }
+
+/* placements */
+.doc-placements { border-top: 1px solid var(--rule); padding-top: 12px; }
+.doc-place-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.doc-place-head h4 { margin: 0; font-size: 13px; color: var(--ink-dim); }
+.doc-place-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+.doc-place-ch { font-weight: 600; color: var(--ink); }
+.doc-place-count { font-size: 12px; color: var(--ink-mute); }
+.doc-x { margin-left: auto; background: transparent; border: none; color: var(--ink-mute); cursor: pointer; font-size: 13px; }
+.doc-x:hover { color: var(--red); }
+.doc-add-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }

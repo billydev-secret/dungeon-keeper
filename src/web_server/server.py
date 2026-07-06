@@ -235,6 +235,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(todo_routes.router, prefix="/api", tags=["todos"])
 
+    from web_server.routes import docs as docs_routes
+
+    app.include_router(docs_routes.router, prefix="/api", tags=["docs"])
+
     # ── Health dashboard routes ────────────────────────────────────
     from web_server.routes import health as health_routes
 
