@@ -3509,8 +3509,9 @@ select option { background: var(--bg-input); color: var(--ink); }
 .dp-desc blockquote { border-left: 3px solid var(--rule); margin: 4px 0; padding: 0 10px; color: var(--ink-dim); }
 .dp-desc ul, .dp-desc ol { margin: 4px 0; padding-left: 22px; }
 .dp-desc a { color: var(--gold); }
-.dp-h { font-weight: 700; color: var(--ink-bright); margin: 6px 0 2px; }
-.dp-h1 { font-size: 18px; } .dp-h2 { font-size: 16px; } .dp-h3 { font-size: 14px; }
+.dp-h { font-weight: 700; color: var(--ink-bright); margin: 8px 0 4px; line-height: 1.25; }
+.dp-h1 { font-size: 24px; } .dp-h2 { font-size: 20px; } .dp-h3 { font-size: 16px; }
+.dp-h:first-child { margin-top: 0; }
 
 /* placements */
 .doc-placements { border-top: 1px solid var(--rule); padding-top: 12px; }
@@ -3522,3 +3523,4 @@ select option { background: var(--bg-input); color: var(--ink); }
 .doc-x { margin-left: auto; background: transparent; border: none; color: var(--ink-mute); cursor: pointer; font-size: 13px; }
 .doc-x:hover { color: var(--red); }
 .doc-add-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.dp-image { display: block; max-width: 100%; max-height: 300px; border-radius: 4px; margin-top: 8px; }

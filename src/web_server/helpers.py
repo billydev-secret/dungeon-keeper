@@ -3,8 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 from bot_modules.services.message_store import get_known_users_bulk
+
+
+def public_base_url() -> str:
+    """Public origin of the dashboard (for building absolute asset URLs).
+
+    Mirrors ``routes.oauth._base_url`` — reads ``DASHBOARD_BASE_URL`` (the
+    Cloudflare-tunnelled https origin in production). Trailing slash stripped.
+    """
+    return os.getenv("DASHBOARD_BASE_URL", "http://localhost:8080").strip().rstrip("/")
 
 
 async def resolve_names(ctx, guild, entries, *id_name_pairs):

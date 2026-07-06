@@ -8,9 +8,11 @@ bot's event loop, a save (``PUT``) re-renders every channel the doc is posted in
 from __future__ import annotations
 
 import time
+from pathlib import Path
+from uuid import uuid4
 
 import discord
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 
 from bot_modules.docs import db as docs_db
@@ -18,10 +20,30 @@ from bot_modules.docs import sync as docs_sync
 from bot_modules.docs.render import render_doc
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web_server.helpers import public_base_url
 
 router = APIRouter()
 
 _MOD = Depends(require_perms({"moderator"}))
+
+# Mod-uploaded images are served unauthenticated from the public /static mount,
+# so keep the surface tight: raster only (no SVG — that's a stored-XSS vector on
+# our own domain), 8 MB ceiling (Discord's display limit), uuid filenames.
+_IMAGE_DIR = Path(__file__).resolve().parent.parent / "static" / "doc-images"
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+def _sniff_image_ext(data: bytes) -> str | None:
+    """Return a safe extension from magic bytes, or None if unsupported."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None
 
 
 class DocCreateBody(BaseModel):
@@ -128,7 +150,31 @@ async def get_doc(request: Request, doc_key: str, _: AuthenticatedUser = _MOD):
 async def preview_doc(request: Request, body: PreviewBody, _: AuthenticatedUser = _MOD):
     """Render markdown to embed specs without saving (live editor preview)."""
     specs = render_doc(body.title, body.body_md)
-    return {"embeds": [{"title": s.title, "description": s.description} for s in specs]}
+    return {
+        "embeds": [
+            {"description": s.description, "image_url": s.image_url} for s in specs
+        ]
+    }
+
+
+@router.post("/docs/images")
+async def upload_image(
+    request: Request, file: UploadFile = File(...), _: AuthenticatedUser = _MOD
+):
+    """Store an uploaded image and return the markdown to drop into a doc."""
+    data = await file.read(_MAX_IMAGE_BYTES + 1)
+    if len(data) > _MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Image must be 8 MB or smaller.")
+    ext = _sniff_image_ext(data)
+    if ext is None:
+        raise HTTPException(
+            status_code=400, detail="Unsupported image (use PNG, JPG, GIF, or WEBP)."
+        )
+    _IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    fname = f"{uuid4().hex}.{ext}"
+    (_IMAGE_DIR / fname).write_bytes(data)
+    url = f"{public_base_url()}/static/doc-images/{fname}"
+    return {"url": url, "markdown": f"![image]({url})"}
 
 
 # ── create / update / delete ────────────────────────────────────────

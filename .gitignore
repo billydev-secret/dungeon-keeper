@@ -28,3 +28,6 @@ test_*.png
 coverage.json
 coverage_after.json
 coverage_final.json
+
+# Mod-uploaded doc images (served publicly via /static)
+src/web_server/static/doc-images/

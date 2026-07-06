@@ -12,14 +12,16 @@ can't express on its own:
 - A line that is just ``---`` (or ``***`` / ``___``) is a **message break**:
   everything up to it becomes one message, everything after starts the next.
   Discord doesn't draw horizontal rules, so this repurposes the syntax cleanly.
-- A section whose first line is a ``#``/``##``/``###`` heading promotes that
-  heading to the embed **title**; the rest is the description.
+- Headings stay inline as ``#``/``##``/``###`` markdown in the description —
+  Discord renders those larger than its fixed-size embed ``title`` field, so a
+  ``#`` header reads as a proper big heading. If the doc's first section has no
+  heading of its own, the doc's title leads it as a ``#`` header.
 - A description longer than 4096 chars is split on paragraph boundaries into
   continuation embeds — never inside a fenced code block.
 
 Each spec becomes its own message (one embed per message). That sidesteps
-Discord's 6000-char *aggregate-per-message* limit entirely: a single embed can
-never exceed title(256) + description(4096) < 6000.
+Discord's 6000-char *aggregate-per-message* limit entirely: a single embed's
+description can never exceed 4096 < 6000.
 """
 
 from __future__ import annotations
@@ -34,14 +36,24 @@ EMBED_DESC_LIMIT = 4096
 _HR_RE = re.compile(r"^\s*(?:-{3,}|\*{3,}|_{3,})\s*$")
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,3})\s+(.+?)\s*#*\s*$")
 _FENCE_RE = re.compile(r"^\s*(```+|~~~+)")
+# Markdown image ``![alt](url)``. The leading ``!`` is required, so masked
+# links ``[text](url)`` are left untouched (Discord renders those in-place).
+_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(\s*(\S+?)\s*\)")
 
 
 @dataclass(frozen=True)
 class EmbedSpec:
-    """One rendered embed: an optional title and a description body."""
+    """One rendered embed: a description body and an optional image.
 
-    title: str | None
+    Headings live *inside* the description as ``#``/``##``/``###`` markdown —
+    Discord renders those larger than the embed ``title`` field (which is a
+    fixed, roughly body-sized bold), so a ``#`` header reads as a proper big
+    heading. Image markdown ``![]()`` (which Discord won't render in a
+    description) is pulled out and surfaced as ``image_url`` instead.
+    """
+
     description: str
+    image_url: str | None = None
 
 
 def _split_sections(body: str) -> list[str]:
@@ -58,19 +70,13 @@ def _split_sections(body: str) -> list[str]:
     return sections
 
 
-def _extract_heading(section: str) -> tuple[str | None, str]:
-    """If the section's first non-blank line is a heading, peel it off as title."""
-    lines = section.split("\n")
-    idx = 0
-    while idx < len(lines) and lines[idx].strip() == "":
-        idx += 1
-    if idx >= len(lines):
-        return None, section
-    m = _HEADING_RE.match(lines[idx])
-    if not m:
-        return None, section
-    rest = "\n".join(lines[idx + 1 :])
-    return m.group(2).strip(), rest
+def _starts_with_heading(text: str) -> bool:
+    """True if the first non-blank line is a ``#``/``##``/``###`` heading."""
+    for line in text.split("\n"):
+        if line.strip() == "":
+            continue
+        return _HEADING_RE.match(line) is not None
+    return False
 
 
 def _atomic_blocks(text: str) -> list[str]:
@@ -161,26 +167,33 @@ def render_doc(title: str, body_md: str) -> list[EmbedSpec]:
     body = (body_md or "").replace("\r\n", "\n").replace("\r", "\n")
 
     specs: list[EmbedSpec] = []
+    lead = True  # first content section leads the whole doc
     for section in _split_sections(body):
-        heading, rest = _extract_heading(section)
-        rest = rest.strip("\n")
-        if not heading and not rest.strip():
+        # Pull the first image out of the section; strip all image markdown so
+        # it doesn't show as literal ``![]()`` text in the description.
+        found = _IMAGE_RE.findall(section)
+        image_url = found[0] if found else None
+        text = _IMAGE_RE.sub("", section).strip("\n")
+        if not text.strip() and not image_url:
             continue
-        chunks = _pack_blocks(_atomic_blocks(rest), EMBED_DESC_LIMIT) or [""]
+        # Headings stay inline as markdown (Discord renders ``#`` big). If the
+        # doc's first content section didn't open with its own heading, lead with
+        # the doc title as a ``#`` header. Prepend before chunking so it's
+        # budgeted against the 4096 limit rather than overflowing it.
+        if lead and title and not _starts_with_heading(text):
+            header = f"# {title[:EMBED_TITLE_LIMIT]}"
+            text = f"{header}\n\n{text}" if text.strip() else header
+        lead = False
+        chunks = _pack_blocks(_atomic_blocks(text), EMBED_DESC_LIMIT) or [""]
         for idx, chunk in enumerate(chunks):
-            spec_title = heading[:EMBED_TITLE_LIMIT] if (idx == 0 and heading) else None
-            specs.append(EmbedSpec(title=spec_title, description=chunk))
-
-    # The first embed inherits the doc's title if the source didn't open with a
-    # heading of its own — so every doc leads with a clear header.
-    if specs and specs[0].title is None and title:
-        specs[0] = EmbedSpec(title=title[:EMBED_TITLE_LIMIT], description=specs[0].description)
+            # The image belongs to the section's first embed only.
+            specs.append(
+                EmbedSpec(description=chunk, image_url=image_url if idx == 0 else None)
+            )
 
     if not specs:
-        specs = [
-            EmbedSpec(
-                title=(title[:EMBED_TITLE_LIMIT] or None),
-                description="*(This document is empty.)*",
-            )
-        ]
+        placeholder = "*(This document is empty.)*"
+        if title:
+            placeholder = f"# {title[:EMBED_TITLE_LIMIT]}\n\n{placeholder}"
+        specs = [EmbedSpec(description=placeholder)]
     return specs

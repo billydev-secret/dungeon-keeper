@@ -188,7 +188,11 @@ def _auto_detect_auth(guild_id: int) -> AuthBackend:
 
 
 def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
-    app = FastAPI(title="Dungeon Keeper Dashboard", docs_url="/api/docs", redoc_url=None)
+    # Swagger UI lives at /api/_docs, NOT /api/docs — the latter is a real REST
+    # resource (the Docs feature's list endpoint). FastAPI registers the docs_url
+    # route before our routers, so pointing it at /api/docs would shadow
+    # GET /api/docs and return Swagger HTML where JSON is expected.
+    app = FastAPI(title="Dungeon Keeper Dashboard", docs_url="/api/_docs", redoc_url=None)
     app.state.ctx = ctx
     app.state.auth = auth or _auto_detect_auth(ctx.guild_id)
 

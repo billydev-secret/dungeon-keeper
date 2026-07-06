@@ -47,9 +47,11 @@ class SyncResult:
 def specs_to_embeds(specs: list[EmbedSpec], color: discord.Colour) -> list[discord.Embed]:
     embeds: list[discord.Embed] = []
     for spec in specs:
+        # Headings live inside the description as ``#`` markdown (bigger than the
+        # embed title field), so we never set embed.title here.
         embed = discord.Embed(description=spec.description or None, color=color)
-        if spec.title:
-            embed.title = spec.title
+        if spec.image_url:
+            embed.set_image(url=spec.image_url)
         embeds.append(embed)
     return embeds
 

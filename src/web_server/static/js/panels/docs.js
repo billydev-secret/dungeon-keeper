@@ -1,4 +1,4 @@
-import { api, apiPost, apiPut, apiDelete, esc, fmtTs } from "../api.js";
+import { api, apiPost, apiPut, apiDelete, request, esc, fmtTs } from "../api.js";
 import { loadChannels, channelName, mountChannelPicker, showStatus } from "../config-helpers.js";
 import { renderLoading, renderEmpty } from "../states.js";
 
@@ -91,8 +91,8 @@ function renderPreview(embeds, accent) {
   const bar = accent && /^#?[0-9a-fA-F]{6}$/.test(accent) ? (accent[0] === "#" ? accent : "#" + accent) : "var(--accent, #E6B84C)";
   return embeds.map((e) => `
     <div class="dp-embed" style="border-left-color:${esc(bar)}">
-      ${e.title ? `<div class="dp-title">${esc(e.title)}</div>` : ""}
       <div class="dp-desc">${mdToHtml(e.description)}</div>
+      ${e.image_url && /^https?:/i.test(e.image_url) ? `<img class="dp-image" src="${esc(e.image_url)}" alt="" loading="lazy">` : ""}
     </div>`).join("");
 }
 
@@ -209,11 +209,13 @@ export function mount(container) {
         <div class="doc-ed-grid">
           <div class="doc-ed-col">
             <label class="doc-ed-lbl">Markdown source
-              <span class="field-hint" style="font-weight:400">A line of <code>---</code> starts a new message. A leading <code>#</code> heading becomes the embed title.</span>
+              <span class="field-hint" style="font-weight:400">A line of <code>---</code> starts a new message. A leading <code>#</code> heading becomes the embed title. An image sits at the bottom of its embed — put it in its own <code>---</code> section for a top banner.</span>
             </label>
             <textarea class="doc-ed-area" data-body spellcheck="true" placeholder="# Server Rules&#10;&#10;1. Be kind.&#10;&#10;---&#10;&#10;## FAQ&#10;...">${esc(doc.body_md)}</textarea>
             <div class="doc-ed-actions">
               <button class="act-btn" data-save>Save &amp; sync</button>
+              <button class="act-btn ghost" data-img-btn title="Upload an image and insert it at the cursor">🖼 Image</button>
+              <input type="file" data-img-input accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" />
               <span class="save-status" data-status></span>
               <span class="act-spacer" style="flex:1"></span>
               <button class="doc-danger" data-delete>Delete</button>
@@ -245,7 +247,33 @@ export function mount(container) {
     editorEl.querySelector("[data-body]").addEventListener("input", schedulePreview);
     editorEl.querySelector("[data-title]").addEventListener("input", schedulePreview);
     editorEl.querySelector("[data-accent]").addEventListener("input", schedulePreview);
+    editorEl.querySelector("[data-img-input]").addEventListener("change", onImagePick);
     refreshPreview();
+  }
+
+  async function onImagePick(e) {
+    const input = e.target;
+    const f = input.files && input.files[0];
+    if (!f) return;
+    const statusEl = editorEl.querySelector("[data-status]");
+    const ta = editorEl.querySelector("[data-body]");
+    showStatus(statusEl, true, "Uploading…");
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const res = await request("POST", "/api/docs/images", { body: fd });
+      const md = `\n\n${res.markdown}\n`;
+      const at = ta.selectionStart ?? ta.value.length;
+      ta.value = ta.value.slice(0, at) + md + ta.value.slice(at);
+      ta.selectionStart = ta.selectionEnd = at + md.length;
+      ta.focus();
+      showStatus(statusEl, true, "Image inserted — Save to publish.");
+      refreshPreview();
+    } catch (err) {
+      showStatus(statusEl, false, err.message);
+    } finally {
+      input.value = "";  // let the same file be picked again
+    }
   }
 
   // ── list + new-doc interactions ────────────────────────────────────
@@ -276,6 +304,11 @@ export function mount(container) {
     const doc = state.doc;
     if (!doc) return;
     const statusEl = editorEl.querySelector("[data-status]");
+
+    if (e.target.closest("[data-img-btn]")) {
+      editorEl.querySelector("[data-img-input]").click();
+      return;
+    }
 
     if (e.target.closest("[data-save]")) {
       if (state.saving) return;

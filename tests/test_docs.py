@@ -15,28 +15,36 @@ from migrations import apply_migrations_sync
 
 # ── render ──────────────────────────────────────────────────────────
 
-def test_simple_doc_uses_title_as_embed_title():
+def test_doc_title_leads_as_big_header():
+    # No heading in the source → doc title leads as a ``#`` header (renders big).
     specs = render_doc("Server Rules", "Be kind to each other.")
     assert len(specs) == 1
-    assert specs[0].title == "Server Rules"
-    assert specs[0].description == "Be kind to each other."
+    assert specs[0].description == "# Server Rules\n\nBe kind to each other."
 
 
-def test_leading_heading_becomes_embed_title():
+def test_leading_heading_stays_inline_and_wins_over_doc_title():
     specs = render_doc("Ignored Title", "# Real Heading\n\nBody text here.")
     assert len(specs) == 1
-    assert specs[0].title == "Real Heading"
-    assert specs[0].description == "Body text here."
+    # Author's own heading is kept as-is; doc title is NOT injected.
+    assert specs[0].description == "# Real Heading\n\nBody text here."
+    assert "Ignored Title" not in specs[0].description
 
 
 def test_hr_splits_into_separate_messages():
     body = "# Rules\n\nRule one.\n\n---\n\n## FAQ\n\nAn answer."
     specs = render_doc("", body)
     assert len(specs) == 2
-    assert specs[0].title == "Rules"
+    assert specs[0].description.startswith("# Rules")
     assert "Rule one." in specs[0].description
-    assert specs[1].title == "FAQ"
+    assert specs[1].description.startswith("## FAQ")
     assert "An answer." in specs[1].description
+
+
+def test_doc_title_only_leads_first_embed():
+    # Title header attaches to the first section only, not later ones.
+    specs = render_doc("Doc", "First part.\n\n---\n\nSecond part.")
+    assert specs[0].description == "# Doc\n\nFirst part."
+    assert specs[1].description == "Second part."
 
 
 def test_star_and_underscore_rules_also_split():
@@ -56,9 +64,8 @@ def test_overflow_splits_on_paragraph_boundaries():
     assert len(specs) >= 2
     for s in specs:
         assert len(s.description) <= EMBED_DESC_LIMIT
-    # Only the first overflow embed keeps the promoted title.
-    assert specs[0].title == "Doc"
-    assert all(s.title is None for s in specs[1:])
+    # The doc title leads the first embed as a big header.
+    assert specs[0].description.startswith("# Doc")
 
 
 def test_overflow_never_breaks_a_code_fence():
@@ -80,12 +87,15 @@ def test_empty_doc_yields_placeholder_embed():
 
 def test_long_title_is_truncated():
     specs = render_doc("T" * 500, "body")
-    assert len(specs[0].title) <= EMBED_TITLE_LIMIT
+    header_line = specs[0].description.split("\n")[0]
+    # "# " + up to EMBED_TITLE_LIMIT chars of title.
+    assert header_line.startswith("# ")
+    assert len(header_line) <= EMBED_TITLE_LIMIT + 2
 
 
-def test_heading_only_section_keeps_title():
+def test_heading_only_section_stays_inline():
     specs = render_doc("", "## Just A Heading")
-    assert specs[0].title == "Just A Heading"
+    assert specs[0].description.strip() == "## Just A Heading"
 
 
 # ── db round-trips ──────────────────────────────────────────────────
@@ -246,3 +256,63 @@ async def test_sync_all_deleted_reposts_in_order(monkeypatch):
     assert result.message_ids == channel.order
     assert result.created == 3 and result.edited == 0
     assert 10 not in channel.present  # stale ids gone
+
+
+# ── image extraction ────────────────────────────────────────────────
+
+def test_image_extracted_and_stripped_from_text():
+    specs = render_doc("Doc", "Intro line.\n\n![banner](https://cdn/x.png)\n\nMore text.")
+    assert len(specs) == 1
+    assert specs[0].image_url == "https://cdn/x.png"
+    # The ![]() markdown must not survive as literal text.
+    assert "![" not in specs[0].description
+    assert "Intro line." in specs[0].description
+    assert "More text." in specs[0].description
+
+
+def test_image_only_section_survives():
+    specs = render_doc("", "![pic](https://cdn/only.png)")
+    assert len(specs) == 1
+    assert specs[0].image_url == "https://cdn/only.png"
+
+
+def test_image_only_doc_is_not_treated_as_empty():
+    specs = render_doc("Banner", "![b](https://cdn/b.png)")
+    assert len(specs) == 1
+    assert specs[0].image_url == "https://cdn/b.png"
+    assert "empty" not in specs[0].description.lower()
+
+
+def test_masked_link_survives_image_extraction():
+    body = "See [the guide](https://example.com) ![pic](https://cdn/p.png)"
+    specs = render_doc("", body)
+    assert specs[0].image_url == "https://cdn/p.png"
+    assert "[the guide](https://example.com)" in specs[0].description
+    assert "![pic]" not in specs[0].description
+
+
+def test_image_as_own_section_is_a_separate_embed():
+    specs = render_doc("", "![banner](https://cdn/top.png)\n\n---\n\n# Rules\n\nBe nice.")
+    assert len(specs) == 2
+    assert specs[0].image_url == "https://cdn/top.png"
+    assert specs[1].description.startswith("# Rules")
+    assert specs[1].image_url is None
+
+
+def test_two_images_in_section_first_wins():
+    specs = render_doc("", "![a](https://cdn/a.png) ![b](https://cdn/b.png)")
+    assert specs[0].image_url == "https://cdn/a.png"
+
+
+def test_image_only_on_first_embed_of_overflow_section():
+    big = "y" * 5000  # forces a 2nd continuation embed
+    specs = render_doc("", f"![pic](https://cdn/p.png)\n\n{big}")
+    assert len(specs) >= 2
+    assert specs[0].image_url == "https://cdn/p.png"
+    assert all(s.image_url is None for s in specs[1:])
+
+
+def test_specs_to_embeds_sets_image():
+    specs = render_doc("Doc", "![p](https://cdn/p.png)\n\nhi")
+    embeds = docs_sync.specs_to_embeds(specs, discord.Colour(0x123456))
+    assert embeds[0].image.url == "https://cdn/p.png"
