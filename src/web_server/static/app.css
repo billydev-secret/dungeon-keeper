@@ -2909,6 +2909,26 @@ textarea.field-input { resize: vertical; }
 .ticket-list-head .ctrl-group { padding: 2px; }
 .ticket-list-head .ctrl-group button { padding: 3px 9px; font-size: 12px; }
 
+.ticket-search {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.ticket-search input[type="search"] {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-rail);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 6px 9px;
+  font-size: 13px;
+}
+.ticket-search input[type="search"]::placeholder { color: var(--ink-mute); }
+.ticket-search input[type="search"]:focus {
+  outline: none;
+  border-color: var(--gold-solid);
+}
+
 .ticket-list {
   overflow-y: auto;
   flex: 1;
