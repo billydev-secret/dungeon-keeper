@@ -14,13 +14,20 @@ from __future__ import annotations
 import discord
 
 
+# Human labels for the four access states, shown in the profile embed.
+_ACCESS_STATE_LABELS: dict[str, str] = {
+    "open": "🔓 Open",
+    "nsfw": "🔞 NSFW — open",
+    "locked": "🔒 NSFW — locked",
+    "spectate": "🎭 Spectator",
+}
+
+
 def build_profile_show_embed(
     *,
     saved_name: str | None,
     saved_limit: int,
-    locked: bool,
-    hidden: bool,
-    spectator: bool = False,
+    access_state: str,
     trusted_count: int,
     blocked_count: int,
     colour: "discord.Colour | None" = None,
@@ -47,10 +54,10 @@ def build_profile_show_embed(
         value=str(saved_limit) if saved_limit else "no cap",
         inline=True,
     )
-    embed.add_field(name="Locked", value="yes" if locked else "no", inline=True)
-    embed.add_field(name="Hidden", value="yes" if hidden else "no", inline=True)
     embed.add_field(
-        name="Spectator", value="yes" if spectator else "no", inline=True
+        name="Access",
+        value=_ACCESS_STATE_LABELS.get(access_state, access_state),
+        inline=True,
     )
     embed.add_field(name="Trusted (count)", value=str(trusted_count), inline=True)
     embed.add_field(name="Blocked (count)", value=str(blocked_count), inline=True)
@@ -123,9 +130,11 @@ def build_panel_embed(colour: "discord.Colour | None" = None) -> discord.Embed:
         description=(
             "Join the Hub voice channel to spin up your own room.\n"
             "Use the menus below to manage **the channel you currently own**.\n\n"
-            "🔒 / 🔓 Lock or unlock — control whether new members can join.\n"
-            "👁️ / 👀 Hide or unhide — control whether the channel is visible "
-            "at all.\n"
+            "Set **who can see and join** in one pick:\n"
+            "🔓 **Open** · 🔞 **NSFW — open** (age-gated) · "
+            "🔒 **NSFW — locked** (age-gated, hidden, invite-only) · "
+            "🎭 **Spectator** (age-gated audience).\n"
+            "People you invite can always get in, even when locked.\n"
         ),
         color=colour,
     )
@@ -145,8 +154,9 @@ def build_inline_panel_embed(
         title="Your voice channel is ready",
         description=(
             f"Welcome, {owner_mention}. Use the menus below to manage "
-            "**this channel** — lock/hide it, rename it, set a user limit, "
-            "invite or kick members, transfer ownership, or reset it. "
+            "**this channel** — set its access (open, NSFW, locked, or "
+            "spectator), rename it, set a user limit, invite or kick members, "
+            "transfer ownership, or reset it. "
             "Changes you make are saved as your default for next time."
         ),
         color=colour,
@@ -182,11 +192,12 @@ def build_howto_embed(
     embed.add_field(
         name="🔑 Who can get in",
         value=(
-            "🔒 **Lock** — others must knock to ask in · 🔓 **Unlock** — all "
-            "welcome\n"
-            "👁️ **Hide** — make the room invisible to everyone else\n"
-            "👋 **Invite** someone in · 🚫 **Kick** someone out\n"
-            "🔔 **Knock** — ask to join someone else's locked room"
+            "Pick one **access** state:\n"
+            "🔓 **Open** — all welcome · 🔞 **NSFW — open** — age-gated but open\n"
+            "🔒 **NSFW — locked** — age-gated, hidden, others must knock\n"
+            "🎭 **Spectator** — age-gated audience: join muted, read-only\n"
+            "👋 **Invite** someone in · 🚫 **Kick** someone out · "
+            "🔔 **Knock** to ask into a locked room"
         ),
         inline=False,
     )

@@ -31,6 +31,7 @@ from bot_modules.services.voice_master_service import (
     list_trusted,
     load_profile,
     load_voice_master_config,
+    profile_access_state,
     remove_name_blocklist,
     set_owner,
     set_voice_master_config_value,
@@ -556,6 +557,7 @@ async def get_profile(
                 {
                     "saved_name": profile.saved_name,
                     "saved_limit": profile.saved_limit,
+                    "access_state": profile_access_state(profile),
                     "locked": profile.locked,
                     "hidden": profile.hidden,
                     "bitrate": profile.bitrate,

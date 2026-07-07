@@ -718,7 +718,7 @@ def test_load_config_returns_defaults_when_unset(db):
     assert cfg.trusted_prune_days == 0
     assert cfg.disable_saves is False
     assert cfg.saveable_fields == frozenset(
-        {"name", "limit", "locked", "hidden", "spectator", "trusted", "blocked"}
+        {"name", "limit", "access", "trusted", "blocked"}
     )
     assert cfg.spectator_gate_role_id == 0
     assert cfg.post_inline_panel is True

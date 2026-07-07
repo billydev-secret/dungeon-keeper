@@ -61,7 +61,7 @@ class VoiceMasterConfig:
 
 
 _DEFAULT_SAVEABLE = frozenset(
-    {"name", "limit", "locked", "hidden", "spectator", "trusted", "blocked"}
+    {"name", "limit", "access", "trusted", "blocked"}
 )
 
 
@@ -81,7 +81,7 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "voice_master_empty_grace_s": "15",
     "voice_master_trusted_prune_days": "0",
     "voice_master_disable_saves": "0",
-    "voice_master_saveable_fields": "name,limit,locked,hidden,spectator,trusted,blocked",
+    "voice_master_saveable_fields": "name,limit,access,trusted,blocked",
     "voice_master_post_inline_panel": "1",
     "voice_master_spectator_gate_role_id": "0",
 }
@@ -158,13 +158,20 @@ def set_voice_master_config_value(
 
 @dataclass(frozen=True)
 class VoiceProfile:
-    """Saved per-member channel preferences."""
+    """Saved per-member channel preferences.
+
+    ``locked``/``hidden``/``spectator``/``age_gated`` together encode the
+    owner's single access-state dial (see :func:`profile_access_state`):
+    ``locked`` always implies ``hidden`` and age-gating, ``spectator`` implies
+    age-gating, and ``age_gated`` on its own is the "NSFW but open" state.
+    """
     saved_name: str | None
     saved_limit: int
     locked: bool
     hidden: bool
     bitrate: int | None
     spectator: bool = False
+    age_gated: bool = False
 
 
 def default_profile() -> VoiceProfile:
@@ -175,6 +182,7 @@ def default_profile() -> VoiceProfile:
         hidden=False,
         bitrate=None,
         spectator=False,
+        age_gated=False,
     )
 
 
@@ -347,7 +355,8 @@ def load_profile(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> VoiceProfile | None:
     row = conn.execute(
-        "SELECT saved_name, saved_limit, locked, hidden, bitrate, spectator "
+        "SELECT saved_name, saved_limit, locked, hidden, bitrate, spectator, "
+        "age_gated "
         "FROM voice_master_profiles WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
     ).fetchone()
@@ -360,6 +369,7 @@ def load_profile(
         hidden=bool(row["hidden"]),
         bitrate=int(row["bitrate"]) if row["bitrate"] is not None else None,
         spectator=bool(row["spectator"]),
+        age_gated=bool(row["age_gated"]),
     )
 
 
@@ -375,8 +385,8 @@ def save_profile(
         """
         INSERT INTO voice_master_profiles
             (guild_id, user_id, saved_name, saved_limit, locked, hidden, bitrate,
-             spectator, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             spectator, age_gated, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, user_id) DO UPDATE SET
             saved_name=excluded.saved_name,
             saved_limit=excluded.saved_limit,
@@ -384,6 +394,7 @@ def save_profile(
             hidden=excluded.hidden,
             bitrate=excluded.bitrate,
             spectator=excluded.spectator,
+            age_gated=excluded.age_gated,
             updated_at=excluded.updated_at
         """,
         (
@@ -395,6 +406,7 @@ def save_profile(
             int(profile.hidden),
             profile.bitrate,
             int(profile.spectator),
+            int(profile.age_gated),
             now if now is not None else time.time(),
         ),
     )
@@ -418,6 +430,7 @@ def update_profile_field(
         "hidden": profile.hidden,
         "bitrate": profile.bitrate,
         "spectator": profile.spectator,
+        "age_gated": profile.age_gated,
     }
     if field not in kwargs:
         raise ValueError(f"unknown profile field: {field}")
@@ -796,8 +809,9 @@ def decorate_channel_name(
 # toggled freely on every lock/unlock.
 
 OPEN_STATUS_TEXT: str = "👋 All welcome"
-LOCKED_STATUS_TEXT: str = "🔒 Ask to join"
-SPECTATE_STATUS_TEXT: str = "🎭 Spectators welcome"
+NSFW_STATUS_TEXT: str = "🔞 Age-gated · all welcome"
+LOCKED_STATUS_TEXT: str = "🔒 Age-gated · ask to join"
+SPECTATE_STATUS_TEXT: str = "🎭 Age-gated · spectators welcome"
 
 
 def lock_status_text(*, locked: bool) -> str:
@@ -806,12 +820,70 @@ def lock_status_text(*, locked: bool) -> str:
 
 
 def access_status_text(*, mode: str) -> str:
-    """Voice-channel status string for an access mode (open/lock/spectate)."""
-    if mode == "lock":
+    """Voice-channel status string for an access mode.
+
+    Modes mirror the access states (``open``/``nsfw``/``lock``/``spectate``);
+    ``lock`` is accepted as the status alias for the locked state.
+    """
+    if mode in ("lock", "locked"):
         return LOCKED_STATUS_TEXT
     if mode == "spectate":
         return SPECTATE_STATUS_TEXT
+    if mode == "nsfw":
+        return NSFW_STATUS_TEXT
     return OPEN_STATUS_TEXT
+
+
+# ---------------------------------------------------------------------------
+# Access state <-> saved-profile mapping
+# ---------------------------------------------------------------------------
+#
+# The owner controls room access through one 4-state dial. These are the
+# canonical state keys and their translation to/from the saved-profile flags
+# (locked/hidden/spectator/age_gated). Kept here — next to the profile CRUD and
+# status text — so persistence and the command layer share one source of truth.
+
+ACCESS_OPEN: str = "open"
+ACCESS_NSFW: str = "nsfw"
+ACCESS_LOCKED: str = "locked"
+ACCESS_SPECTATE: str = "spectate"
+
+ACCESS_STATES: tuple[str, ...] = (
+    ACCESS_OPEN, ACCESS_NSFW, ACCESS_LOCKED, ACCESS_SPECTATE
+)
+
+
+def profile_access_state(profile: VoiceProfile) -> str:
+    """Collapse a saved profile's flags to its single access state.
+
+    Precedence matches the states' semantics and tolerates legacy rows: a
+    spectator profile is spectator; a locked profile is the age-gated locked
+    state (old ``locked`` rows predate the ``age_gated`` column but locking now
+    always implies age-gating); ``age_gated`` alone is the NSFW-open state.
+    Legacy hidden-only profiles (``hidden`` without ``locked``) fall through to
+    open — the standalone hidden state no longer exists.
+    """
+    if profile.spectator:
+        return ACCESS_SPECTATE
+    if profile.locked:
+        return ACCESS_LOCKED
+    if profile.age_gated:
+        return ACCESS_NSFW
+    return ACCESS_OPEN
+
+
+def access_state_profile_flags(state: str) -> dict[str, bool]:
+    """The saved-profile flag values for an access state.
+
+    Locked implies hidden + age-gated; spectator implies age-gated; NSFW-open is
+    age-gated only; open clears everything.
+    """
+    return {
+        "locked": state == ACCESS_LOCKED,
+        "hidden": state == ACCESS_LOCKED,
+        "spectator": state == ACCESS_SPECTATE,
+        "age_gated": state != ACCESS_OPEN,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -16,14 +16,12 @@ from discord.ext import commands
 
 from bot_modules.commands.voice_master_commands import (
     PANEL_DYNAMIC_ITEM_CLASSES,
-    _apply_hide,
+    _apply_access_state,
     _apply_invite,
     _apply_kick,
     _apply_limit,
-    _apply_lock,
     _apply_rename,
     _apply_reset,
-    _apply_spectator,
     _apply_transfer,
     _ephemeral,
     _grant_speaker_if_spectating,
@@ -36,12 +34,18 @@ from bot_modules.commands.voice_master_commands import (
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.moderation import write_audit
 from bot_modules.services.voice_master_service import (
+    ACCESS_LOCKED,
+    ACCESS_NSFW,
+    ACCESS_OPEN,
+    ACCESS_SPECTATE,
     CATEGORY_CHANNEL_CAP,
     DEFAULT_NAME_TEMPLATE,
     VoiceMasterConfig,
     VoiceProfile,
+    access_state_profile_flags,
     access_status_text,
     active_channel_count,
+    profile_access_state,
     add_blocked,
     add_trusted,
     compute_reconciliation_actions,
@@ -757,9 +761,10 @@ class VoiceMasterCog(commands.Cog):
                 create_kwargs["user_limit"] = limit
             if bitrate > 0:
                 create_kwargs["bitrate"] = bitrate
-            # Locked rooms carry Discord's age gate (mirrors _apply_lock).
-            # Spectate wins over a stale saved lock, same as the status below.
-            if profile.locked and not profile.spectator:
+            # Every access state but plain "open" is age-gated (mirrors
+            # _apply_access_state), so carry Discord's age gate at creation.
+            initial_state = profile_access_state(profile)
+            if initial_state != ACCESS_OPEN:
                 create_kwargs["nsfw"] = True
 
             try:
@@ -810,18 +815,18 @@ class VoiceMasterCog(commands.Cog):
                     channel.id, member.id,
                 )
 
-            # Advertise the room's lock state on its status line. create_voice_channel
+            # Advertise the room's access state on its status line. create_voice_channel
             # can't carry a status, so set it here in a follow-up edit (separate
             # endpoint, not subject to the name rate limit). Best-effort.
             with self._suppress_voice_errors():
-                if profile.spectator:
-                    initial_mode = "spectate"
-                elif profile.locked:
-                    initial_mode = "lock"
-                else:
-                    initial_mode = "open"
+                status_mode = {
+                    ACCESS_OPEN: "open",
+                    ACCESS_NSFW: "nsfw",
+                    ACCESS_LOCKED: "lock",
+                    ACCESS_SPECTATE: "spectate",
+                }[initial_state]
                 await channel.edit(
-                    status=access_status_text(mode=initial_mode),
+                    status=access_status_text(mode=status_mode),
                     reason="Voice Master: initial access-state status",
                 )
 
@@ -877,12 +882,16 @@ class VoiceMasterCog(commands.Cog):
         gate_role = (
             guild.get_role(gate_role_id) if gate_role_id else None
         )
+        # Derive the flags from the single access state so legacy rows behave:
+        # the locked state always implies hidden, even for profiles saved before
+        # the states were unified.
+        flags = access_state_profile_flags(profile_access_state(profile))
         plan = plan_initial_overwrites(
             owner_id=owner.id,
             everyone_role_id=guild.default_role.id,
-            profile_locked=profile.locked,
-            profile_hidden=profile.hidden,
-            profile_spectator=profile.spectator,
+            profile_locked=flags["locked"],
+            profile_hidden=flags["hidden"],
+            profile_spectator=flags["spectator"],
             # Only treat spectating as gated if the role still exists.
             gate_role_id=gate_role.id if gate_role is not None else None,
             trusted_ids=trusted_ids,
@@ -920,59 +929,36 @@ class VoiceMasterCog(commands.Cog):
 
     # ── Owner slash commands ──────────────────────────────────────────
 
-    @voice.command(name="lock", description="Lock your voice channel (denies @everyone Connect).")
-    async def voice_lock(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_lock(interaction, channel, row, locked=True)
-
-    @voice.command(name="unlock", description="Unlock your voice channel.")
-    async def voice_unlock(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_lock(interaction, channel, row, locked=False)
-
     @voice.command(
-        name="spectator",
-        description="Open your channel to muted spectators (no mic, no camera, read-only chat).",
+        name="access",
+        description="Set who can see and join your channel (open / NSFW / locked / spectator).",
     )
-    async def voice_spectator(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_spectator(interaction, channel, row, spectator=True)
-
-    @voice.command(
-        name="unspectator",
-        description="Turn off spectator mode and reopen your channel.",
+    @app_commands.describe(state="The access state to apply.")
+    @app_commands.choices(
+        state=[
+            app_commands.Choice(name="🔓 Open — anyone can see and join", value=ACCESS_OPEN),
+            app_commands.Choice(
+                name="🔞 NSFW — age-gated, but open", value=ACCESS_NSFW
+            ),
+            app_commands.Choice(
+                name="🔒 NSFW locked — age-gated, hidden, invite-only",
+                value=ACCESS_LOCKED,
+            ),
+            app_commands.Choice(
+                name="🎭 Spectator — age-gated muted audience", value=ACCESS_SPECTATE
+            ),
+        ]
     )
-    async def voice_unspectator(self, interaction: discord.Interaction) -> None:
+    async def voice_access(
+        self,
+        interaction: discord.Interaction,
+        state: app_commands.Choice[str],
+    ) -> None:
         resolved = await _resolve_owned_channel(interaction)
         if resolved is None:
             return
         channel, row = resolved
-        await _apply_spectator(interaction, channel, row, spectator=False)
-
-    @voice.command(name="hide", description="Hide your voice channel from non-invited members.")
-    async def voice_hide(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_hide(interaction, channel, row, hidden=True)
-
-    @voice.command(name="unhide", description="Make your voice channel visible again.")
-    async def voice_unhide(self, interaction: discord.Interaction) -> None:
-        resolved = await _resolve_owned_channel(interaction)
-        if resolved is None:
-            return
-        channel, row = resolved
-        await _apply_hide(interaction, channel, row, hidden=False)
+        await _apply_access_state(interaction, channel, row, state=state.value)
 
     @voice.command(name="rename", description="Rename your voice channel.")
     @app_commands.describe(name="The new channel name (1–100 characters).")
@@ -1427,9 +1413,7 @@ class VoiceMasterCog(commands.Cog):
         embed = build_profile_show_embed(
             saved_name=profile.saved_name,
             saved_limit=profile.saved_limit,
-            locked=profile.locked,
-            hidden=profile.hidden,
-            spectator=profile.spectator,
+            access_state=profile_access_state(profile),
             trusted_count=len(trusted),
             blocked_count=len(blocked),
             colour=accent,
@@ -1443,9 +1427,7 @@ class VoiceMasterCog(commands.Cog):
             app_commands.Choice(name="all (full reset)", value="all"),
             app_commands.Choice(name="name", value="name"),
             app_commands.Choice(name="limit", value="limit"),
-            app_commands.Choice(name="locked", value="locked"),
-            app_commands.Choice(name="hidden", value="hidden"),
-            app_commands.Choice(name="spectator", value="spectator"),
+            app_commands.Choice(name="access", value="access"),
             app_commands.Choice(name="trusted", value="trusted"),
             app_commands.Choice(name="blocked", value="blocked"),
         ]
@@ -1489,12 +1471,15 @@ class VoiceMasterCog(commands.Cog):
                         profile = replace(profile, saved_name=None)
                     elif target == "limit":
                         profile = replace(profile, saved_limit=0)
-                    elif target == "locked":
-                        profile = replace(profile, locked=False)
-                    elif target == "hidden":
-                        profile = replace(profile, hidden=False)
-                    elif target == "spectator":
-                        profile = replace(profile, spectator=False)
+                    elif target == "access":
+                        # One dial now — clear every underlying access flag.
+                        profile = replace(
+                            profile,
+                            locked=False,
+                            hidden=False,
+                            spectator=False,
+                            age_gated=False,
+                        )
                     save_profile(conn, gid, uid, profile)
                 write_audit(
                     conn,

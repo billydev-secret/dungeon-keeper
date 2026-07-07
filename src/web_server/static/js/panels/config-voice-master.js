@@ -171,10 +171,11 @@ export function mount(container) {
     form.appendChild(buildField(
       "Saveable fields",
       checkboxList("saveable_fields",
-        ["name", "limit", "locked", "hidden", "spectator", "trusted", "blocked"],
+        ["name", "limit", "access", "trusted", "blocked"],
         new Set(cfg.saveable_fields),
       ),
-      "Which profile fields owners may persist.",
+      "Which profile fields owners may persist. \"access\" covers the single " +
+        "open / NSFW / locked / spectator room-access state.",
     ));
 
     const saveRow = document.createElement("div");
