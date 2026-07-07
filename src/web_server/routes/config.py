@@ -114,8 +114,10 @@ from bot_modules.cogs.pen_pals_cog import (
 from bot_modules.services.voice_transcription_service import (
     DEFAULT_MODEL as _VT_DEFAULT_MODEL,
     VALID_MODELS as _VT_VALID_MODELS,
+    download_model_to_cache as _vt_download_model,
     get_config as _vt_get_config,
     is_available as _vt_is_available,
+    model_is_cached as _vt_model_is_cached,
     set_config as _vt_set_config,
 )
 from bot_modules.services.ollama_client import is_available as _ollama_is_available
@@ -489,6 +491,10 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
     }
 
 
+def _vt_models_status() -> list[dict]:
+    return [{"name": m, "cached": _vt_model_is_cached(m)} for m in _VT_VALID_MODELS]
+
+
 def _voice_transcription_section(conn, guild_id: int) -> dict:
     cfg = _vt_get_config(conn, guild_id)
     if cfg is None:
@@ -497,12 +503,14 @@ def _voice_transcription_section(conn, guild_id: int) -> dict:
             "model_name": _VT_DEFAULT_MODEL,
             "channel_ids": [],
             "available": _vt_is_available(),
+            "models": _vt_models_status(),
         }
     return {
         "enabled": cfg.enabled,
         "model_name": cfg.model_name,
         "channel_ids": [str(c) for c in cfg.channel_ids],
         "available": _vt_is_available(),
+        "models": _vt_models_status(),
     }
 
 
@@ -2110,6 +2118,10 @@ class VoiceTranscriptionConfigUpdate(BaseModel):
     channel_ids: list[str] = []
 
 
+class VoiceTranscriptionDownloadRequest(BaseModel):
+    model_name: str = _VT_DEFAULT_MODEL
+
+
 @router.put("/config/voice-transcription")
 async def update_voice_transcription_config(
     request: Request,
@@ -2133,6 +2145,26 @@ async def update_voice_transcription_config(
         return {"ok": True}
 
     return await run_query(_q)
+
+
+@router.post("/config/voice-transcription/download")
+async def download_voice_transcription_model(
+    request: Request,
+    body: VoiceTranscriptionDownloadRequest,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    if not _vt_is_available():
+        raise HTTPException(400, "faster-whisper isn't installed on the bot host.")
+    if body.model_name not in _VT_VALID_MODELS:
+        raise HTTPException(400, f"Unknown model {body.model_name!r}.")
+
+    try:
+        # Network fetch — can take a while; keep it off the event loop.
+        await run_query(_vt_download_model, body.model_name)
+    except Exception as exc:
+        raise HTTPException(502, f"Download failed: {exc}") from exc
+
+    return {"ok": True, "cached": _vt_model_is_cached(body.model_name)}
 
 
 # ── Confessions config ───────────────────────────────────────────────

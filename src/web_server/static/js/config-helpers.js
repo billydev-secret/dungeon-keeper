@@ -4,7 +4,7 @@ import { filterSelect, multiFilterSelect } from "./filter-select.js";
 
 // Canonical escaping + write verbs live in api.js; re-exported here so the
 // 35 existing panel importers keep working unchanged.
-export { esc, esc as escapeHtml, apiPut, apiDelete } from "./api.js";
+export { esc, esc as escapeHtml, apiPost, apiPut, apiDelete } from "./api.js";
 
 let _configCache = null;
 let _channels = null;
