@@ -18,6 +18,83 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.rules_watch")
 
+_REPORT_CTX_MENU_NAME = "Report Rule Violation"
+
+
+class _ReportViolationModal(discord.ui.Modal, title="Report Rule Violation"):
+    """Mod-initiated manual report: logs a rules-watch event pre-labeled as a
+    confirmed violation (a high-value positive training example)."""
+
+    rule: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="Rule number (optional)",
+        placeholder="e.g. 3",
+        required=False,
+        max_length=16,
+    )
+    note: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="Note (optional)",
+        style=discord.TextStyle.paragraph,
+        required=False,
+        max_length=500,
+    )
+
+    def __init__(self, source_message: discord.Message, ctx: AppContext) -> None:
+        super().__init__()
+        self.source_message = source_message
+        self._ctx = ctx
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        ctx = self._ctx
+        msg = self.source_message
+        guild_id = interaction.guild_id or 0
+        rule_val = self.rule.value.strip() or None
+        note_val = self.note.value.strip() or None
+
+        # Pull everything from the live message object — this repo drops stored
+        # content by default, so the DB row may not exist.
+        message_id = msg.id
+        author_id = msg.author.id
+        channel_id = msg.channel.id
+        reporter_id = interaction.user.id
+        content_excerpt = (msg.content or "")[:500] or None
+
+        from bot_modules.rules_watch import service
+
+        def _do_report() -> int:
+            with ctx.open_db() as conn:
+                event_id = service.insert_event(
+                    conn,
+                    guild_id=guild_id,
+                    message_id=message_id,
+                    author_id=author_id,
+                    channel_id=channel_id,
+                    guard_verdict="manual",
+                    guard_rule=rule_val,
+                    guard_reason=content_excerpt,
+                    priority_score=10.0,
+                    priority_tier="immediate",
+                    priority_reason="Manually reported by moderator",
+                )
+                service.upsert_label(
+                    conn,
+                    event_id,
+                    is_violation=True,
+                    corrected_rule=rule_val,
+                    labeled_by=reporter_id,
+                    notes=note_val,
+                )
+                return event_id
+
+        event_id = await asyncio.to_thread(_do_report)
+
+        rule_str = f"Rule {rule_val}" if rule_val else "a rule violation"
+        await interaction.response.send_message(
+            f"✅ Logged {rule_str} against {msg.author.mention} as a confirmed "
+            f"violation (event #{event_id}).",
+            ephemeral=True,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
 
 class RulesWatchCog(commands.Cog):
     rules_watch = app_commands.Group(
@@ -30,6 +107,35 @@ class RulesWatchCog(commands.Cog):
         self.bot = bot
         self.ctx = ctx
         super().__init__()
+
+    async def cog_load(self) -> None:
+        ctx = self.ctx
+
+        async def _report_ctx_cb(
+            interaction: discord.Interaction, message: discord.Message
+        ) -> None:
+            if not ctx.is_mod(interaction):
+                await interaction.response.send_message("Permission denied.", ephemeral=True)
+                return
+            if message.author.bot:
+                await interaction.response.send_message(
+                    "Can't report a bot message.", ephemeral=True
+                )
+                return
+            await interaction.response.send_modal(_ReportViolationModal(message, ctx))
+
+        menu = app_commands.ContextMenu(
+            name=_REPORT_CTX_MENU_NAME, callback=_report_ctx_cb
+        )
+        menu.default_permissions = discord.Permissions(manage_guild=True)
+        self.bot.tree.add_command(menu)
+        self._report_context_menu = menu
+
+    async def cog_unload(self) -> None:
+        if hasattr(self, "_report_context_menu"):
+            self.bot.tree.remove_command(
+                _REPORT_CTX_MENU_NAME, type=discord.AppCommandType.message
+            )
 
     # ------------------------------------------------------------------
     # Enable / disable
