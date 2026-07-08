@@ -62,6 +62,11 @@ export function mount(container) {
           </div>
           <div><button type="button" class="btn btn-primary" data-accent-save>Save</button><span data-accent-status></span></div>
         </section>
+
+        <section class="form" style="margin-top:2rem;padding-top:1.5rem;border-top:1px solid var(--border,#333)">
+          <h3 style="margin:0 0 .5rem">Quote Card Border</h3>
+          <div class="field-hint">Upload a custom frame for this server's quote cards. <a href="#/config-quote-border">Open the Quote Tool&nbsp;→</a></div>
+        </section>
       </div>
     `;
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import os
 from datetime import date
 import httpx
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from bot_modules.core.db_utils import (
@@ -53,6 +55,11 @@ from bot_modules.services.booster_roles import (
     swatch_file_info,
     sync_swatches,
     upsert_booster_role,
+)
+from bot_modules.services.quote_renderer import (
+    BorderStyle,
+    analyze_border_opening,
+    guild_border_path,
 )
 from bot_modules.services.inactivity_prune_service import (
     add_prune_exception,
@@ -1832,6 +1839,150 @@ async def delete_booster_swatch(
         raise HTTPException(404, "File not found")
     target.unlink()
     return _swatch_listing(ctx.db_path, guild_id)
+
+
+# ── Quote card border (per-guild uploaded frame) ─────────────────────
+#
+# A guild can upload one PNG/WEBP frame that becomes its default quote-card
+# border. The renderer composites it over the whole card using its own alpha
+# channel, so an opaque upload would hide the quote entirely — the upload path
+# therefore requires a real, partly-transparent alpha channel and re-encodes to
+# a clean RGBA PNG at the exact path the bot renderer reads
+# (``db_path.parent/quote_borders/<guild_id>/border.png``).
+
+_MAX_QUOTE_BORDER_BYTES = 8 * 1024 * 1024
+_QUOTE_BORDER_MAX_DIM = 2000
+
+
+def _quote_border_meta(db_path, guild_id: int) -> dict:
+    path = guild_border_path(db_path, guild_id)
+    if not path.is_file():
+        return {"exists": False, "width": None, "height": None}
+    width = height = None
+    try:
+        from PIL import Image  # noqa: PLC0415
+
+        with Image.open(path) as im:
+            width, height = im.size
+    except Exception:
+        pass
+    return {"exists": True, "width": width, "height": height}
+
+
+@router.get("/config/quote-border")
+async def get_quote_border(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Metadata about this guild's uploaded quote-card border."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    return _quote_border_meta(ctx.db_path, guild_id)
+
+
+@router.get("/config/quote-border/image")
+async def get_quote_border_image(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Serve the raw border PNG for preview (admin only, guild-scoped)."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    path = guild_border_path(ctx.db_path, guild_id)
+    if not path.is_file():
+        raise HTTPException(404, "No quote border set")
+    return FileResponse(path, media_type="image/png")
+
+
+@router.post("/config/quote-border")
+async def upload_quote_border(
+    request: Request,
+    file: UploadFile = File(...),
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Upload + normalize a per-guild quote-card border.
+
+    Rejects opaque images (they would cover the whole card) and re-encodes to a
+    clean RGBA PNG so the renderer always gets a safe, alpha-carrying frame.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    content = await file.read(_MAX_QUOTE_BORDER_BYTES + 1)
+    if len(content) > _MAX_QUOTE_BORDER_BYTES:
+        raise HTTPException(413, "Border image must be 8 MB or smaller.")
+    if not content:
+        raise HTTPException(400, "Empty file.")
+
+    from PIL import Image, UnidentifiedImageError  # noqa: PLC0415
+
+    try:
+        with Image.open(io.BytesIO(content)) as im:
+            im.load()
+            fmt = (im.format or "").upper()
+            img = im.convert("RGBA")
+    except (UnidentifiedImageError, OSError):
+        raise HTTPException(400, "Unsupported or corrupt image.")
+
+    # SVG can't reach here (PIL won't open it) and JPEG/GIF lack a usable alpha
+    # channel for a see-through frame, so restrict to the two formats that do.
+    if fmt not in ("PNG", "WEBP"):
+        raise HTTPException(
+            400, "Use a PNG or WEBP with transparency (JPEG/GIF have no usable alpha)."
+        )
+
+    # getextrema() on the single-band alpha returns (min, max); min>=250 means
+    # effectively no transparency. (Guard the union type the stubs declare.)
+    alpha_min = img.getchannel("A").getextrema()[0]
+    if isinstance(alpha_min, tuple):
+        alpha_min = alpha_min[0]
+    if alpha_min >= 250:
+        raise HTTPException(
+            400,
+            "This image has no transparent areas — it would cover the whole quote. "
+            "Upload a frame PNG with a see-through center.",
+        )
+
+    img.thumbnail(
+        (_QUOTE_BORDER_MAX_DIM, _QUOTE_BORDER_MAX_DIM), Image.Resampling.LANCZOS
+    )
+
+    target = guild_border_path(ctx.db_path, guild_id)
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write to a temp sibling and confirm the frame leaves a usable opening at the
+    # render canvas (900×500) before replacing any existing border — this is the
+    # real guard: the renderer fits the quote into this opening, so "no opening"
+    # is the failure mode, catching center-covered frames the opaque check misses.
+    tmp = target.with_name("border.tmp.png")
+    img.save(tmp, format="PNG")
+    probe = BorderStyle(
+        name="pending", path=tmp, flip=False, luma_key=False, mask_fit=True
+    )
+    if analyze_border_opening(probe, 900, 500) is None:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(
+            400,
+            "The frame leaves no clear opening for the quote — use a border with a "
+            "larger see-through center.",
+        )
+    tmp.replace(target)
+
+    return _quote_border_meta(ctx.db_path, guild_id)
+
+
+@router.delete("/config/quote-border")
+async def delete_quote_border(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Remove this guild's uploaded quote border."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    path = guild_border_path(ctx.db_path, guild_id)
+    if path.is_file():
+        path.unlink()
+    return _quote_border_meta(ctx.db_path, guild_id)
 
 
 # ── Auto-delete schedules ────────────────────────────────────────────

@@ -26,11 +26,14 @@ from discord.ext import commands
 
 from bot_modules.services.quote_renderer import (
     BORDERS,
+    CUSTOM_BORDER_KEY,
+    CUSTOM_BORDER_NAME,
     FONT_STYLES,
     QUOTE_MAX_CHARS,
     THEMES,
     BorderStyle,
     QuoteTheme,
+    custom_border_style,
     render_quote_card,
 )
 from bot_modules.services.starboard_service import get_starboard_config
@@ -78,6 +81,20 @@ async def _fetch_custom_emojis(text: str) -> dict[str, bytes]:
     return custom_emojis
 
 
+def _resolve_border(bot: "Bot", guild_id: int | None, key: str) -> BorderStyle:
+    """Map a border key to a ``BorderStyle``, resolving a guild's uploaded frame.
+
+    ``CUSTOM_BORDER_KEY`` looks up the per-guild upload; falls back to the default
+    bundled border if the key is custom but no upload exists (e.g. it was removed
+    between selection and render).
+    """
+    if key == CUSTOM_BORDER_KEY and guild_id is not None:
+        custom = custom_border_style(bot.ctx.db_path, guild_id)
+        if custom is not None:
+            return custom
+    return BORDERS.get(key, BORDERS["golden_poppy"])
+
+
 async def _build_card_for_message(
     message: discord.Message,
     *,
@@ -119,7 +136,29 @@ class QuoteStyleView(discord.ui.View):
         self.message = message
         self._theme_key = "golden_meadow"
         self._font_key = "inter"
-        self._border_key = "golden_poppy"
+
+        # A guild that uploaded its own border gets it as the default choice —
+        # "a border for their installation" — while the bundled frames stay
+        # selectable. Resolution is a cheap filesystem stat.
+        guild_id = message.guild.id if message.guild else None
+        has_custom = (
+            guild_id is not None
+            and custom_border_style(bot.ctx.db_path, guild_id) is not None
+        )
+        self._border_key = CUSTOM_BORDER_KEY if has_custom else "golden_poppy"
+        border_options: list[discord.SelectOption] = []
+        if has_custom:
+            border_options.append(
+                discord.SelectOption(
+                    label=CUSTOM_BORDER_NAME, value=CUSTOM_BORDER_KEY, default=True
+                )
+            )
+        border_options += [
+            discord.SelectOption(
+                label=b.name, value=k, default=(k == self._border_key)
+            )
+            for k, b in BORDERS.items()
+        ]
 
         theme_select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
             placeholder="Theme",
@@ -155,10 +194,7 @@ class QuoteStyleView(discord.ui.View):
 
         border_select: discord.ui.Select = discord.ui.Select(  # type: ignore[type-arg]
             placeholder="Border",
-            options=[
-                discord.SelectOption(label=b.name, value=k, default=(k == self._border_key))
-                for k, b in BORDERS.items()
-            ],
+            options=border_options,
             min_values=1,
             max_values=1,
             row=2,
@@ -209,7 +245,9 @@ class QuoteStyleView(discord.ui.View):
                 msg,
                 theme=THEMES[self._theme_key],
                 font_style=self._font_key,
-                border_style=BORDERS[self._border_key],
+                border_style=_resolve_border(
+                    self.bot, msg.guild.id if msg.guild else None, self._border_key
+                ),
             )
         except discord.HTTPException:
             await interaction.edit_original_response(
@@ -477,6 +515,9 @@ class QuoteCog(commands.Cog):
                 theme=theme_obj,
                 font_style=font_style,
                 pfp_shape="none",
+                # Use the server's uploaded border by default (falls back to the
+                # bundled Golden Poppy frame when none is set).
+                border_style=_resolve_border(self.bot, guild.id, CUSTOM_BORDER_KEY),
             )
         except Exception:
             log.exception("banner: render_quote_card failed")
@@ -613,7 +654,9 @@ class QuoteCog(commands.Cog):
                 target,
                 theme=THEMES["golden_meadow"],
                 font_style="inter",
-                border_style=BORDERS["golden_poppy"],
+                border_style=_resolve_border(
+                    self.bot, message.guild.id, CUSTOM_BORDER_KEY
+                ),
             )
         except Exception:
             log.exception("quote: reply-trigger render failed")

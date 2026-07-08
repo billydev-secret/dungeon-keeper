@@ -115,6 +115,10 @@ class BorderStyle:
     # Luminance-key transparency: source has an opaque (black) background that
     # must be keyed out. False when the PNG already carries a real alpha channel.
     luma_key: bool
+    # Derive the writable area from this frame's own transparency and fit the
+    # avatar + quote text inside it (see ``analyze_opening``). Only set for
+    # uploaded per-guild frames; bundled borders keep their hand-tuned layout.
+    mask_fit: bool = False
 
 
 BORDERS: dict[str, BorderStyle] = {
@@ -131,6 +135,205 @@ BORDERS: dict[str, BorderStyle] = {
         luma_key=False,
     ),
 }
+
+# Border key used for a guild's own uploaded frame. Not a member of BORDERS (that
+# dict is global/bundled); the cog resolves it per-guild via ``custom_border_style``.
+CUSTOM_BORDER_KEY = "custom"
+CUSTOM_BORDER_NAME = "Custom (uploaded)"
+
+
+def guild_border_dir(db_path: Path | str, guild_id: int) -> Path:
+    """Per-guild folder holding an uploaded quote border, beside the DB.
+
+    Mirrors the booster-swatch convention (``db_path.parent/<kind>/<guild_id>``)
+    so the web dashboard writes exactly where the bot renderer reads.
+    """
+    return Path(db_path).parent / "quote_borders" / str(guild_id)
+
+
+def guild_border_path(db_path: Path | str, guild_id: int) -> Path:
+    """Canonical path of a guild's uploaded border (always a normalized PNG)."""
+    return guild_border_dir(db_path, guild_id) / "border.png"
+
+
+def custom_border_style(db_path: Path | str, guild_id: int) -> BorderStyle | None:
+    """Return a ``BorderStyle`` for the guild's uploaded border, or None.
+
+    The upload path re-encodes to a real-alpha RGBA PNG, so ``flip``/``luma_key``
+    are both False — the frame is composited using its own transparency.
+    """
+    path = guild_border_path(db_path, guild_id)
+    if path.is_file():
+        return BorderStyle(
+            name=CUSTOM_BORDER_NAME, path=path, flip=False, luma_key=False,
+            mask_fit=True,
+        )
+    return None
+
+
+# ── Border-shape masking ──────────────────────────────────────────────────────
+#
+# For an uploaded frame we don't assume a fixed text column — we read the frame's
+# own transparency and fit the avatar + quote inside the hole it leaves. The
+# geometry here is pure (numpy over the alpha channel); the actual text flow that
+# consumes it lives inside render_quote_card so it can reuse the emoji-aware
+# measurer. Results are cached by (path, mtime, size) since a frame is analysed
+# once and rendered many times.
+
+
+@dataclass
+class BorderOpening:
+    """The transparent hole in a frame, as per-row [left, right] spans.
+
+    ``left``/``right`` are x-edges valid for rows in ``[top, bot]`` (the vertical
+    band where the card centre column is see-through). ``pfp`` is a fitted
+    ``(cx, cy, r)`` avatar disc on the left, or None when no disc fits with room
+    left for text (the card then falls back to centred, avatar-as-background).
+    """
+    left: "list[int]"
+    right: "list[int]"
+    top: int
+    bot: int
+    pfp: "tuple[int, int, int] | None"
+
+
+_MASK_CACHE: "dict[tuple, BorderOpening | None]" = {}
+
+
+def _border_alpha(border_style: BorderStyle, width: int, height: int):
+    """Alpha channel (H×W uint8) of the frame exactly as it will be composited."""
+    import numpy as np  # noqa: PLC0415
+    from PIL import Image  # noqa: PLC0415
+
+    img = Image.open(border_style.path).convert("RGBA")
+    if border_style.flip:
+        img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    img = img.resize((width, height), Image.Resampling.LANCZOS)
+    return np.array(img.getchannel("A"))
+
+
+def _erode(mask, k: int):
+    """Separable binary erosion by a (2k+1) square — insets the passable area."""
+    if k <= 0:
+        return mask
+    h = mask.copy()
+    for d in range(1, k + 1):
+        h[:, d:] &= mask[:, :-d]
+        h[:, :-d] &= mask[:, d:]
+    v = h.copy()
+    for d in range(1, k + 1):
+        v[d:, :] &= h[:-d, :]
+        v[:-d, :] &= h[d:, :]
+    return v
+
+
+def _fit_pfp(passable, top: int, bot: int, left: "list[int]", right: "list[int]",
+             width: int, height: int):
+    """Largest left-hugging avatar disc that fits the opening, or None.
+
+    Fits against an inflated radius so the double ring and drop shadow (drawn
+    ~1.15×r plus a down-right offset) stay inside the frame, not just the disc.
+    """
+    import math  # noqa: PLC0415
+
+    cyp = (top + bot) // 2
+    r0 = int(min(width, height) * 0.16)
+    r_min = int(min(width, height) * 0.11)
+
+    def r_eff(r: int) -> int:
+        # Drawn footprint: double ring (~r+7) plus the down-right drop shadow.
+        return int(r * 1.15) + r // 5 + 6
+
+    def fits(cxp: int, r: int) -> bool:
+        re = r_eff(r)
+        if cxp - re < 0 or cxp + re >= width or cyp - re < 0 or cyp + re >= height:
+            return False
+        for y in range(cyp - re, cyp + re + 1):
+            dx = int(math.sqrt(max(0, re * re - (y - cyp) ** 2)))
+            if not passable[y, cxp - dx:cxp + dx + 1].all():
+                return False
+        return True
+
+    lo, hi, best = r_min, r0, None
+    while lo <= hi:
+        r = (lo + hi) // 2
+        cxp = left[cyp] + r_eff(r)  # push right until the whole footprint clears
+        if fits(cxp, r):
+            best = (cxp, cyp, r)
+            lo = r + 1
+        else:
+            hi = r - 1
+    if best is None:
+        return None
+    cxp, cyp, r = best
+    # Only worth an avatar if meaningful text still fits to its right.
+    if right[cyp] - (cxp + r_eff(r)) < int(width * 0.22):
+        return None
+    return best
+
+
+def analyze_border_opening(
+    border_style: BorderStyle, width: int, height: int
+) -> BorderOpening | None:
+    """Detect a frame's usable opening + a fitted avatar disc, or None.
+
+    None means there's no see-through region around the card centre big enough to
+    hold a quote — the upload path rejects such frames so rendering always has a
+    valid opening to fit into.
+    """
+    try:
+        st = border_style.path.stat()
+    except OSError:
+        return None
+    key = (str(border_style.path), st.st_mtime_ns, width, height)
+    if key in _MASK_CACHE:
+        return _MASK_CACHE[key]
+
+    result = _compute_border_opening(border_style, width, height)
+    _MASK_CACHE[key] = result
+    return result
+
+
+def _compute_border_opening(
+    border_style: BorderStyle, width: int, height: int
+) -> BorderOpening | None:
+    alpha = _border_alpha(border_style, width, height)
+    margin = max(8, int(min(width, height) * 0.025))
+    passable = _erode(alpha < 128, margin)
+
+    cx, cyc = width // 2, height // 2
+    col = passable[:, cx]
+    if not col[cyc]:
+        return None  # centre covered — no usable opening
+
+    top = cyc
+    while top - 1 >= 0 and col[top - 1]:
+        top -= 1
+    bot = cyc
+    while bot + 1 < height and col[bot + 1]:
+        bot += 1
+
+    # Require a band that can hold at least ~2 lines and a readable width.
+    if (bot - top) < int(height * 0.20):
+        return None
+
+    left = [cx] * height
+    right = [cx] * height
+    for y in range(top, bot + 1):
+        row = passable[y]
+        lx = cx
+        while lx - 1 >= 0 and row[lx - 1]:
+            lx -= 1
+        rx = cx
+        while rx + 1 < width and row[rx + 1]:
+            rx += 1
+        left[y], right[y] = lx, rx
+
+    if (right[cyc] - left[cyc]) < int(width * 0.30):
+        return None
+
+    pfp = _fit_pfp(passable, top, bot, left, right, width, height)
+    return BorderOpening(left=left, right=right, top=top, bot=bot, pfp=pfp)
 
 
 # ── Font loading ──────────────────────────────────────────────────────────────
@@ -341,6 +544,22 @@ def render_quote_card(
     # Blurred background — when there's a left-side pfp, push the face left so it
     # doesn't sit under the text column; with no pfp keep the image centred.
     _no_pfp = pfp_shape == "none"
+
+    # Uploaded frames drive their own layout: read the transparent opening and fit
+    # the avatar + text inside it. A frame with no usable opening (rejected at
+    # upload) falls back to the standard layout; one with no room for a disc
+    # renders centred (avatar as background, author as a header).
+    _mask = border_style is not None and border_style.mask_fit
+    _mask_opening = (
+        analyze_border_opening(border_style, width, height)
+        if _mask and border_style is not None
+        else None
+    )
+    if _mask and _mask_opening is None:
+        _mask = False
+    if _mask and _mask_opening is not None and _mask_opening.pfp is None:
+        _no_pfp = True
+
     bg = _build_background(
         avatar_bytes, width, height, theme,
         offset_x=0 if _no_pfp else int(width * 0.20),
@@ -367,6 +586,8 @@ def render_quote_card(
     pfp_r = int(min(width, height) * 0.16)
     pfp_cx = int(width * 0.18)
     pfp_cy = height // 2
+    if _mask and _mask_opening is not None and _mask_opening.pfp is not None:
+        pfp_cx, pfp_cy, pfp_r = _mask_opening.pfp
     pfp_d = pfp_r * 2
     px, py = pfp_cx - pfp_r, pfp_cy - pfp_r
 
@@ -412,7 +633,96 @@ def render_quote_card(
 
     left_margin = int(width * 0.06)
 
-    if _no_pfp:
+    if _mask and _mask_opening is not None:
+        # Fit the quote into the frame's own opening: per-row left/right bounds
+        # from the transparency, flowing around the fitted avatar disc, with the
+        # body font auto-shrunk until the block fits the opening's vertical band.
+        op = _mask_opening
+        # A disc only affects layout when one is actually drawn — banner mode
+        # (pfp_shape="none") fits text into the full opening with no avatar.
+        _has_disc = op.pfp is not None and not _no_pfp
+        _mgap = max(10, int(width * 0.02))
+        # Breathing room between text and the frame: ~one character horizontally,
+        # a little top/bottom so lines don't kiss the opening edge.
+        _linset = max(6, _full_measure("n"))
+        _vpad = max(6, int(height * 0.02))
+        _attr_reserve = int(attr_size * 1.7) if (_has_disc and author_name) else 0
+
+        def _m_left(y: int) -> int:
+            y = min(max(int(y), op.top), op.bot)
+            lb = op.left[y] + _linset
+            if _has_disc:
+                _cxp, _cyp, _rr = op.pfp  # type: ignore[misc]
+                # Keep the quote as a clean rectangular column to the RIGHT of the
+                # avatar — every line starts at the disc's right edge, so the top
+                # and bottom lines don't jut left over/under it.
+                lb = max(lb, _cxp + int(_rr * 1.15) + _mgap)
+            return lb
+
+        def _m_right(y: int) -> int:
+            y = min(max(int(y), op.top), op.bot)
+            return op.right[y] - _linset
+
+        _band_top = op.top + _vpad + (_header_block if not _has_disc else 0)
+        _band_bot = op.bot - _vpad - _attr_reserve
+        _band_h = max(1, _band_bot - _band_top)
+
+        def _flow_mask(start_y: int, lh: int, lg: int, measure) -> list[str]:
+            out: list[str] = []
+            for para in _quoted_text.splitlines():
+                words = para.split()
+                if not words:
+                    out.append("")
+                    continue
+                cur = ""
+                for w in words:
+                    y = start_y + len(out) * (lh + lg)
+                    cand = f"{cur} {w}".strip()
+                    if measure(cand) <= (_m_right(y) - _m_left(y)) or not cur:
+                        cur = cand
+                    else:
+                        out.append(cur)
+                        cur = w
+                if cur:
+                    out.append(cur)
+            return out or [""]
+
+        # Auto-fit: largest size whose (twice-reflowed) block fits the band.
+        _chosen = None
+        for _sz in range(body_size, 15, -2):
+            _f = _load_font(_sz, font_style)
+            _pb = draw.textbbox((0, 0), "Ag", font=_f)
+            _lh = int(_pb[3] - _pb[1])
+            _lg = max(6, _lh // 5)
+            if _HAS_PILMOJI:
+                def _bm(t: str, _ff=_f) -> int:
+                    return _emoji_getsize(t, font=_ff)[0]  # type: ignore[misc]
+            else:
+                def _bm(t: str, _ff=_f) -> int:
+                    return int(draw.textbbox((0, 0), t, font=_ff)[2] - draw.textbbox((0, 0), t, font=_ff)[0])
+            _meas = _make_emoji_measure(_bm, _lh)
+            _ls = _flow_mask(_band_top, _lh, _lg, _meas)
+            _y0 = _band_top + max(0, (_band_h - len(_ls) * (_lh + _lg)) // 2)
+            _ls = _flow_mask(_y0, _lh, _lg, _meas)
+            if len(_ls) * (_lh + _lg) <= _band_h or _sz <= 17:
+                _chosen = (_f, _lh, _lg, _meas, _ls)
+                break
+        assert _chosen is not None
+        body_font, line_h, line_gap, _full_measure, lines = _chosen
+
+        # Ellipsize if even the smallest size overflows the opening.
+        _max_lines = max(1, _band_h // (line_h + line_gap))
+        if len(lines) > _max_lines:
+            lines = lines[:_max_lines]
+            lines[-1] = lines[-1].rstrip("” ").rstrip() + "…”"
+
+        _blk = len(lines) * (line_h + line_gap)
+        text_y_start = _band_top + max(0, (_band_h - _blk) // 2)
+        _content_top = op.top + max(6, int(height * 0.03))
+
+        def _line_x(s: str, y: int) -> int:
+            return _m_left(y)
+    elif _no_pfp:
         # Left-justified body: keep ~one character of buffer off the left frame.
         left_margin += max(1, _full_measure("n"))
         # The brand's flowers fill the bottom-right corner. Carve a matching
@@ -510,7 +820,7 @@ def render_quote_card(
     else:
         for line in lines:
             _render_line_mixed(
-                line, text_pad_l, text_y,
+                line, _line_x(line, text_y), text_y,
                 font=body_font, color=theme.text_color,
                 emoji_size=line_h, custom_emojis=custom_emojis,
                 bg=bg, draw=draw,
@@ -578,10 +888,16 @@ def render_quote_card(
             attr_text = f"— {author_name}"
             attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
             attr_w = attr_bbox[2] - attr_bbox[0]
+            attr_h = attr_bbox[3] - attr_bbox[1]
             # Centre under the (left-shifted) pfp, but never let a long name slide
             # behind the left gold frame.
             ax = max(left_margin, pfp_cx - attr_w // 2)
             ay = pfp_cy + pfp_r + int(height * 0.04)
+            if _mask and _mask_opening is not None:
+                # Keep the attribution inside the frame's opening.
+                ay = min(ay, _mask_opening.bot - attr_h - 4)
+                _ry = min(max(int(ay), _mask_opening.top), _mask_opening.bot)
+                ax = max(_mask_opening.left[_ry] + 4, pfp_cx - attr_w // 2)
             draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
             draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
 
