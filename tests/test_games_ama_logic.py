@@ -18,13 +18,15 @@ import pytest
 from bot_modules.games_ama.embeds import (
     build_answered_embed,
     build_asker_dm_embed,
-    build_idle_ai_question_embed,
     build_lobby_embed,
     build_main_embed,
+    build_panel_embed,
     build_question_embed,
     build_recap_embed,
 )
 from bot_modules.games_ama.logic import (
+    AMA_FORMAT_HOT_SEAT,
+    AMA_FORMAT_PANEL,
     RESOLVED_QUESTION_STATUSES,
     UNANSWERED_QUESTION_RETENTION,
     add_question,
@@ -32,6 +34,7 @@ from bot_modules.games_ama.logic import (
     build_question_entry,
     compute_recap_stats,
     first_content_line,
+    is_panel_target,
     is_resolved_status,
     mark_question_answered,
     mark_question_approved,
@@ -39,10 +42,13 @@ from bot_modules.games_ama.logic import (
     mark_question_message,
     mark_question_passed,
     mark_question_rejected,
+    normalize_format,
+    panel_bottom_bar_label,
     parse_iso_ts,
     recompute_totals,
     remaining_questions_text,
     should_expire,
+    toggle_panel_member,
     unique_asker_count,
     utcnow_iso,
 )
@@ -718,17 +724,6 @@ def test_build_question_embed_escapes_markdown():
     assert "\\*" in embed.description
 
 
-# ── build_idle_ai_question_embed ─────────────────────────────────────
-
-
-def test_build_idle_ai_question_embed_has_distinct_footer():
-    embed = build_idle_ai_question_embed("Hi?")
-    assert embed.footer.text is not None
-    assert "Auto-generated" in embed.footer.text
-    assert embed.description is not None
-    assert "Hi?" in embed.description
-
-
 # ── build_answered_embed ─────────────────────────────────────────────
 
 
@@ -801,3 +796,97 @@ def test_build_recap_embed_has_game_over_title_and_footer():
     assert "GAME OVER" in embed.title
     assert embed.footer.text is not None
     assert "Thanks for playing" in embed.footer.text
+
+
+# ── normalize_format ─────────────────────────────────────────────────
+
+
+def test_normalize_format_recognises_panel():
+    assert normalize_format(AMA_FORMAT_PANEL) == AMA_FORMAT_PANEL
+
+
+@pytest.mark.parametrize("value", [None, "", "hot_seat", "bogus", "HOT_SEAT", 0])
+def test_normalize_format_defaults_to_hot_seat(value):
+    # Old payloads have no format key and bad input shouldn't panic —
+    # everything that isn't the explicit panel sentinel is hot seat.
+    assert normalize_format(value) == AMA_FORMAT_HOT_SEAT
+
+
+# ── toggle_panel_member / is_panel_target ────────────────────────────
+
+
+def test_toggle_panel_member_adds_then_removes_preserving_order():
+    panel: list[int] = []
+    assert toggle_panel_member(panel, 10) is True   # joined
+    assert toggle_panel_member(panel, 20) is True
+    assert panel == [10, 20]                          # join order preserved
+    assert toggle_panel_member(panel, 10) is False  # left
+    assert panel == [20]
+
+
+def test_is_panel_target_reflects_membership():
+    panel = [1, 2, 3]
+    assert is_panel_target(panel, 2) is True
+    assert is_panel_target(panel, 99) is False
+    assert is_panel_target([], 2) is False
+
+
+# ── panel_bottom_bar_label ───────────────────────────────────────────
+
+
+def test_panel_bottom_bar_label_empty_panel():
+    assert panel_bottom_bar_label(0) == "🎙️ AMA Panel"
+
+
+def test_panel_bottom_bar_label_singular_vs_plural():
+    assert "1 answering question" in panel_bottom_bar_label(1)
+    assert panel_bottom_bar_label(1).rstrip().endswith("question")
+    assert "3 answering questions" in panel_bottom_bar_label(3)
+
+
+# ── build_panel_embed ────────────────────────────────────────────────
+
+
+def test_build_panel_embed_empty_prompts_to_volunteer():
+    embed = build_panel_embed("Alice", "unfiltered", [], str)
+    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    assert embed.description is not None and "Volunteer" in embed.description
+    assert by_name["🙋 Panel"] == "—"
+    assert by_name["Host"] == "Alice"
+
+
+def test_build_panel_embed_lists_roster_with_resolver():
+    names = {7: "Bob", 8: "Cara"}
+    embed = build_panel_embed("Alice", "screened", [7, 8], lambda uid: names[uid])
+    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    roster = by_name["🙋 Panel (2)"]
+    assert "Bob" in roster and "Cara" in roster
+    assert embed.description is not None and "anyone on the panel" in embed.description.lower()
+
+
+def test_build_panel_embed_caps_large_roster_by_rendered_length():
+    # Worst case: many members with max-length (32-char) display names — a
+    # count-based cap would blow Discord's 1024-char field limit here.
+    panel = list(range(200))
+    embed = build_panel_embed("Alice", "unfiltered", panel, lambda uid: "N" * 32)
+    roster_field = next(f for f in embed.fields if (f.name or "").startswith("🙋 Panel"))
+    assert roster_field.name is not None and "(200)" in roster_field.name  # header shows the true total
+    assert roster_field.value is not None
+    assert "more" in roster_field.value  # truncation tail present
+    assert len(roster_field.value) <= 1024  # Discord's per-field value hard limit
+
+
+def test_build_panel_embed_short_roster_not_truncated():
+    embed = build_panel_embed("Alice", "unfiltered", [1, 2, 3], lambda uid: f"user{uid}")
+    roster_field = next(f for f in embed.fields if (f.name or "").startswith("🙋 Panel"))
+    assert roster_field.value is not None
+    assert "more" not in roster_field.value
+    assert roster_field.value.count("•") == 3
+
+
+def test_build_panel_embed_includes_progress_when_payload_given():
+    payload = {"questions": [{}, {}, {}], "total_answered": 1, "total_passed": 1}
+    embed = build_panel_embed("Alice", "unfiltered", [7], str, payload=payload)
+    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    assert "📊 Progress" in by_name
+    assert "**3**" in by_name["📊 Progress"]
