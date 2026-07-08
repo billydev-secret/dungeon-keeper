@@ -419,6 +419,46 @@ def test_modinfo_embed_full_kitchen_sink():
     assert embed.image.url == "attachment://modinfo_activity.png"
 
 
+def test_modinfo_embed_xp_source_breakdown():
+    """Per-source XP renders under the level line, compacted, non-zero only."""
+    embed = build_modinfo_embed(
+        user_label="u", user_avatar_url=None,
+        account_created=datetime(2024, 1, 1, tzinfo=timezone.utc), account_age_days=1,
+        joined_at=None,
+        xp_row={"level": 12, "total_xp": 45300.0},
+        xp_by_source={
+            "text": 31200.0, "voice": 9800.0, "reply": 3100.0,
+            "image_react": 1200.0, "grant": 0.0,
+        },
+        watcher_count=0, active_jail=None, jail_history=[],
+        warns=[], tickets=[], last_seen_ts=None,
+        top_channels=[], msgs_30d_total=0,
+        ts_formatter=lambda ts: "t",
+    )
+    level = _field_by_name(embed, "⭐ Level").value
+    assert "Level **12**" in level
+    assert "💬 Text 31.2k" in level
+    assert "🔊 Voice 9.8k" in level
+    assert "↩️ Reply 3.1k" in level
+    assert "🖼 React 1.2k" in level
+    # Zero-value sources are omitted.
+    assert "Grant" not in level
+
+
+def test_modinfo_embed_no_xp_source_breakdown_when_absent():
+    """No xp_by_source → Level field is just the single summary line."""
+    embed = build_modinfo_embed(
+        user_label="u", user_avatar_url=None,
+        account_created=datetime(2024, 1, 1, tzinfo=timezone.utc), account_age_days=1,
+        joined_at=None, xp_row={"level": 3, "total_xp": 200.0},
+        watcher_count=0, active_jail=None, jail_history=[],
+        warns=[], tickets=[], last_seen_ts=None,
+        top_channels=[], msgs_30d_total=0,
+        ts_formatter=lambda ts: "t",
+    )
+    assert _field_by_name(embed, "⭐ Level").value == "Level **3** · 200 XP"
+
+
 def test_modinfo_embed_singular_watcher_label():
     """One watcher → "1 mod watching", not "1 mods watching"."""
     embed = build_modinfo_embed(

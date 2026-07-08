@@ -35,6 +35,28 @@ from bot_modules.services.embeds import (
     MOD_WARNING,
 )
 
+# Compact per-source XP labels for the /modinfo Level field. Order and source
+# keys mirror the stacked-bar chart palette in
+# ``bot_modules.services.activity_graphs`` so the text breakdown and the chart
+# tell the same story.
+_XP_SOURCE_DISPLAY: tuple[tuple[str, str], ...] = (
+    ("text", "💬 Text"),
+    ("voice", "🔊 Voice"),
+    ("reply", "↩️ Reply"),
+    ("image_react", "🖼 React"),
+    ("grant", "🎁 Grant"),
+)
+
+
+def _fmt_xp(amount: float) -> str:
+    """Human-compact XP number: 950 → ``950``, 31234 → ``31.2k``, 1.2M."""
+    n = float(amount)
+    if abs(n) >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if abs(n) >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{n:.0f}"
+
 
 # Defaults that mirror the cog's existing knobs. Kept here so tests can
 # assert behavior changes when (e.g.) the page size moves without finding
@@ -334,6 +356,7 @@ def build_modinfo_embed(
     account_age_days: int,
     joined_at: datetime | None,
     xp_row: Mapping[str, Any] | None,
+    xp_by_source: Mapping[str, float] | None = None,
     watcher_count: int,
     active_jail: Mapping[str, Any] | None,
     jail_history: Sequence[Mapping[str, Any]],
@@ -372,6 +395,20 @@ def build_modinfo_embed(
     # ── XP / Level ───────────────────────────────────────────────────
     if xp_row is not None:
         xp_text = f"Level **{xp_row['level']}** · {xp_row['total_xp']:,.0f} XP"
+        if xp_by_source:
+            known = {src for src, _ in _XP_SOURCE_DISPLAY}
+            parts = [
+                f"{label} {_fmt_xp(xp_by_source[src])}"
+                for src, label in _XP_SOURCE_DISPLAY
+                if xp_by_source.get(src)
+            ]
+            parts += [
+                f"{src} {_fmt_xp(amt)}"
+                for src, amt in xp_by_source.items()
+                if src not in known and amt
+            ]
+            if parts:
+                xp_text += "\n" + " · ".join(parts)
     else:
         xp_text = "No XP recorded"
     embed.add_field(name="⭐ Level", value=xp_text, inline=True)

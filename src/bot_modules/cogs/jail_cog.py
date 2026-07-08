@@ -82,7 +82,11 @@ from bot_modules.services.moderation import (
     write_audit,
 )
 from bot_modules.core.db_utils import get_config_value, get_tz_offset_hours
-from bot_modules.services.activity_graphs import query_message_activity, render_activity_chart
+from bot_modules.services.activity_graphs import (
+    query_message_activity,
+    query_xp_activity_with_breakdown,
+    render_activity_chart,
+)
 
 
 # Discord caps the embed *title* at 256 chars; we trim our policy titles
@@ -1622,6 +1626,15 @@ class JailCog(commands.Cog):
                     (guild.id, user.id),
                 ).fetchone()
 
+                # All-time XP split by source (reconciles with total_xp above).
+                xp_by_source = dict(
+                    conn.execute(
+                        "SELECT source, SUM(amount) FROM xp_events "
+                        "WHERE guild_id = ? AND user_id = ? GROUP BY source",
+                        (guild.id, user.id),
+                    ).fetchall()
+                )
+
                 watcher_count = conn.execute(
                     "SELECT COUNT(*) FROM watched_users WHERE guild_id = ? AND watched_user_id = ?",
                     (guild.id, user.id),
@@ -1642,31 +1655,43 @@ class JailCog(commands.Cog):
                     (guild.id, user.id, since_30d),
                 ).fetchall()
 
-                labels, msg_counts, member_counts = query_message_activity(
+                tz_off = get_tz_offset_hours(conn, guild.id)
+                # Message total (drives the "N msgs (30d)" header) — counts only.
+                _, msg_counts, _ = query_message_activity(
                     conn, guild.id, "day", user_id=user.id,
-                    utc_offset_hours=get_tz_offset_hours(conn, guild.id),
+                    utc_offset_hours=tz_off,
+                )
+                # 30-day XP split by source for the stacked-bar chart.
+                xp_labels, xp_totals, _, xp_series = (
+                    query_xp_activity_with_breakdown(
+                        conn, guild.id, "day", user_id=user.id,
+                        utc_offset_hours=tz_off,
+                    )
                 )
 
             return (
                 active_jail, jail_hist, warns, tickets,
-                xp_row, watcher_count, last_ts, top_channels,
-                labels, msg_counts, member_counts,
+                xp_row, xp_by_source, watcher_count, last_ts, top_channels,
+                msg_counts, xp_labels, xp_totals, xp_series,
             )
 
         (
             active_jail, jail_hist, warns, tickets,
-            xp_row, watcher_count, last_ts, top_channels,
-            labels, msg_counts, member_counts,
+            xp_row, xp_by_source, watcher_count, last_ts, top_channels,
+            msg_counts, xp_labels, xp_totals, xp_series,
         ) = await asyncio.to_thread(_fetch)
 
         chart_bytes = await asyncio.to_thread(
             render_activity_chart,
-            labels,
-            msg_counts,
-            member_counts,
-            f"{user.display_name} — 30-Day Activity",
+            xp_labels,
+            xp_totals,
+            [],
+            f"{user.display_name} — 30-Day XP by Source",
             "day",
             show_members=False,
+            y_label="XP",
+            bar_label="XP",
+            by_source=xp_series,
         )
 
         embed = build_modinfo_embed(
@@ -1676,6 +1701,7 @@ class JailCog(commands.Cog):
             account_age_days=(datetime.now(timezone.utc) - user.created_at).days,
             joined_at=user.joined_at,
             xp_row=xp_row,
+            xp_by_source=xp_by_source,
             watcher_count=watcher_count,
             active_jail=active_jail,
             jail_history=jail_hist,
