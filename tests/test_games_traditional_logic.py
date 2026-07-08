@@ -20,6 +20,7 @@ from bot_modules.games_traditional.embeds import (
     build_recap_embed,
     build_tod_embed,
 )
+from bot_modules.games.utils.question_source import get_traditional_question
 from bot_modules.games_traditional.logic import (
     CAT_LABELS,
     CATEGORIES,
@@ -27,6 +28,7 @@ from bot_modules.games_traditional.logic import (
     available_targets,
     question_pool_size,
     record_asked,
+    select_bank_categories_for_all,
     select_next_question_target,
     summarize_asked_by_category,
     toggle_pref,
@@ -424,3 +426,70 @@ def test_categories_and_labels_stay_aligned():
 @pytest.mark.parametrize("cat", CATEGORIES)
 def test_each_category_has_a_human_label(cat):
     assert CAT_LABELS[cat]
+
+
+# ── select_bank_categories_for_all ───────────────────────────────────
+
+
+def test_bank_categories_picks_one_per_participant():
+    prefs = {"1": ["sfw_truth", "sfw_dare"], "2": ["nsfw_dare"]}
+    chosen = select_bank_categories_for_all(prefs, rng=random.Random(0))
+    assert set(chosen.keys()) == {"1", "2"}
+    assert chosen["1"] in prefs["1"]
+    assert chosen["2"] == "nsfw_dare"
+
+
+def test_bank_categories_omits_players_with_no_prefs():
+    prefs = {"1": ["sfw_truth"], "2": []}
+    chosen = select_bank_categories_for_all(prefs)
+    assert set(chosen.keys()) == {"1"}
+
+
+def test_bank_categories_empty_prefs_gives_empty():
+    assert select_bank_categories_for_all({}) == {}
+
+
+# ── get_traditional_question (bank getter) ───────────────────────────
+
+
+class _FakeDB:
+    """Minimal async db exposing only fetchall(query, params) for the getter."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def fetchall(self, query, params=()):
+        return list(self._rows)
+
+
+def _row(text, category):
+    import json
+    return (text, json.dumps([category]))
+
+
+async def test_get_traditional_question_exact_category_match():
+    db = _FakeDB([_row("truth Q", "sfw_truth"), _row("dare Q", "sfw_dare")])
+    got = await get_traditional_question(db, "sfw_truth")
+    assert got == "truth Q"
+
+
+async def test_get_traditional_question_nsfw_is_a_distinct_category():
+    # An sfw category must never serve an nsfw-tagged question.
+    db = _FakeDB([_row("spicy", "nsfw_truth")])
+    assert await get_traditional_question(db, "sfw_truth") is None
+    assert await get_traditional_question(db, "nsfw_truth") == "spicy"
+
+
+async def test_get_traditional_question_excludes_used():
+    db = _FakeDB([_row("a", "sfw_dare"), _row("b", "sfw_dare")])
+    got = await get_traditional_question(db, "sfw_dare", exclude=["a"])
+    assert got == "b"
+
+
+async def test_get_traditional_question_none_when_empty():
+    assert await get_traditional_question(_FakeDB([]), "sfw_truth") is None
+
+
+async def test_get_traditional_question_unknown_category_returns_none():
+    db = _FakeDB([_row("a", "sfw_truth")])
+    assert await get_traditional_question(db, "bogus") is None

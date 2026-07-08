@@ -139,6 +139,25 @@ def select_next_question_target(
     return chooser.choice(least_asked)
 
 
+def select_bank_categories_for_all(
+    prefs: dict[str, list[str]],
+    rng: random.Random | None = None,
+) -> dict[str, str]:
+    """Pick one opted-in category per participant for a bank round.
+
+    Returns ``{user_id: category}`` — for each participant with at least one
+    declared preference, a single category chosen uniformly at random from
+    that player's preferences. Players with no preferences are omitted.
+
+    Unlike :func:`select_next_question_target`, this deliberately ignores the
+    ``asked`` history: a bank round is repeatable (the host can press the
+    button every round), so the same category may recur across presses. The
+    cog dedupes the *question text* it pulls from the bank, not the category.
+    """
+    chooser = rng if rng is not None else random
+    return {uid: chooser.choice(cats) for uid, cats in prefs.items() if cats}
+
+
 def summarize_asked_by_category(asked: dict[str, str]) -> dict[str, int]:
     """Count questions asked per known category.
 

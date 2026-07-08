@@ -196,6 +196,9 @@ const SECTIONS = [
       { heading: "FFA / Truth or Dare", items: [
         { id: "games-ffa", label: "Questions", module: "./panels/games-ffa.js" },
       ]},
+      { heading: "Traditional Truth or Dare", items: [
+        { id: "games-traditional", label: "Questions", module: "./panels/games-traditional.js" },
+      ]},
       { heading: "Guess Who", items: [
         { id: "config-guess", label: "Config",     module: "./panels/config-guess.js", perms: ["moderator"] },
       ]},

@@ -163,6 +163,61 @@ def test_bank_create_invalid_game_type(open_client):
     assert resp.status_code == 400
 
 
+# ── Traditional Truth-or-Dare: one-of-four category tag enforcement ───────────
+
+
+def test_bank_create_traditional_requires_a_category(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "traditional", "tags": [], "question_text": "Q?"},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_create_traditional_rejects_unknown_category(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "traditional", "tags": ["spicy"], "question_text": "Q?"},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_create_traditional_rejects_extra_tags(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "traditional", "tags": ["sfw_truth", "extra"], "question_text": "Q?"},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_create_traditional_accepts_single_category(open_client, fake_ctx):
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "traditional", "tags": ["nsfw_dare"], "question_text": "Q?"},
+    )
+    assert resp.status_code == 200
+    qid = resp.json()["question_id"]
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["nsfw_dare"]
+
+
+def test_bank_bulk_traditional_requires_a_category(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank/bulk",
+        json={"game_type": "traditional", "tags": [], "lines": ["a", "b"]},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_update_traditional_rejects_bad_category(open_client, fake_ctx):
+    qid = _seed_question(fake_ctx.db_path, "traditional", tags=["sfw_truth"], text="Q?")
+    resp = open_client.put(f"{BASE}/bank/{qid}", json={"tags": ["nope"]})
+    assert resp.status_code == 400
+
+
 def test_bank_list_empty(open_client, fake_ctx):
     _clear_bank(fake_ctx.db_path)
     resp = open_client.get(f"{BASE}/bank")

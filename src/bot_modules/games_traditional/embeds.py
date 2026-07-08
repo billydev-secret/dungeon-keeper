@@ -95,6 +95,9 @@ def build_recap_embed(
     )
     embed.add_field(name="Total Questions Asked", value=str(total_q), inline=True)
     embed.add_field(name="Participants", value=str(len(participants)), inline=True)
+    bank_asked = payload.get("bank_asked", 0)
+    if bank_asked:
+        embed.add_field(name="Bank Round Questions", value=str(bank_asked), inline=True)
     for cat, count in by_cat.items():
         if count:
             label = CAT_LABELS.get(cat, cat)

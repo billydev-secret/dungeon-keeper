@@ -22,7 +22,12 @@ _PROMPT_CONFIG_PATH = (
     Path(__file__).parent.parent.parent / "bot_modules" / "games" / "prompt_config.json"
 )
 
-VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo", "ffa"}
+VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo", "ffa", "traditional"}
+
+# Traditional Truth-or-Dare stores exactly one of these four category tags on
+# every question. The tag *is* the category (matching the cog's CATEGORIES), so
+# a bank round can serve each player a question in a category they opted into.
+TRADITIONAL_CATEGORIES = ("sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare")
 
 ALL_GAME_TYPES = [
     "wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama",
@@ -136,6 +141,25 @@ def _norm_tags(raw) -> list[str]:
             seen.add(t)
             out.append(t)
     return out
+
+
+def _validate_traditional_tags(game_type: str, tags: list[str]) -> None:
+    """Enforce the Traditional Truth-or-Dare tag contract.
+
+    Every traditional question must carry exactly one of the four category
+    tags and nothing else, so a bank round can reliably match it to a
+    player's opted-in category. No-op for any other game type.
+    """
+    if game_type != "traditional":
+        return
+    if len(tags) != 1 or tags[0] not in TRADITIONAL_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Traditional questions require exactly one category tag "
+                "(one of: " + ", ".join(TRADITIONAL_CATEGORIES) + ")."
+            ),
+        )
 
 
 def _parse_tags_col(raw) -> list[str]:
@@ -321,7 +345,9 @@ async def create_question(
         raise HTTPException(status_code=400, detail=f"Invalid game_type: {body.game_type}")
 
     ctx = get_ctx(request)
-    tags_json = json.dumps(_norm_tags(body.tags))
+    tags = _norm_tags(body.tags)
+    _validate_traditional_tags(body.game_type, tags)
+    tags_json = json.dumps(tags)
 
     def _q():
         with ctx.open_db() as conn:
@@ -347,7 +373,7 @@ async def update_question(
     def _q():
         with ctx.open_db() as conn:
             existing = conn.execute(
-                "SELECT question_id FROM games_question_bank WHERE question_id = ?",
+                "SELECT game_type FROM games_question_bank WHERE question_id = ?",
                 (question_id,),
             ).fetchone()
             if not existing:
@@ -359,8 +385,10 @@ async def update_question(
                 sets.append("question_text = ?")
                 params.append(body.question_text.strip())
             if body.tags is not None:
+                tags = _norm_tags(body.tags)
+                _validate_traditional_tags(existing[0], tags)
                 sets.append("tags = ?")
-                params.append(json.dumps(_norm_tags(body.tags)))
+                params.append(json.dumps(tags))
 
             if sets:
                 params.append(question_id)
@@ -419,7 +447,9 @@ async def bulk_add_questions(
         raise HTTPException(status_code=400, detail="No non-empty lines provided")
 
     ctx = get_ctx(request)
-    tags_json = json.dumps(_norm_tags(body.tags))
+    tags = _norm_tags(body.tags)
+    _validate_traditional_tags(body.game_type, tags)
+    tags_json = json.dumps(tags)
 
     def _q():
         with ctx.open_db() as conn:
@@ -486,6 +516,7 @@ async def import_bank(
         tags = _norm_tags(entry.get("tags", []))
         if not tags and entry.get("category") == "nsfw":
             tags = ["nsfw"]
+        _validate_traditional_tags(gt, tags)
         items.append((gt, json.dumps(tags), text))
 
     if not items:

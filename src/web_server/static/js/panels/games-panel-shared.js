@@ -5,9 +5,16 @@ import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
-export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, optSchema = [] }) {
+export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, optSchema = [], bankHint = "", bankCategories = null }) {
   function ctrl(name) { return container.querySelector('[data-ctrl="' + name + '"]'); }
   function region(name) { return container.querySelector('[data-region="' + name + '"]'); }
+
+  // Category mode: instead of free-form tags, every question carries exactly
+  // one required category (a single reserved tag). The tag inputs become a
+  // required <select>, and the server rejects anything else. Used by
+  // Traditional Truth-or-Dare, whose four categories double as bank tags.
+  const catMode = Array.isArray(bankCategories) && bankCategories.length > 0;
+  const catLabel = (v) => { const c = catMode && bankCategories.find(x => x.value === v); return c ? c.label : v; };
 
   // Tag state (used by buildBankHtml below, which runs during initial render).
   const tagDatalistId = "bank-tags-dl-" + gameType;
@@ -155,16 +162,46 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     };
   }
 
+  // A required single-category <select> with the same {el, getTags, setTags}
+  // shape as makeTagWidget, so the rest of the bank code is mode-agnostic.
+  // In filter context (includeAll) a leading "All" clears the filter; in
+  // add/edit context the leading placeholder forces an explicit choice.
+  function makeCategoryWidget(initial, onChange, includeAll) {
+    const sel = document.createElement("select");
+    sel.style.cssText = "border:1px solid var(--rule);border-radius:var(--r);padding:5px 6px;background:var(--bg);color:inherit;font-size:12px;min-width:140px;";
+    sel.appendChild(new Option(includeAll ? "All categories" : "— choose category —", ""));
+    for (const c of bankCategories) sel.appendChild(new Option(c.label, c.value));
+    const init = parseTags(initial).find(t => bankCategories.some(c => c.value === t)) || "";
+    sel.value = init;
+    if (typeof onChange === "function") sel.addEventListener("change", () => onChange(sel.value ? [sel.value] : []));
+    return {
+      el: sel,
+      getTags() { return sel.value ? [sel.value] : []; },
+      setTags(arr) { sel.value = parseTags(arr).find(t => bankCategories.some(c => c.value === t)) || ""; },
+    };
+  }
+
+  function makeChooser(initial, onChange, includeAll) {
+    return catMode ? makeCategoryWidget(initial, onChange, includeAll) : makeTagWidget(initial, onChange);
+  }
+
   function buildBankHtml() {
+    const tagWord = catMode ? "Category" : "Tags";
+    const defaultHint = "Questions used by this game. Tag content to organize it; the reserved <strong>nsfw</strong> tag marks adult content, which games include by default.";
+    const hint = bankHint || defaultHint;
+    // The multi-tag "Match: All/Any" control is meaningless with a single
+    // required category, so it's dropped in category mode.
+    const matchHtml = catMode ? "" :
+      '<div class="field m-0"><label>Match<select data-ctrl="filter-match" style="width:80px;"><option value="all">All</option><option value="any">Any</option></select></label></div>';
     return '<section>' +
       '<div class="section-label">Question Bank</div>' +
-      '<div class="field-hint" style="margin-bottom:12px;">Questions used by this game. Tag content to organize it; the reserved <strong>nsfw</strong> tag marks adult content, which games include by default.</div>' +
+      '<div class="field-hint" style="margin-bottom:12px;">' + hint + "</div>" +
       '<datalist data-ctrl="tags-datalist"></datalist>' +
       '<div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">' +
       '<div style="flex:1;min-width:260px;">' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;">' +
-      '<div class="field" style="margin:0;min-width:180px;"><label>Tags<div data-ctrl="filter-tags"></div></label></div>' +
-      '<div class="field m-0"><label>Match<select data-ctrl="filter-match" style="width:80px;"><option value="all">All</option><option value="any">Any</option></select></label></div>' +
+      '<div class="field" style="margin:0;min-width:180px;"><label>' + tagWord + '<div data-ctrl="filter-tags"></div></label></div>' +
+      matchHtml +
       '<div class="field" style="margin:0;flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="search" placeholder="Filter..." /></label></div>' +
       '<button class="btn" data-action="search-btn">Search</button>' +
       "</div>" +
@@ -174,13 +211,13 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div style="width:300px;flex-shrink:0;">' +
       '<section style="background:var(--bg);border:1px solid var(--rule);border-radius:var(--r);padding:16px;">' +
       '<div class="section-label mb-10">Add Question</div>' +
-      '<div class="field"><label>Tags<div data-ctrl="add-tags"></div></label></div>' +
+      '<div class="field"><label>' + tagWord + '<div data-ctrl="add-tags"></div></label></div>' +
       '<div class="field"><label>Question<textarea class="w-full" data-ctrl="add-text" rows="3"></textarea></label></div>' +
       '<div class="row-8"><button class="btn btn-primary" data-action="add-question">Add</button><span data-status="add" class="save-status"></span></div>' +
       "</section>" +
       '<section style="background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);padding:16px;margin-top:12px;">' +
       '<div class="section-label mb-10">Bulk Import</div>' +
-      '<div class="field"><label>Tags (applied to all)<div data-ctrl="bulk-tags"></div></label></div>' +
+      '<div class="field"><label>' + tagWord + ' (applied to all)<div data-ctrl="bulk-tags"></div></label></div>' +
       '<div class="field"><label>Lines (one per line)<textarea data-ctrl="bulk-text" rows="6" style="width:100%;font-size:12px;"></textarea></label></div>' +
       '<div class="row-8"><button class="btn btn-primary" data-action="bulk-import">Import</button><span data-status="bulk" class="save-status"></span></div>' +
       "</section></div></div></section>";
@@ -193,17 +230,17 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
     // Mount the multi-tag list filter; adding/removing a chip re-runs the
     // search immediately (no need to press Search).
-    const filterTags = makeTagWidget([], (tags) => {
+    const filterTags = makeChooser([], (tags) => {
       currentTags = tags;
       currentPage = 1;
       loadBank();
-    });
+    }, /* includeAll */ true);
     ctrl("filter-tags").appendChild(filterTags.el);
 
     // Mount the persistent add/bulk tag widgets.
-    const addTags = makeTagWidget([]);
+    const addTags = makeChooser([]);
     ctrl("add-tags").appendChild(addTags.el);
-    const bulkTags = makeTagWidget([]);
+    const bulkTags = makeChooser([]);
     ctrl("bulk-tags").appendChild(bulkTags.el);
 
     async function loadBank() {
@@ -223,8 +260,11 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         }
         let rows = "";
         for (const q of qs) {
-          const chips = parseTags(q.tags).map(t => '<span class="ll-tag">' + esc(t) + "</span>").join(" ");
-          rows += '<tr data-qid="' + q.question_id + '">' +
+          const chips = parseTags(q.tags).map(t => '<span class="ll-tag">' + esc(catMode ? catLabel(t) : t) + "</span>").join(" ");
+          // In category mode chips show the label, so stash the raw category
+          // value on the row for the inline editor to restore.
+          const catAttr = catMode ? ' data-cat="' + esc(parseTags(q.tags)[0] || "") + '"' : "";
+          rows += '<tr data-qid="' + q.question_id + '"' + catAttr + '>' +
             '<td class="bank-tags-cell" style="width:160px;"><div class="ll-tags">' + chips + "</div></td>" +
             '<td class="bank-text-cell" style="padding-right:8px;">' + esc(q.question_text) + "</td>" +
             '<td style="width:120px;white-space:nowrap;">' +
@@ -271,9 +311,11 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const textCell = row.querySelector(".bank-text-cell");
         const tagsCell = row.querySelector(".bank-tags-cell");
         const origText = textCell.textContent;
-        const origTags = Array.from(tagsCell.querySelectorAll(".ll-tag")).map(s => s.textContent.trim());
+        const origTags = catMode
+          ? (row.dataset.cat ? [row.dataset.cat] : [])
+          : Array.from(tagsCell.querySelectorAll(".ll-tag")).map(s => s.textContent.trim());
         textCell.innerHTML = '<textarea class="field-input" style="width:100%;min-height:60px;">' + esc(origText) + "</textarea>";
-        const widget = makeTagWidget(origTags);
+        const widget = makeChooser(origTags);
         tagsCell.innerHTML = "";
         tagsCell.appendChild(widget.el);
         row._tagWidget = widget;
@@ -283,6 +325,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const newText = row.querySelector("textarea") && row.querySelector("textarea").value.trim();
         const newTags = row._tagWidget ? row._tagWidget.getTags() : [];
         if (!newText) return;
+        if (catMode && !newTags.length) { toast("Choose a category.", "error"); return; }
         try { await apiPut("/api/games/bank/" + qid, { question_text: newText, tags: newTags }); await loadTags(); loadBank(); }
         catch (err) { toast("Save failed: " + err.message, "error"); }
       } else if (btn.dataset.action === "del-q") {
@@ -292,7 +335,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       }
     });
 
-    ctrl("filter-match").addEventListener("change", () => { if (currentTags.length > 1) { currentPage = 1; loadBank(); } });
+    if (ctrl("filter-match")) ctrl("filter-match").addEventListener("change", () => { if (currentTags.length > 1) { currentPage = 1; loadBank(); } });
     ctrl("search").addEventListener("keydown", e => {
       if (e.key === "Enter") { currentSearch = ctrl("search").value.trim(); currentPage = 1; loadBank(); }
     });
@@ -305,8 +348,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       const st = container.querySelector('[data-status="add"]');
       const text = ctrl("add-text").value.trim();
       if (!text) { showStatus(st, false, "Question text required"); return; }
+      const addTagList = addTags.getTags();
+      if (catMode && !addTagList.length) { showStatus(st, false, "Choose a category"); return; }
       try {
-        await apiPost("/api/games/bank", { game_type: gameType, tags: addTags.getTags(), question_text: text });
+        await apiPost("/api/games/bank", { game_type: gameType, tags: addTagList, question_text: text });
         ctrl("add-text").value = "";
         addTags.setTags([]);
         showStatus(st, true, "Added");
@@ -319,8 +364,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       const raw = ctrl("bulk-text").value;
       const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
       if (!lines.length) { showStatus(st, false, "No lines to import"); return; }
+      const bulkTagList = bulkTags.getTags();
+      if (catMode && !bulkTagList.length) { showStatus(st, false, "Choose a category"); return; }
       try {
-        const res = await apiPost("/api/games/bank/bulk", { game_type: gameType, tags: bulkTags.getTags(), lines });
+        const res = await apiPost("/api/games/bank/bulk", { game_type: gameType, tags: bulkTagList, lines });
         ctrl("bulk-text").value = "";
         showStatus(st, true, "Imported " + res.added);
         await loadTags();

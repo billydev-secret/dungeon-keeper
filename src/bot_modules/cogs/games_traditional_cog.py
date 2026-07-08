@@ -30,9 +30,11 @@ from bot_modules.games_traditional.embeds import (
     build_recap_embed,
     build_tod_embed,
 )
+from bot_modules.games.utils.question_source import get_traditional_question
 from bot_modules.games_traditional.logic import (
     CAT_LABELS,
     record_asked,
+    select_bank_categories_for_all,
     select_next_question_target,
     toggle_pref,
 )
@@ -197,6 +199,64 @@ class TraditionalHostView(discord.ui.View):
             target_id=chosen_uid, target_name=chosen_name, category=chosen_cat,
         )
         await interaction.response.send_modal(modal)
+
+    @discord.ui.button(label="Bank Round", emoji="🎲", style=discord.ButtonStyle.primary, custom_id="tod_bank_round", row=1)
+    async def bank_round(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Serve every opted-in player a fresh question pulled from the bank.
+
+        Each participant gets one question in a category they opted into,
+        drawn from the web-managed question bank (no repeats within a game).
+        Repeatable — the host can press it every round. Players with no
+        available bank question for their picked category are reported back.
+        """
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if not self.is_host_or_mod(interaction):
+            await interaction.response.send_message("Only the host or a mod can run a bank round.", ephemeral=True)
+            return
+
+        payload = await self._get_payload()
+        prefs = payload.get("prefs", {})
+        if not prefs:
+            await interaction.response.send_message("No players have joined yet!", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+
+        guild = interaction.guild
+        channel = interaction.channel
+        assert isinstance(channel, discord.abc.Messageable)  # games run in text channels
+        used: list[str] = list(payload.get("bank_used", []))
+        choices = select_bank_categories_for_all(prefs)  # {uid: category}
+
+        served = 0
+        unserved: list[str] = []
+        for uid, cat in choices.items():
+            member = guild.get_member(int(uid)) if guild else None
+            name = member.display_name if member else str(uid)
+            question = await get_traditional_question(self.db, cat, exclude=used)
+            if question is None:
+                unserved.append(f"{name} ({CAT_LABELS.get(cat, cat)})")
+                continue
+            used.append(question)
+            mention = member.mention if member else f"**{name}**"
+            await channel.send(content=mention, embed=build_question_embed(cat, question, name))
+            served += 1
+
+        payload["bank_used"] = used
+        payload["bank_asked"] = payload.get("bank_asked", 0) + served
+        await self._save_payload(payload)
+        await self.refresh_embed(guild, payload)
+
+        if served == 0 and unserved:
+            msg = (
+                "No bank questions were available. Add some in the web dashboard "
+                "under **Games → Traditional Truth or Dare → Questions**."
+            )
+        else:
+            msg = f"Served **{served}** question{'s' if served != 1 else ''} from the bank."
+            if unserved:
+                msg += "\nNo bank question available for: " + ", ".join(unserved) + "."
+        await interaction.followup.send(msg, ephemeral=True)
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="tod_htp", row=1)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):

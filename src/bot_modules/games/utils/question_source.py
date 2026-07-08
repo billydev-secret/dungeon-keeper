@@ -241,6 +241,42 @@ async def _get_bank_question(
     return random.choice(candidates) if candidates else None
 
 
+# The four Traditional Truth-or-Dare categories double as the reserved bank
+# tags: every traditional question carries exactly one of these (enforced by
+# the web dashboard). The tag *is* the category, so selection is an exact match
+# — an sfw category never serves an nsfw question and vice versa.
+TRADITIONAL_CATEGORIES: tuple[str, ...] = (
+    "sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare",
+)
+
+
+async def get_traditional_question(
+    db, category: str, exclude: list[str] | None = None,
+) -> str | None:
+    """Return a random Traditional Truth-or-Dare bank question for *category*.
+
+    *category* is one of :data:`TRADITIONAL_CATEGORIES`; a question matches
+    only if its single category tag equals it exactly. *exclude* holds
+    question texts already served this game so a bank round doesn't repeat.
+
+    Bank-only by design (no AI fallback): returns None when the bank has no
+    matching, unexcluded question — the cog reports the player as unserved.
+    """
+    if category not in TRADITIONAL_CATEGORIES:
+        return None
+    rows = await db.fetchall(
+        "SELECT question_text, tags FROM games_question_bank WHERE game_type = ?",
+        ("traditional",),
+    )
+    seen = set(exclude or ())
+    candidates = [
+        text
+        for text, tags_json in rows
+        if category in _parse_tags(tags_json) and text not in seen
+    ]
+    return random.choice(candidates) if candidates else None
+
+
 async def has_matching_questions(
     db, game_type: str, tags: list[str] | None, allow_nsfw: bool = False,
 ) -> bool:
