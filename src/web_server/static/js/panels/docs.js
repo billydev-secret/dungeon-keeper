@@ -103,7 +103,12 @@ function syncSummary(sync) {
     return "⚠️ " + bad.map((s) => `#${channelName([], s.channel_id) || s.channel_id}: ${s.detail || s.status}`).join(" · ");
   }
   const total = sync.reduce((a, s) => a + s.created + s.edited + s.deleted, 0);
-  return `Synced ${sync.length} channel${sync.length === 1 ? "" : "s"} (${total} message${total === 1 ? "" : "s"}).`;
+  let msg = `Synced ${sync.length} channel${sync.length === 1 ? "" : "s"} (${total} message${total === 1 ? "" : "s"}).`;
+  const pinIssues = sync.filter((s) => s.pin_detail);
+  if (pinIssues.length) {
+    msg += " ⚠️ " + pinIssues.map((s) => `#${channelName([], s.channel_id) || s.channel_id}: ${s.pin_detail}`).join(" · ");
+  }
+  return msg;
 }
 
 export function mount(container) {
@@ -190,6 +195,9 @@ export function mount(container) {
       <div class="doc-place-row">
         <span class="doc-place-ch">#${esc(channelName(state.channels, p.channel_id) || p.channel_id)}</span>
         <span class="doc-place-count">${p.message_count} msg${p.message_count === 1 ? "" : "s"}</span>
+        <button class="doc-pin${p.pinned ? " on" : ""}" data-pin-ch="${esc(p.channel_id)}"
+                data-pinned="${p.pinned ? "1" : "0"}" aria-pressed="${p.pinned ? "true" : "false"}"
+                title="${p.pinned ? "Pinned in channel — click to unpin" : "Pin this doc in the channel"}">📌</button>
         <button class="doc-x" data-remove-ch="${esc(p.channel_id)}" title="Remove from channel">✕</button>
       </div>`).join("");
   }
@@ -371,6 +379,25 @@ export function mount(container) {
       } catch (err) {
         showStatus(statusEl, false, err.message);
         btn.disabled = false;
+      }
+      return;
+    }
+
+    const pinBtn = e.target.closest("[data-pin-ch]");
+    if (pinBtn) {
+      const chId = pinBtn.dataset.pinCh;
+      const want = pinBtn.dataset.pinned !== "1";
+      pinBtn.disabled = true;
+      try {
+        const res = await apiPut(
+          `/api/docs/${encodeURIComponent(doc.doc_key)}/placements/${chId}/pin`,
+          { pinned: want });
+        const detail = res.sync && res.sync.pin_detail;
+        showStatus(statusEl, !detail, detail || (want ? "Pinned." : "Unpinned."));
+        await selectDoc(doc.doc_key);
+      } catch (err) {
+        showStatus(statusEl, false, err.message);
+        pinBtn.disabled = false;
       }
       return;
     }

@@ -42,6 +42,11 @@ class SyncResult:
     deleted: int = 0
     message_ids: list[int] = field(default_factory=list)
     detail: str = ""
+    pinned: bool = False
+    # Non-empty when the messages posted fine but pinning them didn't (missing
+    # Manage Messages, or Discord's 50-pin channel limit). Kept separate from
+    # ``status`` so a pin hiccup never reports the whole placement as broken.
+    pin_detail: str = ""
 
 
 def specs_to_embeds(specs: list[EmbedSpec], color: discord.Colour) -> list[discord.Embed]:
@@ -79,13 +84,20 @@ async def _resolve_channel(bot: "Bot", channel_id: int):
 
 
 async def _sync_channel(
-    bot: "Bot", channel_id: int, embeds: list[discord.Embed], existing_ids: list[int]
+    bot: "Bot",
+    channel_id: int,
+    embeds: list[discord.Embed],
+    existing_ids: list[int],
+    pinned: bool = False,
 ) -> SyncResult:
     channel = await _resolve_channel(bot, channel_id)
     if channel is None:
         return SyncResult(channel_id, status="missing_channel")
 
     result = SyncResult(channel_id)
+    # Message objects for the ids we end up tracking, in order, so the pin pass
+    # below can read each message's current ``pinned`` state without re-fetching.
+    live_msgs: dict[int, discord.Message] = {}
 
     def _bail(status: str, detail: str) -> SyncResult:
         # Preserve every still-known message id so an error never loses track of
@@ -110,6 +122,7 @@ async def _sync_channel(
                 msg = await channel.fetch_message(mid)
                 await msg.edit(embed=embed)
                 result.message_ids.append(mid)
+                live_msgs[mid] = msg
                 result.edited += 1
                 continue
             except discord.NotFound:
@@ -127,6 +140,7 @@ async def _sync_channel(
             log.warning("doc post failed in %d: %s", channel_id, exc)
             return _bail("error", str(exc))
         result.message_ids.append(msg.id)
+        live_msgs[msg.id] = msg
         result.created += 1
 
     # Delete every tracked message we didn't reuse: surplus from a now-shorter
@@ -142,7 +156,42 @@ async def _sync_channel(
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             pass
 
+    await _reconcile_pins(channel, result, live_msgs, pinned)
     return result
+
+
+async def _reconcile_pins(
+    channel,
+    result: SyncResult,
+    live_msgs: dict[int, "discord.Message"],
+    pinned: bool,
+) -> None:
+    """Pin/unpin the placement's messages to match ``pinned`` — delta-only.
+
+    Pinning a message posts a "pinned a message" system notice; unpinning does
+    not. So we only ever act on a message whose current state differs from the
+    target, making a steady-state sync a true no-op (no notice spam on re-sync
+    or edit). When pinning, we go in reverse: Discord shows the most recently
+    pinned message first, so pinning bottom-up leaves the pins list reading
+    top-to-bottom in doc order. A permission or pin-limit failure is recorded in
+    ``pin_detail`` and never downgrades ``status`` — the messages are fine.
+    """
+    result.pinned = pinned
+    ordered = [live_msgs[mid] for mid in result.message_ids if mid in live_msgs]
+    try:
+        if pinned:
+            for msg in reversed(ordered):
+                if not msg.pinned:
+                    await msg.pin(reason="doc pinned")
+        else:
+            for msg in ordered:
+                if msg.pinned:
+                    await msg.unpin(reason="doc unpinned")
+    except discord.Forbidden:
+        result.pin_detail = "missing Manage Messages — couldn't pin"
+    except discord.HTTPException as exc:
+        # e.g. code 30003 "Maximum number of pins reached (50)".
+        result.pin_detail = f"couldn't pin: {getattr(exc, 'text', '') or exc}"
 
 
 # ── orchestration (called from cog + web route) ─────────────────────
@@ -167,7 +216,9 @@ async def _sync_one(
     existing = await asyncio.to_thread(
         _read_message_ids, ctx, placement_id
     )
-    result = await _sync_channel(bot, channel_id, embeds, existing)
+    result = await _sync_channel(
+        bot, channel_id, embeds, existing, bool(placement.get("pinned"))
+    )
 
     # Persist whatever ids we ended up with (unless the channel vanished).
     if result.status != "missing_channel":
@@ -217,6 +268,29 @@ async def post_doc(
     return await _sync_one(ctx, bot, placement, embeds)
 
 
+async def set_pin(
+    ctx: "AppContext",
+    guild: discord.Guild,
+    doc_row: dict,
+    channel_id: int,
+    pinned: bool,
+) -> SyncResult | None:
+    """Set a placement's pin flag and re-sync just that channel to enforce it.
+
+    Returns ``None`` if the doc isn't placed in ``channel_id``.
+    """
+    bot = ctx.bot
+    placement = await asyncio.to_thread(_read_placement, ctx, doc_row["id"], channel_id)
+    if placement is None:
+        return None
+    await asyncio.to_thread(_set_pinned, ctx, placement["id"], pinned)
+    placement["pinned"] = pinned
+    if bot is None:
+        return SyncResult(channel_id, status="error", detail="Bot unavailable.")
+    embeds = await _render_embeds(ctx, guild, doc_row)
+    return await _sync_one(ctx, bot, placement, embeds)
+
+
 async def unpost_doc(
     ctx: "AppContext", doc_row: dict, channel_id: int
 ) -> bool:
@@ -257,6 +331,11 @@ def _ensure_placement(ctx: "AppContext", doc_id: int, channel_id: int) -> dict:
         placement = docs_db.get_placement(conn, doc_id, channel_id)
         assert placement is not None  # just upserted
         return placement
+
+
+def _set_pinned(ctx: "AppContext", placement_id: int, pinned: bool) -> None:
+    with ctx.open_db() as conn:
+        docs_db.set_placement_pinned(conn, placement_id, pinned, time.time())
 
 
 def _delete_placement(ctx: "AppContext", placement_id: int) -> None:

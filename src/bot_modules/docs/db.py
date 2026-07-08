@@ -116,7 +116,7 @@ def delete_doc(conn: sqlite3.Connection, doc_id: int) -> None:
 
 def list_placements(conn: sqlite3.Connection, doc_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT p.id, p.channel_id, p.created_at, p.updated_at,"
+        "SELECT p.id, p.channel_id, p.pinned, p.created_at, p.updated_at,"
         " (SELECT COUNT(*) FROM doc_placement_messages m WHERE m.placement_id = p.id)"
         "   AS message_count"
         " FROM doc_placements p WHERE p.doc_id = ? ORDER BY p.created_at",
@@ -126,6 +126,7 @@ def list_placements(conn: sqlite3.Connection, doc_id: int) -> list[dict]:
         {
             "id": r["id"],
             "channel_id": r["channel_id"],
+            "pinned": bool(r["pinned"]),
             "created_at": r["created_at"],
             "updated_at": r["updated_at"],
             "message_count": r["message_count"],
@@ -147,6 +148,7 @@ def get_placement(
         "id": r["id"],
         "doc_id": r["doc_id"],
         "channel_id": r["channel_id"],
+        "pinned": bool(r["pinned"]),
         "created_at": r["created_at"],
         "updated_at": r["updated_at"],
     }
@@ -170,6 +172,16 @@ def upsert_placement(
     )
     conn.commit()
     return int(cur.lastrowid or 0)
+
+
+def set_placement_pinned(
+    conn: sqlite3.Connection, placement_id: int, pinned: bool, now: float
+) -> None:
+    conn.execute(
+        "UPDATE doc_placements SET pinned = ?, updated_at = ? WHERE id = ?",
+        (1 if pinned else 0, now, placement_id),
+    )
+    conn.commit()
 
 
 def delete_placement(conn: sqlite3.Connection, placement_id: int) -> None:

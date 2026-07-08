@@ -174,10 +174,24 @@ def _not_found() -> discord.NotFound:
     return discord.NotFound(_R(), "missing")  # type: ignore[arg-type]
 
 
+def _forbidden() -> discord.Forbidden:
+    class _R:
+        status = 403
+        reason = "Forbidden"
+
+    return discord.Forbidden(_R(), "nope")  # type: ignore[arg-type]
+
+
 class _FakeMessage:
     def __init__(self, channel: "_FakeChannel", mid: int) -> None:
         self._channel = channel
         self.id = mid
+
+    @property
+    def pinned(self) -> bool:
+        # Pin state lives on the channel: fetch_message mints a fresh message
+        # each call, so the channel is the single source of truth.
+        return self.id in self._channel.pinned_ids
 
     async def edit(self, *, embed=None) -> None:
         self._channel.log.append(("edit", self.id))
@@ -185,15 +199,28 @@ class _FakeMessage:
     async def delete(self) -> None:
         self._channel.order.remove(self.id)
         self._channel.present.discard(self.id)
+        self._channel.pinned_ids.discard(self.id)
         self._channel.log.append(("delete", self.id))
+
+    async def pin(self, *, reason=None) -> None:
+        if self._channel.pin_raises:
+            raise self._channel.pin_raises
+        self._channel.pinned_ids.add(self.id)
+        self._channel.log.append(("pin", self.id))
+
+    async def unpin(self, *, reason=None) -> None:
+        self._channel.pinned_ids.discard(self.id)
+        self._channel.log.append(("unpin", self.id))
 
 
 class _FakeChannel:
-    """Records send/edit/delete and tracks visible top→bottom order."""
+    """Records send/edit/delete/pin and tracks visible top→bottom order."""
 
-    def __init__(self, present_ids: list[int]) -> None:
+    def __init__(self, present_ids: list[int], pinned_ids: list[int] | None = None) -> None:
         self.present = set(present_ids)
         self.order = list(present_ids)
+        self.pinned_ids = set(pinned_ids or [])
+        self.pin_raises: Exception | None = None
         self._next = 1000
         self.log: list[tuple[str, int]] = []
 
@@ -211,15 +238,18 @@ class _FakeChannel:
         return _FakeMessage(self, mid)
 
 
-async def _run_sync(monkeypatch, present_ids, n_embeds, existing_ids):
-    channel = _FakeChannel(present_ids)
-
+async def _sync_on(monkeypatch, channel, n_embeds, existing_ids, pinned=False):
     async def _fake_resolve(bot, channel_id):
         return channel
 
     monkeypatch.setattr(docs_sync, "_resolve_channel", _fake_resolve)
     embeds = [discord.Embed(description=str(i)) for i in range(n_embeds)]
-    result = await docs_sync._sync_channel(None, 42, embeds, existing_ids)
+    return await docs_sync._sync_channel(None, 42, embeds, existing_ids, pinned)
+
+
+async def _run_sync(monkeypatch, present_ids, n_embeds, existing_ids, pinned=False):
+    channel = _FakeChannel(present_ids)
+    result = await _sync_on(monkeypatch, channel, n_embeds, existing_ids, pinned)
     return channel, result
 
 
@@ -256,6 +286,78 @@ async def test_sync_all_deleted_reposts_in_order(monkeypatch):
     assert result.message_ids == channel.order
     assert result.created == 3 and result.edited == 0
     assert 10 not in channel.present  # stale ids gone
+
+
+# ── pin reconcile ───────────────────────────────────────────────────
+#
+# The correctness story: the pin pass is delta-only, so a steady-state re-sync
+# adds zero new pins (Discord posts a system notice on every pin — re-pinning
+# would spam it). And a pin failure never downgrades the placement status.
+
+async def test_pin_pins_all_messages_bottom_up(monkeypatch):
+    channel, result = await _run_sync(monkeypatch, [10, 11], 2, [10, 11], pinned=True)
+    assert channel.pinned_ids == {10, 11}
+    assert result.pinned is True and result.pin_detail == ""
+    # Pinned bottom-up so the pins list reads top→bottom in doc order.
+    assert [e for e in channel.log if e[0] == "pin"] == [("pin", 11), ("pin", 10)]
+
+
+async def test_pin_is_idempotent_on_resync(monkeypatch):
+    # First sync pins both; a second identical sync must pin NOTHING again.
+    channel = _FakeChannel([10, 11])
+    await _sync_on(monkeypatch, channel, 2, [10, 11], pinned=True)
+    channel.log.clear()
+    result = await _sync_on(monkeypatch, channel, 2, [10, 11], pinned=True)
+    assert [e for e in channel.log if e[0] == "pin"] == []  # zero re-pins → no spam
+    assert channel.pinned_ids == {10, 11}
+    assert result.pinned is True
+
+
+async def test_unpin_when_flag_cleared(monkeypatch):
+    channel = _FakeChannel([10, 11], pinned_ids=[10, 11])
+    result = await _sync_on(monkeypatch, channel, 2, [10, 11], pinned=False)
+    assert channel.pinned_ids == set()
+    assert [e for e in channel.log if e[0] == "unpin"] == [("unpin", 10), ("unpin", 11)]
+    assert result.pinned is False
+
+
+async def test_unpin_idempotent_when_already_unpinned(monkeypatch):
+    channel, result = await _run_sync(monkeypatch, [10], 1, [10], pinned=False)
+    assert [e for e in channel.log if e[0] == "unpin"] == []
+
+
+async def test_pin_failure_does_not_fail_the_post(monkeypatch):
+    channel = _FakeChannel([10])
+    channel.pin_raises = _forbidden()
+    result = await _sync_on(monkeypatch, channel, 1, [10], pinned=True)
+    # Messages synced fine; only the pin didn't take.
+    assert result.status == "ok"
+    assert result.edited == 1
+    assert result.pin_detail  # explains the pin miss
+    assert channel.pinned_ids == set()
+
+
+def test_placement_pinned_roundtrip(tmp_path):
+    conn = _conn(tmp_path)
+    doc_id = docs_db.create_doc(conn, 1, "rules", "Rules", "b", "", 0, 1.0)
+    pid = docs_db.upsert_placement(conn, doc_id, 77, 1.0)
+
+    def _pinned() -> bool:
+        p = docs_db.get_placement(conn, doc_id, 77)
+        assert p is not None
+        return p["pinned"]
+
+    # Defaults to unpinned.
+    assert _pinned() is False
+    assert docs_db.list_placements(conn, doc_id)[0]["pinned"] is False
+
+    docs_db.set_placement_pinned(conn, pid, True, 2.0)
+    assert _pinned() is True
+    assert docs_db.list_placements(conn, doc_id)[0]["pinned"] is True
+
+    # upsert on an existing placement must NOT clobber the pin flag.
+    docs_db.upsert_placement(conn, doc_id, 77, 3.0)
+    assert _pinned() is True
 
 
 # ── image extraction ────────────────────────────────────────────────

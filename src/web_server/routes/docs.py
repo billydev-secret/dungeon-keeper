@@ -68,6 +68,10 @@ class PlacementBody(BaseModel):
     channel_id: str
 
 
+class PinBody(BaseModel):
+    pinned: bool
+
+
 def _sync_json(r: docs_sync.SyncResult) -> dict:
     return {
         "channel_id": str(r.channel_id),
@@ -77,6 +81,8 @@ def _sync_json(r: docs_sync.SyncResult) -> dict:
         "deleted": r.deleted,
         "message_count": len(r.message_ids),
         "detail": r.detail,
+        "pinned": r.pinned,
+        "pin_detail": r.pin_detail,
     }
 
 
@@ -90,7 +96,11 @@ def _doc_json(doc: dict, placements: list[dict], *, include_body: bool) -> dict:
         "updated_by": str(doc["updated_by"]),
         "body_len": len(doc["body_md"] or ""),
         "placements": [
-            {"channel_id": str(p["channel_id"]), "message_count": p["message_count"]}
+            {
+                "channel_id": str(p["channel_id"]),
+                "message_count": p["message_count"],
+                "pinned": bool(p.get("pinned")),
+            }
             for p in placements
         ],
     }
@@ -312,6 +322,32 @@ async def add_placement(
     if result.status == "missing_channel":
         raise HTTPException(status_code=400, detail="That channel isn't available.")
     return {"ok": result.status == "ok", "sync": _sync_json(result)}
+
+
+@router.put("/docs/{doc_key}/placements/{channel_id}/pin")
+async def set_placement_pin(
+    request: Request,
+    doc_key: str,
+    channel_id: int,
+    body: PinBody,
+    _: AuthenticatedUser = _MOD,
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    guild = _require_guild(ctx, guild_id)
+
+    def _load():
+        with ctx.open_db() as conn:
+            return docs_db.get_doc(conn, guild_id, doc_key)
+
+    doc = await run_query(_load)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Doc not found.")
+
+    result = await docs_sync.set_pin(ctx, guild, doc, channel_id, body.pinned)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Doc isn't posted in that channel.")
+    return {"ok": result.status == "ok" and not result.pin_detail, "sync": _sync_json(result)}
 
 
 @router.delete("/docs/{doc_key}/placements/{channel_id}")
