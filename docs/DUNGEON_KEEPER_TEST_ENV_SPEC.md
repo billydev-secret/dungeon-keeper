@@ -30,7 +30,9 @@ Checks that run at startup, before the bot starts handling events. Any failure l
 
 - **Token identity** — fetch the bot's own user from Discord, compare against the expected bot ID for the active environment. If the prod token was set with `BOT_ENV=dev`, the mismatch fails the check.
 - **DB path matches env** — dev path must contain `"dev"`; prod path must not. Catches a swapped path before any write happens.
-- **Guild identity** — if the bot finds itself in a guild whose ID doesn't match the configured one, it leaves that guild and shuts down. Prevents the prod bot from operating against the test guild if someone misinvites it.
+- **Guild identity** — the bot must be in its configured home guild (`GUILD_ID_<ENV>`); if it isn't, it exits. Behaviour on *additional* guilds is environment-specific:
+  - **dev** is single-guild: any guild other than the configured test guild is left immediately and the bot shuts down, so a misinvited dev bot can never act in the wrong server.
+  - **prod (Dungeon Keeper) is multi-guild**: additional guilds are legitimate and are only logged, never left. The check still requires membership in the configured home guild. (The `beta_tools` / puppet bots are a separate, deliberately single-guild application — their `on_guild_join` leaves anything but the dev server; that is intended, not a bug.)
 - **One-way refresh** — the dev-DB refresh script hard-codes source = prod and destination = dev. It refuses any override that would reverse them.
 - **Startup banner** — on `on_ready`, the bot prints (and posts to the dev audit channel) the active env, the bot user, the guild, and the DB path. Prod's banner is colour-coded red in the terminal.
 
