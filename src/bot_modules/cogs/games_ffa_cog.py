@@ -123,6 +123,19 @@ def build_ffa_embed(
     return embed
 
 
+def _find_prompt_entry(payload: dict, message_id: int) -> dict | None:
+    """The per-message ``prompts`` entry for ``message_id`` (or None).
+
+    Every posted prompt gets its own entry — each embed message stays
+    independently replyable, so its running reply-count lives on the entry
+    rather than in one game-wide field.
+    """
+    for entry in payload.get("prompts") or []:
+        if int(entry.get("message_id", 0)) == int(message_id):
+            return entry
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Embed mode (── /games play ffa ──)
 # Standard embed with anonymous replies posted back into the channel and a
@@ -211,16 +224,21 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
             )
             return
 
-        # Bump the running count and refresh the footer.
+        # Bump THIS message's running count and refresh its own footer. Each
+        # posted prompt tracks replies independently, so a reply to an earlier
+        # prompt never disturbs a later one's count.
         def _bump(payload):
-            payload["reply_count"] = int(payload.get("reply_count", 0)) + 1
+            entry = _find_prompt_entry(payload, root_id)
+            if entry is not None:
+                entry["reply_count"] = int(entry.get("reply_count", 0)) + 1
 
         payload = await modify_payload(view.db, view.game_id, _bump)
         try:
             if view._game_msg:
+                entry = _find_prompt_entry(payload, root_id)
+                count = int(entry.get("reply_count", 0)) if entry else 0
                 embed = build_ffa_embed(
-                    view.text, view.label, colour=view.colour,
-                    reply_count=int(payload.get("reply_count", 0)),
+                    view.text, view.label, colour=view.colour, reply_count=count,
                 )
                 await view._game_msg.edit(embed=embed)
         except Exception:
@@ -350,23 +368,52 @@ class FFAEmbedView(discord.ui.View):
             return
 
         label, text = picked
-        self.label = label
-        self.text = text
-        self.colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
+        colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
+
+        # Post the next prompt as a NEW message and leave every earlier prompt
+        # fully interactive — its Reply / New Alias buttons keep working, and its
+        # own reply-count footer keeps ticking. Each message carries its own view
+        # (bound to its own id) and its own `prompts` entry; identity and the
+        # reply-reference already key off the per-message id, so replies to
+        # different prompts never collide. The game-wide `seen` set still means
+        # Next never repeats a prompt across the whole game. The DB anchor stays
+        # on the launch message so recovery can walk the whole `prompts` list.
+        # Send first: if it fails, nothing about the existing prompts changes.
+        embed = build_ffa_embed(text, label, colour=colour, reply_count=0)
+        channel = self._game_msg.channel if self._game_msg else interaction.channel
+        if channel is None or isinstance(
+            channel, (discord.ForumChannel, discord.CategoryChannel)
+        ):
+            await interaction.followup.send(
+                "Couldn't post the next prompt in this channel.", ephemeral=True
+            )
+            return
+        new_view = FFAEmbedView(
+            self.game_id, self.host_id, text, label, colour, self.db, self.bot,
+            kind=self.kind, tags=self.tags,
+        )
+        try:
+            new_msg = await channel.send(embed=embed, view=new_view)
+        except discord.HTTPException:
+            log.debug("ffa: failed to post next prompt", exc_info=True)
+            await interaction.followup.send(
+                "Couldn't post the next prompt — please try again.", ephemeral=True
+            )
+            return
+
+        new_view._game_msg = new_msg
+        self.bot.active_views[self.game_id] = new_view
+        self.bot.add_view(new_view, message_id=new_msg.id)
 
         def _advance(p):
             p["prompt"] = text
             p["label"] = label
-            p["reply_count"] = 0
             p["seen"] = [*seen, text]
+            p.setdefault("prompts", []).append(
+                {"message_id": new_msg.id, "prompt": text, "label": label, "reply_count": 0}
+            )
 
         await modify_payload(self.db, self.game_id, _advance)
-        try:
-            if self._game_msg:
-                embed = build_ffa_embed(self.text, self.label, colour=self.colour, reply_count=0)
-                await self._game_msg.edit(embed=embed, view=self)
-        except Exception:
-            log.debug("ffa: failed to advance prompt embed", exc_info=True)
 
     @discord.ui.button(
         label="Info",
@@ -525,8 +572,11 @@ class FFACog(commands.Cog):
                 "kind": kind,
                 "tags": tags,
                 "mode": "embed",
-                "reply_count": 0,
                 "seen": [text],
+                # One entry per posted prompt message — seeded once the launch
+                # message id is known (below). Each entry drives an independently
+                # replyable embed with its own reply-count footer.
+                "prompts": [],
             },
         )
         embed = build_ffa_embed(text, label, colour=colour, reply_count=0)
@@ -543,6 +593,13 @@ class FFACog(commands.Cog):
 
         view._game_msg = msg
         await update_game_message(self.db, game_id, msg.id)
+
+        def _seed(p):
+            p.setdefault("prompts", []).append(
+                {"message_id": msg.id, "prompt": text, "label": label, "reply_count": 0}
+            )
+
+        await modify_payload(self.db, game_id, _seed)
         await update_session(self.db, channel.id, game_id, [host_id])
         log.info("Game %s (ffa/embed) posted by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
         return game_id
@@ -616,7 +673,12 @@ class FFACog(commands.Cog):
         return game_id
 
     async def recover_game(self, row, payload, channel, message) -> bool:
-        """Re-register a stateful embed-mode FFA view after a restart.
+        """Re-register the stateful embed-mode FFA views after a restart.
+
+        A game may have several posted prompts, each an independently replyable
+        message. We rebuild one view per ``prompts`` entry (bound to its own
+        message id) so every prompt's buttons come back alive, not just the
+        latest. Messages that were deleted while the bot was down are skipped.
 
         Banner games are fire-and-forget (ended immediately, never persisted as
         active), so only embed games recover.
@@ -624,17 +686,61 @@ class FFACog(commands.Cog):
         if payload.get("mode") != "embed":
             return False
         game_id = row["game_id"]
-        label = payload.get("label") or "TRUTH"
-        text = payload.get("prompt", "") or ""
-        colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
-        view = FFAEmbedView(
-            game_id, int(row["host_id"]), text, label, colour, self.db, self.bot,
-            kind=payload.get("kind") or "random", tags=list(payload.get("tags") or []),
+        host_id = int(row["host_id"])
+        kind = payload.get("kind") or "random"
+        tags = list(payload.get("tags") or [])
+
+        entries = list(payload.get("prompts") or [])
+        if not entries:
+            # Legacy game from before per-message prompts existed: it only ever
+            # had the single anchor message. Synthesize its entry and persist it
+            # so subsequent replies find a home for their count.
+            entries = [{
+                "message_id": message.id,
+                "prompt": payload.get("prompt", "") or "",
+                "label": payload.get("label") or "TRUTH",
+                "reply_count": int(payload.get("reply_count", 0)),
+            }]
+
+            def _migrate(p):
+                p["prompts"] = entries
+
+            await modify_payload(self.db, game_id, _migrate)
+
+        recovered = 0
+        latest_view: FFAEmbedView | None = None
+        for entry in entries:
+            mid = entry.get("message_id")
+            if not mid:
+                continue
+            # The anchor message is already fetched; the rest we fetch by id and
+            # skip any that were deleted while the bot was offline.
+            if int(mid) == int(message.id):
+                msg = message
+            else:
+                try:
+                    msg = await channel.fetch_message(int(mid))
+                except Exception:
+                    continue
+            label = entry.get("label") or "TRUTH"
+            text = entry.get("prompt", "") or ""
+            colour = _EMBED_COLOUR_FOR_LABEL.get(label, _DEFAULT_EMBED_COLOUR)
+            view = FFAEmbedView(
+                game_id, host_id, text, label, colour, self.db, self.bot,
+                kind=kind, tags=tags,
+            )
+            view._game_msg = msg
+            self.bot.add_view(view, message_id=msg.id)
+            latest_view = view
+            recovered += 1
+
+        if latest_view is None:
+            return False
+        self.bot.active_views[game_id] = latest_view
+        log.info(
+            "Recovered ffa (embed) game %s (%d prompt message(s)) in #%s",
+            game_id, recovered, getattr(channel, "name", channel.id),
         )
-        view._game_msg = message
-        self.bot.active_views[game_id] = view
-        self.bot.add_view(view, message_id=message.id)
-        log.info("Recovered ffa (embed) game %s in #%s", game_id, getattr(channel, "name", channel.id))
         return True
 
 
