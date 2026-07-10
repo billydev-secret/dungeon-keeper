@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Full pytest regression suite. Run before pushing / opening a PR.
+# Thin wrapper — the canonical gate is scripts/gate.py (cross-platform).
 set -euo pipefail
-cd "$(dirname "$0")/.."
-exec ./.venv/Scripts/python.exe -m pytest "$@"
+exec python3 "$(dirname "$0")/gate.py" "$@"

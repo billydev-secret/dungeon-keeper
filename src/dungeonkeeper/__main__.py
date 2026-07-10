@@ -79,6 +79,36 @@ def _setup_logging() -> None:
     _log_queue_listener = listener
 
 
+def _record_deploy(log: logging.Logger) -> None:
+    """Move the `deployed` git tag to the booted commit so `git describe`
+    always answers "what's running in prod". Best-effort: never blocks boot."""
+    import subprocess
+
+    try:
+        desc = subprocess.run(
+            ["git", "describe", "--always", "--dirty"],
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if desc.returncode != 0:
+            return
+        rev = desc.stdout.strip()
+        subprocess.run(
+            ["git", "tag", "-f", "deployed"],
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+            timeout=10,
+        )
+        if rev.endswith("-dirty"):
+            log.warning("Booted at %s — WORKING TREE IS DIRTY (uncommitted changes are live)", rev)
+        else:
+            log.info("Booted at %s (tag 'deployed' moved)", rev)
+    except Exception:
+        log.warning("Could not record deploy tag", exc_info=True)
+
+
 def main() -> None:
     load_dotenv(override=True)
 
@@ -89,6 +119,8 @@ def main() -> None:
     _setup_logging()
 
     log = logging.getLogger("dungeonkeeper.bot")
+
+    _record_deploy(log)
 
     boot_cfg = load_config()
     check_db_path(boot_cfg)

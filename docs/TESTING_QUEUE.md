@@ -30,6 +30,20 @@ live pass:
 - [ ] Sanity-check the 3s ACK: in a cold DM channel the `defer` should keep
       the interaction alive even when opening the DM is slow.
 
+### Ops hardening — watchdog DMs, deploy tag, lockfiles (uncommitted)
+
+- [ ] Install + start the watchdog:
+      `sudo cp deploy/dungeon-keeper-watchdog.service /etc/systemd/system/ &&
+      sudo systemctl daemon-reload && sudo systemctl enable --now dungeon-keeper-watchdog`
+- [ ] `python3 scripts/watchdog.py --test` → you get a 🧪 DM.
+- [ ] Live drill: `sudo systemctl stop dungeon-keeper`, wait ~40 s → 🔴 DM;
+      `start` it again → 🟢 recovery DM.
+- [ ] After the next bot restart: `git describe --always deployed` names the
+      running commit, and the boot log shows "Booted at …" (warns if dirty).
+- [ ] First push after committing: CI is green on Python 3.14 with
+      `requirements-dev.lock` (watch the Actions run — first lockfile install
+      is the risky one).
+
 ### Truth or Dare — `single_choice` (one category per player)  (uncommitted)
 
 `/games play traditional` gained a `single_choice` boolean. When on, the four

@@ -1,0 +1,19 @@
+# Watchdog for dungeon-keeper.service — DMs the owner when the bot goes down.
+# Install:
+#   sudo cp deploy/dungeon-keeper-watchdog.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now dungeon-keeper-watchdog
+[Unit]
+Description=Dungeon Keeper watchdog (DMs the owner if the bot goes down)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ben
+ExecStart=/usr/bin/python3 /home/ben/discord-bots/dungeon-keeper/scripts/watchdog.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+version: 2
+updates:
+  # Bumps the pins in requirements*.lock (pip-compile-compatible files).
+  # All updates land as one weekly grouped PR; the Test Suite workflow runs
+  # the full gate against it, so a green PR = the new versions are tested.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      python-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
