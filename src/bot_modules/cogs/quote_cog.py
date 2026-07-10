@@ -49,11 +49,13 @@ _PREVIEW_TIMEOUT = 120
 
 # Reply to a message and ping a role whose name normalizes to this, and the bot
 # renders a quote card of the replied-to message (MakeItAQuote-style trigger).
-_TRIGGER_ROLE_NAME = "make_it_a_quote"
+_TRIGGER_ROLE_NAME = "makeitaquote"
 
 
 def _normalize_role_name(name: str) -> str:
-    return name.strip().lower().replace(" ", "_")
+    # Fold to lowercase alphanumerics so "MakeItaQuote", "make_it_a_quote",
+    # and "Make It A Quote" all match the trigger.
+    return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
 # ── Shared render path ────────────────────────────────────────────────────────
@@ -543,7 +545,7 @@ class QuoteCog(commands.Cog):
 
     @app_commands.command(
         name="quote-role",
-        description='Create the mentionable "make_it_a_quote" reply-to-quote role.',
+        description='Create the mentionable "MakeItAQuote" reply-to-quote role.',
     )
     @app_commands.default_permissions(manage_roles=True)
     @app_commands.guild_only()
@@ -586,7 +588,7 @@ class QuoteCog(commands.Cog):
 
         try:
             role = await guild.create_role(
-                name="make_it_a_quote",
+                name="MakeItAQuote",
                 mentionable=True,
                 reason=f"Reply-to-quote trigger (by {interaction.user})",
             )
@@ -663,13 +665,32 @@ class QuoteCog(commands.Cog):
             return
 
         try:
-            await channel.send(
+            posted = await channel.send(
                 file=discord.File(io.BytesIO(card_bytes), filename="quote.png"),
                 reference=target,
                 mention_author=False,
             )
         except discord.HTTPException:
             log.warning("quote: reply-trigger failed to post card in %s", channel.id)
+            return
+
+        # Seed the starboard reaction, matching the context-menu Post button.
+        guild = message.guild
+        if guild is not None:
+            gid = guild.id
+            try:
+                def _get_cfg():
+                    with self.bot.ctx.open_db() as conn:
+                        return get_starboard_config(conn, gid)
+
+                cfg = await asyncio.to_thread(_get_cfg)
+                emoji = cfg["emoji"] if cfg else "⭐"
+                await posted.add_reaction(emoji)
+            except Exception:
+                log.warning(
+                    "quote: reply-trigger could not add starboard reaction",
+                    exc_info=True,
+                )
 
 
 async def setup(bot: "Bot") -> None:

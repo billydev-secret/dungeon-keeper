@@ -31,3 +31,6 @@ coverage_final.json
 
 # Mod-uploaded doc images (served publicly via /static)
 src/web_server/static/doc-images/
+
+# Per-guild uploaded quote border frames (runtime data next to the dev DB)
+quote_borders/

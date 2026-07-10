@@ -19,7 +19,14 @@ import bot_modules.cogs.quote_cog as qc
 
 
 def test_normalize_role_name_matches_variants():
-    for variant in ("make_it_a_quote", "Make It A Quote", "  MAKE_IT_A_QUOTE  ", "make it a quote"):
+    for variant in (
+        "make_it_a_quote",
+        "Make It A Quote",
+        "  MAKE_IT_A_QUOTE  ",
+        "make it a quote",
+        "MakeItaQuote",
+        "MakeItAQuote",
+    ):
         assert qc._normalize_role_name(variant) == qc._TRIGGER_ROLE_NAME
     assert qc._normalize_role_name("quotes") != qc._TRIGGER_ROLE_NAME
 
@@ -36,8 +43,10 @@ def _target(content: str = "hello world", msg_type=discord.MessageType.default):
 
 
 def _message(*, bot=False, guild=True, reference=True, roles=None, target=None):
+    posted = MagicMock()
+    posted.add_reaction = AsyncMock()
     channel = MagicMock(spec=discord.TextChannel)
-    channel.send = AsyncMock()
+    channel.send = AsyncMock(return_value=posted)
     channel.fetch_message = AsyncMock(return_value=target)
     channel.id = 999
     ref = None
@@ -45,11 +54,16 @@ def _message(*, bot=False, guild=True, reference=True, roles=None, target=None):
         ref = SimpleNamespace(message_id=123, resolved=target)
     return SimpleNamespace(
         author=SimpleNamespace(bot=bot),
-        guild=object() if guild else None,
+        guild=SimpleNamespace(id=1) if guild else None,
         reference=ref,
         role_mentions=roles if roles is not None else [_role("make_it_a_quote")],
         channel=channel,
     )
+
+
+def _cog():
+    """Stub cog exposing the .bot.ctx.open_db() context manager the star uses."""
+    return SimpleNamespace(bot=SimpleNamespace(ctx=MagicMock()))
 
 
 @pytest.fixture
@@ -59,16 +73,20 @@ def stub_render(monkeypatch):
     return fake
 
 
-async def _run(message):
-    # The listener never touches ``self``; a bare object stands in for the cog.
-    await qc.QuoteCog._on_quote_trigger(cast(qc.QuoteCog, object()), message)
+async def _run(message, cog=None):
+    # Guard-path cases bail before touching ``self``; the happy path needs a cog
+    # stub for the starboard lookup.
+    await qc.QuoteCog._on_quote_trigger(cast(qc.QuoteCog, cog or object()), message)
 
 
-async def test_triggers_on_reply_with_role_mention(stub_render):
+async def test_triggers_on_reply_with_role_mention(stub_render, monkeypatch):
+    monkeypatch.setattr(qc, "get_starboard_config", lambda conn, gid: None)
     msg = _message(target=_target())
-    await _run(msg)
+    await _run(msg, cog=_cog())
     stub_render.assert_awaited_once()
     msg.channel.send.assert_awaited_once()
+    # Auto-star: the posted card gets the default starboard reaction.
+    msg.channel.send.return_value.add_reaction.assert_awaited_once_with("⭐")
 
 
 async def test_ignores_bot_author(stub_render):
