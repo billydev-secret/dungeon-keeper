@@ -22,7 +22,7 @@ _PROMPT_CONFIG_PATH = (
     Path(__file__).parent.parent.parent / "bot_modules" / "games" / "prompt_config.json"
 )
 
-VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo", "ffa", "traditional"}
+VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo", "ffa", "traditional", "pen_pals"}
 
 # Traditional Truth-or-Dare stores exactly one of these four category tags on
 # every question. The tag *is* the category (matching the cog's CATEGORIES), so

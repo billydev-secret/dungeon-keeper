@@ -5,7 +5,9 @@ import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
-export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, optSchema = [], bankHint = "", bankCategories = null }) {
+// hasStatus=false drops the Enabled/options section for features that manage
+// their own enable switch outside games_game_config (e.g. Pen Pals config).
+export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, hasStatus = true, optSchema = [], bankHint = "", bankCategories = null }) {
   function ctrl(name) { return container.querySelector('[data-ctrl="' + name + '"]'); }
   function region(name) { return container.querySelector('[data-region="' + name + '"]'); }
 
@@ -38,18 +40,21 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
 
   const bankHtml = hasBank ? buildBankHtml() : "";
 
+  const statusHtml = hasStatus
+    ? "<section>" +
+      '<div class="section-label">Status</div>' +
+      '<div style="margin-bottom:' + (optSchema.length ? "16px" : "12px") + ';">' +
+      '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">' +
+      '<input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />' +
+      "<span>Enabled on this server</span></label></div>" +
+      optFieldsHtml +
+      '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">' +
+      '<button class="btn btn-primary" data-action="save-config">Save</button>' +
+      '<span data-status="config" class="save-status"></span></div></section>'
+    : "";
+
   container.innerHTML = '<div class="panel"><header><h2>' + esc(gameIcon) + " " + esc(gameName) + "</h2></header>" +
-    "<section>" +
-    '<div class="section-label">Status</div>' +
-    '<div style="margin-bottom:' + (optSchema.length ? "16px" : "12px") + ';">' +
-    '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">' +
-    '<input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />' +
-    "<span>Enabled on this server</span></label></div>" +
-    optFieldsHtml +
-    '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">' +
-    '<button class="btn btn-primary" data-action="save-config">Save</button>' +
-    '<span data-status="config" class="save-status"></span></div></section>' +
-    bankHtml + "</div>";
+    statusHtml + bankHtml + "</div>";
 
   async function loadConfig() {
     try {
@@ -68,25 +73,26 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     }
   }
 
-  container.querySelector('[data-action="save-config"]').addEventListener("click", async () => {
-    const st = container.querySelector('[data-status="config"]');
-    const options = {};
-    for (const opt of optSchema) {
-      const el = container.querySelector('[data-opt="' + opt.key + '"]');
-      if (!el) continue;
-      if (opt.type === "bool") options[opt.key] = el.checked;
-      else if (opt.type === "text") options[opt.key] = el.value.trim();
-      else options[opt.key] = parseInt(el.value, 10) || 0;
-    }
-    try {
-      await apiPut("/api/games/config/games/" + encodeURIComponent(gameType), { enabled: ctrl("enabled").checked, options });
-      showStatus(st, true, "Saved");
-    } catch (err) {
-      showStatus(st, false, err.message);
-    }
-  });
-
-  loadConfig();
+  if (hasStatus) {
+    container.querySelector('[data-action="save-config"]').addEventListener("click", async () => {
+      const st = container.querySelector('[data-status="config"]');
+      const options = {};
+      for (const opt of optSchema) {
+        const el = container.querySelector('[data-opt="' + opt.key + '"]');
+        if (!el) continue;
+        if (opt.type === "bool") options[opt.key] = el.checked;
+        else if (opt.type === "text") options[opt.key] = el.value.trim();
+        else options[opt.key] = parseInt(el.value, 10) || 0;
+      }
+      try {
+        await apiPut("/api/games/config/games/" + encodeURIComponent(gameType), { enabled: ctrl("enabled").checked, options });
+        showStatus(st, true, "Saved");
+      } catch (err) {
+        showStatus(st, false, err.message);
+      }
+    });
+    loadConfig();
+  }
   if (hasBank) initBank();
 
   return { unmount() {} };

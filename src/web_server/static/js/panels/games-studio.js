@@ -6,7 +6,7 @@ import { apiPut, showStatus } from "../config-helpers.js";
 const GAME_NAMES = {
   wyr: "Would You Rather", nhie: "Never Have I Ever", mlt: "Most Likely To",
   rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
-  photo: "Photo Challenge",
+  photo: "Photo Challenge", pen_pals: "Pen Pals",
 };
 
 const GAME_HINTS = {
@@ -18,6 +18,7 @@ const GAME_HINTS = {
   clapback: "Generates provocative debate topics.",
   ama:      "Generates anonymous question prompts.",
   photo:    "Generates photo-challenge prompts players answer with a picture.",
+  pen_pals: "Generates getting-to-know-you conversation starters for matched pen pals.",
 };
 
 export function mount(container, params = {}) {

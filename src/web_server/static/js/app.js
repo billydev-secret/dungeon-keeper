@@ -210,6 +210,8 @@ const SECTIONS = [
       ]},
       { heading: "Pen Pals", items: [
         { id: "config-pen-pals",  label: "Config",     module: "./panels/config-pen-pals.js", adminOnly: true },
+        { id: "games-pen-pals",   label: "Questions",  module: "./panels/games-pen-pals.js" },
+        { id: "games-pen-pals-studio", label: "Prompts & AI", module: "./panels/games-studio.js", gt: "pen_pals" },
       ]},
     ],
   },

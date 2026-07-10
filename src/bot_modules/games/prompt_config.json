@@ -50,6 +50,12 @@
       "descriptor": "Photo Challenge prompts — playful dares to post a single photo",
       "user_prompt": "Generate ONE Photo Challenge prompt: a short, playful dare that anyone can answer by posting a single photo from their phone right now (e.g. 'the last photo in your camera roll', 'your most chaotic selfie', 'whatever's closest to you'). Achievable in seconds, no special setup. Return only the prompt as a single sentence. No quotes, no numbering, no preamble.",
       "max_tokens": 120
+    },
+    "pen_pals": {
+      "name": "Pen Pals",
+      "descriptor": "Pen Pals conversation-starter questions",
+      "user_prompt": "Generate ONE short, engaging getting-to-know-you question for two community members who were just matched as pen pals. It should be easy to answer but open the door to a real conversation. Under 150 characters. Return only the question - no quotes, no numbering.",
+      "max_tokens": 80
     }
   }
 }

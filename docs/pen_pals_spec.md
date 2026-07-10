@@ -9,11 +9,12 @@ Members opt in to a pairing pool. When two or more are waiting, the bot creates 
 | `/penpals join` | Slash | Everyone (server only) | Enter the pairing pool; if a partner is already waiting, pair immediately |
 | `/penpals leave` | Slash | Everyone (server only) | Leave the pool before being paired |
 | `/penpals status` | Slash | Everyone (server only) | Ephemeral: current pairing state, time remaining, or pool position |
-| `/penpals new-question` | Slash | Everyone (active channel only) | Replace the current question with a fresh one from the bank (max 3 per session) |
+| `/penpals new-question` | Slash | Session members (active channel only) | Replace the current question with a fresh one from the bank (max 3 per session) |
 | `/penpals end` | Slash | Everyone (active channel only) | Start a 15-second confirm to close your current pen pal early |
 | `/penpals pair <user1> <user2>` | Slash | Manage Guild | Force-pair two specific members, bypassing the pool |
 | `/penpals round` | Slash | Manage Guild | Drain the current pool — pair everyone waiting, leave the odd one out in the pool |
 | Pen Pals config | Web (dashboard) | Admin | Set category, opt-in role, question category, auto-round schedule |
+| Pen Pals questions | Web (dashboard) | Admin / Game Host | Question-bank manager (`game_type = 'pen_pals'`) plus a Prompts & AI studio for the AI-fallback prompt |
 
 ## Behaviour
 
@@ -25,7 +26,7 @@ Members opt in to a pairing pool. When two or more are waiting, the bot creates 
 
 ### Channel lifecycle
 
-**Creation.** The bot creates a text channel under the configured Pen Pals category. Name format: `penpals-<user1>-<user2>` (display names, lowercased, spaces replaced with `-`, truncated to 100 chars total). Permissions: only the two members and the bot can view and send.
+**Creation.** The bot creates a text channel under the configured Pen Pals category. Name format: `penpals-<user1>-<user2>` (display names, lowercased, spaces replaced with `-`, truncated to 100 chars total). Permissions: only the two members and the bot can view and send. When the guild's question category is `all` (NSFW prompts included), the channel is created age-restricted so the channel gate matches the content that can appear in it.
 
 The bot posts two messages in sequence and pins the first:
 
@@ -57,7 +58,7 @@ The expiry timestamp uses Discord's absolute + relative format so both users see
 
 ### Questions
 
-Questions are drawn from `games_question_bank` where `game_type = 'pen_pals'`. Each question is chosen at random from the guild's preferred category (SFW or SFW+NSFW depending on config). The pair's question history is tracked per session to avoid repeating within the 72-hour window. If the bank is exhausted the bot falls back to AI generation using the same prompt path as the other bank-backed games.
+Questions are drawn from `games_question_bank` where `game_type = 'pen_pals'`, using the shared tags model: rows tagged `nsfw` are only served when the guild's question category is `all`. The pair's question history is tracked per session to avoid repeating within the 72-hour window. If the bank is exhausted the bot falls back to AI generation using the same prompt path as the other bank-backed games (`prompt_config.json` → `games.pen_pals`, editable in the dashboard studio); the AI fallback always generates SFW — NSFW prompts come only from the curated bank.
 
 **Automatic cadence.** Every 24 hours after pairing, the bot posts a new question and pings both members:
 
