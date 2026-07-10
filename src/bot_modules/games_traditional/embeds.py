@@ -68,8 +68,14 @@ def build_tod_embed(
         value = "\n".join(members_in_cat) if members_in_cat else "—"
         embed.add_field(name=CAT_LABELS[cat], value=value, inline=True)
 
-    embed.set_footer(text=f"{GAME_ICONS['traditional']} Truth or Dare")
+    embed.set_footer(text=_footer_text(payload.get("single_choice", False)))
     return embed
+
+
+def _footer_text(single_choice: bool) -> str:
+    """Footer line, tagged with the pick mode when single-choice is on."""
+    base = f"{GAME_ICONS['traditional']} Truth or Dare"
+    return f"{base} • One category each" if single_choice else base
 
 
 def build_recap_embed(
@@ -108,23 +114,30 @@ def build_recap_embed(
 def build_lobby_embed(
     host_name: str,
     colour: "discord.Colour | None" = None,
+    single_choice: bool = False,
 ) -> discord.Embed:
     """Build the initial lobby embed shown when ``/traditional`` is invoked.
 
     Distinct from :func:`build_tod_embed` only in the description and
-    the hard-coded zero counts (no payload required yet).
+    the hard-coded zero counts (no payload required yet). When
+    ``single_choice`` is on, the prompt and footer say so up front.
     """
     if colour is None:
         colour = discord.Colour(BRAND_COLOR)
+    description = (
+        "Pick the one category you're up for below to join!"
+        if single_choice
+        else "Select your preferences below to join!"
+    )
     embed = discord.Embed(
         title=f"{GAME_ICONS['traditional']} TRUTH OR DARE",
-        description="Select your preferences below to join!",
+        description=description,
         color=colour,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Participants", value="0", inline=True)
     embed.add_field(name="Questions Asked", value="0", inline=True)
-    embed.set_footer(text=f"{GAME_ICONS['traditional']} Truth or Dare")
+    embed.set_footer(text=_footer_text(single_choice))
     return embed
 
 

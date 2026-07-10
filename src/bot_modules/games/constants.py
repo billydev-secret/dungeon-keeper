@@ -110,7 +110,10 @@ SCHEDULE_OPTION_SCHEMA = {
     'photo': [
         {'name': 'prompt', 'label': 'Custom challenge (optional)', 'type': 'str', 'default': ''},
     ],
-    'traditional': [],
+    'traditional': [
+        {'name': 'single_choice', 'label': 'One category per player (radio-style)',
+         'type': 'bool', 'default': False},
+    ],
     'compliment': [],
     'mfk': [
         {'name': 'options', 'label': 'Custom categories (comma-separated, optional)',
@@ -219,7 +222,9 @@ HOW_TO_PLAY = {
         "2. The host clicks **Ask Question**, the bot picks a player from the pool, "
         "and the host writes a custom question for them\n"
         "3. Each player gets one question per category they opted into\n\n"
-        "💡 Players who haven't been asked yet are picked first to keep things fair."
+        "💡 Players who haven't been asked yet are picked first to keep things fair.\n"
+        "💡 Host tip: pass **single_choice** when starting the game to make each "
+        "player pick just one category (the buttons act like radio buttons)."
     ),
     'compliment': (
         "💛 **Spin the Compliment**\n"

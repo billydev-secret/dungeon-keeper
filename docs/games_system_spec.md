@@ -9,7 +9,7 @@ A 19-game party-games suite. Every game is one slash command that spins up a pub
 | Game | Command | Permission | Notes |
 |---|---|---|---|
 | Free For All | `/ffa question:<str>` | Everyone | Anonymous reply modal posts via the bot |
-| Truth or Dare | `/traditional` | Everyone | SFW/NSFW Truth & Dare opt-in pools |
+| Truth or Dare | `/traditional single_choice:[bool]` | Everyone | SFW/NSFW Truth & Dare opt-in pools; `single_choice:true` makes each player pick exactly one category (radio-style) |
 | Spin the Compliment | `/compliment` | Everyone | Derangement-paired giver → receiver |
 | Marry, Fornicate, Kiss | `/mfk options:[csv]` | Everyone | `options:` overrides the three default labels |
 | Would You Rather | `/wyr question:[a\|b]` | Everyone | Multi-round; per-round question queue |

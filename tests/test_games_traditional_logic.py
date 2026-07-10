@@ -82,6 +82,35 @@ def test_toggle_pref_handles_multiple_users_independently():
     assert payload["prefs"] == {"1": ["sfw_truth"], "2": ["nsfw_dare"]}
 
 
+def test_toggle_pref_single_choice_replaces_existing_pick():
+    """In single-choice mode a new pick swaps out the old one (radio-style)."""
+    payload: dict = {}
+    toggle_pref(payload, 42, "sfw_truth", single_choice=True)
+    action = toggle_pref(payload, 42, "nsfw_dare", single_choice=True)
+    assert action == "switched"
+    assert payload["prefs"]["42"] == ["nsfw_dare"]
+    # Still a single participant entry after the swap
+    assert payload["participants"] == [42]
+
+
+def test_toggle_pref_single_choice_first_pick_is_a_plain_add():
+    """A player's first pick in single-choice mode is an ordinary add, not a swap."""
+    payload: dict = {}
+    action = toggle_pref(payload, 42, "sfw_dare", single_choice=True)
+    assert action == "added"
+    assert payload["prefs"]["42"] == ["sfw_dare"]
+
+
+def test_toggle_pref_single_choice_deselects_to_empty():
+    """Tapping the already-selected category in single-choice mode clears it."""
+    payload: dict = {}
+    toggle_pref(payload, 42, "sfw_truth", single_choice=True)
+    action = toggle_pref(payload, 42, "sfw_truth", single_choice=True)
+    assert action == "removed"
+    assert payload["participants"] == []
+    assert "42" not in payload["prefs"]
+
+
 # ── record_asked ─────────────────────────────────────────────────────
 
 
@@ -310,6 +339,21 @@ def test_build_tod_embed_has_footer():
     embed = build_tod_embed("Alice", {})
     assert embed.footer.text is not None
     assert "Truth or Dare" in embed.footer.text
+
+
+def test_build_tod_embed_footer_flags_single_choice():
+    plain = build_tod_embed("Alice", {})
+    single = build_tod_embed("Alice", {"single_choice": True})
+    assert "One category each" not in (plain.footer.text or "")
+    assert "One category each" in (single.footer.text or "")
+
+
+def test_build_lobby_embed_single_choice_changes_prompt_and_footer():
+    plain = build_lobby_embed("Alice")
+    single = build_lobby_embed("Alice", single_choice=True)
+    assert "as many" not in (plain.description or "")  # default prompt unchanged
+    assert "one category" in (single.description or "").lower()
+    assert "One category each" in (single.footer.text or "")
 
 
 # ── build_recap_embed ────────────────────────────────────────────────

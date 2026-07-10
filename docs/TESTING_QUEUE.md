@@ -30,6 +30,27 @@ live pass:
 - [ ] Sanity-check the 3s ACK: in a cold DM channel the `defer` should keep
       the interaction alive even when opening the DM is slow.
 
+### Truth or Dare — `single_choice` (one category per player)  (uncommitted)
+
+`/games play traditional` gained a `single_choice` boolean. When on, the four
+category buttons act like radio buttons: a player's second pick swaps out the
+first (`toggle_pref(..., single_choice=True)`). Also exposed as a scheduler
+option and stored in the game payload so it survives a bot restart. Logic +
+embed unit tests cover it; the Discord-button behaviour needs a live pass:
+
+- [ ] `/games play traditional single_choice:true` → lobby says "Pick the one
+      category you're up for" and the footer reads "One category each".
+- [ ] Pick SFW Truth, then tap SFW Dare → ephemeral says "Switched to SFW
+      Dare", and the embed shows you under only one category.
+- [ ] Tap your single selected category again → it deselects and you drop out
+      of the participant list.
+- [ ] Default `/games play traditional` (no option) still lets you opt into
+      multiple categories, unchanged.
+- [ ] Schedule a traditional game from the dashboard with the "One category
+      per player" box checked → the launched game runs in single-choice mode.
+- [ ] Restart the bot mid-game → recovered game still enforces single-choice
+      (flag read from the payload, not the view).
+
 ---
 
 ## Done

@@ -33,7 +33,7 @@ CAT_LABELS: dict[str, str] = {
 
 
 def toggle_pref(
-    payload: dict[str, Any], user_id: int, category: str
+    payload: dict[str, Any], user_id: int, category: str, single_choice: bool = False
 ) -> str:
     """Toggle ``category`` in ``user_id``'s preference list inside ``payload``.
 
@@ -43,8 +43,15 @@ def toggle_pref(
     the user from ``participants`` entirely when their last preference
     is removed (so an opted-out player isn't still shown in the lobby).
 
-    Returns ``"added"`` or ``"removed"`` so the caller can echo back the
-    action in an ephemeral reply.
+    When ``single_choice`` is true the four categories behave like radio
+    buttons: picking a new category while another is already selected
+    replaces the old one, so each player holds exactly one preference.
+    Tapping the already-selected category still deselects it (leaving the
+    player with none), and a player's first pick is an ordinary add.
+
+    Returns ``"added"``, ``"removed"``, or — only in single-choice mode
+    when an existing pick was replaced — ``"switched"``, so the caller
+    can echo back the action in an ephemeral reply.
     """
     str_id = str(user_id)
     participants: list[int] = payload.setdefault("participants", [])
@@ -60,6 +67,10 @@ def toggle_pref(
             participants.remove(user_id)
             del prefs[str_id]
         return "removed"
+    if single_choice and user_prefs:
+        user_prefs.clear()
+        user_prefs.append(category)
+        return "switched"
     user_prefs.append(category)
     return "added"
 

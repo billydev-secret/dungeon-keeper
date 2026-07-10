@@ -160,13 +160,19 @@ class TraditionalHostView(discord.ui.View):
         action_holder: dict[str, str] = {}
 
         def _do_toggle(payload):
-            action_holder["action"] = toggle_pref(payload, user_id, category)
+            single_choice = bool(payload.get("single_choice", False))
+            action_holder["action"] = toggle_pref(
+                payload, user_id, category, single_choice=single_choice
+            )
 
         payload = await modify_payload(self.db, self.game_id, _do_toggle)
         await self._update_embed(interaction, payload)
-        await interaction.response.send_message(
-            f"**{CAT_LABELS[category]}** {action_holder['action']} from your preferences.", ephemeral=True
-        )
+        action = action_holder["action"]
+        if action == "switched":
+            msg = f"Switched to **{CAT_LABELS[category]}**."
+        else:
+            msg = f"**{CAT_LABELS[category]}** {action} from your preferences."
+        await interaction.response.send_message(msg, ephemeral=True)
 
     # --- Host controls (row 1) ---
 
@@ -302,7 +308,10 @@ class TraditionalCog(commands.Cog):
         return self.bot.games_db
 
     @app_commands.command(name="traditional", description="Start a Traditional Truth or Dare game!")
-    async def traditional(self, interaction: discord.Interaction):
+    @app_commands.describe(
+        single_choice="Each player picks only one category (radio-style) instead of as many as they like",
+    )
+    async def traditional(self, interaction: discord.Interaction, single_choice: bool = False):
         log.info("%s used /games play traditional in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
@@ -317,7 +326,7 @@ class TraditionalCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={},
+            options={"single_choice": single_choice},
         )
         if game_id is None:
             try:
@@ -339,17 +348,19 @@ class TraditionalCog(commands.Cog):
         options: dict,
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        single_choice = bool(options.get("single_choice", False))
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "traditional",
             state="joining",
+            payload={"single_choice": True} if single_choice else None,
         )
 
         guild = getattr(channel, "guild", None)
         colour = await resolve_accent_color(self.bot.ctx.db_path, guild) if guild else None
-        embed = build_lobby_embed(host_name, colour=colour)
+        embed = build_lobby_embed(host_name, colour=colour, single_choice=single_choice)
 
         log.info("Game %s (traditional) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         host_view = TraditionalHostView(game_id, host_id, self.db, self.bot)
