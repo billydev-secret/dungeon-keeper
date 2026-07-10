@@ -3,9 +3,11 @@ default_stages: [pre-commit]
 repos:
   - repo: local
     hooks:
-      - id: lint
-        name: lint (ruff + pyright)
-        entry: ./.venv/Scripts/python.exe -m pytest -q tests/test_lint.py
+      - id: gate-quick
+        name: gate (ruff + pyright)
+        # gate.py locates the repo venv itself, so this works on Linux and
+        # Windows with whatever `python` is on PATH.
+        entry: python scripts/gate.py --quick
         language: system
         pass_filenames: false
         always_run: true

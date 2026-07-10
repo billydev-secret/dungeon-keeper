@@ -19,6 +19,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [README.md](README.md) | Feature overview + slash-command reference (recently corrected) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
+| [bios_cog_spec.md](bios_cog_spec.md) | Bios cog (profiles, wizard) |
 | [birthday-announcement.md](birthday-announcement.md) | Birthday announcement message format |
 | [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration |
 | [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
@@ -29,6 +30,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [pressure_cooker_spec.md](pressure_cooker_spec.md) | Pressure Cooker duel |
 | [privacy_spec.md](privacy_spec.md) | Data deletion (`/delete_me`, `/delete_user`) |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
+| [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch cog design |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
 | [todo_spec.md](todo_spec.md) | Server todo (`/todo` + context menu) |
@@ -64,6 +66,7 @@ These describe features or shapes of the system that don't match reality. They'r
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games | Stale module path (`dk/cogs/games/` doesn't exist); §9.3 Minesweeper Duel and §9.6 Liar's Dice are fully specced with **zero code**; contains a BaseGame/BaseGame copy-paste bug |
 | [games_system_spec.md](games_system_spec.md) | Party games suite | Says "19-game" (17 exist); uses old standalone `/ffa` format instead of `/games play ffa`; documents phantom admin commands; omits Photo Challenge; the consent system it references has been removed |
 | [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Documents ~22 `/wellness` commands; only 3 exist (`/wellness setup`, `/wellness away on\|off`); caps, blackouts, partners, etc. are unbuilt |
+| [duel_minigame_flows_v2.md](duel_minigame_flows_v2.md) | Duel minigame UX flows | **Partially aspirational** — Liar's Dice and Minesweeper flows are specced but unbuilt |
 
 ## Audits
 
@@ -71,16 +74,6 @@ These describe features or shapes of the system that don't match reality. They'r
 |---|---|
 | [reviews/2026-07-01-deep-review.md](reviews/2026-07-01-deep-review.md) | Full system audit (2026-07-01) |
 | [reviews/2026-07-01-rules-watch-followups.md](reviews/2026-07-01-rules-watch-followups.md) | Rules Watch follow-ups (audit follow-up) |
-
-## Root-level specs
-
-Three specs currently live in the repo root rather than in `docs/` — they could be moved here later:
-
-| Doc | What it covers | Classification |
-|---|---|---|
-| [../bios_cog_spec.md](../bios_cog_spec.md) | Bios cog (profiles, wizard) | Reference |
-| [../duel_minigame_flows_v2.md](../duel_minigame_flows_v2.md) | Duel minigame UX flows | **Partially aspirational** — Liar's Dice and Minesweeper flows are specced but unbuilt |
-| [../rules_watch_cog.md](../rules_watch_cog.md) | Rules Watch cog design | Reference |
 
 ---
 
