@@ -268,6 +268,30 @@ def test_format_steal_all_summary_empty_returns_empty_string():
     ) == ""
 
 
+def test_format_steal_all_summary_reports_skipped_duplicates():
+    text = format_steal_all_summary(
+        added_mentions=[],
+        guild_name="G",
+        failed=[],
+        skipped=["dup1", "dup2"],
+    )
+    assert "Skipped **2** already present" in text
+    assert "dup1" in text
+    assert "dup2" in text
+
+
+def test_format_steal_all_summary_added_skipped_and_failed():
+    text = format_steal_all_summary(
+        added_mentions=["<:ok:1>"],
+        guild_name="G",
+        failed=[("bad", "nope")],
+        skipped=["already"],
+    )
+    assert "Added" in text
+    assert "Skipped **1**" in text
+    assert "Failed" in text
+
+
 # ── compress_gif_for_emoji ───────────────────────────────────────────
 
 

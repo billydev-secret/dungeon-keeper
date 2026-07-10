@@ -120,12 +120,14 @@ def format_steal_all_summary(
     added_mentions: list[str],
     guild_name: str,
     failed: list[tuple[str, str]],
+    skipped: list[str] | None = None,
 ) -> str:
     """Format the message that follows a Steal-All button click.
 
-    Combines the count + emoji list for successes with a ``name (reason)``
-    list for failures. Lives here so a future caller (queue worker,
-    dashboard, etc.) can reuse the same wording.
+    Combines the count + emoji list for successes, a ``name`` list for
+    duplicates skipped as already-present, and a ``name (reason)`` list for
+    failures. Lives here so a future caller (queue worker, dashboard, etc.)
+    can reuse the same wording.
     """
     lines: list[str] = []
     if added_mentions:
@@ -135,6 +137,9 @@ def format_steal_all_summary(
         lines.append(
             f"Added **{count}** emoji{plural} to **{guild_name}**: {emoji_str}"
         )
+    if skipped:
+        skip_str = ", ".join(f"`:{n}:`" for n in skipped)
+        lines.append(f"Skipped **{len(skipped)}** already present: {skip_str}")
     if failed:
         fail_str = ", ".join(f"`:{n}:` ({r})" for n, r in failed)
         lines.append(f"Failed **{len(failed)}**: {fail_str}")
