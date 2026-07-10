@@ -144,6 +144,70 @@ def setup_button_label(step: int) -> str:
     return "Finish" if step >= SETUP_FINAL_STEP else "Next →"
 
 
+# ── Setup wizard: DM-delivered dropdown pagination ────────────────────
+
+# Discord's native role/channel/category select menus auto-populate from the
+# guild the interaction happens in — so they render empty in a DM. The DM
+# wizard instead builds a plain StringSelect whose options we assemble by hand
+# from the guild's roles/channels. Discord caps a select at 25 options, so a
+# server with more than 25 roles (or channels) needs paging; these two pure
+# helpers own that paging + cross-page accumulation so the View stays thin.
+
+SETUP_PAGE_SIZE = 25  # Discord's hard cap on options in a single select menu
+SETUP_MAX_ROLE_PICKS = 10  # cap on accumulated multi-select picks per role step
+
+
+def paginate_setup_options(
+    options: list[tuple[int, str]],
+    page: int,
+    *,
+    per_page: int = SETUP_PAGE_SIZE,
+) -> tuple[list[tuple[int, str]], int, int]:
+    """Slice ``(id, label)`` *options* into one page for a DM setup dropdown.
+
+    Returns ``(page_slice, clamped_page, total_pages)``. ``clamped_page`` is the
+    input clamped into ``0..total_pages-1`` so paging past either end (pressing
+    ▶ on the last page) is a no-op rather than an empty menu. An empty option
+    list yields a single empty page (``total_pages == 1``) so callers can render
+    a disabled "nothing to pick" select without special-casing.
+    """
+    total_pages = max(1, (len(options) + per_page - 1) // per_page)
+    clamped = max(0, min(page, total_pages - 1))
+    start = clamped * per_page
+    return options[start : start + per_page], clamped, total_pages
+
+
+def merge_setup_selection(
+    accumulated: list[int],
+    page_option_ids: list[int],
+    selected_ids: list[int],
+    *,
+    max_picks: int = SETUP_MAX_ROLE_PICKS,
+) -> list[int]:
+    """Fold one page's multi-select result into the running selection.
+
+    A StringSelect only reports the picks on the *current* page, so to let an
+    admin choose roles spread across several pages the View carries the
+    accumulated selection between page flips. Each time a page's selection
+    changes we drop that page's option IDs from the accumulator and re-add
+    whatever is now selected there — so deselecting on a page removes the pick
+    while choices made on other pages survive.
+
+    Insertion order is preserved (previously-kept first, then this page's picks)
+    with duplicates collapsed, and the result is capped at ``max_picks`` to keep
+    the stored config sane.
+    """
+    page_set = set(page_option_ids)
+    kept = [i for i in accumulated if i not in page_set]
+    result: list[int] = []
+    seen: set[int] = set()
+    for i in [*kept, *selected_ids]:
+        if i not in seen:
+            seen.add(i)
+            result.append(i)
+    return result[:max_picks]
+
+
 # ── Role snapshots ────────────────────────────────────────────────────
 
 def snapshot_roles(role_ids: list[int]) -> list[int]:

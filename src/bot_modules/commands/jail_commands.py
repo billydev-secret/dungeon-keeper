@@ -55,6 +55,8 @@ from bot_modules.jail.embeds import (
 )
 from bot_modules.jail.logic import (
     SETUP_FINAL_STEP,
+    merge_setup_selection,
+    paginate_setup_options,
     setup_button_label,
     setup_step_meta,
     vote_outcome as _vote_outcome,
@@ -298,6 +300,218 @@ _SETUP_SELECTS: dict[str, type] = {
     "channel": _SetupChannelSelect,
     "category": _SetupCategorySelect,
 }
+
+
+# ── DM-delivered setup wizard ─────────────────────────────────────────
+#
+# ``/setup`` DMs the admin who ran it and walks them through the same six
+# steps as the in-channel wizard above. The native RoleSelect/ChannelSelect
+# components can't be reused: they auto-populate from the interaction's guild,
+# which is absent in a DM. So each step is a plain StringSelect whose options
+# we build by hand from the guild captured at ``/setup`` time — paged, since a
+# select tops out at 25 options. The guild is also why config is written with
+# ``guild.id`` rather than ``interaction.guild_id`` (the latter is ``None`` in
+# a DM). Pure paging/accumulation lives in ``jail.logic``; this View is glue.
+
+
+def _setup_options_for(
+    guild: discord.Guild, select_kind: str
+) -> list[tuple[int, str]]:
+    """Assemble the selectable ``(id, label)`` list for a step from the guild.
+
+    Roles exclude ``@everyone`` (never a meaningful mod/admin role) and are
+    ordered high-to-low like the role list in Discord's UI; channels and
+    categories follow their positional order.
+    """
+    if select_kind == "role":
+        roles = [r for r in guild.roles if not r.is_default()]
+        roles.sort(key=lambda r: r.position, reverse=True)
+        return [(r.id, r.name) for r in roles]
+    if select_kind == "category":
+        cats = sorted(guild.categories, key=lambda c: c.position)
+        return [(c.id, c.name) for c in cats]
+    chans = sorted(guild.text_channels, key=lambda c: c.position)
+    return [(c.id, c.name) for c in chans]
+
+
+class _SetupDMView(discord.ui.View):
+    """Stateful DM wizard: one StringSelect per step, paged, with Back/Next.
+
+    Only rebuilt state (current page, accumulated selection) lives on the
+    instance; the step wording and ordering come from ``setup_step_meta`` so
+    this shares its single source of truth with the in-channel wizard.
+    """
+
+    def __init__(
+        self,
+        ctx: AppContext,
+        guild: discord.Guild,
+        step: int = 1,
+        *,
+        colour: "discord.Colour | None" = None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self.ctx = ctx
+        self.guild = guild
+        self.step = step
+        self.colour = colour
+        self.page = 0
+        self.selected: list[int] = []
+        self._build()
+
+    # -- helpers --------------------------------------------------------
+
+    def _is_multi(self, meta: dict[str, str]) -> bool:
+        # Only the mod/admin *role* steps allow more than one pick.
+        return meta["select_kind"] == "role"
+
+    def _render_selected(self, select_kind: str) -> str:
+        prefix = "@" if select_kind == "role" else "#" if select_kind == "channel" else ""
+        labels = dict(_setup_options_for(self.guild, select_kind))
+        return ", ".join(f"{prefix}{labels.get(i, i)}" for i in self.selected) or "(none)"
+
+    def _guild_footer(self, embed: discord.Embed) -> discord.Embed:
+        # The DM is decontextualised from the server, so an admin who manages
+        # several guilds needs to see which one this wizard is configuring.
+        embed.set_footer(text=f"Configuring: {self.guild.name}")
+        return embed
+
+    def _embed(self) -> discord.Embed:
+        meta = setup_step_meta(self.step)
+        if meta is None:
+            return self._guild_footer(build_setup_complete_embed())
+        embed = build_setup_step_embed(meta, colour=self.colour)
+        if self.selected:
+            embed.add_field(
+                name="Selected", value=self._render_selected(meta["select_kind"]),
+                inline=False,
+            )
+        return self._guild_footer(embed)
+
+    # -- rebuild items for the current step/page ------------------------
+
+    def _build(self) -> None:
+        self.clear_items()
+        meta = setup_step_meta(self.step)
+        if meta is None:
+            return
+
+        options = _setup_options_for(self.guild, meta["select_kind"])
+        page_slice, self.page, total_pages = paginate_setup_options(options, self.page)
+        multi = self._is_multi(meta)
+
+        if page_slice:
+            select = discord.ui.Select(
+                placeholder=meta["placeholder"],
+                min_values=0 if multi else 1,
+                max_values=len(page_slice) if multi else 1,
+                options=[
+                    discord.SelectOption(
+                        label=(label or str(oid))[:100],
+                        value=str(oid),
+                        default=oid in self.selected,
+                    )
+                    for oid, label in page_slice
+                ],
+            )
+        else:
+            # No candidates (e.g. a server with no categories yet). Show a
+            # disabled placeholder so the admin can still skip the step.
+            select = discord.ui.Select(
+                placeholder="Nothing to choose — skip with Next →",
+                min_values=0,
+                max_values=1,
+                options=[discord.SelectOption(label="(none available)", value="__none__")],
+                disabled=True,
+            )
+        select.callback = self._on_select  # type: ignore[method-assign]
+        self.add_item(select)
+
+        if total_pages > 1:
+            prev_btn: discord.ui.Button = discord.ui.Button(
+                label="◀", style=discord.ButtonStyle.secondary, disabled=self.page == 0,
+                row=1,
+            )
+            prev_btn.callback = self._on_prev  # type: ignore[method-assign]
+            self.add_item(prev_btn)
+
+            page_btn: discord.ui.Button = discord.ui.Button(
+                label=f"Page {self.page + 1}/{total_pages}",
+                style=discord.ButtonStyle.secondary, disabled=True, row=1,
+            )
+            self.add_item(page_btn)
+
+            next_btn: discord.ui.Button = discord.ui.Button(
+                label="▶", style=discord.ButtonStyle.secondary,
+                disabled=self.page >= total_pages - 1, row=1,
+            )
+            next_btn.callback = self._on_next_page  # type: ignore[method-assign]
+            self.add_item(next_btn)
+
+        advance: discord.ui.Button = discord.ui.Button(
+            label=setup_button_label(self.step), style=discord.ButtonStyle.primary, row=2,
+        )
+        advance.callback = self._on_advance  # type: ignore[method-assign]
+        self.add_item(advance)
+
+    # -- callbacks ------------------------------------------------------
+
+    async def _on_select(self, interaction: discord.Interaction) -> None:
+        meta = setup_step_meta(self.step)
+        if meta is None:
+            return
+        options = _setup_options_for(self.guild, meta["select_kind"])
+        page_slice, self.page, _ = paginate_setup_options(options, self.page)
+        page_ids = [oid for oid, _ in page_slice]
+        raw = (interaction.data or {}).get("values", []) if isinstance(interaction.data, dict) else []
+        picked = [int(v) for v in raw if isinstance(v, str) and v.isdigit()]
+        if self._is_multi(meta):
+            self.selected = merge_setup_selection(self.selected, page_ids, picked)
+        else:
+            self.selected = picked[:1]
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def _on_prev(self, interaction: discord.Interaction) -> None:
+        self.page -= 1
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def _on_next_page(self, interaction: discord.Interaction) -> None:
+        self.page += 1
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+    async def _on_advance(self, interaction: discord.Interaction) -> None:
+        meta = setup_step_meta(self.step)
+        if meta is not None and self.selected:
+            # Only persist when something was picked, so skipping a step never
+            # clobbers an existing value on a re-run.
+            self.ctx.set_config_value(
+                meta["config_key"], ",".join(str(i) for i in self.selected), self.guild.id
+            )
+
+        self.step += 1
+        self.page = 0
+        self.selected = []
+        if setup_step_meta(self.step) is None:
+            self.clear_items()
+            self.stop()
+            await interaction.response.edit_message(embed=self._embed(), view=self)
+            return
+        self._build()
+        await interaction.response.edit_message(embed=self._embed(), view=self)
+
+
+def _setup_dm_view(
+    ctx: AppContext,
+    guild: discord.Guild,
+    *,
+    colour: "discord.Colour | None" = None,
+) -> tuple[discord.Embed, "_SetupDMView"]:
+    """Build the first-step embed + View for the DM-delivered ``/setup`` wizard."""
+    view = _SetupDMView(ctx, guild, 1, colour=colour)
+    return view._embed(), view
 
 
 def _setup_view(
