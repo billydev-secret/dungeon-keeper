@@ -858,10 +858,9 @@ def test_dms_post_panel_503_when_guild_missing(authed_client, fake_ctx):
     assert resp.status_code == 503
 
 
-def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fake_ctx):
-    """Happy path: cog._ensure_panel(guild, channel_id, force_repost=True) is
-    awaited; the returned message_id is persisted via set_panel_settings; and
-    the cog's in-memory panel_settings dict is updated."""
+def _dms_panel_guild(fake_ctx, *, perms=None, channel=None):
+    """Build the bot/guild/channel mock scaffolding for post-panel tests."""
+    import discord
     from unittest.mock import AsyncMock, MagicMock
 
     cog = MagicMock()
@@ -870,11 +869,30 @@ def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fak
 
     guild = MagicMock()
     guild.id = fake_ctx.guild_id
+    if channel is None:
+        channel = MagicMock(spec=discord.TextChannel)
+        channel.name = "general"
+        channel.permissions_for = MagicMock(
+            return_value=perms
+            if perms is not None
+            else discord.Permissions(
+                view_channel=True, send_messages=True, embed_links=True
+            )
+        )
+    guild.get_channel = MagicMock(return_value=channel)
 
     bot = MagicMock()
     bot.get_cog = MagicMock(return_value=cog)
     bot.get_guild = MagicMock(return_value=guild)
     fake_ctx.bot = bot
+    return cog, guild
+
+
+def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fake_ctx):
+    """Happy path: cog._ensure_panel(guild, channel_id, force_repost=True) is
+    awaited; the returned message_id is persisted via set_panel_settings; and
+    the cog's in-memory panel_settings dict is updated."""
+    cog, guild = _dms_panel_guild(fake_ctx)
 
     resp = authed_client.post(
         "/api/config/dms/post-panel", json={"channel_id": "5000"}
@@ -892,6 +910,53 @@ def test_dms_post_panel_invokes_ensure_panel_and_persists_ids(authed_client, fak
     assert persisted is not None
     assert persisted["panel_channel_id"] == 5000
     assert persisted["panel_message_id"] == 88888
+
+
+def test_dms_post_panel_400_when_channel_not_text(authed_client, fake_ctx):
+    """get_channel returns a non-TextChannel (or None) → 400, no send."""
+    from unittest.mock import MagicMock
+
+    cog, guild = _dms_panel_guild(fake_ctx, channel=MagicMock())
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 400
+    cog._ensure_panel.assert_not_awaited()
+
+
+def test_dms_post_panel_400_names_missing_permissions(authed_client, fake_ctx):
+    """Bot lacks send/embed in the channel → 400 whose detail names the
+    missing permissions, and nothing is posted or persisted."""
+    import discord
+
+    cog, guild = _dms_panel_guild(
+        fake_ctx, perms=discord.Permissions(view_channel=True)
+    )
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "Send Messages" in detail
+    assert "Embed Links" in detail
+    assert "View Channel" not in detail
+    cog._ensure_panel.assert_not_awaited()
+    assert cog.panel_settings == {}
+
+
+def test_dms_post_panel_502_when_discord_rejects_send(authed_client, fake_ctx):
+    """Perms look fine but the actual send still fails (_ensure_panel → None):
+    the route must report an error instead of a false success."""
+    cog, guild = _dms_panel_guild(fake_ctx)
+    cog._ensure_panel.return_value = None
+
+    resp = authed_client.post(
+        "/api/config/dms/post-panel", json={"channel_id": "5000"}
+    )
+    assert resp.status_code == 502
+    assert cog.panel_settings == {}
 
 
 # ── /config/booster-roles/post-panel happy + sync-swatches ───────────

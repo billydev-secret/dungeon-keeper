@@ -2472,6 +2472,8 @@ async def post_dms_panel(
     body: PostButtonRequest,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
+    import discord
+
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
@@ -2486,7 +2488,31 @@ async def post_dms_panel(
         raise HTTPException(503, "Discord guild not available")
 
     channel_id = int(body.channel_id)
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        raise HTTPException(400, "Channel not found or not a text channel")
+    perms = channel.permissions_for(guild.me)
+    missing = [
+        label
+        for flag, label in (
+            (perms.view_channel, "View Channel"),
+            (perms.send_messages, "Send Messages"),
+            (perms.embed_links, "Embed Links"),
+        )
+        if not flag
+    ]
+    if missing:
+        raise HTTPException(
+            400,
+            f"The bot can't post in #{channel.name} — missing permissions: "
+            f"{', '.join(missing)}",
+        )
+
     message_id = await cog._ensure_panel(guild, channel_id, force_repost=True)
+    if message_id is None:
+        raise HTTPException(
+            502, f"Discord rejected the post in #{channel.name} — panel was not posted"
+        )
     set_panel_settings(ctx.db_path, guild_id, channel_id, message_id)
     cog.panel_settings[guild_id] = {"panel_channel_id": channel_id, "panel_message_id": message_id}
     return {"ok": True}
