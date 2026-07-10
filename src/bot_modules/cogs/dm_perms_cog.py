@@ -39,15 +39,16 @@ from bot_modules.dm_perms.logic import (
     pick_dm_roles_to_remove,
 )
 from bot_modules.services.dm_perms_service import (
-    DM_ROLE_NAMES,
     add_consent_pair,
     build_panel_embed,
     count_pending_for_requester,
     expire_stale_pending_requests,
     get_consent_pair_meta,
     init_db,
+    is_dm_mode_role,
     load_audit_channels,
     load_consent_pairs,
+    load_dm_mode_roles,
     load_panel_settings,
     load_request_by_message_id,
     load_request_channels,
@@ -417,6 +418,9 @@ class DmPermsCog(commands.Cog):
         self.dm_requests: dict[int, dict[tuple[int, int], dict[str, Any]]] = {}
         self.request_channels: dict[int, int] = {}
         self.panel_settings: dict[int, dict[str, Optional[int]]] = {}
+        # Per-guild mode→role-id overrides ({"open"/"ask"/"closed": id}).
+        # Loaded at cog_load; the web config route pokes this cache on save.
+        self.mode_role_ids: dict[int, dict[str, int]] = {}
         self._panel_locks: dict[int, asyncio.Lock] = {}
         self._panel_bump_guards: dict[int, float] = {}
         self._expiry_task: Optional[asyncio.Task[None]] = None
@@ -430,6 +434,7 @@ class DmPermsCog(commands.Cog):
                 "dm_requests": load_requests(self.ctx.db_path),
                 "request_channels": load_request_channels(self.ctx.db_path),
                 "panel_settings": load_panel_settings(self.ctx.db_path),
+                "mode_role_ids": load_dm_mode_roles(self.ctx.db_path),
             }
 
         loaded = await asyncio.to_thread(_load_all)
@@ -437,6 +442,7 @@ class DmPermsCog(commands.Cog):
         self.dm_requests = loaded["dm_requests"]
         self.request_channels = loaded["request_channels"]
         self.panel_settings = loaded["panel_settings"]
+        self.mode_role_ids = loaded["mode_role_ids"]
 
         # Persistent views: clicks on DM consent buttons across ALL DMs route
         # to this single instance, which recovers per-request state from the DB.
@@ -541,12 +547,34 @@ class DmPermsCog(commands.Cog):
             self._panel_locks[guild_id] = asyncio.Lock()
         return self._panel_locks[guild_id]
 
+    def _mode_roles_for(self, guild_id: int) -> dict[str, int]:
+        """The guild's configured mode→role-id overrides (empty dict if none)."""
+        return self.mode_role_ids.get(guild_id, {})
+
+    def _mode_role_names_for(self, guild: discord.Guild) -> dict[str, str]:
+        """Display names for the guild's DM-mode roles (for the panel embed).
+
+        Configured overrides that resolve to a live role use that role's
+        name; everything else keeps the default "DMs: …" label.
+        """
+        overrides = self._mode_roles_for(guild.id)
+        names: dict[str, str] = {}
+        for mode, rid in overrides.items():
+            role = guild.get_role(rid) if rid else None
+            if role is not None:
+                names[mode] = role.name
+        return names
+
     def _precheck_dm_request(self, guild: discord.Guild, requester: discord.Member, target: discord.Member | discord.User) -> Optional[str]:
         # ``classify_dm_request`` takes primitives, not discord objects, so it
         # remains testable without spinning up Discord. The cog observes the
         # facts here and the classifier picks the right message.
         target_in_guild = isinstance(target, discord.Member)
-        target_mode = resolve_mode(target) if isinstance(target, discord.Member) else ""
+        target_mode = (
+            resolve_mode(target, self._mode_roles_for(guild.id))
+            if isinstance(target, discord.Member)
+            else ""
+        )
         return classify_dm_request(
             target_in_guild=target_in_guild,
             is_self=target.id == requester.id,
@@ -662,6 +690,7 @@ class DmPermsCog(commands.Cog):
                 return None
 
             accent = await resolve_accent_color(self.ctx.db_path, guild)
+            role_names = self._mode_role_names_for(guild)
             settings = self.panel_settings.get(guild.id, {})
             old_msg_id = settings.get("panel_message_id")
 
@@ -678,13 +707,13 @@ class DmPermsCog(commands.Cog):
             if old_msg_id and not force_repost:
                 try:
                     existing = await channel.fetch_message(old_msg_id)
-                    await existing.edit(embed=build_panel_embed(colour=accent), view=DmRequestPanelView(self))
+                    await existing.edit(embed=build_panel_embed(colour=accent, role_names=role_names), view=DmRequestPanelView(self))
                     return existing.id
                 except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                     pass
 
             try:
-                new_msg = await channel.send(embed=build_panel_embed(colour=accent), view=DmRequestPanelView(self))
+                new_msg = await channel.send(embed=build_panel_embed(colour=accent, role_names=role_names), view=DmRequestPanelView(self))
             except (discord.Forbidden, discord.HTTPException):
                 return None
 
@@ -731,7 +760,10 @@ class DmPermsCog(commands.Cog):
     async def _on_member_update_dm_roles(
         self, _before: discord.Member, after: discord.Member
     ) -> None:
-        dm_roles = [r for r in after.roles if r.name in DM_ROLE_NAMES]
+        dm_roles = [
+            r for r in after.roles
+            if is_dm_mode_role(r, self._mode_roles_for(after.guild.id))
+        ]
         to_remove = pick_dm_roles_to_remove(dm_roles)
         if not to_remove:
             return
@@ -766,7 +798,11 @@ class DmPermsCog(commands.Cog):
         assert isinstance(interaction.user, discord.Member)
         await interaction.response.defer(ephemeral=True)
         try:
-            await set_member_dm_mode(interaction.user, mode.value)
+            await set_member_dm_mode(
+                interaction.user,
+                mode.value,
+                self._mode_roles_for(interaction.user.guild.id),
+            )
         except discord.Forbidden:
             await interaction.followup.send("I don't have permission to manage roles here.", ephemeral=True)
             return

@@ -265,13 +265,19 @@ class RulesWatchMonitor(commands.Cog):
         author_mode = "ask"
         target_mode = "ask"
         if tid and message.guild:
-            from bot_modules.services.dm_perms_service import resolve_mode
+            from bot_modules.services.dm_perms_service import (
+                get_dm_mode_role_ids,
+                resolve_mode,
+            )
+            mode_role_ids = await asyncio.to_thread(
+                get_dm_mode_role_ids, self.ctx.db_path, guild_id
+            )
             target_member = message.guild.get_member(tid)
             author_member = message.guild.get_member(author_id)
             if author_member:
-                author_mode = resolve_mode(author_member)
+                author_mode = resolve_mode(author_member, mode_role_ids)
             if target_member:
-                target_mode = resolve_mode(target_member)
+                target_mode = resolve_mode(target_member, mode_role_ids)
         tier_mismatch = is_dm_tier_mismatch(author_mode, target_mode) if tid else False
 
         # 4. Guard model call -------------------------------------------------------

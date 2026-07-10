@@ -708,6 +708,30 @@ def test_update_dms_persists_channels(authed_client, fake_ctx):
     assert load_audit_channels(fake_ctx.db_path).get(fake_ctx.guild_id) == 1200
 
 
+def test_update_dms_persists_mode_roles(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/dms",
+        json={"open_role_id": "500", "ask_role_id": "0", "closed_role_id": "600"},
+    )
+    assert resp.status_code == 200
+
+    from bot_modules.services.dm_perms_service import get_dm_mode_role_ids
+    assert get_dm_mode_role_ids(fake_ctx.db_path, fake_ctx.guild_id) == {
+        "open": 500,
+        "ask": 0,
+        "closed": 600,
+    }
+
+    # Partial update: only one field changes, the rest are preserved.
+    resp = authed_client.put("/api/config/dms", json={"ask_role_id": "550"})
+    assert resp.status_code == 200
+    assert get_dm_mode_role_ids(fake_ctx.db_path, fake_ctx.guild_id) == {
+        "open": 500,
+        "ask": 550,
+        "closed": 600,
+    }
+
+
 # ── /config/confessions (PUT + block/unblock) ────────────────────────
 
 

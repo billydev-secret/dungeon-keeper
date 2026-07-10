@@ -68,8 +68,10 @@ from bot_modules.services.inactivity_prune_service import (
     remove_prune_exception,
 )
 from bot_modules.services.dm_perms_service import (
+    get_dm_mode_role_ids,
     get_dms_config_with_conn,
     set_audit_channel,
+    set_dm_mode_role_ids,
     set_panel_settings,
     set_request_channel,
 )
@@ -2445,6 +2447,9 @@ async def post_confessions_button(
 class DmsConfigUpdate(BaseModel):
     request_channel_id: str | None = None
     audit_channel_id: str | None = None
+    open_role_id: str | None = None
+    ask_role_id: str | None = None
+    closed_role_id: str | None = None
 
 
 @router.put("/config/dms")
@@ -2456,14 +2461,38 @@ async def update_dms(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    role_fields = (body.open_role_id, body.ask_role_id, body.closed_role_id)
+
     def _q():
         if body.request_channel_id is not None:
             set_request_channel(ctx.db_path, guild_id, int(body.request_channel_id))
         if body.audit_channel_id is not None:
             set_audit_channel(ctx.db_path, guild_id, int(body.audit_channel_id))
-        return {"ok": True}
+        if any(f is not None for f in role_fields):
+            current = get_dm_mode_role_ids(ctx.db_path, guild_id)
+            merged = {
+                "open": int(body.open_role_id) if body.open_role_id is not None else current["open"],
+                "ask": int(body.ask_role_id) if body.ask_role_id is not None else current["ask"],
+                "closed": int(body.closed_role_id) if body.closed_role_id is not None else current["closed"],
+            }
+            set_dm_mode_role_ids(
+                ctx.db_path, guild_id,
+                open_role_id=merged["open"],
+                ask_role_id=merged["ask"],
+                closed_role_id=merged["closed"],
+            )
+            return merged
+        return None
 
-    return await run_query(_q)
+    merged = await run_query(_q)
+
+    # Poke the cog's in-memory cache so the new roles apply without a restart.
+    if merged is not None:
+        bot = getattr(ctx, "bot", None)
+        cog = bot.get_cog("DmPermsCog") if bot is not None else None
+        if cog is not None:
+            cog.mode_role_ids[guild_id] = merged
+    return {"ok": True}
 
 
 @router.post("/config/dms/post-panel")
