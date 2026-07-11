@@ -9,6 +9,28 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Games — cross-game global question pool  (uncommitted)
+
+Every bank manager gained a per-question **Pool** button (copies the question
+into a reserved `global` bank slot; duplicate texts skipped, Traditional's
+category tags collapsed to `nsfw`/dropped) and a **Browse pool** panel that
+imports selected pool questions into that game's bank (duplicates skipped;
+Traditional makes you pick the category the imports are filed under). New
+routes `POST /api/games/bank/{id}/pool` and `POST /api/games/bank/pool/import`;
+the `global` type is a valid bank slot so full-bank export/import round-trips.
+Offline route + logic tests pass; the dashboard flow needs a live pass:
+
+- [ ] On a game's bank manager, tap **Pool** on a question → status confirms it
+      was copied; tapping it again reports the duplicate (not re-added).
+- [ ] **Browse pool** → the pool list loads; search filters it.
+- [ ] Tick pool questions and **Import selected** into a non-Traditional game →
+      they land in the bank with their pool tags; duplicates already present are
+      skipped and reported.
+- [ ] Same import into Traditional → you must choose an "Import as" category;
+      imported questions carry exactly that one category tag.
+- [ ] Send a Traditional NSFW question to the pool → its four-way category tag
+      is gone but a generic `nsfw` tag remains.
+
 ### Economy (stage 0) — wallets, ledger, settings, `/bank` + config panel  (uncommitted)
 
 Foundation slice of the economy feature (`docs/plans/economy-and-perk-shop.md`):

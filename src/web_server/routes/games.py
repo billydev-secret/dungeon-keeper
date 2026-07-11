@@ -24,6 +24,12 @@ _PROMPT_CONFIG_PATH = (
 
 VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo", "ffa", "traditional", "pen_pals"}
 
+# The cross-game "global pool" lives in games_question_bank under this
+# reserved game_type. Gameplay never sees it (every game selects by its own
+# type); it's a staging area the dashboard can send questions to and import
+# from into any game's bank.
+GLOBAL_POOL_TYPE = "global"
+
 # Traditional Truth-or-Dare stores exactly one of these four category tags on
 # every question. The tag *is* the category (matching the cog's CATEGORIES), so
 # a bank round can serve each player a question in a category they opted into.
@@ -60,6 +66,12 @@ class BankImportItem(BaseModel):
     game_type: str
     tags: list[str] = []
     question_text: str
+
+
+class PoolImportBody(BaseModel):
+    game_type: str
+    question_ids: list[int]
+    tags: Optional[list[str]] = None
 
 
 class PromptsGlobalBody(BaseModel):
@@ -140,6 +152,28 @@ def _norm_tags(raw) -> list[str]:
         if t and t not in seen:
             seen.add(t)
             out.append(t)
+    return out
+
+
+def _check_bank_type(game_type: str) -> None:
+    """Reject unknown bank game_types. The global pool is a valid bank slot
+    (so full-bank exports containing pool rows round-trip through import)."""
+    if game_type not in VALID_GAME_TYPES and game_type != GLOBAL_POOL_TYPE:
+        raise HTTPException(status_code=400, detail=f"Invalid game_type: {game_type}")
+
+
+def _pool_tags(game_type: str, tags: list[str]) -> list[str]:
+    """Translate a question's tags for storage in the global pool.
+
+    Traditional's four category tags are meaningless outside that game, so
+    they're dropped — but the NSFW half of the information is preserved as
+    the reserved ``nsfw`` tag every game understands.
+    """
+    if game_type != "traditional":
+        return tags
+    out = [t for t in tags if t not in TRADITIONAL_CATEGORIES]
+    if any(t.startswith("nsfw_") for t in tags) and "nsfw" not in out:
+        out.append("nsfw")
     return out
 
 
@@ -341,8 +375,7 @@ async def create_question(
     body: BankCreateBody,
     _: AuthenticatedUser = Depends(require_game_host),
 ):
-    if body.game_type not in VALID_GAME_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid game_type: {body.game_type}")
+    _check_bank_type(body.game_type)
 
     ctx = get_ctx(request)
     tags = _norm_tags(body.tags)
@@ -439,8 +472,7 @@ async def bulk_add_questions(
     body: BankBulkBody,
     _: AuthenticatedUser = Depends(require_game_host),
 ):
-    if body.game_type not in VALID_GAME_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid game_type: {body.game_type}")
+    _check_bank_type(body.game_type)
 
     lines = [line.strip() for line in body.lines if line.strip()]
     if not lines:
@@ -459,6 +491,121 @@ async def bulk_add_questions(
             )
             conn.commit()
             return {"added": len(lines)}
+
+    return await run_query(_q)
+
+
+# ── Global pool ──────────────────────────────────────────────────────────────
+# Pool rows are ordinary bank rows under GLOBAL_POOL_TYPE, so listing, editing
+# and deleting them reuses the /bank endpoints (game_type=global). Only the
+# two copy directions need dedicated routes.
+
+
+@router.post("/bank/{question_id}/pool")
+async def send_to_pool(
+    request: Request,
+    question_id: int,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    """Copy one bank question into the global pool (the original stays put).
+
+    Duplicate texts already in the pool are not re-added — the response says
+    which happened so the UI can report it.
+    """
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT game_type, tags, question_text FROM games_question_bank"
+                " WHERE question_id = ?",
+                (question_id,),
+            ).fetchone()
+            if not row:
+                return None
+            game_type, tags_raw, text = row
+            if game_type == GLOBAL_POOL_TYPE:
+                return {"error": "Question is already in the global pool"}
+            text = text.strip()
+            dup = conn.execute(
+                "SELECT 1 FROM games_question_bank"
+                " WHERE game_type = ? AND TRIM(question_text) = ? LIMIT 1",
+                (GLOBAL_POOL_TYPE, text),
+            ).fetchone()
+            if dup:
+                return {"sent": False, "duplicate": True}
+            tags = _pool_tags(game_type, _parse_tags_col(tags_raw))
+            conn.execute(
+                "INSERT INTO games_question_bank (game_type, tags, question_text) VALUES (?, ?, ?)",
+                (GLOBAL_POOL_TYPE, json.dumps(tags), text),
+            )
+            conn.commit()
+            return {"sent": True, "duplicate": False}
+
+    result = await run_query(_q)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Question not found")
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@router.post("/bank/pool/import")
+async def import_from_pool(
+    request: Request,
+    body: PoolImportBody,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    """Copy selected global-pool questions into a game's bank (pool keeps them).
+
+    ``tags``, when given, replaces each copy's tags (Traditional requires it:
+    exactly one category tag); when omitted the pool row's tags carry over.
+    Questions whose text already exists in the target bank are skipped.
+    """
+    _check_bank_type(body.game_type)
+    if body.game_type == GLOBAL_POOL_TYPE:
+        raise HTTPException(status_code=400, detail="Cannot import the pool into itself")
+    if not body.question_ids:
+        raise HTTPException(status_code=400, detail="No questions selected")
+
+    override = _norm_tags(body.tags) if body.tags is not None else None
+    if body.game_type == "traditional" or override is not None:
+        _validate_traditional_tags(body.game_type, override or [])
+
+    ctx = get_ctx(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            placeholders = ",".join("?" for _ in body.question_ids)
+            rows = conn.execute(
+                f"SELECT tags, question_text FROM games_question_bank"
+                f" WHERE game_type = ? AND question_id IN ({placeholders})",
+                [GLOBAL_POOL_TYPE, *body.question_ids],
+            ).fetchall()
+            existing = {
+                (t or "").strip()
+                for (t,) in conn.execute(
+                    "SELECT question_text FROM games_question_bank WHERE game_type = ?",
+                    (body.game_type,),
+                ).fetchall()
+            }
+            to_add: list[tuple[str, str, str]] = []
+            skipped = 0
+            for tags_raw, text in rows:
+                text = text.strip()
+                if text in existing:
+                    skipped += 1
+                    continue
+                existing.add(text)
+                tags = override if override is not None else _parse_tags_col(tags_raw)
+                to_add.append((body.game_type, json.dumps(tags), text))
+            if to_add:
+                conn.executemany(
+                    "INSERT INTO games_question_bank (game_type, tags, question_text) VALUES (?, ?, ?)",
+                    to_add,
+                )
+                conn.commit()
+            return {"imported": len(to_add), "skipped": skipped}
 
     return await run_query(_q)
 
@@ -507,7 +654,7 @@ async def import_bank(
             raise HTTPException(status_code=400, detail=f"Item {i} is not an object")
         gt = entry.get("game_type", "")
         text = entry.get("question_text", "").strip()
-        if gt not in VALID_GAME_TYPES:
+        if gt not in VALID_GAME_TYPES and gt != GLOBAL_POOL_TYPE:
             raise HTTPException(status_code=400, detail=f"Item {i}: invalid game_type '{gt}'")
         if not text:
             continue

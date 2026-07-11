@@ -226,13 +226,39 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div class="field"><label>' + tagWord + ' (applied to all)<div data-ctrl="bulk-tags"></div></label></div>' +
       '<div class="field"><label>Lines (one per line)<textarea data-ctrl="bulk-text" rows="6" style="width:100%;font-size:12px;"></textarea></label></div>' +
       '<div class="row-8"><button class="btn btn-primary" data-action="bulk-import">Import</button><span data-status="bulk" class="save-status"></span></div>' +
-      "</section></div></div></section>";
+      "</section>" +
+      '<section style="background:var(--bg-card);border:1px solid var(--rule);border-radius:var(--r);padding:16px;margin-top:12px;">' +
+      '<div class="section-label mb-10">Global Pool</div>' +
+      '<div class="field-hint" style="margin-bottom:10px;">A question pool shared by every game. Each question’s <strong>Pool</strong> button copies it there; browse the pool to import questions into this bank.</div>' +
+      '<button class="btn" data-action="toggle-pool">Browse pool</button>' +
+      "</section></div></div>" +
+      buildPoolBrowserHtml() +
+      "</section>";
+  }
+
+  function buildPoolBrowserHtml() {
+    const importHint = catMode
+      ? "Tick questions, choose the category to file them under, then import. Duplicates already in this bank are skipped."
+      : "Tick questions to import; their pool tags carry over. Duplicates already in this bank are skipped.";
+    return '<div data-region="pool-browser" style="display:none;margin-top:16px;border:1px solid var(--rule);border-radius:var(--r);padding:16px;background:var(--bg-card);">' +
+      '<div class="section-label mb-10">Global Pool</div>' +
+      '<div class="field-hint" style="margin-bottom:10px;">' + importHint + "</div>" +
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;">' +
+      '<div class="field m-0" style="flex:1;min-width:160px;"><label>Search<input class="w-full" type="text" data-ctrl="pool-search" placeholder="Filter..." /></label></div>' +
+      '<button class="btn" data-action="pool-search-btn">Search</button>' +
+      (catMode ? '<div class="field m-0"><label>Import as<div data-ctrl="pool-cat"></div></label></div>' : "") +
+      '<button class="btn btn-primary" data-action="pool-import">Import selected</button>' +
+      '<span data-status="pool" class="save-status"></span>' +
+      "</div>" +
+      '<div data-region="pool-list">' + renderLoading("Loading...") + "</div>" +
+      "</div>";
   }
 
   function initBank() {
     let currentPage = 1;
     let currentTags = [];
     let currentSearch = "";
+    let poolLoaded = false;
 
     // Mount the multi-tag list filter; adding/removing a chip re-runs the
     // search immediately (no need to press Search).
@@ -273,13 +299,14 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
           rows += '<tr data-qid="' + q.question_id + '"' + catAttr + '>' +
             '<td class="bank-tags-cell" style="width:160px;"><div class="ll-tags">' + chips + "</div></td>" +
             '<td class="bank-text-cell" style="padding-right:8px;">' + esc(q.question_text) + "</td>" +
-            '<td style="width:120px;white-space:nowrap;">' +
+            '<td style="width:170px;white-space:nowrap;">' +
             '<button class="btn" style="padding:2px 6px;font-size:12px;margin-right:4px;" data-action="edit-q" data-qid="' + q.question_id + '">Edit</button>' +
+            '<button class="btn" style="padding:2px 6px;font-size:12px;margin-right:4px;" data-action="pool-q" data-qid="' + q.question_id + '" title="Copy to the global pool">Pool</button>' +
             '<button class="btn" style="padding:2px 6px;font-size:12px;" data-action="del-q" data-qid="' + q.question_id + '">Del</button>' +
             "</td></tr>";
         }
         el.innerHTML = '<table style="width:100%;border-collapse:collapse;" class="data-table">' +
-          '<thead><tr><th style="width:160px;">Tags</th><th>Question</th><th style="width:120px;"></th></tr></thead>' +
+          '<thead><tr><th style="width:160px;">Tags</th><th>Question</th><th style="width:170px;"></th></tr></thead>' +
           "<tbody>" + rows + "</tbody></table>";
 
         const pag = region("bank-pagination");
@@ -308,7 +335,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     // listener) so a single click can't both open the editor AND bubble into
     // the save branch after the button flips to data-action="save-q".
     region("bank-list").addEventListener("click", async (e) => {
-      const btn = e.target.closest('[data-action="edit-q"],[data-action="save-q"],[data-action="del-q"]');
+      const btn = e.target.closest('[data-action="edit-q"],[data-action="save-q"],[data-action="del-q"],[data-action="pool-q"]');
       if (!btn) return;
       const qid = btn.dataset.qid;
       const list = region("bank-list");
@@ -334,6 +361,14 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         if (catMode && !newTags.length) { toast("Choose a category.", "error"); return; }
         try { await apiPut("/api/games/bank/" + qid, { question_text: newText, tags: newTags }); await loadTags(); loadBank(); }
         catch (err) { toast("Save failed: " + err.message, "error"); }
+      } else if (btn.dataset.action === "pool-q") {
+        btn.disabled = true;
+        try {
+          const res = await apiPost("/api/games/bank/" + qid + "/pool", {});
+          toast(res.duplicate ? "Already in the global pool." : "Copied to the global pool.", res.duplicate ? "info" : "");
+          if (res.sent && poolLoaded) loadPool();
+        } catch (err) { toast("Send failed: " + err.message, "error"); }
+        btn.disabled = false;
       } else if (btn.dataset.action === "del-q") {
         if (!(await confirmDialog("Delete this question?", { danger: true, confirmLabel: "Delete" }))) return;
         try { await apiDelete("/api/games/bank/" + qid); loadBank(); }
@@ -380,6 +415,91 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         loadBank();
       } catch (err) { showStatus(st, false, err.message); }
     });
+
+    // ── Global pool browser ────────────────────────────────────────────────
+    // Lazy: the pool list is only fetched the first time the browser opens.
+    const poolCat = catMode ? makeCategoryWidget([]) : null;
+    if (poolCat) ctrl("pool-cat").appendChild(poolCat.el);
+
+    container.querySelector('[data-action="toggle-pool"]').addEventListener("click", (e) => {
+      const reg = region("pool-browser");
+      const open = reg.style.display !== "none";
+      reg.style.display = open ? "none" : "";
+      e.target.textContent = open ? "Browse pool" : "Hide pool";
+      if (!open && !poolLoaded) { poolLoaded = true; loadPool(); }
+    });
+
+    async function loadPool() {
+      const el = region("pool-list");
+      el.innerHTML = renderLoading("Loading...");
+      const params = new URLSearchParams({ game_type: "global", per_page: 200 });
+      const search = ctrl("pool-search").value.trim();
+      if (search) params.set("search", search);
+      try {
+        const data = await api("/api/games/bank?" + params);
+        const qs = data.questions || [];
+        if (!qs.length) {
+          el.innerHTML = renderEmpty("The global pool is empty. Use a question's Pool button in any game's bank to add to it.");
+          return;
+        }
+        let rows = "";
+        for (const q of qs) {
+          const chips = parseTags(q.tags).map(t => '<span class="ll-tag">' + esc(t) + "</span>").join(" ");
+          rows += "<tr>" +
+            '<td style="width:28px;"><input type="checkbox" data-pool-check="' + q.question_id + '" /></td>' +
+            '<td style="width:160px;"><div class="ll-tags">' + chips + "</div></td>" +
+            '<td style="padding-right:8px;">' + esc(q.question_text) + "</td>" +
+            '<td style="width:50px;white-space:nowrap;"><button class="btn" style="padding:2px 6px;font-size:12px;" data-action="pool-del" data-qid="' + q.question_id + '">Del</button></td>' +
+            "</tr>";
+        }
+        const note = data.total > qs.length ? " — showing the first " + qs.length + ", refine your search" : "";
+        el.innerHTML = '<table style="width:100%;border-collapse:collapse;" class="data-table">' +
+          '<thead><tr><th style="width:28px;"><input type="checkbox" data-ctrl="pool-select-all" /></th><th style="width:160px;">Tags</th><th>Question</th><th style="width:50px;"></th></tr></thead>' +
+          "<tbody>" + rows + "</tbody></table>" +
+          '<div style="font-size:12px;color:var(--ink-muted);margin-top:6px;">' + data.total + " question" + (data.total !== 1 ? "s" : "") + " in the pool" + note + "</div>";
+        el.querySelector('[data-ctrl="pool-select-all"]').addEventListener("change", (e) => {
+          el.querySelectorAll("[data-pool-check]").forEach(c => { c.checked = e.target.checked; });
+        });
+      } catch (err) {
+        el.innerHTML = renderError(err);
+      }
+    }
+
+    // Delegated Del handler — loadPool() replaces the list's innerHTML, so a
+    // per-render listener would stack (same reasoning as the bank list above).
+    region("pool-browser").addEventListener("click", async (e) => {
+      const btn = e.target.closest('[data-action="pool-del"]');
+      if (!btn) return;
+      if (!(await confirmDialog("Remove this question from the global pool?", { danger: true, confirmLabel: "Remove" }))) return;
+      try { await apiDelete("/api/games/bank/" + btn.dataset.qid); loadPool(); }
+      catch (err) { toast("Remove failed: " + err.message, "error"); }
+    });
+
+    container.querySelector('[data-action="pool-search-btn"]').addEventListener("click", () => loadPool());
+    ctrl("pool-search").addEventListener("keydown", e => {
+      if (e.key === "Enter") loadPool();
+    });
+
+    container.querySelector('[data-action="pool-import"]').addEventListener("click", async () => {
+      const st = container.querySelector('[data-status="pool"]');
+      const ids = Array.from(region("pool-list").querySelectorAll("[data-pool-check]:checked"))
+        .map(c => parseInt(c.dataset.poolCheck, 10));
+      if (!ids.length) { showStatus(st, false, "Select questions first"); return; }
+      const body = { game_type: gameType, question_ids: ids };
+      if (catMode) {
+        const cat = poolCat.getTags();
+        if (!cat.length) { showStatus(st, false, "Choose a category"); return; }
+        body.tags = cat;
+      }
+      try {
+        const res = await apiPost("/api/games/bank/pool/import", body);
+        showStatus(st, true, "Imported " + res.imported + (res.skipped ? " (" + res.skipped + " already in bank)" : ""));
+        region("pool-list").querySelectorAll("[data-pool-check]:checked").forEach(c => { c.checked = false; });
+        await loadTags();
+        loadBank();
+      } catch (err) { showStatus(st, false, err.message); }
+    });
+
     loadTags();
     loadBank();
   }

@@ -466,6 +466,177 @@ def test_bank_import_empty_texts_skipped(open_client):
     assert resp.json()["imported"] == 0
 
 
+# ── Global pool ───────────────────────────────────────────────────────────────
+
+
+def _pool_rows(db_path):
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT question_id, tags, question_text FROM games_question_bank"
+            " WHERE game_type = 'global' ORDER BY question_id",
+        ).fetchall()
+
+
+def test_send_to_pool_copies_question_and_tags(open_client, fake_ctx):
+    qid = _seed_question(fake_ctx.db_path, "wyr", text="Fly or swim?", tags=["funny", "nsfw"])
+    resp = open_client.post(f"{BASE}/bank/{qid}/pool")
+    assert resp.status_code == 200
+    assert resp.json() == {"sent": True, "duplicate": False}
+
+    rows = _pool_rows(fake_ctx.db_path)
+    assert len(rows) == 1
+    assert rows[0]["question_text"] == "Fly or swim?"
+    assert json.loads(rows[0]["tags"]) == ["funny", "nsfw"]
+    # The original stays in its own bank.
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT game_type FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert row["game_type"] == "wyr"
+
+
+def test_send_to_pool_duplicate_text_not_readded(open_client, fake_ctx):
+    q1 = _seed_question(fake_ctx.db_path, "wyr", text="Same?")
+    q2 = _seed_question(fake_ctx.db_path, "nhie", text="  Same?  ")
+    assert open_client.post(f"{BASE}/bank/{q1}/pool").json()["sent"] is True
+    resp = open_client.post(f"{BASE}/bank/{q2}/pool")
+    assert resp.status_code == 200
+    assert resp.json() == {"sent": False, "duplicate": True}
+    assert len(_pool_rows(fake_ctx.db_path)) == 1
+
+
+def test_send_to_pool_traditional_translates_category_tags(open_client, fake_ctx):
+    nsfw_q = _seed_question(fake_ctx.db_path, "traditional", text="Spicy?", tags=["nsfw_dare"])
+    sfw_q = _seed_question(fake_ctx.db_path, "traditional", text="Mild?", tags=["sfw_truth"])
+    assert open_client.post(f"{BASE}/bank/{nsfw_q}/pool").status_code == 200
+    assert open_client.post(f"{BASE}/bank/{sfw_q}/pool").status_code == 200
+
+    rows = {r["question_text"]: json.loads(r["tags"]) for r in _pool_rows(fake_ctx.db_path)}
+    assert rows["Spicy?"] == ["nsfw"]   # category dropped, nsfw preserved
+    assert rows["Mild?"] == []          # sfw category just dropped
+
+
+def test_send_to_pool_missing_question_404(open_client):
+    assert open_client.post(f"{BASE}/bank/999999/pool").status_code == 404
+
+
+def test_send_to_pool_pool_row_rejected(open_client, fake_ctx):
+    qid = _seed_question(fake_ctx.db_path, "global", text="Already pooled?")
+    assert open_client.post(f"{BASE}/bank/{qid}/pool").status_code == 400
+
+
+def test_pool_import_copies_with_tags_carried_over(open_client, fake_ctx):
+    p1 = _seed_question(fake_ctx.db_path, "global", text="Pooled A?", tags=["funny"])
+    p2 = _seed_question(fake_ctx.db_path, "global", text="Pooled B?", tags=["nsfw"])
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "wyr", "question_ids": [p1, p2]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"imported": 2, "skipped": 0}
+
+    with open_db(fake_ctx.db_path) as conn:
+        rows = conn.execute(
+            "SELECT tags, question_text FROM games_question_bank"
+            " WHERE game_type = 'wyr' ORDER BY question_id",
+        ).fetchall()
+    got = {r["question_text"]: json.loads(r["tags"]) for r in rows}
+    assert got == {"Pooled A?": ["funny"], "Pooled B?": ["nsfw"]}
+    # Pool keeps its copies.
+    assert len(_pool_rows(fake_ctx.db_path)) == 2
+
+
+def test_pool_import_skips_texts_already_in_target(open_client, fake_ctx):
+    _seed_question(fake_ctx.db_path, "wyr", text="Dup?")
+    p1 = _seed_question(fake_ctx.db_path, "global", text="Dup?")
+    p2 = _seed_question(fake_ctx.db_path, "global", text="Fresh?")
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "wyr", "question_ids": [p1, p2]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"imported": 1, "skipped": 1}
+
+
+def test_pool_import_ignores_non_pool_and_unknown_ids(open_client, fake_ctx):
+    wyr_q = _seed_question(fake_ctx.db_path, "wyr", text="Not pooled?")
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "nhie", "question_ids": [wyr_q, 999999]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"imported": 0, "skipped": 0}
+
+
+def test_pool_import_tags_override_replaces_pool_tags(open_client, fake_ctx):
+    pid = _seed_question(fake_ctx.db_path, "global", text="Override me?", tags=["funny"])
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "wyr", "question_ids": [pid], "tags": ["deep"]},
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE game_type = 'wyr'"
+            " AND question_text = 'Override me?'",
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["deep"]
+
+
+def test_pool_import_traditional_requires_category(open_client, fake_ctx):
+    pid = _seed_question(fake_ctx.db_path, "global", text="Where to?")
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "traditional", "question_ids": [pid]},
+    )
+    assert resp.status_code == 400
+
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "traditional", "question_ids": [pid], "tags": ["sfw_truth"]},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"imported": 1, "skipped": 0}
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE game_type = 'traditional'"
+            " AND question_text = 'Where to?'",
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["sfw_truth"]
+
+
+def test_pool_import_rejects_pool_as_target_and_empty_selection(open_client, fake_ctx):
+    pid = _seed_question(fake_ctx.db_path, "global", text="Loop?")
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "global", "question_ids": [pid]},
+    )
+    assert resp.status_code == 400
+    resp = open_client.post(
+        f"{BASE}/bank/pool/import",
+        json={"game_type": "wyr", "question_ids": []},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_create_and_export_roundtrip_includes_pool(open_client, fake_ctx):
+    """POST /bank accepts the reserved 'global' type, and a full export
+    containing pool rows re-imports cleanly."""
+    _clear_bank(fake_ctx.db_path)
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "global", "tags": ["funny"], "question_text": "Pooled?"},
+    )
+    assert resp.status_code == 200
+
+    exported = open_client.get(f"{BASE}/bank/export").json()
+    assert exported == [{"game_type": "global", "tags": ["funny"], "question_text": "Pooled?"}]
+
+    resp = open_client.post(f"{BASE}/bank/import", json=exported)
+    assert resp.status_code == 200
+    assert resp.json()["imported"] == 1
+
+
 # ── Prompts ───────────────────────────────────────────────────────────────────
 
 

@@ -41,7 +41,7 @@ A 19-game party-games suite. Every game is one slash command that spins up a pub
 
 ### Dashboard
 
-The dashboard at `/api/games/*` mirrors the admin slash commands and adds full LegitLibs template authoring, question bank import/export, and AI prompt editing. Two permission tiers gate it: `mod` (Administrator / Manage Server) for config writes, and a Game Host tier (Administrator OR a configured editor role) for content authoring (bank, templates, AI generate, history, stats). Reads of AI prompt configuration are re-loaded per request so dashboard edits take effect mid-game without a restart.
+The dashboard at `/api/games/*` mirrors the admin slash commands and adds full LegitLibs template authoring, question bank import/export, and AI prompt editing. Banks also share a **global pool** — bank rows stored under the reserved `global` game type, which gameplay never selects. Every bank manager has a per-question *Pool* button (copy to the pool; duplicate texts are skipped, and Traditional's category tags are translated to the generic `nsfw` tag or dropped) and a pool browser that imports selected pool questions into that game's bank (duplicates skipped; Traditional requires choosing the category the imports are filed under, other games carry the pool tags over). Two permission tiers gate it: `mod` (Administrator / Manage Server) for config writes, and a Game Host tier (Administrator OR a configured editor role) for content authoring (bank, templates, AI generate, history, stats). Reads of AI prompt configuration are re-loaded per request so dashboard edits take effect mid-game without a restart.
 
 ## Behaviour
 
