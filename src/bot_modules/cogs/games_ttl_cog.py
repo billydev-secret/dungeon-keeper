@@ -502,6 +502,7 @@ class TTLCog(commands.Cog):
             player_count=len(player_ids),
             round_count=len(player_ids),
             payload=payload,
+            bot=self.bot, player_ids=player_ids,
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]

@@ -7,11 +7,20 @@ table. See docs/economy_spec.md for the feature design.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import sqlite3
 import time
 from dataclasses import dataclass, fields
+from typing import TYPE_CHECKING
+
+from bot_modules.economy import logic
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import discord
 
 ECON_PREFIX = "econ_"
 
@@ -286,3 +295,339 @@ def set_notify_muted(
         """,
         (guild_id, user_id, 1 if muted else 0),
     )
+
+
+# ── faucets: login, conversion, QOTD, game rewards ────────────────────
+
+
+@dataclass(frozen=True)
+class LoginOutcome:
+    paid: int
+    streak: int
+    milestone: int
+    grace_consumed: bool
+    reset: bool
+
+
+def process_login(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    *,
+    local_day: str,
+    source: str,
+    booster: bool,
+) -> LoginOutcome | None:
+    """Pay the daily login for the first qualifying activity of a local day.
+
+    Returns None when the user already logged in this local day. The
+    INSERT OR IGNORE on econ_logins is the race anchor: it rides the same
+    connection/transaction as the credits, so concurrent triggers pay at
+    most once. Milestone bonuses land as a separate "milestone" ledger row.
+    """
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO econ_logins (guild_id, user_id, local_day, source, paid)
+        VALUES (?, ?, ?, ?, 0)
+        """,
+        (guild_id, user_id, local_day, source),
+    )
+    if (cur.rowcount or 0) == 0:
+        return None
+
+    row = conn.execute(
+        """
+        SELECT current_streak, longest_streak, last_login_day, last_grace_day
+        FROM econ_streaks
+        WHERE guild_id = ? AND user_id = ?
+        """,
+        (guild_id, user_id),
+    ).fetchone()
+    ev = logic.evaluate_login(
+        today=local_day,
+        last_login_day=row["last_login_day"] if row else None,
+        current_streak=int(row["current_streak"]) if row else 0,
+        last_grace_day=row["last_grace_day"] if row else None,
+    )
+
+    last_grace_day = ev.grace_covers_day if ev.grace_consumed else (
+        row["last_grace_day"] if row else None
+    )
+    longest = max(ev.new_streak, int(row["longest_streak"]) if row else 0)
+    conn.execute(
+        """
+        INSERT INTO econ_streaks
+            (guild_id, user_id, current_streak, longest_streak,
+             last_login_day, last_grace_day)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, user_id) DO UPDATE SET
+            current_streak = excluded.current_streak,
+            longest_streak = excluded.longest_streak,
+            last_login_day = excluded.last_login_day,
+            last_grace_day = excluded.last_grace_day
+        """,
+        (guild_id, user_id, ev.new_streak, longest, local_day, last_grace_day),
+    )
+
+    base = settings.login_voice_base if source == "voice" else settings.login_text_base
+    amount = logic.login_amount(ev.new_streak, base, settings.streak_bonus_cap)
+    paid = 0
+    if amount > 0:
+        paid = apply_credit(
+            conn,
+            guild_id,
+            user_id,
+            amount,
+            "login",
+            meta={"local_day": local_day, "source": source, "streak": ev.new_streak},
+            booster=booster,
+            multiplier=settings.booster_multiplier,
+        )
+
+    milestone = logic.milestone_amount(ev.new_streak, settings)
+    milestone_paid = 0
+    if milestone > 0:
+        milestone_paid = apply_credit(
+            conn,
+            guild_id,
+            user_id,
+            milestone,
+            "milestone",
+            meta={"local_day": local_day, "streak": ev.new_streak},
+            booster=booster,
+            multiplier=settings.booster_multiplier,
+        )
+
+    conn.execute(
+        """
+        UPDATE econ_logins SET paid = ?
+        WHERE guild_id = ? AND user_id = ? AND local_day = ?
+        """,
+        (paid + milestone_paid, guild_id, user_id, local_day),
+    )
+    return LoginOutcome(
+        paid=paid,
+        streak=ev.new_streak,
+        milestone=milestone_paid,
+        grace_consumed=ev.grace_consumed,
+        reset=ev.reset,
+    )
+
+
+def process_conversion(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    *,
+    local_day: str,
+    xp: float,
+    booster: bool,
+) -> int:
+    """Convert one local day's XP to currency; returns the credited amount.
+
+    Idempotent per (guild, user, local_day) via INSERT OR IGNORE on
+    econ_conversions — a replayed day returns 0 with no writes. The
+    fractional remainder from the latest prior conversion carries in.
+    """
+    prev = conn.execute(
+        """
+        SELECT remainder FROM econ_conversions
+        WHERE guild_id = ? AND user_id = ?
+        ORDER BY local_day DESC LIMIT 1
+        """,
+        (guild_id, user_id),
+    ).fetchone()
+    carry = float(prev["remainder"]) if prev else 0.0
+    coins, remainder = logic.convert_xp(xp, carry, settings.xp_per_coin)
+
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO econ_conversions
+            (guild_id, user_id, local_day, xp, coins, remainder)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (guild_id, user_id, local_day, xp, coins, remainder),
+    )
+    if (cur.rowcount or 0) == 0:
+        return 0
+    if coins <= 0:
+        return 0
+    return apply_credit(
+        conn,
+        guild_id,
+        user_id,
+        coins,
+        "conversion",
+        meta={"local_day": local_day, "xp": round(xp, 2)},
+        booster=booster,
+        multiplier=settings.booster_multiplier,
+    )
+
+
+def create_qotd(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    question: str,
+    posted_by: int,
+    local_day: str,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO econ_qotd
+            (guild_id, channel_id, message_id, question, posted_by,
+             local_day, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (guild_id, channel_id, message_id, question, posted_by, local_day, time.time()),
+    )
+    return int(cur.lastrowid or 0)
+
+
+def open_qotd_for(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int, local_day: str
+) -> sqlite3.Row | None:
+    """Return the QOTD open in this channel for this local day (latest wins)."""
+    return conn.execute(
+        """
+        SELECT id, guild_id, channel_id, message_id, question, posted_by,
+               local_day, created_at
+        FROM econ_qotd
+        WHERE guild_id = ? AND channel_id = ? AND local_day = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (guild_id, channel_id, local_day),
+    ).fetchone()
+
+
+def try_award_qotd(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    qotd_id: int,
+    guild_id: int,
+    user_id: int,
+    *,
+    booster: bool,
+) -> bool:
+    """Pay the QOTD reward once per member; False if already rewarded."""
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO econ_qotd_rewards (qotd_id, user_id) VALUES (?, ?)",
+        (qotd_id, user_id),
+    )
+    if (cur.rowcount or 0) == 0:
+        return False
+    if settings.reward_qotd > 0:
+        apply_credit(
+            conn,
+            guild_id,
+            user_id,
+            settings.reward_qotd,
+            "qotd",
+            meta={"qotd_id": qotd_id},
+            booster=booster,
+            multiplier=settings.booster_multiplier,
+        )
+    return True
+
+
+def award_game_reward(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    user_id: int,
+    *,
+    kind: str,
+    booster: bool,
+) -> int:
+    """Credit a game reward; ``kind`` picks the amount. Returns the credit."""
+    amounts = {
+        "game_participation": settings.reward_game_participation,
+        "game_win": settings.reward_game_win,
+    }
+    if kind not in amounts:
+        raise ValueError(f"unknown game reward kind: {kind!r}")
+    amount = amounts[kind]
+    if amount <= 0:
+        return 0
+    return apply_credit(
+        conn,
+        guild_id,
+        user_id,
+        amount,
+        kind,
+        booster=booster,
+        multiplier=settings.booster_multiplier,
+    )
+
+
+def member_is_booster(bot: discord.Client, guild_id: int, user_id: int) -> bool:
+    """True when the member is currently boosting the guild."""
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return False
+    member = guild.get_member(user_id)
+    return member is not None and member.premium_since is not None
+
+
+async def notify_member(
+    bot: discord.Client,
+    db_path: Path,
+    guild_id: int,
+    user_id: int,
+    *,
+    embed: discord.Embed | None = None,
+    content: str | None = None,
+) -> bool:
+    """DM an economy notification, falling back to the bank channel.
+
+    A muted member (econ_notify_prefs) is silently dropped and counts as
+    delivered. Returns False only when both the DM and the bank-channel
+    fallback fail.
+    """
+    import discord  # local import to keep this module import-light for tests
+
+    from bot_modules.core.db_utils import open_db
+
+    def _read():
+        with open_db(db_path) as conn:
+            return (
+                get_notify_muted(conn, guild_id, user_id),
+                load_econ_settings(conn, guild_id),
+            )
+
+    muted, settings = await asyncio.to_thread(_read)
+    if muted:
+        return True
+
+    kwargs: dict = {}
+    if content:
+        kwargs["content"] = content
+    if embed:
+        kwargs["embed"] = embed
+
+    guild = bot.get_guild(guild_id)
+    member = guild.get_member(user_id) if guild else None
+    if member is not None:
+        try:
+            await member.send(**kwargs)
+            return True
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    if guild is None or not settings.bank_channel_id:
+        return False
+    channel = guild.get_channel(settings.bank_channel_id)
+    if not isinstance(channel, discord.abc.Messageable):
+        return False
+    mention = f"<@{user_id}>"
+    fallback_kwargs: dict = {"content": f"{mention} {content}" if content else mention}
+    if embed:
+        fallback_kwargs["embed"] = embed
+    try:
+        await channel.send(**fallback_kwargs)
+        return True
+    except (discord.Forbidden, discord.HTTPException):
+        return False

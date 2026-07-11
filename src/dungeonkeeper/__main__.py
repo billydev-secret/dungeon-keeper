@@ -21,6 +21,7 @@ from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.booster_roles import BoosterRoleDynamicButton
 from bot_modules.services.inactivity_prune_service import inactivity_prune_loop
+from bot_modules.services.economy_loop import economy_loop
 from bot_modules.services.voice_xp_service import voice_xp_loop
 from bot_modules.services.wellness_partners import (
     WellnessPartnerAcceptButton,
@@ -294,6 +295,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: scheduled_games_loop(bot))
 
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: economy_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: db_backup_loop(bot, db_path))
 

@@ -16,6 +16,7 @@ from discord import app_commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
+from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.duels.base_game import BaseGame
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
@@ -128,6 +129,9 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             winner, loser = resolve_crash(crashers, game.bail_log)
             if loser is not None and winner is not None:
                 await self._post_group_result(game, winner, loser)
+                await pay_game_rewards(
+                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY
+                )
             else:
                 # total wipeout (nobody bailed) → cosmetic, no nick
                 await self._resolve_cosmetic(game, winner)
@@ -171,6 +175,10 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             last_action_at=now,
         )
         await self.on_game_resolved(game.id)
+        await pay_game_rewards(
+            self.bot, game.guild_id, list(game.roster),
+            [winner_id] if winner_id is not None else [], self.GAME_KEY,
+        )
 
     # ── Button handler ────────────────────────────────────────────────────────
 

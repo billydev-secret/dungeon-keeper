@@ -604,7 +604,8 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         finally:
             await end_game(db, game_id,
                            player_count=len(player_ids),
-                           round_count=1)
+                           round_count=1,
+                           bot=cog.bot, player_ids=player_ids)
             cog.bot.active_views.pop(game_id, None)
             cog._game_canceled.discard(game_id)
 

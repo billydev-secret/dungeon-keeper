@@ -17,6 +17,7 @@ from discord import app_commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
+from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.games.command_groups import games
 from bot_modules.duels.views import ResultView
@@ -164,6 +165,10 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 result_message_id=result_message_id,
                 resolved_at=now,
                 last_action_at=now,
+            )
+            await pay_game_rewards(
+                self.bot, game.guild_id,
+                [game.challenger_id, game.target_id], [winner_id], self.GAME_KEY,
             )
 
         self._cancel_timer(game_id)

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
+import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db, set_config_value
@@ -9,14 +12,23 @@ from migrations import apply_migrations_sync
 from bot_modules.services.economy_service import (
     DEFAULT_ECON_SETTINGS,
     ECON_PREFIX,
+    EconSettings,
     apply_credit,
     apply_debit,
+    award_game_reward,
+    create_qotd,
     get_balance,
     get_ledger,
     get_notify_muted,
     load_econ_settings,
+    member_is_booster,
+    notify_member,
+    open_qotd_for,
+    process_conversion,
+    process_login,
     save_econ_settings,
     set_notify_muted,
+    try_award_qotd,
 )
 
 GUILD = 123
@@ -253,3 +265,450 @@ def test_notify_muted_roundtrip(db):
         assert get_notify_muted(conn, GUILD, USER) is True
         set_notify_muted(conn, GUILD, USER, False)
         assert get_notify_muted(conn, GUILD, USER) is False
+
+
+# ── daily login ───────────────────────────────────────────────────────
+
+S = DEFAULT_ECON_SETTINGS
+DAY = "2026-07-10"
+PREV = "2026-07-09"
+
+
+def _seed_streak(
+    conn,
+    *,
+    streak: int,
+    last_login: str,
+    last_grace: str | None = None,
+    longest: int | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO econ_streaks
+            (guild_id, user_id, current_streak, longest_streak,
+             last_login_day, last_grace_day)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (GUILD, USER, streak, longest if longest is not None else streak,
+         last_login, last_grace),
+    )
+
+
+def _streak_row(conn):
+    return conn.execute(
+        "SELECT * FROM econ_streaks WHERE guild_id = ? AND user_id = ?",
+        (GUILD, USER),
+    ).fetchone()
+
+
+def test_process_login_first_ever(db):
+    with open_db(db) as conn:
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        assert out is not None
+        assert out.paid == S.login_text_base
+        assert out.streak == 1
+        assert out.milestone == 0
+        assert out.grace_consumed is False
+        assert out.reset is False
+        assert get_balance(conn, GUILD, USER) == S.login_text_base
+        rows = get_ledger(conn, GUILD, USER)
+        assert [r["kind"] for r in rows] == ["login"]
+        row = _streak_row(conn)
+        assert row["current_streak"] == 1
+        assert row["last_login_day"] == DAY
+        login = conn.execute(
+            "SELECT * FROM econ_logins WHERE guild_id=? AND user_id=?",
+            (GUILD, USER),
+        ).fetchone()
+        assert login["source"] == "text"
+        assert login["paid"] == S.login_text_base
+
+
+def test_process_login_same_day_returns_none(db):
+    with open_db(db) as conn:
+        assert process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        ) is not None
+        assert process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="voice", booster=False
+        ) is None
+        # No double pay.
+        assert get_balance(conn, GUILD, USER) == S.login_text_base
+        assert len(get_ledger(conn, GUILD, USER)) == 1
+
+
+def test_process_login_voice_uses_voice_base(db):
+    with open_db(db) as conn:
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="voice", booster=False
+        )
+        assert out is not None
+        assert out.paid == S.login_voice_base
+
+
+def test_process_login_consecutive_day_adds_streak_bonus(db):
+    with open_db(db) as conn:
+        _seed_streak(conn, streak=3, last_login=PREV)
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        assert out is not None
+        assert out.streak == 4
+        assert out.paid == S.login_text_base + 3  # +1/day bonus, streak 4
+        assert _streak_row(conn)["longest_streak"] == 4
+
+
+def test_process_login_bonus_capped_but_streak_counter_grows(db):
+    with open_db(db) as conn:
+        _seed_streak(conn, streak=50, last_login=PREV)
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        assert out is not None
+        assert out.streak == 51  # cap applies to the bonus, not the counter
+        assert out.paid == S.login_text_base + S.streak_bonus_cap
+
+
+def test_process_login_milestone_separate_ledger_row(db):
+    with open_db(db) as conn:
+        _seed_streak(conn, streak=6, last_login=PREV)
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        assert out is not None
+        assert out.streak == 7
+        assert out.milestone == S.milestone_day7
+        rows = get_ledger(conn, GUILD, USER)
+        assert sorted(r["kind"] for r in rows) == ["login", "milestone"]
+        assert get_balance(conn, GUILD, USER) == out.paid + out.milestone
+        login = conn.execute(
+            "SELECT paid FROM econ_logins WHERE guild_id=? AND user_id=?",
+            (GUILD, USER),
+        ).fetchone()
+        assert login["paid"] == out.paid + out.milestone
+
+
+def test_process_login_grace_bridges_and_persists(db):
+    with open_db(db) as conn:
+        _seed_streak(conn, streak=4, last_login="2026-07-08")
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        assert out is not None
+        assert out.streak == 5
+        assert out.grace_consumed is True
+        assert out.reset is False
+        assert _streak_row(conn)["last_grace_day"] == PREV
+
+
+def test_process_login_grace_exhausted_resets(db):
+    with open_db(db) as conn:
+        _seed_streak(conn, streak=4, last_login="2026-07-08", last_grace="2026-07-05")
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        assert out is not None
+        assert out.streak == 1
+        assert out.reset is True
+        # Old grace anchor preserved (no new grace consumed).
+        assert _streak_row(conn)["last_grace_day"] == "2026-07-05"
+
+
+def test_process_login_two_day_gap_resets_but_keeps_longest(db):
+    with open_db(db) as conn:
+        _seed_streak(conn, streak=9, last_login="2026-07-07")
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=False
+        )
+        assert out is not None
+        assert out.streak == 1
+        assert out.reset is True
+        assert out.paid == S.login_text_base
+        assert _streak_row(conn)["longest_streak"] == 9
+
+
+def test_process_login_booster_ceil(db):
+    with open_db(db) as conn:
+        out = process_login(
+            conn, S, GUILD, USER, local_day=DAY, source="text", booster=True
+        )
+        assert out is not None
+        # ceil(5 * 1.5) == 8
+        assert out.paid == 8
+        assert get_balance(conn, GUILD, USER) == 8
+
+
+# ── XP conversion ─────────────────────────────────────────────────────
+
+
+def test_process_conversion_basic_credit(db):
+    with open_db(db) as conn:
+        credited = process_conversion(
+            conn, S, GUILD, USER, local_day=DAY, xp=31.0, booster=False
+        )
+        assert credited == 2  # 31 / 15
+        rows = get_ledger(conn, GUILD, USER)
+        assert rows[0]["kind"] == "conversion"
+        row = conn.execute(
+            "SELECT * FROM econ_conversions WHERE guild_id=? AND user_id=?",
+            (GUILD, USER),
+        ).fetchone()
+        assert row["coins"] == 2
+        assert row["remainder"] == pytest.approx(1.0)
+
+
+def test_process_conversion_idempotent_per_day(db):
+    with open_db(db) as conn:
+        assert process_conversion(
+            conn, S, GUILD, USER, local_day=DAY, xp=31.0, booster=False
+        ) == 2
+        assert process_conversion(
+            conn, S, GUILD, USER, local_day=DAY, xp=31.0, booster=False
+        ) == 0
+        assert get_balance(conn, GUILD, USER) == 2
+        assert len(get_ledger(conn, GUILD, USER)) == 1
+
+
+def test_process_conversion_remainder_carries_across_days(db):
+    with open_db(db) as conn:
+        process_conversion(conn, S, GUILD, USER, local_day=PREV, xp=10.0, booster=False)
+        credited = process_conversion(
+            conn, S, GUILD, USER, local_day=DAY, xp=6.0, booster=False
+        )
+        # 10 carried + 6 = 16 -> 1 coin, 1 XP remainder.
+        assert credited == 1
+        row = conn.execute(
+            "SELECT remainder FROM econ_conversions "
+            "WHERE guild_id=? AND user_id=? AND local_day=?",
+            (GUILD, USER, DAY),
+        ).fetchone()
+        assert row["remainder"] == pytest.approx(1.0)
+
+
+def test_process_conversion_zero_coins_writes_row_no_ledger(db):
+    with open_db(db) as conn:
+        assert process_conversion(
+            conn, S, GUILD, USER, local_day=DAY, xp=7.0, booster=False
+        ) == 0
+        assert get_ledger(conn, GUILD, USER) == []
+        row = conn.execute(
+            "SELECT remainder FROM econ_conversions WHERE guild_id=? AND user_id=?",
+            (GUILD, USER),
+        ).fetchone()
+        assert row["remainder"] == pytest.approx(7.0)
+
+
+def test_process_conversion_booster_ceil(db):
+    with open_db(db) as conn:
+        credited = process_conversion(
+            conn, S, GUILD, USER, local_day=DAY, xp=45.0, booster=True
+        )
+        # 3 coins -> ceil(3 * 1.5) == 5
+        assert credited == 5
+
+
+def test_process_conversion_zero_rate_carries_everything(db):
+    settings = EconSettings(xp_per_coin=0.0)
+    with open_db(db) as conn:
+        assert process_conversion(
+            conn, settings, GUILD, USER, local_day=DAY, xp=40.0, booster=False
+        ) == 0
+        row = conn.execute(
+            "SELECT coins, remainder FROM econ_conversions "
+            "WHERE guild_id=? AND user_id=?",
+            (GUILD, USER),
+        ).fetchone()
+        assert row["coins"] == 0
+        assert row["remainder"] == pytest.approx(40.0)
+
+
+# ── QOTD ──────────────────────────────────────────────────────────────
+
+CHANNEL = 42
+
+
+def test_create_and_open_qotd(db):
+    with open_db(db) as conn:
+        qid = create_qotd(conn, GUILD, CHANNEL, 555, "Best snack?", USER, DAY)
+        assert qid > 0
+        row = open_qotd_for(conn, GUILD, CHANNEL, DAY)
+        assert row is not None
+        assert row["id"] == qid
+        assert row["question"] == "Best snack?"
+        assert row["posted_by"] == USER
+        # Wrong day / wrong channel -> no match.
+        assert open_qotd_for(conn, GUILD, CHANNEL, PREV) is None
+        assert open_qotd_for(conn, GUILD, CHANNEL + 1, DAY) is None
+
+
+def test_open_qotd_latest_wins(db):
+    with open_db(db) as conn:
+        create_qotd(conn, GUILD, CHANNEL, 555, "First?", USER, DAY)
+        second = create_qotd(conn, GUILD, CHANNEL, 556, "Second?", USER, DAY)
+        row = open_qotd_for(conn, GUILD, CHANNEL, DAY)
+        assert row is not None
+        assert row["id"] == second
+
+
+def test_try_award_qotd_once_per_member(db):
+    with open_db(db) as conn:
+        qid = create_qotd(conn, GUILD, CHANNEL, 555, "Q?", USER, DAY)
+        assert try_award_qotd(conn, S, qid, GUILD, OTHER, booster=False) is True
+        assert try_award_qotd(conn, S, qid, GUILD, OTHER, booster=False) is False
+        assert get_balance(conn, GUILD, OTHER) == S.reward_qotd
+        rows = get_ledger(conn, GUILD, OTHER)
+        assert len(rows) == 1
+        assert rows[0]["kind"] == "qotd"
+
+
+def test_try_award_qotd_booster_ceil(db):
+    with open_db(db) as conn:
+        qid = create_qotd(conn, GUILD, CHANNEL, 555, "Q?", USER, DAY)
+        assert try_award_qotd(conn, S, qid, GUILD, OTHER, booster=True) is True
+        # ceil(10 * 1.5) == 15
+        assert get_balance(conn, GUILD, OTHER) == 15
+
+
+def test_try_award_qotd_zero_reward_still_marks(db):
+    settings = EconSettings(reward_qotd=0)
+    with open_db(db) as conn:
+        qid = create_qotd(conn, GUILD, CHANNEL, 555, "Q?", USER, DAY)
+        assert try_award_qotd(conn, settings, qid, GUILD, OTHER, booster=False) is True
+        assert get_balance(conn, GUILD, OTHER) == 0
+        assert try_award_qotd(conn, settings, qid, GUILD, OTHER, booster=False) is False
+
+
+# ── game rewards ──────────────────────────────────────────────────────
+
+
+def test_award_game_reward_amounts_and_kinds(db):
+    with open_db(db) as conn:
+        assert award_game_reward(
+            conn, S, GUILD, USER, kind="game_participation", booster=False
+        ) == S.reward_game_participation
+        assert award_game_reward(
+            conn, S, GUILD, USER, kind="game_win", booster=False
+        ) == S.reward_game_win
+        rows = get_ledger(conn, GUILD, USER)
+        assert sorted(r["kind"] for r in rows) == ["game_participation", "game_win"]
+
+
+def test_award_game_reward_booster_ceil(db):
+    with open_db(db) as conn:
+        credited = award_game_reward(
+            conn, S, GUILD, USER, kind="game_participation", booster=True
+        )
+        # ceil(5 * 1.5) == 8
+        assert credited == 8
+
+
+def test_award_game_reward_unknown_kind_raises(db):
+    with open_db(db) as conn:
+        with pytest.raises(ValueError):
+            award_game_reward(conn, S, GUILD, USER, kind="game_loss", booster=False)
+
+
+def test_award_game_reward_zero_amount_no_writes(db):
+    settings = EconSettings(reward_game_participation=0)
+    with open_db(db) as conn:
+        assert award_game_reward(
+            conn, settings, GUILD, USER, kind="game_participation", booster=False
+        ) == 0
+        assert get_ledger(conn, GUILD, USER) == []
+
+
+# ── booster check + notifications ─────────────────────────────────────
+
+
+def _fake_bot(*, guild=None):
+    bot = MagicMock()
+    bot.get_guild.return_value = guild
+    return bot
+
+
+def _fake_guild(*, member=None, channel=None):
+    guild = MagicMock()
+    guild.get_member.return_value = member
+    guild.get_channel.return_value = channel
+    return guild
+
+
+def _fake_member(*, premium=None):
+    member = MagicMock(spec=discord.Member)
+    member.premium_since = premium
+    return member
+
+
+def _forbidden() -> discord.Forbidden:
+    return discord.Forbidden(MagicMock(status=403, reason="Forbidden"), "no DMs")
+
+
+def test_member_is_booster_true():
+    guild = _fake_guild(member=_fake_member(premium=object()))
+    assert member_is_booster(_fake_bot(guild=guild), GUILD, USER) is True
+
+
+def test_member_is_booster_false_cases():
+    assert member_is_booster(_fake_bot(guild=None), GUILD, USER) is False
+    assert member_is_booster(_fake_bot(guild=_fake_guild()), GUILD, USER) is False
+    guild = _fake_guild(member=_fake_member(premium=None))
+    assert member_is_booster(_fake_bot(guild=guild), GUILD, USER) is False
+
+
+async def test_notify_member_muted_drops_silently(db):
+    with open_db(db) as conn:
+        set_notify_muted(conn, GUILD, USER, True)
+    member = _fake_member()
+    bot = _fake_bot(guild=_fake_guild(member=member))
+    assert await notify_member(bot, db, GUILD, USER, content="hi") is True
+    member.send.assert_not_called()
+
+
+async def test_notify_member_dm_success(db):
+    member = _fake_member()
+    bot = _fake_bot(guild=_fake_guild(member=member))
+    assert await notify_member(bot, db, GUILD, USER, content="hi") is True
+    member.send.assert_awaited_once_with(content="hi")
+
+
+async def test_notify_member_dm_forbidden_falls_back_to_bank_channel(db):
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bank_channel_id": 777})
+    member = _fake_member()
+    member.send.side_effect = _forbidden()
+    channel = MagicMock(spec=discord.TextChannel)
+    bot = _fake_bot(guild=_fake_guild(member=member, channel=channel))
+    assert await notify_member(bot, db, GUILD, USER, content="hi") is True
+    channel.send.assert_awaited_once()
+    kwargs = channel.send.await_args.kwargs
+    assert f"<@{USER}>" in kwargs["content"]
+    assert "hi" in kwargs["content"]
+
+
+async def test_notify_member_no_fallback_configured_returns_false(db):
+    member = _fake_member()
+    member.send.side_effect = _forbidden()
+    bot = _fake_bot(guild=_fake_guild(member=member))
+    assert await notify_member(bot, db, GUILD, USER, content="hi") is False
+
+
+async def test_notify_member_both_fail_returns_false(db):
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bank_channel_id": 777})
+    member = _fake_member()
+    member.send.side_effect = _forbidden()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send.side_effect = _forbidden()
+    bot = _fake_bot(guild=_fake_guild(member=member, channel=channel))
+    assert await notify_member(bot, db, GUILD, USER, content="hi") is False
+
+
+async def test_notify_member_member_gone_uses_bank_channel(db):
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bank_channel_id": 777})
+    channel = MagicMock(spec=discord.TextChannel)
+    bot = _fake_bot(guild=_fake_guild(member=None, channel=channel))
+    assert await notify_member(bot, db, GUILD, USER, content="hi") is True
+    channel.send.assert_awaited_once()

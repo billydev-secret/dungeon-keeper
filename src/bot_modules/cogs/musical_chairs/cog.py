@@ -18,6 +18,7 @@ from discord import app_commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_game import BaseGame
+from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_RED, COLOR_YELLOW
 
@@ -153,6 +154,9 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
             )
             if winner is not None and loser is not None:
                 await self._post_group_result(game, winner, loser)
+                await pay_game_rewards(
+                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY
+                )
             return True
 
         cfg = await mcdb.get_config(self.db, game.guild_id)

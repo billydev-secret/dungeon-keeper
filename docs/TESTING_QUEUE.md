@@ -35,6 +35,41 @@ need a live pass:
 - [ ] A non-admin session cannot reach the Economy API
       (`GET/PUT /api/economy/config` → 403), and the nav item is hidden.
 
+### Economy (stage 1) — faucets: logins, conversion, reactions, QOTD, game payouts  (uncommitted)
+
+Faucet slice of the economy feature (`docs/plans/economy-and-perk-shop.md`):
+migration 063 adds `econ_logins`/`econ_streaks`/`econ_conversions`/`econ_qotd`
+(+ `econ_qotd_rewards`) and the `xp_reaction_awards` dedup table; a new hourly
+`economy_loop` (day/week-roll conversion, streak eval, QOTD window close); the
+`reaction_given` XP source; `/qotd post` and `/bank mute`; login hooks on the
+message and voice-XP paths; and duel/party game payouts. Offline logic is
+covered by service/loop/logic/cog/route tests; the Discord + scheduler surfaces
+need a live pass:
+
+- [ ] **Setup first:** set the dev guild's `tz_offset_hours` config row so
+      "local midnight" is correct — it currently inherits global −7 (Pacific).
+      Every day-roll check below depends on this.
+- [ ] Bot restarts clean: the new economy loop registers (no boot error), and
+      `/qotd post` + `/bank mute` appear in the command list.
+- [ ] First counted message of the local day pays the text login → `/bank
+      wallet` ledger shows a "login" row (5 base).
+- [ ] Sit in a 2-human, non-AFK VC ≥5 min with **no** message earlier that day
+      → voice login pays 15 base (ledger "login"); streak increments the next
+      day.
+- [ ] React to someone else's message → the reactor gains XP (`xp_events`
+      source `reaction_given`); reacting again / unreact+react on the same
+      message pays **nothing** (once per message ever). No self/bot payout.
+- [ ] `/qotd post <question>` renders a banner card; a non-manager is refused;
+      members who reply in-channel that day each get 10 **once**.
+- [ ] Finish a duel game (e.g. quickdraw) → winner +25 total (20 win + 5
+      participation) and loser +5 in their `/bank wallet` ledgers.
+- [ ] Conversion lands after guild-local midnight: a "conversion" ledger entry
+      appears, coins = floor(day XP / rate), and the fractional remainder
+      carries onto the conversion row.
+- [ ] Dashboard XP panel shows the new **Reaction Given XP** coefficient
+      (default 0.34), and editing + Save persists it (reload shows the saved
+      value).
+
 ### Auto-delete: media-only mode  — committed 1c56e7c (2026-07-10)
 
 New per-channel "only delete messages with attachments" toggle on the

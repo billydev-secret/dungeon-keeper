@@ -77,6 +77,12 @@ ceil on faucet credits; balance can never go negative — debit fails atomically
 - Tests: conversion idempotency (double-roll replay), remainder carry, login race
   (message+voice same day), streak/grace matrix, reaction dedup, QOTD one-per-member,
   end_game payout, winner payout per duel cog + per party-game resolver.
+- **Shipped notes:** (1) conversion is single-day — the loop converts only the most
+  recent marked local day and jumps forward, so a multi-day outage never mints a
+  backlog when a guild re-enables the economy (§12). (2) participation/win payouts v1
+  reach only games with a tracked roster (six duel games; ttl/traditional/legitlibs);
+  most party cogs record just the host, so their rosters need enriching before they pay
+  participation — committed follow-up below.
 
 ## Stage 2 — Quests
 
@@ -158,7 +164,10 @@ from stages 0–4). Decision checkpoint with real income data before rooms.
 ## V2 (committed after v1 ships)
 
 Member wallet dashboard page (`require_perms(set())`) · role studio panel with live
-preview · spotlight slots (purchase, featured embed, 3/ISO-week inventory, expiry).
+preview · spotlight slots (purchase, featured embed, 3/ISO-week inventory, expiry) ·
+party-cog roster enrichment for participation payouts (record every player, not just the
+host, in the session tracker so the `end_game` participation payout reaches all party
+games).
 
 ## Deliberately deferred
 

@@ -9,6 +9,9 @@ See docs/economy_spec.md for the feature design.
 from __future__ import annotations
 
 import asyncio
+import io
+import logging
+import time
 from typing import TYPE_CHECKING
 
 import discord
@@ -16,18 +19,43 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.db_utils import get_tz_offset_hours
+from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
+    create_qotd,
     get_balance,
     get_ledger,
+    get_notify_muted,
     load_econ_settings,
+    set_notify_muted,
 )
+from bot_modules.services.quote_renderer import THEMES, render_quote_card
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
 
+log = logging.getLogger("dungeonkeeper.economy")
+
 _DISABLED_MSG = "The economy isn't enabled on this server yet."
+_QOTD_CARD_FILENAME = "qotd.png"
+
+
+async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
+    """Bytes for the QOTD card background — the server icon, bot avatar fallback."""
+    if guild.icon is not None:
+        try:
+            return await guild.icon.replace(size=512).read()
+        except discord.HTTPException:
+            log.warning("qotd: failed to read guild icon for %s", guild.id)
+    user = bot.user
+    if user is not None:
+        try:
+            return await user.display_avatar.with_size(512).read()
+        except discord.HTTPException:
+            log.warning("qotd: failed to read bot avatar")
+    return None
 
 
 def _unit(settings: EconSettings, amount: int) -> str:
@@ -185,6 +213,129 @@ class EconomyCog(commands.Cog):
         embed.set_footer(text=f"Granted by {actor.display_name}")
 
         await interaction.response.send_message(embed=embed)
+
+    @bank.command(
+        name="mute", description="Toggle economy DM notifications for yourself."
+    )
+    async def bank_mute(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        guild_id = guild.id
+        user_id = interaction.user.id
+
+        settings = await asyncio.to_thread(self._load_settings, guild_id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+
+        def _toggle() -> bool:
+            with self.ctx.open_db() as conn:
+                new_muted = not get_notify_muted(conn, guild_id, user_id)
+                set_notify_muted(conn, guild_id, user_id, new_muted)
+                return new_muted
+
+        muted = await asyncio.to_thread(_toggle)
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = discord.Embed(
+            title="Notifications muted" if muted else "Notifications on",
+            description=(
+                "You won't get economy DMs anymore. Run this again to turn them back on."
+                if muted
+                else "You'll get economy DMs again — milestones, streak saves, and more."
+            ),
+            colour=accent,
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    qotd = app_commands.Group(
+        name="qotd",
+        description="Question of the day.",
+        guild_only=True,
+    )
+
+    @qotd.command(
+        name="post", description="Post today's question of the day (staff only)."
+    )
+    @app_commands.describe(question="The question to ask the server")
+    async def qotd_post(
+        self, interaction: discord.Interaction, question: str
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        guild_id = guild.id
+        actor = interaction.user
+        assert isinstance(actor, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild_id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not _can_grant(actor, settings):
+            await interaction.response.send_message(
+                "You don't have permission to post a question of the day.",
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.abc.Messageable):
+            await interaction.response.send_message(
+                "I can't post a question here.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+
+        # Prefer the rendered quote card; fall back to a plain branded embed if
+        # there's no usable background image or the renderer raises.
+        card_file: discord.File | None = None
+        image_bytes = await _resolve_qotd_image(guild, self.bot)
+        if image_bytes is not None:
+            try:
+                card_bytes = await asyncio.to_thread(
+                    render_quote_card,
+                    question,
+                    author_name="Question of the Day",
+                    avatar_bytes=image_bytes,
+                    theme=THEMES["midnight"],
+                    pfp_shape="none",
+                )
+                card_file = discord.File(
+                    io.BytesIO(card_bytes), filename=_QOTD_CARD_FILENAME
+                )
+            except Exception:
+                log.exception("qotd: failed to render card in guild %s", guild_id)
+
+        try:
+            if card_file is not None:
+                message = await channel.send(file=card_file)
+            else:
+                embed = discord.Embed(
+                    title="📣 Question of the Day",
+                    description=question,
+                    colour=accent,
+                )
+                message = await channel.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I don't have permission to post in this channel.", ephemeral=True
+            )
+            return
+
+        def _record() -> None:
+            with self.ctx.open_db() as conn:
+                offset = get_tz_offset_hours(conn, guild_id)
+                today = local_day_for(time.time(), offset)
+                create_qotd(
+                    conn, guild_id, channel.id, message.id, question, actor.id, today
+                )
+
+        await asyncio.to_thread(_record)
+        await interaction.followup.send(
+            "Posted the question of the day.", ephemeral=True
+        )
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:

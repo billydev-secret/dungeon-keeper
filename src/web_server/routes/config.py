@@ -207,6 +207,7 @@ def _xp_coefficients(conn, guild_id: int = 0) -> dict:
         "image_reaction_received_xp": _f(
             "image_reaction_received_xp", d.image_reaction_received_xp
         ),
+        "reaction_given_xp": _f("reaction_given_xp", d.reaction_given_xp),
         "cooldown_thresholds_seconds": _s(
             "cooldown_thresholds_seconds",
             ",".join(str(v) for v in d.cooldown_thresholds_seconds),
@@ -1151,6 +1152,7 @@ class XpConfigUpdate(BaseModel):
     message_word_xp: float | None = None
     reply_bonus_xp: float | None = None
     image_reaction_received_xp: float | None = None
+    reaction_given_xp: float | None = None
     cooldown_thresholds_seconds: str | None = None
     cooldown_multipliers: str | None = None
     duplicate_multiplier: float | None = None
@@ -1214,6 +1216,7 @@ async def update_xp(
                 "message_word_xp",
                 "reply_bonus_xp",
                 "image_reaction_received_xp",
+                "reaction_given_xp",
                 "cooldown_thresholds_seconds",
                 "cooldown_multipliers",
                 "duplicate_multiplier",

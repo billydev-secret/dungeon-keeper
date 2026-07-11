@@ -11,8 +11,11 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_service import (
     apply_credit,
     get_balance,
+    get_notify_muted,
+    notify_member,
     save_econ_settings,
 )
+from bot_modules.services.quote_renderer import THEMES
 from migrations import apply_migrations_sync
 from tests.fakes import FakeGuild, fake_interaction
 
@@ -245,3 +248,172 @@ async def test_grant_rejects_bot_target(ctx, db):
     assert "bot" in interaction.response.send_message.await_args.args[0].lower()
     with open_db(db) as conn:
         assert get_balance(conn, GUILD_ID, 900) == 0
+
+
+# ── /qotd post ────────────────────────────────────────────────────────────────
+
+
+def _qotd_interaction(actor: MagicMock) -> tuple[MagicMock, MagicMock]:
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 12345
+    posted = MagicMock()
+    posted.id = 67890
+    channel.send = AsyncMock(return_value=posted)
+    inter = fake_interaction(guild=FakeGuild(id=GUILD_ID))
+    inter.user = actor
+    inter.channel = channel
+    return inter, channel
+
+
+async def _qotd(cog, interaction, question) -> None:
+    await cog.qotd_post.callback(cog, interaction, question)
+
+
+@pytest.fixture(autouse=True)
+def _patch_qotd_image():
+    """Force the plain-embed fallback (no PIL render) in cog tests."""
+    with patch(
+        "bot_modules.cogs.economy_cog._resolve_qotd_image",
+        new=AsyncMock(return_value=None),
+    ):
+        yield
+
+
+@pytest.mark.asyncio
+async def test_qotd_disabled_gate(ctx, db):
+    cog = _make_cog(ctx)  # economy disabled
+    interaction, channel = _qotd_interaction(_member(admin=True))
+    await _qotd(cog, interaction, "What's your favorite game?")
+    args = interaction.response.send_message.await_args.args
+    assert "enabled" in args[0].lower()
+    channel.send.assert_not_called()
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 0
+
+
+@pytest.mark.asyncio
+async def test_qotd_admin_posts_and_records(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(_member(admin=True))
+    await _qotd(cog, interaction, "What's your favorite game?")
+
+    channel.send.assert_awaited_once()
+    assert "embed" in channel.send.await_args.kwargs  # fell back to a branded embed
+    interaction.followup.send.assert_awaited_once()
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT channel_id, message_id, question FROM econ_qotd"
+        ).fetchone()
+    assert row["channel_id"] == 12345
+    assert row["message_id"] == 67890
+    assert row["question"] == "What's your favorite game?"
+
+
+@pytest.mark.asyncio
+async def test_qotd_renders_card_when_image_available(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(_member(admin=True))
+    with (
+        patch(
+            "bot_modules.cogs.economy_cog._resolve_qotd_image",
+            new=AsyncMock(return_value=b"img-bytes"),
+        ),
+        patch(
+            "bot_modules.cogs.economy_cog.render_quote_card", return_value=b"PNG"
+        ) as mock_render,
+    ):
+        await _qotd(cog, interaction, "Card question?")
+
+    mock_render.assert_called_once()
+    kwargs = mock_render.call_args.kwargs
+    assert kwargs["author_name"] == "Question of the Day"
+    assert kwargs["pfp_shape"] == "none"
+    assert kwargs["theme"] is THEMES["midnight"]
+    # The rendered card is posted as a file attachment, not the embed fallback.
+    assert "file" in channel.send.await_args.kwargs
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 1
+
+
+@pytest.mark.asyncio
+async def test_qotd_manager_role_allowed(ctx, db):
+    _enable(db, manager_role_id=MANAGER_ROLE_ID)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(
+        _member(admin=False, role_ids=(MANAGER_ROLE_ID,))
+    )
+    await _qotd(cog, interaction, "Coffee or tea?")
+    channel.send.assert_awaited_once()
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 1
+
+
+@pytest.mark.asyncio
+async def test_qotd_plain_member_refused(ctx, db):
+    _enable(db, manager_role_id=MANAGER_ROLE_ID)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(_member(admin=False, role_ids=()))
+    await _qotd(cog, interaction, "Nope?")
+    args = interaction.response.send_message.await_args.args
+    assert "permission" in args[0].lower()
+    channel.send.assert_not_called()
+    with open_db(db) as conn:
+        assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 0
+
+
+# ── /bank mute + notify_member honoring the pref ─────────────────────────────
+
+
+async def _mute(cog, interaction) -> None:
+    await cog.bank_mute.callback(cog, interaction)
+
+
+@pytest.mark.asyncio
+async def test_bank_mute_toggles_pref(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    actor = _member(member_id=500)
+    interaction = _interaction(actor)
+
+    await _mute(cog, interaction)
+    with open_db(db) as conn:
+        assert get_notify_muted(conn, GUILD_ID, 500) is True
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+
+    # Toggling again turns notifications back on.
+    interaction2 = _interaction(actor)
+    await _mute(cog, interaction2)
+    with open_db(db) as conn:
+        assert get_notify_muted(conn, GUILD_ID, 500) is False
+
+
+@pytest.mark.asyncio
+async def test_bank_mute_disabled_gate(ctx, db):
+    cog = _make_cog(ctx)  # disabled
+    interaction = _interaction(_member(member_id=500))
+    await _mute(cog, interaction)
+    args = interaction.response.send_message.await_args.args
+    assert "enabled" in args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_muted_member_not_dmd_by_notify_member(ctx, db):
+    """A muted pref makes notify_member drop silently (returns True, no DM)."""
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    await _mute(cog, interaction)  # mute user 500
+
+    dm_target = MagicMock()
+    dm_target.send = AsyncMock()
+    guild = MagicMock()
+    guild.get_member = MagicMock(return_value=dm_target)
+    bot = MagicMock()
+    bot.get_guild = MagicMock(return_value=guild)
+
+    delivered = await notify_member(bot, db, GUILD_ID, 500, content="ping")
+    assert delivered is True
+    dm_target.send.assert_not_called()

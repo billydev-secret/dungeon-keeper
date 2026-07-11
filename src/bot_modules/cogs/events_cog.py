@@ -33,13 +33,29 @@ from bot_modules.services.message_store import (
     upsert_known_channel,
     upsert_known_user,
 )
-from bot_modules.services.message_xp_service import award_image_reaction_xp, award_message_xp
+from bot_modules.services.message_xp_service import (
+    award_image_reaction_xp,
+    award_message_xp,
+    award_reaction_given_xp,
+)
 from bot_modules.services.sentiment_service import score_text
 from bot_modules.services.welcome_service import build_leave_embed, build_welcome_embed
 from bot_modules.services.wellness_enforcement import wellness_on_message
 from bot_modules.services.xp_service import handle_level_progress
-from bot_modules.core.utils import format_guild_for_log
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.db_utils import get_tz_offset_hours
+from bot_modules.core.utils import format_guild_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
+from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_service import (
+    EconSettings,
+    LoginOutcome,
+    load_econ_settings,
+    notify_member,
+    open_qotd_for,
+    process_login,
+    try_award_qotd,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot, GuildConfig
@@ -661,35 +677,204 @@ class EventsCog(commands.Cog):
                 db_path=self.ctx.db_path,
             )
 
-    @commands.Cog.listener()
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
-        if payload.guild_id is None:
-            return  # DM reactions earn no XP and have no reaction-count tracking
-        cfg = self.ctx.guild_config(payload.guild_id)
+        # Economy faucets — daily text login + QOTD reward. Optional and fully
+        # fail-safe: an economy error must never break message/XP processing.
+        if isinstance(message.author, discord.Member):
+            try:
+                await self._process_economy_message(message)
+            except Exception:
+                log.exception("economy on_message hook failed")
+
+    async def _process_economy_message(self, message: discord.Message) -> None:
+        """Pay the daily text login and any open QOTD reward for a member message.
+
+        The DB work (settings load, streak read, login, QOTD award) runs in one
+        off-loop transaction; the streak read *before* ``process_login`` captures
+        the pre-login streak so a trivial 1→short reset stays silent (spec §10).
+        """
+        assert message.guild is not None
+        guild_id = message.guild.id
+        user_id = message.author.id
+        channel_id = message.channel.id
+        booster = (
+            isinstance(message.author, discord.Member)
+            and message.author.premium_since is not None
+        )
+
+        def _econ_work() -> tuple[EconSettings, LoginOutcome, int] | None:
+            with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild_id)
+                if not settings.enabled:
+                    return None
+                offset = get_tz_offset_hours(conn, guild_id)
+                today = local_day_for(time.time(), offset)
+                prior = conn.execute(
+                    "SELECT current_streak FROM econ_streaks "
+                    "WHERE guild_id = ? AND user_id = ?",
+                    (guild_id, user_id),
+                ).fetchone()
+                prior_streak = int(prior["current_streak"]) if prior else 0
+                outcome = process_login(
+                    conn,
+                    settings,
+                    guild_id,
+                    user_id,
+                    local_day=today,
+                    source="text",
+                    booster=booster,
+                )
+                qotd = open_qotd_for(conn, guild_id, channel_id, today)
+                if qotd is not None:
+                    try_award_qotd(
+                        conn,
+                        settings,
+                        int(qotd["id"]),
+                        guild_id,
+                        user_id,
+                        booster=booster,
+                    )
+                if outcome is None:
+                    return None
+                return settings, outcome, prior_streak
+
+        result = await asyncio.to_thread(_econ_work)
+        if result is None:
+            return
+        settings, outcome, prior_streak = result
+
+        # The login payout itself is silent; only milestones, a used grace day,
+        # or a *meaningful* streak reset (a real streak, not a 1→1 blip) DM.
+        notify_reset = outcome.reset and prior_streak >= 3
+        if not (outcome.milestone > 0 or outcome.grace_consumed or notify_reset):
+            return
+
+        accent = await resolve_accent_color(self.ctx.db_path, message.guild)
+        embed = self._econ_login_embed(settings, outcome, prior_streak, accent)
+        await notify_member(
+            self.bot, self.ctx.db_path, guild_id, user_id, embed=embed
+        )
+
+    @staticmethod
+    def _econ_login_embed(
+        settings: EconSettings,
+        outcome: LoginOutcome,
+        prior_streak: int,
+        accent: discord.Colour,
+    ) -> discord.Embed:
+        """Branded streak-update embed covering every triggered login event."""
+        embed = discord.Embed(
+            title=f"{settings.currency_emoji} Daily streak",
+            colour=accent,
+        )
+        if outcome.milestone > 0:
+            unit = settings.currency_name if outcome.milestone == 1 else settings.currency_plural
+            embed.add_field(
+                name=f"🏆 Day {outcome.streak} milestone!",
+                value=f"Bonus **{outcome.milestone:,}** {unit}",
+                inline=False,
+            )
+        if outcome.grace_consumed:
+            embed.add_field(
+                name="🛟 Streak saved",
+                value=(
+                    f"We covered a missed day — your streak lives on at "
+                    f"day **{outcome.streak}**."
+                ),
+                inline=False,
+            )
+        if outcome.reset and prior_streak >= 3:
+            embed.add_field(
+                name="🔁 Streak reset",
+                value=(
+                    f"Your **{prior_streak}**-day streak ended. Starting fresh "
+                    f"at day **{outcome.streak}**."
+                ),
+                inline=False,
+            )
+        return embed
+
+    async def _fetch_reaction_message(
+        self, payload: discord.RawReactionActionEvent
+    ) -> discord.Message | None:
+        """Fetch the reacted-to message once, shared by both reaction XP awards.
+
+        Retries transient 5xx with capped backoff (matching the prior inline
+        loop); returns None on a permanent failure so the handler stays robust.
+        """
+        guild = self.bot.get_guild(payload.guild_id) if payload.guild_id else None
+        if guild is None:
+            return None
+        channel = get_guild_channel_or_thread(guild, payload.channel_id)
+        if channel is None:
+            return None
         delay = 1
         loop = asyncio.get_running_loop()
         deadline = loop.time() + 30
         while True:
             try:
-                result = await award_image_reaction_xp(
-                    payload,
-                    bot=self.bot,
-                    db_path=self.ctx.db_path,
-                    excluded_channel_ids=cfg.xp_excluded_channel_ids,
-                    settings=cfg.xp_settings,
-                )
-                break
+                return await channel.fetch_message(payload.message_id)
+            except (discord.Forbidden, discord.NotFound):
+                return None
             except discord.HTTPException as exc:
-                if (
-                    exc.status < 500
-                    or loop.time() + delay > deadline
-                ):
-                    raise
+                if exc.status < 500 or loop.time() + delay > deadline:
+                    log.warning(
+                        "reaction message fetch got %s; giving up", exc.status
+                    )
+                    return None
                 log.warning(
-                    "award_image_reaction_xp got %s, retrying in %ss", exc.status, delay
+                    "reaction message fetch got %s, retrying in %ss", exc.status, delay
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 16)
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent) -> None:
+        if payload.guild_id is None:
+            return  # DM reactions earn no XP and have no reaction-count tracking
+        cfg = self.ctx.guild_config(payload.guild_id)
+
+        # One fetch feeds both awards (author's image XP + reactor's given XP).
+        message = await self._fetch_reaction_message(payload)
+
+        # Reaction-given XP pays the reactor; keep it fail-safe so a hiccup here
+        # never blocks the image-react award below.
+        try:
+            given = await award_reaction_given_xp(
+                payload,
+                bot=self.bot,
+                db_path=self.ctx.db_path,
+                excluded_channel_ids=cfg.xp_excluded_channel_ids,
+                settings=cfg.xp_settings,
+                message=message,
+            )
+        except Exception:
+            log.exception("award_reaction_given_xp failed")
+            given = None
+        if given is not None:
+            reactor, given_award = given
+            await handle_level_progress(
+                reactor,
+                given_award,
+                "reaction_given",
+                level_5_role_id=cfg.level_5_role_id,
+                level_up_log_channel_id=cfg.level_up_log_channel_id,
+                level_5_log_channel_id=cfg.level_5_log_channel_id,
+                settings=cfg.xp_settings,
+                db_path=self.ctx.db_path,
+            )
+
+        try:
+            result = await award_image_reaction_xp(
+                payload,
+                bot=self.bot,
+                db_path=self.ctx.db_path,
+                excluded_channel_ids=cfg.xp_excluded_channel_ids,
+                settings=cfg.xp_settings,
+                message=message,
+            )
+        except discord.HTTPException as exc:
+            log.warning("award_image_reaction_xp failed: %s", exc)
+            result = None
         if result is not None:
             member, award = result
             await handle_level_progress(
