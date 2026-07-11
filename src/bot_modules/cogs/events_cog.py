@@ -14,9 +14,9 @@ from discord.ext import commands
 from bot_modules.commands.jail_commands import check_jail_rejoin
 from bot_modules.core.post_monitoring import enforce_spoiler_requirement
 from bot_modules.services.auto_delete_service import (
-    auto_delete_rule_exists,
     remove_tracked_auto_delete_message,
     remove_tracked_auto_delete_messages,
+    should_track_auto_delete_message,
     track_auto_delete_message,
 )
 from bot_modules.services.discord_scan import collect_messageable_channels
@@ -103,10 +103,9 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                         "SELECT MAX(message_id) FROM messages WHERE guild_id = ? AND channel_id = ?",
                         (_g_id, _ch_id),
                     ).fetchone()
-                    _has_rule = auto_delete_rule_exists(conn, _g_id, _ch_id)
-                return _row, _has_rule
+                return _row
 
-            row, channel_has_auto_delete_rule = await asyncio.to_thread(_do_channel_query)
+            row = await asyncio.to_thread(_do_channel_query)
             max_id = row[0] if row and row[0] else None
             history_kwargs: dict = {"limit": None, "oldest_first": True}
             if max_id:
@@ -135,7 +134,9 @@ async def _backfill_messages(bot: Bot, ctx: AppContext) -> None:
                             if msg.reference and msg.reference.message_id
                             else None
                         )
-                        if channel_has_auto_delete_rule:
+                        if should_track_auto_delete_message(
+                            conn, g.id, channel.id, has_media=bool(msg.attachments)
+                        ):
                             track_auto_delete_message(
                                 conn,
                                 g.id,
@@ -398,7 +399,12 @@ class EventsCog(commands.Cog):
 
             def _persist_bot_message():
                 with self.ctx.open_db() as conn:
-                    if auto_delete_rule_exists(conn, guild_id, message.channel.id):
+                    if should_track_auto_delete_message(
+                        conn,
+                        guild_id,
+                        message.channel.id,
+                        has_media=bool(message.attachments),
+                    ):
                         track_auto_delete_message(
                             conn,
                             guild_id,
@@ -465,7 +471,12 @@ class EventsCog(commands.Cog):
 
             def _persist_nonmember_message():
                 with self.ctx.open_db() as conn:
-                    if auto_delete_rule_exists(conn, guild_id, message.channel.id):
+                    if should_track_auto_delete_message(
+                        conn,
+                        guild_id,
+                        message.channel.id,
+                        has_media=bool(message.attachments),
+                    ):
                         track_auto_delete_message(
                             conn,
                             guild_id,
@@ -538,7 +549,12 @@ class EventsCog(commands.Cog):
                     message.id,
                     message_ts,
                 )
-                if auto_delete_rule_exists(conn, guild_id, message.channel.id):
+                if should_track_auto_delete_message(
+                    conn,
+                    guild_id,
+                    message.channel.id,
+                    has_media=bool(message.attachments),
+                ):
                     track_auto_delete_message(
                         conn,
                         guild_id,

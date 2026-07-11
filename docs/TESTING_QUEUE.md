@@ -9,6 +9,27 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Auto-delete: media-only mode  — committed 1c56e7c (2026-07-10)
+
+New per-channel "only delete messages with attachments" toggle on the
+dashboard config page. Queue-time filtering (the sweep is queue-driven), plus
+a matching guard in the startup history scan. Unit + route tests cover the
+logic; the Discord-side delete behaviour needs a live pass:
+
+- [ ] On a test channel, add an auto-delete rule with **media-only ON**, post
+      a text message and an image, wait for the sweep → only the image is
+      deleted, the text stays.
+- [ ] Toggle the same rule's media-only **OFF** and Save → confirm the tracked
+      queue was cleared (no surprise mass-delete of already-queued text) and
+      that new text messages start aging out again.
+- [ ] Toggle media-only **ON** on a rule that already had a text backlog →
+      confirm the backlog stops being deleted (queue cleared); the next bot
+      restart's startup scan should re-queue only the media.
+- [ ] Edit only the age/interval of a media-only rule (no toggle) → confirm the
+      existing queue survives (messages still age out on schedule).
+- [ ] Sanity: a message whose only "media" is a link-preview embed (no real
+      attachment) is **not** deleted under a media-only rule.
+
 ### `/setup` DM-delivered config wizard  — committed 042c95e (2026-07-10)
 
 The `/setup` wizard now DMs the admin who runs it instead of showing an

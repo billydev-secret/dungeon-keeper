@@ -450,6 +450,30 @@ def test_auto_delete_rule_upsert_and_delete(authed_client, fake_ctx):
     assert 3001 not in [r["channel_id"] for r in rules]
 
 
+def test_auto_delete_media_only_round_trips(authed_client, fake_ctx):
+    from bot_modules.services.auto_delete_service import list_auto_delete_rules_for_guild
+
+    # media_only defaults to False when omitted.
+    authed_client.put("/api/config/auto-delete/3002", json={
+        "max_age_seconds": 86400,
+        "interval_seconds": 3600,
+    })
+    rules = {r["channel_id"]: r for r in list_auto_delete_rules_for_guild(
+        fake_ctx.db_path, fake_ctx.guild_id
+    )}
+    assert bool(rules[3002]["media_only"]) is False
+
+    # Setting it persists, and the config payload surfaces it.
+    authed_client.put("/api/config/auto-delete/3002", json={
+        "max_age_seconds": 86400,
+        "interval_seconds": 3600,
+        "media_only": True,
+    })
+    config = authed_client.get("/api/config").json()
+    entry = next(e for e in config["auto_delete"] if e["channel_id"] == "3002")
+    assert entry["media_only"] is True
+
+
 # ── PUT /api/config/guess ──────────────────────────────────────────────
 
 

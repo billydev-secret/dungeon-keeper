@@ -829,6 +829,7 @@ async def get_config(
                         "max_age_seconds": int(r["max_age_seconds"]),
                         "interval_seconds": int(r["interval_seconds"]),
                         "last_run_ts": float(r["last_run_ts"]),
+                        "media_only": bool(r["media_only"]),
                         "max_age_display": _fmt_dur(int(r["max_age_seconds"])),
                         "interval_display": _fmt_dur(int(r["interval_seconds"])),
                     }
@@ -1993,6 +1994,7 @@ async def delete_quote_border(
 class AutoDeleteRuleUpdate(BaseModel):
     max_age_seconds: int
     interval_seconds: int
+    media_only: bool = False
 
 
 @router.put("/config/auto-delete/{channel_id}")
@@ -2012,6 +2014,7 @@ async def update_auto_delete(
             int(channel_id),
             body.max_age_seconds,
             body.interval_seconds,
+            media_only=body.media_only,
         )
         return {"ok": True}
 

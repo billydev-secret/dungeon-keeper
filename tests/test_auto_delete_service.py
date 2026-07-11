@@ -13,6 +13,7 @@ from bot_modules.services.auto_delete_service import (
     remove_auto_delete_rule,
     remove_tracked_auto_delete_message,
     remove_tracked_auto_delete_messages,
+    should_track_auto_delete_message,
     touch_auto_delete_rule_run,
     track_auto_delete_message,
     upsert_auto_delete_rule,
@@ -186,3 +187,83 @@ def test_remove_rule_also_clears_tracked_messages(ad_db):
     remove_auto_delete_rule(ad_db, 1, 100)
     with open_db(ad_db) as conn:
         assert pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=9999.0) == []
+
+
+# ── media_only mode ───────────────────────────────────────────────────
+
+def test_new_rule_defaults_to_not_media_only(ad_db):
+    upsert_auto_delete_rule(ad_db, 1, 100, 86400, 3600)
+    rules = list_auto_delete_rules_for_guild(ad_db, 1)
+    assert bool(rules[0]["media_only"]) is False
+
+
+def test_upsert_persists_media_only(ad_db):
+    upsert_auto_delete_rule(ad_db, 1, 100, 86400, 3600, media_only=True)
+    rules = list_auto_delete_rules_for_guild(ad_db, 1)
+    assert bool(rules[0]["media_only"]) is True
+
+
+def test_should_track_false_when_no_rule(ad_db):
+    with open_db(ad_db) as conn:
+        assert should_track_auto_delete_message(conn, 1, 100, has_media=True) is False
+        assert should_track_auto_delete_message(conn, 1, 100, has_media=False) is False
+
+
+def test_should_track_regular_rule_queues_everything(ad_db):
+    upsert_auto_delete_rule(ad_db, 1, 100, 86400, 3600, media_only=False)
+    with open_db(ad_db) as conn:
+        assert should_track_auto_delete_message(conn, 1, 100, has_media=True) is True
+        assert should_track_auto_delete_message(conn, 1, 100, has_media=False) is True
+
+
+def test_should_track_media_only_rule_queues_only_media(ad_db):
+    upsert_auto_delete_rule(ad_db, 1, 100, 86400, 3600, media_only=True)
+    with open_db(ad_db) as conn:
+        assert should_track_auto_delete_message(conn, 1, 100, has_media=True) is True
+        assert should_track_auto_delete_message(conn, 1, 100, has_media=False) is False
+
+
+def test_toggling_media_only_clears_tracked_queue(ad_db):
+    upsert_auto_delete_rule(ad_db, 1, 100, 86400, 3600, media_only=False)
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+    # Flip the mode: stale queue (built under "all") must be dropped so the
+    # sweep can't delete a text message the media_only rule promises to keep.
+    upsert_auto_delete_rule(ad_db, 1, 100, 86400, 3600, media_only=True)
+    with open_db(ad_db) as conn:
+        assert pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=9999.0) == []
+
+
+def test_editing_age_without_mode_change_keeps_queue(ad_db):
+    upsert_auto_delete_rule(ad_db, 1, 100, 86400, 3600, media_only=True)
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+    # Same mode, different age/interval — the queue must survive (a Save posts
+    # every field, so unconditional clearing would wipe the queue each edit).
+    upsert_auto_delete_rule(ad_db, 1, 100, 43200, 7200, media_only=True)
+    with open_db(ad_db) as conn:
+        due = pop_due_auto_delete_message_ids(conn, 1, 100, cutoff_ts=9999.0)
+    assert [mid for mid, _ in due] == [1001]
+
+
+def test_media_only_column_migrated_onto_legacy_table(tmp_path):
+    db_path = tmp_path / "legacy.db"
+    with open_db(db_path) as conn:
+        # Simulate a pre-media_only schema (no media_only column).
+        conn.execute(
+            """
+            CREATE TABLE auto_delete_rules (
+                guild_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                max_age_seconds INTEGER NOT NULL,
+                interval_seconds INTEGER NOT NULL,
+                last_run_ts REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY (guild_id, channel_id)
+            )
+            """
+        )
+    with open_db(db_path) as conn:
+        init_auto_delete_tables(conn)
+    upsert_auto_delete_rule(db_path, 1, 100, 86400, 3600, media_only=True)
+    rules = list_auto_delete_rules_for_guild(db_path, 1)
+    assert bool(rules[0]["media_only"]) is True
