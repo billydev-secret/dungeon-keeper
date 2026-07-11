@@ -127,6 +127,7 @@ const SECTIONS = [
       { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true },
       { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
       { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
+      { id: "economy-config",    label: "Economy",           module: "./panels/economy-config.js", adminOnly: true },
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
       { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },

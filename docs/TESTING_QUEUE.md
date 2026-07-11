@@ -9,6 +9,32 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy (stage 0) — wallets, ledger, settings, `/bank` + config panel  (uncommitted)
+
+Foundation slice of the economy feature (`docs/plans/economy-and-perk-shop.md`):
+migration 062 adds `econ_wallets`/`econ_ledger`/`econ_notify_prefs`, an
+`EconSettings` KV loader (per-guild, no guild-0 legacy fallback), atomic
+`apply_credit`/`apply_debit` with the booster ×1.5 ceil, the `/bank`
+command group, and an admin-only Economy config panel + API. Service, cog,
+and route tests cover the offline logic; the Discord + dashboard surfaces
+need a live pass:
+
+- [ ] Bot restarts clean with the new `economy` cog loaded (no boot error,
+      `/bank` appears in the command list).
+- [ ] `/bank wallet` on a fresh member → shows an empty branded wallet
+      (0 balance, currency name/emoji from settings, accent color) with no
+      ledger rows.
+- [ ] `/bank grant` run by an **admin** → credits the target, confirmation
+      shows the new balance, and the amount appears in that member's
+      `/bank wallet` ledger.
+- [ ] `/bank grant` run by a **plain member** (no manager/admin) → refused,
+      no wallet change.
+- [ ] Dashboard: an admin sees **Economy** under Config; branding + scaling
+      settings save, and persist across a page reload (re-open shows the
+      saved values, not defaults).
+- [ ] A non-admin session cannot reach the Economy API
+      (`GET/PUT /api/economy/config` → 403), and the nav item is hidden.
+
 ### Auto-delete: media-only mode  — committed 1c56e7c (2026-07-10)
 
 New per-channel "only delete messages with attachments" toggle on the
