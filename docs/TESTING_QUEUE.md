@@ -20,6 +20,31 @@ unchanged.
       nothing appears in the channel.
 - [ ] Both parties still receive the revoke DM.
 
+### Pen Pals — 24h sessions, round-only matching, monthly cooldown  (uncommitted)
+
+Pen Pals reworked: sessions now live **24 hours** (was 72); `/penpals join` and
+the signup-panel button **only queue** — pairing happens solely in a round (the
+weekly auto-round or `/penpals round`); a member is skipped by a round unless
+they've had **no pen pal for a month** (30 days from their most recent pairing).
+The first question still posts immediately when a channel opens.
+`/penpals pair` (admin) still bypasses the pool and the cooldown. Offline
+logic tests pass; the live flow needs a pass:
+
+- [ ] `/penpals join` on an empty pool → "You're in the pool! You'll get a
+      private channel the next time matches are drawn." — and **no** channel is
+      created yet.
+- [ ] A second member joins → still no channel; both appear as waiting in the
+      panel / `/penpals status`.
+- [ ] `/penpals round` (Manage Guild) → eligible waiting members get private
+      channels, each opening with the pinned intro embed **and** the first
+      question posted immediately; "Session ends" reads ~24 h out.
+- [ ] A member paired **less** than a month ago stays in the pool when a round
+      runs (not re-paired); the round summary counts them among "still waiting".
+- [ ] A member last paired **more** than a month ago is paired again.
+- [ ] 1-hour close warning fires near the end and the channel deletes at ~24 h.
+- [ ] `/penpals pair <a> <b>` still force-pairs two members regardless of the
+      cooldown.
+
 ### Games — cross-game global question pool  (uncommitted)
 
 Every bank manager gained a per-question **Pool** button (copies the question

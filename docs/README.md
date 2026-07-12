@@ -67,7 +67,7 @@ logging, and 24-hour auto-reverting nickname stakes (or custom cosmetic stakes).
 
 ### Engagement & content
 - **Whisper** — Send an anonymous message to an opted-in member who gets three guesses to name the sender. Share publicly, reply back, or reveal yourself once you're guessed.
-- **Pen Pals** — Members join a pool and the bot creates a private 2-person channel for each matched pair, seeded with a conversation-starter question. Channels tear down after ~72 hours, and mods can pair specific members or kick off a new round.
+- **Pen Pals** — Members join a pool and a scheduled round pairs eligible members (nobody re-matched more than once a month) into private 2-person channels, each seeded with a conversation-starter question. Channels tear down after ~24 hours, and mods can pair specific members or kick off a new round.
 - **Confessions** — Post an anonymous confession via `/confess` to a channel or forum thread, each with anonymous-reply buttons. Replies use either a stable per-thread identity or a fresh ephemeral one, and everything mirrors to a mod-only log.
 - **Starboard** — Reactions with a configured emoji repost high-engagement messages to a dedicated board once they cross a threshold. Self-stars don't count and an NSFW guard keeps age-gated content out of SFW channels.
 - **Quote** — Right-click any message to render it as a styled quote card over the author's avatar, with theme and font pickers. Post it publicly and the bot auto-reacts so great quotes can reach the starboard themselves.

@@ -1,12 +1,12 @@
 # Pen Pals — Feature Spec
 
-Members opt in to a pairing pool. When two or more are waiting, the bot creates a private two-person text channel for each matched pair, posts a conversation-starter from the question bank, and tears it down 72 hours later. The goal is low-stakes 1-on-1 connection inside the server.
+Members opt in to a pairing pool. On a schedule (the weekly auto-round) or when an admin runs a round, the bot pairs the waiting members into private two-person text channels, posts a conversation-starter from the question bank into each, and tears them down 24 hours later. A member is only re-matched once they've had no pen pal for a month. The goal is low-stakes 1-on-1 connection inside the server.
 
 ## Commands
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/penpals join` | Slash | Everyone (server only) | Enter the pairing pool; if a partner is already waiting, pair immediately |
+| `/penpals join` | Slash | Everyone (server only) | Enter the pairing pool; you're matched on the next round |
 | `/penpals leave` | Slash | Everyone (server only) | Leave the pool before being paired |
 | `/penpals status` | Slash | Everyone (server only) | Ephemeral: current pairing state, time remaining, or pool position |
 | `/penpals new-question` | Slash | Session members (active channel only) | Replace the current question with a fresh one from the bank (max 3 per session) |
@@ -20,9 +20,9 @@ Members opt in to a pairing pool. When two or more are waiting, the bot creates 
 
 ### Pool and pairing
 
-`/penpals join` adds the invoker to the pool. If the pool now has ≥ 2 members, pairing fires immediately: the two longest-waiting members are matched, a private channel is created for them, and the pool shrinks by two. A member already in an active pen pal is blocked from joining again until their session expires or they end it early.
+`/penpals join` adds the invoker to the pool and nothing more — joining never pairs on the spot. The invoker is told: "You're in the pool! You'll get a private channel the next time matches are drawn." A member already in an active pen pal is blocked from joining again until their session expires or they end it early.
 
-`/penpals round` pairs everyone in the pool in FIFO order. If the pool has an odd count, the last member stays in for the next round. After pairing, a confirmation is posted ephemerally to the invoker: "Paired N members into N/2 channels. 1 member still waiting." The `/penpals round` and auto-round schedule share the same logic.
+Pairing happens only when a round runs — either the weekly auto-round or `/penpals round`. A round pairs the *eligible* pool members (see **Match cooldown**) in FIFO order, skipping anyone matched within the last month and leaving them in the pool. If an odd number is eligible, the last one stays in for the next round. After pairing, a confirmation is posted ephemerally to the `/penpals round` invoker: "Paired **N** pairs. **M** members still in the pool (waiting or on cooldown)." — the pool count includes members left behind by the cooldown, so it isn't the number who'll pair next round. `/penpals round` and the auto-round share the same logic.
 
 ### Channel lifecycle
 
@@ -50,7 +50,7 @@ Footer: Admins can see this channel.
 
 The expiry timestamp uses Discord's absolute + relative format so both users see it in their local time.
 
-**72-hour countdown.** A background task checks active sessions every 5 minutes. When `now ≥ expiry_at`, the channel is deleted. A warning is posted 1 hour before deletion: "⏰ This pen pal channel closes in 1 hour." Deletion only removes the channel — no transcript is produced.
+**24-hour countdown.** A background task checks active sessions every 5 minutes. When `now ≥ expiry_at`, the channel is deleted. A warning is posted 1 hour before deletion: "⏰ This pen pal channel closes in 1 hour." Deletion only removes the channel — no transcript is produced.
 
 **Early close.** `/penpals end` in the active channel prompts the invoker for a 15-second confirm. Either member can initiate; the channel is deleted on confirmation. The other member receives a DM: "Your pen pal session in **{server}** was ended early."
 
@@ -58,9 +58,9 @@ The expiry timestamp uses Discord's absolute + relative format so both users see
 
 ### Questions
 
-Questions are drawn from `games_question_bank` where `game_type = 'pen_pals'`, using the shared tags model: rows tagged `nsfw` are only served when the guild's question category is `all`. The pair's question history is tracked per session to avoid repeating within the 72-hour window. If the bank is exhausted the bot falls back to AI generation using the same prompt path as the other bank-backed games (`prompt_config.json` → `games.pen_pals`, editable in the dashboard studio); the AI fallback always generates SFW — NSFW prompts come only from the curated bank.
+Questions are drawn from `games_question_bank` where `game_type = 'pen_pals'`, using the shared tags model: rows tagged `nsfw` are only served when the guild's question category is `all`. The pair's question history is tracked per session to avoid repeating within the 24-hour window. If the bank is exhausted the bot falls back to AI generation using the same prompt path as the other bank-backed games (`prompt_config.json` → `games.pen_pals`, editable in the dashboard studio); the AI fallback always generates SFW — NSFW prompts come only from the curated bank.
 
-**Automatic cadence.** Every 24 hours after pairing, the bot posts a new question and pings both members:
+**Automatic cadence.** The auto-question machinery fires every 24 hours after pairing:
 
 ```
 {user1.mention} {user2.mention}
@@ -68,7 +68,7 @@ Questions are drawn from `games_question_bank` where `game_type = 'pen_pals'`, u
 > {question}
 ```
 
-This produces up to 3 question posts over the 72-hour session (at 0 h, 24 h, 48 h). The 1-hour-before-close warning from the background task suppresses the 48 h post if fewer than 2 hours remain at that point.
+In practice a 24-hour session shows only the opening question: the first follow-up would land exactly as the channel closes, and the background task suppresses any auto-question with fewer than 2 hours left. Members who want a fresh prompt sooner use the manual swap.
 
 **Manual swap.** `/penpals new-question` posts a question immediately out of cycle, visibly delineating the conversation:
 
@@ -80,9 +80,13 @@ This produces up to 3 question posts over the 72-hour session (at 0 h, 24 h, 48 
 
 A manual swap does not reset the 12-hour auto-cadence clock. After all 3 swaps are used the command is blocked: "You've used all 3 question swaps for this session."
 
+### Match cooldown
+
+A member is only eligible for a new pairing once they've had **no pen pal for a month** (`_MATCH_COOLDOWN_SECS`, 30 days from the `started_at` of their most recent session — active or closed). Members still inside the cooldown are skipped by the round and left untouched in the pool; they become eligible automatically once a month has passed. Because joining never pairs on the spot, the round is the only pairing path, so the cooldown can't be bypassed. `/penpals pair <user1> <user2>` is an explicit admin override and ignores the cooldown.
+
 ### No-repeat pairing
 
-When picking partners, the bot checks the last **10 pairings** for each user within the guild and avoids re-pairing them if any other valid partner exists. If the pool has only two members and they were recently paired, the bot pairs them anyway and notes the repeat in the confirmation message.
+Among the *eligible* members in a round, when picking partners the bot checks the last **10 pairings** for each user within the guild and avoids re-pairing them if any other eligible partner exists. If only two eligible members remain and they were previously paired, the bot pairs them anyway.
 
 ### Opt-in role (optional)
 
@@ -90,7 +94,7 @@ If an opt-in role is configured, `/penpals join` requires the invoker to hold th
 
 ### Auto-round schedule
 
-Admins can configure a weekly auto-round (day-of-week + time). When it fires, the bot drains the pool exactly like `/penpals round` and posts a summary to a configured log channel (or silently if none is set).
+Admins can configure a weekly auto-round (day-of-week + time). When it fires, the bot drains the pool exactly like `/penpals round` — pairing eligible members and skipping anyone matched within the last month — and posts a summary to a configured log channel (or silently if none is set).
 
 ## User-visible errors
 
@@ -140,4 +144,4 @@ Past pairings are queried from `pen_pals_sessions` for the no-repeat check. No s
 
 ## Elevator pitch
 
-Most servers have hundreds of members who never talk to each other beyond the same handful of regulars. Pen Pals quietly solves that. Members opt in, get matched with someone they probably haven't spoken to one-on-one, and land in a private channel with a conversation starter already waiting — no awkward "so… hi." The 72-hour window creates just enough structure to make it feel like an event rather than a neglected DM thread. After the timer expires the channel disappears, so there's no pressure to maintain it forever. Run a weekly round and you're giving the whole community a slow, low-stakes way to actually meet.
+Most servers have hundreds of members who never talk to each other beyond the same handful of regulars. Pen Pals quietly solves that. Members opt in, get matched with someone they probably haven't spoken to one-on-one, and land in a private channel with a conversation starter already waiting — no awkward "so… hi." The 24-hour window creates just enough structure to make it feel like an event rather than a neglected DM thread. After the timer expires the channel disappears, so there's no pressure to maintain it forever. Run a weekly round — and with the month-long re-match cooldown, nobody gets paired so often it becomes a chore — and you're giving the whole community a slow, low-stakes way to actually meet.

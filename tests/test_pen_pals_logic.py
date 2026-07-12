@@ -7,14 +7,14 @@ Covers:
 - Bank drawing — tags-based NSFW gating, per-session no-repeat exclusion,
   the AI fallback chain in ``_draw_question``.
 - Pool + session store — join/leave idempotence, FIFO ordering,
-  ``_claim_pool_partner`` no-repeat preference and rowcount-verified claims,
   session lifecycle (create / lookup / close / swaps).
 - ``_do_pair`` — session + channel creation, NSFW channel flag, the
   duplicate-pairing guard (channel deleted, no second session).
 - ``_handle_join`` — every ephemeral branch: unconfigured, role-gated,
-  already-active, already-queued, queue-up, match, and the failed-pair
-  requeue that preserves the partner's queue position.
-- ``_do_round`` — FIFO drain, odd-one-out, failed pairs counted as waiting.
+  already-active, already-queued, and queue-up (joining only ever queues;
+  pairing happens in ``_do_round``, never on join).
+- ``_do_round`` — FIFO drain, odd-one-out, failed pairs counted as waiting,
+  the last-month re-match cooldown, and the recent-partner no-repeat.
 
 Discord objects are ``MagicMock(spec=...)`` so ``isinstance`` checks in the
 cog pass without a gateway connection; the network-facing helpers
@@ -37,6 +37,7 @@ from bot_modules.core.db_utils import open_db
 from tests.fakes import FakeGuild, FakeRole, FakeUser, fake_interaction
 
 GUILD_ID = 9001
+_COOLDOWN = pp._MATCH_COOLDOWN_SECS
 
 
 # ── Fixtures / builders ───────────────────────────────────────────────
@@ -275,51 +276,6 @@ def test_add_to_pool_preserves_explicit_joined_at(sync_db_path):
         assert row["joined_at"] == 123.0
 
 
-# ── _claim_pool_partner ───────────────────────────────────────────────
-
-
-def test_claim_returns_none_when_pool_empty(sync_db_path):
-    with open_db(sync_db_path) as conn:
-        assert pp._claim_pool_partner(conn, GUILD_ID, 1) is None
-
-
-def test_claim_ignores_self(sync_db_path):
-    with open_db(sync_db_path) as conn:
-        pp._add_to_pool(conn, GUILD_ID, 1)
-        assert pp._claim_pool_partner(conn, GUILD_ID, 1) is None
-        assert pp._in_pool(conn, GUILD_ID, 1)  # not consumed
-
-
-def test_claim_takes_longest_waiting_and_removes(sync_db_path):
-    with open_db(sync_db_path) as conn:
-        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=200.0)
-        pp._add_to_pool(conn, GUILD_ID, 3, joined_at=300.0)
-        claimed = pp._claim_pool_partner(conn, GUILD_ID, 1)
-        assert claimed == (2, 200.0)
-        assert not pp._in_pool(conn, GUILD_ID, 2)
-        assert pp._in_pool(conn, GUILD_ID, 3)
-
-
-def test_claim_prefers_non_recent_partner(sync_db_path):
-    with open_db(sync_db_path) as conn:
-        # user 1 was recently paired with user 2
-        pp._create_session(conn, "s-old", GUILD_ID, 100, 1, 2, time.time())
-        pp._close_session(conn, "s-old", "expired")
-        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
-        pp._add_to_pool(conn, GUILD_ID, 3, joined_at=200.0)
-        claimed = pp._claim_pool_partner(conn, GUILD_ID, 1)
-        assert claimed is not None and claimed[0] == 3
-
-
-def test_claim_falls_back_to_recent_when_only_option(sync_db_path):
-    with open_db(sync_db_path) as conn:
-        pp._create_session(conn, "s-old", GUILD_ID, 100, 1, 2, time.time())
-        pp._close_session(conn, "s-old", "expired")
-        pp._add_to_pool(conn, GUILD_ID, 2)
-        claimed = pp._claim_pool_partner(conn, GUILD_ID, 1)
-        assert claimed is not None and claimed[0] == 2
-
-
 # ── Session helpers ───────────────────────────────────────────────────
 
 
@@ -480,10 +436,12 @@ async def test_handle_join_blocks_active_session(sync_db_path):
     assert "already have an active pen pal" in msg
 
 
-async def test_handle_join_matches_waiting_partner(sync_db_path, monkeypatch):
+async def test_handle_join_never_pairs_on_join(sync_db_path, monkeypatch):
+    # Even with a partner already waiting, joining only queues — pairing is
+    # the round's job now, so the cooldown can't be bypassed on join.
     _configure(sync_db_path)
     with open_db(sync_db_path) as conn:
-        pp._add_to_pool(conn, GUILD_ID, 2)
+        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
     do_pair = AsyncMock(return_value=True)
     monkeypatch.setattr(pp, "_do_pair", do_pair)
     monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
@@ -491,50 +449,10 @@ async def test_handle_join_matches_waiting_partner(sync_db_path, monkeypatch):
     interaction = _join_interaction(1)
     await pp._handle_join(interaction, sync_db_path)
 
-    do_pair.assert_awaited_once()
-    assert do_pair.await_args is not None
-    assert do_pair.await_args.args[2:] == (GUILD_ID, 2, 1)
-    assert _pool_ids(sync_db_path) == []  # partner claimed
-    msg = interaction.followup.send.await_args.args[0]
-    assert "matched" in msg
-
-
-async def test_handle_join_failed_pair_requeues_with_position(sync_db_path, monkeypatch):
-    _configure(sync_db_path)
-    with open_db(sync_db_path) as conn:
-        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
-    monkeypatch.setattr(pp, "_do_pair", AsyncMock(return_value=False))
-    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
-
-    interaction = _join_interaction(1)
-    await pp._handle_join(interaction, sync_db_path)
-
-    # Partner keeps their original FIFO slot; joiner queues behind them.
-    assert _pool_ids(sync_db_path) == [2, 1]
-    with open_db(sync_db_path) as conn:
-        rows = pp._get_pool(conn, GUILD_ID)
-        assert rows[0]["joined_at"] == 100.0
-
-
-async def test_handle_join_failed_pair_skips_requeue_of_newly_paired(sync_db_path, monkeypatch):
-    _configure(sync_db_path)
-    with open_db(sync_db_path) as conn:
-        pp._add_to_pool(conn, GUILD_ID, 2, joined_at=100.0)
-
-    async def losing_pair(bot, db_path, guild_id, u1, u2):
-        # Simulate the partner winning a concurrent pairing while ours failed.
-        with open_db(db_path) as conn:
-            pp._create_session(conn, "rival", guild_id, 999, u1, 42, time.time())
-        return False
-
-    monkeypatch.setattr(pp, "_do_pair", losing_pair)
-    monkeypatch.setattr(pp, "_refresh_panel", AsyncMock())
-
-    interaction = _join_interaction(1)
-    await pp._handle_join(interaction, sync_db_path)
-
-    # Partner (2) now has an active session and must NOT be back in the pool.
-    assert _pool_ids(sync_db_path) == [1]
+    do_pair.assert_not_awaited()
+    assert _pool_ids(sync_db_path) == [2, 1]  # both waiting, FIFO preserved
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "in the pool" in msg
 
 
 # ── _handle_leave ─────────────────────────────────────────────────────
@@ -617,8 +535,11 @@ async def test_do_round_counts_failed_pairs_as_waiting(sync_db_path, monkeypatch
 async def test_do_round_avoids_recent_repeat_when_possible(sync_db_path, monkeypatch):
     _configure(sync_db_path)
     with open_db(sync_db_path) as conn:
-        # 1 and 2 were recently paired; 3 is fresh.
-        pp._create_session(conn, "old", GUILD_ID, 5, 1, 2, time.time())
+        # 1 and 2 were paired before — but long enough ago to clear the
+        # month-long cooldown, so they're eligible and only the no-repeat
+        # preference should steer 1 away from 2. 3 is fresh.
+        old = time.time() - (_COOLDOWN + 86400)
+        pp._create_session(conn, "old", GUILD_ID, 5, 1, 2, old)
         pp._close_session(conn, "old", "expired")
         for i, uid in enumerate([1, 2, 3], start=1):
             pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
@@ -636,6 +557,56 @@ async def test_do_round_avoids_recent_repeat_when_possible(sync_db_path, monkeyp
     await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
     assert calls == [(1, 3)]
     assert _pool_ids(sync_db_path) == [2]
+
+
+async def test_do_round_skips_members_matched_within_the_month(sync_db_path, monkeypatch):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        # 1 was matched a week ago → still cooling down; 2 and 3 are fresh.
+        pp._create_session(conn, "recent", GUILD_ID, 5, 1, 99, time.time() - 7 * 86400)
+        pp._close_session(conn, "recent", "expired")
+        for i, uid in enumerate([1, 2, 3], start=1):
+            pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
+
+    calls: list[tuple[int, int]] = []
+
+    async def fake_pair(bot, db_path, guild_id, u1, u2):
+        calls.append((u1, u2))
+        with open_db(db_path) as conn:
+            pp._remove_from_pool(conn, guild_id, u1)
+            pp._remove_from_pool(conn, guild_id, u2)
+        return True
+
+    monkeypatch.setattr(pp, "_do_pair", fake_pair)
+    pairs, waiting = await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
+    # Only 2 & 3 are eligible; 1 stays untouched and counts as waiting.
+    assert calls == [(2, 3)]
+    assert pairs == 1 and waiting == 1
+    assert _pool_ids(sync_db_path) == [1]
+
+
+async def test_do_round_eligible_once_cooldown_elapses(sync_db_path, monkeypatch):
+    _configure(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        # Both last matched just over a month ago → both eligible again.
+        old = time.time() - (_COOLDOWN + 86400)
+        pp._create_session(conn, "a", GUILD_ID, 5, 1, 98, old)
+        pp._close_session(conn, "a", "expired")
+        pp._create_session(conn, "b", GUILD_ID, 6, 2, 97, old)
+        pp._close_session(conn, "b", "expired")
+        for i, uid in enumerate([1, 2], start=1):
+            pp._add_to_pool(conn, GUILD_ID, uid, joined_at=float(i))
+
+    async def fake_pair(bot, db_path, guild_id, u1, u2):
+        with open_db(db_path) as conn:
+            pp._remove_from_pool(conn, guild_id, u1)
+            pp._remove_from_pool(conn, guild_id, u2)
+        return True
+
+    monkeypatch.setattr(pp, "_do_pair", fake_pair)
+    pairs, waiting = await pp._do_round(MagicMock(), sync_db_path, GUILD_ID)
+    assert pairs == 1 and waiting == 0
+    assert _pool_ids(sync_db_path) == []
 
 
 # ── Panel refresh serialization ───────────────────────────────────────

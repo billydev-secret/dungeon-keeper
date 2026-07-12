@@ -25,13 +25,14 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.pen_pals")
 
-_SESSION_SECS = 72 * 3600       # 72-hour session
+_SESSION_SECS = 24 * 3600       # 24-hour session
 _Q_INTERVAL = 24 * 3600         # auto-question every 24 h
 _WARN_SECS = 3600                # post 1-h warning when this much time remains
 _Q_SUPPRESS_SECS = 2 * 3600     # skip auto-question if fewer than 2 h remain
 _MAX_SWAPS = 3
 _TICK_SECS = 300                 # background loop tick every 5 min
 _RECENT_LIMIT = 10               # past pairings to check for repeats
+_MATCH_COOLDOWN_SECS = 30 * 86400  # only re-match a member once they've had no pen pal for a month
 _GAME_TYPE = "pen_pals"
 
 
@@ -101,32 +102,6 @@ def _get_pool(conn, guild_id: int) -> list:
         "SELECT user_id, joined_at FROM pen_pals_pool WHERE guild_id = ? ORDER BY joined_at ASC",
         (guild_id,),
     ).fetchall()
-
-
-def _claim_pool_partner(conn, guild_id: int, user_id: int) -> tuple[int, float] | None:
-    """Claim the best waiting partner for *user_id*, removing them from the pool.
-
-    Preference: longest-waiting member who isn't a recent partner, then
-    longest-waiting overall. The DELETE's rowcount confirms the claim, so two
-    joins racing for the same partner can't both take them — the loser falls
-    through to the next candidate (or to None → queue up instead).
-    Returns (partner_id, joined_at) or None when no partner is available.
-    """
-    pool = [
-        (r["user_id"], r["joined_at"])
-        for r in _get_pool(conn, guild_id)
-        if r["user_id"] != user_id
-    ]
-    recent = _recent_partners(conn, guild_id, user_id)
-    ordered = [p for p in pool if p[0] not in recent] + [p for p in pool if p[0] in recent]
-    for partner_id, joined_at in ordered:
-        cur = conn.execute(
-            "DELETE FROM pen_pals_pool WHERE guild_id = ? AND user_id = ?",
-            (guild_id, partner_id),
-        )
-        if cur.rowcount:
-            return partner_id, joined_at
-    return None
 
 
 def _get_active_session(conn, guild_id: int, user_id: int):
@@ -237,6 +212,22 @@ def _recent_partners(conn, guild_id: int, user_id: int) -> set[int]:
         (user_id, guild_id, user_id, user_id, _RECENT_LIMIT),
     ).fetchall()
     return {r[0] for r in rows}
+
+
+def _last_matched_at(conn, guild_id: int, user_id: int) -> float | None:
+    """When *user_id* was last paired in this guild, or None if never.
+
+    Any session (active or closed) counts — the cooldown is about how long
+    since a member last *had* a pen pal, not whether that pairing is still open.
+    """
+    row = conn.execute(
+        """
+        SELECT MAX(started_at) FROM pen_pals_sessions
+        WHERE guild_id = ? AND (user1_id = ? OR user2_id = ?)
+        """,
+        (guild_id, user_id, user_id),
+    ).fetchone()
+    return row[0] if row and row[0] is not None else None
 
 
 def _cfg_allows_nsfw(cfg) -> bool:
@@ -483,19 +474,26 @@ async def _do_pair(
 async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[int, int]:
     """Drain the pool for a guild. Returns (pairs_made, still_waiting).
 
-    Users whose pairing fails stay in the DB pool, so they count as still
-    waiting alongside the odd one out.
+    Only members who haven't had a pen pal in the last month are eligible;
+    anyone still inside that cooldown is left untouched in the pool. Users
+    whose pairing fails likewise stay in the DB pool. ``still_waiting`` is the
+    pool size once the round settles, so it counts cooled-down members, the
+    odd one out, and any failed pairs alike.
     """
-    def _load_and_stamp():
+    def _load_eligible_and_stamp():
         with open_db(db_path) as conn:
-            pool = [r["user_id"] for r in _get_pool(conn, guild_id)]
+            now = time.time()
+            eligible = [
+                r["user_id"]
+                for r in _get_pool(conn, guild_id)
+                if (last := _last_matched_at(conn, guild_id, r["user_id"])) is None
+                or now - last >= _MATCH_COOLDOWN_SECS
+            ]
             _update_last_auto_round(conn, guild_id)
-            return pool
+            return eligible
 
-    user_ids = await asyncio.to_thread(_load_and_stamp)
-    remaining = list(user_ids)
+    remaining = await asyncio.to_thread(_load_eligible_and_stamp)
     pairs_made = 0
-    failed = 0
 
     while len(remaining) >= 2:
         u1 = remaining.pop(0)
@@ -510,10 +508,12 @@ async def _do_round(bot: discord.Client, db_path: Path, guild_id: int) -> tuple[
 
         if await _do_pair(bot, db_path, guild_id, u1, partner):
             pairs_made += 1
-        else:
-            failed += 2
 
-    return pairs_made, len(remaining) + failed
+    def _pool_count():
+        with open_db(db_path) as conn:
+            return len(_get_pool(conn, guild_id))
+
+    return pairs_made, await asyncio.to_thread(_pool_count)
 
 
 # ── Background loop ───────────────────────────────────────────────────────────
@@ -639,7 +639,7 @@ def _build_panel_embed(
     embed = discord.Embed(
         title="🖊️ Pen Pals",
         description=(
-            "Get matched 1-on-1 with another server member for 72 hours.\n"
+            "Get matched 1-on-1 with another server member for 24 hours.\n"
             "A private channel opens for just the two of you, "
             "with a conversation starter already waiting."
         ),
@@ -761,19 +761,16 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
             )
             return
 
-    def _check() -> tuple[str, tuple[int, float] | None]:
+    def _check() -> str:
         with open_db(db_path) as conn:
             if _get_active_session(conn, guild_id, user_id):
-                return "active", None
+                return "active"
             if _in_pool(conn, guild_id, user_id):
-                return "in_pool", None
-            claimed = _claim_pool_partner(conn, guild_id, user_id)
-            if claimed is None:
-                _add_to_pool(conn, guild_id, user_id)
-                return "queued", None
-            return "matched", claimed
+                return "in_pool"
+            _add_to_pool(conn, guild_id, user_id)
+            return "queued"
 
-    status, claimed = await asyncio.to_thread(_check)
+    status = await asyncio.to_thread(_check)
 
     if status == "active":
         await interaction.response.send_message(
@@ -785,36 +782,11 @@ async def _handle_join(interaction: discord.Interaction, db_path: Path) -> None:
             "You're already in the pool. Use `/penpals status` to check your position.", ephemeral=True
         )
         return
-    if status == "queued":
-        await interaction.response.send_message(
-            "✅ You're in the pool! You'll get a private channel when someone joins.", ephemeral=True
-        )
-        await _refresh_panel(interaction.client, db_path, guild_id)
-        return
 
-    assert claimed is not None
-    partner_id, partner_joined_at = claimed
-    await interaction.response.defer(ephemeral=True)
-    success = await _do_pair(interaction.client, db_path, guild_id, partner_id, user_id)
-    if success:
-        await interaction.followup.send(
-            "✅ You've been matched! Check your new pen pal channel.", ephemeral=True
-        )
-    else:
-        def _requeue():
-            with open_db(db_path) as conn:
-                # Restore the partner's original queue position; skip anyone
-                # who picked up an active session in the meantime.
-                if not _get_active_session(conn, guild_id, partner_id):
-                    _add_to_pool(conn, guild_id, partner_id, joined_at=partner_joined_at)
-                if not _get_active_session(conn, guild_id, user_id):
-                    _add_to_pool(conn, guild_id, user_id)
-
-        await asyncio.to_thread(_requeue)
-        await interaction.followup.send(
-            "Something went wrong creating the channel — you've been added to the pool instead.",
-            ephemeral=True,
-        )
+    await interaction.response.send_message(
+        "✅ You're in the pool! You'll get a private channel the next time matches are drawn.",
+        ephemeral=True,
+    )
     await _refresh_panel(interaction.client, db_path, guild_id)
 
 
@@ -966,7 +938,7 @@ class _EndConfirmView(discord.ui.View):
 class PenPalsCog(commands.Cog):
     penpals = app_commands.Group(
         name="penpals",
-        description="Pen Pals — get matched with someone for a 72-hour private chat.",
+        description="Pen Pals — get matched with someone for a 24-hour private chat.",
     )
 
     def __init__(self, bot: "Bot", ctx: "AppContext") -> None:
@@ -1042,7 +1014,7 @@ class PenPalsCog(commands.Cog):
 
     # ── /penpals join ─────────────────────────────────────────────────
 
-    @penpals.command(name="join", description="Join the Pen Pals pool and get matched with someone.")
+    @penpals.command(name="join", description="Join the Pen Pals pool to be matched in the next round.")
     async def penpals_join(self, interaction: discord.Interaction) -> None:
         await _handle_join(interaction, self.ctx.db_path)
 
@@ -1282,7 +1254,7 @@ class PenPalsCog(commands.Cog):
         pairs, left = await _do_round(self.bot, self.ctx.db_path, interaction.guild.id)
         msg = f"✅ Paired **{pairs}** {'pair' if pairs == 1 else 'pairs'}."
         if left:
-            msg += f" **{left}** member{'s' if left != 1 else ''} still waiting in the pool."
+            msg += f" **{left}** member{'s' if left != 1 else ''} still in the pool (waiting or on cooldown)."
         else:
             msg += " Pool is now empty."
         await interaction.followup.send(msg, ephemeral=True)

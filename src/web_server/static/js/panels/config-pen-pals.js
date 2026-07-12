@@ -35,7 +35,7 @@ export function mount(container) {
       <div class="panel">
         <header>
           <h2>Pen Pals</h2>
-          <div class="subtitle">Private 72-hour matched channels with prompted questions · ${pp.pool_size ?? 0} member${(pp.pool_size ?? 0) === 1 ? "" : "s"} waiting in pool</div>
+          <div class="subtitle">Private 24-hour matched channels with prompted questions · ${pp.pool_size ?? 0} member${(pp.pool_size ?? 0) === 1 ? "" : "s"} waiting in pool</div>
         </header>
         <form class="form" data-form>
 
