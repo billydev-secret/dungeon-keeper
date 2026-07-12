@@ -630,3 +630,43 @@ def test_build_recap_embed_footer_mentions_host() -> None:
     embed = build_recap_embed("Host", 1, 1, {}, None)
     assert embed.footer.text is not None
     assert "Host" in embed.footer.text
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_price_cog as price_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+from tests.fakes import FakeChannel  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_show_recap_pays_all_submitters(monkeypatch, sync_db_path):
+    """Recap pays everyone who submitted a price in any round."""
+    spy = AsyncMock()
+    monkeypatch.setattr(price_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {
+        "rounds": {"1": {"prices": {"1": 100, "2": 200}}, "2": {"prices": {"3": 50}}},
+        "scores": {"reasonable_wins": {}, "unhinged_wins": {}},
+    }
+    gid = await create_game(bot.games_db, 100, 1, "price", payload=payload)
+    cog = price_cog.PriceCog(bot)  # type: ignore[arg-type]
+    channel = FakeChannel(id=100)
+    await cog._show_recap(gid, 1, "Host", channel, None, {})
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert set(call.kwargs["player_ids"]) == {1, 2, 3}
+    assert call.kwargs["bot"] is bot

@@ -506,3 +506,57 @@ def test_full_round_flow_single_winner():
     status, uid = find_winner(lives, eliminated)
     assert status == "winner"
     assert uid == 1
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_nhie_cog as nhie_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+from tests.fakes import FakeGuild  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_advance_winner_pays_survivors_and_eliminated(monkeypatch, sync_db_path):
+    """The guiltiest winner may be an eliminated player, so the roster must be
+    everyone who played (survivors + eliminated), not just survivors."""
+    spy = AsyncMock()
+    monkeypatch.setattr(nhie_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {
+        "rounds": {"1": {}},
+        "lives": {"1": 1, "2": 1},
+        "eliminated": [],
+        "guilt_scores": {},
+        "max_lives": 1,
+    }
+    gid = await create_game(bot.games_db, 100, 1, "nhie", payload=payload)
+    bot.active_views[gid] = object()
+    cog = nhie_cog.NHIECog(bot)  # type: ignore[arg-type]
+    guild = FakeGuild(id=9001)
+    channel = SimpleNamespace(id=100, guild=guild, send=AsyncMock())
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=1, channel=channel,
+        guild=guild, statement="X", lives={1: 1, 2: 1}, eliminated=set(),
+        max_lives=1, interaction=None,
+    )
+    view.guilty = [1]     # player 1 admits guilt -> loses last life -> eliminated
+    view.innocent = [2]   # player 2 survives -> winner
+    await view.advance_callback(SimpleNamespace(edit=AsyncMock()))
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    # Eliminated guiltiest (1) is included alongside survivor (2).
+    assert sorted(call.kwargs["player_ids"]) == [1, 2]
+    assert call.kwargs["bot"] is bot

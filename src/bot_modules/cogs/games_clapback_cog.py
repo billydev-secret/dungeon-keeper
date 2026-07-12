@@ -1041,6 +1041,7 @@ class ClapbackCog(commands.Cog):
             player_count=len(players),
             round_count=rounds_played,
             payload=payload,
+            bot=self.bot, player_ids=list(players),
         )
         self.bot.active_views.pop(game_id, None)
         self._cleanup(game_id)

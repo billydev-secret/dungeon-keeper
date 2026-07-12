@@ -82,7 +82,7 @@ ceil on faucet credits; balance can never go negative — debit fails atomically
   backlog when a guild re-enables the economy (§12). (2) participation/win payouts v1
   reach only games with a tracked roster (six duel games; ttl/traditional/legitlibs);
   most party cogs record just the host, so their rosters need enriching before they pay
-  participation — committed follow-up below.
+  participation. **Done in Stage 2** — 11 party cogs enriched (see Stage 2 shipped note 5).
 
 ## Stage 2 — Quests
 
@@ -99,6 +99,21 @@ ceil on faucet credits; balance can never go negative — debit fails atomically
   community progress bar embed; payout to `member_activity` 30-day actives.
 - Tests: claim state machine (pending/approved/denied/expired/re-claim), one-pending
   rule, settlement exactly-once, rotation, route perms (manager vs admin vs member).
+- **Shipped notes:** (1) claims are period-keyed — daily = local day (`YYYY-MM-DD`),
+  weekly = ISO week (`YYYY-Www`), community = `once` — with partial-unique
+  `(quest, user, period)` indexes as the race anchors (≤1 pending, ≤1 paid per period),
+  so re-claimability needs no reset sweep. (2) Sign-off cards are persistent
+  `DynamicItem` Approve/Deny buttons (`econ_claim:approve|deny:<id>`) re-registered in
+  `cog_load` — restart-safe with no per-message view store; the same claim resolves from
+  the card or the Bank Manager panel (dashboard resolution best-effort edits the card +
+  DMs over the shared loop). (3) Pending claims expire >7 days with a DM and become
+  re-claimable. (4) Community settlement splits on sign-off: plain quests auto-settle on
+  the weekly ISO-week roll (`list_settleable_community_quests` excludes sign-off), sign-off
+  quests settle only via the dashboard manual Settle. (5) Roster enrichment shipped — 11
+  party cogs (ama, clapback, compliment, hottakes, mfk, mlt, nhie, price, rushmore, story,
+  wyr) now pass real player rosters into `end_game`, taking participation payouts to 20 of
+  23 games; photo, ffa, and fantasies remain excluded by design (anonymous submissions or
+  no per-player completion hook).
 
 ## Stage 3 — Transfers + sinks part 1 (rental engine, role perks, gifts)
 
@@ -164,10 +179,11 @@ from stages 0–4). Decision checkpoint with real income data before rooms.
 ## V2 (committed after v1 ships)
 
 Member wallet dashboard page (`require_perms(set())`) · role studio panel with live
-preview · spotlight slots (purchase, featured embed, 3/ISO-week inventory, expiry) ·
-party-cog roster enrichment for participation payouts (record every player, not just the
-host, in the session tracker so the `end_game` participation payout reaches all party
-games).
+preview · spotlight slots (purchase, featured embed, 3/ISO-week inventory, expiry).
+
+(Party-cog roster enrichment for participation payouts shipped early, in Stage 2 — 11
+cogs now pass real player rosters into `end_game`; photo/ffa/fantasies excluded by
+design.)
 
 ## Deliberately deferred
 

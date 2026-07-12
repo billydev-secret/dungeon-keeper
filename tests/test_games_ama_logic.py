@@ -801,3 +801,45 @@ def test_build_recap_embed_has_game_over_title_and_footer():
     assert "GAME OVER" in embed.title
     assert embed.footer.text is not None
     assert "Thanks for playing" in embed.footer.text
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_ama_cog as ama_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_do_close_pays_askers_and_hot_seats(monkeypatch, sync_db_path):
+    """Participants = human askers (AI sentinel 0 excluded) plus the hot-seat
+    occupants who answered."""
+    spy = AsyncMock()
+    monkeypatch.setattr(ama_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {"questions": [
+        {"asker_id": 5, "hot_seat_id": 9},
+        {"asker_id": 0, "hot_seat_id": 9},   # AI-asked, answered by hot seat 9
+        {"asker_id": 7, "hot_seat_id": 5},   # asker 5 later took the hot seat
+        {"asker_id": 5, "hot_seat_id": 9},
+    ]}
+    gid = await create_game(bot.games_db, 100, 1, "ama", payload=payload)
+    view = ama_cog.AMAView(gid, 1, "public", bot.games_db, bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+    await view._do_close(channel)
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [5, 7, 9]  # askers {5,7} ∪ hot seats {9,5}
+    assert call.kwargs["bot"] is bot

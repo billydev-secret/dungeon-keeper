@@ -419,6 +419,17 @@ class MLTCog(commands.Cog):
         except Exception:
             log.exception("MLT: failed to emit final standings for %s", game_id)
 
+    async def _voter_roster(self, game_id: str) -> list[int]:
+        """Everyone who cast a vote in any completed round — the real
+        participant set for economy payouts (survivors-only ``players`` would
+        drop members who voted for several rounds then left)."""
+        payload = await get_game_payload(self.db, game_id)
+        return sorted({
+            int(v)
+            for rd in payload.get("rounds", {}).values()
+            for v in (rd.get("votes") or {})
+        })
+
     async def _run_round(
         self,
         interaction,
@@ -444,7 +455,7 @@ class MLTCog(commands.Cog):
                 "or ask an admin to add prompts with `/bank add`."
             )
             await self._emit_final_standings(channel, game_id)
-            await end_game(self.db, game_id)
+            await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))
             self.bot.active_views.pop(game_id, None)
             return
 
@@ -543,7 +554,7 @@ class MLTCog(commands.Cog):
             if len(next_players) < 2:
                 await channel.send("🎲 Not enough players left — ending the game.")
                 await self._emit_final_standings(channel, game_id)
-                await end_game(self.db, game_id)
+                await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))
                 self.bot.active_views.pop(game_id, None)
                 return
 

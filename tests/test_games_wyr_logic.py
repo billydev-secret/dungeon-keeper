@@ -264,3 +264,45 @@ def test_build_closed_embed_can_reveal_voters():
     votes_field = _field_by_name(embed)["Votes"]
     assert "<@1>" in votes_field
     assert "<@2>" in votes_field
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_wyr_cog as wyr_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_run_round_empty_bank_pays_all_voters(monkeypatch, sync_db_path):
+    """When the question bank runs dry, the game ends paying everyone who voted
+    for either option across all completed rounds."""
+    spy = AsyncMock()
+    monkeypatch.setattr(wyr_cog, "end_game", spy)
+    monkeypatch.setattr(wyr_cog, "get_wyr_question", AsyncMock(return_value=None))
+    bot = _SpyBot(sync_db_path)
+    payload = {"rounds": {
+        "1": {"a": [1, 2], "b": [3], "q": "A OR B"},
+        "2": {"a": [4], "b": [1], "q": "C OR D"},
+    }}
+    gid = await create_game(bot.games_db, 100, 1, "wyr", payload=payload)
+    bot.active_views[gid] = object()
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+    await cog._run_round(None, gid, 1, "Host", 3, channel)
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3, 4]
+    assert call.kwargs["bot"] is bot

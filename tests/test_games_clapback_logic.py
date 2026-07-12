@@ -952,3 +952,37 @@ def test_build_recap_embed_omits_total_clapbacks_when_zero():
 def test_clamp_config_values_boundary_inputs_unchanged(rounds, timer, vote_timer):
     """Boundary-valid inputs aren't altered."""
     assert clamp_config_values(rounds, timer, vote_timer) == (rounds, timer, vote_timer)
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_clapback_cog as clapback_cog  # noqa: E402
+from tests.fakes import FakeChannel  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self) -> None:
+        self.games_db = None
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=":memory:")
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_post_recap_passes_players_to_end_game(monkeypatch):
+    """The genuine recap site pays the joined roster, not just the host."""
+    spy = AsyncMock()
+    monkeypatch.setattr(clapback_cog, "end_game", spy)
+    cog = clapback_cog.ClapbackCog(_SpyBot())  # type: ignore[arg-type]
+    channel = FakeChannel(id=100)
+    payload = {"players": [1, 2, 3], "scores": {}, "clapbacks": {},
+               "round_history": [], "host_id": 1}
+    await cog._post_recap("g1", channel, payload, {"anonymous": False})
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3]
+    assert call.kwargs["bot"] is cog.bot

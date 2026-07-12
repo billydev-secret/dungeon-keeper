@@ -559,3 +559,48 @@ def test_lobby_minimum_enforced_then_passes(vote_kind_unused):
     assert can_start(players) is False
     add_player(players, 3)
     assert can_start(players) is True
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_mlt_cog as mlt_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_run_round_empty_bank_pays_all_voters(monkeypatch, sync_db_path):
+    """When the prompt bank runs dry, the game ends paying everyone who voted
+    across all completed rounds (not just current survivors)."""
+    spy = AsyncMock()
+    monkeypatch.setattr(mlt_cog, "end_game", spy)
+    monkeypatch.setattr(mlt_cog, "get_mlt_prompt", AsyncMock(return_value=None))
+    bot = _SpyBot(sync_db_path)
+    payload = {
+        "rounds": {
+            "1": {"votes": {"1": "2", "2": "1"}, "prompt": "x"},
+            "2": {"votes": {"3": "1"}, "prompt": "y"},
+        },
+        "crowns": {}, "players": [1, 3],  # player 2 left mid-game
+    }
+    gid = await create_game(bot.games_db, 100, 1, "mlt", payload=payload)
+    bot.active_views[gid] = object()
+    cog = mlt_cog.MLTCog(bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+    await cog._run_round(None, gid, 1, "Host", 3, [1, 3], channel)
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3]  # includes departed voter 2
+    assert call.kwargs["bot"] is bot

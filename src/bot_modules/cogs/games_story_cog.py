@@ -474,6 +474,7 @@ class StoryCog(commands.Cog):
             player_count=len(players),
             round_count=len(sentences),
             payload=payload,
+            bot=self.bot, player_ids=list(players),
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]

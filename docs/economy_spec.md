@@ -99,9 +99,11 @@ XP earned that local day converts to currency.
   QOTD (dedup row per member). No scheduler — mods run it when they want.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and at each duel cog's
-  resolution point. *Stage-1 note:* participation reaches only games with a tracked
-  roster — the six duel games plus ttl/traditional/legitlibs; other party cogs record
-  just the host today, so roster enrichment is a planned follow-up (§12).
+  resolution point. Participation now covers **20 of 23 games**: the six duel games,
+  ttl/traditional/legitlibs, and — enriched in Stage 2 — 11 party cogs that now pass
+  their real player rosters into `end_game` (ama, clapback, compliment, hottakes, mfk,
+  mlt, nhie, price, rushmore, story, wyr). The remaining three — photo, ffa, fantasies —
+  are excluded by design (anonymous submissions or no per-player completion hook).
 - **Game win +20:** paid for **both** game architectures in v1 (decided). Duel games
   read their explicit `winner_id` (chicken, hot potato, musical chairs, pressure
   cooker, quickdraw, …). Party games get a per-game-type winner resolver over the
@@ -123,18 +125,34 @@ pool (rotation happens on the guild-local day roll in the economy loop).
 
 ### 4.2 Member Flow
 - `/bank quests` + wallet page: active quests, progress, claim state.
-- **Instant quests:** claim → immediate payout.
-- **Sign-off quests:** claim → card in the bank channel with Approve/Deny buttons
-  (persistent views, re-registered on restart like other recoverable views). Approve
-  pays; Deny DMs the reason. Denied claims are re-claimable within the quest period;
-  one pending claim per quest per member; pending claims auto-expire (→ re-claimable)
-  after 7 days via the hourly loop.
+- **Claims are period-keyed.** A daily's period is the guild-local day (`YYYY-MM-DD`),
+  a weekly's is the ISO week (`YYYY-Www`), community is `once`. Partial-unique indexes on
+  `(quest_id, user_id, period)` permit at most one `pending` and one `paid` row per
+  period, so re-claimability falls out of the key — a member is claimable again the next
+  local day / ISO week with no reset sweep. Instant quests insert `paid` and credit in
+  one transaction; sign-off quests insert `pending`.
+- **Instant quests:** claim → immediate payout (ledger kind `quest`).
+- **Sign-off quests:** claim → a card in the bank channel carrying Approve/Deny as
+  persistent `DynamicItem` buttons (`custom_id` `econ_claim:approve|deny:<claim_id>`,
+  re-registered in `cog_load` so they survive a restart — no per-message view store).
+  Approve pays and DMs; Deny opens a reason modal, DMs the reason, and leaves the period
+  re-claimable. One pending claim per quest per member; a claim left pending **>7 days**
+  expires via the hourly loop (`expire_stale_claims`), DMs the claimant, and frees a
+  re-claim. **Approve/Deny works from both surfaces** — the bank-channel card and the
+  Bank Manager panel's pending queue resolve the same claim; a dashboard resolution also
+  best-effort edits the card and DMs the claimant over the shared event loop.
 
 ### 4.3 Community Quests
-Guild-wide objective with a progress bar. **Payout: flat, to every member active in the
-last 30 days** — sourced from the existing `member_activity` table. Settlement is
-exactly-once: a per-(quest, user) payout row is reserved before crediting
-(wellness-scheduler pattern). Sign-off tickbox gates settlement if enabled.
+Guild-wide objective with a progress bar. Community quests are **not member-claimable** —
+a manager drives `current` toward the target from the Bank Manager panel and `completed_at`
+stamps once on the crossing. **Payout: flat, to every member active in the last 30 days**
+(`member_activity` via `active_member_ids`). Settlement is exactly-once: a per-(quest, user)
+row in `econ_community_payouts` is reserved before crediting (wellness-scheduler pattern),
+so a replay pays only the members it missed and `settled_at` stamps last. **Sign-off gates
+the sweep:** a sign-off community quest settles ONLY via the dashboard's manual Settle
+(`settle_community_quest`); a plain one auto-settles on the weekly ISO-week roll in the
+economy loop (`list_settleable_community_quests` filters out sign-off quests, so the
+auto-sweep never pays one awaiting approval).
 
 ## 5. Transfers
 
@@ -178,6 +196,12 @@ cleanup (member-remove listener).
   `pay`, `quests`, `shop`, `role`, `mute`, `grant` [mod]) plus `/qotd post` [mod] and
   rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command names
   are global; all *strings* inside are currency-branded.
+- **Manager surface (dashboard):** the **Bank Manager** panel — a top-level nav section
+  gated on `economy_manager_role_id` or admin (mirrors `games_editor_role` /
+  `require_game_host`) — is where managers author quests, work the pending sign-off queue
+  (Approve/Deny), set community progress + run manual Settle, grant, and read the ledger
+  audit. It is the dashboard counterpart to the `[mod]` `/bank grant` and `/qotd post`
+  commands.
 - **Role customization in v1** happens via `/bank role` subcommands + modals
   (name / color hex / gradient / icon emoji-or-upload), proxied through the bot.
 - **v2 member dashboard:** wallet page (`require_perms(set())` like the home page —
@@ -264,10 +288,10 @@ nothing and misses nothing (catch-up on next tick).
   and jumps forward — intervening days' XP is not converted retroactively (prevents
   backlog minting when a guild re-enables the economy; same trade the games scheduler
   makes).
-- Game participation payouts v1 cover games with a tracked roster (all six duel games;
-  ttl/traditional/legitlibs party games). Most party cogs record only the host in the
-  session tracker, so they don't pay participation yet — enriching their rosters is a
-  planned follow-up (see plan).
+- Game participation payouts cover 20 of 23 games — the six duel games,
+  ttl/traditional/legitlibs, and the 11 party cogs whose rosters were enriched in
+  Stage 2. photo, ffa, and fantasies stay excluded by design (anonymous submissions or
+  no per-player completion hook).
 - Guild loses Level 2 / Enhanced Role Styles mid-rental: perk enters grace as if unpaid?
   No — billing pauses the affected perk (icon/gradient) and DMs the owner; auto-resumes
   when the feature returns (no charge while suspended).

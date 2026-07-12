@@ -458,11 +458,18 @@ class HotTakesCog(commands.Cog):
         if processed > 0:
             assert view is not None
             await view._post_recap(channel, payload)
+        # Roster = everyone who voted or authored a take; the winning take's
+        # author may not have voted, so a voters-only set would drop their bonus.
+        participants = sorted(
+            {v for r in results for v in r.get("voters", [])}
+            | {r["author"] for r in results if r.get("author") is not None}
+        )
         await end_game(
             self.db, game_id,
-            player_count=len({v for r in results for v in r.get("voters", [])}),
+            player_count=len(participants),
             round_count=processed,
             payload=payload,
+            bot=self.bot, player_ids=participants,
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]

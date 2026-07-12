@@ -140,6 +140,15 @@ const SECTIONS = [
     ],
   },
   {
+    // Shown to admins OR holders of the economy manager role (econManagerRole,
+    // mirroring gameHostRole). The item carries NO adminOnly/perms so a
+    // manager-role holder who isn't an admin keeps it after item-filtering.
+    id: "bank-manager", label: "Bank Manager", perms: ["admin"], econManagerRole: true,
+    items: [
+      { id: "economy-bank-manager", label: "Bank Manager", module: "./panels/economy-bank-manager.js" },
+    ],
+  },
+  {
     id: "wellness", label: "Wellness", perms: [], roles: ["Wellness Guardian"],
     items: [
       { id: "wellness-home",      label: "Overview",   module: "./panels/wellness-home.js" },
@@ -255,6 +264,15 @@ function rebuildIndex() {
       if (userPerms.has("admin")) return true;
       const hostRoleId = window.__dk_user?.games_editor_role_id;
       return !!(hostRoleId && userRoleIds.has(hostRoleId));
+    }
+
+    // Economy manager role: show Bank Manager to admins OR the configured
+    // manager-role holders (every endpoint is gated by require_economy_manager,
+    // which excludes plain moderators — same reasoning as gameHostRole).
+    if (sec.econManagerRole) {
+      if (userPerms.has("admin")) return true;
+      const mgrRoleId = window.__dk_user?.economy_manager_role_id;
+      return !!(mgrRoleId && userRoleIds.has(mgrRoleId));
     }
 
     const permOk = !sec.perms || sec.perms.length === 0 || sec.perms.every((p) => userPerms.has(p));
@@ -603,6 +621,7 @@ function applyMeData(me) {
     guild_id: me.guild_id,
     primary_guild_id: primaryGuildId,
     games_editor_role_id: me.games_editor_role_id || null,
+    economy_manager_role_id: me.economy_manager_role_id || null,
   };
 
   // Recompute visible nav (Config pages are filtered per primary/non-primary)

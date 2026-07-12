@@ -1,17 +1,26 @@
-"""Cog-level tests for /bank — wallet view and the mod grant permission matrix."""
+"""Cog-level tests for /bank — wallet view, mod grant matrix, and /bank quests."""
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
 import pytest
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.quests import quest_period
+from bot_modules.services.economy_quests_service import (
+    claim_quest,
+    create_quest,
+    set_quest_active,
+)
 from bot_modules.services.economy_service import (
     apply_credit,
     get_balance,
     get_notify_muted,
+    load_econ_settings,
     notify_member,
     save_econ_settings,
 )
@@ -361,6 +370,127 @@ async def test_qotd_plain_member_refused(ctx, db):
     channel.send.assert_not_called()
     with open_db(db) as conn:
         assert conn.execute("SELECT COUNT(*) c FROM econ_qotd").fetchone()["c"] == 0
+
+
+# ── /bank quests — listing state matrix ──────────────────────────────────────
+
+
+def _mk_quest(
+    db,
+    *,
+    qtype="daily",
+    reward=15,
+    signoff=0,
+    community_target=None,
+    active=True,
+    title="Quest",
+) -> int:
+    with open_db(db) as conn:
+        qid = create_quest(
+            conn,
+            GUILD_ID,
+            title=title,
+            description="",
+            qtype=qtype,
+            reward=reward,
+            signoff=signoff,
+            criteria="Do the thing",
+            starts_at=None,
+            ends_at=None,
+            rotate_tag="",
+            community_target=community_target,
+            created_by=1,
+        )
+        if active:
+            set_quest_active(conn, GUILD_ID, qid, True)
+    return qid
+
+
+def _period(db, qtype) -> str:
+    with open_db(db) as conn:
+        offset = get_tz_offset_hours(conn, GUILD_ID)
+    return quest_period(qtype, local_day_for(time.time(), offset))
+
+
+async def _quests(cog, interaction) -> None:
+    await cog.bank_quests.callback(cog, interaction)
+
+
+@pytest.mark.asyncio
+async def test_quests_disabled_gate(ctx, db):
+    cog = _make_cog(ctx)  # disabled
+    interaction = _interaction(_member(member_id=500))
+    await _quests(cog, interaction)
+    args = interaction.response.send_message.await_args.args
+    assert "enabled" in args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_quests_empty_when_none_active(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    await _quests(cog, interaction)
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    assert "no active quests" in kwargs["embed"].description.lower()
+    assert "view" not in kwargs  # nothing claimable → no select attached
+
+
+@pytest.mark.asyncio
+async def test_quests_listing_state_matrix(ctx, db):
+    _enable(db)
+    user_id = 500
+    daily = _mk_quest(db, qtype="daily", title="Say hi")  # claimable
+    weekly_done = _mk_quest(db, qtype="weekly", reward=40, title="Weekly grind")
+    weekly_pending = _mk_quest(
+        db, qtype="weekly", reward=50, signoff=1, title="Sign me off"
+    )
+    _mk_quest(
+        db, qtype="community", reward=10, community_target=100, title="Team goal"
+    )
+
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD_ID)
+        # weekly_done → a paid claim this period; weekly_pending → a pending one.
+        claim_quest(
+            conn, settings, GUILD_ID, weekly_done, user_id,
+            period=_period(db, "weekly"), booster=False,
+        )
+        claim_quest(
+            conn, settings, GUILD_ID, weekly_pending, user_id,
+            period=_period(db, "weekly"), booster=False,
+        )
+        conn.execute(
+            "INSERT INTO econ_community_progress (quest_id, current) "
+            "SELECT id, 40 FROM econ_quests WHERE title = 'Team goal'"
+        )
+
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=user_id))
+    await _quests(cog, interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    embed = kwargs["embed"]
+    by_title = {f.name: f.value for f in embed.fields}
+    assert any("Say hi" in n and "Ready to claim" in v for n, v in by_title.items())
+    assert any("Weekly grind" in n and "Completed" in v for n, v in by_title.items())
+    assert any("Sign me off" in n and "sign-off" in v.lower() for n, v in by_title.items())
+    assert any("Team goal" in n and "40" in v and "100" in v for n, v in by_title.items())
+    # Exactly one claimable (the daily) → select view attached.
+    assert "view" in kwargs
+    assert daily  # referenced
+
+
+@pytest.mark.asyncio
+async def test_cog_load_registers_persistent_signoff_buttons(ctx, db):
+    from bot_modules.economy.quest_views import QuestApproveButton, QuestDenyButton
+
+    bot = MagicMock()
+    cog = _make_cog(ctx)
+    cog.bot = bot
+    await cog.cog_load()
+    bot.add_dynamic_items.assert_called_once_with(QuestApproveButton, QuestDenyButton)
 
 
 # ── /bank mute + notify_member honoring the pref ─────────────────────────────

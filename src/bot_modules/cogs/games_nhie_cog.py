@@ -454,7 +454,12 @@ class NHIECog(commands.Cog):
                             )
                     except discord.HTTPException:
                         pass
-                    await end_game(self.db, game_id, player_count=len(current_lives), round_count=round_num, payload=payload)
+                    # Roster = everyone who played. ``current_lives`` retains
+                    # eliminated players (at 0 hp), so it is the full participant
+                    # set — the guiltiest winner may have been eliminated, and a
+                    # survivors-only roster would drop their win bonus + credit.
+                    await end_game(self.db, game_id, player_count=len(current_lives), round_count=round_num, payload=payload,
+                                   bot=self.bot, player_ids=sorted(current_lives))
                     if game_id in self.bot.active_views:
                         del self.bot.active_views[game_id]
                     return

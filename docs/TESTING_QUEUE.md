@@ -103,6 +103,44 @@ need a live pass:
       (default 0.34), and editing + Save persists it (reload shows the saved
       value).
 
+### Economy (stage 2) — quests, Bank Manager panel, party roster payouts  (uncommitted)
+
+Quest slice of the economy feature (`docs/plans/economy-and-perk-shop.md`):
+migration 064 adds `econ_quests`/`econ_quest_claims`/`econ_community_progress`/
+`econ_community_payouts` (period-keyed claims, partial-unique race anchors); a
+Bank Manager dashboard section (gated on `economy_manager_role_id` or admin)
+with quest CRUD + active-slot rule + sign-off queue + community progress/settle
++ grant + ledger audit; `/bank quests` with instant + sign-off claim flow;
+persistent `DynamicItem` Approve/Deny cards in the bank channel; economy-loop
+daily rotation / weekly activation / plain-community auto-settle / >7-day claim
+expiry; and 11 party cogs enriched to pay participation. Offline logic is
+covered by service/loop/logic/view/route tests; the Discord + dashboard +
+scheduler surfaces need a live pass:
+
+- [ ] Bot restarts clean — the `DynamicItem` claim buttons register with no boot
+      error and `/bank quests` appears in the command list.
+- [ ] In Bank Manager, create a **daily** and a **weekly** quest; a non-manager
+      session can't see the section, a manager-role holder **without** admin can.
+- [ ] Activate a second daily → the ≤1-daily slot error surfaces in the panel
+      (not a silent failure).
+- [ ] `/bank quests` lists the active quests with claim buttons.
+- [ ] Claim an **instant** quest → pays immediately and a `quest` row appears in
+      the `/bank wallet` ledger.
+- [ ] Claim a **sign-off** quest → a card posts in the bank channel. **Approve**
+      from the card → pays, DMs the claimant, card turns green. Then verify a
+      claim **Approved from the DASHBOARD** panel also edits the card + DMs
+      (the shared-event-loop path has no test coverage).
+- [ ] **Deny** a sign-off claim with a reason → the reason is DM'd and the member
+      can re-claim.
+- [ ] Same quest is not claimable twice the same local day, but is claimable
+      again the next local day.
+- [ ] Community quest: set progress to target in the panel; a **sign-off** one
+      waits for the manual **Settle**, a **plain** one settles on the next weekly
+      roll, paying all 30-day-active members.
+- [ ] Play a quick party game (e.g. MFK) with 2+ players → **all** participants
+      get +5 (not just the host).
+- [ ] Dashboard **grant** is refused (409) while the economy is disabled.
+
 ### Auto-delete: media-only mode  — committed 1c56e7c (2026-07-10)
 
 New per-channel "only delete messages with attachments" toggle on the

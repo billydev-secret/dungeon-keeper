@@ -136,6 +136,7 @@ class MFKView(discord.ui.View):
             self.game_id,
             player_count=len(participants),
             payload={"assignments": serialize_assignments(assignments)},
+            bot=self.bot, player_ids=list(participants),
         )
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]

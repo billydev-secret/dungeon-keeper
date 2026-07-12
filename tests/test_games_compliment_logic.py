@@ -263,3 +263,41 @@ def test_serialize_then_pairing_ids_consistent():
 def test_generate_pairings_size_matches_pool(pool_size):
     pairings = generate_pairings(list(range(pool_size)))
     assert len(pairings) == pool_size
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_compliment_cog as compliment_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+from tests.fakes import FakeUser, fake_interaction  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_close_generate_pays_participants(monkeypatch, sync_db_path):
+    """Generating pairings pays everyone who joined the pool."""
+    spy = AsyncMock()
+    monkeypatch.setattr(compliment_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "compliment", payload={"participants": [1, 2, 3]})
+    view = compliment_cog.ComplimentView(gid, 1, bot.games_db, bot)  # type: ignore[arg-type]
+    interaction = fake_interaction(user=FakeUser(id=1))
+    interaction.guild = None
+    interaction.followup.send = AsyncMock(return_value=SimpleNamespace(delete=AsyncMock()))
+    await view.close_generate.callback(interaction)
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3]
+    assert call.kwargs["bot"] is bot
