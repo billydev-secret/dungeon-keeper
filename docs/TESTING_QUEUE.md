@@ -260,6 +260,35 @@ embed unit tests cover it; the Discord-button behaviour needs a live pass:
 - [ ] Restart the bot mid-game → recovered game still enforces single-choice
       (flag read from the payload, not the view).
 
+### Economy (stage 4) — weekly metrics rollup + pricing hints  (uncommitted)
+
+Migration 066 adds `econ_metrics_weekly` (one immutable row per guild + closed
+ISO week) and `econ_rentals.ended_at`. At the guild-local week roll the economy
+loop computes a rollup for the week that just closed (median/p90 income over
+earners, minted vs burned, faucet mix, rental holders/churn, streak health);
+the admin home gains an Economy tile and the config panel shows suggested-price
+lines. All idempotent/pure-math paths are unit-covered; the live surface needs a
+pass:
+
+- [ ] Restart the bot → boots clean (migration 066 applies once; no error on the
+      second boot).
+- [ ] After the first guild-local **Monday** rollover, a row exists for the week
+      that closed:
+      `SELECT iso_week, median_income, minted, burned FROM econ_metrics_weekly
+      WHERE guild_id = <guild> ORDER BY iso_week DESC LIMIT 3;`
+- [ ] Admin home page shows the **Economy** tile populated (median coins, p90,
+      minted/burned with the net-mint arrow, faucet bar, rental-holder %). Before
+      the first rollover it shows the "rollup pending" empty state instead.
+- [ ] Log in as a **non-admin** → the Economy tile does **not** appear (route is
+      admin-gated; `GET /api/economy/metrics` 403s for them).
+- [ ] Economy **config panel** shows "suggested ≈ N" lines under each price field
+      once a rollup exists (nothing shown while metrics are empty).
+- [ ] Sanity-check one number against reality — `minted` should equal the week's
+      minted ledger sum:
+      `SELECT COALESCE(SUM(amount),0) FROM econ_ledger WHERE guild_id = <guild>
+      AND amount > 0 AND kind != 'transfer_in'
+      AND created_at >= <week_start_epoch> AND created_at < <week_end_epoch>;`
+
 ---
 
 ## Done

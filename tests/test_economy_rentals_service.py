@@ -265,6 +265,75 @@ def test_cancel_all_for_member_none_live_returns_empty(db):
         assert cancel_all_for_member(conn, GUILD, USER, now=T0) == []
 
 
+# ── ended_at stamping (Stage 4: churn numerator) ───────────────────────
+
+
+def test_cancel_grace_stamps_ended_at(db):
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")
+    _set(db, r["id"], state="grace", grace_since=T0)
+    with open_db(db) as conn:
+        cancel_rental(conn, GUILD, r["id"], requester_id=USER, now=T0 + 5)
+    row = _get(db, r["id"])
+    assert row["state"] == "cancelled"
+    assert row["ended_at"] == T0 + 5
+
+
+def test_cancel_active_period_end_leaves_ended_at_null(db):
+    # An active cancel only flags cancel_at_period_end — the rental is still live,
+    # so ended_at stays NULL until the anniversary tick finalises it.
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")
+    with open_db(db) as conn:
+        cancel_rental(conn, GUILD, r["id"], requester_id=USER, now=T0 + 5)
+    assert _get(db, r["id"])["ended_at"] is None
+
+
+def test_cancel_all_for_member_stamps_ended_at(db):
+    _fund(db, USER, 200)
+    _fund(db, OTHER, 200)
+    owned = _rent(db, USER, "role_color")
+    gift = _rent(db, OTHER, "gift_color", beneficiary_id=USER)
+    with open_db(db) as conn:
+        cancel_all_for_member(conn, GUILD, USER, now=T0 + 9)
+    assert _get(db, owned["id"])["ended_at"] == T0 + 9
+    assert _get(db, gift["id"])["ended_at"] == T0 + 9
+
+
+def test_bill_revoke_stamps_ended_at(db):
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_color")
+    grace_start = T0 + WEEK_SECONDS
+    _set(db, r["id"], state="grace", grace_since=grace_start)
+    when = grace_start + GRACE_SECONDS
+    res = _bill(db, r["id"], when)
+    assert res.action == "revoke"
+    row = _get(db, r["id"])
+    assert row["state"] == "lapsed"
+    assert row["ended_at"] == when
+
+
+def test_bill_cancel_period_end_stamps_ended_at(db):
+    _fund(db, USER, 500)
+    r = _rent(db, USER, "role_color")
+    _set(db, r["id"], cancel_at_period_end=1)
+    when = T0 + WEEK_SECONDS + 1
+    res = _bill(db, r["id"], when)
+    assert res.action == "cancel_period_end"
+    row = _get(db, r["id"])
+    assert row["state"] == "cancelled"
+    assert row["ended_at"] == when
+
+
+def test_bill_renewal_charge_leaves_ended_at_null(db):
+    # A live renewal is not a termination — ended_at must stay NULL.
+    _fund(db, USER, 200)
+    r = _rent(db, USER, "role_color")
+    res = _bill(db, r["id"], T0 + WEEK_SECONDS + 1)
+    assert res.action == "charge"
+    assert _get(db, r["id"])["ended_at"] is None
+
+
 # ── bill_rental: the billing matrix ────────────────────────────────────
 
 

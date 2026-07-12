@@ -9,6 +9,7 @@ dungeonkeeper.db-shm
 .pytest_cache/
 __pycache__/
 .venv/
+.venv
 /.claude/*
 backups/
 models/

@@ -174,15 +174,18 @@ def cancel_rental(
     *,
     requester_id: int,
     force: bool = False,
+    now: float | None = None,
 ) -> sqlite3.Row:
     """Cancel a rental. Owner-only unless ``force`` (manager/system cleanup).
 
     An active rental is marked ``cancel_at_period_end`` — the perk runs out the
-    paid week and the anniversary tick finalises it (no refund). A grace rental
-    is cancelled immediately (there is nothing paid to run out). Raises
-    ValueError when the rental is missing, not the requester's (and not
-    ``force``), or already terminal.
+    paid week and the anniversary tick finalises it (no refund; ``ended_at`` is
+    stamped then, by ``bill_rental``). A grace rental is cancelled immediately
+    (nothing paid to run out) and ``ended_at`` is stamped now. Raises ValueError
+    when the rental is missing, not the requester's (and not ``force``), or
+    already terminal.
     """
+    now = time.time() if now is None else now
     row = _get_rental(conn, rental_id)
     if row is None or int(row["guild_id"]) != guild_id:
         raise ValueError("rental not found")
@@ -196,7 +199,8 @@ def cancel_rental(
         )
     elif state == "grace":
         conn.execute(
-            "UPDATE econ_rentals SET state = 'cancelled' WHERE id = ?", (rental_id,)
+            "UPDATE econ_rentals SET state = 'cancelled', ended_at = ? WHERE id = ?",
+            (now, rental_id),
         )
     else:
         raise ValueError("rental is not live")
@@ -229,8 +233,9 @@ def cancel_all_for_member(
     ids = [int(r["id"]) for r in rows]
     placeholders = ",".join("?" for _ in ids)
     conn.execute(
-        f"UPDATE econ_rentals SET state = 'cancelled' WHERE id IN ({placeholders})",
-        ids,
+        f"UPDATE econ_rentals SET state = 'cancelled', ended_at = ? "
+        f"WHERE id IN ({placeholders})",
+        (now, *ids),
     )
     return [r for r in (_get_rental(conn, rid) for rid in ids) if r is not None]
 
@@ -310,13 +315,15 @@ def bill_rental(
 
     if action is BillingAction.CANCEL_PERIOD_END:
         conn.execute(
-            "UPDATE econ_rentals SET state = 'cancelled' WHERE id = ?", (rental_id,)
+            "UPDATE econ_rentals SET state = 'cancelled', ended_at = ? WHERE id = ?",
+            (now, rental_id),
         )
         return _result(BillingAction.CANCEL_PERIOD_END)
 
     if action is BillingAction.REVOKE:
         conn.execute(
-            "UPDATE econ_rentals SET state = 'lapsed' WHERE id = ?", (rental_id,)
+            "UPDATE econ_rentals SET state = 'lapsed', ended_at = ? WHERE id = ?",
+            (now, rental_id),
         )
         return _result(BillingAction.REVOKE)
 

@@ -424,6 +424,57 @@ def test_week_roll_rotates_weekly_and_settles_community(db):
     assert _balance(db, OTHER) == 30
 
 
+def _rollup_count(db_path, guild_id=GUILD) -> int:
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT COUNT(*) AS n FROM econ_metrics_weekly WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchone()["n"]
+
+
+def _rollup(db_path, iso_week, guild_id=GUILD):
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT * FROM econ_metrics_weekly WHERE guild_id = ? AND iso_week = ?",
+            (guild_id, iso_week),
+        ).fetchone()
+
+
+def test_week_roll_computes_metrics_rollup_once(db):
+    _enable(db)
+    # A credit inside W28 so the rollup has real ledger data to summarise.
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO econ_ledger "
+            "(guild_id, user_id, amount, kind, actor_id, meta, created_at) "
+            "VALUES (?, ?, ?, ?, NULL, NULL, ?)",
+            (GUILD, USER, 40, "login", _ts(D1)),  # D1 is in W28
+        )
+    bot = _Bot([_Guild(GUILD)])
+
+    _roll(bot, db, _ts(DSUN))  # first sight → mark W28, no rollup
+    assert _rollup_count(db) == 0
+
+    _roll(bot, db, _ts(DMON))  # week change W28 → W29: roll up the CLOSED week
+    assert _rollup_count(db) == 1
+    row = _rollup(db, WEEK_28)
+    assert row is not None
+    assert row["minted"] == 40  # the seeded login credit
+
+    # A second tick in the new week must not create another rollup (PK-idempotent).
+    _rewind_marks(db, DSUN, WEEK_28)
+    _roll(bot, db, _ts(DMON))
+    assert _rollup_count(db) == 1
+
+
+def test_same_week_day_roll_computes_no_metrics(db):
+    _enable(db)
+    bot = _Bot([_Guild(GUILD)])
+    _roll(bot, db, _ts(D1))  # W28 first sight
+    _roll(bot, db, _ts(D2))  # still W28 → day roll only, no week roll
+    assert _rollup_count(db) == 0
+
+
 def test_same_week_day_roll_does_not_settle_community(db):
     _enable(db)
     qc = _create_quest(db, qtype="community", reward=30, community_target=5, active=True)

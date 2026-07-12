@@ -7,6 +7,11 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from bot_modules.economy.metrics import pricing_hints
+from bot_modules.services.economy_metrics_service import (
+    get_weekly_metrics,
+    latest_median_income,
+)
 from bot_modules.services.economy_service import (
     load_econ_settings,
     save_econ_settings,
@@ -68,6 +73,31 @@ async def get_economy_config(
     def _q():
         with ctx.open_db() as conn:
             return asdict(load_econ_settings(conn, guild_id))
+
+    return await run_query(_q)
+
+
+@router.get("/economy/metrics")
+async def get_economy_metrics(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Weekly rollups (newest first) plus pricing hints from the latest median.
+
+    ``weeks`` is a list of rollup dicts; ``faucet_mix`` stays a JSON string
+    (``"{}"`` when nothing was minted). ``hints`` is ``{}`` until the first
+    rollup exists — the config panel shows no suggestion lines in that case.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            weeks = [dict(r) for r in get_weekly_metrics(conn, guild_id, limit=12)]
+            median = latest_median_income(conn, guild_id)
+            hints = pricing_hints(median, settings)
+        return {"weeks": weeks, "hints": hints, "median_income": median}
 
     return await run_query(_q)
 

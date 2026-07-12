@@ -12,12 +12,15 @@ The same hourly tick also drives the quest surface (spec §4):
 
 * **Daily rotation** — on any day roll, a rotate-tag daily pool advances one
   slot (:func:`economy_quests_service.rotate_pool`).
-* **Weekly rotation + community settlement** — when the guild-local ISO week
-  changes (``econ_day_marks.last_iso_week`` vs :func:`quests.iso_week_for`),
-  the weekly pool advances and every completed-but-unsettled community quest is
-  paid out. ``last_iso_week`` advances in the same trailing mark update as
+* **Weekly rotation + community settlement + metrics** — when the guild-local
+  ISO week changes (``econ_day_marks.last_iso_week`` vs
+  :func:`quests.iso_week_for`), the weekly pool advances, every
+  completed-but-unsettled community quest is paid out, and
+  :func:`economy_metrics_service.compute_weekly_rollup` snapshots the week that
+  just closed. ``last_iso_week`` advances in the same trailing mark update as
   ``last_local_day`` so a crash before it replays the whole roll (settlement is
-  reserve-row idempotent, so the replay pays only the members it missed).
+  reserve-row idempotent and the rollup is PK-idempotent, so the replay pays
+  only the members it missed and recomputes no metrics).
 * **Claim expiry** — every tick (roll or not), stale pending sign-off claims
   transition to ``expired`` and each claimant is DM'd once. Expiry is a single
   global sweep (``expire_stale_claims`` is not guild-scoped) run before the
@@ -72,6 +75,7 @@ from bot_modules.services.economy_quests_service import (
     rotate_pool,
     settle_community_quest,
 )
+from bot_modules.services.economy_metrics_service import compute_weekly_rollup
 from bot_modules.services.economy_rentals_service import (
     BillingResult,
     bill_rental,
@@ -213,6 +217,11 @@ def run_guild_day_roll(
     if last_week is not None and last_week != this_week:
         rotate_pool(conn, guild_id, "weekly")
         _settle_completed_community(bot, conn, settings, guild_id)
+        # Roll up metrics for the week that JUST closed (idempotent via PK —
+        # a replay before the marks advance recomputes nothing).
+        compute_weekly_rollup(
+            conn, settings, guild_id, last_week, offset_hours=offset, now=now_ts
+        )
 
     # Marks advance LAST (both columns together) so any crash above replays the
     # whole roll on the next tick.

@@ -151,15 +151,32 @@ ceil on faucet credits; balance can never go negative — debit fails atomically
   `role_updated` reports whether it ran; an active cancel just sets
   `cancel_at_period_end`.
 
-## Stage 4 — Metrics & tuning surface (admin)
+## Stage 4 — Metrics & tuning surface (admin) — DONE
 
 - `tiles/economy-metrics.js` + widget-registry entry + `econ_metrics_weekly` rollup
   (week roll in loop): median/p90 income, minted vs burned, faucet mix, rental
   uptake/churn, streak health; pricing hints computed from ledger and surfaced next
   to price fields in the config panel.
 - Tests: rollup math, hints math, tile route perms.
+- **Shipped notes:** (1) The rollup (`economy_metrics_service.compute_weekly_rollup`)
+  rides the week-roll branch of the economy loop, in the same transaction as the
+  weekly rotation and community settlement, and is **idempotent via the
+  `(guild_id, iso_week)` primary key** (`INSERT OR IGNORE`; returns `None` on replay),
+  so a crash before the trailing mark update recomputes nothing. (2) **Transfers are
+  excluded both directions** — income / minted drop `transfer_in`, burned drops
+  `transfer_out` — so the figures measure real mint/burn, not currency movement. (3)
+  Churn is counted off the new **`econ_rentals.ended_at`**, stamped on every
+  termination path (billing revoke, period-end / immediate cancel, member-leave
+  cleanup); `NULL` for live rentals. (4) The home tile rides a **new `"economy"` home
+  source** mirroring the existing `health` source (own fetch of `/api/economy/metrics`,
+  wired through `home.js` / `widget-grid.js` / `widget-registry.js`), admin-perms,
+  Health category. (5) The tile's week-over-week arrow is **net-mint** (minted −
+  burned direction, ≥ 2 weeks) — not the design-era ">20% MoM" flag. (6) **Pricing
+  hints are advisory only** (`round(median × fixed factor)`, no enforcement); both the
+  tile and the hints show an **empty state** (`{}` / "rollup pending") until the first
+  guild-local week closes.
 
-## Stage 5 — Soak + tuning pass
+## Stage 5 — Soak + tuning pass — ACTIVE (Billy-driven)
 
 No new features. Run the economy live ≥1–2 weeks; use the metrics card to set real
 prices/rates for each guild; fix what live testing surfaces (TESTING_QUEUE entries

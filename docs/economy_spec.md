@@ -270,10 +270,28 @@ quest reward bands, booster multiplier. XP coefficients remain on the existing X
 surface.
 
 Home dashboard gains an **Economy Metrics tile** (widget-registry entry + `tiles/`
-module): median & p90 weekly income, minted vs burned week-over-week (flag >20% MoM
-supply growth with flat rental uptake), faucet mix, rental uptake & churn, streak
-health, and **pricing hints** ("solid color ≈ 50% of median weekly income") computed
-from the ledger and shown beside each price field in the config panel.
+module): median & p90 weekly income, minted vs burned, faucet mix, rental uptake &
+churn, streak health, and **pricing hints** ("solid color ≈ 50% of median weekly
+income") computed from the ledger and shown beside each price field in the config
+panel.
+
+**Shipped (Stage 4).** A **weekly rollup** runs at the guild-local ISO-week roll
+(inside the same loop transaction as the weekly rotation / community settlement) and
+writes one immutable `econ_metrics_weekly` row per (guild, closed week), idempotent on
+its `(guild_id, iso_week)` primary key. Each row records, over the closed week:
+median / p90 income across **earners only** (positive credits, `transfer_in`
+excluded — transfers move currency, they neither mint nor burn), **minted** (positive
+credits ex-`transfer_in`) vs **burned** (`|negative|` ex-`transfer_out`), the
+**faucet mix** (minted share per group: logins / activity / quests / games / grants,
+`{}` when nothing minted), rental **holders / live / ended** (churn via the new
+`econ_rentals.ended_at`, stamped on every termination path), and streak health
+(`streaks_7plus`, `grace_used`). The admin-only home tile (`source: "economy"`,
+Health category) shows the latest week with a **week-over-week net-mint arrow**
+(minted − burned, direction only, needs ≥ 2 weeks); before the first rollup it shows a
+"rollup pending" empty state. **Pricing hints** are `round(median weekly income ×
+fixed per-perk factor)` served from `GET /api/economy/metrics` and rendered under each
+price field in the config panel; advisory only (no enforcement), and `{}` until the
+first rollup lands.
 
 ## 10. Notifications
 
