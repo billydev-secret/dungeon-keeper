@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 
 from fastapi.testclient import TestClient
@@ -400,3 +401,163 @@ def test_ledger_filters_and_cap(authed_client, fake_ctx):
         authed_client.get("/api/economy/ledger", params={"limit": 100000}).status_code
         == 200
     )
+
+
+# ── perk rentals ───────────────────────────────────────────────────────
+
+
+def _seed_rental(
+    fake_ctx,
+    *,
+    user_id: int,
+    perk: str = "role_color",
+    state: str = "active",
+    price: int = 50,
+    beneficiary_id: int | None = None,
+    next_bill_at: float | None = None,
+) -> int:
+    """Insert a rental row directly (bypasses the upfront charge) so tests can
+    put a rental into any state. Callers vary (user_id, perk, beneficiary) per
+    live row to respect the one-live-rental unique index."""
+    now = time.time()
+    beneficiary = user_id if beneficiary_id is None else beneficiary_id
+    nb = now + 7 * 86400 if next_bill_at is None else next_bill_at
+    with open_db(fake_ctx.db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO econ_rentals
+                (guild_id, user_id, perk, state, price, started_at,
+                 next_bill_at, beneficiary_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (fake_ctx.guild_id, user_id, perk, state, price, now, nb, beneficiary, now),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def _rental_state(fake_ctx, rental_id: int) -> sqlite3.Row:
+    with open_db(fake_ctx.db_path) as conn:
+        return conn.execute(
+            "SELECT state, cancel_at_period_end FROM econ_rentals WHERE id = ?",
+            (rental_id,),
+        ).fetchone()
+
+
+def test_list_rentals_shape(authed_client, fake_ctx):
+    # An active self-rental and a gifted (beneficiary ≠ owner) grace-state one.
+    _seed_rental(fake_ctx, user_id=100, perk="role_color", state="active", price=50)
+    gift_id = _seed_rental(
+        fake_ctx,
+        user_id=200,
+        perk="gift_color",
+        state="grace",
+        price=60,
+        beneficiary_id=201,
+    )
+    # A lapsed rental must NOT appear (default states = active + grace only).
+    _seed_rental(fake_ctx, user_id=300, perk="role_icon", state="lapsed")
+
+    rentals = authed_client.get("/api/economy/rentals").json()["rentals"]
+    assert len(rentals) == 2
+    by_id = {r["id"]: r for r in rentals}
+    gift = by_id[gift_id]
+    assert gift["user_id"] == "200"
+    assert gift["beneficiary_id"] == "201"
+    assert gift["perk"] == "gift_color"
+    assert gift["state"] == "grace"
+    assert gift["price"] == 60
+    assert gift["suspended"] is False
+    assert gift["cancel_at_period_end"] is False
+    assert "next_bill_at" in gift
+
+
+def test_list_rentals_reports_suspended(authed_client, fake_ctx):
+    rid = _seed_rental(fake_ctx, user_id=100, perk="role_icon", state="active")
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "UPDATE econ_rentals SET suspended = 1, suspended_since = ? WHERE id = ?",
+            (time.time(), rid),
+        )
+    rentals = authed_client.get("/api/economy/rentals").json()["rentals"]
+    assert rentals[0]["suspended"] is True
+
+
+def test_cancel_active_marks_period_end(authed_client, fake_ctx):
+    rid = _seed_rental(fake_ctx, user_id=100, perk="role_color", state="active")
+    resp = authed_client.post(f"/api/economy/rentals/{rid}/cancel")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "active"  # stays live until the anniversary tick
+    assert body["cancel_at_period_end"] is True
+    row = _rental_state(fake_ctx, rid)
+    assert row["state"] == "active"
+    assert row["cancel_at_period_end"] == 1
+
+
+def test_cancel_grace_cancels_immediately(authed_client, fake_ctx):
+    rid = _seed_rental(fake_ctx, user_id=100, perk="role_color", state="grace")
+    resp = authed_client.post(f"/api/economy/rentals/{rid}/cancel")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "cancelled"
+    # No bot in tests → the de-projection is skipped and reported false, but the
+    # state change still lands.
+    assert body["role_updated"] is False
+    assert _rental_state(fake_ctx, rid)["state"] == "cancelled"
+
+
+def test_cancel_active_reports_role_updated_false(authed_client, fake_ctx):
+    # An active cancel only sets cancel_at_period_end — no de-projection.
+    rid = _seed_rental(fake_ctx, user_id=100, perk="role_color", state="active")
+    body = authed_client.post(f"/api/economy/rentals/{rid}/cancel").json()
+    assert body["role_updated"] is False
+
+
+def test_cancel_grace_deprojects_with_ready_bot(authed_client, fake_ctx):
+    """A grace cancel with a ready bot runs the best-effort de-projection.
+
+    The fake bot's ``get_guild`` returns None, so ``revoke_role_perks`` is a
+    no-op that still completes — the branch runs and ``role_updated`` is True.
+    A gifted rental confirms the beneficiary (not the payer) is targeted.
+    """
+
+    class _ReadyBot:
+        def is_ready(self):
+            return True
+
+        def get_guild(self, _guild_id):
+            return None
+
+    rid = _seed_rental(
+        fake_ctx,
+        user_id=200,
+        perk="gift_color",
+        state="grace",
+        beneficiary_id=201,
+    )
+    fake_ctx.bot = _ReadyBot()
+    try:
+        body = authed_client.post(f"/api/economy/rentals/{rid}/cancel").json()
+    finally:
+        fake_ctx.bot = None
+    assert body["state"] == "cancelled"
+    assert body["role_updated"] is True
+    assert _rental_state(fake_ctx, rid)["state"] == "cancelled"
+
+
+def test_cancel_unknown_rental_409(authed_client):
+    assert authed_client.post("/api/economy/rentals/999999/cancel").status_code == 409
+
+
+def test_cancel_lapsed_rental_409(authed_client, fake_ctx):
+    rid = _seed_rental(fake_ctx, user_id=100, perk="role_color", state="lapsed")
+    assert authed_client.post(f"/api/economy/rentals/{rid}/cancel").status_code == 409
+
+
+def test_rentals_gated_to_manager(fake_ctx):
+    _set_manager_role(fake_ctx)
+    rid = _seed_rental(fake_ctx, user_id=100, perk="role_color", state="active")
+    client = _client(fake_ctx, admin=False, role_ids=[123])
+    assert client.get("/api/economy/rentals").status_code == 403
+    assert client.post(f"/api/economy/rentals/{rid}/cancel").status_code == 403
+    client.close()

@@ -260,6 +260,40 @@ def apply_debit(
     return True
 
 
+def transfer_currency(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    from_id: int,
+    to_id: int,
+    amount: int,
+) -> None:
+    """Move ``amount`` between two wallets as one atomic debit + credit.
+
+    Raises ValueError for ``amount < 1``, a self-transfer, or insufficient
+    funds — the debit rides ``apply_debit``'s guarded UPDATE, so an
+    insufficient balance fails with ZERO writes (no ledger row, no credit).
+    Both sides are ledgered: ``transfer_out`` (meta ``{"to": to_id}``) and
+    ``transfer_in`` (meta ``{"from": from_id}``). Transfers do NOT mint — the
+    booster multiplier is intentionally never applied to the credit, so the
+    recipient gets exactly what the sender paid. Rides the caller's
+    connection/transaction as the commit boundary.
+    """
+    if amount < 1:
+        raise ValueError("transfer amount must be >= 1")
+    if from_id == to_id:
+        raise ValueError("cannot transfer to yourself")
+    debited = apply_debit(
+        conn, guild_id, from_id, amount, "transfer_out",
+        actor_id=from_id, meta={"to": to_id},
+    )
+    if not debited:
+        raise ValueError("insufficient funds")
+    apply_credit(
+        conn, guild_id, to_id, amount, "transfer_in",
+        actor_id=from_id, meta={"from": from_id},
+    )
+
+
 def get_ledger(
     conn: sqlite3.Connection, guild_id: int, user_id: int, limit: int = 10
 ) -> list[sqlite3.Row]:

@@ -21,7 +21,9 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from bot_modules.economy.perk_actions import revoke_role_perks
 from bot_modules.services import economy_quests_service as quests_svc
+from bot_modules.services import economy_rentals_service as rentals_svc
 from bot_modules.services.economy_service import (
     apply_credit,
     load_econ_settings,
@@ -135,6 +137,23 @@ def _claim_dict(row: sqlite3.Row) -> dict:
         "resolved_at": row["resolved_at"],
         "resolver_id": str(row["resolver_id"]) if row["resolver_id"] else None,
         "deny_reason": row["deny_reason"],
+    }
+
+
+def _rental_dict(row: sqlite3.Row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "user_id": str(row["user_id"]),
+        "perk": row["perk"],
+        "state": row["state"],
+        # ``price`` is the current guild price once past the first week (rent-time
+        # snapshot only for week 1) — the panel labels it "price/wk (current)".
+        "price": int(row["price"]),
+        "next_bill_at": row["next_bill_at"],
+        "suspended": bool(row["suspended"]),
+        "cancel_at_period_end": bool(row["cancel_at_period_end"]),
+        # Equal to user_id except for gift_color (the befriended recipient).
+        "beneficiary_id": str(row["beneficiary_id"]),
     }
 
 
@@ -616,3 +635,75 @@ async def grant(
             return {"ok": True, "credited": credited}
 
     return await run_query(_q)
+
+
+# ── perk rentals ──────────────────────────────────────────────────────
+
+
+@router.get("/economy/rentals")
+async def list_rentals(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            # Default states = the live ones (active + grace).
+            rows = rentals_svc.list_rentals(conn, guild_id)
+            return [_rental_dict(r) for r in rows]
+
+    return {"rentals": await run_query(_q)}
+
+
+@router.post("/economy/rentals/{rental_id}/cancel")
+async def cancel_rental(
+    request: Request,
+    rental_id: int,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """Manager force-cancel: an active rental runs to the paid week's end
+    (``cancel_at_period_end``), a grace rental is cancelled immediately.
+    ``cancel_rental`` raises ValueError for a missing or already-terminal
+    rental → 409 (per the rentals-service contract).
+
+    A grace cancel lands the rental in ``cancelled`` at once. The billing loop
+    only walks live (active/grace) rentals, so nothing else would ever
+    de-project the beneficiary's personal role — we reconcile here, best-effort
+    and post-commit (mirrors the claim approve/deny bot work): guarded on a
+    ready bot, all Discord failures swallowed+logged, ``role_updated`` reports
+    whether the de-projection ran."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+
+    def _q():
+        with ctx.open_db() as conn:
+            try:
+                row = rentals_svc.cancel_rental(
+                    conn,
+                    guild_id,
+                    rental_id,
+                    requester_id=user.user_id,
+                    force=True,
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            return _rental_dict(row)
+
+    result = await run_query(_q)
+
+    role_updated = False
+    if result["state"] == "cancelled" and bot is not None and bot.is_ready():
+        try:
+            await revoke_role_perks(
+                bot, ctx.db_path, guild_id, int(result["beneficiary_id"])
+            )
+            role_updated = True
+        except Exception:  # noqa: BLE001 — Discord cleanup must never fail the API
+            _log.warning(
+                "rental cancel role de-projection failed", exc_info=True
+            )
+    result["role_updated"] = role_updated
+    return result

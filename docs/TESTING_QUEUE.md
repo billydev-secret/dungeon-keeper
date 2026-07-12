@@ -141,6 +141,48 @@ scheduler surfaces need a live pass:
       get +5 (not just the host).
 - [ ] Dashboard **grant** is refused (409) while the economy is disabled.
 
+### Economy (stage 3) — transfers, rental billing, role perks, gifts  (uncommitted)
+
+Sinks slice of the economy feature (`docs/plans/economy-and-perk-shop.md`):
+migration 065 adds `econ_rentals` (billing state machine: no-drift
+anniversaries, single-charge catch-up after downtime, 36h grace, suspension
+freezes the clock) and `econ_personal_roles`; `/bank pay|shop|gift`; the
+`/bank role name|color|gradient|icon` subgroup with an idempotent personal-role
+projector (position above the "#### Cosmetics" band on create, `ENHANCED_ROLE_COLORS`
+/`ROLE_ICONS` gates, ΔE ≥ 25 staff-colour guard, Voice Master name blocklist);
+`transfer_currency` (no booster on `transfer_in`); a rental-billing pass in the
+economy loop (feature-gate sweep → billing → post-commit effects, transition-only
+DMs); dashboard Rentals table + force-cancel; and `on_member_remove` rental cleanup.
+Offline logic is covered by service/loop/logic/projector/route tests; the Discord +
+dashboard + scheduler surfaces need a live pass:
+
+- [ ] Bot restarts clean — `/bank pay`, `/bank shop`, `/bank gift`, and the
+      `/bank role` subgroup all appear with no boot error.
+- [ ] `/bank pay` a small amount → lands in **both** ledgers (payer `transfer_out`,
+      recipient `transfer_in`) and DMs the recipient.
+- [ ] `/bank pay` **>100** → shows the confirmation step before debiting.
+- [ ] Disable transfers in config → `/bank pay` is refused with a branded notice.
+- [ ] `/bank shop` shows branded prices; icon/gradient rows reflect the server's
+      role features (gated when the guild lacks them).
+- [ ] Rent a **colour**, then `/bank role color` → the personal role appears
+      **above** the booster swatch band and shows the colour.
+- [ ] Try a **staff-adjacent** colour → the ΔE refusal **names** the staff role it
+      clashes with.
+- [ ] Rent a **gradient** → the gradient renders and **supersedes** the solid colour.
+- [ ] `/bank gift @friend` a colour → the friend gets the DM + role and the payer
+      sees the gift rental in `/bank wallet`.
+- [ ] A **blocklisted** role name is refused by `/bank role name`.
+- [ ] Let a rental hit its anniversary with an **empty wallet** → grace DM, then
+      after 36h the role reverts + a lapsed DM. *(Force it fast by editing the row:
+      `UPDATE econ_rentals SET next_bill_at = strftime('%s','now') - 60 WHERE id = <rid>;`
+      to trigger grace on the next tick, then
+      `UPDATE econ_rentals SET grace_since = strftime('%s','now') - 130000 WHERE id = <rid>;`
+      to push past the 36h window.)*
+- [ ] Dashboard **Rentals** table lists the rental with the correct state.
+- [ ] Dashboard **force-cancel** of a **grace** rental removes the role within a
+      minute (best-effort de-projection).
+- [ ] A member **leaves** → their rentals cancel and the personal role is deleted.
+
 ### Auto-delete: media-only mode  — committed 1c56e7c (2026-07-10)
 
 New per-channel "only delete messages with attachments" toggle on the

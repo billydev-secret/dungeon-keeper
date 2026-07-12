@@ -13,10 +13,12 @@ from datetime import datetime
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.economy.rentals import GRACE_SECONDS, WEEK_SECONDS
 from bot_modules.services import economy_loop
 from bot_modules.services.economy_loop import (
     run_claim_expiry,
     run_guild_day_roll,
+    run_guild_rentals,
     run_tick,
 )
 from bot_modules.services.economy_quests_service import (
@@ -25,7 +27,9 @@ from bot_modules.services.economy_quests_service import (
     set_community_progress,
     set_quest_active,
 )
+from bot_modules.services.economy_rentals_service import rent_perk
 from bot_modules.services.economy_service import (
+    apply_credit,
     get_balance,
     load_econ_settings,
     save_econ_settings,
@@ -602,3 +606,343 @@ def test_run_claim_expiry_returns_notices_with_quest_title(db):
     assert notices[0].guild_id == GUILD
     assert notices[0].quest_id == quest_id
     assert notices[0].quest_title  # non-empty, drawn from the quest row
+
+
+# ── rental billing pass (run_guild_rentals) ────────────────────────────
+
+# Anchor rental time on a plain float so week arithmetic is exact and tz-free.
+RT0 = 2_000_000.0
+PRICE_COLOR = 50  # EconSettings.price_role_color default
+PRICE_ICON = 75  # EconSettings.price_role_icon default
+
+
+class _PerkRecorder:
+    """Async stand-ins for the perk_actions projector, patched onto the loop.
+
+    ``gate`` is either a bool (all perks) or a {perk: bool} map; flipping it
+    between ticks simulates a guild gaining/losing a role feature. Records every
+    apply/revoke/gate call so tests can assert the exact post-commit wiring.
+    """
+
+    def __init__(self, gate: bool | dict[str, bool] = True) -> None:
+        self.gate = gate
+        self.gate_calls: list[tuple[int, str]] = []
+        self.apply_calls: list[tuple[int, int]] = []
+        self.revoke_calls: list[tuple[int, int]] = []
+
+    async def feature_gate_ok(self, bot, guild_id, perk) -> bool:
+        self.gate_calls.append((guild_id, perk))
+        if isinstance(self.gate, dict):
+            return self.gate.get(perk, True)
+        return self.gate
+
+    async def apply_role_perks(self, bot, db_path, guild_id, user_id) -> bool:
+        self.apply_calls.append((guild_id, user_id))
+        return True
+
+    async def revoke_role_perks(self, bot, db_path, guild_id, user_id) -> None:
+        self.revoke_calls.append((guild_id, user_id))
+
+
+def _patch_perks(monkeypatch, gate: bool | dict[str, bool] = True) -> _PerkRecorder:
+    rec = _PerkRecorder(gate)
+    monkeypatch.setattr(economy_loop, "feature_gate_ok", rec.feature_gate_ok)
+    monkeypatch.setattr(economy_loop, "apply_role_perks", rec.apply_role_perks)
+    monkeypatch.setattr(economy_loop, "revoke_role_perks", rec.revoke_role_perks)
+    return rec
+
+
+def _fund(db_path, user_id, amount, guild_id=GUILD) -> None:
+    with open_db(db_path) as conn:
+        apply_credit(conn, guild_id, user_id, amount, "grant")
+
+
+def _rent(db_path, user_id, perk, *, beneficiary_id=None, now=RT0, guild_id=GUILD) -> int:
+    with open_db(db_path) as conn:
+        settings = load_econ_settings(conn, guild_id)
+        row = rent_perk(
+            conn, settings, guild_id, user_id, perk,
+            beneficiary_id=beneficiary_id, now=now,
+        )
+        return int(row["id"])
+
+
+def _rental(db_path, rental_id):
+    with open_db(db_path) as conn:
+        return dict(
+            conn.execute(
+                "SELECT * FROM econ_rentals WHERE id = ?", (rental_id,)
+            ).fetchone()
+        )
+
+
+def _set_rental(db_path, rental_id, **cols) -> None:
+    assigns = ", ".join(f"{k} = ?" for k in cols)
+    with open_db(db_path) as conn:
+        conn.execute(
+            f"UPDATE econ_rentals SET {assigns} WHERE id = ?",
+            (*cols.values(), rental_id),
+        )
+
+
+async def _rental_tick(bot, db_path, now_ts, guild_id=GUILD) -> None:
+    await run_guild_rentals(bot, db_path, guild_id, now_ts)
+
+
+def _rental_bot():
+    return _Bot([_Guild(GUILD)])
+
+
+# ── charge / grace / retry ─────────────────────────────────────────────
+
+
+async def test_due_charge_advances_silently_without_drift(db, monkeypatch):
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 2 * PRICE_COLOR)  # first week upfront + one renewal
+    rid = _rent(db, USER, "role_color")  # charges 50 upfront → balance 50
+    assert _balance(db) == PRICE_COLOR
+    due = _rental(db, rid)["next_bill_at"]  # == RT0 + WEEK
+
+    # Tick a bit *after* the anniversary: the charge must advance from the
+    # scheduled time, not from ``now`` (no drift).
+    await _rental_tick(_rental_bot(), db, due + 100.0)
+
+    row = _rental(db, rid)
+    assert row["state"] == "active"
+    assert row["next_bill_at"] == due + WEEK_SECONDS  # scheduled+week, not now+week
+    assert _balance(db) == 0  # second 50 charged
+    assert notify.calls == []  # silent renewal
+    assert rec.apply_calls == [] and rec.revoke_calls == []
+
+
+async def test_insufficient_enters_grace_dm_once_then_retry_silent(db, monkeypatch):
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, PRICE_COLOR)  # exactly one week — renewal will fail
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+
+    await _rental_tick(_rental_bot(), db, due)  # debit fails → enter grace
+    row = _rental(db, rid)
+    assert row["state"] == "grace"
+    assert row["grace_since"] == due
+    assert len(notify.calls) == 1
+    assert "grace" in (notify.calls[0][2] or "")
+    assert rec.revoke_calls == []
+
+    # Second tick still inside the 36h window → retry, silent (no repeat DM).
+    await _rental_tick(_rental_bot(), db, due + 3600.0)
+    assert _rental(db, rid)["state"] == "grace"
+    assert len(notify.calls) == 1  # still just the one
+    assert rec.revoke_calls == []
+
+
+async def test_funded_retry_recovers_silently(db, monkeypatch):
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, PRICE_COLOR)
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+    await _rental_tick(_rental_bot(), db, due)  # → grace
+    assert _rental(db, rid)["state"] == "grace"
+
+    # Top the wallet up, then retry inside the window → silent recovery.
+    _fund(db, USER, PRICE_COLOR)
+    notify.calls.clear()
+    await _rental_tick(_rental_bot(), db, due + 7200.0)
+
+    row = _rental(db, rid)
+    assert row["state"] == "active"
+    assert row["grace_since"] is None
+    assert row["next_bill_at"] == due + WEEK_SECONDS  # advanced from scheduled
+    assert _balance(db) == 0
+    # Grace never revoked the perk, so recovery re-projects nothing and is silent.
+    assert notify.calls == []
+    assert rec.apply_calls == [] and rec.revoke_calls == []
+
+
+# ── revoke / cancel ────────────────────────────────────────────────────
+
+
+async def test_grace_elapsed_revokes_and_dms_owner(db, monkeypatch):
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, PRICE_COLOR)
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+    await _rental_tick(_rental_bot(), db, due)  # → grace
+    notify.calls.clear()
+
+    # Past the 36h grace window → revoke.
+    await _rental_tick(_rental_bot(), db, due + GRACE_SECONDS + 1.0)
+
+    assert _rental(db, rid)["state"] == "lapsed"
+    assert rec.revoke_calls == [(GUILD, USER)]  # beneficiary == owner here
+    assert len(notify.calls) == 1
+    assert (GUILD, USER) == (notify.calls[0][0], notify.calls[0][1])
+    assert "lapsed" in (notify.calls[0][2] or "")
+
+
+async def test_grace_elapsed_gift_dms_owner_and_beneficiary(db, monkeypatch):
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, PRICE_COLOR)  # payer funds one week only
+    rid = _rent(db, USER, "gift_color", beneficiary_id=OTHER)
+    due = _rental(db, rid)["next_bill_at"]
+    await _rental_tick(_rental_bot(), db, due)  # → grace
+    notify.calls.clear()
+
+    await _rental_tick(_rental_bot(), db, due + GRACE_SECONDS + 1.0)  # → revoke
+
+    assert _rental(db, rid)["state"] == "lapsed"
+    assert rec.revoke_calls == [(GUILD, OTHER)]  # beneficiary, not payer
+    dmed = {(gid, uid) for gid, uid, _ in notify.calls}
+    assert dmed == {(GUILD, USER), (GUILD, OTHER)}  # owner + courtesy to friend
+
+
+async def test_cancel_at_period_end_revokes_with_no_dm(db, monkeypatch):
+    _enable(db)
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 2 * PRICE_COLOR)
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+    _set_rental(db, rid, cancel_at_period_end=1)
+
+    await _rental_tick(_rental_bot(), db, due)  # anniversary of a cancelled rental
+
+    assert _rental(db, rid)["state"] == "cancelled"
+    assert _balance(db) == PRICE_COLOR  # NOT charged the second week
+    assert rec.revoke_calls == [(GUILD, USER)]  # beneficiary revoked …
+    assert notify.calls == []  # … but member-initiated: silent
+
+
+# ── feature-gate suspension sweep ──────────────────────────────────────
+
+
+async def test_feature_loss_suspends_once_and_freezes_billing(db, monkeypatch):
+    _enable(db)
+    rec = _patch_perks(monkeypatch, gate=False)  # server lacks the icon feature
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, PRICE_ICON)  # one week only → a charge would fail if attempted
+    rid = _rent(db, USER, "role_icon")
+    due = _rental(db, rid)["next_bill_at"]
+
+    await _rental_tick(_rental_bot(), db, due)  # due, but feature gone → suspend
+    row = _rental(db, rid)
+    assert row["suspended"] == 1
+    assert row["state"] == "active"  # suspended, NOT billed → never entered grace
+    assert row["grace_since"] is None
+    assert _balance(db) == 0  # nothing charged while suspended
+    assert len(notify.calls) == 1
+    assert "paused" in (notify.calls[0][2] or "")
+
+    # Feature still gone next tick: no transition → no second DM, still frozen.
+    await _rental_tick(_rental_bot(), db, due + 3600.0)
+    assert _rental(db, rid)["suspended"] == 1
+    assert len(notify.calls) == 1  # not re-notified
+    assert rec.revoke_calls == []  # suspended rental is skipped by billing
+
+
+async def test_feature_return_unsuspends_and_reprojects(db, monkeypatch):
+    _enable(db)
+    gate = {"role_icon": False}
+    rec = _patch_perks(monkeypatch, gate=gate)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, PRICE_ICON)
+    rid = _rent(db, USER, "role_icon")  # anniversary a week out
+
+    # Feature lost well before the anniversary → suspend, no billing yet.
+    await _rental_tick(_rental_bot(), db, RT0 + 1000.0)
+    assert _rental(db, rid)["suspended"] == 1
+    notify.calls.clear()
+
+    # Feature returns, still before the (frozen-span-pushed) anniversary.
+    gate["role_icon"] = True
+    await _rental_tick(_rental_bot(), db, RT0 + 2000.0)
+
+    row = _rental(db, rid)
+    assert row["suspended"] == 0
+    assert rec.apply_calls == [(GUILD, USER)]  # re-projected on resume
+    assert rec.revoke_calls == []  # resume never revokes
+    assert len(notify.calls) == 1
+    assert "resumed" in (notify.calls[0][2] or "")
+
+
+# ── guard rails: disabled guild + idempotence ──────────────────────────
+
+
+async def test_disabled_guild_rental_pass_untouched(db, monkeypatch):
+    _enable(db)  # enable to create the rental …
+    rec = _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 2 * PRICE_COLOR)
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+    _enable(db, enabled=False)  # … then turn economy off
+
+    await _rental_tick(_rental_bot(), db, due + WEEK_SECONDS)  # long overdue
+
+    row = _rental(db, rid)
+    assert row["state"] == "active"
+    assert row["next_bill_at"] == due  # not advanced
+    assert _balance(db) == PRICE_COLOR  # not charged
+    assert notify.calls == []
+    assert rec.revoke_calls == [] and rec.gate_calls == []
+
+
+async def test_double_tick_idempotent_over_rental_pass(db, monkeypatch):
+    _enable(db)
+    _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 2 * PRICE_COLOR)
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+
+    await _rental_tick(_rental_bot(), db, due)  # charge
+    after_first = _rental(db, rid)
+    assert after_first["next_bill_at"] == due + WEEK_SECONDS
+    assert _balance(db) == 0
+
+    # Immediate second tick at the same clock: nothing due → no change.
+    await _rental_tick(_rental_bot(), db, due)
+    after_second = _rental(db, rid)
+    assert after_second["next_bill_at"] == after_first["next_bill_at"]
+    assert _balance(db) == 0
+    assert _ledger_kind_count(db, "rental") == 2  # upfront + one renewal, no more
+    assert notify.calls == []
+
+
+async def test_run_tick_drives_the_rental_pass(db, monkeypatch):
+    # Integration: exercise the real entry point (run_tick's per-guild loop),
+    # not run_guild_rentals directly, so the wiring itself is covered.
+    _enable(db)
+    _patch_perks(monkeypatch)
+    notify = _NotifyRecorder()
+    monkeypatch.setattr(economy_loop, "notify_member", notify)
+    _fund(db, USER, 2 * PRICE_COLOR)
+    rid = _rent(db, USER, "role_color")
+    due = _rental(db, rid)["next_bill_at"]
+
+    await _tick(_rental_bot(), db, due)  # the actual hourly tick (run_tick)
+
+    row = _rental(db, rid)
+    assert row["state"] == "active"
+    assert row["next_bill_at"] == due + WEEK_SECONDS  # renewal charged + advanced
+    assert _balance(db) == 0

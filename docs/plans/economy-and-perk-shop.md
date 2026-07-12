@@ -135,6 +135,21 @@ ceil on faucet credits; balance can never go negative — debit fails atomically
   gift-a-color.
 - Tests: billing state machine incl. restart replay, grace/revoke timing, gradient
   supersedes solid, role lifecycle + precedence, gift flow, transfer limits.
+- **Shipped notes:** (1) **Renewals bill the current guild price at each anniversary** —
+  the rent-time price is snapshotted only for week one; a config price change takes
+  effect next cycle, never retroactively. (2) Anniversaries are **no-drift** (advance
+  `next_bill_at` by exactly one week off schedule) and a multi-week catch-up after
+  downtime charges **once**; **suspension** (feature loss) freezes both the billing clock
+  and the visual, then auto-resumes clean. (3) **Gift creates the recipient's role
+  eagerly** at rent time (the beneficiary, not the payer, holds the personal role). (4)
+  Personal-role hierarchy position is set **on create only** — above the "#### Cosmetics"
+  booster band; a reconcile never re-hoists a manually moved role. (5) Uploaded role
+  icons are stored under the db-parent dir at `econ_role_icons/` (sibling of the SQLite
+  file). (6) Guards: **ΔE ≥ 25** vs staff colours (refusal names the clashing role) and
+  the **Voice Master name blocklist** (shared table). (7) Dashboard **grace-cancel
+  de-projects the role best-effort** post-commit (the loop only walks live rentals) —
+  `role_updated` reports whether it ran; an active cancel just sets
+  `cancel_at_period_end`.
 
 ## Stage 4 — Metrics & tuning surface (admin)
 

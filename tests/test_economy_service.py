@@ -28,6 +28,7 @@ from bot_modules.services.economy_service import (
     process_login,
     save_econ_settings,
     set_notify_muted,
+    transfer_currency,
     try_award_qotd,
 )
 
@@ -712,3 +713,86 @@ async def test_notify_member_member_gone_uses_bank_channel(db):
     bot = _fake_bot(guild=_fake_guild(member=None, channel=channel))
     assert await notify_member(bot, db, GUILD, USER, content="hi") is True
     channel.send.assert_awaited_once()
+
+
+# ── transfers ─────────────────────────────────────────────────────────
+
+
+def test_transfer_roundtrip_moves_balance_and_ledgers_both_sides(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 100, "grant")
+    with open_db(db) as conn:
+        transfer_currency(conn, GUILD, USER, OTHER, 30)
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 70
+        assert get_balance(conn, GUILD, OTHER) == 30
+        out = get_ledger(conn, GUILD, USER, limit=1)[0]
+        assert out["kind"] == "transfer_out"
+        assert out["amount"] == -30
+        assert out["actor_id"] == USER
+        import json
+        assert json.loads(out["meta"]) == {"to": OTHER}
+        inc = get_ledger(conn, GUILD, OTHER, limit=1)[0]
+        assert inc["kind"] == "transfer_in"
+        assert inc["amount"] == 30
+        assert inc["actor_id"] == USER
+        assert json.loads(inc["meta"]) == {"from": USER}
+
+
+def test_transfer_insufficient_is_zero_write(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 10, "grant")
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="insufficient"):
+            transfer_currency(conn, GUILD, USER, OTHER, 11)
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 10
+        assert get_balance(conn, GUILD, OTHER) == 0
+        # No ledger rows written on either side.
+        assert get_ledger(conn, GUILD, USER) == [] or all(
+            r["kind"] != "transfer_out" for r in get_ledger(conn, GUILD, USER)
+        )
+        assert get_ledger(conn, GUILD, OTHER) == []
+
+
+def test_transfer_to_self_rejected_before_any_write(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 50, "grant")
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="yourself"):
+            transfer_currency(conn, GUILD, USER, USER, 10)
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 50
+
+
+def test_transfer_below_min_rejected(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 50, "grant")
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match=">= 1"):
+            transfer_currency(conn, GUILD, USER, OTHER, 0)
+        with pytest.raises(ValueError, match=">= 1"):
+            transfer_currency(conn, GUILD, USER, OTHER, -5)
+
+
+def test_transfer_does_not_mint_no_booster_multiplier(db):
+    # Even with a hefty booster multiplier configured, a transfer credits the
+    # recipient exactly what the sender paid — transfers never mint currency.
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"booster_multiplier": 10.0})
+        apply_credit(conn, GUILD, USER, 100, "grant")
+    with open_db(db) as conn:
+        transfer_currency(conn, GUILD, USER, OTHER, 40)
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 60
+        assert get_balance(conn, GUILD, OTHER) == 40
+
+
+def test_transfer_min_amount_one(db):
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD, USER, 1, "grant")
+    with open_db(db) as conn:
+        transfer_currency(conn, GUILD, USER, OTHER, 1)
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD, USER) == 0
+        assert get_balance(conn, GUILD, OTHER) == 1

@@ -91,6 +91,11 @@ function render(container, members) {
         <div data-claims><div class="empty">Loading…</div></div>
       </section>
 
+      <section class="card" data-sec="rentals">
+        <div class="section-label">Perk rentals</div>
+        <div data-rentals><div class="empty">Loading…</div></div>
+      </section>
+
       <section class="card" data-sec="grant">
         <div class="section-label">Grant currency</div>
         <form data-form-grant class="form">
@@ -128,7 +133,87 @@ function render(container, members) {
   wireLedger(container, members);
   refreshQuests(container, members);
   refreshClaims(container, members);
+  refreshRentals(container, members);
   refreshLedger(container, members);
+}
+
+// ── perk rentals ─────────────────────────────────────────────────────
+
+const PERK_LABELS = {
+  role_color: "Role color",
+  role_name: "Role name",
+  role_icon: "Role icon",
+  role_gradient: "Role gradient",
+  gift_color: "Gift color",
+};
+
+async function refreshRentals(container, members) {
+  const host = container.querySelector("[data-rentals]");
+  let rentals;
+  try {
+    rentals = (await api("/api/economy/rentals")).rentals;
+  } catch (err) {
+    host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    return;
+  }
+  if (!rentals.length) {
+    host.innerHTML = `<div class="empty">No active rentals.</div>`;
+    return;
+  }
+  const rows = rentals.map((r) => {
+    const perk = PERK_LABELS[r.perk] || r.perk;
+    const stateBadge = r.suspended
+      ? `${esc(r.state)} <span class="badge badge-warning" title="Required server feature missing — billing paused">suspended</span>`
+      : (r.cancel_at_period_end
+        ? `${esc(r.state)} <span class="badge badge-dim" title="Cancels at the end of the paid week">cancelling</span>`
+        : esc(r.state));
+    // beneficiary shown only when it differs from the owner (a gifted color).
+    const gift = String(r.beneficiary_id) !== String(r.user_id)
+      ? esc(memberName(members, r.beneficiary_id))
+      : "—";
+    const nextBill = fmtAge((r.next_bill_at || 0) - nowSec());
+    const disabled = r.cancel_at_period_end ? " disabled" : "";
+    return `
+      <tr data-rental-row="${r.id}">
+        <td>${esc(memberName(members, r.user_id))}</td>
+        <td>${esc(perk)}</td>
+        <td>${stateBadge}</td>
+        <td style="text-align:right;">${r.price}</td>
+        <td>${nextBill}</td>
+        <td>${gift}</td>
+        <td>
+          <button class="btn btn-ghost btn-sm" data-cancel-rental="${r.id}"${disabled}>Cancel</button>
+          <span class="save-status" data-rental-status="${r.id}"></span>
+        </td>
+      </tr>`;
+  }).join("");
+  host.innerHTML = `
+    <div class="field-hint">Force-cancelling an active rental runs it to the end of the paid week (no refund); a grace-period rental is cancelled immediately.</div>
+    <div style="overflow-x:auto;">
+      <table class="data-table">
+        <thead><tr><th>Member</th><th>Perk</th><th>State</th><th>price/wk (current)</th><th>Next bill</th><th>Gift to</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+
+  host.querySelectorAll("[data-cancel-rental]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.cancelRental;
+      const rental = rentals.find((r) => String(r.id) === String(id));
+      const status = host.querySelector(`[data-rental-status="${id}"]`);
+      const note = rental && rental.state === "grace"
+        ? "This grace-period rental cancels immediately."
+        : "This active rental runs to the end of the paid week (no refund), then finalizes.";
+      if (!(await confirmDialog(`Cancel this rental? ${note}`, { danger: true, confirmLabel: "Cancel rental" }))) return;
+      try {
+        await apiPost(`/api/economy/rentals/${id}/cancel`, {});
+        showStatus(status, true, "Cancelled");
+        refreshRentals(container, members);
+      } catch (err) {
+        showStatus(status, false, err.message); // 409 when not live
+      }
+    });
+  });
 }
 
 // ── quest library ────────────────────────────────────────────────────
