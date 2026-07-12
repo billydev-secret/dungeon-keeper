@@ -310,6 +310,16 @@ class WYRCog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
+    async def _voter_roster(self, game_id: str) -> list[int]:
+        """Everyone who voted for either option in any completed round — the
+        real participant set for economy payouts."""
+        payload = await get_game_payload(self.db, game_id)
+        return sorted({
+            int(v)
+            for rd in payload.get("rounds", {}).values()
+            for v in (rd.get("a") or []) + (rd.get("b") or [])
+        })
+
     async def _run_round(
         self,
         interaction,
@@ -333,7 +343,7 @@ class WYRCog(commands.Cog):
                     "❌ The question bank is empty! Use **✍️ Pose Question** to submit your own, "
                     "or ask an admin to add questions with `/bank add`."
                 )
-                await end_game(self.db, game_id)
+                await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))
                 self.bot.active_views.pop(game_id, None)
                 return
             option_a, option_b = question

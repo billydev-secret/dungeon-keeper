@@ -21,6 +21,13 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.quest_views import (
+    QuestApproveButton,
+    QuestClaimView,
+    QuestDenyButton,
+    can_manage_economy,
+)
+from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -63,12 +70,28 @@ def _unit(settings: EconSettings, amount: int) -> str:
     return settings.currency_name if abs(amount) == 1 else settings.currency_plural
 
 
+_QUEST_STATE_LABEL = {
+    "claimable": "✅ Ready to claim",
+    "pending": "⏳ Awaiting sign-off",
+    "done": "☑️ Completed this period",
+}
+
+
+def _progress_bar(current: int, target: int, width: int = 10) -> str:
+    """A text meter for a community quest's running total."""
+    if target <= 0:
+        return f"{current:,}"
+    filled = max(0, min(width, round(width * current / target)))
+    return f"{'▰' * filled}{'▱' * (width - filled)} {current:,}/{target:,}"
+
+
 def _can_grant(user: discord.Member, settings: EconSettings) -> bool:
-    """True for server admins or holders of the configured manager role."""
-    if user.guild_permissions.administrator:
-        return True
-    role_id = settings.manager_role_id
-    return role_id != 0 and any(r.id == role_id for r in user.roles)
+    """True for server admins or holders of the configured manager role.
+
+    Delegates to the canonical gate in ``quest_views`` so the grant command
+    and the sign-off buttons enforce one rule.
+    """
+    return can_manage_economy(user, settings)
 
 
 class EconomyCog(commands.Cog):
@@ -248,6 +271,110 @@ class EconomyCog(commands.Cog):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+    @bank.command(name="quests", description="View and claim the server's active quests.")
+    async def bank_quests(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+
+        settings, quests_state = await asyncio.to_thread(
+            self._load_quests_state, guild.id, interaction.user.id
+        )
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = discord.Embed(title=f"{settings.currency_emoji} Quests", colour=accent)
+
+        if not quests_state:
+            embed.description = "_No active quests right now — check back soon!_"
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        for q in quests_state:
+            reward = int(q["reward"])
+            unit = _unit(settings, reward)
+            header = f"{settings.currency_emoji} {q['title']}"
+            lines = [f"**{reward:,}** {unit} · {q['qtype']}"]
+            if q.get("description"):
+                lines.append(str(q["description"]))
+            if q["state"] == "community":
+                lines.append(_progress_bar(q["current"], q["target"]))
+            else:
+                lines.append(_QUEST_STATE_LABEL.get(q["state"], ""))
+            embed.add_field(name=header, value="\n".join(lines), inline=False)
+
+        claimable = [q for q in quests_state if q["state"] == "claimable"]
+        kwargs: dict = {"embed": embed, "ephemeral": True}
+        if claimable:
+            kwargs["view"] = QuestClaimView(self.ctx, settings, guild, claimable)
+        await interaction.response.send_message(**kwargs)
+
+    def _load_quests_state(
+        self, guild_id: int, user_id: int
+    ) -> tuple[EconSettings, list[dict]]:
+        """Load active quests with the caller's per-period claim state.
+
+        Community quests carry their running total (no self-claim); daily/weekly
+        carry ``claimable``/``pending``/``done`` for this period's key.
+        """
+        with self.ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled:
+                return settings, []
+            offset = get_tz_offset_hours(conn, guild_id)
+            day = local_day_for(time.time(), offset)
+            rows = conn.execute(
+                """
+                SELECT * FROM econ_quests
+                WHERE guild_id = ? AND active = 1
+                ORDER BY qtype, id
+                """,
+                (guild_id,),
+            ).fetchall()
+            out: list[dict] = []
+            for row in rows:
+                qtype = str(row["qtype"])
+                quest_id = int(row["id"])
+                entry: dict = {
+                    "id": quest_id,
+                    "title": row["title"],
+                    "description": row["description"],
+                    "qtype": qtype,
+                    "reward": int(row["reward"]),
+                    "signoff": bool(row["signoff"]),
+                    "criteria": row["criteria"],
+                }
+                if qtype == "community":
+                    prog = conn.execute(
+                        "SELECT current FROM econ_community_progress WHERE quest_id = ?",
+                        (quest_id,),
+                    ).fetchone()
+                    target = row["community_target"]
+                    entry["state"] = "community"
+                    entry["current"] = int(prog["current"]) if prog else 0
+                    entry["target"] = int(target) if target is not None else 0
+                else:
+                    period = quest_period(qtype, day)
+                    claim = conn.execute(
+                        """
+                        SELECT state FROM econ_quest_claims
+                        WHERE quest_id = ? AND user_id = ? AND period = ?
+                          AND state IN ('paid', 'pending')
+                        ORDER BY CASE state WHEN 'paid' THEN 0 ELSE 1 END
+                        LIMIT 1
+                        """,
+                        (quest_id, user_id, period),
+                    ).fetchone()
+                    if claim is None:
+                        entry["state"] = "claimable"
+                    elif claim["state"] == "paid":
+                        entry["state"] = "done"
+                    else:
+                        entry["state"] = "pending"
+                out.append(entry)
+        return settings, out
+
     qotd = app_commands.Group(
         name="qotd",
         description="Question of the day.",
@@ -336,6 +463,12 @@ class EconomyCog(commands.Cog):
         await interaction.followup.send(
             "Posted the question of the day.", ephemeral=True
         )
+
+    async def cog_load(self) -> None:
+        # Re-register the persistent sign-off buttons so Approve/Deny clicks on
+        # existing bank-channel cards still route after a restart — the
+        # custom_ids embed the claim id (econ_claim:{approve,deny}:<id>).
+        self.bot.add_dynamic_items(QuestApproveButton, QuestDenyButton)
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:

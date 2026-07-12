@@ -389,3 +389,60 @@ def test_tally_votes_single_vote_avg_equals_scale_value(idx, expected_avg):
     counts, avg, _std = tally_votes({1: idx})
     assert counts[idx] == 1
     assert avg == expected_avg
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+import asyncio  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_hottakes_cog as hottakes_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_run_voting_pays_voters_and_authors(monkeypatch, sync_db_path):
+    """Roster = voters plus take authors; the winning take's author may not have
+    voted, so a voters-only set would drop their participation + win credit."""
+    spy = AsyncMock()
+    monkeypatch.setattr(hottakes_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {"takes": [{"text": "t1", "user_id": 9}], "results": []}
+    gid = await create_game(bot.games_db, 100, 1, "hottakes", payload=payload)
+    bot.active_views[gid] = object()  # placeholder so the loop's entry guard passes
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(
+        id=100, guild=None,
+        send=AsyncMock(return_value=SimpleNamespace(id=999, edit=AsyncMock())),
+    )
+    task = asyncio.ensure_future(cog._run_voting(None, gid, 1, "Host", channel))
+    try:
+        view = None
+        for _ in range(300):
+            await asyncio.sleep(0.01)
+            candidate = bot.active_views.get(gid)
+            if isinstance(candidate, hottakes_cog.HotTakeVoteView):
+                view = candidate
+                break
+        assert view is not None, "vote view was never created"
+        view.votes = {1: 0, 2: 3}  # author 9 never voted
+        await view.advance_callback(SimpleNamespace(edit=AsyncMock()))
+        await asyncio.wait_for(task, timeout=5)
+    finally:
+        if not task.done():
+            task.cancel()
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 9]
+    assert call.kwargs["bot"] is bot

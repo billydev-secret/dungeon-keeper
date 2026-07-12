@@ -964,6 +964,7 @@ class RushmoreCog(commands.Cog):
             player_count=len(draft_view.players),
             round_count=DRAFT_ROUNDS,
             payload=payload,
+            bot=self.bot, player_ids=list(draft_view.players),
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]

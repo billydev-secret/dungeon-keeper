@@ -24,6 +24,7 @@ class MeResponse(BaseModel):
     avatar_url: str | None = None
     status: str | None = None
     games_editor_role_id: str | None = None
+    economy_manager_role_id: str | None = None
 
 
 class RoleMeta(BaseModel):

@@ -1086,6 +1086,7 @@ class PriceCog(commands.Cog):
             player_count=len(all_players),
             round_count=rounds_played,
             payload=payload,
+            bot=self.bot, player_ids=list(all_players),
         )
         if game_id in self.bot.active_views:
             del self.bot.active_views[game_id]

@@ -749,7 +749,16 @@ class AMAView(discord.ui.View):
         await channel.send(embed=embed)
 
         log.info("Game %s ended — %d questions asked", self.game_id, total_q)
-        await end_game(self.db, self.game_id, player_count=unique_askers, round_count=total_q, payload=payload)
+        # Participants = members who asked a question (asker_id 0 is the AI
+        # idle-question sentinel — mirror unique_asker_count's filter) plus the
+        # hot-seat occupants who answered them.
+        _qs = payload.get("questions", [])
+        participants = sorted(
+            {q["asker_id"] for q in _qs if q.get("asker_id", 0) > 0}
+            | {q["hot_seat_id"] for q in _qs if q.get("hot_seat_id", 0) > 0}
+        )
+        await end_game(self.db, self.game_id, player_count=unique_askers, round_count=total_q, payload=payload,
+                       bot=self.bot, player_ids=participants)
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]
 

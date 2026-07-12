@@ -695,3 +695,44 @@ def test_build_recap_embed_empty_stats_omits_draft_stats_field():
     )
     field_names = [f.name or "" for f in embed.fields]
     assert not any(n.endswith("Draft Stats") for n in field_names)
+
+
+# ── economy roster enrichment (Stage 2 faucet) ──────────────────────
+
+import time as _time_mod  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_rushmore_cog as rushmore_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+
+
+class _SpyBot:
+    def __init__(self, db_path) -> None:
+        self.games_db = GamesDb(db_path)
+        self.active_views: dict = {}
+        self.ctx = SimpleNamespace(db_path=db_path)
+
+    def get_cog(self, name):
+        return None
+
+
+async def test_show_recap_pays_drafters(monkeypatch, sync_db_path):
+    """Recap pays the full drafting roster."""
+    spy = AsyncMock()
+    monkeypatch.setattr(rushmore_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "rushmore", payload={"players": [1, 2, 3]})
+    cog = rushmore_cog.RushmoreCog(bot)  # type: ignore[arg-type]
+    draft_view = SimpleNamespace(
+        game_id=gid, _draft_start=_time_mod.time(), boards={}, draft_order=[],
+        all_picks=[], pick_times={}, skipped=[], host_name="Host",
+        topic="Best X", players=[1, 2, 3], host_id=1,
+    )
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+    await cog._show_recap(draft_view, channel, None, {}, {}, [])  # type: ignore[arg-type]
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 3]
+    assert call.kwargs["bot"] is bot

@@ -176,6 +176,31 @@ async def require_game_host(
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
 
 
+async def require_economy_manager(
+    request: Request,
+    auth: AuthBackend = Depends(get_auth),
+) -> AuthenticatedUser:
+    """Allow admins OR holders of the configured economy manager role."""
+    from bot_modules.services.economy_service import load_econ_settings
+
+    user = await auth.authenticate(request)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+    if "admin" in user.perms:
+        return user
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return load_econ_settings(conn, guild_id).manager_role_id
+
+    manager_role_id = await run_query(_q)
+    if manager_role_id and manager_role_id in user.role_ids:
+        return user
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+
 def require_perms(required: set[str]) -> Callable[..., Awaitable[AuthenticatedUser]]:
     """Return a FastAPI dependency that enforces ``required`` permissions."""
     required_frozen = frozenset(required)
