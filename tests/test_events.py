@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +12,14 @@ import pytest
 from discord import app_commands
 
 from bot_modules.cogs.events_cog import EventsCog, _collect_backfill_channels, _on_tree_error
+from bot_modules.core.db_utils import open_db
 from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS
+from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_service import (
+    get_balance,
+    save_econ_settings,
+)
+from migrations import apply_migrations_sync
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
@@ -801,3 +809,237 @@ async def test_on_member_remove_skips_when_channel_unset():
         await cog.on_member_remove(member)
 
     member.guild.get_channel.assert_not_called()
+
+
+# ── economy: text login + QOTD hooks in _process_economy_message ──────────
+
+ECON_GUILD = 4242
+ECON_USER = 77
+ECON_CHANNEL = 88
+
+
+@pytest.fixture
+def econ_db(tmp_path):
+    db_path = tmp_path / "econ.db"
+    apply_migrations_sync(db_path)
+    return db_path
+
+
+def _econ_cog(econ_db) -> EventsCog:
+    ctx: Any = SimpleNamespace(db_path=econ_db, open_db=lambda: open_db(econ_db))
+    return EventsCog(_make_bot(), ctx)
+
+
+def _enable_econ(econ_db, **overrides) -> None:
+    values: dict[str, object] = {"enabled": True}
+    values.update(overrides)
+    with open_db(econ_db) as conn:
+        save_econ_settings(conn, ECON_GUILD, values)
+
+
+def _seed_streak(econ_db, *, streak: int, last_login_day: str, last_grace_day=None) -> None:
+    with open_db(econ_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO econ_streaks
+                (guild_id, user_id, current_streak, longest_streak,
+                 last_login_day, last_grace_day)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (ECON_GUILD, ECON_USER, streak, streak, last_login_day, last_grace_day),
+        )
+
+
+def _econ_message(*, booster: bool = False) -> MagicMock:
+    msg = MagicMock(spec=discord.Message)
+    guild = MagicMock()
+    guild.id = ECON_GUILD
+    msg.guild = guild
+    author = MagicMock(spec=discord.Member)
+    author.id = ECON_USER
+    author.premium_since = object() if booster else None
+    msg.author = author
+    channel = MagicMock()
+    channel.id = ECON_CHANNEL
+    msg.channel = channel
+    return msg
+
+
+def _days_ago(n: int) -> str:
+    import time as _t
+
+    return local_day_for(_t.time() - n * 86400, 0.0)
+
+
+def _today() -> str:
+    import time as _t
+
+    return local_day_for(_t.time(), 0.0)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Colour(0x123456)),
+)
+async def test_econ_disabled_is_noop(mock_notify, econ_db):
+    cog = _econ_cog(econ_db)  # economy left disabled
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_not_awaited()
+    with open_db(econ_db) as conn:
+        rows = conn.execute("SELECT COUNT(*) c FROM econ_logins").fetchone()
+    assert rows["c"] == 0
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Colour(0x123456)),
+)
+async def test_econ_first_login_pays_silently(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    # A day-1 login pays but does not DM (login payout is silent, spec §10).
+    mock_notify.assert_not_awaited()
+    with open_db(econ_db) as conn:
+        assert get_balance(conn, ECON_GUILD, ECON_USER) > 0
+        row = conn.execute(
+            "SELECT current_streak FROM econ_streaks WHERE guild_id=? AND user_id=?",
+            (ECON_GUILD, ECON_USER),
+        ).fetchone()
+    assert row["current_streak"] == 1
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Colour(0x123456)),
+)
+async def test_econ_repeat_same_day_no_second_login(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    with open_db(econ_db) as conn:
+        first = get_balance(conn, ECON_GUILD, ECON_USER)
+    await cog._process_economy_message(_econ_message())
+    with open_db(econ_db) as conn:
+        second = get_balance(conn, ECON_GUILD, ECON_USER)
+    assert first == second  # process_login returns None on the same local day
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Colour(0x123456)),
+)
+async def test_econ_milestone_dms(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    _seed_streak(econ_db, streak=6, last_login_day=_days_ago(1))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert any("milestone" in f.name.lower() for f in embed.fields)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Colour(0x123456)),
+)
+async def test_econ_grace_dms(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # Missed exactly one day, no grace used in the window → grace bridges it.
+    _seed_streak(econ_db, streak=4, last_login_day=_days_ago(2))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert any("saved" in f.name.lower() for f in embed.fields)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Colour(0x123456)),
+)
+async def test_econ_reset_below_three_is_silent(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # A short 2-day streak that breaks (3-day gap) resets — too trivial to DM.
+    _seed_streak(econ_db, streak=2, last_login_day=_days_ago(3))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_not_awaited()
+    with open_db(econ_db) as conn:
+        row = conn.execute(
+            "SELECT current_streak FROM econ_streaks WHERE guild_id=? AND user_id=?",
+            (ECON_GUILD, ECON_USER),
+        ).fetchone()
+    assert row["current_streak"] == 1  # it did reset, just silently
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Colour(0x123456)),
+)
+async def test_econ_reset_at_three_plus_dms(mock_notify, econ_db):
+    _enable_econ(econ_db)
+    # A meaningful streak (>=3) that breaks earns a "streak reset" DM.
+    _seed_streak(econ_db, streak=8, last_login_day=_days_ago(4))
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    mock_notify.assert_awaited_once()
+    embed = mock_notify.await_args.kwargs["embed"]
+    assert any("reset" in f.name.lower() for f in embed.fields)
+
+
+@patch("bot_modules.cogs.events_cog.notify_member", new_callable=AsyncMock)
+@patch(
+    "bot_modules.cogs.events_cog.resolve_accent_color",
+    new=AsyncMock(return_value=discord.Colour(0x123456)),
+)
+async def test_econ_qotd_reward_once_per_member(mock_notify, econ_db):
+    _enable_econ(econ_db, reward_qotd=10)
+    with open_db(econ_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO econ_qotd
+                (guild_id, channel_id, message_id, question, posted_by, local_day, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ECON_GUILD, ECON_CHANNEL, 999, "Q?", 1, _today(), 0.0),
+        )
+    cog = _econ_cog(econ_db)
+    await cog._process_economy_message(_econ_message())
+    with open_db(econ_db) as conn:
+        rewarded = conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"]
+    assert rewarded == 1
+    # A second same-day message must not re-reward the QOTD.
+    await cog._process_economy_message(_econ_message())
+    with open_db(econ_db) as conn:
+        rewarded2 = conn.execute("SELECT COUNT(*) c FROM econ_qotd_rewards").fetchone()["c"]
+    assert rewarded2 == 1
+
+
+@patch("bot_modules.cogs.events_cog.handle_level_progress", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.record_member_activity")
+@patch("bot_modules.cogs.events_cog.should_track_auto_delete_message", return_value=False)
+@patch("bot_modules.cogs.events_cog.award_message_xp", new_callable=AsyncMock)
+@patch("bot_modules.cogs.events_cog.enforce_spoiler_requirement", new_callable=AsyncMock)
+async def test_econ_hook_failure_never_breaks_on_message(
+    mock_spoiler, mock_award, mock_track, mock_activity, mock_level, cog
+):
+    """A raising economy branch must be swallowed so message/XP processing survives."""
+    mock_spoiler.return_value = False
+    mock_award.return_value = None
+    with patch.object(
+        EventsCog,
+        "_process_economy_message",
+        new=AsyncMock(side_effect=RuntimeError("boom")),
+    ) as mock_econ:
+        # Should not raise despite the economy hook blowing up.
+        await cog.on_message(_make_message())
+    mock_econ.assert_awaited_once()
+    mock_activity.assert_called_once()  # normal processing still completed

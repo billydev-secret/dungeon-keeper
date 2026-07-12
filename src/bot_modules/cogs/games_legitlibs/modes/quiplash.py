@@ -324,7 +324,8 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
 
             await mark_template_used(db, guild.id, template["template_id"])
         finally:
-            await end_game(db, game_id, player_count=len(player_ids), round_count=1)
+            await end_game(db, game_id, player_count=len(player_ids), round_count=1,
+                           bot=cog.bot, player_ids=player_ids)
             cog.bot.active_views.pop(game_id, None)
             cog._game_canceled.discard(game_id)
 

@@ -294,7 +294,8 @@ class TraditionalHostView(discord.ui.View):
             await interaction.followup.send(embed=embed)
 
         log.info("Game %s ended — %d players", self.game_id, len(participants))
-        await end_game(self.db, self.game_id, player_count=len(participants), round_count=total_q, payload=payload)
+        await end_game(self.db, self.game_id, player_count=len(participants), round_count=total_q, payload=payload,
+                       bot=self.bot, player_ids=participants)
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]
 

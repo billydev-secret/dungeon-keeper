@@ -262,6 +262,20 @@ def test_update_xp_coefficient(authed_client, fake_ctx):
     assert float(val) == 0.75
 
 
+def test_reaction_given_xp_coefficient_roundtrips(authed_client):
+    # Default surfaces on GET before any write.
+    before = authed_client.get("/api/config")
+    assert before.status_code == 200
+    assert before.json()["xp"]["reaction_given_xp"] == 0.34
+
+    put = authed_client.put("/api/config/xp", json={"reaction_given_xp": 0.5})
+    assert put.status_code == 200
+
+    after = authed_client.get("/api/config")
+    assert after.status_code == 200
+    assert after.json()["xp"]["reaction_given_xp"] == 0.5
+
+
 # ── PUT /api/config/prune ─────────────────────────────────────────────
 
 

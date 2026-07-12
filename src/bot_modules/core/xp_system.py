@@ -19,6 +19,7 @@ class XpSettings:
     message_word_xp: float = 0.08
     reply_bonus_xp: float = 0.33
     image_reaction_received_xp: float = 0.17
+    reaction_given_xp: float = 0.34
     cooldown_thresholds_seconds: tuple[int, int, int] = (10, 30, 60)
     cooldown_multipliers: tuple[float, float, float] = (0.35, 0.6, 0.85)
     duplicate_multiplier: float = 0.2
@@ -42,6 +43,7 @@ _FLOAT_COEFFS = [
     "message_word_xp",
     "reply_bonus_xp",
     "image_reaction_received_xp",
+    "reaction_given_xp",
     "duplicate_multiplier",
     "pair_streak_multiplier",
     "voice_award_xp",
@@ -121,6 +123,7 @@ XP_SOURCE_TEXT = "text"
 XP_SOURCE_REPLY = "reply"
 XP_SOURCE_VOICE = "voice"
 XP_SOURCE_IMAGE_REACT = "image_react"
+XP_SOURCE_REACTION_GIVEN = "reaction_given"
 XP_SOURCE_GRANT = "grant"
 
 

@@ -15,6 +15,7 @@ from discord import app_commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels.base_duel import BaseDuel
+from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
@@ -189,6 +190,12 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
             game_view = self.build_game_view(game.id)
             game_view.disable()
             await interaction.edit_original_response(embed=bust_embed, view=game_view)
+            await pay_game_rewards(
+                self.bot, game.guild_id,
+                [game.challenger_id, game.target_id],
+                [game.winner_id] if game.winner_id is not None else [],
+                self.GAME_KEY,
+            )
             return ("done", game.loser_id)
 
         return ("continue", None)

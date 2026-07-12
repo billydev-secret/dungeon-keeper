@@ -1,6 +1,6 @@
 # XP — Feature Spec
 
-A leveling system for Discord activity. Three independent sources push positive XP into a single per-member ledger: text messages (with a reply bonus), voice-channel participation, and reactions received on image posts. A handful of anti-grind multipliers attenuate text XP before it lands. Level is a quadratic function of total XP. XP only goes up — there is no decay.
+A leveling system for Discord activity. Four independent sources push positive XP into a single per-member ledger: text messages (with a reply bonus), voice-channel participation, reactions received on image posts, and reactions *given* to other members' messages. A handful of anti-grind multipliers attenuate text XP before it lands. Level is a quadratic function of total XP. XP only goes up — there is no decay.
 
 ## Commands
 
@@ -10,6 +10,7 @@ A leveling system for Discord activity. Three independent sources push positive 
 | `/xp_give member:<member>` | Slash | Mod, or a user in the per-guild grant-allowlist | Award a flat manual grant (default 20 XP) to a member; public confirmation |
 | Message activity | Listener | n/a | Text messages earn XP; replies to a human earn a bonus. See [[events-spec]] |
 | Image-reaction received | Listener | n/a | When a member's qualifying image post gets a reaction, the author earns a flat reaction-XP stipend. See [[events-spec]] |
+| Reaction given | Listener | n/a | When a member reacts to *another* member's message, the reactor earns a flat stipend, once per message ever. See [[events-spec]] |
 | Voice tick | Background loop | n/a | Members in a qualifying voice channel earn XP per completed interval |
 
 The dashboard exposes the leaderboard and a time-to-level histogram (any level 2–100), plus an admin config panel for the XP coefficients and the role/channel ids. See [[reporting-spec]] for the dashboard wrapper.
@@ -21,6 +22,7 @@ The dashboard exposes the leaderboard and a time-to-level histogram (any level 2
 - **Text message XP**: every qualified word in a non-bot, non-system message earns a small per-word amount. Replying to another human adds a flat reply bonus. Qualified words exclude URLs, custom Discord emoji, `:shortcode:` emoji, tokens shorter than 3 characters, and tokens with no alphanumerics. URL-only or emoji-only messages award nothing.
 - **Voice XP**: every completed voice interval (default 60 seconds) in a qualifying channel pays a flat amount. A channel qualifies when it has at least 2 non-bot humans and is not the guild's AFK channel. The qualification clock resets to zero when the human count drops below the threshold.
 - **Image-reaction XP**: when a non-bot reactor adds any reaction to a message whose author posted a non-spoilered image, the **author** receives a flat stipend. The reactor gets nothing. Self-reactions and bot reactions don't pay out.
+- **Reaction-given XP**: when a non-bot member reacts to *another* member's message, the **reactor** receives a flat stipend (default 0.34, coeff `xp_coeff_reaction_given_xp` — double the image-react rate). Awarded at most **once per (message, reactor) ever** via a dedup table, so react/unreact can't farm. No self-reactions, no bots. This is the same event that feeds the economy's XP→currency conversion (see [[economy-spec]] §3.2).
 
 ### Anti-grind multipliers (text only)
 
@@ -75,7 +77,7 @@ Crossing level 5 (the configured role-grant level) grants the level-5 role and p
 
 Per-guild settings, all editable from the dashboard XP panel:
 
-- **Algorithm coefficients** — per-word XP, reply bonus, image-reaction stipend, the three cooldown thresholds and their multipliers, duplicate-message multiplier, pair-streak threshold and multiplier, voice-award amount, voice-interval seconds, voice-minimum-humans, manual-grant amount, level-curve factor.
+- **Algorithm coefficients** — per-word XP, reply bonus, image-reaction stipend, reaction-given stipend, the three cooldown thresholds and their multipliers, duplicate-message multiplier, pair-streak threshold and multiplier, voice-award amount, voice-interval seconds, voice-minimum-humans, manual-grant amount, level-curve factor.
 - **Level-5 role** — the role granted on reaching level 5.
 - **Level-up log channel** — where per-level-up embeds post.
 - **Level-5 log channel** — where the level-5 milestone embed posts (can match the level-up channel; the role-grant level then de-duplicates).
@@ -86,4 +88,4 @@ Two internal knobs — the voice-tick poll period and the role-grant level itsel
 
 ## Stored data
 
-Per-guild and per-member: a totals row (total XP, cached level, last-message timestamp and fingerprint for the cooldown / duplicate multipliers), an append-only event ledger tagged by source (text, reply, voice, image-react, grant) with optional channel id, live voice-session state (current channel, qualifying-since timestamp, intervals already paid), a last-activity row for inactivity reports, a processed-messages ledger for backfill idempotency, and an append-only role-event audit (every grant and removal the bot sees, not just XP rewards). The pair-streak state lives only in memory and resets on bot restart. No DM data is ever stored.
+Per-guild and per-member: a totals row (total XP, cached level, last-message timestamp and fingerprint for the cooldown / duplicate multipliers), an append-only event ledger tagged by source (text, reply, voice, image-react, reaction-given, grant) with optional channel id, a per-(message, reactor) dedup table backing the once-ever reaction-given award, live voice-session state (current channel, qualifying-since timestamp, intervals already paid), a last-activity row for inactivity reports, a processed-messages ledger for backfill idempotency, and an append-only role-event audit (every grant and removal the bot sees, not just XP rewards). The pair-streak state lives only in memory and resets on bot restart. No DM data is ever stored.

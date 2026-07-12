@@ -14,6 +14,7 @@ from bot_modules.core.utils import format_user_for_log, get_guild_channel_or_thr
 from bot_modules.core.xp_system import (
     DEFAULT_XP_SETTINGS,
     XP_SOURCE_IMAGE_REACT,
+    XP_SOURCE_REACTION_GIVEN,
     XP_SOURCE_REPLY,
     XP_SOURCE_TEXT,
     AwardResult,
@@ -202,8 +203,14 @@ async def award_image_reaction_xp(
     db_path: Path,
     excluded_channel_ids: frozenset[int] | set[int],
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    *,
+    message: discord.Message | None = None,
 ) -> tuple[discord.Member, AwardResult] | None:
-    """Award XP to image poster when their image receives a reaction."""
+    """Award XP to image poster when their image receives a reaction.
+
+    ``message`` may be supplied pre-fetched so a single ``fetch_message`` can
+    feed both this and the reaction-given award; when omitted it is fetched.
+    """
     bot_user = bot.user
     if payload.guild_id is None or bot_user is None or payload.user_id == bot_user.id:
         return None
@@ -227,10 +234,11 @@ async def award_image_reaction_xp(
     if member is not None and member.bot:
         return None
 
-    try:
-        message = await channel.fetch_message(payload.message_id)
-    except (discord.Forbidden, discord.NotFound):
-        return None
+    if message is None:
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.Forbidden, discord.NotFound):
+            return None
 
     if not isinstance(message.author, discord.Member):
         author = guild.get_member(message.author.id)
@@ -265,3 +273,84 @@ async def award_image_reaction_xp(
     )
 
     return author, award
+
+
+async def award_reaction_given_xp(
+    payload: discord.RawReactionActionEvent,
+    bot: discord.Client,
+    db_path: Path,
+    excluded_channel_ids: frozenset[int] | set[int],
+    settings: XpSettings = DEFAULT_XP_SETTINGS,
+    *,
+    message: discord.Message | None = None,
+) -> tuple[discord.Member, AwardResult] | None:
+    """Award XP to the *reactor* for engaging with someone else's message.
+
+    Mirrors :func:`award_image_reaction_xp` (guild/channel resolution, the same
+    ``apply_xp_award`` path) but pays the person adding the reaction, once per
+    ``(guild, message, reactor)`` via the ``xp_reaction_awards`` dedup row —
+    the INSERT OR IGNORE rides the same transaction as the award. No self-award,
+    no bots (reactor or author). ``message`` may be supplied pre-fetched to avoid
+    a second ``fetch_message`` when the image-react award already fetched it.
+    """
+    bot_user = bot.user
+    if payload.guild_id is None or bot_user is None or payload.user_id == bot_user.id:
+        return None
+
+    guild = bot.get_guild(payload.guild_id)
+    if guild is None:
+        return None
+
+    channel = get_guild_channel_or_thread(guild, payload.channel_id)
+    if channel is None:
+        return None
+
+    channel_id = getattr(channel, "id", None)
+    if channel_id is None:
+        return None
+    parent_id = getattr(channel, "parent_id", None)
+    if not is_channel_xp_eligible(channel_id, parent_id, excluded_channel_ids):
+        return None
+
+    reactor = guild.get_member(payload.user_id)
+    if reactor is None or reactor.bot:
+        return None
+
+    if message is None:
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.Forbidden, discord.NotFound):
+            return None
+
+    author = message.author
+    if author.bot or author.id == payload.user_id:
+        return None
+
+    with open_db(db_path) as conn:
+        inserted = conn.execute(
+            """
+            INSERT OR IGNORE INTO xp_reaction_awards (guild_id, message_id, user_id)
+            VALUES (?, ?, ?)
+            """,
+            (guild.id, message.id, payload.user_id),
+        ).rowcount
+        if not inserted:
+            return None
+        award = apply_xp_award(
+            conn,
+            guild.id,
+            payload.user_id,
+            settings.reaction_given_xp,
+            event_source=XP_SOURCE_REACTION_GIVEN,
+            channel_id=channel_id,
+            settings=settings,
+        )
+
+    log.debug(
+        "Awarded %.2f reaction-given XP to %s for reacting to message %s.",
+        award.awarded_xp,
+        format_user_for_log(reactor),
+        message.id,
+    )
+
+    return reactor, award

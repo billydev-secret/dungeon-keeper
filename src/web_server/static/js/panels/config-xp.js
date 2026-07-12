@@ -69,6 +69,11 @@ export function mount(container) {
               <input type="number" name="image_reaction_received_xp" step="0.01" min="0" value="${xp.image_reaction_received_xp}" />
               <div class="field-hint">XP per reaction received on image posts (default 0.17)</div>
             </div>
+            <div class="field">
+              <label>Reaction Given XP</label>
+              <input type="number" name="reaction_given_xp" step="0.01" min="0" value="${xp.reaction_given_xp}" />
+              <div class="field-hint">XP to the reactor for reacting to someone else's message (default 0.34)</div>
+            </div>
 
             <div class="section-label">Cooldown</div>
             <div class="field">
@@ -157,6 +162,7 @@ export function mount(container) {
           message_word_xp: parseFloat(fd.get("message_word_xp")),
           reply_bonus_xp: parseFloat(fd.get("reply_bonus_xp")),
           image_reaction_received_xp: parseFloat(fd.get("image_reaction_received_xp")),
+          reaction_given_xp: parseFloat(fd.get("reaction_given_xp")),
           cooldown_thresholds_seconds: fd.get("cooldown_thresholds_seconds"),
           cooldown_multipliers: fd.get("cooldown_multipliers"),
           duplicate_multiplier: parseFloat(fd.get("duplicate_multiplier")),

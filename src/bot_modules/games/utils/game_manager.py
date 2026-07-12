@@ -3,6 +3,7 @@ import json
 import uuid
 import logging
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -199,8 +200,16 @@ async def end_game(
     player_count: int = 0,
     round_count: int = 0,
     payload: dict | None = None,
+    *,
+    bot=None,
+    player_ids: Sequence[int | str] | None = None,
 ):
-    """Write game to history and remove from games_active_games."""
+    """Write game to history and remove from games_active_games.
+
+    When *bot* and *player_ids* are supplied (only from a game's genuine
+    completion site), the economy faucet pays each participant. ``bot=None``
+    keeps abort/cleanup call sites payout-free and fully backward-compatible.
+    """
     row = await db.fetchone(
         "SELECT * FROM games_active_games WHERE game_id = ?", (game_id,)
     )
@@ -230,6 +239,25 @@ async def end_game(
     await db.execute("DELETE FROM games_active_games WHERE game_id = ?", (game_id,))
     _payload_locks.pop(game_id, None)
     log.info("Game %s ended and removed.", game_id)
+
+    if bot is not None and player_ids:
+        await _pay_party_rewards(bot, row, payload, player_ids)
+
+
+async def _pay_party_rewards(bot, row, payload: dict | None, player_ids: Sequence[int | str]) -> None:
+    """Fire the economy faucet for a completed party game; never raises."""
+    try:
+        from bot_modules.economy.game_rewards import pay_game_rewards, resolve_winners
+
+        channel = bot.get_channel(row["channel_id"])
+        guild = getattr(channel, "guild", None)
+        if guild is None:
+            return
+        game_type = row["game_type"]
+        winners = resolve_winners(game_type, payload or {})
+        await pay_game_rewards(bot, guild.id, list(player_ids), winners, game_type)
+    except Exception:
+        log.exception("party game payout failed for %s", row["game_id"])
 
 
 async def force_end_active_game(bot, db, game_id: str) -> None:

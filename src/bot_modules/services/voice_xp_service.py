@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import discord
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.core.utils import format_user_for_log
 from bot_modules.core.xp_system import (
     DEFAULT_XP_SETTINGS,
@@ -24,13 +24,59 @@ from bot_modules.core.xp_system import (
     list_voice_sessions,
     set_voice_session,
 )
+from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_service import (
+    EconSettings,
+    load_econ_settings,
+    process_login,
+)
 
 if TYPE_CHECKING:
+    import sqlite3 as _sqlite3
     from pathlib import Path
 
     from bot_modules.core.xp_system import AwardResult
 
 log = logging.getLogger("dungeonkeeper.voice_xp")
+
+# Sustained qualified voice time (seconds) that earns the daily voice login —
+# spec §3.1's 5-minute presence bar. econ_logins' PK keeps it once-per-day.
+VOICE_LOGIN_MIN_SECONDS = 300
+
+
+def _try_voice_login(
+    conn: _sqlite3.Connection,
+    guild_id: int,
+    member: discord.Member,
+    now_ts: float,
+    settings: EconSettings,
+    offset_hours: float,
+) -> None:
+    """Pay the daily voice login for a member past the presence bar.
+
+    Idempotency lives in ``process_login`` (econ_logins PK); the caller's cheap
+    existence check just spares the heavier path on repeat ticks. Fail-safe:
+    swallow-and-log so an economy error never aborts the shared tick transaction.
+    """
+    today = local_day_for(now_ts, offset_hours)
+    already = conn.execute(
+        "SELECT 1 FROM econ_logins WHERE guild_id = ? AND user_id = ? AND local_day = ? LIMIT 1",
+        (guild_id, member.id, today),
+    ).fetchone()
+    if already is not None:
+        return
+    try:
+        process_login(
+            conn,
+            settings,
+            guild_id,
+            member.id,
+            local_day=today,
+            source="voice",
+            booster=member.premium_since is not None,
+        )
+    except Exception:
+        log.exception("voice login failed for member %s in guild %s", member.id, guild_id)
 
 
 def is_qualifying_voice_channel(
@@ -66,6 +112,21 @@ async def process_voice_xp_tick(
     now_ts = time.time()
 
     with open_db(db_path) as conn:
+        # Lazily resolved per-guild economy config for the daily voice login:
+        # None once we know a guild's economy is disabled, so we load at most
+        # once per guild per tick and only when a member actually crosses the bar.
+        econ_cache: dict[int, tuple[EconSettings, float] | None] = {}
+
+        def _econ_for(gid: int) -> tuple[EconSettings, float] | None:
+            if gid not in econ_cache:
+                econ_settings = load_econ_settings(conn, gid)
+                econ_cache[gid] = (
+                    (econ_settings, get_tz_offset_hours(conn, gid))
+                    if econ_settings.enabled
+                    else None
+                )
+            return econ_cache[gid]
+
         for guild in bot.guilds:
             g_settings = settings_for(guild.id) if settings_for is not None else settings
             for channel in guild.voice_channels:
@@ -117,6 +178,14 @@ async def process_voice_xp_tick(
                             awarded_intervals=0,
                         )
                         continue
+
+                    # Daily voice login once sustained qualified time clears the bar.
+                    if now_ts - session.qualified_since >= VOICE_LOGIN_MIN_SECONDS:
+                        econ = _econ_for(guild.id)
+                        if econ is not None:
+                            _try_voice_login(
+                                conn, guild.id, member, now_ts, econ[0], econ[1]
+                            )
 
                     intervals_due = completed_voice_intervals(session, now_ts, g_settings)
                     if intervals_due <= 0:

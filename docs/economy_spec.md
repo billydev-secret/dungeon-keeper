@@ -80,11 +80,11 @@ XP earned that local day converts to currency.
   real rates: a 2-hour qualifying voice hangout ≈ 200 XP ≈ 13 coins at the default rate.
   The conversion rate and all XP coefficients are the scaling parameters in the config
   menu (§9); income anchors are tuned there against the metrics card, not hardcoded.
-- **New XP source `reaction_given`** (decided): reacting to someone else's message pays
-  the *reactor* XP — default 0.34 (double the existing image-react rate), tunable via
-  `xp_coeff_reaction_given_xp`. Feeds regular XP/leaderboards *and* (via conversion)
-  currency. Guards: no self-reactions, no bots, one award per (message, reactor) ever
-  (dedup table), so react/unreact can't farm.
+- **New XP source `reaction_given`** (live, Stage 1): reacting to someone else's message
+  pays the *reactor* XP — default 0.34 (double the existing image-react rate), tunable via
+  `xp_coeff_reaction_given_xp` on the dashboard XP panel. Feeds regular XP/leaderboards
+  *and* (via conversion) currency. Guards: no self-reactions, no bots, one award per
+  (message, reactor) ever (dedup table), so react/unreact can't farm. See [[xp-spec]].
 - Conversion is silent (ledger entry: "Daily activity"). Runs from the economy hourly
   loop when a guild's local day rolls; idempotent via a per-(guild, user, local_day)
   conversion row.
@@ -99,7 +99,9 @@ XP earned that local day converts to currency.
   QOTD (dedup row per member). No scheduler — mods run it when they want.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and at each duel cog's
-  resolution point.
+  resolution point. *Stage-1 note:* participation reaches only games with a tracked
+  roster — the six duel games plus ttl/traditional/legitlibs; other party cogs record
+  just the host today, so roster enrichment is a planned follow-up (§12).
 - **Game win +20:** paid for **both** game architectures in v1 (decided). Duel games
   read their explicit `winner_id` (chicken, hot potato, musical chairs, pressure
   cooker, quickdraw, …). Party games get a per-game-type winner resolver over the
@@ -233,7 +235,7 @@ crash-restart), ticking hourly:
 
 | On tick | Action |
 |---|---|
-| Guild-local day rolled | XP→currency conversion; streak evaluation (grace/reset); daily quest rotation; QOTD reward window closes |
+| Guild-local day rolled | XP→currency conversion (only the most recent marked local day — no retroactive backlog after an outage, §12); streak evaluation (grace/reset); daily quest rotation; QOTD reward window closes |
 | Every tick (hourly) | Rental billing + grace retries; pending-claim expiry; (v2) spotlight expiry; (rooms stage) room archive/purge |
 | Guild-local ISO week rolled | Weekly quest activation; community settlement; metrics rollup; (v2) spotlight inventory reset |
 
@@ -258,6 +260,14 @@ nothing and misses nothing (catch-up on next tick).
   tickbox is v2.
 - Reaction farming: one `reaction_given` award per (message, reactor), ever.
 - Wallets are integer; XP remainders carry as fractions on conversion rows only.
+- Multi-day outage: the conversion loop converts only the most recent marked local day
+  and jumps forward — intervening days' XP is not converted retroactively (prevents
+  backlog minting when a guild re-enables the economy; same trade the games scheduler
+  makes).
+- Game participation payouts v1 cover games with a tracked roster (all six duel games;
+  ttl/traditional/legitlibs party games). Most party cogs record only the host in the
+  session tracker, so they don't pay participation yet — enriching their rosters is a
+  planned follow-up (see plan).
 - Guild loses Level 2 / Enhanced Role Styles mid-rental: perk enters grace as if unpaid?
   No — billing pauses the affected perk (icon/gradient) and DMs the owner; auto-resumes
   when the feature returns (no charge while suspended).

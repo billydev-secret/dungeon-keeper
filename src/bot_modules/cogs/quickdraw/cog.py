@@ -17,6 +17,7 @@ from discord import app_commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.duels import db as duels_db
 from bot_modules.duels.base_duel import BaseDuel
+from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
@@ -177,6 +178,12 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                     last_action_at=time.time(),
                 )
                 game.qd_state = "COMPLETE"
+                await pay_game_rewards(
+                    self.bot, game.guild_id,
+                    [game.challenger_id, game.target_id],
+                    [game.winner_id] if game.winner_id is not None else [],
+                    self.GAME_KEY,
+                )
                 if guild:
                     dview = self.build_game_view(game_id)
                     dview.disable()
@@ -419,6 +426,10 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             await interaction.edit_original_response(
                 embed=self.render_game_state(game, guild), view=view
             )
+            await pay_game_rewards(
+                self.bot, game.guild_id,
+                [game.challenger_id, game.target_id], [winner_id], self.GAME_KEY,
+            )
             return ("done", loser_id)
 
         if game.qd_state == "DRAW":
@@ -476,6 +487,12 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             view.disable()
             await interaction.edit_original_response(
                 embed=self.render_game_state(game, guild), view=view
+            )
+            await pay_game_rewards(
+                self.bot, game.guild_id,
+                [game.challenger_id, game.target_id],
+                [game.winner_id] if game.winner_id is not None else [],
+                self.GAME_KEY,
             )
             return ("done", game.loser_id)
 
