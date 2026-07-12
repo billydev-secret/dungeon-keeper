@@ -54,7 +54,7 @@ If the bot has been removed from the guild between the request being sent and th
 The panel auto-bumps to the bottom of its channel on any new message there, debounced to one bump per **2 seconds** per guild to avoid thrashing during busy periods.
 
 ### Revoke
-Either party can `/dm_revoke` the other. The consent pair is removed; if the original request DM is still on file, it gets edited in place with a revoke embed (buttons cleared). Both sides receive a revoke DM. The audit log records `relationship_revoked` with the actor's name.
+Either party can `/dm_revoke` the other. The consent pair is removed; if the original request DM is still on file, it gets edited in place with a revoke embed (buttons cleared). Both sides receive a revoke DM; the invoker's slash-command confirmation is ephemeral, so nothing about the revoke is visible in the channel. The audit log records `relationship_revoked` with the actor's name.
 
 ### Status check
 `/dm_status` is a one-line "connected" or "no connection yet" lookup against the in-memory consent map — it does not surface the original reason, who initiated, or when.

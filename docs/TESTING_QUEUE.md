@@ -9,6 +9,17 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### DM Perms — `/dm_revoke` confirmation now ephemeral  (uncommitted)
+
+The final "Done — your connection with @user has been removed" reply was
+posted publicly in the channel; it's now ephemeral. Revoke DMs to both
+parties, the audit log, and the in-place edit of the original request DM are
+unchanged.
+
+- [ ] `/dm_revoke` an existing connection → only you see the confirmation;
+      nothing appears in the channel.
+- [ ] Both parties still receive the revoke DM.
+
 ### Games — cross-game global question pool  (uncommitted)
 
 Every bank manager gained a per-question **Pool** button (copies the question

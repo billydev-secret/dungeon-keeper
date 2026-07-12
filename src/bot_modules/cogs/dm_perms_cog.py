@@ -871,7 +871,8 @@ class DmPermsCog(commands.Cog):
             ),
         )
         await interaction.response.send_message(
-            f"Done — your connection with {user.mention} has been removed."
+            f"Done — your connection with {user.mention} has been removed.",
+            ephemeral=True,
         )
 
     @app_commands.command(name="dm_status", description="Check whether mutual DM permission exists with a user.")
