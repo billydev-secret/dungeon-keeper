@@ -44,7 +44,7 @@ from web_server.deps import (
 router = APIRouter()
 _log = logging.getLogger("dungeonkeeper.web.economy_manager")
 
-_QTYPES = ("daily", "weekly", "community", "event")
+_QTYPES = ("daily", "weekly", "monthly", "community", "event")
 # The AI idea generator has no prompt shape for trigger-paid event quests.
 _AI_QTYPES = ("daily", "weekly", "community")
 
@@ -68,6 +68,7 @@ class QuestCreate(BaseModel):
     trigger_words: str = Field(default="", max_length=1000)
     trigger_channel_id: int | None = None
     trigger_kind: str = Field(default="", max_length=32)
+    target_count: int = Field(default=1, ge=1, le=10000)
 
 
 class QuestUpdate(BaseModel):
@@ -90,6 +91,7 @@ class QuestUpdate(BaseModel):
     trigger_words: str | None = Field(default=None, max_length=1000)
     trigger_channel_id: int | None = None
     trigger_kind: str | None = Field(default=None, max_length=32)
+    target_count: int | None = Field(default=None, ge=1, le=10000)
 
 
 class QuestGenerateBody(BaseModel):
@@ -152,6 +154,7 @@ def _quest_dict(row: sqlite3.Row | None) -> dict:
         "created_at": row["created_at"],
         "trigger_words": row["trigger_words"],
         "trigger_kind": row["trigger_kind"],
+        "target_count": int(row["target_count"]),
         # Stringified: channel snowflakes overflow JS number precision.
         "trigger_channel_id": (
             str(row["trigger_channel_id"])
@@ -257,6 +260,7 @@ async def create_quest(
                     trigger_words=body.trigger_words,
                     trigger_channel_id=body.trigger_channel_id,
                     trigger_kind=body.trigger_kind,
+                    target_count=body.target_count,
                 )
             except ValueError as exc:
                 # Bad qtype/trigger_kind pairing from the service validator.

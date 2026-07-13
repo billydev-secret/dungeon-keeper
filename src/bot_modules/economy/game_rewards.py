@@ -124,13 +124,19 @@ async def pay_game_rewards(
 
         await asyncio.to_thread(_credit)
 
-        kind = "duel" if game_type in _DUEL_GAME_TYPES else "party_game"
+        is_duel = game_type in _DUEL_GAME_TYPES
+        kind = "duel" if is_duel else "party_game"
         # Namespace with the game type: duel ids are per-type table PKs, so
         # chicken #5 and quickdraw #5 must not share one occurrence key.
         scoped = f"{game_type}:{occurrence}" if occurrence is not None else None
         await _fire_triggers(
             bot, guild, settings, kind, participants, boosters, scoped
         )
+        if winners:
+            win_kind = "duel_win" if is_duel else "game_win"
+            await _fire_triggers(
+                bot, guild, settings, win_kind, sorted(winners), boosters, scoped
+            )
     except Exception:
         log.exception("pay_game_rewards failed for guild %s (%s)", guild_id, game_type)
 

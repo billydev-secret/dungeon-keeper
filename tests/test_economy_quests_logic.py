@@ -64,9 +64,19 @@ def test_quest_period_community_is_once():
     assert quest_period("community", "2026-07-10") == "once"
 
 
+def test_quest_period_monthly_is_calendar_month():
+    # Plain calendar months: the window opens on the 1st, guild-local —
+    # no ISO-style shifting at year/month boundaries.
+    assert quest_period("monthly", "2026-07-01") == "2026-07"
+    assert quest_period("monthly", "2026-07-31") == "2026-07"
+    assert quest_period("monthly", "2026-08-01") == "2026-08"
+    assert quest_period("monthly", "2026-12-31") == "2026-12"
+    assert quest_period("monthly", "2027-01-01") == "2027-01"
+
+
 def test_quest_period_unknown_raises():
     with pytest.raises(ValueError):
-        quest_period("monthly", "2026-07-10")
+        quest_period("yearly", "2026-07-10")
 
 
 def test_quest_period_event_raises():
@@ -98,6 +108,11 @@ def test_occurrence_period_is_keyed_to_the_occurrence():
         (["weekly"] * 5 + ["daily"], "weekly", False),
         # a daily active does not eat a weekly slot
         (["daily"], "weekly", True),
+        # monthly: up to five active, own slot pool
+        ([], "monthly", True),
+        (["monthly"] * 4, "monthly", True),
+        (["monthly"] * 5, "monthly", False),
+        (["weekly"] * 5, "monthly", True),
         # community: uncapped
         (["community"] * 20, "community", True),
         ([], "community", True),
@@ -124,7 +139,7 @@ def test_can_activate_event(existing_kinds, kind, expected):
 
 def test_can_activate_unknown_raises():
     with pytest.raises(ValueError):
-        can_activate([], "monthly")
+        can_activate([], "yearly")
 
 
 # ── pick_rotation: cursor cycling ─────────────────────────────────────
@@ -168,7 +183,8 @@ def test_pick_rotation_full_cycle():
         ("daily", (10, 20)),
         ("weekly", (25, 75)),
         ("community", None),
-        ("monthly", None),
+        ("monthly", (75, 200)),
+        ("yearly", None),
     ],
 )
 def test_reward_band(qtype, expected):

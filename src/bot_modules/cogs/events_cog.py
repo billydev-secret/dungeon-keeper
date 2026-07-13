@@ -47,7 +47,10 @@ from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.utils import format_guild_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
 from bot_modules.economy.logic import local_day_for
-from bot_modules.services.economy_quests_service import fire_trigger_inline
+from bot_modules.services.economy_quests_service import (
+    fire_trigger_inline,
+    fire_trigger_quests,
+)
 from bot_modules.services.economy_service import (
     EconSettings,
     LoginOutcome,
@@ -701,6 +704,17 @@ class EventsCog(commands.Cog):
             isinstance(message.author, discord.Member)
             and message.author.premium_since is not None
         )
+        message_id = message.id
+        parent_id = getattr(message.channel, "parent_id", None)
+        channel_ids = tuple(c for c in (channel_id, parent_id) if c is not None)
+        # A reply counts only against someone ELSE's message. When the
+        # reference isn't resolved in cache we can't verify the author, so it
+        # counts — the dedup and target still bound the payout.
+        ref = message.reference
+        resolved = ref.resolved if ref is not None else None
+        is_reply = ref is not None and not (
+            isinstance(resolved, discord.Message) and resolved.author.id == user_id
+        )
 
         def _econ_work() -> tuple[EconSettings, LoginOutcome, int] | None:
             with self.ctx.open_db() as conn:
@@ -737,14 +751,25 @@ class EventsCog(commands.Cog):
                     if newly_awarded:
                         # First qualifying reply → the qotd_reply quest
                         # trigger (silent; wallet/quests carry the news).
-                        fire_trigger_inline(
-                            conn,
-                            guild_id,
-                            "qotd_reply",
-                            user_id,
+                        fire_trigger_quests(
+                            conn, settings, guild_id, "qotd_reply", user_id,
+                            local_day=today,
                             occurrence=str(int(qotd["id"])),
                             booster=booster,
                         )
+                # Message/reply quest triggers (usually counted quests —
+                # occurrence = the message, so nothing double-counts).
+                fire_trigger_quests(
+                    conn, settings, guild_id, "message_sent", user_id,
+                    local_day=today, occurrence=str(message_id),
+                    booster=booster, channel_ids=channel_ids,
+                )
+                if is_reply:
+                    fire_trigger_quests(
+                        conn, settings, guild_id, "reply_sent", user_id,
+                        local_day=today, occurrence=str(message_id),
+                        booster=booster, channel_ids=channel_ids,
+                    )
                 if outcome is None:
                     return None
                 return settings, outcome, prior_streak
@@ -874,6 +899,33 @@ class EventsCog(commands.Cog):
                 settings=cfg.xp_settings,
                 db_path=self.ctx.db_path,
             )
+            # Reaction quest trigger — `given` is non-None only when the XP
+            # dedup admitted a NEW (message, reactor) pair, so the quest
+            # inherits the farm guard (no self-reacts, no repeats, no bots).
+            _guild_id = payload.guild_id
+            _channel = getattr(message, "channel", None)
+            _parent_id = getattr(_channel, "parent_id", None)
+            _channel_ids = tuple(
+                c for c in (payload.channel_id, _parent_id) if c is not None
+            )
+            _booster = (
+                isinstance(reactor, discord.Member)
+                and reactor.premium_since is not None
+            )
+
+            def _fire_reaction_quests():
+                with self.ctx.open_db() as conn:
+                    fire_trigger_inline(
+                        conn,
+                        _guild_id,
+                        "reaction_given",
+                        reactor.id,
+                        occurrence=str(payload.message_id),
+                        booster=_booster,
+                        channel_ids=_channel_ids,
+                    )
+
+            await asyncio.to_thread(_fire_reaction_quests)
 
         try:
             result = await award_image_reaction_xp(

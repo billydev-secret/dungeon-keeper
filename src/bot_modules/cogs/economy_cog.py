@@ -49,6 +49,7 @@ from bot_modules.services.economy_quests_service import (
     fire_trigger_inline,
     fire_trigger_quests,
     get_photo_card,
+    get_progress,
     list_trigger_quests,
 )
 from bot_modules.services.economy_rentals_service import (
@@ -1054,6 +1055,10 @@ class EconomyCog(commands.Cog):
                 lines.append(_progress_bar(q["current"], q["target"]))
             else:
                 lines.append(_QUEST_STATE_LABEL.get(q["state"], ""))
+                if q.get("progress_target") and q["state"] not in ("done", "pending"):
+                    lines.append(
+                        _progress_bar(q["progress_current"], q["progress_target"])
+                    )
             embed.add_field(name=header, value="\n".join(lines), inline=False)
 
         claimable = [q for q in quests_state if q["state"] == "claimable"]
@@ -1125,6 +1130,12 @@ class EconomyCog(commands.Cog):
                     ).fetchone()
                     kind = str(row["trigger_kind"] or "")
                     has_trigger = bool(str(row["trigger_words"] or "").strip())
+                    target = int(row["target_count"])
+                    if kind and target > 1:
+                        entry["progress_current"] = get_progress(
+                            conn, quest_id, user_id, period
+                        )
+                        entry["progress_target"] = target
                     if claim is None:
                         # Trigger quests never enter the claim select — the
                         # phrase/game event IS the verification, so a manual

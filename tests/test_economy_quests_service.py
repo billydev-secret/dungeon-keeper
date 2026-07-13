@@ -32,6 +32,7 @@ from bot_modules.services.economy_quests_service import (
     fire_trigger_inline,
     fire_trigger_quests,
     get_photo_card,
+    get_progress,
     get_quest,
     list_income_sources,
     list_kind_triggered_quests,
@@ -84,6 +85,7 @@ def _make(
     trigger_words="",
     trigger_channel_id=None,
     trigger_kind="",
+    target_count=1,
 ):
     qid = create_quest(
         conn,
@@ -102,6 +104,7 @@ def _make(
         trigger_words=trigger_words,
         trigger_channel_id=trigger_channel_id,
         trigger_kind=trigger_kind,
+        target_count=target_count,
     )
     if active:
         set_quest_active(conn, guild_id, qid, True)
@@ -137,7 +140,7 @@ def test_create_unknown_type_raises(db):
                 GUILD,
                 title="x",
                 description="",
-                qtype="monthly",
+                qtype="yearly",
                 reward=1,
                 signoff=0,
                 criteria="",
@@ -1041,6 +1044,72 @@ def test_fire_respects_channel_scope(db):
             channel_ids=(333, 222),  # thread + parent
         )
         assert [int(q["id"]) for q, _ in fired] == [scoped]
+
+
+def test_target_count_validation(db):
+    with open_db(db) as conn:
+        with pytest.raises(ValueError):  # needs a trigger to count
+            _make(conn, qtype="weekly", target_count=5)
+        with pytest.raises(ValueError):  # events pay every occurrence
+            _make(conn, qtype="event", trigger_kind="duel", target_count=5)
+        with pytest.raises(ValueError):
+            _make(conn, qtype="daily", trigger_kind="duel", target_count=0)
+        qid = _make(conn, qtype="weekly", trigger_kind="reaction_given", target_count=5)
+        assert _get(conn, GUILD, qid)["target_count"] == 5
+        # Patching the trigger away while a target remains is rejected.
+        with pytest.raises(ValueError):
+            update_quest(conn, GUILD, qid, {"trigger_kind": ""})
+
+
+def test_counted_quest_pays_at_target_with_occurrence_dedup(db):
+    with open_db(db) as conn:
+        qid = _make(
+            conn, qtype="weekly", trigger_kind="reply_sent",
+            reward=30, target_count=3,
+        )
+
+        def fire(occ, day="2026-07-13"):
+            return fire_trigger_quests(
+                conn, SETTINGS, GUILD, "reply_sent", USER,
+                local_day=day, occurrence=occ, booster=False,
+            )
+
+        assert fire("m1") == []            # 1/3
+        assert fire("m1") == []            # replayed occurrence: still 1/3
+        assert fire("m2") == []            # 2/3
+        assert get_progress(conn, qid, USER, "2026-W29") == 2
+        fired = fire("m3")                 # 3/3 → pays
+        assert len(fired) == 1 and fired[0][1].paid == 30
+        assert get_balance(conn, GUILD, USER) == 30
+        assert fire("m4") == []            # past target: no double pay
+        # Next ISO week: a fresh count from zero.
+        assert fire("n1", day="2026-07-20") == []
+        assert get_progress(conn, qid, USER, "2026-W30") == 1
+
+
+def test_counted_quest_needs_occurrence(db):
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="party_game", reward=10, target_count=2)
+        assert fire_trigger_quests(
+            conn, SETTINGS, GUILD, "party_game", USER,
+            local_day="2026-07-13", occurrence=None, booster=False,
+        ) == []
+        assert get_balance(conn, GUILD, USER) == 0
+
+
+def test_monthly_quest_claims_once_per_month(db):
+    with open_db(db) as conn:
+        qid = _make(conn, qtype="monthly", reward=100)
+        out = claim_quest(
+            conn, SETTINGS, GUILD, qid, USER, period="2026-07", booster=False
+        )
+        assert out.state == "paid" and out.paid == 100
+        with pytest.raises(ValueError):
+            claim_quest(
+                conn, SETTINGS, GUILD, qid, USER, period="2026-07", booster=False
+            )
+        claim_quest(conn, SETTINGS, GUILD, qid, USER, period="2026-08", booster=False)
+        assert get_balance(conn, GUILD, USER) == 200
 
 
 def test_fire_trigger_inline_loads_settings_and_pays(db):

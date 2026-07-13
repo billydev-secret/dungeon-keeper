@@ -8,12 +8,13 @@ import {
 import { toast, confirmDialog, promptDialog } from "../ui.js";
 
 // Advisory reward bands (client-side hint only — the server saves any value).
-const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75] };
+const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75], monthly: [75, 200] };
 
 // Plain-language cadence per quest type (shown under the Type select).
 const TYPE_HINTS = {
   daily: "Members can complete it once per day (guild-local midnight). One daily can be active at a time; use a rotate tag to cycle a pool.",
   weekly: "Members can complete it once per ISO week. Up to five can be active.",
+  monthly: "Members can complete it once per calendar month (starts on the 1st, guild-local). Up to five can be active.",
   community: "One shared goal for the whole server. You track progress and settle the payout from the Community goals card.",
   event: "Pays by itself every time the trigger happens — no claims, no daily/weekly cap. One active event quest per trigger.",
 };
@@ -92,6 +93,7 @@ function render(container, members, channels) {
               <select name="qtype">
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
+                <option value="monthly">Monthly</option>
                 <option value="community">Community goal</option>
                 <option value="event">Event (every time it happens)</option>
               </select>
@@ -140,6 +142,9 @@ function render(container, members, channels) {
               `<option value="${k}">${esc(v)}</option>`).join("")}
             </select>
             <div class="field-hint" data-kind-hint></div></div>
+          <div class="field" data-target-count style="display:none;"><label>How many times</label>
+            <input type="number" name="target_count" min="1" max="10000" step="1" value="1" style="max-width:110px;" />
+            <div class="field-hint">1 = the first occurrence completes it. Higher = a counted quest ("do it N times this period") with a progress bar on /quests.</div></div>
 
           <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
             <input type="checkbox" name="signoff" /> Requires manager sign-off
@@ -298,7 +303,8 @@ async function refreshRentals(container, members) {
 function questVerification(q) {
   const pay = q.signoff ? "sign-off" : "instant";
   if (q.trigger_kind && KIND_LABELS[q.trigger_kind]) {
-    return `<span title="${esc(KIND_LABELS[q.trigger_kind])}">${esc(KIND_LABELS[q.trigger_kind].split(" ")[0])} game trigger</span> · ${pay}`;
+    const times = (q.target_count || 1) > 1 ? ` ×${q.target_count}` : "";
+    return `<span title="${esc(KIND_LABELS[q.trigger_kind])}">${esc(KIND_LABELS[q.trigger_kind].split(" ")[0])} game trigger${times}</span> · ${pay}`;
   }
   if (q.trigger_words) {
     return `<span title="${esc(q.trigger_words)}">🗣️ phrase</span> · ${pay}`;
@@ -313,12 +319,14 @@ function renderSlotSummary(container, quests) {
   const active = quests.filter((q) => q.active);
   const daily = active.filter((q) => q.qtype === "daily").length;
   const weekly = active.filter((q) => q.qtype === "weekly").length;
+  const monthly = active.filter((q) => q.qtype === "monthly").length;
   const kinds = active
     .filter((q) => q.qtype === "event" && q.trigger_kind)
     .map((q) => (KIND_LABELS[q.trigger_kind] || q.trigger_kind).split(" ")[0]);
   const parts = [
     `Active slots: daily ${daily}/1`,
     `weekly ${weekly}/5`,
+    `monthly ${monthly}/5`,
     `event ${kinds.length ? kinds.join(" ") : "none"}`,
   ];
   host.textContent = parts.join(" · ");
@@ -501,6 +509,8 @@ function wireAuthoring(container, channels) {
   const kindField = form.querySelector("[data-trigger-kind]");
   const kindHint = form.querySelector("[data-kind-hint]");
   const kindSel = form.querySelector("[name=trigger_kind]");
+  const targetField = form.querySelector("[data-target-count]");
+  const targetInput = form.querySelector("[name=target_count]");
   const submitBtn = form.querySelector("[data-submit-quest]");
   const cancelBtn = form.querySelector("[data-cancel-edit]");
   const authorLabel = container.querySelector("[data-author-label]");
@@ -546,6 +556,10 @@ function wireAuthoring(container, channels) {
     wordsField.style.display = mode === "phrase" && !isCommunity ? "" : "none";
     channelField.style.display = channelScoped && !isCommunity ? "" : "none";
     kindField.style.display = mode === "game" && !isCommunity ? "" : "none";
+    // Counted quests need a trigger to count and a calendar cadence to
+    // count within — events pay every occurrence, no target.
+    const countable = mode === "game" && ["daily", "weekly", "monthly"].includes(qtype);
+    targetField.style.display = countable ? "" : "none";
     updateKindHint();
   };
   rewardInput.addEventListener("input", updateHint);
@@ -586,6 +600,7 @@ function wireAuthoring(container, channels) {
     form.querySelector("[name=trigger_words]").value = q.trigger_words || "";
     triggerPicker.setValue(q.trigger_channel_id || "0");
     if (q.trigger_kind) kindSel.value = q.trigger_kind;
+    targetInput.value = q.target_count ?? 1;
     setCompletion(q.trigger_kind ? "game" : (q.trigger_words ? "phrase" : "manual"));
     authorLabel.textContent = `Editing: ${q.title}`;
     submitBtn.textContent = "Save changes";
@@ -614,12 +629,16 @@ function wireAuthoring(container, channels) {
       trigger_words: "",
       trigger_channel_id: null,
       trigger_kind: "",
+      target_count: 1,
     };
     if (qtype === "community") {
       const t = form.querySelector("[name=community_target]").value;
       body.community_target = t === "" ? null : parseInt(t, 10);
     } else if (mode === "game") {
       body.trigger_kind = kindSel.value;
+      if (["daily", "weekly", "monthly"].includes(qtype)) {
+        body.target_count = Math.max(1, parseInt(targetInput.value, 10) || 1);
+      }
       if (CHANNEL_SCOPED_KINDS.has(kindSel.value)) {
         const trigCh = triggerPicker.getValue();
         body.trigger_channel_id = !trigCh || trigCh === "0" ? null : trigCh;

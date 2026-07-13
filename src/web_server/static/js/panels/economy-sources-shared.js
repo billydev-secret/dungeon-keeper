@@ -15,7 +15,14 @@ export const KIND_LABELS = {
   bio_set: "📇 Set or update your bio",
   media_post: "🖼️ Post an image (channel-scopable)",
   pen_pal: "💌 Get matched with a Pen Pal",
+  message_sent: "💬 Send a message (channel-scopable)",
+  reply_sent: "↩️ Reply to someone's message (channel-scopable)",
+  reaction_given: "👍 React to someone's message (channel-scopable)",
+  game_win: "🏆 Win a party game",
+  duel_win: "🥇 Win a duel / PvP challenge",
 };
 
 // Kinds whose quests can carry a trigger-channel scope.
-export const CHANNEL_SCOPED_KINDS = new Set(["media_post"]);
+export const CHANNEL_SCOPED_KINDS = new Set([
+  "media_post", "message_sent", "reply_sent", "reaction_given",
+]);
