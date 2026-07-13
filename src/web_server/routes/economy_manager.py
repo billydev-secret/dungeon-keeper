@@ -62,6 +62,8 @@ class QuestCreate(BaseModel):
     ends_at: float | None = None
     rotate_tag: str = Field(default="", max_length=64)
     community_target: int | None = Field(default=None, ge=0)
+    trigger_words: str = Field(default="", max_length=1000)
+    trigger_channel_id: int | None = None
 
 
 class QuestUpdate(BaseModel):
@@ -81,6 +83,8 @@ class QuestUpdate(BaseModel):
     ends_at: float | None = None
     rotate_tag: str | None = Field(default=None, max_length=64)
     community_target: int | None = Field(default=None, ge=0)
+    trigger_words: str | None = Field(default=None, max_length=1000)
+    trigger_channel_id: int | None = None
 
 
 class QuestGenerateBody(BaseModel):
@@ -136,6 +140,13 @@ def _quest_dict(row: sqlite3.Row | None) -> dict:
         "community_target": row["community_target"],
         "created_by": row["created_by"],
         "created_at": row["created_at"],
+        "trigger_words": row["trigger_words"],
+        # Stringified: channel snowflakes overflow JS number precision.
+        "trigger_channel_id": (
+            str(row["trigger_channel_id"])
+            if row["trigger_channel_id"] is not None
+            else None
+        ),
     }
 
 
@@ -231,6 +242,8 @@ async def create_quest(
                 rotate_tag=body.rotate_tag,
                 community_target=body.community_target,
                 created_by=user.user_id,
+                trigger_words=body.trigger_words,
+                trigger_channel_id=body.trigger_channel_id,
             )
             return _quest_dict(quests_svc.get_quest(conn, guild_id, quest_id))
 

@@ -1,12 +1,14 @@
 """Pure quest math — no discord, no database (spec §4).
 
 The claim ``period`` model, the library slot rule, the rotate-pool cursor,
-and the reward bands. Everything is deterministic on its inputs so the ISO
-week boundaries, slot matrix, and rotation cycling stay table-testable.
+the reward bands, and the trigger-phrase matcher. Everything is deterministic
+on its inputs so the ISO week boundaries, slot matrix, rotation cycling, and
+phrase-boundary rules stay table-testable.
 """
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 # Library slot limits per guild: 1 active daily, up to 5 active weeklies,
@@ -86,3 +88,52 @@ def reward_band(qtype: str) -> tuple[int, int] | None:
     Community has no band (author's call).
     """
     return _REWARD_BANDS.get(qtype)
+
+
+# ── trigger-phrase verification (spec §4.4) ───────────────────────────
+
+
+def parse_trigger_words(raw: str) -> list[str]:
+    """Split a stored ``trigger_words`` value into clean phrases.
+
+    Phrases are separated by commas or newlines; surrounding whitespace is
+    stripped, internal runs of whitespace collapse to one space, and
+    duplicates (case-insensitive) keep their first occurrence.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for chunk in re.split(r"[,\n]", raw or ""):
+        phrase = " ".join(chunk.split())
+        if not phrase:
+            continue
+        key = phrase.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(phrase)
+    return out
+
+
+def compile_trigger_pattern(words: list[str]) -> re.Pattern[str] | None:
+    """One case-insensitive pattern matching any phrase as a whole word.
+
+    ``(?<!\\w)…(?!\\w)`` instead of ``\\b`` so phrases that start or end with
+    non-word characters (e.g. ``:wave:``) still anchor correctly, and "gm"
+    never matches inside "dogma". Whitespace inside a phrase matches any
+    whitespace run. None when there are no phrases.
+    """
+    if not words:
+        return None
+    alternatives = [
+        r"\s+".join(re.escape(token) for token in phrase.split())
+        for phrase in words
+    ]
+    return re.compile(
+        r"(?<!\w)(?:" + "|".join(alternatives) + r")(?!\w)",
+        re.IGNORECASE,
+    )
+
+
+def message_matches_trigger(content: str, pattern: re.Pattern[str] | None) -> bool:
+    """True when a message body contains one of the quest's trigger phrases."""
+    return bool(pattern is not None and content and pattern.search(content))

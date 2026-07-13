@@ -122,7 +122,8 @@ XP earned that local day converts to currency.
 ### 4.1 Authoring (Bank Manager panel, gated on `economy_manager_role` or admin —
 mirrors the `games_editor_role` / `require_game_host` dashboard pattern)
 Fields: title, description, type (daily/weekly/community), reward, sign-off tickbox,
-criteria (freeform v1), date range, repeat/auto-rotate tag. Rewards free-entry with an
+criteria (freeform v1), date range, repeat/auto-rotate tag, trigger words + optional
+trigger channel (§4.4, daily/weekly only — hidden for community). Rewards free-entry with an
 amber out-of-band warning; out-of-band saves fine, audit-tagged. Library model:
 **1 active daily + up to 5 weeklies** per guild; dailies can auto-rotate from a tagged
 pool (rotation happens on the guild-local day roll in the economy loop).
@@ -170,7 +171,30 @@ the sweep:** a sign-off community quest settles ONLY via the dashboard's manual 
 economy loop (`list_settleable_community_quests` filters out sign-off quests, so the
 auto-sweep never pays one awaiting approval).
 
-## 5. Transfers  *(shipped — Stage 3)*
+### 4.4 Trigger-Word Quests
+A daily/weekly quest may carry **trigger words** (comma/newline-separated phrases,
+`econ_quests.trigger_words`) and an optional **trigger channel**
+(`trigger_channel_id`, NULL = anywhere; threads count toward their parent channel).
+The message is the verification: when a member's message contains a phrase
+(whole-phrase, case-insensitive, word-boundary-anchored — "gm" never matches
+"dogma"; matching lives in `quests.parse_trigger_words` /
+`compile_trigger_pattern`), the `EconomyCog` `on_message` listener claims the quest
+on their behalf through the ordinary `claim_quest` state machine:
+
+- **Instant quest:** pays on the spot — ✅ reaction + a reply embed naming the
+  quest and payout.
+- **Sign-off quest:** files the `pending` claim, posts the bank-channel card, and
+  reacts 📝 — a manager still approves the payout.
+
+Trigger quests are **excluded from the `/bank quests` claim select** (state
+`trigger` on the wallet page) — self-claiming without saying the phrase would
+bypass the verification. Repeats inside a period fall out silently via the
+per-period claim collision, so a busy "good morning" channel never gets error
+spam. Per-guild trigger quests are cached in the cog for **60 s**
+(`_TRIGGER_CACHE_TTL`), so a dashboard edit takes effect within a minute without
+a restart; the cache also stores empty lists, keeping the per-message cost of
+guilds without trigger quests to a dict lookup. Community quests never trigger
+(not member-claimable).
 
 `/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
 100** (an ephemeral confirm button before the debit lands). Both sides ledgered

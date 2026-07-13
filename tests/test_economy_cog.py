@@ -384,6 +384,8 @@ def _mk_quest(
     community_target=None,
     active=True,
     title="Quest",
+    trigger_words="",
+    trigger_channel_id=None,
 ) -> int:
     with open_db(db) as conn:
         qid = create_quest(
@@ -400,6 +402,8 @@ def _mk_quest(
             rotate_tag="",
             community_target=community_target,
             created_by=1,
+            trigger_words=trigger_words,
+            trigger_channel_id=trigger_channel_id,
         )
         if active:
             set_quest_active(conn, GUILD_ID, qid, True)
@@ -1195,3 +1199,135 @@ async def test_member_remove_skips_when_economy_disabled(ctx, db):
         await _member_remove(cog, _leaving_member(500))
     revoke.assert_not_awaited()
     assert len(_live_rentals(db)) == 1  # untouched
+
+
+# ── trigger-word quests (spec §4.4) ─────────────────────────────────────────
+
+
+def _trigger_message(
+    *,
+    author,
+    content,
+    channel_id: int = 111,
+    parent_id: int | None = None,
+) -> MagicMock:
+    msg = MagicMock(spec=discord.Message)
+    msg.guild = FakeGuild(id=GUILD_ID)
+    msg.author = author
+    msg.content = content
+    msg.channel = SimpleNamespace(id=channel_id, parent_id=parent_id)
+    msg.add_reaction = AsyncMock()
+    msg.reply = AsyncMock()
+    return msg
+
+
+def _balance(db, user_id) -> int:
+    with open_db(db) as conn:
+        return get_balance(conn, GUILD_ID, user_id)
+
+
+@pytest.mark.asyncio
+async def test_trigger_message_pays_instant_quest_once_per_period(ctx, db):
+    _enable(db)
+    _mk_quest(db, reward=10, title="Say GM", trigger_words="gm, good morning")
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    msg = _trigger_message(author=member, content="GM everyone!")
+    await cog._on_trigger_message(msg)
+    assert _balance(db, 501) == 10
+    msg.add_reaction.assert_awaited_once_with("✅")
+    msg.reply.assert_awaited_once()
+
+    # A repeat inside the same period stays silent and pays nothing more.
+    repeat = _trigger_message(author=member, content="gm again")
+    await cog._on_trigger_message(repeat)
+    assert _balance(db, 501) == 10
+    repeat.reply.assert_not_awaited()
+    repeat.add_reaction.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_trigger_message_ignores_non_matches_and_bots(ctx, db):
+    _enable(db)
+    _mk_quest(db, reward=10, trigger_words="gm")
+    cog = _make_cog(ctx)
+
+    await cog._on_trigger_message(
+        _trigger_message(author=_member(member_id=501), content="hello there")
+    )
+    await cog._on_trigger_message(
+        _trigger_message(author=_member(member_id=502, is_bot=True), content="gm")
+    )
+    assert _balance(db, 501) == 0
+    assert _balance(db, 502) == 0
+
+
+@pytest.mark.asyncio
+async def test_trigger_channel_scope(ctx, db):
+    _enable(db)
+    _mk_quest(db, reward=10, trigger_words="gm", trigger_channel_id=222)
+    cog = _make_cog(ctx)
+
+    wrong = _trigger_message(
+        author=_member(member_id=501), content="gm", channel_id=111
+    )
+    await cog._on_trigger_message(wrong)
+    assert _balance(db, 501) == 0
+    wrong.reply.assert_not_awaited()
+
+    right = _trigger_message(
+        author=_member(member_id=501), content="gm", channel_id=222
+    )
+    await cog._on_trigger_message(right)
+    assert _balance(db, 501) == 10
+
+    # A thread under the scoped channel counts via parent_id.
+    thread = _trigger_message(
+        author=_member(member_id=502), content="gm",
+        channel_id=333, parent_id=222,
+    )
+    await cog._on_trigger_message(thread)
+    assert _balance(db, 502) == 10
+
+
+@pytest.mark.asyncio
+async def test_trigger_signoff_quest_files_pending_claim_and_card(ctx, db):
+    _enable(db)
+    qid = _mk_quest(db, reward=10, signoff=1, trigger_words="did it")
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    msg = _trigger_message(author=member, content="I did it!")
+    with patch(
+        "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
+    ) as card:
+        await cog._on_trigger_message(msg)
+
+    assert _balance(db, 501) == 0  # sign-off gates the payout
+    card.assert_awaited_once()
+    msg.add_reaction.assert_awaited_once_with("📝")
+    with open_db(db) as conn:
+        claim = conn.execute(
+            "SELECT state FROM econ_quest_claims WHERE quest_id = ? AND user_id = 501",
+            (qid,),
+        ).fetchone()
+    assert claim is not None and claim["state"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_trigger_message_noop_when_economy_disabled(ctx, db):
+    _mk_quest(db, reward=10, trigger_words="gm")  # economy left disabled
+    cog = _make_cog(ctx)
+    msg = _trigger_message(author=_member(member_id=501), content="gm")
+    await cog._on_trigger_message(msg)
+    assert _balance(db, 501) == 0
+    msg.reply.assert_not_awaited()
+
+
+def test_trigger_quest_excluded_from_manual_claims(ctx, db):
+    _enable(db)
+    _mk_quest(db, title="Say GM", trigger_words="gm")
+    cog = _make_cog(ctx)
+    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    assert [q["state"] for q in state] == ["trigger"]

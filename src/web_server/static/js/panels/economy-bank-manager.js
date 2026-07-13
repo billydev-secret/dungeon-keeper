@@ -1,7 +1,7 @@
 // Bank Manager — quest library, claim sign-off, community goals, grants, and
 // the ledger audit stream. Gated by the economy manager role (or admin).
 import { api, apiPost, apiPut, apiDelete, esc, fmtAge, fmtTs } from "../api.js";
-import { showStatus, loadMembers } from "../config-helpers.js";
+import { showStatus, loadMembers, loadChannels, mountChannelPicker } from "../config-helpers.js";
 import { toast, confirmDialog, promptDialog } from "../ui.js";
 
 // Advisory reward bands (client-side hint only — the server saves any value).
@@ -20,8 +20,11 @@ function bandHint(qtype, reward) {
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading Bank Manager…</div></div>`;
   (async () => {
-    const members = await loadMembers().catch(() => []);
-    render(container, members);
+    const [members, channels] = await Promise.all([
+      loadMembers().catch(() => []),
+      loadChannels().catch(() => []),
+    ]);
+    render(container, members, channels);
   })();
   return null;
 }
@@ -31,7 +34,7 @@ function memberName(members, id) {
   return m ? (m.display_name || m.name) : String(id);
 }
 
-function render(container, members) {
+function render(container, members, channels) {
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -89,6 +92,12 @@ function render(container, members) {
             <div class="field"><label>Ends (optional)</label>
               <input type="datetime-local" name="ends_at" /></div>
           </div>
+          <div class="field" data-trigger-words><label>Trigger words (optional)</label>
+            <textarea name="trigger_words" maxlength="1000" rows="2" placeholder="e.g. good morning, gm"></textarea>
+            <div class="field-hint">Comma or newline separated. Saying a phrase in chat completes the quest automatically — no manual claim. With sign-off on, it files the claim for approval instead of paying.</div></div>
+          <div class="field" data-trigger-channel><label>Trigger channel</label>
+            <span data-picker="trigger-channel"></span>
+            <div class="field-hint">If set, only messages in this channel (or its threads) count.</div></div>
           <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
             <input type="checkbox" name="signoff" /> Requires manager sign-off
           </label>
@@ -141,7 +150,7 @@ function render(container, members) {
       </section>
     </div>`;
 
-  wireAuthoring(container);
+  wireAuthoring(container, channels);
   wireGrant(container, members);
   wireLedger(container, members);
   refreshQuests(container, members);
@@ -253,7 +262,7 @@ async function refreshQuests(container, members) {
         <td>${esc(q.qtype)}</td>
         <td>${q.reward}</td>
         <td>${q.rotate_tag ? esc(q.rotate_tag) : "—"}</td>
-        <td>${q.signoff ? "sign-off" : "instant"}</td>
+        <td>${q.signoff ? "sign-off" : "instant"}${q.trigger_words ? ` · <span title="${esc(q.trigger_words)}">🗣️ trigger</span>` : ""}</td>
         <td>
           <label style="display:inline-flex; gap:4px; align-items:center;">
             <input type="checkbox" data-active-toggle="${q.id}"${q.active ? " checked" : ""} /> active
@@ -374,17 +383,25 @@ function toEpoch(v) {
   return Number.isNaN(ms) ? null : ms / 1000;
 }
 
-function wireAuthoring(container) {
+function wireAuthoring(container, channels) {
   const form = container.querySelector("[data-form-quest]");
   const status = form.querySelector("[data-status-quest]");
   const rewardInput = form.querySelector("[name=reward]");
   const qtypeSel = form.querySelector("[name=qtype]");
   const hint = form.querySelector("[data-reward-hint]");
   const communityField = form.querySelector("[data-community-target]");
+  const triggerFields = form.querySelectorAll("[data-trigger-words], [data-trigger-channel]");
+  const triggerPicker = mountChannelPicker(
+    form.querySelector('[data-picker="trigger-channel"]'), channels, "0",
+    { emptyLabel: "(any channel)" },
+  );
 
   const updateHint = () => { hint.textContent = bandHint(qtypeSel.value, rewardInput.value); };
   const updateCommunity = () => {
-    communityField.style.display = qtypeSel.value === "community" ? "" : "none";
+    const isCommunity = qtypeSel.value === "community";
+    communityField.style.display = isCommunity ? "" : "none";
+    // Community quests settle guild-wide — no per-member trigger claims.
+    triggerFields.forEach((el) => { el.style.display = isCommunity ? "none" : ""; });
   };
   rewardInput.addEventListener("input", updateHint);
   qtypeSel.addEventListener("change", () => { updateHint(); updateCommunity(); });
@@ -409,11 +426,16 @@ function wireAuthoring(container) {
     if (qtypeSel.value === "community") {
       const t = form.querySelector("[name=community_target]").value;
       body.community_target = t === "" ? null : parseInt(t, 10);
+    } else {
+      body.trigger_words = form.querySelector("[name=trigger_words]").value.trim();
+      const trigCh = triggerPicker.getValue();
+      body.trigger_channel_id = !trigCh || trigCh === "0" ? null : trigCh;
     }
     try {
       await apiPost("/api/economy/quests", body);
       showStatus(status, true, "Created");
       form.reset();
+      triggerPicker.setValue("0");
       updateHint();
       updateCommunity();
       const members = await loadMembers().catch(() => []);

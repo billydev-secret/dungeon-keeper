@@ -9,6 +9,28 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — trigger-word quest verification  (this commit)
+
+Daily/weekly quests can carry trigger phrases (+ optional channel scope); saying
+one in chat auto-claims the quest — instant quests pay on the spot, sign-off
+quests file the pending claim + bank-channel card. Offline tests cover matching,
+claim wiring, channel/thread scoping, and the once-per-period silence; live checks:
+
+- [ ] Bank Manager → New quest: trigger-words field + "(any channel)" picker
+      show for daily/weekly, hide when Community is selected; library table
+      shows the 🗣️ trigger badge (hover = the phrases).
+- [ ] Create an instant daily with trigger words (e.g. `gm, good morning`),
+      activate it, say "gm" in chat → ✅ reaction + "Quest complete!" reply,
+      wallet credited once; saying it again the same day stays silent.
+- [ ] Channel-scoped quest: phrase in the wrong channel does nothing; in the
+      configured channel (and in a thread under it) it pays.
+- [ ] Sign-off trigger quest: phrase → 📝 reaction + "sent for sign-off" reply,
+      card lands in the bank channel, Approve pays the claimant.
+- [ ] `/bank quests` lists the trigger quest with the 🗣️ "completes
+      automatically" line and does NOT offer it in the claim select.
+- [ ] Dashboard edit of trigger words takes effect within ~60 s (cache TTL)
+      without a restart.
+
 ### Economy — `/bank post-guide` channel how-to panel  (uncommitted)
 
 New staff command posts a branded "how the economy works" embed that sits in a
