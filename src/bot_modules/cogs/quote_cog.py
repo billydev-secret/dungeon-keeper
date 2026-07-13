@@ -137,7 +137,7 @@ class QuoteStyleView(discord.ui.View):
         self.bot = bot
         self.message = message
         self._theme_key = "golden_meadow"
-        self._font_key = "inter"
+        self._font_key = "times"
 
         # A guild that uploaded its own border gets it as the default choice —
         # "a border for their installation" — while the bundled frames stay
@@ -441,7 +441,7 @@ class QuoteCog(commands.Cog):
     @app_commands.describe(
         text="The quote to put on the banner.",
         theme="Colour grading for the card (default: Golden Meadow).",
-        font="Typeface for the quote (default: Inter).",
+        font="Typeface for the quote (default: Times).",
         title="Optional heading shown above the quote.",
     )
     @app_commands.choices(
@@ -483,7 +483,7 @@ class QuoteCog(commands.Cog):
             return
 
         theme_obj = THEMES.get(theme or "", THEMES["golden_meadow"])
-        font_style = font if font in FONT_STYLES else "inter"
+        font_style = font if font in FONT_STYLES else "times"
 
         await interaction.response.defer(ephemeral=True)
 

@@ -19,14 +19,15 @@ log = logging.getLogger(__name__)
 
 _ASSETS = Path("assets") / "fonts"
 _INTER = _ASSETS / "Inter-Regular.ttf"
-_LORA = _ASSETS / "Lora-Regular.ttf"
 _PLAYFAIR = _ASSETS / "PlayfairDisplay-Regular.ttf"
 _OSWALD = _ASSETS / "Oswald-Regular.ttf"
 _CAVEAT = _ASSETS / "Caveat-Regular.ttf"
 _BEBAS = _ASSETS / "BebasNeue-Regular.ttf"
-# Arimo is the OFL, metric-compatible stand-in for Helvetica/Arial — Helvetica
-# itself is proprietary and can't be bundled. Exposed to users as "Helvetica".
+# Arimo and Liberation Serif are the OFL, metric-compatible stand-ins for
+# Helvetica/Arial and Times New Roman — the originals are proprietary and can't
+# be bundled. Exposed to users as "Helvetica" and "Times".
 _HELVETICA = _ASSETS / "Arimo-Regular.ttf"
+_TIMES = _ASSETS / "LiberationSerif-Regular.ttf"
 
 try:
     from pilmoji import Pilmoji as _Pilmoji
@@ -93,13 +94,13 @@ THEMES: dict[str, QuoteTheme] = {
 }
 
 FONT_STYLES: dict[str, Path] = {
+    "times": _TIMES,
+    "helvetica": _HELVETICA,
     "inter": _INTER,
-    "lora": _LORA,
     "playfair": _PLAYFAIR,
     "oswald": _OSWALD,
     "caveat": _CAVEAT,
     "bebas": _BEBAS,
-    "helvetica": _HELVETICA,
 }
 
 
@@ -119,6 +120,11 @@ class BorderStyle:
     # avatar + quote text inside it (see ``analyze_opening``). Only set for
     # uploaded per-guild frames; bundled borders keep their hand-tuned layout.
     mask_fit: bool = False
+    # Render a slim drawn frame instead of compositing the (thick, baked-in)
+    # frame, and shrink the decorative flower cluster into the corner. Keeps the
+    # frame full-bleed so the tuned avatar/text layout is unaffected. Only the
+    # bundled floral border opts in — see ``_composite_slim_border``.
+    slim_frame: bool = False
 
 
 BORDERS: dict[str, BorderStyle] = {
@@ -127,6 +133,7 @@ BORDERS: dict[str, BorderStyle] = {
         path=Path("assets") / "border.png",
         flip=True,
         luma_key=True,
+        slim_frame=True,
     ),
     "midnight_frame": BorderStyle(
         name="Midnight Frame",
@@ -169,6 +176,60 @@ def custom_border_style(db_path: Path | str, guild_id: int) -> BorderStyle | Non
             mask_fit=True,
         )
     return None
+
+
+# ── Slim frame + shrunk-flower composite ──────────────────────────────────────
+#
+# The bundled floral PNG bakes a thick gold frame and a large flower cluster into
+# one image. To keep the frame full-bleed (so the tuned avatar/text layout stays
+# put) while making the decoration less obtrusive, we draw a thin gold frame
+# ourselves and composite only the flower cluster, shrunk into the corner.
+
+# Sampled from the baked frame's gold; used for the drawn slim frame.
+_SLIM_FRAME_GOLD = (232, 168, 30)
+# Fraction of the flower cluster's baked size to render it at.
+_SLIM_FLOWER_SCALE = 0.72
+# Interior box holding the flower cluster, clear of the baked frame lines
+# (fractions of width/height). Cropped, shrunk, then tucked into the corner.
+_SLIM_FLOWER_CROP = (0.494, 0.30, 0.947, 0.93)
+
+
+def _composite_slim_border(out, border_style: BorderStyle, width: int, height: int) -> None:
+    """Draw a thin gold frame and tuck a shrunk flower cluster into the corner.
+
+    Mutates ``out`` (an RGBA card with rounded-corner transparency already
+    applied). Only used for borders with ``slim_frame`` set.
+    """
+    from PIL import Image, ImageDraw  # noqa: PLC0415
+
+    # Key the frame+flowers exactly as the full composite would, then lift just
+    # the interior flower cluster (the frame lines stay behind, redrawn below).
+    border = Image.open(border_style.path).convert("RGBA")
+    if border_style.flip:
+        border = border.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    border = border.resize((width, height), Image.Resampling.LANCZOS)
+    if border_style.luma_key:
+        lum = border.convert("RGB").convert("L")
+        border.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))
+
+    inset = max(8, int(min(width, height) * 0.03))
+    fl, ft, fr, fb = _SLIM_FLOWER_CROP
+    flowers = border.crop((int(width * fl), int(height * ft),
+                           int(width * fr), int(height * fb)))
+    flowers = flowers.resize(
+        (max(1, int(flowers.width * _SLIM_FLOWER_SCALE)),
+         max(1, int(flowers.height * _SLIM_FLOWER_SCALE))),
+        Image.Resampling.LANCZOS,
+    )
+    ax = width - inset - 6 - flowers.width
+    ay = height - inset - 6 - flowers.height
+    out.alpha_composite(flowers, (ax, ay))
+
+    rad = max(20, int(min(width, height) * 0.10))
+    ImageDraw.Draw(out).rounded_rectangle(
+        (inset, inset, width - 1 - inset, height - 1 - inset),
+        radius=rad, outline=_SLIM_FRAME_GOLD, width=max(2, int(min(width, height) * 0.006)),
+    )
 
 
 # ── Border-shape masking ──────────────────────────────────────────────────────
@@ -520,6 +581,7 @@ def render_quote_card(
     avatar_bytes: bytes,
     theme: QuoteTheme,
     font_style: str = "inter",
+    header_font_style: str = "helvetica",
     border_style: "BorderStyle | None" = None,
     width: int = 900,
     height: int = 500,
@@ -535,6 +597,10 @@ def render_quote_card(
     avatar without clipping its corners), or ``"none"`` (no avatar box at all —
     the prompt is centred across the card and ``author_name`` becomes a centred
     header above it).
+
+    ``font_style`` sets the quote-body typeface; ``header_font_style`` sets the
+    no-pfp header's, defaulting to Helvetica so the editorial pairing (sans header
+    over serif body) holds regardless of the body font the caller picks.
     """
     from PIL import Image, ImageDraw, ImageFilter  # noqa: PLC0415
 
@@ -618,12 +684,13 @@ def render_quote_card(
     _full_measure = _make_emoji_measure(_base_m, line_h)
 
     # No-pfp mode turns the label into a centred header above the prompt. Give it
-    # a dedicated font that's larger than the body and faux-bolded with a stroke
-    # (there's no bold TTF in assets/) so it reads clearly as a title.
+    # a dedicated font that's larger than the body; a light stroke (there's no bold
+    # TTF in assets/) plus the drop shadow keeps it legible without reading as a
+    # heavy, cartoonish title — the size alone carries the "header" role.
     _header_text = author_name if (_no_pfp and author_name) else ""
     header_size = max(body_size + 10, int(body_size * 1.6))
-    header_font = _load_font(header_size, font_style)
-    _header_stroke = max(2, header_size // 16)
+    header_font = _load_font(header_size, header_font_style)
+    _header_stroke = max(1, header_size // 40)
     _header_h = _header_gap = 0
     if _header_text:
         _hb = draw.textbbox((0, 0), _header_text, font=header_font, stroke_width=_header_stroke)
@@ -908,7 +975,9 @@ def render_quote_card(
     # Border overlay — composited after transparency so it shows over the full card area
     if border_style is None:
         border_style = BORDERS["golden_poppy"]
-    if border_style.path.exists():
+    if border_style.slim_frame and border_style.path.exists():
+        _composite_slim_border(out, border_style, width, height)
+    elif border_style.path.exists():
         border = Image.open(border_style.path).convert("RGBA")
         if border_style.flip:
             border = border.transpose(Image.Transpose.FLIP_LEFT_RIGHT)

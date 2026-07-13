@@ -9,6 +9,26 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Quote cards — slim frame, smaller flowers, new typography  (this commit)
+
+The Golden Poppy quote/banner cards were restyled: the thick baked gold frame is
+replaced by a slim drawn rounded-rect (full-bleed), the floral cluster is shrunk
+to ~72% and tucked into the corner, the no-pfp header is de-bolded, and the fonts
+default to **Helvetica header over Times body** (Times = bundled Liberation
+Serif; the corrupt `lora` option was removed). Rendering is pixel-verified
+offline; the live surface needs a look:
+
+- [ ] `/quote` on a message → generate with the default (Times) → card shows the
+      slim gold frame, small corner flowers, serif quote body, avatar + double
+      ring intact on the left.
+- [ ] `/banner` with a title → header renders in **Helvetica** (clean sans, light
+      weight — no heavy outline), body in **Times**, over the guild's uploaded
+      border if set (custom/Midnight frames unchanged — only Golden Poppy is slim).
+- [ ] Font picker: **Times** and **Helvetica** are the first two options; picking
+      another body font still renders a Helvetica header in banner mode.
+- [ ] No `lora` option in the picker; a guild that previously stored `lora`
+      falls back to Times without a crash.
+
 ### Economy — onboarding path + quest XP rewards  (this commit)
 
 Quests can now pay **XP alongside coins** (`Bonus XP` field — flat, no booster
