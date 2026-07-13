@@ -9,6 +9,38 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — photo-reply event quest + Photo Challenge ping role  (this commit)
+
+Photo Challenge now feeds the economy: every posted card is registered, and an
+active **event quest** (new type, trigger kind "photo reply") pays a member who
+**replies to a card with an image** — once per member per card, no time gate
+(old cards still count). The Photo panel in the Games Studio gained a
+**Ping role on post** option mentioned with every card (manual and scheduled).
+Offline tests cover the claim dedup, pairing validation, slot rule, listener
+guards, and registry; live checks:
+
+- [ ] Bank Manager → New quest: pick type "Event (auto-trigger)" — the
+      photo-reply trigger select appears, trigger-words/channel fields hide,
+      quest saves and lists with the "📸 photo reply" mode tag; activating a
+      second event quest is refused (409 toast).
+- [ ] `/games play photo` posts a card; reply to it **with a photo** → ✅
+      reaction + "Quest complete!" embed, wallet credited once (ledger kind
+      `quest`). A second photo reply to the same card stays silent; a reply
+      to a *new* card pays again.
+- [ ] A reply without an image, or a plain (non-reply) photo in the channel,
+      pays nothing.
+- [ ] `/bank quests` lists the event quest with the 📸 how-to line and no
+      claim button.
+- [ ] With sign-off ticked on the event quest: photo reply reacts 📝, files a
+      pending claim, and the bank-channel card approves/denies it (photo
+      review flow).
+- [ ] Games Studio → Photo Challenge → set **Ping role on post** to a role ID:
+      manual `/games play photo` and a scheduled photo run both mention the
+      role above the card exactly once (don't also set the schedule's
+      announce ping unless a double mention is wanted).
+- [ ] A card posted while **no** event quest was active still pays once a
+      quest is activated later (reply after activation).
+
 ### Economy — trigger-word quest verification  (this commit)
 
 Daily/weekly quests can carry trigger phrases (+ optional channel scope); saying

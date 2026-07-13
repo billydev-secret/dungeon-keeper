@@ -12,9 +12,16 @@ import re
 from datetime import date
 
 # Library slot limits per guild: 1 active daily, up to 5 active weeklies,
-# community goals are uncapped.
+# community goals are uncapped. Event quests are capped at 1 active — the
+# listener pays whichever event quest matches its trigger, so two active at
+# once would double-pay; the cap becomes per-trigger-kind if more kinds land.
 MAX_ACTIVE_DAILY = 1
 MAX_ACTIVE_WEEKLY = 5
+MAX_ACTIVE_EVENT = 1
+
+# Trigger kinds an event quest can be paid by (v1: replying to a Photo
+# Challenge card with an image attached).
+EVENT_TRIGGER_KINDS = ("photo_reply",)
 
 # Suggested reward bands per quest type (community is judged by the author).
 _REWARD_BANDS: dict[str, tuple[int, int]] = {
@@ -47,7 +54,18 @@ def quest_period(qtype: str, local_day: str) -> str:
         return iso_week_for(local_day)
     if qtype == "community":
         return "once"
+    # Event quests have no calendar period — the trigger listener supplies a
+    # per-occurrence key (see photo_card_period), so a calendar lookup is a bug.
     raise ValueError(f"unknown quest type: {qtype!r}")
+
+
+def photo_card_period(game_id: str) -> str:
+    """The claim period key for one Photo Challenge card.
+
+    Keyed to the card (not the calendar): each posted card pays each member
+    at most once, forever — replies to old cards still count.
+    """
+    return f"photo:{game_id}"
 
 
 def can_activate(existing_active: list[str], qtype: str) -> bool:
@@ -62,6 +80,8 @@ def can_activate(existing_active: list[str], qtype: str) -> bool:
         return existing_active.count("weekly") < MAX_ACTIVE_WEEKLY
     if qtype == "community":
         return True
+    if qtype == "event":
+        return existing_active.count("event") < MAX_ACTIVE_EVENT
     raise ValueError(f"unknown quest type: {qtype!r}")
 
 

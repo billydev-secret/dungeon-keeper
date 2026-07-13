@@ -27,8 +27,11 @@ from bot_modules.economy import quests
 from bot_modules.services.economy_service import EconSettings, apply_credit
 
 # Quests whose reward the member cannot self-claim (community goals pay via
-# the settlement sweep, not the claim path).
-_CLAIMABLE_TYPES = ("daily", "weekly")
+# the settlement sweep, not the claim path). Event quests DO go through
+# claim_quest, but only the trigger listener calls it for them — the member
+# views never offer a claim button, and quest_period() has no calendar key
+# for 'event' so a stray self-claim path can't even build a period.
+_CLAIMABLE_TYPES = ("daily", "weekly", "event")
 
 _EXPIRE_SECONDS_PER_DAY = 86400
 
@@ -53,6 +56,7 @@ _UPDATABLE_FIELDS = frozenset(
         "community_target",
         "trigger_words",
         "trigger_channel_id",
+        "trigger_kind",
     }
 )
 
@@ -96,17 +100,20 @@ def create_quest(
     created_by: int | None,
     trigger_words: str = "",
     trigger_channel_id: int | None = None,
+    trigger_kind: str = "",
 ) -> int:
     """Insert a quest into the guild's library (inactive). Returns its id."""
-    if qtype not in ("daily", "weekly", "community"):
+    if qtype not in ("daily", "weekly", "community", "event"):
         raise ValueError(f"unknown quest type: {qtype!r}")
+    _check_trigger_kind(qtype, trigger_kind)
     cur = conn.execute(
         """
         INSERT INTO econ_quests
             (guild_id, title, description, qtype, reward, signoff, criteria,
              starts_at, ends_at, active, rotate_tag, community_target,
-             created_by, created_at, trigger_words, trigger_channel_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+             created_by, created_at, trigger_words, trigger_channel_id,
+             trigger_kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -124,9 +131,19 @@ def create_quest(
             time.time(),
             trigger_words,
             trigger_channel_id,
+            trigger_kind,
         ),
     )
     return int(cur.lastrowid or 0)
+
+
+def _check_trigger_kind(qtype: str, trigger_kind: str) -> None:
+    """Event quests need a known trigger kind; other types must not have one."""
+    if qtype == "event":
+        if trigger_kind not in quests.EVENT_TRIGGER_KINDS:
+            raise ValueError(f"unknown event trigger kind: {trigger_kind!r}")
+    elif trigger_kind:
+        raise ValueError("trigger_kind is only valid on event quests")
 
 
 def update_quest(
@@ -138,6 +155,13 @@ def update_quest(
         raise KeyError(f"unknown quest field(s): {sorted(unknown)}")
     if not values:
         return
+    if "qtype" in values or "trigger_kind" in values:
+        quest = get_quest(conn, guild_id, quest_id)
+        if quest is not None:
+            _check_trigger_kind(
+                str(values.get("qtype", quest["qtype"])),
+                str(values.get("trigger_kind", quest["trigger_kind"])),
+            )
     assignments = ", ".join(f"{k} = ?" for k in values)
     params = [
         (1 if v else 0) if k == "signoff" and isinstance(v, bool) else v
@@ -222,6 +246,61 @@ def list_trigger_quests(
     ).fetchall()
 
 
+def get_active_event_quest(
+    conn: sqlite3.Connection, guild_id: int, trigger_kind: str
+) -> sqlite3.Row | None:
+    """The guild's active event quest for a trigger kind, if any.
+
+    The slot rule caps active event quests at one, so a bare LIMIT 1 (newest
+    wins if the cap is ever loosened) is the whole lookup.
+    """
+    return conn.execute(
+        """
+        SELECT * FROM econ_quests
+        WHERE guild_id = ? AND active = 1
+          AND qtype = 'event' AND trigger_kind = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (guild_id, trigger_kind),
+    ).fetchone()
+
+
+# ── Photo Challenge card registry (event-quest trigger source) ────────
+
+
+def record_photo_card(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    game_id: str,
+    prompt: str,
+) -> None:
+    """Remember a posted Photo Challenge card so reply payouts can find it.
+
+    Recorded whether or not an event quest is active — a quest activated
+    later still pays for replies to older cards (no time gate, by design).
+    """
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO econ_photo_cards
+            (message_id, guild_id, channel_id, game_id, prompt, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (message_id, guild_id, channel_id, game_id, prompt, time.time()),
+    )
+
+
+def get_photo_card(
+    conn: sqlite3.Connection, guild_id: int, message_id: int
+) -> sqlite3.Row | None:
+    """The card row for a replied-to message, if that message was a card."""
+    return conn.execute(
+        "SELECT * FROM econ_photo_cards WHERE message_id = ? AND guild_id = ?",
+        (message_id, guild_id),
+    ).fetchone()
+
+
 def _active_qtypes(
     conn: sqlite3.Connection, guild_id: int, *, exclude_id: int
 ) -> list[str]:
@@ -265,7 +344,11 @@ def claim_quest(
     period: str,
     booster: bool,
 ) -> ClaimOutcome:
-    """Claim a daily/weekly quest for a member in a given period.
+    """Claim a daily/weekly/event quest for a member in a given period.
+
+    Daily/weekly callers pass the calendar period from ``quest_period``;
+    event-quest callers (the trigger listeners) pass their per-occurrence
+    key (e.g. ``photo_card_period(game_id)``).
 
     Instant (signoff=0): inserts a 'paid' claim and credits kind="quest" in
     the same transaction. Sign-off (signoff=1): inserts a 'pending' claim (no
