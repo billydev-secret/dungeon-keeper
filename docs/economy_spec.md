@@ -126,10 +126,11 @@ Fields: title, description, type (daily/weekly/community/event), reward, sign-of
 tickbox, criteria (freeform v1), date range, repeat/auto-rotate tag, and a
 **completion mode** — member claims it / trigger phrase (§4.4) / game trigger
 (§4.5) — phrase and game trigger being mutually exclusive. Rewards free-entry with
-an amber out-of-band warning; out-of-band saves fine, audit-tagged. Library model:
-**1 active daily + up to 5 weeklies + 1 active event quest per trigger kind** per
-guild; dailies can auto-rotate from a tagged pool (rotation happens on the
-guild-local day roll in the economy loop). The Bank Manager panel orders cards by
+an amber out-of-band warning; out-of-band saves fine, audit-tagged. Counted
+trigger quests take a **target count** ("how many times", §4.5). Library model:
+**1 active daily + up to 5 weeklies + up to 5 monthlies + 1 active event quest
+per trigger kind** per guild; dailies can auto-rotate from a tagged pool
+(rotation happens on the guild-local day roll in the economy loop). The Bank Manager panel orders cards by
 workflow (pending claims → library w/ slot summary + inline edit → community
 goals → quest editor → grant → rentals → ledger) and supports editing quests in
 place (PUT), member pickers for grant/ledger, and a ledger kind datalist.
@@ -238,6 +239,25 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `bio_set` | member saves/updates their bio via the wizard | `bios/wizard._persist_sync` | `bio_set:set` (event = once ever) |
 | `media_post` | member posts a message with an image; per-quest `trigger_channel_id` scopes it (threads count via parent) | `EconomyCog._on_media_post` (announces like photo) | `media_post:<message_id>` — use daily/weekly cadence |
 | `pen_pal` | two members are paired into a Pen Pals session (both fire) | `pen_pals_cog._do_pair` save | `pen_pal:<session_id>` |
+| `message_sent` | any member message (channel-scopable) | `events_cog._econ_work` (same txn as login/QOTD) | `message_sent:<message_id>` |
+| `reply_sent` | a Discord reply to someone ELSE's message (self-replies skipped; unresolvable references count) | `events_cog._econ_work` | `reply_sent:<message_id>` |
+| `reaction_given` | reaction-given XP newly awarded (inherits the farm guard: one per message+reactor ever, no self-reacts) | `events_cog.on_raw_reaction_add` | `reaction_given:<message_id>` |
+| `game_win` | winning a party game (only NHIE/TTL/Hot Takes resolve a winner) | `pay_game_rewards` winners pass | `game_win:<game_type>:<game_id>` |
+| `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
+
+**Monthly cadence:** `qtype='monthly'` claims once per guild-local calendar
+month (period `"YYYY-MM"`, so the window opens on the 1st); up to 5 active, own
+slot pool, suggested band 75–200, no rotation, and — like all cadences — needs
+no loop work: the period key itself resets claimability.
+
+**Counted quests:** a trigger-kind quest on a daily/weekly/monthly cadence may
+set `target_count` > 1 ("send 20 messages this week"). Each distinct occurrence
+inserts an `econ_quest_progress_marks` row (the dedup — replays never
+double-count) and bumps `econ_quest_progress`; the ordinary claim fires when
+the count reaches the target, and `/quests` shows a progress meter. Targets are
+invalid on manual quests (nothing counts) and event quests (every occurrence
+already pays). Progress is per (quest, member, period) — a new period starts a
+fresh count with no reset sweep.
 
 Game-fired claims are **silent in-channel** (matching the participation faucet —
 a game recap followed by a dozen quest embeds would be noise); the wallet ledger

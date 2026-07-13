@@ -41,7 +41,7 @@ log = logging.getLogger(__name__)
 # claim_quest, but only the trigger listener calls it for them — the member
 # views never offer a claim button, and quest_period() has no calendar key
 # for 'event' so a stray self-claim path can't even build a period.
-_CLAIMABLE_TYPES = ("daily", "weekly", "event")
+_CLAIMABLE_TYPES = ("daily", "weekly", "monthly", "event")
 
 _EXPIRE_SECONDS_PER_DAY = 86400
 
@@ -67,6 +67,7 @@ _UPDATABLE_FIELDS = frozenset(
         "trigger_words",
         "trigger_channel_id",
         "trigger_kind",
+        "target_count",
     }
 )
 
@@ -111,19 +112,21 @@ def create_quest(
     trigger_words: str = "",
     trigger_channel_id: int | None = None,
     trigger_kind: str = "",
+    target_count: int = 1,
 ) -> int:
     """Insert a quest into the guild's library (inactive). Returns its id."""
-    if qtype not in ("daily", "weekly", "community", "event"):
+    if qtype not in ("daily", "weekly", "monthly", "community", "event"):
         raise ValueError(f"unknown quest type: {qtype!r}")
     _check_trigger_config(qtype, trigger_kind, trigger_words)
+    _check_target_count(qtype, trigger_kind, target_count)
     cur = conn.execute(
         """
         INSERT INTO econ_quests
             (guild_id, title, description, qtype, reward, signoff, criteria,
              starts_at, ends_at, active, rotate_tag, community_target,
              created_by, created_at, trigger_words, trigger_channel_id,
-             trigger_kind)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+             trigger_kind, target_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -142,6 +145,7 @@ def create_quest(
             trigger_words,
             trigger_channel_id,
             trigger_kind,
+            int(target_count),
         ),
     )
     return int(cur.lastrowid or 0)
@@ -168,6 +172,22 @@ def _check_trigger_config(qtype: str, trigger_kind: str, trigger_words: str) -> 
         raise ValueError("a quest takes trigger words or a trigger kind, not both")
 
 
+def _check_target_count(qtype: str, trigger_kind: str, target_count: int) -> None:
+    """A target above 1 is only meaningful on counted trigger quests.
+
+    Manual claims are one-shot per period (nothing increments a count), and
+    an event quest pays *every* occurrence, so neither can carry a target.
+    """
+    if target_count < 1:
+        raise ValueError("target count must be at least 1")
+    if target_count == 1:
+        return
+    if not trigger_kind:
+        raise ValueError("a target count needs a game trigger to count")
+    if qtype not in ("daily", "weekly", "monthly"):
+        raise ValueError("a target count needs a daily/weekly/monthly cadence")
+
+
 def update_quest(
     conn: sqlite3.Connection, guild_id: int, quest_id: int, values: dict
 ) -> None:
@@ -177,13 +197,20 @@ def update_quest(
         raise KeyError(f"unknown quest field(s): {sorted(unknown)}")
     if not values:
         return
-    if {"qtype", "trigger_kind", "trigger_words"} & set(values):
+    if {"qtype", "trigger_kind", "trigger_words", "target_count"} & set(values):
         quest = get_quest(conn, guild_id, quest_id)
         if quest is not None:
+            merged_qtype = str(values.get("qtype", quest["qtype"]))
+            merged_kind = str(values.get("trigger_kind", quest["trigger_kind"]))
             _check_trigger_config(
-                str(values.get("qtype", quest["qtype"])),
-                str(values.get("trigger_kind", quest["trigger_kind"])),
+                merged_qtype,
+                merged_kind,
                 str(values.get("trigger_words", quest["trigger_words"])),
+            )
+            _check_target_count(
+                merged_qtype,
+                merged_kind,
+                int(values.get("target_count", quest["target_count"])),
             )
     assignments = ", ".join(f"{k} = ?" for k in values)
     params = [
@@ -217,6 +244,10 @@ def delete_quest(conn: sqlite3.Connection, guild_id: int, quest_id: int) -> None
     )
     conn.execute("DELETE FROM econ_community_progress WHERE quest_id = ?", (quest_id,))
     conn.execute("DELETE FROM econ_community_payouts WHERE quest_id = ?", (quest_id,))
+    conn.execute("DELETE FROM econ_quest_progress WHERE quest_id = ?", (quest_id,))
+    conn.execute(
+        "DELETE FROM econ_quest_progress_marks WHERE quest_id = ?", (quest_id,)
+    )
     conn.execute(
         "DELETE FROM econ_quests WHERE id = ? AND guild_id = ?", (quest_id, guild_id)
     )
@@ -262,7 +293,7 @@ def list_trigger_quests(
         """
         SELECT * FROM econ_quests
         WHERE guild_id = ? AND active = 1
-          AND qtype IN ('daily', 'weekly') AND trigger_words != ''
+          AND qtype IN ('daily', 'weekly', 'monthly') AND trigger_words != ''
         ORDER BY id
         """,
         (guild_id,),
@@ -424,6 +455,16 @@ def fire_trigger_quests(
             period = quests.occurrence_period(trigger_kind, occurrence)
         else:
             period = quests.quest_period(qtype, local_day)
+            target = int(quest["target_count"])
+            if target > 1:
+                # Counted quest: each distinct occurrence bumps the period's
+                # progress; the claim only fires when the target is reached.
+                if occurrence is None:
+                    continue
+                if not _bump_progress(
+                    conn, int(quest["id"]), user_id, period, occurrence, target
+                ):
+                    continue
         try:
             outcome = claim_quest(
                 conn,
@@ -438,6 +479,67 @@ def fire_trigger_quests(
             continue  # already claimed this period/occurrence, or window closed
         out.append((quest, outcome))
     return out
+
+
+def _bump_progress(
+    conn: sqlite3.Connection,
+    quest_id: int,
+    user_id: int,
+    period: str,
+    occurrence: str,
+    target: int,
+) -> bool:
+    """Count one occurrence toward a counted quest; True when target reached.
+
+    The marks table dedupes occurrences (a gateway replay or repeat event
+    can't double-count), so the progress row only moves on genuinely new
+    ones. Progress past the target keeps a mark but stops incrementing —
+    the paid-claim index is the real payout guard either way.
+    """
+    marked = conn.execute(
+        """
+        INSERT OR IGNORE INTO econ_quest_progress_marks
+            (quest_id, user_id, period, occurrence)
+        VALUES (?, ?, ?, ?)
+        """,
+        (quest_id, user_id, period, occurrence),
+    )
+    if (marked.rowcount or 0) == 0:
+        # Same occurrence seen before: it may have been the one that hit the
+        # target (claim path could still be pending sign-off) — never re-pay,
+        # never re-count.
+        return False
+    conn.execute(
+        """
+        INSERT INTO econ_quest_progress (quest_id, user_id, period, current)
+        VALUES (?, ?, ?, 1)
+        ON CONFLICT (quest_id, user_id, period) DO UPDATE SET
+            current = current + 1
+        """,
+        (quest_id, user_id, period),
+    )
+    row = conn.execute(
+        """
+        SELECT current FROM econ_quest_progress
+        WHERE quest_id = ? AND user_id = ? AND period = ?
+        """,
+        (quest_id, user_id, period),
+    ).fetchone()
+    return row is not None and int(row["current"]) >= target
+
+
+def get_progress(
+    conn: sqlite3.Connection, quest_id: int, user_id: int, period: str
+) -> int:
+    """A member's progress count for a counted quest's period (0 if none)."""
+    row = conn.execute(
+        """
+        SELECT current FROM econ_quest_progress
+        WHERE quest_id = ? AND user_id = ? AND period = ?
+        """,
+        (quest_id, user_id, period),
+    ).fetchone()
+    return int(row["current"]) if row else 0
 
 
 # ── Photo Challenge card registry (event-quest trigger source) ────────

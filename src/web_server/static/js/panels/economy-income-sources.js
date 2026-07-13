@@ -17,11 +17,10 @@ const FAUCET_LABELS = {
 // Not built yet — shown so managers can see what's on the table. Keep in
 // sync with the parking lot in docs/economy_spec.md.
 const SUGGESTIONS = [
-  ["🔢 Counted quests", "“Play 5 party games this week” — per-member progress counters instead of once-per-period. The next structural piece; multiplies every source below."],
-  ["📆 Monthly cadence", "A monthly quest type alongside daily/weekly (period = calendar month)."],
   ["🔔 Server bump", "Reward whoever runs /bump. Needs attribution from the detector-bot message (message.interaction_metadata) before it can ship."],
   ["📊 Survey completion", "The survey spec is aspirational — there is no survey feature in the code yet to hook."],
   ["🤝 Invite retention", "Pay the invite source only after the invitee survives the prune window (the current invite source pays on join)."],
+  ["🔥 Streak milestones", "A trigger kind firing on login-streak milestone days, so streaks can be quest-ified beyond the flat milestone payouts."],
   ["🤫 Confessions", "Considered and rejected — a payout in the ledger would deanonymize the confessor."],
 ];
 

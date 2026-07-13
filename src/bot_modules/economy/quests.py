@@ -17,6 +17,7 @@ from datetime import date
 # so two same-kind actives would double-pay one occurrence.
 MAX_ACTIVE_DAILY = 1
 MAX_ACTIVE_WEEKLY = 5
+MAX_ACTIVE_MONTHLY = 5
 MAX_ACTIVE_EVENT_PER_KIND = 1
 
 # Game/module triggers a quest can be auto-completed by (label = how the
@@ -39,6 +40,11 @@ TRIGGER_KINDS: dict[str, str] = {
     "bio_set": "Set or update your bio",
     "media_post": "Post an image (optionally scoped to the trigger channel)",
     "pen_pal": "Get matched with a Pen Pal",
+    "message_sent": "Send a message",
+    "reply_sent": "Reply to someone's message",
+    "reaction_given": "React to someone's message",
+    "game_win": "Win a party game",
+    "duel_win": "Win a duel / PvP challenge",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -57,6 +63,11 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "bio_set": "Saving or updating your member bio. Event cadence: once ever.",
     "media_post": "Posting a message with an image attached; set a trigger channel to scope it (e.g. #art). Event cadence: once per message — use daily/weekly for this one.",
     "pen_pal": "Being paired into a Pen Pals session (both members fire). Event cadence: once per session.",
+    "message_sent": "Any message in the server. Pair with a target count ('send 20 messages this week') — a target of 1 completes on the first message, and rewarding raw volume invites spam.",
+    "reply_sent": "Using Discord's reply on someone ELSE's message (self-replies never count). Best with a target count.",
+    "reaction_given": "Reacting to someone else's message — inherits the XP farm guard (one per message per reactor, ever; no self-reacts, no bots). Best with a target count.",
+    "game_win": "Winning a party game (only types with a real winner resolve one: NHIE guiltiest, TTL best liar, Hot Takes hottest). Event cadence: once per game.",
+    "duel_win": "Winning a duel/PvP match. Event cadence: once per match.",
 }
 
 
@@ -64,6 +75,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
 _REWARD_BANDS: dict[str, tuple[int, int]] = {
     "daily": (10, 20),
     "weekly": (25, 75),
+    "monthly": (75, 200),
 }
 
 
@@ -78,6 +90,15 @@ def iso_week_for(local_day: str) -> str:
     return f"{iso.year}-W{iso.week:02d}"
 
 
+def month_for(local_day: str) -> str:
+    """The calendar month ("YYYY-MM") a guild-local day falls in.
+
+    Plain calendar months — a monthly quest's window opens on the 1st at
+    guild-local midnight, no ISO-style shifting.
+    """
+    return local_day[:7]
+
+
 def quest_period(qtype: str, local_day: str) -> str:
     """The claim period key for a quest type on a given guild-local day.
 
@@ -89,6 +110,8 @@ def quest_period(qtype: str, local_day: str) -> str:
         return local_day
     if qtype == "weekly":
         return iso_week_for(local_day)
+    if qtype == "monthly":
+        return month_for(local_day)
     if qtype == "community":
         return "once"
     # Event quests have no calendar period — the trigger listener supplies a
@@ -115,6 +138,8 @@ def can_activate(existing_active: list[str], qtype: str) -> bool:
         return existing_active.count("daily") < MAX_ACTIVE_DAILY
     if qtype == "weekly":
         return existing_active.count("weekly") < MAX_ACTIVE_WEEKLY
+    if qtype == "monthly":
+        return existing_active.count("monthly") < MAX_ACTIVE_MONTHLY
     if qtype == "community":
         return True
     if qtype == "event":

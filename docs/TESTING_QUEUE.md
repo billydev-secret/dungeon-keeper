@@ -9,6 +9,31 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — counted quests, monthly cadence, message/reply/react/win sources  (this commit)
+
+Quests can now be **counted** ("do it N times this period" — progress bar on
+/quests, occurrence-deduped so replays never double-count), **monthly** joins
+the cadences (calendar month, starts the 1st guild-local, up to 5 active), and
+five new sources landed: **send a message, reply to someone, react to someone
+(all channel-scopable), win a party game, win a duel**. Live checks:
+
+- [ ] Quest editor shows Monthly in the Type select with its hint and 75–200
+      band; slot line reads "monthly 0/5"; a monthly manual quest claims once,
+      refuses a re-claim, and (if you want to wait) resets on the 1st.
+- [ ] Create weekly "React to 5 messages" (reaction_given, target 5):
+      /quests shows the 🗣️-style auto line + a ▰▱ progress bar; five distinct
+      reacts complete it (silent, ledger kind `quest`); re-reacting the same
+      message doesn't advance the count (XP dedup inherited).
+- [ ] Counted "send 10 messages" scoped to a channel: only messages there
+      advance it; the bar updates; payment at 10.
+- [ ] Reply quest: replying to someone else counts; replying to yourself
+      doesn't.
+- [ ] game_win/duel_win: win a NHIE/TTL/Hot Takes party game and a quickdraw
+      duel with win-kind quests active → winner paid, losers not.
+- [ ] Income Sources page lists 18 sources; counted/monthly suggestions are
+      gone (built), streak-milestones suggestion appears.
+- [ ] Editing a counted quest re-loads its target into "How many times".
+
 ### Economy — 8 new income sources + Income Sources page  (this commit)
 
 Trigger kinds now cover most member-facing modules: **voice session, QOTD
