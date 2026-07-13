@@ -104,9 +104,12 @@ function render(container, members, channels) {
           <div class="field"><label>Criteria (shown on the claim card)</label>
             <textarea name="criteria" maxlength="2000" rows="2"></textarea></div>
           <div class="field-row">
-            <div class="field"><label>Reward</label>
+            <div class="field"><label>Reward (coins)</label>
               <input type="number" name="reward" min="0" step="1" value="10" style="max-width:120px;" />
               <div class="field-hint" data-reward-hint style="color:#d9a441;"></div></div>
+            <div class="field"><label>Bonus XP</label>
+              <input type="number" name="reward_xp" min="0" step="1" value="0" style="max-width:120px;" />
+              <div class="field-hint">Levelling XP paid with the coins (no booster multiplier).</div></div>
             <div class="field" data-community-target style="display:none;"><label>Community target</label>
               <input type="number" name="community_target" min="0" step="1" style="max-width:120px;" /></div>
             <div class="field" data-rotate-field><label>Rotate tag</label>
@@ -149,6 +152,10 @@ function render(container, members, channels) {
           <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
             <input type="checkbox" name="signoff" /> Requires manager sign-off
             <span class="field-hint" style="margin:0;">(completion files a claim you approve instead of paying instantly)</span>
+          </label>
+          <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
+            <input type="checkbox" name="onboarding" /> 🧭 Onboarding path
+            <span class="field-hint" style="margin:0;">(new members get this quest DMed to them when they join — best on event quests that pay once ever)</span>
           </label>
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary" data-submit-quest>Create quest</button>
@@ -351,9 +358,9 @@ async function refreshQuests(container, members) {
     const status = `dk-quest-status-${q.id}`;
     return `
       <tr data-quest-row="${q.id}">
-        <td>${esc(q.title)}</td>
+        <td>${q.onboarding ? `<span title="Onboarding path — DMed to new members">🧭 </span>` : ""}${esc(q.title)}</td>
         <td>${esc(q.qtype)}</td>
-        <td>${q.reward}</td>
+        <td>${q.reward}${q.reward_xp > 0 ? ` <span class="field-hint" title="Bonus XP">+${q.reward_xp}xp</span>` : ""}</td>
         <td>${questVerification(q)}</td>
         <td>
           <label style="display:inline-flex; gap:4px; align-items:center;">
@@ -592,7 +599,9 @@ function wireAuthoring(container, channels) {
     form.querySelector("[name=criteria]").value = q.criteria || "";
     qtypeSel.value = q.qtype;
     rewardInput.value = q.reward ?? 0;
+    form.querySelector("[name=reward_xp]").value = q.reward_xp ?? 0;
     form.querySelector("[name=signoff]").checked = !!q.signoff;
+    form.querySelector("[name=onboarding]").checked = !!q.onboarding;
     form.querySelector("[name=rotate_tag]").value = q.rotate_tag || "";
     form.querySelector("[name=starts_at]").value = fromEpoch(q.starts_at);
     form.querySelector("[name=ends_at]").value = fromEpoch(q.ends_at);
@@ -620,7 +629,9 @@ function wireAuthoring(container, channels) {
       criteria: form.querySelector("[name=criteria]").value,
       qtype,
       reward: parseInt(rewardInput.value, 10) || 0,
+      reward_xp: parseInt(form.querySelector("[name=reward_xp]").value, 10) || 0,
       signoff: form.querySelector("[name=signoff]").checked,
+      onboarding: form.querySelector("[name=onboarding]").checked,
       rotate_tag: form.querySelector("[name=rotate_tag]").value.trim(),
       starts_at: toEpoch(form.querySelector("[name=starts_at]").value),
       ends_at: toEpoch(form.querySelector("[name=ends_at]").value),

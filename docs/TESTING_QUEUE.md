@@ -9,6 +9,28 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — onboarding path + quest XP rewards  (this commit)
+
+Quests can now pay **XP alongside coins** (`Bonus XP` field — flat, no booster
+multiplier, ledgered as xp_events source `quest`), and quests flagged
+**🧭 Onboarding path** are DMed to new members on join as a branded "starter
+path" embed (once ever per member; rejoins never re-DM). Live checks:
+
+- [ ] Quest editor: Bonus XP field + 🧭 Onboarding checkbox save and reload;
+      library shows "+Nxp" next to the coin reward and 🧭 before the title.
+- [ ] Create the starter set as event quests flagged onboarding (e.g. "Set
+      your bio" bio_set +20/+100xp once-ever, "Play your first game"
+      party_game, "Say hello" message_sent) — join with a test account →
+      one DM listing all three with coins + XP + how-to lines.
+- [ ] Rejoin with the same account → no second DM.
+- [ ] Complete a flagged quest → wallet gets coins, `/xp` (level) reflects
+      the XP, ledger kind `quest`, xp_events row with source `quest`.
+- [ ] Sign-off quest with XP: XP arrives at manager approval, not at filing.
+- [ ] /quests shows "+ ⭐ N XP" in the reward line; trigger-quest completion
+      announcements show "(+⭐ N XP)".
+- [ ] Member with economy DMs muted: the starter path lands in the bank
+      channel fallback instead.
+
 ### Economy — counted quests, monthly cadence, message/reply/react/win sources  (this commit)
 
 Quests can now be **counted** ("do it N times this period" — progress bar on

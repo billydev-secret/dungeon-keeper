@@ -26,6 +26,7 @@ from dataclasses import dataclass
 import logging
 
 from bot_modules.core.db_utils import get_tz_offset_hours
+from bot_modules.core.xp_system import apply_xp_award, load_xp_settings
 from bot_modules.economy import quests
 from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_service import (
@@ -68,6 +69,8 @@ _UPDATABLE_FIELDS = frozenset(
         "trigger_channel_id",
         "trigger_kind",
         "target_count",
+        "reward_xp",
+        "onboarding",
     }
 )
 
@@ -113,10 +116,14 @@ def create_quest(
     trigger_channel_id: int | None = None,
     trigger_kind: str = "",
     target_count: int = 1,
+    reward_xp: int = 0,
+    onboarding: int = 0,
 ) -> int:
     """Insert a quest into the guild's library (inactive). Returns its id."""
     if qtype not in ("daily", "weekly", "monthly", "community", "event"):
         raise ValueError(f"unknown quest type: {qtype!r}")
+    if reward_xp < 0:
+        raise ValueError("XP reward cannot be negative")
     _check_trigger_config(qtype, trigger_kind, trigger_words)
     _check_target_count(qtype, trigger_kind, target_count)
     cur = conn.execute(
@@ -125,8 +132,8 @@ def create_quest(
             (guild_id, title, description, qtype, reward, signoff, criteria,
              starts_at, ends_at, active, rotate_tag, community_target,
              created_by, created_at, trigger_words, trigger_channel_id,
-             trigger_kind, target_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+             trigger_kind, target_count, reward_xp, onboarding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -146,6 +153,8 @@ def create_quest(
             trigger_channel_id,
             trigger_kind,
             int(target_count),
+            int(reward_xp),
+            1 if onboarding else 0,
         ),
     )
     return int(cur.lastrowid or 0)
@@ -528,6 +537,38 @@ def _bump_progress(
     return row is not None and int(row["current"]) >= target
 
 
+def list_onboarding_quests(
+    conn: sqlite3.Connection, guild_id: int
+) -> list[sqlite3.Row]:
+    """The guild's active onboarding-path quests, in library order."""
+    return conn.execute(
+        """
+        SELECT * FROM econ_quests
+        WHERE guild_id = ? AND active = 1 AND onboarding = 1
+        ORDER BY id
+        """,
+        (guild_id,),
+    ).fetchall()
+
+
+def mark_onboarding_dm(
+    conn: sqlite3.Connection, guild_id: int, user_id: int
+) -> bool:
+    """Reserve the once-ever onboarding DM; False when already sent.
+
+    Reserve-before-send (the community-payout pattern): a crash after the
+    mark loses one DM rather than ever double-DMing a rejoiner.
+    """
+    cur = conn.execute(
+        """
+        INSERT OR IGNORE INTO econ_onboarding_dms (guild_id, user_id, sent_at)
+        VALUES (?, ?, ?)
+        """,
+        (guild_id, user_id, time.time()),
+    )
+    return (cur.rowcount or 0) > 0
+
+
 def get_progress(
     conn: sqlite3.Connection, quest_id: int, user_id: int, period: str
 ) -> int:
@@ -716,12 +757,29 @@ def _credit_reward(
     booster: bool,
     claim_id: int,
 ) -> int:
+    guild_id = int(quest["guild_id"])
+    reward_xp = int(quest["reward_xp"])
+    if reward_xp > 0:
+        # XP rides every quest payout (instant + approved sign-off — both
+        # come through here). No booster multiplier: the ×1.5 is a currency
+        # patron bonus, and minting XP would distort the level curve. Level
+        # progression lands in the DB; the announcement, if any, happens on
+        # the member's next ordinary XP award.
+        apply_xp_award(
+            conn,
+            guild_id,
+            user_id,
+            float(reward_xp),
+            event_source="quest",
+            event_timestamp=time.time(),
+            settings=load_xp_settings(conn, guild_id),
+        )
     reward = int(quest["reward"])
     if reward < 1:
         return 0
     return apply_credit(
         conn,
-        int(quest["guild_id"]),
+        guild_id,
         user_id,
         reward,
         "quest",
