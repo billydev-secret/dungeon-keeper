@@ -9,6 +9,26 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — Bank Manager Statistics page  (uncommitted)
+
+New live, on-demand tuning surface under Bank Manager (`GET /api/economy/stats`,
+manager-role-or-admin gated): supply concentration (median / top-10% / Gini over
+positive balances), balance histogram, 7d flow + burn rate, per-member income
+velocity table, engagement (earner ratio, quest approval rate, hoard-weeks), perk
+affordability in days of median income, and top transfer pairs.
+
+- [ ] Restart clean (no startup errors in the log).
+- [ ] Bank Manager section shows a **Statistics** nav item for an admin AND for a
+      plain `economy_manager_role` holder; a member without that role does **not**
+      see it (and the endpoint 403s for them).
+- [ ] Page loads with real data: supply row, histogram, and member table render;
+      the member table sorts on header click; the refresh button re-fetches.
+- [ ] Numbers sanity: the displayed total supply equals
+      `SELECT SUM(balance) FROM econ_wallets WHERE guild_id=<guild> AND balance>0;`.
+- [ ] Make a transfer between two members, then refresh → the pair appears in the
+      top-transfers list.
+- [ ] Affordability card appears once some members have 7d income.
+
 ### DM Perms — `/dm_revoke` confirmation now ephemeral  (uncommitted)
 
 The final "Done — your connection with @user has been removed" reply was

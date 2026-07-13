@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +31,7 @@ from bot_modules.services.economy_service import (
     member_is_booster,
     notify_member,
 )
+from bot_modules.services.economy_stats_service import compute_stats
 from web_server.auth import AuthenticatedUser
 from web_server.deps import (
     get_active_guild_id,
@@ -633,6 +635,33 @@ async def grant(
                 multiplier=settings.booster_multiplier,
             )
             return {"ok": True, "credited": credited}
+
+    return await run_query(_q)
+
+
+# ── statistics ────────────────────────────────────────────────────────
+
+
+@router.get("/economy/stats")
+async def economy_stats(
+    request: Request,
+    limit: int = 100,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """Tuning-grade snapshot: supply/inequality, distribution, 7d flow, a
+    per-member earning table, engagement, top transfers, and affordability.
+    ``limit`` caps the member table (default 100, hard cap 500)."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    member_limit = min(max(limit, 1), 500)
+    now = time.time()
+
+    def _q():
+        with ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            return compute_stats(
+                conn, settings, guild_id, now=now, member_limit=member_limit
+            )
 
     return await run_query(_q)
 

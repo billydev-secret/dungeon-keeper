@@ -293,6 +293,24 @@ fixed per-perk factor)` served from `GET /api/economy/metrics` and rendered unde
 price field in the config panel; advisory only (no enforcement), and `{}` until the
 first rollup lands.
 
+**Statistics page (Bank Manager).** A live, on-demand tuning surface under Bank
+Manager (`GET /api/economy/stats`, gated on `require_economy_manager` — manager
+role or admin; member table capped at 500), complementing the weekly rollup with a
+same-instant read of the ledger. It shows: **supply concentration** — total supply,
+holder count, median balance, top-10% share, and Gini, all computed over **positive
+balances only** (inequality of who-holds-what, not the zero-balance long tail); a
+fixed-bucket **balance histogram**; **7-day flow** — minted vs burned with a burn
+rate, plus transfer volume and grants (money definitions match the rollup: mint /
+income exclude `transfer_in`, burn excludes `transfer_out`); a **per-member income
+velocity table** (top holders by balance) with 7/30-day income, coins/day, 7d spend,
+top faucet group, live rentals, streak, and last-earned; **engagement** — earner
+ratio (7d earners ÷ 30d active), spenders, quest claims, **quest approval rate**
+(resolved paid ÷ paid+denied over 30d, resolved-only), and **hoard-weeks** (median
+balance ÷ latest-rollup median weekly income); **perk affordability** in days of
+median daily income per price field; and the **top 5 transfer pairs** (30d, by
+`transfer_out` magnitude) as the alt-funnel audit surface for transfer abuse (§12).
+All ratios/divides are guarded (0 or `null` when there is no denominator).
+
 ## 10. Notifications
 
 DM-first via a shared `try_dm`-style helper; on failure, fall back to the bank channel.

@@ -561,3 +561,59 @@ def test_rentals_gated_to_manager(fake_ctx):
     assert client.get("/api/economy/rentals").status_code == 403
     assert client.post(f"/api/economy/rentals/{rid}/cancel").status_code == 403
     client.close()
+
+
+# ── statistics ──────────────────────────────────────────────────────────
+
+
+def _seed_stats_wallet(fake_ctx, user_id: int, balance: int) -> None:
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO econ_wallets "
+            "(guild_id, user_id, balance, created_at, updated_at) VALUES (?, ?, ?, 0, 0)",
+            (fake_ctx.guild_id, user_id, balance),
+        )
+        conn.execute(
+            "INSERT INTO econ_ledger "
+            "(guild_id, user_id, amount, kind, actor_id, meta, created_at) "
+            "VALUES (?, ?, 40, 'login', NULL, NULL, ?)",
+            (fake_ctx.guild_id, user_id, time.time() - 3600),
+        )
+
+
+def test_stats_shape(authed_client, fake_ctx):
+    _seed_stats_wallet(fake_ctx, 100, 500)
+    _seed_stats_wallet(fake_ctx, 101, 50)
+    resp = authed_client.get("/api/economy/stats")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    for key in (
+        "supply",
+        "distribution",
+        "flow_7d",
+        "members",
+        "engagement",
+        "transfers_top",
+        "affordability",
+    ):
+        assert key in body
+    assert body["supply"]["holders"] == 2
+    assert len(body["members"]) == 2
+
+
+def test_stats_limit_capped(authed_client, fake_ctx):
+    for uid in range(600, 606):
+        _seed_stats_wallet(fake_ctx, uid, uid)
+    # Over-cap request is clamped to 500 (server-side); a small limit truncates.
+    body = authed_client.get("/api/economy/stats", params={"limit": 2}).json()
+    assert len(body["members"]) == 2
+    # A huge limit is accepted (capped internally), returns all rows.
+    body = authed_client.get("/api/economy/stats", params={"limit": 100000}).json()
+    assert len(body["members"]) == 6
+
+
+def test_stats_gated_to_manager(fake_ctx):
+    _set_manager_role(fake_ctx)
+    client = _client(fake_ctx, admin=False, role_ids=[123])
+    assert client.get("/api/economy/stats").status_code == 403
+    client.close()

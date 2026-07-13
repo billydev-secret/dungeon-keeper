@@ -182,6 +182,11 @@ No new features. Run the economy live ≥1–2 weeks; use the metrics card to se
 prices/rates for each guild; fix what live testing surfaces (TESTING_QUEUE entries
 from stages 0–4). Decision checkpoint with real income data before rooms.
 
+- Shipped the **Statistics page** (Bank Manager) as Stage-5 tuning tooling — live,
+  on-demand who-has-what + income-velocity read (supply concentration, distribution,
+  7d flow, per-member table, engagement, affordability, top transfer pairs) beside
+  the weekly rollup card. See spec §9.
+
 ## Stage 6 — Private rooms (spec §8)
 
 - Migration: `econ_rooms`, `econ_room_members`, `econ_room_blocks` (persist across
