@@ -9,6 +9,36 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — dashboard reorg: one Economy nav section  (this commit)
+
+The economy dashboard pages are now one top-level **Economy** section:
+**Operations** (claims, community goals, grants, rentals, ledger — the old
+Bank Manager page minus authoring), **Quests** (library + authoring + AI
+ideas, split out), **Income Sources** (trigger switches + the faucet rates,
+now editable in place for admins), **Statistics**, and **Settings** (the old
+Config → Economy page, minus the faucet fields, admin-only). Same page ids —
+old `#/economy-*` links still resolve. Verify live (needs a service restart
+for the JS):
+
+- [ ] As **admin**: Economy section shows all five pages; Config section no
+      longer lists Economy; `#/economy-config` opens Settings inside the
+      Economy section.
+- [ ] As a **manager-role holder who isn't admin**: Economy section shows
+      Operations / Quests / Income Sources / Statistics but **not** Settings;
+      Income Sources shows faucet rates read-only (no inputs, no Save).
+- [ ] As admin on **Income Sources**: edit a faucet rate (e.g. QOTD reward),
+      Save rates → reload → value persisted; Settings page no longer shows
+      faucet fields but still saves branding/prices fine.
+- [ ] On **Quests**: create + edit a quest end-to-end (the form moved panels —
+      check the game-trigger/phrase conditional fields and the AI ideas
+      button still work).
+- [ ] On **Operations**: approve or deny a pending claim, set community
+      progress, and check the community card refreshes without the quest
+      library (it fetches quests itself now).
+- [ ] Cross-links navigate: Operations header → Quests; Quests library hint →
+      Income Sources + Operations; Income Sources → Quests + Settings;
+      Settings subtitle → Income Sources.
+
 ### Economy — onboarding path + quest XP rewards  (this commit)
 
 Quests can now pay **XP alongside coins** (`Bonus XP` field — flat, no booster

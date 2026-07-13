@@ -440,11 +440,17 @@ async def list_income_sources(
                     }
                     for kind in quest_rules.TRIGGER_KINDS
                 ],
-                # Built-in faucets shown read-only for context; the knobs
-                # live on the Economy Config page.
+                # Built-in faucet rates. Managers see them read-only here;
+                # admins edit them in place on this page via the admin-gated
+                # PUT /economy/config (partial update).
                 "faucets": {
                     "login_text_base": settings.login_text_base,
                     "login_voice_base": settings.login_voice_base,
+                    "streak_bonus_cap": settings.streak_bonus_cap,
+                    "milestone_day7": settings.milestone_day7,
+                    "milestone_day30": settings.milestone_day30,
+                    "milestone_day100": settings.milestone_day100,
+                    "milestone_per_100": settings.milestone_per_100,
                     "reward_qotd": settings.reward_qotd,
                     "reward_game_participation": settings.reward_game_participation,
                     "reward_game_win": settings.reward_game_win,

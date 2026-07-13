@@ -9,19 +9,8 @@ import {
 } from "../config-helpers.js";
 
 // Numeric fields grouped by section. Each entry: [key, label, {min, step, hint}].
-const FAUCET_FIELDS = [
-  ["login_text_base", "Text login base", { min: 0 }],
-  ["login_voice_base", "Voice login base", { min: 0 }],
-  ["streak_bonus_cap", "Streak bonus cap", { min: 0 }],
-  ["milestone_day7", "Day 7 milestone", { min: 0 }],
-  ["milestone_day30", "Day 30 milestone", { min: 0 }],
-  ["milestone_day100", "Day 100 milestone", { min: 0 }],
-  ["milestone_per_100", "Per-100-days bonus", { min: 0 }],
-  ["reward_qotd", "QOTD reward", { min: 0 }],
-  ["reward_game_participation", "Game participation", { min: 0 }],
-  ["reward_game_win", "Game win", { min: 0 }],
-];
-
+// Faucet rates are edited on the Income Sources page (manager-visible,
+// admin-editable) — this page keeps the wiring, branding, and prices.
 const PRICE_FIELDS = [
   ["price_role_color", "Role colour", { min: 0 }],
   ["price_role_name", "Role name", { min: 0 }],
@@ -73,8 +62,9 @@ function render(container, cfg, channels, roles, pricing) {
   container.innerHTML = `
     <div class="panel">
       <header>
-        <h2>Economy</h2>
-        <div class="subtitle">Soft-currency wallets, faucets, and perk prices</div>
+        <h2>Economy Settings</h2>
+        <div class="subtitle">Wiring, branding, and perk prices — faucet rates live on
+          <a href="#/economy-income-sources">Income Sources</a></div>
       </header>
 
       <form class="form card" data-form>
@@ -95,16 +85,10 @@ function render(container, cfg, channels, roles, pricing) {
           <input type="checkbox" name="transfers_enabled"${cfg.transfers_enabled ? " checked" : ""} />
           Member-to-member transfers enabled
         </label>
-        <div class="field-row">
-          <div class="field">
-            <label>Booster multiplier</label>
-            <input type="number" name="booster_multiplier" value="${cfg.booster_multiplier}" min="1" step="0.1" style="max-width:140px;" />
-            <div class="field-hint">Applied to faucet credits for server boosters (≥ 1).</div>
-          </div>
-          <div class="field">
-            <label>XP per coin</label>
-            <input type="number" name="xp_per_coin" value="${cfg.xp_per_coin}" min="0" step="0.5" style="max-width:140px;" />
-          </div>
+        <div class="field">
+          <label>Booster multiplier</label>
+          <input type="number" name="booster_multiplier" value="${cfg.booster_multiplier}" min="1" step="0.1" style="max-width:140px;" />
+          <div class="field-hint">Applied to faucet credits for server boosters (≥ 1).</div>
         </div>
 
         <div class="section-label">Branding</div>
@@ -131,11 +115,6 @@ function render(container, cfg, channels, roles, pricing) {
         <div class="field">
           <label>Currency icon URL</label>
           <input type="text" name="currency_icon_url" value="${cfg.currency_icon_url}" maxlength="512" />
-        </div>
-
-        <div class="section-label">Faucets</div>
-        <div class="field-row" style="flex-wrap:wrap;">
-          ${FAUCET_FIELDS.map(([k, l, o]) => numField(k, l, cfg, o)).join("")}
         </div>
 
         <div class="section-label">Perk prices</div>
@@ -166,11 +145,9 @@ function render(container, cfg, channels, roles, pricing) {
 
   const numKeys = [
     "booster_multiplier",
-    "xp_per_coin",
-    ...FAUCET_FIELDS.map(([k]) => k),
     ...PRICE_FIELDS.map(([k]) => k),
   ];
-  const floatKeys = new Set(["booster_multiplier", "xp_per_coin"]);
+  const floatKeys = new Set(["booster_multiplier"]);
   const strKeys = [
     "currency_name",
     "currency_plural",

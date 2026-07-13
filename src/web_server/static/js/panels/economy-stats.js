@@ -1,6 +1,6 @@
-// Bank Manager — Statistics. Tuning-grade visibility into who holds what and
+// Economy — Statistics. Tuning-grade visibility into who holds what and
 // how fast currency flows. Read-only; gated by the economy manager role (or
-// admin), same as the Bank Manager panel. Everything is a single GET; the
+// admin), same as the Operations page. Everything is a single GET; the
 // Refresh button re-fetches.
 import { api, esc, fmtAge } from "../api.js";
 import { loadMembers } from "../config-helpers.js";
