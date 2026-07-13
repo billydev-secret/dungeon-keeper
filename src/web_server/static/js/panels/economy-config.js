@@ -32,13 +32,21 @@ const PRICE_FIELDS = [
   ["price_gift_color", "Gift colour", { min: 0, hint: "Used by a later stage." }],
 ];
 
-function numField(key, label, cfg, { min = 0, step = 1, hint } = {}) {
+function numField(key, label, cfg, { min = 0, step = 1, hint } = {}, pricing = null) {
   const hintHtml = hint ? `<div class="field-hint">${hint}</div>` : "";
+  // Advisory pricing suggestion, appended as its own muted node so the
+  // existing "later stage" hint is preserved. Only price_* fields carry hints.
+  const suggested = pricing && pricing.hints ? pricing.hints[key] : null;
+  const median = pricing ? Math.round(pricing.median || 0) : 0;
+  const suggest = suggested != null
+    ? `<div class="field-hint" data-suggest="${key}">suggested ≈ ${suggested} (from median weekly income ${median})</div>`
+    : "";
   return `
     <div class="field">
       <label>${label}</label>
       <input type="number" name="${key}" value="${cfg[key]}" min="${min}" step="${step}" style="max-width:140px;" />
       ${hintHtml}
+      ${suggest}
     </div>`;
 }
 
@@ -46,16 +54,22 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading economy config…</div></div>`;
 
   (async () => {
-    const [cfg, channels, roles] = await Promise.all([
+    const [cfg, channels, roles, metrics] = await Promise.all([
       api("/api/economy/config"),
       loadChannels(),
       loadRoles(),
+      api("/api/economy/metrics").catch(() => null),
     ]);
-    render(container, cfg, channels, roles);
+    // Pricing hints are advisory: only render when the first rollup exists
+    // (hints is {} otherwise). median feeds the "from median weekly income" note.
+    const pricing = metrics && metrics.hints && Object.keys(metrics.hints).length
+      ? { hints: metrics.hints, median: metrics.median_income }
+      : null;
+    render(container, cfg, channels, roles, pricing);
   })();
 }
 
-function render(container, cfg, channels, roles) {
+function render(container, cfg, channels, roles, pricing) {
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -126,7 +140,7 @@ function render(container, cfg, channels, roles) {
 
         <div class="section-label">Perk prices</div>
         <div class="field-row" style="flex-wrap:wrap;">
-          ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, cfg, o)).join("")}
+          ${PRICE_FIELDS.map(([k, l, o]) => numField(k, l, cfg, o, pricing)).join("")}
         </div>
 
         <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">

@@ -52,17 +52,20 @@ export function mount(container) {
   let layout = getLayout(userId, isAdmin, isMod);
   let editMode = false;
   let refreshTimer = null;
-  let data = { home: null, health: null };
+  let data = { home: null, health: null, economy: null };
 
   async function fetchData() {
     // Determine which sources are needed
     const needsHome = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "home");
     const needsHealth = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "health");
+    const needsEconomy = layout.some(e => WIDGET_MAP[entryId(e)]?.source === "economy");
 
     const promises = [];
     if (needsHome) promises.push(api("/api/home").then(d => { data.home = d; }));
     else promises.push(Promise.resolve());
     if (needsHealth) promises.push(api("/api/health/tiles").then(d => { data.health = d; }));
+    else promises.push(Promise.resolve());
+    if (needsEconomy) promises.push(api("/api/economy/metrics").then(d => { data.economy = d; }));
     else promises.push(Promise.resolve());
 
     await Promise.all(promises);

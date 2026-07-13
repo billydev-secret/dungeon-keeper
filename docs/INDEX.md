@@ -51,7 +51,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [auto_delete_spec.md](auto_delete_spec.md) | Auto-delete message rules | |
 | [beta_tools_spec.md](beta_tools_spec.md) | Beta tools: synthetic activity for testers | Built |
 | [DUNGEON_KEEPER_TEST_ENV_SPEC.md](DUNGEON_KEEPER_TEST_ENV_SPEC.md) | Test env with beta puppets | Built |
-| [economy_spec.md](economy_spec.md) | Economy & perk shop (currency, quests, rentals) | Stage 0 built |
+| [economy_spec.md](economy_spec.md) | Economy & perk shop (currency, quests, rentals) | Stages 0–4 built (rooms/v2 still design) |
 | [events_spec.md](events_spec.md) | Events cog | |
 | [MUSIC_COG_CLAUDE_CODE_SPEC.md](MUSIC_COG_CLAUDE_CODE_SPEC.md) | Music cog (Lavalink) | Built |
 | [post_monitoring_spec.md](post_monitoring_spec.md) | Post monitoring | |

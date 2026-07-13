@@ -166,6 +166,48 @@ scheduler surfaces need a live pass:
       get +5 (not just the host).
 - [ ] Dashboard **grant** is refused (409) while the economy is disabled.
 
+### Economy (stage 3) — transfers, rental billing, role perks, gifts  (uncommitted)
+
+Sinks slice of the economy feature (`docs/plans/economy-and-perk-shop.md`):
+migration 065 adds `econ_rentals` (billing state machine: no-drift
+anniversaries, single-charge catch-up after downtime, 36h grace, suspension
+freezes the clock) and `econ_personal_roles`; `/bank pay|shop|gift`; the
+`/bank role name|color|gradient|icon` subgroup with an idempotent personal-role
+projector (position above the "#### Cosmetics" band on create, `ENHANCED_ROLE_COLORS`
+/`ROLE_ICONS` gates, ΔE ≥ 25 staff-colour guard, Voice Master name blocklist);
+`transfer_currency` (no booster on `transfer_in`); a rental-billing pass in the
+economy loop (feature-gate sweep → billing → post-commit effects, transition-only
+DMs); dashboard Rentals table + force-cancel; and `on_member_remove` rental cleanup.
+Offline logic is covered by service/loop/logic/projector/route tests; the Discord +
+dashboard + scheduler surfaces need a live pass:
+
+- [ ] Bot restarts clean — `/bank pay`, `/bank shop`, `/bank gift`, and the
+      `/bank role` subgroup all appear with no boot error.
+- [ ] `/bank pay` a small amount → lands in **both** ledgers (payer `transfer_out`,
+      recipient `transfer_in`) and DMs the recipient.
+- [ ] `/bank pay` **>100** → shows the confirmation step before debiting.
+- [ ] Disable transfers in config → `/bank pay` is refused with a branded notice.
+- [ ] `/bank shop` shows branded prices; icon/gradient rows reflect the server's
+      role features (gated when the guild lacks them).
+- [ ] Rent a **colour**, then `/bank role color` → the personal role appears
+      **above** the booster swatch band and shows the colour.
+- [ ] Try a **staff-adjacent** colour → the ΔE refusal **names** the staff role it
+      clashes with.
+- [ ] Rent a **gradient** → the gradient renders and **supersedes** the solid colour.
+- [ ] `/bank gift @friend` a colour → the friend gets the DM + role and the payer
+      sees the gift rental in `/bank wallet`.
+- [ ] A **blocklisted** role name is refused by `/bank role name`.
+- [ ] Let a rental hit its anniversary with an **empty wallet** → grace DM, then
+      after 36h the role reverts + a lapsed DM. *(Force it fast by editing the row:
+      `UPDATE econ_rentals SET next_bill_at = strftime('%s','now') - 60 WHERE id = <rid>;`
+      to trigger grace on the next tick, then
+      `UPDATE econ_rentals SET grace_since = strftime('%s','now') - 130000 WHERE id = <rid>;`
+      to push past the 36h window.)*
+- [ ] Dashboard **Rentals** table lists the rental with the correct state.
+- [ ] Dashboard **force-cancel** of a **grace** rental removes the role within a
+      minute (best-effort de-projection).
+- [ ] A member **leaves** → their rentals cancel and the personal role is deleted.
+
 ### Auto-delete: media-only mode  — committed 1c56e7c (2026-07-10)
 
 New per-channel "only delete messages with attachments" toggle on the
@@ -242,6 +284,35 @@ embed unit tests cover it; the Discord-button behaviour needs a live pass:
       per player" box checked → the launched game runs in single-choice mode.
 - [ ] Restart the bot mid-game → recovered game still enforces single-choice
       (flag read from the payload, not the view).
+
+### Economy (stage 4) — weekly metrics rollup + pricing hints  (uncommitted)
+
+Migration 066 adds `econ_metrics_weekly` (one immutable row per guild + closed
+ISO week) and `econ_rentals.ended_at`. At the guild-local week roll the economy
+loop computes a rollup for the week that just closed (median/p90 income over
+earners, minted vs burned, faucet mix, rental holders/churn, streak health);
+the admin home gains an Economy tile and the config panel shows suggested-price
+lines. All idempotent/pure-math paths are unit-covered; the live surface needs a
+pass:
+
+- [ ] Restart the bot → boots clean (migration 066 applies once; no error on the
+      second boot).
+- [ ] After the first guild-local **Monday** rollover, a row exists for the week
+      that closed:
+      `SELECT iso_week, median_income, minted, burned FROM econ_metrics_weekly
+      WHERE guild_id = <guild> ORDER BY iso_week DESC LIMIT 3;`
+- [ ] Admin home page shows the **Economy** tile populated (median coins, p90,
+      minted/burned with the net-mint arrow, faucet bar, rental-holder %). Before
+      the first rollover it shows the "rollup pending" empty state instead.
+- [ ] Log in as a **non-admin** → the Economy tile does **not** appear (route is
+      admin-gated; `GET /api/economy/metrics` 403s for them).
+- [ ] Economy **config panel** shows "suggested ≈ N" lines under each price field
+      once a rollup exists (nothing shown while metrics are empty).
+- [ ] Sanity-check one number against reality — `minted` should equal the week's
+      minted ledger sum:
+      `SELECT COALESCE(SUM(amount),0) FROM econ_ledger WHERE guild_id = <guild>
+      AND amount > 0 AND kind != 'transfer_in'
+      AND created_at >= <week_start_epoch> AND created_at < <week_end_epoch>;`
 
 ---
 

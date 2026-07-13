@@ -21,6 +21,13 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.perk_actions import (
+    apply_role_perks,
+    feature_gate_ok,
+    find_color_clash,
+    parse_hex_colour,
+    revoke_role_perks,
+)
 from bot_modules.economy.quest_views import (
     QuestApproveButton,
     QuestClaimView,
@@ -28,6 +35,13 @@ from bot_modules.economy.quest_views import (
     can_manage_economy,
 )
 from bot_modules.economy.quests import quest_period
+from bot_modules.services.economy_rentals_service import (
+    cancel_all_for_member,
+    entitlements,
+    list_member_rentals,
+    rent_perk,
+    upsert_personal_role,
+)
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -36,9 +50,15 @@ from bot_modules.services.economy_service import (
     get_ledger,
     get_notify_muted,
     load_econ_settings,
+    notify_member,
     set_notify_muted,
+    transfer_currency,
 )
 from bot_modules.services.quote_renderer import THEMES, render_quote_card
+from bot_modules.services.voice_master_service import (
+    list_name_blocklist,
+    name_is_blocked,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -47,6 +67,60 @@ log = logging.getLogger("dungeonkeeper.economy")
 
 _DISABLED_MSG = "The economy isn't enabled on this server yet."
 _QOTD_CARD_FILENAME = "qotd.png"
+
+# Transfers above this need an explicit confirm step (spec §5, "over 100").
+_PAY_CONFIRM_THRESHOLD = 100
+_MAX_ROLE_NAME_LEN = 32
+_MAX_ICON_BYTES = 256 * 1024
+
+# Human labels for the rentable perks (shop rows, wallet field, DMs).
+_PERK_LABELS = {
+    "role_color": "Custom role colour",
+    "role_name": "Custom role name",
+    "role_icon": "Role icon",
+    "role_gradient": "Gradient role",
+    "gift_color": "Gift-a-colour",
+}
+# The perks a member rents for themselves, in shop display order.
+_SELF_PERKS = ("role_color", "role_name", "role_gradient", "role_icon")
+# Feature-gated perks and the friendly reason shown when the gate is closed.
+_FEATURE_GATED = ("role_gradient", "role_icon")
+
+
+def _perk_price(settings: EconSettings, perk: str) -> int:
+    return int(getattr(settings, f"price_{perk}"))
+
+
+def _icon_store_path(db_path, guild_id: int, user_id: int):
+    """Managed on-disk path for an uploaded personal-role icon (per guild/member)."""
+    directory = db_path.parent / "econ_role_icons" / str(guild_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{user_id}.png"
+
+
+def _rental_lines(settings: EconSettings, rentals: list, user_id: int) -> list[str]:
+    """One line per live rental for the wallet's 'Active rentals' field."""
+    emoji = settings.currency_emoji
+    lines: list[str] = []
+    for r in rentals:
+        perk = str(r["perk"])
+        label = _PERK_LABELS.get(perk, perk)
+        price = int(r["price"])
+        next_bill = int(r["next_bill_at"])
+        owner_id = int(r["user_id"])
+        beneficiary_id = int(r["beneficiary_id"])
+        attribution = ""
+        if perk == "gift_color":
+            if beneficiary_id == user_id and owner_id != user_id:
+                attribution = " (gift received)"
+            elif owner_id == user_id and beneficiary_id != user_id:
+                attribution = f" (gift to <@{beneficiary_id}>)"
+        grace = " · ⏳ in grace" if str(r["state"]) == "grace" else ""
+        lines.append(
+            f"**{label}**{attribution} — {emoji} {price:,}/wk · "
+            f"renews <t:{next_bill}:R>{grace}"
+        )
+    return lines
 
 
 async def _resolve_qotd_image(guild: discord.Guild, bot: Bot) -> bytes | None:
@@ -94,11 +168,106 @@ def _can_grant(user: discord.Member, settings: EconSettings) -> bool:
     return can_manage_economy(user, settings)
 
 
+class _PayConfirmView(discord.ui.View):
+    """Ephemeral Confirm/Cancel gate for a transfer over the threshold."""
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        sender: discord.Member,
+        recipient: discord.Member,
+        amount: int,
+    ) -> None:
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+        self.sender = sender
+        self.recipient = recipient
+        self.amount = amount
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.sender.id:
+            await interaction.response.send_message(
+                "This confirmation isn't yours.", ephemeral=True
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
+    async def _confirm(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        self.stop()
+        await self.cog.finalize_pay(
+            interaction, self.settings, self.guild, self.sender, self.recipient,
+            self.amount, via_confirm=True,
+        )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
+    async def _cancel(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        self.stop()
+        await interaction.response.edit_message(
+            content="Payment cancelled.", embed=None, view=None
+        )
+
+
+class _ShopView(discord.ui.View):
+    """Rent buttons for the self-service role perks (feature-gated rows disabled)."""
+
+    def __init__(
+        self,
+        cog: EconomyCog,
+        settings: EconSettings,
+        guild: discord.Guild,
+        user_id: int,
+        gated: set[str],
+    ) -> None:
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.settings = settings
+        self.guild = guild
+        self.user_id = user_id
+        for perk in _SELF_PERKS:
+            price = _perk_price(settings, perk)
+            button = discord.ui.Button(
+                label=f"Rent {_PERK_LABELS[perk]} · {price}",
+                style=discord.ButtonStyle.primary,
+                disabled=perk in gated,
+                custom_id=f"econ_shop_rent:{perk}",
+            )
+            button.callback = self._make_callback(perk)
+            self.add_item(button)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "Open your own shop with /bank shop.", ephemeral=True
+            )
+            return False
+        return True
+
+    def _make_callback(self, perk: str):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await self.cog.do_rent(interaction, self.settings, self.guild, perk)
+
+        return _cb
+
+
 class EconomyCog(commands.Cog):
     bank = app_commands.Group(
         name="bank",
         description="Wallet and currency commands.",
         guild_only=True,
+    )
+    role = app_commands.Group(
+        name="role",
+        description="Customise your personal role (rent perks with /bank shop).",
+        parent=bank,
     )
 
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
@@ -113,14 +282,15 @@ class EconomyCog(commands.Cog):
         guild_id = guild.id
         user_id = interaction.user.id
 
-        def _load() -> tuple[EconSettings, int, list]:
+        def _load() -> tuple[EconSettings, int, list, list]:
             with self.ctx.open_db() as conn:
                 settings = load_econ_settings(conn, guild_id)
                 balance = get_balance(conn, guild_id, user_id)
                 ledger = get_ledger(conn, guild_id, user_id, limit=10)
-            return settings, balance, ledger
+                rentals = list_member_rentals(conn, guild_id, user_id)
+            return settings, balance, ledger, rentals
 
-        settings, balance, ledger = await asyncio.to_thread(_load)
+        settings, balance, ledger, rentals = await asyncio.to_thread(_load)
 
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
@@ -151,6 +321,12 @@ class EconomyCog(commands.Cog):
         else:
             embed.add_field(
                 name="Recent activity", value="_No activity yet._", inline=False
+            )
+
+        rental_lines = _rental_lines(settings, rentals, user_id)
+        if rental_lines:
+            embed.add_field(
+                name="Active rentals", value="\n".join(rental_lines), inline=False
             )
 
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -270,6 +446,521 @@ class EconomyCog(commands.Cog):
             colour=accent,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # ── transfers ────────────────────────────────────────────────────────
+
+    @bank.command(name="pay", description="Send currency to another member.")
+    @app_commands.describe(member="Who to pay", amount="How much (whole number)")
+    async def bank_pay(
+        self, interaction: discord.Interaction, member: discord.Member, amount: int
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        sender = interaction.user
+        assert isinstance(sender, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not settings.transfers_enabled:
+            await interaction.response.send_message(
+                "Transfers are turned off on this server.", ephemeral=True
+            )
+            return
+        if member.bot:
+            await interaction.response.send_message(
+                "Bots don't have wallets.", ephemeral=True
+            )
+            return
+        if member.id == sender.id:
+            await interaction.response.send_message(
+                "You can't pay yourself.", ephemeral=True
+            )
+            return
+        if amount < 1:
+            await interaction.response.send_message(
+                "The amount must be at least 1.", ephemeral=True
+            )
+            return
+
+        if amount > _PAY_CONFIRM_THRESHOLD:
+            accent = await resolve_accent_color(self.ctx.db_path, guild)
+            confirm = discord.Embed(
+                title="Confirm payment",
+                description=(
+                    f"Send {settings.currency_emoji} **{amount:,}** "
+                    f"{_unit(settings, amount)} to {member.mention}?"
+                ),
+                colour=accent,
+            )
+            view = _PayConfirmView(self, settings, guild, sender, member, amount)
+            await interaction.response.send_message(
+                embed=confirm, view=view, ephemeral=True
+            )
+            return
+
+        await self.finalize_pay(
+            interaction, settings, guild, sender, member, amount, via_confirm=False
+        )
+
+    async def finalize_pay(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+        sender: discord.Member,
+        recipient: discord.Member,
+        amount: int,
+        *,
+        via_confirm: bool,
+    ) -> None:
+        """Execute the transfer and report — shared by the direct and confirm paths."""
+
+        def _tx() -> int:
+            with self.ctx.open_db() as conn:
+                transfer_currency(conn, guild.id, sender.id, recipient.id, amount)
+                return get_balance(conn, guild.id, sender.id)
+
+        try:
+            new_balance = await asyncio.to_thread(_tx)
+        except ValueError as exc:
+            if "insufficient" in str(exc):
+                bal = await asyncio.to_thread(self._balance, guild.id, sender.id)
+                text = (
+                    f"You don't have enough — your balance is "
+                    f"{settings.currency_emoji} {bal:,}."
+                )
+            else:
+                text = "That payment isn't allowed."
+            await self._reply(interaction, text, via_confirm=via_confirm)
+            return
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = discord.Embed(
+            title="Payment sent",
+            description=(
+                f"{settings.currency_emoji} **{amount:,}** {_unit(settings, amount)} "
+                f"→ {recipient.mention}"
+            ),
+            colour=accent,
+        )
+        embed.set_footer(text=f"Your balance: {new_balance:,}")
+        await self._reply_embed(interaction, embed, via_confirm=via_confirm)
+
+        await notify_member(
+            self.bot, self.ctx.db_path, guild.id, recipient.id,
+            content=(
+                f"{sender.display_name} sent you {settings.currency_emoji} "
+                f"{amount:,} {_unit(settings, amount)}."
+            ),
+        )
+
+    # ── shop ─────────────────────────────────────────────────────────────
+
+    @bank.command(name="shop", description="Browse and rent personal-role perks.")
+    async def bank_shop(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        user_id = interaction.user.id
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+
+        gated: set[str] = set()
+        for perk in _FEATURE_GATED:
+            if not await feature_gate_ok(self.bot, guild.id, perk):
+                gated.add(perk)
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = discord.Embed(
+            title="🛍️ Perk shop",
+            description="Weekly rentals — billed every 7 days, cancel any time.",
+            colour=accent,
+        )
+        for perk in _SELF_PERKS:
+            price = _perk_price(settings, perk)
+            note = (
+                " · _requires a server feature not enabled here_"
+                if perk in gated
+                else ""
+            )
+            embed.add_field(
+                name=_PERK_LABELS[perk],
+                value=f"{settings.currency_emoji} **{price:,}** / week{note}",
+                inline=False,
+            )
+        gift_price = _perk_price(settings, "gift_color")
+        embed.add_field(
+            name=_PERK_LABELS["gift_color"],
+            value=(
+                f"{settings.currency_emoji} **{gift_price:,}** / week · "
+                "gift a friend a colour with /bank gift"
+            ),
+            inline=False,
+        )
+        view = _ShopView(self, settings, guild, user_id, gated)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    async def do_rent(
+        self,
+        interaction: discord.Interaction,
+        settings: EconSettings,
+        guild: discord.Guild,
+        perk: str,
+    ) -> None:
+        """Rent a self-perk from a shop button, then project the role."""
+        user_id = interaction.user.id
+
+        def _rent() -> None:
+            with self.ctx.open_db() as conn:
+                rent_perk(conn, settings, guild.id, user_id, perk, now=time.time())
+
+        try:
+            await asyncio.to_thread(_rent)
+        except ValueError as exc:
+            msg = str(exc)
+            if "insufficient" in msg:
+                bal = await asyncio.to_thread(self._balance, guild.id, user_id)
+                text = (
+                    f"You need {settings.currency_emoji} "
+                    f"{_perk_price(settings, perk):,} but only have {bal:,}."
+                )
+            elif "already rented" in msg:
+                text = "You're already renting that perk."
+            else:
+                text = "That perk isn't available."
+            await interaction.response.send_message(text, ephemeral=True)
+            return
+
+        await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
+        await interaction.response.send_message(
+            f"Rented **{_PERK_LABELS[perk]}**! Customise it with `/bank role`.",
+            ephemeral=True,
+        )
+
+    # ── gift ─────────────────────────────────────────────────────────────
+
+    @bank.command(name="gift", description="Gift a friend a custom colour.")
+    @app_commands.describe(member="Who to gift a colour to")
+    async def bank_gift(
+        self, interaction: discord.Interaction, member: discord.Member
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        gifter = interaction.user
+        assert isinstance(gifter, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if member.bot:
+            await interaction.response.send_message(
+                "Bots can't wear a colour.", ephemeral=True
+            )
+            return
+        if member.id == gifter.id:
+            await interaction.response.send_message(
+                "Rent your own colour with /bank shop.", ephemeral=True
+            )
+            return
+
+        def _rent() -> None:
+            with self.ctx.open_db() as conn:
+                rent_perk(
+                    conn, settings, guild.id, gifter.id, "gift_color",
+                    beneficiary_id=member.id, now=time.time(),
+                )
+
+        try:
+            await asyncio.to_thread(_rent)
+        except ValueError as exc:
+            msg = str(exc)
+            if "insufficient" in msg:
+                bal = await asyncio.to_thread(self._balance, guild.id, gifter.id)
+                text = (
+                    f"You need {settings.currency_emoji} "
+                    f"{_perk_price(settings, 'gift_color'):,} but only have {bal:,}."
+                )
+            elif "already rented" in msg:
+                text = "You're already gifting them a colour."
+            else:
+                text = "That gift isn't available."
+            await interaction.response.send_message(text, ephemeral=True)
+            return
+
+        await apply_role_perks(self.bot, self.ctx.db_path, guild.id, member.id)
+        await notify_member(
+            self.bot, self.ctx.db_path, guild.id, member.id,
+            content=(
+                f"{gifter.display_name} gifted you a custom colour! "
+                "Pick one with /bank role color."
+            ),
+        )
+        await interaction.response.send_message(
+            f"Gifted a custom colour to {member.mention}. They can set it with "
+            "`/bank role color`.",
+            ephemeral=True,
+        )
+
+    # ── role studio ──────────────────────────────────────────────────────
+
+    @role.command(name="name", description="Set your personal role's name.")
+    @app_commands.describe(text="The name (up to 32 characters)")
+    async def role_name(self, interaction: discord.Interaction, text: str) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        user_id = interaction.user.id
+        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if "role_name" not in ent:
+            await interaction.response.send_message(
+                "Rent the **Custom role name** perk first (/bank shop).", ephemeral=True
+            )
+            return
+        text = text.strip()
+        if not text or len(text) > _MAX_ROLE_NAME_LEN:
+            await interaction.response.send_message(
+                f"Role names must be 1–{_MAX_ROLE_NAME_LEN} characters.", ephemeral=True
+            )
+            return
+        patterns = await asyncio.to_thread(self._name_blocklist, guild.id)
+        if name_is_blocked(text, patterns):
+            await interaction.response.send_message(
+                "That name isn't allowed here.", ephemeral=True
+            )
+            return
+        await asyncio.to_thread(
+            self._upsert_role, guild.id, user_id, {"name": text}
+        )
+        await self._apply_and_confirm(
+            interaction, guild.id, user_id, f"Your role name is now **{text}**."
+        )
+
+    @role.command(name="color", description="Set your personal role's colour.")
+    @app_commands.describe(hex="A hex colour like #7B2FF7")
+    async def role_color(self, interaction: discord.Interaction, hex: str) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        user_id = interaction.user.id
+        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if "role_color" not in ent and "gift_color" not in ent:
+            await interaction.response.send_message(
+                "Rent the **Custom role colour** perk or get one gifted (/bank shop).",
+                ephemeral=True,
+            )
+            return
+        value = parse_hex_colour(hex)
+        if value is None:
+            await interaction.response.send_message(
+                "Give a colour as a hex code like `#7B2FF7`.", ephemeral=True
+            )
+            return
+        clash = find_color_clash(guild, value)
+        if clash is not None:
+            await interaction.response.send_message(
+                f"That colour is too close to **{clash.name}** — pick another.",
+                ephemeral=True,
+            )
+            return
+        await asyncio.to_thread(
+            self._upsert_role, guild.id, user_id, {"color": value}
+        )
+        await self._apply_and_confirm(
+            interaction, guild.id, user_id, f"Your role colour is now `#{value:06X}`."
+        )
+
+    @role.command(name="gradient", description="Set a two-colour gradient role.")
+    @app_commands.describe(hex1="First hex colour", hex2="Second hex colour")
+    async def role_gradient(
+        self, interaction: discord.Interaction, hex1: str, hex2: str
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        user_id = interaction.user.id
+        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if "role_gradient" not in ent:
+            await interaction.response.send_message(
+                "Rent the **Gradient role** perk first (/bank shop).", ephemeral=True
+            )
+            return
+        if not await feature_gate_ok(self.bot, guild.id, "role_gradient"):
+            await interaction.response.send_message(
+                "This server doesn't support gradient roles right now.", ephemeral=True
+            )
+            return
+        v1, v2 = parse_hex_colour(hex1), parse_hex_colour(hex2)
+        if v1 is None or v2 is None:
+            await interaction.response.send_message(
+                "Give both colours as hex codes like `#7B2FF7`.", ephemeral=True
+            )
+            return
+        clash = find_color_clash(guild, v1) or find_color_clash(guild, v2)
+        if clash is not None:
+            await interaction.response.send_message(
+                f"That colour is too close to **{clash.name}** — pick another.",
+                ephemeral=True,
+            )
+            return
+        await asyncio.to_thread(
+            self._upsert_role, guild.id, user_id, {"color": v1, "color2": v2}
+        )
+        await self._apply_and_confirm(
+            interaction, guild.id, user_id,
+            f"Your gradient is now `#{v1:06X}` → `#{v2:06X}`.",
+        )
+
+    @role.command(name="icon", description="Set your personal role's icon.")
+    @app_commands.describe(
+        emoji="A unicode emoji to use as the icon",
+        image="Or upload an image (256KB max)",
+    )
+    async def role_icon(
+        self,
+        interaction: discord.Interaction,
+        emoji: str | None = None,
+        image: discord.Attachment | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        user_id = interaction.user.id
+        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if "role_icon" not in ent:
+            await interaction.response.send_message(
+                "Rent the **Role icon** perk first (/bank shop).", ephemeral=True
+            )
+            return
+        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
+            await interaction.response.send_message(
+                "This server doesn't support role icons right now.", ephemeral=True
+            )
+            return
+        if not emoji and image is None:
+            await interaction.response.send_message(
+                "Give an emoji or upload an image.", ephemeral=True
+            )
+            return
+
+        if image is not None:
+            if image.size > _MAX_ICON_BYTES:
+                await interaction.response.send_message(
+                    "That image is too big — 256KB max.", ephemeral=True
+                )
+                return
+            data = await image.read()
+            path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
+
+            def _write() -> None:
+                path.write_bytes(data)
+                self._upsert_role(guild.id, user_id, {"icon_path": str(path)})
+
+            await asyncio.to_thread(_write)
+        else:
+            assert emoji is not None
+            await asyncio.to_thread(
+                self._upsert_role, guild.id, user_id, {"icon_path": emoji.strip()}
+            )
+        await self._apply_and_confirm(
+            interaction, guild.id, user_id, "Your role icon is set."
+        )
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member) -> None:
+        """Cancel a leaver's rentals and re-project every affected role."""
+        guild = member.guild
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            return
+
+        def _cancel() -> list:
+            with self.ctx.open_db() as conn:
+                return cancel_all_for_member(
+                    conn, guild.id, member.id, now=time.time()
+                )
+
+        rows = await asyncio.to_thread(_cancel)
+        # Re-project every distinct beneficiary whose entitlements just changed —
+        # the leaver themselves (self-perks / received gifts) AND any friend whose
+        # gifted colour the leaver was funding.
+        affected = {int(r["beneficiary_id"]) for r in rows}
+        affected.add(member.id)
+        for beneficiary_id in affected:
+            try:
+                await revoke_role_perks(
+                    self.bot, self.ctx.db_path, guild.id, beneficiary_id
+                )
+            except Exception:
+                log.exception(
+                    "econ: role cleanup failed for %s in %s", beneficiary_id, guild.id
+                )
+
+    # ── shared helpers ───────────────────────────────────────────────────
+
+    async def _apply_and_confirm(
+        self, interaction: discord.Interaction, guild_id: int, user_id: int, msg: str
+    ) -> None:
+        ok = await apply_role_perks(self.bot, self.ctx.db_path, guild_id, user_id)
+        if ok:
+            await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            await interaction.response.send_message(
+                "Saved — but I couldn't update your role right now. Try again shortly.",
+                ephemeral=True,
+            )
+
+    async def _reply(
+        self, interaction: discord.Interaction, text: str, *, via_confirm: bool
+    ) -> None:
+        if via_confirm:
+            await interaction.response.edit_message(content=text, embed=None, view=None)
+        else:
+            await interaction.response.send_message(text, ephemeral=True)
+
+    async def _reply_embed(
+        self, interaction: discord.Interaction, embed: discord.Embed, *, via_confirm: bool
+    ) -> None:
+        if via_confirm:
+            await interaction.response.edit_message(
+                content=None, embed=embed, view=None
+            )
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    def _balance(self, guild_id: int, user_id: int) -> int:
+        with self.ctx.open_db() as conn:
+            return get_balance(conn, guild_id, user_id)
+
+    def _load_role_ctx(
+        self, guild_id: int, user_id: int
+    ) -> tuple[EconSettings, set[str]]:
+        with self.ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            ent = entitlements(conn, guild_id, user_id)
+        return settings, ent
+
+    def _name_blocklist(self, guild_id: int) -> list[str]:
+        with self.ctx.open_db() as conn:
+            return list_name_blocklist(conn, guild_id)
+
+    def _upsert_role(
+        self, guild_id: int, user_id: int, values: dict[str, object]
+    ) -> None:
+        with self.ctx.open_db() as conn:
+            upsert_personal_role(conn, guild_id, user_id, values)
 
     @bank.command(name="quests", description="View and claim the server's active quests.")
     async def bank_quests(self, interaction: discord.Interaction) -> None:

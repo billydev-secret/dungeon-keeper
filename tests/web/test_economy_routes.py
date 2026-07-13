@@ -10,6 +10,35 @@ from web_server.auth import DiscordOAuthAuth, SESSION_COOKIE
 from web_server.server import create_app
 
 
+def _seed_rollup(fake_ctx, iso_week: str, *, median: float, **cols) -> None:
+    """Insert one econ_metrics_weekly row for the fixture guild."""
+    row = {
+        "guild_id": fake_ctx.guild_id,
+        "iso_week": iso_week,
+        "median_income": median,
+        "p90_income": cols.get("p90_income", median * 2),
+        "active_members": cols.get("active_members", 10),
+        "earners": cols.get("earners", 6),
+        "minted": cols.get("minted", 1000),
+        "burned": cols.get("burned", 400),
+        "faucet_mix": cols.get("faucet_mix", '{"logins": 0.5, "activity": 0.3, '
+        '"quests": 0.1, "games": 0.1, "grants": 0.0}'),
+        "rental_holders": cols.get("rental_holders", 3),
+        "rentals_live": cols.get("rentals_live", 4),
+        "rentals_ended": cols.get("rentals_ended", 1),
+        "streaks_7plus": cols.get("streaks_7plus", 5),
+        "grace_used": cols.get("grace_used", 2),
+        "computed_at": cols.get("computed_at", 1_700_000_000.0),
+    }
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            f"INSERT INTO econ_metrics_weekly ({', '.join(row)}) "
+            f"VALUES ({', '.join('?' for _ in row)})",
+            tuple(row.values()),
+        )
+        conn.commit()
+
+
 def _non_admin_client(fake_ctx) -> TestClient:
     """A session that is a guild member but holds no admin bit."""
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
@@ -126,5 +155,66 @@ def test_put_rejects_booster_multiplier_below_one(authed_client):
 def test_put_requires_admin(fake_ctx):
     client = _non_admin_client(fake_ctx)
     resp = client.put("/api/economy/config", json={"enabled": True})
+    assert resp.status_code == 403
+    client.close()
+
+
+# ── GET /api/economy/metrics ───────────────────────────────────────────
+
+
+def test_metrics_empty_state(authed_client):
+    """No rollups yet → empty weeks, no hints, zero median."""
+    resp = authed_client.get("/api/economy/metrics")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["weeks"] == []
+    assert data["hints"] == {}
+    assert data["median_income"] == 0.0
+
+
+def test_metrics_returns_weeks_newest_first(authed_client, fake_ctx):
+    """Two seeded weeks come back newest-first with faucet_mix left a string."""
+    _seed_rollup(fake_ctx, "2026-W01", median=40.0, minted=500, burned=300)
+    _seed_rollup(fake_ctx, "2026-W02", median=100.0, minted=1200, burned=400)
+
+    resp = authed_client.get("/api/economy/metrics")
+    assert resp.status_code == 200
+    data = resp.json()
+
+    weeks = data["weeks"]
+    assert len(weeks) == 2
+    # Newest ISO week first.
+    assert weeks[0]["iso_week"] == "2026-W02"
+    assert weeks[1]["iso_week"] == "2026-W01"
+    assert weeks[0]["median_income"] == 100.0
+    assert weeks[0]["minted"] == 1200
+    assert weeks[0]["burned"] == 400
+    # faucet_mix stays a JSON string (the tile parses it client-side).
+    assert isinstance(weeks[0]["faucet_mix"], str)
+
+
+def test_metrics_hints_from_latest_week_only(authed_client, fake_ctx):
+    """Hints derive from the latest week's median (100), not the older (40)."""
+    _seed_rollup(fake_ctx, "2026-W01", median=40.0)
+    _seed_rollup(fake_ctx, "2026-W02", median=100.0)
+
+    resp = authed_client.get("/api/economy/metrics")
+    data = resp.json()
+
+    assert data["median_income"] == 100.0
+    hints = data["hints"]
+    # Factors anchored to the spec defaults at median 100.
+    assert hints["price_role_color"] == 50
+    assert hints["price_role_name"] == 35
+    assert hints["price_role_icon"] == 75
+    assert hints["price_role_gradient"] == 120
+    assert hints["price_gift_color"] == 50
+    assert hints["price_text_room"] == 200
+    assert hints["price_voice_room"] == 200
+
+
+def test_metrics_requires_admin(fake_ctx):
+    client = _non_admin_client(fake_ctx)
+    resp = client.get("/api/economy/metrics")
     assert resp.status_code == 403
     client.close()

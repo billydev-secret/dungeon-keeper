@@ -547,3 +547,651 @@ async def test_muted_member_not_dmd_by_notify_member(ctx, db):
     delivered = await notify_member(bot, db, GUILD_ID, 500, content="ping")
     assert delivered is True
     dm_target.send.assert_not_called()
+
+
+# ── Stage 3: transfers / shop / role studio / gift / rentals ─────────────────
+
+import contextlib  # noqa: E402
+
+from bot_modules.services.voice_master_service import add_name_blocklist  # noqa: E402
+
+
+def _credit(db, user_id, amount) -> None:
+    with open_db(db) as conn:
+        apply_credit(conn, GUILD_ID, user_id, amount, "grant", actor_id=1)
+
+
+def _settings(db):
+    with open_db(db) as conn:
+        return load_econ_settings(conn, GUILD_ID)
+
+
+def _add_rental(db, perk, *, user_id=500, beneficiary_id=None, state="active") -> None:
+    beneficiary_id = user_id if beneficiary_id is None else beneficiary_id
+    now = time.time()
+    with open_db(db) as conn:
+        conn.execute(
+            """
+            INSERT INTO econ_rentals
+                (guild_id, user_id, perk, state, price, started_at, next_bill_at,
+                 cancel_at_period_end, suspended, beneficiary_id, created_at)
+            VALUES (?, ?, ?, ?, 50, ?, ?, 0, 0, ?, ?)
+            """,
+            (GUILD_ID, user_id, perk, state, now, now + 604800, beneficiary_id, now),
+        )
+
+
+def _live_rentals(db) -> list:
+    with open_db(db) as conn:
+        return conn.execute(
+            "SELECT * FROM econ_rentals WHERE state IN ('active', 'grace') "
+            "ORDER BY id"
+        ).fetchall()
+
+
+def _guild_roles(roles=()) -> MagicMock:
+    g = MagicMock()
+    g.id = GUILD_ID
+    g.roles = list(roles)
+    return g
+
+
+def _role_interaction(actor, roles=()) -> MagicMock:
+    inter = _interaction(actor)
+    inter.guild = _guild_roles(roles)
+    return inter
+
+
+@contextlib.contextmanager
+def _patch_projection():
+    """Isolate command logic from the real Discord projector / DM path."""
+    with (
+        patch(
+            "bot_modules.cogs.economy_cog.apply_role_perks",
+            new=AsyncMock(return_value=True),
+        ) as apply_mock,
+        patch(
+            "bot_modules.cogs.economy_cog.revoke_role_perks", new=AsyncMock()
+        ) as revoke_mock,
+        patch(
+            "bot_modules.cogs.economy_cog.notify_member",
+            new=AsyncMock(return_value=True),
+        ) as notify_mock,
+    ):
+        yield apply_mock, revoke_mock, notify_mock
+
+
+# ── /bank pay ────────────────────────────────────────────────────────────────
+
+
+async def _pay(cog, interaction, member, amount) -> None:
+    await cog.bank_pay.callback(cog, interaction, member, amount)
+
+
+@pytest.mark.asyncio
+async def test_pay_immediate_under_threshold(ctx, db):
+    _enable(db)
+    _credit(db, 500, 200)
+    cog = _make_cog(ctx)
+    sender = _member(member_id=500, name="Alice")
+    recipient = _member(member_id=900, name="Bob")
+    interaction = _interaction(sender)
+
+    with _patch_projection() as (_apply, _revoke, notify):
+        await _pay(cog, interaction, recipient, 50)
+
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 150
+        assert get_balance(conn, GUILD_ID, 900) == 50
+    notify.assert_awaited_once()
+    assert notify.await_args is not None
+    assert "50" in notify.await_args.kwargs["content"]
+
+
+@pytest.mark.asyncio
+async def test_pay_over_threshold_requires_confirm(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    sender = _member(member_id=500)
+    recipient = _member(member_id=900)
+    interaction = _interaction(sender)
+
+    with _patch_projection():
+        await _pay(cog, interaction, recipient, 200)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    from bot_modules.cogs.economy_cog import _PayConfirmView
+
+    assert isinstance(kwargs["view"], _PayConfirmView)
+    # No transfer happened yet — the gate holds.
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 500
+        assert get_balance(conn, GUILD_ID, 900) == 0
+
+
+@pytest.mark.asyncio
+async def test_pay_exactly_100_transfers_without_confirm(ctx, db):
+    """Spec: confirm triggers *over* 100 — 100 itself sends straight through."""
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with _patch_projection():
+        await _pay(cog, interaction, _member(member_id=900), 100)
+    assert "view" not in interaction.response.send_message.await_args.kwargs
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 900) == 100
+
+
+@pytest.mark.asyncio
+async def test_pay_confirm_button_executes_transfer(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    sender = _member(member_id=500)
+    recipient = _member(member_id=900)
+    interaction = _interaction(sender)
+
+    with _patch_projection():
+        await _pay(cog, interaction, recipient, 200)
+        view = interaction.response.send_message.await_args.kwargs["view"]
+        confirm_inter = _interaction(sender)
+        await view.children[0].callback(confirm_inter)  # Confirm button
+
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 300
+        assert get_balance(conn, GUILD_ID, 900) == 200
+    confirm_inter.response.edit_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_pay_cancel_button_aborts(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    sender = _member(member_id=500)
+    recipient = _member(member_id=900)
+    interaction = _interaction(sender)
+
+    with _patch_projection():
+        await _pay(cog, interaction, recipient, 200)
+        view = interaction.response.send_message.await_args.kwargs["view"]
+        cancel_inter = _interaction(sender)
+        await view.children[1].callback(cancel_inter)  # Cancel button
+
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 500
+    assert "cancel" in cancel_inter.response.edit_message.await_args.kwargs["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_pay_transfers_disabled(ctx, db):
+    _enable(db, transfers_enabled=False)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with _patch_projection():
+        await _pay(cog, interaction, _member(member_id=900), 50)
+
+    args = interaction.response.send_message.await_args.args
+    assert "off" in args[0].lower()
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 500
+
+
+@pytest.mark.asyncio
+async def test_pay_insufficient(ctx, db):
+    _enable(db)
+    _credit(db, 500, 10)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with _patch_projection():
+        await _pay(cog, interaction, _member(member_id=900), 50)
+
+    args = interaction.response.send_message.await_args.args
+    assert "enough" in args[0].lower()
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 10
+        assert get_balance(conn, GUILD_ID, 900) == 0
+
+
+@pytest.mark.asyncio
+async def test_pay_rejects_self(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    sender = _member(member_id=500)
+    interaction = _interaction(sender)
+    with _patch_projection():
+        await _pay(cog, interaction, sender, 50)
+    assert "yourself" in interaction.response.send_message.await_args.args[0].lower()
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 500
+
+
+@pytest.mark.asyncio
+async def test_pay_rejects_bot(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    sender = _member(member_id=500)
+    interaction = _interaction(sender)
+    with _patch_projection():
+        await _pay(cog, interaction, _member(member_id=901, is_bot=True), 50)
+    assert "bot" in interaction.response.send_message.await_args.args[0].lower()
+
+
+# ── /bank shop ───────────────────────────────────────────────────────────────
+
+
+async def _shop(cog, interaction) -> None:
+    await cog.bank_shop.callback(cog, interaction)
+
+
+@pytest.mark.asyncio
+async def test_shop_lists_perks_and_gates_features(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    async def _gate(bot, guild_id, perk):
+        return perk not in ("role_gradient", "role_icon")
+
+    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(side_effect=_gate)):
+        await _shop(cog, interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    from bot_modules.cogs.economy_cog import _ShopView
+
+    view = kwargs["view"]
+    assert isinstance(view, _ShopView)
+    # Gradient + icon buttons disabled; colour + name enabled.
+    buttons = [b for b in view.children if isinstance(b, discord.ui.Button)]
+    disabled = {
+        str(b.custom_id).split(":")[1] for b in buttons if b.disabled
+    }
+    assert disabled == {"role_gradient", "role_icon"}
+    blob = " ".join(f.value for f in kwargs["embed"].fields)
+    assert "requires a server feature" in blob
+
+
+@pytest.mark.parametrize(
+    "perk", ["role_color", "role_name", "role_gradient", "role_icon"]
+)
+@pytest.mark.asyncio
+async def test_shop_rent_success_each_perk(ctx, db, perk):
+    _enable(db)
+    _credit(db, 500, 500)
+    settings = _settings(db)
+    price = int(getattr(settings, f"price_{perk}"))
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with _patch_projection() as (apply_mock, _r, _n):
+        await cog.do_rent(interaction, settings, _guild_roles(), perk)
+
+    rentals = _live_rentals(db)
+    assert len(rentals) == 1 and rentals[0]["perk"] == perk
+    apply_mock.assert_awaited_once()
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 500 - price  # upfront week
+
+
+@pytest.mark.asyncio
+async def test_shop_rent_duplicate(ctx, db):
+    _enable(db)
+    _credit(db, 500, 200)
+    cog = _make_cog(ctx)
+
+    with _patch_projection():
+        await cog.do_rent(_interaction(_member(member_id=500)), _settings(db), _guild_roles(), "role_color")
+        interaction = _interaction(_member(member_id=500))
+        await cog.do_rent(interaction, _settings(db), _guild_roles(), "role_color")
+
+    assert "already" in interaction.response.send_message.await_args.args[0].lower()
+    assert len(_live_rentals(db)) == 1
+
+
+@pytest.mark.asyncio
+async def test_shop_rent_insufficient(ctx, db):
+    _enable(db)
+    _credit(db, 500, 10)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with _patch_projection():
+        await cog.do_rent(interaction, _settings(db), _guild_roles(), "role_color")
+
+    assert "only have" in interaction.response.send_message.await_args.args[0].lower()
+    assert _live_rentals(db) == []
+
+
+# ── /bank role validators ────────────────────────────────────────────────────
+
+
+async def _role_name(cog, interaction, text) -> None:
+    await cog.role_name.callback(cog, interaction, text)
+
+
+async def _role_color(cog, interaction, hex_) -> None:
+    await cog.role_color.callback(cog, interaction, hex_)
+
+
+async def _role_gradient(cog, interaction, h1, h2) -> None:
+    await cog.role_gradient.callback(cog, interaction, h1, h2)
+
+
+async def _role_icon(cog, interaction, emoji=None, image=None) -> None:
+    await cog.role_icon.callback(cog, interaction, emoji, image)
+
+
+@pytest.mark.asyncio
+async def test_role_name_needs_entitlement(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _role_name(cog, interaction, "Cool")
+    assert "rent" in interaction.response.send_message.await_args.args[0].lower()
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_role_name_blocklist_hit(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_name")
+    with open_db(db) as conn:
+        add_name_blocklist(conn, GUILD_ID, "badword", 1)
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _role_name(cog, interaction, "My BadWord name")
+    assert "allowed" in interaction.response.send_message.await_args.args[0].lower()
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_role_name_too_long(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_name")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection():
+        await _role_name(cog, interaction, "x" * 33)
+    assert "32" in interaction.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_role_name_success(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_name")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _role_name(cog, interaction, "Stardust")
+    apply_mock.assert_awaited_once()
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT name FROM econ_personal_roles WHERE user_id = 500"
+        ).fetchone()
+    assert row["name"] == "Stardust"
+
+
+@pytest.mark.asyncio
+async def test_role_color_needs_entitlement(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _role_color(cog, interaction, "#7B2FF7")
+    assert "perk" in interaction.response.send_message.await_args.args[0].lower()
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_role_color_bad_hex(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_color")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection():
+        await _role_color(cog, interaction, "not-a-colour")
+    assert "hex" in interaction.response.send_message.await_args.args[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_role_color_delta_e_clash(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_color")
+    staff = MagicMock()
+    staff.id = 77
+    staff.name = "Admins"
+    staff.colour = discord.Colour(0xFF0000)
+    staff.permissions = discord.Permissions(administrator=True)
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500), roles=[staff])
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _role_color(cog, interaction, "#FE0101")  # near-identical red
+    args = interaction.response.send_message.await_args.args
+    assert "Admins" in args[0]
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_role_color_gift_entitlement_allows(ctx, db):
+    _enable(db)
+    _add_rental(db, "gift_color", user_id=800, beneficiary_id=500)  # gifted to 500
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await _role_color(cog, interaction, "#00FF00")
+    apply_mock.assert_awaited_once()
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT color FROM econ_personal_roles WHERE user_id = 500"
+        ).fetchone()
+    assert row["color"] == 0x00FF00
+
+
+@pytest.mark.asyncio
+async def test_role_gradient_needs_feature(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_gradient")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=False)),
+    ):
+        await _role_gradient(cog, interaction, "#111111", "#222222")
+    assert "support" in interaction.response.send_message.await_args.args[0].lower()
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_role_gradient_success(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_gradient")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)),
+    ):
+        await _role_gradient(cog, interaction, "#111111", "#222222")
+    apply_mock.assert_awaited_once()
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT color, color2 FROM econ_personal_roles WHERE user_id = 500"
+        ).fetchone()
+    assert row["color"] == 0x111111 and row["color2"] == 0x222222
+
+
+@pytest.mark.asyncio
+async def test_role_icon_without_feature(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_icon")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=False)),
+    ):
+        await _role_icon(cog, interaction, emoji="✨")
+    assert "support" in interaction.response.send_message.await_args.args[0].lower()
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_role_icon_emoji_success(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_icon")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)),
+    ):
+        await _role_icon(cog, interaction, emoji="✨")
+    apply_mock.assert_awaited_once()
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
+        ).fetchone()
+    assert row["icon_path"] == "✨"
+
+
+# ── /bank gift ───────────────────────────────────────────────────────────────
+
+
+async def _gift(cog, interaction, member) -> None:
+    await cog.bank_gift.callback(cog, interaction, member)
+
+
+@pytest.mark.asyncio
+async def test_gift_success_both_sides(ctx, db):
+    _enable(db)
+    _credit(db, 500, 50)
+    cog = _make_cog(ctx)
+    gifter = _member(member_id=500, name="Alice")
+    friend = _member(member_id=900, name="Bob")
+    interaction = _interaction(gifter)
+
+    with _patch_projection() as (apply_mock, _r, notify):
+        await _gift(cog, interaction, friend)
+
+    rentals = _live_rentals(db)
+    assert len(rentals) == 1
+    assert rentals[0]["perk"] == "gift_color"
+    assert rentals[0]["user_id"] == 500 and rentals[0]["beneficiary_id"] == 900
+    # Beneficiary's role is projected and DM'd; payer gets the confirmation.
+    apply_mock.assert_awaited_once_with(cog.bot, ctx.db_path, GUILD_ID, 900)
+    notify.assert_awaited_once()
+    assert notify.await_args is not None
+    assert notify.await_args.args[3] == 900  # DM sent to the beneficiary
+
+
+@pytest.mark.asyncio
+async def test_gift_rejects_self_and_bot(ctx, db):
+    _enable(db)
+    _credit(db, 500, 50)
+    cog = _make_cog(ctx)
+    gifter = _member(member_id=500)
+    with _patch_projection():
+        await _gift(cog, _interaction(gifter), gifter)
+    interaction = _interaction(gifter)
+    with _patch_projection():
+        await _gift(cog, interaction, _member(member_id=901, is_bot=True))
+    assert "bot" in interaction.response.send_message.await_args.args[0].lower()
+    assert _live_rentals(db) == []
+
+
+@pytest.mark.asyncio
+async def test_gift_insufficient(ctx, db):
+    _enable(db)
+    _credit(db, 500, 10)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+    with _patch_projection():
+        await _gift(cog, interaction, _member(member_id=900))
+    assert "only have" in interaction.response.send_message.await_args.args[0].lower()
+    assert _live_rentals(db) == []
+
+
+# ── /bank wallet: rentals field ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_wallet_shows_active_rentals(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_color", user_id=500)
+    _add_rental(db, "gift_color", user_id=800, beneficiary_id=500)  # gift received
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await _wallet(cog, interaction)
+
+    embed = interaction.response.send_message.await_args.kwargs["embed"]
+    rentals_field = next(f for f in embed.fields if f.name == "Active rentals")
+    assert "Custom role colour" in rentals_field.value
+    assert "gift received" in rentals_field.value
+
+
+# ── on_member_remove cleanup ─────────────────────────────────────────────────
+
+
+async def _member_remove(cog, member) -> None:
+    await cog.on_member_remove(member)
+
+
+def _leaving_member(member_id) -> MagicMock:
+    m = MagicMock()
+    m.id = member_id
+    m.guild = _guild_roles()
+    return m
+
+
+@pytest.mark.asyncio
+async def test_member_remove_cancels_and_reprojects_all(ctx, db):
+    _enable(db)
+    # Leaver 500 rents a colour AND gifts a colour to friend 900.
+    _add_rental(db, "role_color", user_id=500)
+    _add_rental(db, "gift_color", user_id=500, beneficiary_id=900)
+    cog = _make_cog(ctx)
+
+    with _patch_projection() as (_a, revoke, _n):
+        await _member_remove(cog, _leaving_member(500))
+
+    # Both live rentals cancelled.
+    assert _live_rentals(db) == []
+    # Re-projected for the leaver (500) and the still-present friend (900).
+    revoked_ids = {call.args[3] for call in revoke.await_args_list}
+    assert revoked_ids == {500, 900}
+
+
+@pytest.mark.asyncio
+async def test_member_remove_beneficiary_leaving_cancels_gift(ctx, db):
+    _enable(db)
+    # Friend 900 leaves; the gift 500→900 must lapse.
+    _add_rental(db, "gift_color", user_id=500, beneficiary_id=900)
+    cog = _make_cog(ctx)
+
+    with _patch_projection() as (_a, revoke, _n):
+        await _member_remove(cog, _leaving_member(900))
+
+    assert _live_rentals(db) == []
+    revoked_ids = {call.args[3] for call in revoke.await_args_list}
+    assert 900 in revoked_ids
+
+
+@pytest.mark.asyncio
+async def test_member_remove_skips_when_economy_disabled(ctx, db):
+    _add_rental(db, "role_color", user_id=500)  # economy left disabled
+    cog = _make_cog(ctx)
+    with _patch_projection() as (_a, revoke, _n):
+        await _member_remove(cog, _leaving_member(500))
+    revoke.assert_not_awaited()
+    assert len(_live_rentals(db)) == 1  # untouched

@@ -32,6 +32,9 @@ const WIDGETS = [
   { id: "health-mod-workload",     label: "Mod Workload",        category: "Health", perms: ["admin"], source: "health", tileKey: "mod_workload",     wide: false, nav: "health-mod-workload",    needsNames: true  },
   { id: "health-sentiment-feed",  label: "Sentiment Feed",      category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment-feed", needsNames: true,  maxRows: 4 },
   { id: "health-message-feed",   label: "Message Feed",         category: "Health", perms: ["admin"], source: "health", tileKey: "message_feed",    wide: true,  nav: "health-message-feed",  needsNames: true,  maxRows: 4 },
+
+  // ── Economy tiles ────────────────────────────────────────────────
+  { id: "economy-metrics",       label: "Economy",             category: "Health", perms: ["admin"], source: "economy", wide: false, nav: "economy-config" },
 ];
 
 // Keyed lookup
@@ -93,6 +96,7 @@ const TILE_LOADERS = {
   "health-mod-workload":    () => import("./tiles/mod-workload.js"),
   "health-sentiment-feed": () => import("./tiles/sentiment-feed.js"),
   "health-message-feed":  () => import("./tiles/message-feed.js"),
+  "economy-metrics":        () => import("./tiles/economy-metrics.js"),
 };
 
 // Cache resolved modules so we import each tile at most once

@@ -11,7 +11,7 @@ console.log("[widget-grid] resize-enabled build loaded");
  *
  * @param {HTMLElement} gridEl  - The .home-grid element to populate
  * @param {string[]}    layout  - Ordered array of widget IDs
- * @param {object}      data    - { home: apiResponse|null, health: { tiles, channel_names, user_names }|null }
+ * @param {object}      data    - { home: apiResponse|null, health: { tiles, channel_names, user_names }|null, economy: { weeks, hints, median_income }|null }
  * @param {object}      opts    - { editMode, onReorder(newLayout), onRemove(id), onAdd() }
  */
 function entryToParts(entry) {
@@ -108,6 +108,8 @@ export async function renderGrid(gridEl, layout, data, opts = {}) {
         }
       } else if (widget.source === "home" && data.home) {
         renderTile(content, data.home);
+      } else if (widget.source === "economy" && data.economy) {
+        renderTile(content, data.economy);
       } else {
         content.innerHTML = `<div class="home-card-label">${esc(widget.label)}</div><div class="home-dim">Loading...</div>`;
       }

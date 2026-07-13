@@ -1,8 +1,12 @@
 # Economy & Perk Shop — Spec V3.1 (repo-grounded)
 
 **Brandable per-guild currency · Logins & streaks · XP conversion · Quests · Rentable perks**
-*Status: Design spec (unbuilt — implementation plan in `docs/plans/economy-and-perk-shop.md`).
-Supersedes the uploaded V3 draft. All numbers are per-guild-tunable defaults (§9).*
+*Status: partially shipped — Stages 0–3 built (wallets/ledger/config, faucets,
+quests, and transfers + the rental engine + role perks + gifts). Metrics (Stage 4),
+soak/tuning (Stage 5), and private rooms (Stage 6) plus the v2 member dashboard and
+spotlight slots remain design-only. Implementation plan in
+`docs/plans/economy-and-perk-shop.md`. Supersedes the uploaded V3 draft. All numbers
+are per-guild-tunable defaults (§9).*
 
 This revision replaces V3's assumptions with the systems Dungeon Keeper actually has.
 The load-bearing change: **currency does not get its own activity tracker** — it converts
@@ -154,16 +158,27 @@ the sweep:** a sign-off community quest settles ONLY via the dashboard's manual 
 economy loop (`list_settleable_community_quests` filters out sign-off quests, so the
 auto-sweep never pays one awaiting approval).
 
-## 5. Transfers
+## 5. Transfers  *(shipped — Stage 3)*
 
-`/bank pay @member amount` — min 1, whole numbers, no fee. Confirmation step over 100.
-Both sides ledgered. Per-guild `transfers_enabled` toggle (default **on**) is the kill
-switch for alt-funneling.
+`/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
+100** (an ephemeral confirm button before the debit lands). Both sides ledgered
+(payer `transfer_out`, recipient `transfer_in`). Per-guild `transfers_enabled` toggle
+(default **on**) is the kill switch for alt-funneling; `/bank pay` refuses with a
+branded notice when it is off. **Transfers do not mint** — the recipient's
+`transfer_in` credit takes **no** booster multiplier (the ×1.5 is a faucet-only patron
+bonus); a transfer only moves existing currency between wallets.
 
 ## 6. Sinks (The Perk Shop)
 
+**Shipped (Stage 3):** the role-customization perks (solid colour, name, icon,
+gradient) and **gift-a-color** are live, browsable and rentable via `/bank shop`
+and `/bank role` (§7). Private rooms stay **Stage 6** and the spotlight slot stays
+**v2** — both still design-only below.
+
 Weekly rentals bill on personal anniversary tick. Defaults below; every price per-guild
-tunable (§9).
+tunable (§9). **Renewal bills the CURRENT guild price at each anniversary** — the
+rent-time price is snapshotted only for week one; a price tuned in the config panel
+takes effect on the next cycle, never retroactively.
 
 | Perk | Per week | Repo grounding |
 |---|---|---|
@@ -176,26 +191,49 @@ tunable (§9).
 | Gift-a-color | 50 | Payer funds a friend's solid color |
 | Spotlight slot | 150 flat | **v2 (decided).** Featured embed in `spotlight_channel_id`, buyer text through the name blocklist, 7-day expiry, 3/ISO-week inventory |
 
-**Personal roles:** one per member, auto-created in a fixed hierarchy band anchored by a
-named anchor role (`guild.edit_role_positions` under an anchor — the exact mechanism
-`booster_roles.sync_swatches` uses), positioned **above** the booster cosmetic swatch
-band so a rented color wins the display-color contest. ΔE collision check against staff
-colors. Deleted when all role-perks lapse; role-count alert at 200.
+**Personal roles:** one per member, auto-created **positioned above the booster
+cosmetic swatch band** (the "#### Cosmetics" anchor) so a rented colour wins the
+display-colour contest — the position is set **on create only** (a reconcile never
+re-hoists a manually moved role). The projector is idempotent: it reconciles the role
+to the member's current entitlements (name / colour / gradient / icon) and downgrades
+cleanly when a component lapses. Guards: a **ΔE ≥ 25 collision check against staff role
+colours** (a too-close colour is refused, the message naming the staff role it clashes
+with), and role **names run through the Voice Master name blocklist** (the shared
+matcher/table). Icon perks gate on `ROLE_ICONS` and gradient on Enhanced Role Styles
+(`ENHANCED_ROLE_COLORS`) in `guild.features`. The role is deleted when the member's last
+role-perk lapses; a role-count alert fires near the 250 ceiling.
 
 **Rental engine:** hourly billing loop → debit on `next_bill_at` → on failed debit,
-36h grace with hourly retries and one DM → revoke on expiry (`lapsed`), re-purchasable.
+**36h grace with hourly retries and one DM at entry** → revoke on expiry (`lapsed`),
+re-purchasable. Anniversaries are **no-drift** (each renewal advances `next_bill_at` by
+exactly one week off the scheduled time, so downtime never shifts the billing day) and a
+multi-week catch-up after downtime charges **once**, not once per missed week.
+**Suspension** (a guild losing `ROLE_ICONS`/Enhanced Role Styles mid-rental) **pauses
+both the billing clock and the visual** — no charge accrues while suspended and the
+perk auto-resumes cleanly (re-projected, clock restarted) when the feature returns.
 Restart-safe exactly-once via claim-before-side-effect on the rental row
-(`scheduled_games_service` pattern: state is advanced before the Discord side-effect).
-Dashboard cancel runs to end of paid week, no refunds. Leave/ban = immediate cancel +
-cleanup (member-remove listener).
+(`scheduled_games_service` pattern: state is advanced before the Discord side-effect),
+with feature-loss re-projection and transition-only DMs handled as post-commit effects.
+Dashboard cancel: an **active** rental runs to the end of the paid week (no refund); a
+**grace** rental is cancelled immediately and best-effort de-projects the role (§12).
+Leave/ban = immediate cancel + cleanup (member-remove listener), covering both rentals
+the member owns and gift rentals where they are the beneficiary.
 
 ## 7. Member Surface
 
 - **Discord is the entire v1 member surface** (decided — the member-facing dashboard
   wallet page and role studio are v2). One top-level group **`/bank`** (`wallet`,
-  `pay`, `quests`, `shop`, `role`, `mute`, `grant` [mod]) plus `/qotd post` [mod] and
-  rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command names
-  are global; all *strings* inside are currency-branded.
+  `pay`, `quests`, `shop`, `gift`, `role`, `mute`, `grant` [mod]) plus `/qotd post` [mod]
+  and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
+  names are global; all *strings* inside are currency-branded.
+  - **`/bank pay @member amount`** — transfer (§5); **`/bank shop`** — browse the perk
+    catalogue with branded prices, icon/gradient rows reflecting the server's role
+    features; **`/bank gift @member <perk>`** — pay to rent a friend a solid colour
+    (eager role creation on the recipient).
+  - **`/bank role`** subgroup drives the shipped personal-role perks (Stage 3):
+    **`name`**, **`color`**, **`gradient`**, **`icon`** — each applies the matching
+    rented component to the member's personal role (§6), subject to the blocklist / ΔE
+    / feature gates.
 - **Manager surface (dashboard):** the **Bank Manager** panel — a top-level nav section
   gated on `economy_manager_role_id` or admin (mirrors `games_editor_role` /
   `require_game_host`) — is where managers author quests, work the pending sign-off queue
@@ -232,10 +270,28 @@ quest reward bands, booster multiplier. XP coefficients remain on the existing X
 surface.
 
 Home dashboard gains an **Economy Metrics tile** (widget-registry entry + `tiles/`
-module): median & p90 weekly income, minted vs burned week-over-week (flag >20% MoM
-supply growth with flat rental uptake), faucet mix, rental uptake & churn, streak
-health, and **pricing hints** ("solid color ≈ 50% of median weekly income") computed
-from the ledger and shown beside each price field in the config panel.
+module): median & p90 weekly income, minted vs burned, faucet mix, rental uptake &
+churn, streak health, and **pricing hints** ("solid color ≈ 50% of median weekly
+income") computed from the ledger and shown beside each price field in the config
+panel.
+
+**Shipped (Stage 4).** A **weekly rollup** runs at the guild-local ISO-week roll
+(inside the same loop transaction as the weekly rotation / community settlement) and
+writes one immutable `econ_metrics_weekly` row per (guild, closed week), idempotent on
+its `(guild_id, iso_week)` primary key. Each row records, over the closed week:
+median / p90 income across **earners only** (positive credits, `transfer_in`
+excluded — transfers move currency, they neither mint nor burn), **minted** (positive
+credits ex-`transfer_in`) vs **burned** (`|negative|` ex-`transfer_out`), the
+**faucet mix** (minted share per group: logins / activity / quests / games / grants,
+`{}` when nothing minted), rental **holders / live / ended** (churn via the new
+`econ_rentals.ended_at`, stamped on every termination path), and streak health
+(`streaks_7plus`, `grace_used`). The admin-only home tile (`source: "economy"`,
+Health category) shows the latest week with a **week-over-week net-mint arrow**
+(minted − burned, direction only, needs ≥ 2 weeks); before the first rollup it shows a
+"rollup pending" empty state. **Pricing hints** are `round(median weekly income ×
+fixed per-perk factor)` served from `GET /api/economy/metrics` and rendered under each
+price field in the config panel; advisory only (no enforcement), and `{}` until the
+first rollup lands.
 
 ## 10. Notifications
 
@@ -295,6 +351,18 @@ nothing and misses nothing (catch-up on next tick).
 - Guild loses Level 2 / Enhanced Role Styles mid-rental: perk enters grace as if unpaid?
   No — billing pauses the affected perk (icon/gradient) and DMs the owner; auto-resumes
   when the feature returns (no charge while suspended).
+- **Dashboard grace-cancel de-projection (Stage 3):** the billing loop only walks *live*
+  (active/grace) rentals, so a manager force-cancelling a **grace** rental — which lands
+  it in `cancelled` at once — would otherwise leave the Discord role projected. The
+  cancel endpoint reconciles best-effort post-commit (`revoke_role_perks` on the
+  *beneficiary*, guarded on a ready bot, failures swallowed+logged, `role_updated`
+  reported); an active-rental cancel just sets `cancel_at_period_end` and de-projects at
+  the anniversary. A DB write always lands even if the Discord cleanup can't run.
+- **Suspend at anniversary (Stage 3):** if a perk is suspended (feature lost) exactly as
+  its `next_bill_at` comes due, the billing clock is frozen, so on resume the perk can be
+  billed immediately (the anniversary is already in the past). Benign — the member owed
+  that week's rent regardless and was not charged while the visual was suspended;
+  documented rather than special-cased.
 
 ## 13. V2 (committed) & Parking Lot
 
