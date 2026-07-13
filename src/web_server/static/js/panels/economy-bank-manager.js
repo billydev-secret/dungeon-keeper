@@ -18,14 +18,7 @@ const TYPE_HINTS = {
   event: "Pays by itself every time the trigger happens — no claims, no daily/weekly cap. One active event quest per trigger.",
 };
 
-// Game triggers (mirror of TRIGGER_KINDS in economy/quests.py).
-const KIND_LABELS = {
-  photo_reply: "📸 Reply to a Photo Challenge card with a photo",
-  party_game: "🎲 Finish a party game",
-  duel: "⚔️ Finish a duel / PvP challenge",
-  risky_roll: "🎰 Take a Risky Roll dare",
-  guess: "🕵️ Play a Guess Who round",
-};
+import { KIND_LABELS, CHANNEL_SCOPED_KINDS } from "./economy-sources-shared.js";
 
 // Common ledger kinds for the audit filter (free text still allowed).
 const LEDGER_KINDS = [
@@ -547,13 +540,17 @@ function wireAuthoring(container, channels) {
     });
     const mode = completion();
     completionHint.textContent = COMPLETION_HINTS[mode] || "";
+    const channelScoped =
+      mode === "phrase" ||
+      (mode === "game" && CHANNEL_SCOPED_KINDS.has(kindSel.value));
     wordsField.style.display = mode === "phrase" && !isCommunity ? "" : "none";
-    channelField.style.display = mode === "phrase" && !isCommunity ? "" : "none";
+    channelField.style.display = channelScoped && !isCommunity ? "" : "none";
     kindField.style.display = mode === "game" && !isCommunity ? "" : "none";
     updateKindHint();
   };
   rewardInput.addEventListener("input", updateHint);
   qtypeSel.addEventListener("change", () => { updateHint(); updateCommunity(); });
+  kindSel.addEventListener("change", updateCommunity);
   form.querySelectorAll("[name=completion]").forEach((r) =>
     r.addEventListener("change", updateCommunity));
   updateHint();
@@ -623,6 +620,10 @@ function wireAuthoring(container, channels) {
       body.community_target = t === "" ? null : parseInt(t, 10);
     } else if (mode === "game") {
       body.trigger_kind = kindSel.value;
+      if (CHANNEL_SCOPED_KINDS.has(kindSel.value)) {
+        const trigCh = triggerPicker.getValue();
+        body.trigger_channel_id = !trigCh || trigCh === "0" ? null : trigCh;
+      }
     } else if (mode === "phrase") {
       body.trigger_words = form.querySelector("[name=trigger_words]").value.trim();
       const trigCh = triggerPicker.getValue();

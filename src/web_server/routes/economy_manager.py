@@ -22,6 +22,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.perk_actions import revoke_role_perks
 from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services import economy_rentals_service as rentals_svc
@@ -105,6 +106,11 @@ class QuestGenerateBody(BaseModel):
 class ActiveBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     active: bool
+
+
+class SourceBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
 
 
 class DenyBody(BaseModel):
@@ -377,6 +383,83 @@ async def set_quest_active(
             except ValueError as exc:
                 raise HTTPException(404, str(exc)) from exc
             return _quest_dict(quests_svc.get_quest(conn, guild_id, quest_id))
+
+    return await run_query(_q)
+
+
+# ── income sources (custom-coded trigger hooks) ───────────────────────
+
+
+@router.get("/economy/income-sources")
+async def list_income_sources(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """Every custom trigger source with its enable state and quest usage."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            states = quests_svc.list_income_sources(conn, guild_id)
+            usage: dict[str, list[dict]] = {}
+            for row in conn.execute(
+                """
+                SELECT trigger_kind, title, qtype, active FROM econ_quests
+                WHERE guild_id = ? AND trigger_kind != ''
+                ORDER BY active DESC, id
+                """,
+                (guild_id,),
+            ).fetchall():
+                usage.setdefault(str(row["trigger_kind"]), []).append({
+                    "title": row["title"],
+                    "qtype": row["qtype"],
+                    "active": bool(row["active"]),
+                })
+            settings = load_econ_settings(conn, guild_id)
+            return {
+                "sources": [
+                    {
+                        "source": kind,
+                        "label": quest_rules.TRIGGER_KINDS[kind],
+                        "info": quest_rules.TRIGGER_KIND_INFO.get(kind, ""),
+                        "enabled": states[kind],
+                        "quests": usage.get(kind, []),
+                    }
+                    for kind in quest_rules.TRIGGER_KINDS
+                ],
+                # Built-in faucets shown read-only for context; the knobs
+                # live on the Economy Config page.
+                "faucets": {
+                    "login_text_base": settings.login_text_base,
+                    "login_voice_base": settings.login_voice_base,
+                    "reward_qotd": settings.reward_qotd,
+                    "reward_game_participation": settings.reward_game_participation,
+                    "reward_game_win": settings.reward_game_win,
+                    "xp_per_coin": settings.xp_per_coin,
+                },
+            }
+
+    return await run_query(_q)
+
+
+@router.put("/economy/income-sources/{source}")
+async def set_income_source(
+    request: Request,
+    source: str,
+    body: SourceBody,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            try:
+                quests_svc.set_income_source(conn, guild_id, source, body.enabled)
+            except ValueError as exc:
+                raise HTTPException(404, str(exc)) from exc
+        return {"source": source, "enabled": body.enabled}
 
     return await run_query(_q)
 

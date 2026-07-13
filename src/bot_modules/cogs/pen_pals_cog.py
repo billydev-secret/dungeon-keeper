@@ -436,6 +436,19 @@ async def _do_pair(
             _record_question(conn, session_id, question)
             _remove_from_pool(conn, guild_id, user1_id)
             _remove_from_pool(conn, guild_id, user2_id)
+            # Pen-pal quest trigger for both matched members, keyed to the
+            # session so one pairing pays each side once.
+            from bot_modules.services.economy_quests_service import fire_trigger_inline
+
+            for m in (user1, user2):
+                fire_trigger_inline(
+                    conn,
+                    guild_id,
+                    "pen_pal",
+                    m.id,
+                    occurrence=session_id,
+                    booster=m.premium_since is not None,
+                )
             return True
 
     if not await asyncio.to_thread(_save):

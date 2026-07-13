@@ -31,6 +31,32 @@ TRIGGER_KINDS: dict[str, str] = {
     "duel": "Finish a duel / PvP challenge",
     "risky_roll": "Take a Risky Roll dare",
     "guess": "Play a Guess Who round",
+    "voice_session": "Be active in voice chat",
+    "qotd_reply": "Answer the Question of the Day",
+    "starboard": "Get a message on the starboard",
+    "invite": "Invite a new member",
+    "boost": "Boost the server",
+    "bio_set": "Set or update your bio",
+    "media_post": "Post an image (optionally scoped to the trigger channel)",
+    "pen_pal": "Get matched with a Pen Pal",
+}
+
+# Longer per-kind copy for the Income Sources page: what fires it and what
+# the event-quest occurrence key means for repeat payouts.
+TRIGGER_KIND_INFO: dict[str, str] = {
+    "photo_reply": "A reply to a Photo Challenge card carrying an image. Event cadence: once per card.",
+    "party_game": "Any party game completing with the member in the roster. Event cadence: once per game.",
+    "duel": "A duel/PvP game resolving (chicken, hot potato, musical chairs, pressure cooker, quickdraw). Event cadence: once per match.",
+    "risky_roll": "Pressing Roll in a Risky Rolls round. Event cadence: once per round.",
+    "guess": "Submitting a scored guess in a Guess Who round. Event cadence: once per round.",
+    "voice_session": "Earning voice-activity XP (being in VC, not idle-muted). Event cadence: once per guild-local day.",
+    "qotd_reply": "Earning the QOTD reward (first message in the QOTD channel that day). Event cadence: once per question.",
+    "starboard": "Having a message cross the starboard threshold. Event cadence: once per starred message.",
+    "invite": "A member you invited joining the server. Event cadence: once per distinct invitee — alt-farmable, enable with care.",
+    "boost": "Starting a server boost. Event cadence: once per day it is detected.",
+    "bio_set": "Saving or updating your member bio. Event cadence: once ever.",
+    "media_post": "Posting a message with an image attached; set a trigger channel to scope it (e.g. #art). Event cadence: once per message — use daily/weekly for this one.",
+    "pen_pal": "Being paired into a Pen Pals session (both members fire). Event cadence: once per session.",
 }
 
 

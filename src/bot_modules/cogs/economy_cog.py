@@ -46,6 +46,7 @@ from bot_modules.economy.quests import (
 )
 from bot_modules.services.economy_quests_service import (
     claim_quest,
+    fire_trigger_inline,
     fire_trigger_quests,
     get_photo_card,
     list_trigger_quests,
@@ -1356,6 +1357,94 @@ class EconomyCog(commands.Cog):
             result = await asyncio.to_thread(_claim)
         except Exception:
             log.exception("econ photo: claim failed in guild %s", guild_id)
+            return
+        if result is None:
+            return
+        settings, fired = result
+        for quest, outcome in fired:
+            await self._announce_quest_claim(
+                message, member, str(quest["title"]), settings, outcome
+            )
+
+    @commands.Cog.listener("on_member_update")
+    async def _on_boost_started(
+        self, before: discord.Member, after: discord.Member
+    ) -> None:
+        """Fire the boost trigger when a member starts boosting.
+
+        Occurrence is the boost start timestamp, so one boost pays an event
+        quest once even across gateway replays; boosting again later is a new
+        occurrence. Nothing in the codebase watched premium_since transitions
+        before this.
+        """
+        if before.premium_since is not None or after.premium_since is None:
+            return
+        guild_id = after.guild.id
+        occurrence = str(int(after.premium_since.timestamp()))
+
+        def _fire():
+            with self.ctx.open_db() as conn:
+                return fire_trigger_inline(
+                    conn,
+                    guild_id,
+                    "boost",
+                    after.id,
+                    occurrence=occurrence,
+                    booster=True,
+                )
+
+        await asyncio.to_thread(_fire)
+
+    @commands.Cog.listener("on_message")
+    async def _on_media_post(self, message: discord.Message) -> None:
+        """Fire the media-post trigger for any image a member posts.
+
+        Channel scoping happens per quest (``trigger_channel_id``) inside
+        ``fire_trigger_quests``, so an unscoped media quest counts every
+        channel while a scoped one (e.g. #art) only counts there. Occurrence
+        is the message, so event quests pay per image message — the sane
+        cadence for this kind is daily/weekly, as the dashboard hint says.
+        """
+        if message.guild is None or message.author.bot:
+            return
+        member = message.author
+        if not isinstance(member, discord.Member):
+            return
+        if not _has_image_attachment(message):
+            return
+
+        guild_id = message.guild.id
+        channel = message.channel
+        parent_id = getattr(channel, "parent_id", None)
+        channel_ids = tuple(
+            c for c in (channel.id, parent_id) if c is not None
+        )
+        booster = member.premium_since is not None
+
+        def _claim():
+            with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild_id)
+                if not settings.enabled:
+                    return None
+                offset = get_tz_offset_hours(conn, guild_id)
+                day = local_day_for(time.time(), offset)
+                fired = fire_trigger_quests(
+                    conn,
+                    settings,
+                    guild_id,
+                    "media_post",
+                    member.id,
+                    local_day=day,
+                    occurrence=str(message.id),
+                    booster=booster,
+                    channel_ids=channel_ids,
+                )
+                return settings, fired
+
+        try:
+            result = await asyncio.to_thread(_claim)
+        except Exception:
+            log.exception("econ media: claim failed in guild %s", guild_id)
             return
         if result is None:
             return

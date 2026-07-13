@@ -10,6 +10,7 @@ import discord
 from discord.ext import commands
 
 from bot_modules.core.db_utils import get_config_id_set
+from bot_modules.services.economy_quests_service import fire_trigger_inline
 from bot_modules.services.starboard_service import (
     add_reactor,
     delete_starboard_post,
@@ -189,12 +190,30 @@ class StarboardCog(commands.Cog):
             log.warning("starboard: failed to send starboard post for message %s", message_id)
             return
 
+        author_is_bot = message.author.bot
+        author_booster = (
+            isinstance(message.author, discord.Member)
+            and message.author.premium_since is not None
+        )
+
         def _insert():
             with self.ctx.open_db() as conn:
                 insert_starboard_post(
                     conn, guild_id, message_id, sb_msg.id,
                     payload.channel_id, author_id, effective_count,
                 )
+                # Starboard quest trigger for the starred author — this block
+                # only runs on the first threshold crossing, so once per
+                # message. Bot-authored messages earn nothing.
+                if not author_is_bot:
+                    fire_trigger_inline(
+                        conn,
+                        guild_id,
+                        "starboard",
+                        author_id,
+                        occurrence=str(message_id),
+                        booster=author_booster,
+                    )
 
         await asyncio.to_thread(_insert)
 

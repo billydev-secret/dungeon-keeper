@@ -47,6 +47,7 @@ from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.utils import format_guild_for_log, get_guild_channel_or_thread
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
 from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_quests_service import fire_trigger_inline
 from bot_modules.services.economy_service import (
     EconSettings,
     LoginOutcome,
@@ -725,7 +726,7 @@ class EventsCog(commands.Cog):
                 )
                 qotd = open_qotd_for(conn, guild_id, channel_id, today)
                 if qotd is not None:
-                    try_award_qotd(
+                    newly_awarded = try_award_qotd(
                         conn,
                         settings,
                         int(qotd["id"]),
@@ -733,6 +734,17 @@ class EventsCog(commands.Cog):
                         user_id,
                         booster=booster,
                     )
+                    if newly_awarded:
+                        # First qualifying reply → the qotd_reply quest
+                        # trigger (silent; wallet/quests carry the news).
+                        fire_trigger_inline(
+                            conn,
+                            guild_id,
+                            "qotd_reply",
+                            user_id,
+                            occurrence=str(int(qotd["id"])),
+                            booster=booster,
+                        )
                 if outcome is None:
                     return None
                 return settings, outcome, prior_streak
@@ -1095,10 +1107,23 @@ class EventsCog(commands.Cog):
         if inviter_id is not None:
             _inv_id: int = inviter_id
             _inv_code = invite_code
+            _inviter = member.guild.get_member(_inv_id)
+            _inv_booster = _inviter is not None and _inviter.premium_since is not None
 
             def _do_record_invite():
                 with self.ctx.open_db() as conn:
                     record_invite(conn, _guild_id, _inv_id, _member_id, _inv_code)
+                    # Invite quest trigger for the inviter. Occurrence = the
+                    # invitee, so a rejoin (or a re-fire off the OR IGNOREd
+                    # edge) never double-pays the same recruit.
+                    fire_trigger_inline(
+                        conn,
+                        _guild_id,
+                        "invite",
+                        _inv_id,
+                        occurrence=str(_member_id),
+                        booster=_inv_booster,
+                    )
 
             await asyncio.to_thread(_do_record_invite)
             log.info(
