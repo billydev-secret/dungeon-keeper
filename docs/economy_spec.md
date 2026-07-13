@@ -250,6 +250,24 @@ month (period `"YYYY-MM"`, so the window opens on the 1st); up to 5 active, own
 slot pool, suggested band 75–200, no rotation, and — like all cadences — needs
 no loop work: the period key itself resets claimability.
 
+**XP rewards:** `reward_xp` pays levelling XP alongside the coins on every
+quest payout — instant and approved sign-off both flow through
+`_credit_reward`, so an approved claim pays XP at approval, not filing. XP is
+flat (no booster multiplier — that's a currency patron bonus; minting XP would
+distort the level curve), ledgered as `xp_events` source `quest`. Level
+progression lands in the DB; any level-up announces on the member's next
+ordinary XP award.
+
+**Onboarding path:** quests flagged `onboarding` are DMed to each new member
+on join — a branded "starter path" embed listing title, coin + XP rewards, and
+each quest's auto-complete hint, capped at 10, with a `/quests` pointer. Sent
+once ever per member (`econ_onboarding_dms`, reserve-before-send so a crash
+loses one DM rather than double-DMing a rejoiner; nothing is reserved when no
+flagged quests exist, so a path added later still reaches earlier joiners on
+rejoin). Respects the economy notification mute + bank-channel fallback via
+`notify_member`. Works best as event quests that pay once ever (bio, first
+game, intro photo) — new members can finish them at their own pace.
+
 **Counted quests:** a trigger-kind quest on a daily/weekly/monthly cadence may
 set `target_count` > 1 ("send 20 messages this week"). Each distinct occurrence
 inserts an `econ_quest_progress_marks` row (the dedup — replays never

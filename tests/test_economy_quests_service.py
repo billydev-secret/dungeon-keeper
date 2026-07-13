@@ -36,7 +36,9 @@ from bot_modules.services.economy_quests_service import (
     get_quest,
     list_income_sources,
     list_kind_triggered_quests,
+    list_onboarding_quests,
     list_quests,
+    mark_onboarding_dm,
     record_photo_card,
     set_income_source,
     source_enabled,
@@ -86,6 +88,8 @@ def _make(
     trigger_channel_id=None,
     trigger_kind="",
     target_count=1,
+    reward_xp=0,
+    onboarding=0,
 ):
     qid = create_quest(
         conn,
@@ -105,6 +109,8 @@ def _make(
         trigger_channel_id=trigger_channel_id,
         trigger_kind=trigger_kind,
         target_count=target_count,
+        reward_xp=reward_xp,
+        onboarding=onboarding,
     )
     if active:
         set_quest_active(conn, guild_id, qid, True)
@@ -1110,6 +1116,57 @@ def test_monthly_quest_claims_once_per_month(db):
             )
         claim_quest(conn, SETTINGS, GUILD, qid, USER, period="2026-08", booster=False)
         assert get_balance(conn, GUILD, USER) == 200
+
+
+def test_quest_xp_reward_pays_alongside_coins(db):
+    with open_db(db) as conn:
+        qid = _make(conn, reward=10, reward_xp=50)
+        out = claim_quest(
+            conn, SETTINGS, GUILD, qid, USER, period="2026-07-13", booster=True
+        )
+        assert out.paid == 15  # coins take the booster multiplier
+        rows = conn.execute(
+            "SELECT amount FROM xp_events WHERE guild_id = ? AND user_id = ? "
+            "AND source = 'quest'",
+            (GUILD, USER),
+        ).fetchall()
+        # XP is flat — no booster multiplier on the level curve.
+        assert [int(r["amount"]) for r in rows] == [50]
+        with pytest.raises(ValueError):
+            _make(conn, reward_xp=-5)
+
+
+def test_quest_xp_paid_on_signoff_approval_not_filing(db):
+    with open_db(db) as conn:
+        qid = _make(conn, reward=10, reward_xp=25, signoff=1)
+        out = claim_quest(
+            conn, SETTINGS, GUILD, qid, USER, period="2026-07-13", booster=False
+        )
+        assert out.state == "pending"
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM xp_events WHERE source = 'quest'"
+        ).fetchone()["c"] == 0
+        resolve_claim(
+            conn, SETTINGS, out.claim_id, approve=True,
+            resolver_id=MANAGER, booster=False,
+        )
+        assert conn.execute(
+            "SELECT COUNT(*) c FROM xp_events WHERE source = 'quest'"
+        ).fetchone()["c"] == 1
+
+
+def test_onboarding_listing_and_dm_dedup(db):
+    with open_db(db) as conn:
+        flagged = _make(conn, qtype="event", trigger_kind="bio_set", onboarding=1)
+        _make(conn, qtype="daily")  # unflagged
+        _make(
+            conn, qtype="event", trigger_kind="pen_pal",
+            onboarding=1, active=False,  # inactive stays out of the DM
+        )
+        assert [int(r["id"]) for r in list_onboarding_quests(conn, GUILD)] == [flagged]
+        assert mark_onboarding_dm(conn, GUILD, USER) is True
+        assert mark_onboarding_dm(conn, GUILD, USER) is False  # rejoin: no re-DM
+        assert mark_onboarding_dm(conn, GUILD, OTHER) is True
 
 
 def test_fire_trigger_inline_loads_settings_and_pays(db):

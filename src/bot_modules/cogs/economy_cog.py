@@ -50,7 +50,9 @@ from bot_modules.services.economy_quests_service import (
     fire_trigger_quests,
     get_photo_card,
     get_progress,
+    list_onboarding_quests,
     list_trigger_quests,
+    mark_onboarding_dm,
 )
 from bot_modules.services.economy_rentals_service import (
     cancel_all_for_member,
@@ -172,6 +174,19 @@ _QUEST_STATE_LABEL = {
     "duel": "⚔️ Completes automatically when you finish a 1v1 duel",
     "risky_roll": "🎰 Completes automatically when you take a Risky Roll dare",
     "guess": "🕵️ Completes automatically when you play a Guess Who round",
+    "voice_session": "🎙️ Completes automatically when you're active in voice chat",
+    "qotd_reply": "📣 Completes automatically when you answer the Question of the Day",
+    "starboard": "⭐ Completes automatically when a message of yours hits the starboard",
+    "invite": "📨 Completes automatically when someone you invited joins",
+    "boost": "🚀 Completes automatically when you boost the server",
+    "bio_set": "📇 Completes automatically when you set up your bio",
+    "media_post": "🖼️ Completes automatically when you post an image",
+    "pen_pal": "💌 Completes automatically when you're matched with a Pen Pal",
+    "message_sent": "💬 Completes automatically as you chat",
+    "reply_sent": "↩️ Completes automatically when you reply to people",
+    "reaction_given": "👍 Completes automatically when you react to people's messages",
+    "game_win": "🏆 Completes automatically when you win a party game",
+    "duel_win": "🥇 Completes automatically when you win a duel",
 }
 
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
@@ -189,6 +204,7 @@ class _TriggerQuest:
     signoff: bool
     channel_id: int | None  # None = any channel counts
     pattern: re.Pattern[str]
+    reward_xp: int
 
 
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif")
@@ -1048,7 +1064,12 @@ class EconomyCog(commands.Cog):
             reward = int(q["reward"])
             unit = _unit(settings, reward)
             header = f"{settings.currency_emoji} {q['title']}"
-            lines = [f"**{reward:,}** {unit} · {q['qtype']}"]
+            reward_line = f"**{reward:,}** {unit} · {q['qtype']}"
+            if q.get("reward_xp"):
+                reward_line = (
+                    f"**{reward:,}** {unit} + ⭐ {q['reward_xp']:,} XP · {q['qtype']}"
+                )
+            lines = [reward_line]
             if q.get("description"):
                 lines.append(str(q["description"]))
             if q["state"] == "community":
@@ -1099,6 +1120,7 @@ class EconomyCog(commands.Cog):
                     "description": row["description"],
                     "qtype": qtype,
                     "reward": int(row["reward"]),
+                    "reward_xp": int(row["reward_xp"]),
                     "signoff": bool(row["signoff"]),
                     "criteria": row["criteria"],
                 }
@@ -1221,6 +1243,7 @@ class EconomyCog(commands.Cog):
                     signoff=bool(row["signoff"]),
                     channel_id=int(channel_id) if channel_id is not None else None,
                     pattern=pattern,
+                    reward_xp=int(row["reward_xp"]),
                 )
             )
         return out
@@ -1264,7 +1287,8 @@ class EconomyCog(commands.Cog):
             return
 
         await self._announce_quest_claim(
-            message, member, trig.title, settings, outcome
+            message, member, trig.title, settings, outcome,
+            reward_xp=trig.reward_xp,
         )
 
     async def _announce_quest_claim(
@@ -1274,6 +1298,7 @@ class EconomyCog(commands.Cog):
         title: str,
         settings: EconSettings,
         outcome,
+        reward_xp: int = 0,
     ) -> None:
         """React + reply for an auto-claimed quest (trigger phrase or photo)."""
         guild = message.guild
@@ -1282,12 +1307,13 @@ class EconomyCog(commands.Cog):
 
         if outcome.state == "paid":
             paid = int(outcome.paid)
+            xp_note = f" (+⭐ {reward_xp:,} XP)" if reward_xp > 0 else ""
             embed = discord.Embed(
                 title="Quest complete!",
                 description=(
                     f"{member.mention} completed **{title}** — "
                     f"{settings.currency_emoji} {paid:,} {_unit(settings, paid)} "
-                    "added to their wallet."
+                    f"added to their wallet{xp_note}."
                 ),
                 colour=accent,
             )
@@ -1374,8 +1400,77 @@ class EconomyCog(commands.Cog):
         settings, fired = result
         for quest, outcome in fired:
             await self._announce_quest_claim(
-                message, member, str(quest["title"]), settings, outcome
+                message, member, str(quest["title"]), settings, outcome,
+                reward_xp=int(quest["reward_xp"]),
             )
+
+    @commands.Cog.listener("on_member_join")
+    async def _on_join_onboarding(self, member: discord.Member) -> None:
+        """DM a new member the guild's onboarding quest path, once ever.
+
+        Skipped for bots, when the economy is off, when no active quest is
+        flagged onboarding, or when this member already got it (rejoins).
+        The DM respects the member's economy notification mute and falls
+        back to the bank channel like every other economy notice.
+        """
+        if member.bot:
+            return
+        guild = member.guild
+
+        def _prepare():
+            with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild.id)
+                if not settings.enabled:
+                    return None
+                quests_rows = list_onboarding_quests(conn, guild.id)
+                if not quests_rows:
+                    return None
+                if not mark_onboarding_dm(conn, guild.id, member.id):
+                    return None
+                return settings, [dict(r) for r in quests_rows]
+
+        try:
+            prepared = await asyncio.to_thread(_prepare)
+        except Exception:
+            log.exception("onboarding DM prep failed in guild %s", guild.id)
+            return
+        if prepared is None:
+            return
+        settings, rows = prepared
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = discord.Embed(
+            title=f"🧭 Welcome to {guild.name} — your starter path",
+            description=(
+                "Complete these to earn your first "
+                f"{settings.currency_plural} and XP. Most finish on their "
+                "own as you explore — check progress any time with "
+                "**/quests**."
+            ),
+            colour=accent,
+        )
+        for row in rows[:10]:
+            reward_bits = []
+            coins = int(row["reward"])
+            if coins > 0:
+                reward_bits.append(
+                    f"{settings.currency_emoji} {coins:,} {_unit(settings, coins)}"
+                )
+            if int(row["reward_xp"]) > 0:
+                reward_bits.append(f"⭐ {int(row['reward_xp']):,} XP")
+            lines = [" · ".join(reward_bits) or "—"]
+            hint = _QUEST_STATE_LABEL.get(str(row["trigger_kind"] or ""), "")
+            if hint:
+                lines.append(hint)
+            elif row["description"]:
+                lines.append(str(row["description"]))
+            embed.add_field(
+                name=str(row["title"]), value="\n".join(lines), inline=False
+            )
+
+        await notify_member(
+            self.bot, self.ctx.db_path, guild.id, member.id, embed=embed
+        )
 
     @commands.Cog.listener("on_member_update")
     async def _on_boost_started(
@@ -1462,7 +1557,8 @@ class EconomyCog(commands.Cog):
         settings, fired = result
         for quest, outcome in fired:
             await self._announce_quest_claim(
-                message, member, str(quest["title"]), settings, outcome
+                message, member, str(quest["title"]), settings, outcome,
+                reward_xp=int(quest["reward_xp"]),
             )
 
     qotd = app_commands.Group(
