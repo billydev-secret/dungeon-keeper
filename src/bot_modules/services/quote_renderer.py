@@ -232,6 +232,70 @@ def _composite_slim_border(out, border_style: BorderStyle, width: int, height: i
     )
 
 
+# ── Dominant border color ─────────────────────────────────────────────────────
+
+_DOMINANT_CACHE: "dict[tuple, tuple[int, int, int]]" = {}
+
+
+def dominant_border_color(border_style: BorderStyle) -> tuple[int, int, int]:
+    """The border's dominant *vivid* color — used to tint the header text.
+
+    Counts the frame's opaque pixels weighted by saturation×value, so the pick
+    lands on the border's signature accent (Golden Poppy's gold) instead of the
+    dark leaves or a keyed-out black background that a plain most-common count
+    would surface. Cached by (path, mtime). Falls back to a warm gold if the
+    frame can't be read or has no vivid pixels.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    fallback = (232, 168, 30)
+    try:
+        st = border_style.path.stat()
+    except OSError:
+        return fallback
+    key = (str(border_style.path), st.st_mtime_ns)
+    if key in _DOMINANT_CACHE:
+        return _DOMINANT_CACHE[key]
+
+    from PIL import Image  # noqa: PLC0415
+
+    img = Image.open(border_style.path).convert("RGBA").resize((120, 120))
+    if border_style.luma_key:
+        lum = img.convert("RGB").convert("L")
+        img.putalpha(lum.point([0 if i <= 20 else 255 for i in range(256)]))
+
+    arr = np.asarray(img, dtype=np.float64).reshape(-1, 4)
+    rgb = arr[arr[:, 3] >= 128][:, :3]
+    if rgb.shape[0] == 0:
+        _DOMINANT_CACHE[key] = fallback
+        return fallback
+
+    # Vividness weight per pixel = saturation × value (HSV), so dark leaves and a
+    # keyed-out background carry ~0 weight and the signature accent wins.
+    mx = rgb.max(axis=1)
+    mn = rgb.min(axis=1)
+    value = mx / 255.0
+    sat = np.where(mx > 0, (mx - mn) / np.maximum(mx, 1e-9), 0.0)
+    weight = sat * value
+
+    # Accumulate weight into 24-wide colour buckets and take the heaviest.
+    quant = (rgb // 24).astype(np.int64) * 24
+    codes = quant[:, 0] * 65536 + quant[:, 1] * 256 + quant[:, 2]
+    uniq, inverse = np.unique(codes, return_inverse=True)
+    totals = np.zeros(uniq.shape[0])
+    np.add.at(totals, inverse, weight)
+    best = int(uniq[int(totals.argmax())])
+
+    # Unpack the winning code and snap to the centre of its 24-wide cell.
+    color = (
+        min(255, (best // 65536) + 12),
+        min(255, (best // 256) % 256 + 12),
+        min(255, best % 256 + 12),
+    )
+    _DOMINANT_CACHE[key] = color
+    return color
+
+
 # ── Border-shape masking ──────────────────────────────────────────────────────
 #
 # For an uploaded frame we don't assume a fixed text column — we read the frame's
@@ -788,7 +852,11 @@ def render_quote_card(
         _content_top = op.top + max(6, int(height * 0.03))
 
         def _line_x(s: str, y: int) -> int:
-            return _m_left(y)
+            lo = _m_left(y)
+            if not _no_pfp:
+                return lo  # quote-with-avatar: keep the left-aligned column
+            hi = _m_right(y)  # banner over a custom frame: centre in the opening
+            return lo + max(0, (hi - lo - _full_measure(s)) // 2)
     elif _no_pfp:
         # Left-justified body: keep ~one character of buffer off the left frame.
         left_margin += max(1, _full_measure("n"))
@@ -847,9 +915,15 @@ def render_quote_card(
         text_y_start, _content_top = _layout(lines)
 
         def _line_x(s: str, y: int) -> int:
-            # Left-justified: every line starts at the left margin. Wrapping via
-            # _avail_w(y) already keeps lines clear of the floral corner.
-            return left_margin
+            # Centred: announcement banners read centred. Start from the true card
+            # centre, then shove left only if the line would otherwise reach into
+            # the floral corner (wrapping via _avail_w already bounds the width).
+            lw = _full_measure(s)
+            x = (width - lw) // 2
+            right_limit = int(_flower_left(y) - _gap3)
+            if x + lw > right_limit:
+                x = right_limit - lw
+            return max(left_margin, x)
     else:
         _measure = _make_emoji_measure(_base_m, line_h) if _DISCORD_EMOJI_RE.search(_quoted_text) else (_base_m if _HAS_PILMOJI else None)
         lines = _wrap_text(_quoted_text, body_font, text_col_w, draw, measure=_measure)
@@ -896,8 +970,10 @@ def render_quote_card(
     draw = ImageDraw.Draw(bg)
 
     if _no_pfp:
-        # No avatar box — draw the label as a centred header above the prompt.
+        # No avatar box — draw the label as a centred header above the prompt,
+        # tinted with the border's dominant colour so the title echoes the frame.
         if _header_text:
+            _hdr_color = dominant_border_color(border_style or BORDERS["golden_poppy"])
             _hb2 = draw.textbbox((0, 0), _header_text, font=header_font, stroke_width=_header_stroke)
             _hx = (width - int(_hb2[2] - _hb2[0])) // 2
             draw.text(
@@ -906,8 +982,8 @@ def render_quote_card(
             )
             draw.text(
                 (_hx, _content_top), _header_text, font=header_font,
-                fill=theme.attribution_color, stroke_width=_header_stroke,
-                stroke_fill=theme.attribution_color,
+                fill=_hdr_color, stroke_width=_header_stroke,
+                stroke_fill=_hdr_color,
             )
     else:
         _square = pfp_shape == "square"

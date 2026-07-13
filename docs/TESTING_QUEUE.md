@@ -9,6 +9,23 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Quote cards — border-colored header + centered announcement body  (this commit)
+
+Follow-up to the restyle: the no-pfp **header now takes the border's dominant
+color** (`dominant_border_color` — vividness-weighted, so Golden Poppy → gold,
+not the dark leaves), and the **announcement/banner body text is centered**
+(avatar `/quote` cards stay left-aligned in their column). Verified offline;
+live look:
+
+- [ ] QOTD card (`/qotd post`): "Question of the Day" header renders in the
+      border's gold; the question body is **centered** under it (not left-hugging).
+- [ ] `/banner`: header echoes the active border's dominant color; multi-line
+      body is centered and stays clear of the corner flowers.
+- [ ] Photo-challenge and FFA launch cards: prompt body centered, header in
+      border gold.
+- [ ] `/quote` on a message (avatar mode): body still **left-aligned** in the
+      right column — unchanged.
+
 ### Quote cards — slim frame, smaller flowers, new typography  (this commit)
 
 The Golden Poppy quote/banner cards were restyled: the thick baked gold frame is

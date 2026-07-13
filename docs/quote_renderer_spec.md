@@ -47,9 +47,12 @@ Default canvas **900×500**.
 **`pfp_shape`:**
 - `"circle"` (default) — circular avatar crop with the double ring.
 - `"square"` — rounded-square crop (shows the whole avatar uncropped).
-- `"none"` — no avatar box. The prompt is centred across the card and
-  `author_name` becomes a centred **header** above it. This is the "banner" look
-  every non-`quote` caller uses.
+- `"none"` — no avatar box. The prompt is **centre-aligned** across the card and
+  `author_name` becomes a centred **header** above it. This is the "banner" /
+  announcement look every non-`quote` caller uses. (Avatar modes keep the body
+  **left-aligned** in the right-hand column — only banner/announcement bodies are
+  centred. Body lines are clamped left of the floral corner so centring never
+  runs text under the flowers.)
 
 ### `render_quote(...)` — legacy solid-bg card
 
@@ -79,7 +82,9 @@ text/attribution colors, and vignette darkness.
   `"helvetica"`, so the editorial **sans-header / serif-body** pairing holds
   regardless of the body font a mod picks. The header is faux-bolded with a
   light stroke (`header_size // 40`) plus its drop shadow — no bold TTF is
-  bundled.
+  bundled. Its **color is the border's dominant accent**
+  (`dominant_border_color`), so the title echoes the frame (Golden Poppy → gold)
+  rather than a fixed theme color.
 
 | Key | Face | Notes |
 |---|---|---|
