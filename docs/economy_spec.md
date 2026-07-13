@@ -127,6 +127,18 @@ amber out-of-band warning; out-of-band saves fine, audit-tagged. Library model:
 **1 active daily + up to 5 weeklies** per guild; dailies can auto-rotate from a tagged
 pool (rotation happens on the guild-local day roll in the economy loop).
 
+**AI idea generator.** The New-quest form has a "Generate ideas" button
+(`POST /api/economy/quests/generate`, manager-gated) that batches suggestions for
+the selected quest type. It uses the **Anthropic cloud path** — the same
+`bot_modules.games.utils.ai_client.generate_text` the party-game studio uses, *not*
+the local moderation LLM — and prompts for in-band rewards (daily 10–20, weekly 25–75)
+plus a `community_target` for community goals. Ideas render as clickable cards; picking
+one loads title/description/criteria/reward into the form. **Nothing is persisted** —
+a suggestion is inert until the manager reviews and submits it. Prompt building and the
+tolerant JSON parser (fenced-array / leading-prose / title-only fallbacks) live in
+`bot_modules/economy/quest_ai.py`; the prompt text is hardcoded for v1 (editable-prompt
+parity with the Games Studio is a parking-lot item).
+
 ### 4.2 Member Flow
 - `/bank quests` + wallet page: active quests, progress, claim state.
 - **Claims are period-keyed.** A daily's period is the guild-local day (`YYYY-MM-DD`),

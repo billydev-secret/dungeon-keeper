@@ -81,6 +81,17 @@ class QuestUpdate(BaseModel):
     community_target: int | None = Field(default=None, ge=0)
 
 
+class QuestGenerateBody(BaseModel):
+    """Ask the AI for a batch of quest ideas of one type. ``theme`` is an
+    optional steer; ``count`` is clamped server-side to the module's cap."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    qtype: str
+    count: int = Field(default=0, ge=0)
+    theme: str = Field(default="", max_length=200)
+
+
 class ActiveBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     active: bool
@@ -222,6 +233,52 @@ async def create_quest(
             return _quest_dict(quests_svc.get_quest(conn, guild_id, quest_id))
 
     return await run_query(_q)
+
+
+@router.post("/economy/quests/generate")
+async def generate_quest_ideas(
+    request: Request,
+    body: QuestGenerateBody,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """Generate a batch of quest ideas for the New-quest form to load.
+
+    Uses the same Anthropic cloud path as the party-game studio
+    (:func:`bot_modules.games.utils.ai_client.generate_text`) — not the local
+    LLM. Nothing is persisted: the manager reviews the returned ideas and
+    one-click loads one into the form, editing before they create it.
+    """
+    from bot_modules.economy import quest_ai
+    from bot_modules.games.utils.ai_client import generate_text
+
+    if body.qtype not in _QTYPES:
+        raise HTTPException(422, f"unknown quest type: {body.qtype!r}")
+
+    count = body.count or quest_ai.DEFAULT_COUNT
+    count = max(1, min(quest_ai.MAX_COUNT, count))
+
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _settings():
+        with ctx.open_db() as conn:
+            return load_econ_settings(conn, guild_id)
+
+    settings = await run_query(_settings)
+
+    system = quest_ai.build_system_prompt(settings.currency_name)
+    user = quest_ai.build_user_prompt(body.qtype, count, body.theme)
+    text = await generate_text(
+        system,
+        user,
+        max_tokens=quest_ai.MAX_TOKENS,
+        temperature=quest_ai.TEMPERATURE,
+    )
+    if not text:
+        raise HTTPException(503, "Idea generation failed — check ANTHROPIC_API_KEY.")
+
+    ideas = quest_ai.parse_quest_ideas(text, body.qtype, limit=count)
+    return {"ideas": [idea.as_dict() for idea in ideas]}
 
 
 @router.put("/economy/quests/{quest_id}")

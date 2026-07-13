@@ -9,6 +9,26 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — AI quest-idea generator on the Bank Manager  (uncommitted)
+
+The New-quest form gained a "✨ Generate ideas" button that batches AI quest
+suggestions for the selected type (Anthropic cloud path, same as the Games
+Studio — needs `ANTHROPIC_API_KEY`). Ideas render as clickable cards; clicking
+one loads title/description/criteria/reward into the form. Nothing is saved
+until you create it. Offline parser/prompt tests pass; the live call + form
+wiring need a pass:
+
+- [ ] Bank Manager → New quest: pick a type, click **Generate ideas** →
+      cards appear within a few seconds (rewards land in the type's band;
+      community ideas show a target).
+- [ ] Click an idea → its title/description/criteria/reward populate the form,
+      the title field focuses, and a "Idea loaded" toast shows. Editing then
+      **Create quest** saves it normally.
+- [ ] A theme in the box steers the ideas; changing the type changes the flavor
+      (daily = quick, weekly = bigger, community = a server goal).
+- [ ] With no `ANTHROPIC_API_KEY` (or on an API error) → a clear inline error in
+      the results area, no crash, form still usable manually.
+
 ### DM Perms — `/dm_revoke` confirmation now ephemeral  (uncommitted)
 
 The final "Done — your connection with @user has been removed" reply was

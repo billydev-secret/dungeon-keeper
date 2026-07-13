@@ -46,6 +46,19 @@ function render(container, members) {
 
       <section class="card" data-sec="author">
         <div class="section-label">New quest</div>
+        <div class="ai-gen" data-quest-ai>
+          <div class="field-row" style="align-items:flex-end;">
+            <div class="field"><label>AI idea theme (optional)</label>
+              <input type="text" data-ai-theme maxlength="200" placeholder="e.g. summer event, voice chat, art"
+                     style="max-width:260px;" /></div>
+            <div class="field"><label>How many</label>
+              <input type="number" data-ai-count min="1" max="10" step="1" value="5" style="max-width:90px;" /></div>
+            <div class="field" style="align-self:flex-end;">
+              <button type="button" class="btn" data-ai-generate>✨ Generate ideas</button></div>
+          </div>
+          <div class="field-hint" style="opacity:.75;">Ideas use the quest type selected below. Click one to load it into the form — nothing is saved until you create it.</div>
+          <div data-ai-results></div>
+        </div>
         <form data-form-quest class="form">
           <div class="field-row">
             <div class="field"><label>Title</label>
@@ -378,6 +391,8 @@ function wireAuthoring(container) {
   updateHint();
   updateCommunity();
 
+  wireQuestAi(container, form, { updateHint, updateCommunity });
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const body = {
@@ -405,6 +420,84 @@ function wireAuthoring(container) {
       refreshQuests(container, members);
     } catch (err) {
       showStatus(status, false, err.message);
+    }
+  });
+}
+
+// ── AI quest-idea generator ──────────────────────────────────────────
+// Batches suggestions for the currently-selected quest type, renders them as
+// clickable cards, and loads a picked idea into the New-quest form. Nothing is
+// persisted here — the manager still reviews and submits.
+
+function wireQuestAi(container, form, { updateHint, updateCommunity }) {
+  const root = container.querySelector("[data-quest-ai]");
+  if (!root) return;
+  const btn = root.querySelector("[data-ai-generate]");
+  const results = root.querySelector("[data-ai-results]");
+  const qtypeSel = form.querySelector("[name=qtype]");
+
+  const setField = (name, value) => {
+    const el = form.querySelector(`[name=${name}]`);
+    if (el != null) el.value = value == null ? "" : value;
+  };
+
+  const loadIdea = (idea) => {
+    setField("title", idea.title || "");
+    setField("description", idea.description || "");
+    setField("criteria", idea.criteria || "");
+    setField("reward", idea.reward ?? "");
+    if (qtypeSel.value === "community" && idea.community_target != null) {
+      setField("community_target", idea.community_target);
+    }
+    updateHint();
+    updateCommunity();
+    form.querySelector("[name=title]").focus();
+    toast("Idea loaded — edit and create", "success");
+    form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  };
+
+  const renderIdeas = (ideas) => {
+    if (!ideas.length) {
+      results.innerHTML = `<div class="empty">No ideas came back — try again.</div>`;
+      return;
+    }
+    results.innerHTML = "";
+    ideas.forEach((idea) => {
+      const card = document.createElement("div");
+      card.className = "ai-idea";
+      card.style.cssText =
+        "border:1px solid var(--border,#3a3a3a);border-radius:8px;padding:8px 10px;margin:6px 0;cursor:pointer;";
+      const target =
+        idea.community_target != null
+          ? ` · target ${idea.community_target}`
+          : "";
+      card.innerHTML =
+        `<div style="display:flex;justify-content:space-between;gap:8px;">` +
+        `<strong>${esc(idea.title || "(untitled)")}</strong>` +
+        `<span class="badge">${idea.reward ?? 0}${esc(target)}</span></div>` +
+        (idea.description ? `<div style="opacity:.85;margin-top:2px;">${esc(idea.description)}</div>` : "") +
+        (idea.criteria ? `<div style="opacity:.65;font-size:.9em;margin-top:2px;">✓ ${esc(idea.criteria)}</div>` : "");
+      card.addEventListener("click", () => loadIdea(idea));
+      results.appendChild(card);
+    });
+  };
+
+  btn.addEventListener("click", async () => {
+    const theme = root.querySelector("[data-ai-theme]").value.trim();
+    const count = Math.max(1, Math.min(10, parseInt(root.querySelector("[data-ai-count]").value, 10) || 5));
+    const qtype = qtypeSel.value;
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = "Generating…";
+    results.innerHTML = `<div class="empty">Generating ${count} ${esc(qtype)} idea(s)…</div>`;
+    try {
+      const data = await apiPost("/api/economy/quests/generate", { qtype, count, theme });
+      renderIdeas(data.ideas || []);
+    } catch (err) {
+      results.innerHTML = `<div class="error">${esc(err.message)}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
     }
   });
 }
