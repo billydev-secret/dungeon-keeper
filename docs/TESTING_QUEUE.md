@@ -9,6 +9,41 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — 8 new income sources + Income Sources page  (this commit)
+
+Trigger kinds now cover most member-facing modules: **voice session, QOTD
+reply, starboard, invite, boost, bio set, media post (channel-scopable), Pen
+Pal pairing** join the five game kinds. A new **Income Sources** page (Bank
+Manager section) holds an enable switch per source (default on; disabling
+stops firing instantly, quests wait in the library), shows which quests use
+each source, the built-in faucet values, and the suggested-sources roadmap.
+Live checks:
+
+- [ ] Income Sources page loads under Bank Manager; all 13 sources listed as
+      enabled; toggling one off/on sticks across reload.
+- [ ] Disable a source that an active quest uses (e.g. duel) → playing a duel
+      pays nothing; re-enable → next duel pays.
+- [ ] Voice: sit unmuted in VC past the qualify window with a voice-session
+      daily quest active → quest completes once that day (ledger `quest`),
+      not again on later ticks.
+- [ ] QOTD: `/qotd post`, first reply gets flat award + completes a
+      qotd-reply quest; second member likewise; repeat replies don't.
+- [ ] Starboard: a message crossing the threshold completes a starboard quest
+      for its author (once, even with more stars added).
+- [ ] Invite: a join attributed to an inviter completes their invite quest;
+      the same invitee rejoining does not re-pay.
+- [ ] Boost: starting a boost completes a boost quest (ledger check).
+- [ ] Bio: finishing the bio wizard completes a bio-set quest; an event
+      bio quest does NOT pay again on a later edit ("once ever"), a daily one
+      does next period.
+- [ ] Media post: quest scoped to #art — an image in #art completes it
+      (✅ + embed on the message), an image elsewhere doesn't, a thread under
+      #art does.
+- [ ] Pen Pals: a pairing completes the quest for both members (occurrence =
+      session).
+- [ ] Bank Manager quest form: "Playing a game" kind list shows all 13 with
+      labels; picking Media post reveals the trigger-channel picker.
+
 ### Economy — game-trigger quests + Bank Manager UX overhaul  (this commit)
 
 Quest triggers now span the game modules, and any daily/weekly quest can be

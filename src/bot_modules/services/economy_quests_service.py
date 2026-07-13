@@ -23,8 +23,18 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
+import logging
+
+from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy import quests
-from bot_modules.services.economy_service import EconSettings, apply_credit
+from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_service import (
+    EconSettings,
+    apply_credit,
+    load_econ_settings,
+)
+
+log = logging.getLogger(__name__)
 
 # Quests whose reward the member cannot self-claim (community goals pay via
 # the settlement sweep, not the claim path). Event quests DO go through
@@ -277,6 +287,100 @@ def list_kind_triggered_quests(
     ).fetchall()
 
 
+def source_enabled(conn: sqlite3.Connection, guild_id: int, source: str) -> bool:
+    """Whether a custom income source (trigger kind) is on for this guild.
+
+    Absent row = enabled: sources default ON so a newly shipped kind works
+    without a dashboard visit.
+    """
+    row = conn.execute(
+        "SELECT enabled FROM econ_income_sources WHERE guild_id = ? AND source = ?",
+        (guild_id, source),
+    ).fetchone()
+    return True if row is None else bool(row["enabled"])
+
+
+def list_income_sources(conn: sqlite3.Connection, guild_id: int) -> dict[str, bool]:
+    """Enabled state for every known trigger kind (absent = enabled)."""
+    stored = {
+        str(r["source"]): bool(r["enabled"])
+        for r in conn.execute(
+            "SELECT source, enabled FROM econ_income_sources WHERE guild_id = ?",
+            (guild_id,),
+        ).fetchall()
+    }
+    return {kind: stored.get(kind, True) for kind in quests.TRIGGER_KINDS}
+
+
+def set_income_source(
+    conn: sqlite3.Connection, guild_id: int, source: str, enabled: bool
+) -> None:
+    if source not in quests.TRIGGER_KINDS:
+        raise ValueError(f"unknown income source: {source!r}")
+    conn.execute(
+        """
+        INSERT INTO econ_income_sources (guild_id, source, enabled, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (guild_id, source) DO UPDATE SET
+            enabled = excluded.enabled, updated_at = excluded.updated_at
+        """,
+        (guild_id, source, 1 if enabled else 0, time.time()),
+    )
+
+
+def fire_trigger_inline(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    trigger_kind: str,
+    user_id: int,
+    *,
+    occurrence: str | None,
+    booster: bool = False,
+    channel_ids: tuple[int, ...] | None = None,
+) -> list[tuple[sqlite3.Row, ClaimOutcome]]:
+    """Fire a trigger from a call site that already holds the main-DB conn.
+
+    One-stop wrapper for module hooks (voice tick, starboard insert, invite
+    record, bio save, pen-pal pairing, QOTD award): loads settings (no-op
+    when the economy is off), derives the guild-local day, and fires inside
+    a savepoint. Never raises, and a failure rolls back only the quest work —
+    economy trouble must not break or dirty the host module's transaction.
+    Sign-off claims filed here get no bank-channel card (no bot object); they
+    still surface in the Bank Manager pending-claims table.
+    """
+    try:
+        settings = load_econ_settings(conn, guild_id)
+        if not settings.enabled:
+            return []
+        offset = get_tz_offset_hours(conn, guild_id)
+        day = local_day_for(time.time(), offset)
+        conn.execute("SAVEPOINT quest_fire")
+        try:
+            fired = fire_trigger_quests(
+                conn,
+                settings,
+                guild_id,
+                trigger_kind,
+                user_id,
+                local_day=day,
+                occurrence=occurrence,
+                booster=booster,
+                channel_ids=channel_ids,
+            )
+        except Exception:
+            conn.execute("ROLLBACK TO quest_fire")
+            raise
+        finally:
+            conn.execute("RELEASE quest_fire")
+        return fired
+    except Exception:
+        log.exception(
+            "inline trigger %s failed for user %s in guild %s",
+            trigger_kind, user_id, guild_id,
+        )
+        return []
+
+
 def fire_trigger_quests(
     conn: sqlite3.Connection,
     settings: EconSettings,
@@ -287,6 +391,7 @@ def fire_trigger_quests(
     local_day: str,
     occurrence: str | None,
     booster: bool,
+    channel_ids: tuple[int, ...] | None = None,
 ) -> list[tuple[sqlite3.Row, ClaimOutcome]]:
     """Claim every active quest with this trigger kind for one member.
 
@@ -296,9 +401,22 @@ def fire_trigger_quests(
     unkeyed event would be unbounded). Per-period repeats fall out silently
     via the claim collision; anything paid or filed is returned so the caller
     can announce or post sign-off cards.
+
+    ``channel_ids`` is the firing message's channel (and thread parent) for
+    kinds with channel context: a quest with ``trigger_channel_id`` set only
+    fires when it matches, and never fires from a caller with no channel
+    context. Returns nothing when the source is disabled on the Income
+    Sources page.
     """
+    if not source_enabled(conn, guild_id, trigger_kind):
+        return []
     out: list[tuple[sqlite3.Row, ClaimOutcome]] = []
     for quest in list_kind_triggered_quests(conn, guild_id, trigger_kind):
+        scope = quest["trigger_channel_id"]
+        if scope is not None and (
+            channel_ids is None or int(scope) not in channel_ids
+        ):
+            continue
         qtype = str(quest["qtype"])
         if qtype == "event":
             if occurrence is None:

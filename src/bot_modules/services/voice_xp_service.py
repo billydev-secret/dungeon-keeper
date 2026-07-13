@@ -25,6 +25,7 @@ from bot_modules.core.xp_system import (
     set_voice_session,
 )
 from bot_modules.economy.logic import local_day_for
+from bot_modules.services.economy_quests_service import fire_trigger_inline
 from bot_modules.services.economy_service import (
     EconSettings,
     load_econ_settings,
@@ -220,6 +221,20 @@ async def process_voice_xp_tick(
                             award.new_level,
                         )
                         leveled_members[(guild.id, member.id)] = (member, award)
+                        # Voice-session quest trigger, keyed to the local day
+                        # so repeated ticks collide silently (once/day even on
+                        # event quests). Rides the voice-XP award so the
+                        # anti-idle qualification rules gate it too.
+                        econ = _econ_for(guild.id)
+                        if econ is not None and econ[0].enabled:
+                            fire_trigger_inline(
+                                conn,
+                                guild.id,
+                                "voice_session",
+                                member.id,
+                                occurrence=local_day_for(now_ts, econ[1]),
+                                booster=member.premium_since is not None,
+                            )
 
         for session in list_voice_sessions(conn):
             if (session.guild_id, session.user_id) not in active_members:

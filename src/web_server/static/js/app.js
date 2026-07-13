@@ -146,6 +146,7 @@ const SECTIONS = [
     id: "bank-manager", label: "Bank Manager", perms: ["admin"], econManagerRole: true,
     items: [
       { id: "economy-bank-manager", label: "Bank Manager", module: "./panels/economy-bank-manager.js" },
+      { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js" },
       { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js" },
     ],
   },

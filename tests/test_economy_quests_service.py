@@ -29,12 +29,16 @@ from bot_modules.services.economy_quests_service import (
     list_settleable_community_quests,
     list_trigger_quests,
     expire_stale_claims,
+    fire_trigger_inline,
     fire_trigger_quests,
     get_photo_card,
     get_quest,
+    list_income_sources,
     list_kind_triggered_quests,
     list_quests,
     record_photo_card,
+    set_income_source,
+    source_enabled,
     resolve_claim,
     rotate_pool,
     set_claim_card,
@@ -43,7 +47,11 @@ from bot_modules.services.economy_quests_service import (
     settle_community_quest,
     update_quest,
 )
-from bot_modules.services.economy_service import EconSettings, get_balance
+from bot_modules.services.economy_service import (
+    EconSettings,
+    get_balance,
+    save_econ_settings,
+)
 from migrations import apply_migrations_sync
 
 GUILD = 500
@@ -972,6 +980,86 @@ def test_fire_trigger_quests_without_occurrence_skips_event(db):
         )
         assert [int(q["id"]) for q, _ in fired] == [daily]
         assert get_balance(conn, GUILD, USER) == 10
+
+
+# ── income sources (enable switches) ──────────────────────────────────
+
+
+def test_income_sources_default_on_and_toggle(db):
+    with open_db(db) as conn:
+        states = list_income_sources(conn, GUILD)
+        assert states and all(states.values())  # every kind, default enabled
+        set_income_source(conn, GUILD, "duel", False)
+        states = list_income_sources(conn, GUILD)
+        assert states["duel"] is False and states["party_game"] is True
+        set_income_source(conn, GUILD, "duel", True)
+        assert source_enabled(conn, GUILD, "duel") is True
+        with pytest.raises(ValueError):
+            set_income_source(conn, GUILD, "nope", True)
+
+
+def test_disabled_source_stops_firing(db):
+    with open_db(db) as conn:
+        _make(conn, qtype="daily", trigger_kind="duel", reward=10)
+        set_income_source(conn, GUILD, "duel", False)
+        assert fire_trigger_quests(
+            conn, SETTINGS, GUILD, "duel", USER,
+            local_day="2026-07-13", occurrence="quickdraw:1", booster=False,
+        ) == []
+        assert get_balance(conn, GUILD, USER) == 0
+        # Re-enabling picks up where it left off — no state was consumed.
+        set_income_source(conn, GUILD, "duel", True)
+        fired = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "duel", USER,
+            local_day="2026-07-13", occurrence="quickdraw:1", booster=False,
+        )
+        assert len(fired) == 1
+        assert get_balance(conn, GUILD, USER) == 10
+
+
+def test_fire_respects_channel_scope(db):
+    with open_db(db) as conn:
+        scoped = _make(
+            conn, qtype="daily", trigger_kind="media_post", reward=10,
+            trigger_channel_id=222,
+        )
+        # Wrong channel → nothing; matching channel (or thread parent) → pays.
+        assert fire_trigger_quests(
+            conn, SETTINGS, GUILD, "media_post", USER,
+            local_day="2026-07-13", occurrence="m1", booster=False,
+            channel_ids=(111,),
+        ) == []
+        # A channel-scoped quest never fires from a caller with no channel
+        # context at all.
+        assert fire_trigger_quests(
+            conn, SETTINGS, GUILD, "media_post", USER,
+            local_day="2026-07-13", occurrence="m2", booster=False,
+        ) == []
+        fired = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "media_post", USER,
+            local_day="2026-07-13", occurrence="m3", booster=False,
+            channel_ids=(333, 222),  # thread + parent
+        )
+        assert [int(q["id"]) for q, _ in fired] == [scoped]
+
+
+def test_fire_trigger_inline_loads_settings_and_pays(db):
+    with open_db(db) as conn:
+        qid = _make(conn, qtype="event", trigger_kind="starboard", reward=10)
+        # Economy disabled → no-op.
+        assert fire_trigger_inline(
+            conn, GUILD, "starboard", USER, occurrence="msg-1"
+        ) == []
+        save_econ_settings(conn, GUILD, {"enabled": True})
+        fired = fire_trigger_inline(
+            conn, GUILD, "starboard", USER, occurrence="msg-1"
+        )
+        assert [int(q["id"]) for q, _ in fired] == [qid]
+        assert get_balance(conn, GUILD, USER) == 10
+        # Same occurrence again → silent.
+        assert fire_trigger_inline(
+            conn, GUILD, "starboard", USER, occurrence="msg-1"
+        ) == []
 
 
 def test_photo_card_registry_roundtrip(db):

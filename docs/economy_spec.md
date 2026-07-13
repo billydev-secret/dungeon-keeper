@@ -230,11 +230,33 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
 | `guess` | member submits a scored guess in a Guess Who round | `GuessSelectView._on_select` → `fire_member_trigger` | `guess:<round_id>` |
+| `voice_session` | member earns voice-activity XP (anti-idle rules apply) | `voice_xp_service.process_voice_xp_tick` (inline conn) | `voice_session:<local_day>` (once/day by construction) |
+| `qotd_reply` | member newly earns the QOTD flat award | `events_cog._econ_work` after `try_award_qotd` returns True | `qotd_reply:<qotd_id>` |
+| `starboard` | a member's message first crosses the star threshold | `starboard_cog` first-crossing insert (bot authors excluded) | `starboard:<message_id>` |
+| `invite` | a member the inviter recruited joins | `events_cog.on_member_join` beside `record_invite` | `invite:<invitee_id>` (rejoin never re-pays) |
+| `boost` | member starts a server boost (`premium_since` None→set) | `EconomyCog._on_boost_started` (new listener) | `boost:<boost_start_ts>` |
+| `bio_set` | member saves/updates their bio via the wizard | `bios/wizard._persist_sync` | `bio_set:set` (event = once ever) |
+| `media_post` | member posts a message with an image; per-quest `trigger_channel_id` scopes it (threads count via parent) | `EconomyCog._on_media_post` (announces like photo) | `media_post:<message_id>` — use daily/weekly cadence |
+| `pen_pal` | two members are paired into a Pen Pals session (both fire) | `pen_pals_cog._do_pair` save | `pen_pal:<session_id>` |
 
 Game-fired claims are **silent in-channel** (matching the participation faucet —
 a game recap followed by a dozen quest embeds would be noise); the wallet ledger
 and `/quests` carry the news, and sign-off claims still post the bank-channel
-card. Only the photo-reply listener announces, since the reply is a 1:1 exchange.
+card. The photo-reply and media-post listeners announce (✅/📝 on the member's
+own message — a 1:1 exchange). Hooks that fire inside another module's open
+transaction use `fire_trigger_inline` (savepoint-wrapped, never raises, no
+bank-card posting — pending sign-off claims still appear on the claims panel).
+
+**Income Sources page** (Bank Manager section of the dashboard): a per-guild
+enable switch for every trigger kind, stored in `econ_income_sources`
+(absent = enabled; the gate is checked once inside `fire_trigger_quests`, so a
+disabled source stops firing everywhere immediately while its quests wait in
+the library). The page also shows which quests use each source, a read-only
+summary of the built-in faucets (knobs live on Economy Config), and the
+suggested-sources roadmap (bump attribution, survey — no survey feature exists
+in code yet —, invite retention, counted quests, monthly cadence; confessions
+rejected for anonymity). JS labels shared with the quest form via
+`economy-sources-shared.js`.
 
 **Photo plumbing:** every posted card (manual `/games play photo` or the games
 scheduler — both go through `PhotoCog.launch`) is recorded in `econ_photo_cards`
