@@ -9,6 +9,46 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — game-trigger quests + Bank Manager UX overhaul  (this commit)
+
+Quest triggers now span the game modules, and any daily/weekly quest can be
+auto-verified by one. New trigger kinds: **party game**, **duel/PvP**, **Risky
+Roll dare**, **Guess Who round** (plus the existing photo reply). Daily/weekly +
+kind = "do it once this period" (auto-claims the calendar period); event + kind
+= pays every occurrence. Game-fired payouts are silent in-channel (ledger +
+/quests carry the news); sign-off claims still post the bank card. The Bank
+Manager page was reordered around the workflow (pending claims first, slot
+summary, community goals only when present, quest editor below the library) and
+gained **in-place quest editing**, a completion-mode radio (member claims /
+phrase / game), member pickers for grant + ledger, and a ledger kind datalist.
+Live checks:
+
+- [ ] Bank Manager loads with the new order: Pending claims → Quest library
+      (slot summary line + "Also earn from…" note) → quest editor → Grant →
+      Rentals → Ledger; the Community goals card only appears when a community
+      quest exists.
+- [ ] Edit flow: Edit on a library row loads the quest into the editor
+      ("Editing: <title>", Save changes / Cancel edit), saving updates the row
+      without delete/recreate; switching completion mode on edit clears the
+      other mode's fields (check a phrase quest edited into a game trigger).
+- [ ] Create a **daily** quest with completion "Playing a game" → Risky Roll
+      dare: pressing Roll in a Risky Rolls round completes it (once that day,
+      silent — verify via wallet ledger kind `quest` and /quests showing ☑️).
+      A second roll the same day pays nothing.
+- [ ] Create an **event** quest with trigger "Finish a duel": each completed
+      quickdraw/chicken/etc. pays every participant once per game; a rematch
+      pays again (new occurrence).
+- [ ] Party game (e.g. /games play wyr to completion) fires the party-game
+      trigger for the roster alongside the usual participation payout.
+- [ ] Guess Who: making a scored guess completes a guess-kind quest; a second
+      guess on the same round does not double-pay an event quest.
+- [ ] Slot rule: two active event quests with the *same* kind → 409; one
+      photo-reply + one duel event quest active together → allowed.
+- [ ] Sign-off + game trigger: completing the game files a pending claim and
+      posts the bank-channel card (no channel spam).
+- [ ] Grant + Ledger use the member picker; ledger kind datalist filters
+      (e.g. kind `quest`).
+
 ### Economy — photo-reply event quest + Photo Challenge ping role  (this commit)
 
 Photo Challenge now feeds the economy: every posted card is registered, and an
@@ -19,10 +59,10 @@ active **event quest** (new type, trigger kind "photo reply") pays a member who
 Offline tests cover the claim dedup, pairing validation, slot rule, listener
 guards, and registry; live checks:
 
-- [ ] Bank Manager → New quest: pick type "Event (auto-trigger)" — the
-      photo-reply trigger select appears, trigger-words/channel fields hide,
-      quest saves and lists with the "📸 photo reply" mode tag; activating a
-      second event quest is refused (409 toast).
+- [ ] Bank Manager → quest editor: pick type "Event (every time it happens)" —
+      completion locks to "Playing a game" with the photo-reply trigger
+      selectable; quest saves and lists with the 📸 game-trigger tag;
+      activating a second photo-reply event quest is refused (409 toast).
 - [ ] `/games play photo` posts a card; reply to it **with a photo** → ✅
       reaction + "Quest complete!" embed, wallet credited once (ledger kind
       `quest`). A second photo reply to the same card stays silent; a reply

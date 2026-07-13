@@ -124,7 +124,8 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
                 )
                 await self._post_group_result(game, winner, loser)
                 await pay_game_rewards(
-                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY
+                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY,
+                    occurrence=str(game.id),
                 )
                 resolved = True
             else:

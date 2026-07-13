@@ -169,6 +169,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
             await pay_game_rewards(
                 self.bot, game.guild_id,
                 [game.challenger_id, game.target_id], [winner_id], self.GAME_KEY,
+                occurrence=str(game.id),
             )
 
         self._cancel_timer(game_id)

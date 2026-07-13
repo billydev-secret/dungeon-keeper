@@ -105,7 +105,7 @@ def create_quest(
     """Insert a quest into the guild's library (inactive). Returns its id."""
     if qtype not in ("daily", "weekly", "community", "event"):
         raise ValueError(f"unknown quest type: {qtype!r}")
-    _check_trigger_kind(qtype, trigger_kind)
+    _check_trigger_config(qtype, trigger_kind, trigger_words)
     cur = conn.execute(
         """
         INSERT INTO econ_quests
@@ -137,13 +137,25 @@ def create_quest(
     return int(cur.lastrowid or 0)
 
 
-def _check_trigger_kind(qtype: str, trigger_kind: str) -> None:
-    """Event quests need a known trigger kind; other types must not have one."""
+def _check_trigger_config(qtype: str, trigger_kind: str, trigger_words: str) -> None:
+    """Validate the trigger configuration for a quest type.
+
+    Event quests require a known trigger kind (they have no other way to be
+    claimed). Daily/weekly quests may carry one — "do the thing once this
+    period" — or trigger words, but not both (two auto-claim paths racing for
+    one period would be ambiguous to explain, so it's rejected outright).
+    Community quests settle guild-wide and take neither.
+    """
+    if trigger_kind and trigger_kind not in quests.TRIGGER_KINDS:
+        raise ValueError(f"unknown trigger kind: {trigger_kind!r}")
     if qtype == "event":
-        if trigger_kind not in quests.EVENT_TRIGGER_KINDS:
-            raise ValueError(f"unknown event trigger kind: {trigger_kind!r}")
-    elif trigger_kind:
-        raise ValueError("trigger_kind is only valid on event quests")
+        if not trigger_kind:
+            raise ValueError("event quests need a trigger kind")
+    elif qtype == "community":
+        if trigger_kind:
+            raise ValueError("community quests cannot have a trigger kind")
+    if trigger_kind and trigger_words.strip():
+        raise ValueError("a quest takes trigger words or a trigger kind, not both")
 
 
 def update_quest(
@@ -155,12 +167,13 @@ def update_quest(
         raise KeyError(f"unknown quest field(s): {sorted(unknown)}")
     if not values:
         return
-    if "qtype" in values or "trigger_kind" in values:
+    if {"qtype", "trigger_kind", "trigger_words"} & set(values):
         quest = get_quest(conn, guild_id, quest_id)
         if quest is not None:
-            _check_trigger_kind(
+            _check_trigger_config(
                 str(values.get("qtype", quest["qtype"])),
                 str(values.get("trigger_kind", quest["trigger_kind"])),
+                str(values.get("trigger_words", quest["trigger_words"])),
             )
     assignments = ", ".join(f"{k} = ?" for k in values)
     params = [
@@ -246,23 +259,67 @@ def list_trigger_quests(
     ).fetchall()
 
 
-def get_active_event_quest(
+def list_kind_triggered_quests(
     conn: sqlite3.Connection, guild_id: int, trigger_kind: str
-) -> sqlite3.Row | None:
-    """The guild's active event quest for a trigger kind, if any.
+) -> list[sqlite3.Row]:
+    """The guild's active quests auto-paid by a trigger kind (any qtype).
 
-    The slot rule caps active event quests at one, so a bare LIMIT 1 (newest
-    wins if the cap is ever loosened) is the whole lookup.
+    An event quest pays per occurrence; a daily/weekly quest with the same
+    kind auto-claims its calendar period ("do it once today/this week").
     """
     return conn.execute(
         """
         SELECT * FROM econ_quests
-        WHERE guild_id = ? AND active = 1
-          AND qtype = 'event' AND trigger_kind = ?
-        ORDER BY id DESC LIMIT 1
+        WHERE guild_id = ? AND active = 1 AND trigger_kind = ?
+        ORDER BY id
         """,
         (guild_id, trigger_kind),
-    ).fetchone()
+    ).fetchall()
+
+
+def fire_trigger_quests(
+    conn: sqlite3.Connection,
+    settings: EconSettings,
+    guild_id: int,
+    trigger_kind: str,
+    user_id: int,
+    *,
+    local_day: str,
+    occurrence: str | None,
+    booster: bool,
+) -> list[tuple[sqlite3.Row, ClaimOutcome]]:
+    """Claim every active quest with this trigger kind for one member.
+
+    The claim period comes from the quest's own cadence: daily/weekly use the
+    calendar period for ``local_day``; event quests use the per-occurrence key
+    (skipped when the firing site has no stable ``occurrence`` id — paying an
+    unkeyed event would be unbounded). Per-period repeats fall out silently
+    via the claim collision; anything paid or filed is returned so the caller
+    can announce or post sign-off cards.
+    """
+    out: list[tuple[sqlite3.Row, ClaimOutcome]] = []
+    for quest in list_kind_triggered_quests(conn, guild_id, trigger_kind):
+        qtype = str(quest["qtype"])
+        if qtype == "event":
+            if occurrence is None:
+                continue
+            period = quests.occurrence_period(trigger_kind, occurrence)
+        else:
+            period = quests.quest_period(qtype, local_day)
+        try:
+            outcome = claim_quest(
+                conn,
+                settings,
+                guild_id,
+                int(quest["id"]),
+                user_id,
+                period=period,
+                booster=booster,
+            )
+        except ValueError:
+            continue  # already claimed this period/occurrence, or window closed
+        out.append((quest, outcome))
+    return out
 
 
 # ── Photo Challenge card registry (event-quest trigger source) ────────
@@ -322,9 +379,26 @@ def set_quest_active(
     if quest is None:
         raise ValueError("quest not found")
     if active:
-        existing = _active_qtypes(conn, guild_id, exclude_id=quest_id)
-        if not quests.can_activate(existing, quest["qtype"]):
-            raise SlotLimitError(f"too many active {quest['qtype']} quests")
+        if quest["qtype"] == "event":
+            kinds = [
+                str(r["trigger_kind"])
+                for r in conn.execute(
+                    """
+                    SELECT trigger_kind FROM econ_quests
+                    WHERE guild_id = ? AND active = 1 AND qtype = 'event'
+                      AND id != ?
+                    """,
+                    (guild_id, quest_id),
+                ).fetchall()
+            ]
+            if not quests.can_activate_event(kinds, str(quest["trigger_kind"])):
+                raise SlotLimitError(
+                    "an event quest with this trigger is already active"
+                )
+        else:
+            existing = _active_qtypes(conn, guild_id, exclude_id=quest_id)
+            if not quests.can_activate(existing, quest["qtype"]):
+                raise SlotLimitError(f"too many active {quest['qtype']} quests")
     conn.execute(
         "UPDATE econ_quests SET active = ? WHERE id = ? AND guild_id = ?",
         (1 if active else 0, quest_id, guild_id),
@@ -348,7 +422,7 @@ def claim_quest(
 
     Daily/weekly callers pass the calendar period from ``quest_period``;
     event-quest callers (the trigger listeners) pass their per-occurrence
-    key (e.g. ``photo_card_period(game_id)``).
+    key (e.g. ``occurrence_period(kind, game_id)``).
 
     Instant (signoff=0): inserts a 'paid' claim and credits kind="quest" in
     the same transaction. Sign-off (signoff=1): inserts a 'pending' claim (no

@@ -1,11 +1,37 @@
 // Bank Manager — quest library, claim sign-off, community goals, grants, and
 // the ledger audit stream. Gated by the economy manager role (or admin).
 import { api, apiPost, apiPut, apiDelete, esc, fmtAge, fmtTs } from "../api.js";
-import { showStatus, loadMembers, loadChannels, mountChannelPicker } from "../config-helpers.js";
+import {
+  showStatus, loadMembers, loadChannels,
+  mountChannelPicker, mountPicker, toMemberOptions,
+} from "../config-helpers.js";
 import { toast, confirmDialog, promptDialog } from "../ui.js";
 
 // Advisory reward bands (client-side hint only — the server saves any value).
 const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75] };
+
+// Plain-language cadence per quest type (shown under the Type select).
+const TYPE_HINTS = {
+  daily: "Members can complete it once per day (guild-local midnight). One daily can be active at a time; use a rotate tag to cycle a pool.",
+  weekly: "Members can complete it once per ISO week. Up to five can be active.",
+  community: "One shared goal for the whole server. You track progress and settle the payout from the Community goals card.",
+  event: "Pays by itself every time the trigger happens — no claims, no daily/weekly cap. One active event quest per trigger.",
+};
+
+// Game triggers (mirror of TRIGGER_KINDS in economy/quests.py).
+const KIND_LABELS = {
+  photo_reply: "📸 Reply to a Photo Challenge card with a photo",
+  party_game: "🎲 Finish a party game",
+  duel: "⚔️ Finish a duel / PvP challenge",
+  risky_roll: "🎰 Take a Risky Roll dare",
+  guess: "🕵️ Play a Guess Who round",
+};
+
+// Common ledger kinds for the audit filter (free text still allowed).
+const LEDGER_KINDS = [
+  "quest", "quest_community", "qotd", "game_participation", "game_win",
+  "conversion", "grant", "transfer_in", "transfer_out", "rental",
+];
 
 function nowSec() { return Date.now() / 1000; }
 
@@ -42,26 +68,29 @@ function render(container, members, channels) {
         <div class="subtitle">Quests, claim sign-off, community goals, grants, and the ledger</div>
       </header>
 
+      <section class="card" data-sec="claims">
+        <div class="section-label">Pending claims — needs you</div>
+        <div data-claims><div class="empty">Loading…</div></div>
+      </section>
+
       <section class="card" data-sec="library">
         <div class="section-label">Quest library</div>
+        <div class="field-hint" style="margin-bottom:8px;">
+          Quests are the tunable rewards. Members also earn automatically from daily
+          logins &amp; streaks, XP conversion, reactions, game participation/wins, and
+          QOTD replies — those rates live in <strong>Economy Config</strong>.
+        </div>
+        <div data-quest-slots class="field-hint" style="margin-bottom:6px;"></div>
         <div data-quests><div class="empty">Loading…</div></div>
       </section>
 
+      <section class="card" data-sec="community" style="display:none;">
+        <div class="section-label">Community goals</div>
+        <div data-community></div>
+      </section>
+
       <section class="card" data-sec="author">
-        <div class="section-label">New quest</div>
-        <div class="ai-gen" data-quest-ai>
-          <div class="field-row" style="align-items:flex-end;">
-            <div class="field"><label>AI idea theme (optional)</label>
-              <input type="text" data-ai-theme maxlength="200" placeholder="e.g. summer event, voice chat, art"
-                     style="max-width:260px;" /></div>
-            <div class="field"><label>How many</label>
-              <input type="number" data-ai-count min="1" max="10" step="1" value="5" style="max-width:90px;" /></div>
-            <div class="field" style="align-self:flex-end;">
-              <button type="button" class="btn" data-ai-generate>✨ Generate ideas</button></div>
-          </div>
-          <div class="field-hint" style="opacity:.75;">Ideas use the quest type selected below. Click one to load it into the form — nothing is saved until you create it.</div>
-          <div data-ai-results></div>
-        </div>
+        <div class="section-label" data-author-label>New quest</div>
         <form data-form-quest class="form">
           <div class="field-row">
             <div class="field"><label>Title</label>
@@ -70,9 +99,10 @@ function render(container, members, channels) {
               <select name="qtype">
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
-                <option value="community">Community</option>
-                <option value="event">Event (auto-trigger)</option>
-              </select></div>
+                <option value="community">Community goal</option>
+                <option value="event">Event (every time it happens)</option>
+              </select>
+              <div class="field-hint" data-type-hint style="max-width:420px;"></div></div>
           </div>
           <div class="field"><label>Description</label>
             <textarea name="description" maxlength="2000" rows="2"></textarea></div>
@@ -84,7 +114,7 @@ function render(container, members, channels) {
               <div class="field-hint" data-reward-hint style="color:#d9a441;"></div></div>
             <div class="field" data-community-target style="display:none;"><label>Community target</label>
               <input type="number" name="community_target" min="0" step="1" style="max-width:120px;" /></div>
-            <div class="field"><label>Rotate tag</label>
+            <div class="field" data-rotate-field><label>Rotate tag</label>
               <input type="text" name="rotate_tag" maxlength="64" style="max-width:160px;" /></div>
           </div>
           <div class="field-row">
@@ -93,43 +123,63 @@ function render(container, members, channels) {
             <div class="field"><label>Ends (optional)</label>
               <input type="datetime-local" name="ends_at" /></div>
           </div>
-          <div class="field" data-trigger-words><label>Trigger words (optional)</label>
+
+          <div class="field" data-completion-block>
+            <label>How it completes</label>
+            <div style="display:flex; gap:14px; flex-wrap:wrap; margin:4px 0;">
+              <label style="display:flex; gap:5px; align-items:center; cursor:pointer;">
+                <input type="radio" name="completion" value="manual" checked /> Member claims it</label>
+              <label style="display:flex; gap:5px; align-items:center; cursor:pointer;">
+                <input type="radio" name="completion" value="phrase" /> Saying a phrase</label>
+              <label style="display:flex; gap:5px; align-items:center; cursor:pointer;">
+                <input type="radio" name="completion" value="game" /> Playing a game</label>
+            </div>
+            <div class="field-hint" data-completion-hint></div>
+          </div>
+          <div class="field" data-trigger-words style="display:none;"><label>Trigger words</label>
             <textarea name="trigger_words" maxlength="1000" rows="2" placeholder="e.g. good morning, gm"></textarea>
-            <div class="field-hint">Comma or newline separated. Saying a phrase in chat completes the quest automatically — no manual claim. With sign-off on, it files the claim for approval instead of paying.</div></div>
-          <div class="field" data-trigger-channel><label>Trigger channel</label>
+            <div class="field-hint">Comma or newline separated; whole-phrase, case-insensitive.</div></div>
+          <div class="field" data-trigger-channel style="display:none;"><label>Trigger channel</label>
             <span data-picker="trigger-channel"></span>
             <div class="field-hint">If set, only messages in this channel (or its threads) count.</div></div>
-          <div class="field" data-trigger-kind style="display:none;"><label>Event trigger</label>
-            <select name="trigger_kind">
-              <option value="photo_reply">📸 Reply to a Photo Challenge card with a photo</option>
+          <div class="field" data-trigger-kind style="display:none;"><label>Game trigger</label>
+            <select name="trigger_kind">${Object.entries(KIND_LABELS).map(([k, v]) =>
+              `<option value="${k}">${esc(v)}</option>`).join("")}
             </select>
-            <div class="field-hint">Pays automatically — each member once per challenge card, with no time limit (replies to old cards still count). One event quest can be active at a time.</div></div>
+            <div class="field-hint" data-kind-hint></div></div>
+
           <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
             <input type="checkbox" name="signoff" /> Requires manager sign-off
+            <span class="field-hint" style="margin:0;">(completion files a claim you approve instead of paying instantly)</span>
           </label>
           <div style="display:flex; gap:8px; align-items:center;">
-            <button type="submit" class="btn btn-primary">Create quest</button>
+            <button type="submit" class="btn btn-primary" data-submit-quest>Create quest</button>
+            <button type="button" class="btn" data-cancel-edit style="display:none;">Cancel edit</button>
             <span data-status-quest></span>
           </div>
         </form>
-      </section>
-
-      <section class="card" data-sec="claims">
-        <div class="section-label">Pending claims</div>
-        <div data-claims><div class="empty">Loading…</div></div>
-      </section>
-
-      <section class="card" data-sec="rentals">
-        <div class="section-label">Perk rentals</div>
-        <div data-rentals><div class="empty">Loading…</div></div>
+        <div class="ai-gen" data-quest-ai style="margin-top:14px;">
+          <div class="section-label" style="font-size:.85em;">✨ Need ideas?</div>
+          <div class="field-row" style="align-items:flex-end;">
+            <div class="field"><label>AI idea theme (optional)</label>
+              <input type="text" data-ai-theme maxlength="200" placeholder="e.g. summer event, voice chat, art"
+                     style="max-width:260px;" /></div>
+            <div class="field"><label>How many</label>
+              <input type="number" data-ai-count min="1" max="10" step="1" value="5" style="max-width:90px;" /></div>
+            <div class="field" style="align-self:flex-end;">
+              <button type="button" class="btn" data-ai-generate>Generate ideas</button></div>
+          </div>
+          <div class="field-hint" style="opacity:.75;">Ideas use the quest type selected above. Click one to load it into the form — nothing is saved until you create it.</div>
+          <div data-ai-results></div>
+        </div>
       </section>
 
       <section class="card" data-sec="grant">
         <div class="section-label">Grant currency</div>
         <form data-form-grant class="form">
           <div class="field-row">
-            <div class="field"><label>Member ID</label>
-              <input type="text" name="member_id" placeholder="Discord user id" style="max-width:220px;" required /></div>
+            <div class="field"><label>Member</label>
+              <span data-picker="grant-member"></span></div>
             <div class="field"><label>Amount</label>
               <input type="number" name="amount" min="1" step="1" value="1" style="max-width:120px;" /></div>
           </div>
@@ -142,13 +192,19 @@ function render(container, members, channels) {
         </form>
       </section>
 
+      <section class="card" data-sec="rentals">
+        <div class="section-label">Perk rentals</div>
+        <div data-rentals><div class="empty">Loading…</div></div>
+      </section>
+
       <section class="card" data-sec="ledger">
         <div class="section-label">Ledger audit</div>
         <div class="field-row">
-          <div class="field"><label>Member ID filter</label>
-            <input type="text" data-ledger-user placeholder="(all)" style="max-width:200px;" /></div>
+          <div class="field"><label>Member filter</label>
+            <span data-picker="ledger-member"></span></div>
           <div class="field"><label>Kind filter</label>
-            <input type="text" data-ledger-kind placeholder="(all) e.g. quest" style="max-width:180px;" /></div>
+            <input type="text" data-ledger-kind list="dk-ledger-kinds" placeholder="(all)" style="max-width:180px;" />
+            <datalist id="dk-ledger-kinds">${LEDGER_KINDS.map((k) => `<option value="${k}"></option>`).join("")}</datalist></div>
           <div class="field" style="align-self:flex-end;">
             <button class="btn" data-ledger-refresh>Apply</button></div>
         </div>
@@ -246,6 +302,35 @@ async function refreshRentals(container, members) {
 
 // ── quest library ────────────────────────────────────────────────────
 
+function questVerification(q) {
+  const pay = q.signoff ? "sign-off" : "instant";
+  if (q.trigger_kind && KIND_LABELS[q.trigger_kind]) {
+    return `<span title="${esc(KIND_LABELS[q.trigger_kind])}">${esc(KIND_LABELS[q.trigger_kind].split(" ")[0])} game trigger</span> · ${pay}`;
+  }
+  if (q.trigger_words) {
+    return `<span title="${esc(q.trigger_words)}">🗣️ phrase</span> · ${pay}`;
+  }
+  if (q.qtype === "community") return `manager settles · ${pay}`;
+  return `member claims · ${pay}`;
+}
+
+function renderSlotSummary(container, quests) {
+  const host = container.querySelector("[data-quest-slots]");
+  if (!host) return;
+  const active = quests.filter((q) => q.active);
+  const daily = active.filter((q) => q.qtype === "daily").length;
+  const weekly = active.filter((q) => q.qtype === "weekly").length;
+  const kinds = active
+    .filter((q) => q.qtype === "event" && q.trigger_kind)
+    .map((q) => (KIND_LABELS[q.trigger_kind] || q.trigger_kind).split(" ")[0]);
+  const parts = [
+    `Active slots: daily ${daily}/1`,
+    `weekly ${weekly}/5`,
+    `event ${kinds.length ? kinds.join(" ") : "none"}`,
+  ];
+  host.textContent = parts.join(" · ");
+}
+
 async function refreshQuests(container, members) {
   const host = container.querySelector("[data-quests]");
   let quests;
@@ -255,8 +340,9 @@ async function refreshQuests(container, members) {
     host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
     return;
   }
+  renderSlotSummary(container, quests);
   if (!quests.length) {
-    host.innerHTML = `<div class="empty">No quests yet.</div>`;
+    host.innerHTML = `<div class="empty">No quests yet — create one below.</div>`;
     renderCommunity(container, members, quests);
     return;
   }
@@ -267,8 +353,7 @@ async function refreshQuests(container, members) {
         <td>${esc(q.title)}</td>
         <td>${esc(q.qtype)}</td>
         <td>${q.reward}</td>
-        <td>${q.rotate_tag ? esc(q.rotate_tag) : "—"}</td>
-        <td>${q.signoff ? "sign-off" : "instant"}${q.trigger_words ? ` · <span title="${esc(q.trigger_words)}">🗣️ trigger</span>` : ""}${q.trigger_kind === "photo_reply" ? ` · <span title="Pays on a photo reply to a Photo Challenge card">📸 photo reply</span>` : ""}</td>
+        <td>${questVerification(q)}</td>
         <td>
           <label style="display:inline-flex; gap:4px; align-items:center;">
             <input type="checkbox" data-active-toggle="${q.id}"${q.active ? " checked" : ""} /> active
@@ -276,6 +361,7 @@ async function refreshQuests(container, members) {
           <span id="${status}" class="save-status" style="margin-left:6px;"></span>
         </td>
         <td>
+          <button class="btn btn-ghost btn-sm" data-edit-quest="${q.id}">Edit</button>
           <button class="btn btn-ghost btn-sm" data-del-quest="${q.id}">Delete</button>
         </td>
       </tr>`;
@@ -283,10 +369,17 @@ async function refreshQuests(container, members) {
   host.innerHTML = `
     <div style="overflow-x:auto;">
       <table class="data-table">
-        <thead><tr><th>Title</th><th>Type</th><th>Reward</th><th>Rotate</th><th>Mode</th><th>Active</th><th></th></tr></thead>
+        <thead><tr><th>Title</th><th>Type</th><th>Reward</th><th>How it completes</th><th>Active</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+
+  host.querySelectorAll("[data-edit-quest]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const quest = quests.find((q) => String(q.id) === String(btn.dataset.editQuest));
+      if (quest) container.dispatchEvent(new CustomEvent("dk-edit-quest", { detail: quest }));
+    });
+  });
 
   host.querySelectorAll("[data-active-toggle]").forEach((cb) => {
     cb.addEventListener("change", async () => {
@@ -322,17 +415,14 @@ async function refreshQuests(container, members) {
 // ── community goals ──────────────────────────────────────────────────
 
 function renderCommunity(container, members, quests) {
-  let host = container.querySelector("[data-community-sec]");
+  const sec = container.querySelector("[data-sec='community']");
+  const host = sec.querySelector("[data-community]");
   const community = quests.filter((q) => q.qtype === "community");
-  if (!host) {
-    const sec = document.createElement("section");
-    sec.className = "card";
-    sec.dataset.communitySec = "1";
-    container.querySelector("[data-sec='claims']").before(sec);
-    host = sec;
-  }
+  // The whole card hides when there are no community goals — an empty
+  // placeholder card between the library and the editor was just noise.
+  sec.style.display = community.length ? "" : "none";
   if (!community.length) {
-    host.innerHTML = `<div class="section-label">Community goals</div><div class="empty">No community quests.</div>`;
+    host.innerHTML = "";
     return;
   }
   const rows = community.map((q) => `
@@ -347,7 +437,7 @@ function renderCommunity(container, members, quests) {
         <span class="save-status" data-cstatus="${q.id}"></span>
       </div>
     </div>`).join("");
-  host.innerHTML = `<div class="section-label">Community goals</div>${rows}`;
+  host.innerHTML = rows;
 
   host.querySelectorAll("[data-cprogress-save]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -389,67 +479,164 @@ function toEpoch(v) {
   return Number.isNaN(ms) ? null : ms / 1000;
 }
 
+function fromEpoch(sec) {
+  if (!sec) return "";
+  const d = new Date(sec * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+const COMPLETION_HINTS = {
+  manual: "Members claim it themselves from /bank quests (or /quests).",
+  phrase: "Saying one of the phrases in chat completes it — no manual claim.",
+  game: "Completes on its own when the member does this in a game. Daily/weekly: once per period. Event: every single time.",
+};
+
 function wireAuthoring(container, channels) {
   const form = container.querySelector("[data-form-quest]");
   const status = form.querySelector("[data-status-quest]");
   const rewardInput = form.querySelector("[name=reward]");
   const qtypeSel = form.querySelector("[name=qtype]");
   const hint = form.querySelector("[data-reward-hint]");
+  const typeHint = form.querySelector("[data-type-hint]");
   const communityField = form.querySelector("[data-community-target]");
-  const triggerFields = form.querySelectorAll("[data-trigger-words], [data-trigger-channel]");
+  const rotateField = form.querySelector("[data-rotate-field]");
+  const completionBlock = form.querySelector("[data-completion-block]");
+  const completionHint = form.querySelector("[data-completion-hint]");
+  const wordsField = form.querySelector("[data-trigger-words]");
+  const channelField = form.querySelector("[data-trigger-channel]");
+  const kindField = form.querySelector("[data-trigger-kind]");
+  const kindHint = form.querySelector("[data-kind-hint]");
+  const kindSel = form.querySelector("[name=trigger_kind]");
+  const submitBtn = form.querySelector("[data-submit-quest]");
+  const cancelBtn = form.querySelector("[data-cancel-edit]");
+  const authorLabel = container.querySelector("[data-author-label]");
   const triggerPicker = mountChannelPicker(
     form.querySelector('[data-picker="trigger-channel"]'), channels, "0",
     { emptyLabel: "(any channel)" },
   );
+  let editingId = null;
+
+  const completion = () =>
+    form.querySelector("[name=completion]:checked")?.value || "manual";
+  const setCompletion = (value) => {
+    const radio = form.querySelector(`[name=completion][value="${value}"]`);
+    if (radio) radio.checked = true;
+  };
 
   const updateHint = () => { hint.textContent = bandHint(qtypeSel.value, rewardInput.value); };
-  const triggerKindField = form.querySelector("[data-trigger-kind]");
+  const updateKindHint = () => {
+    kindHint.textContent = qtypeSel.value === "event"
+      ? "Pays every time it happens — one payout per member per game/card/round."
+      : "Auto-completes the quest the first time it happens each period.";
+  };
   const updateCommunity = () => {
-    const isCommunity = qtypeSel.value === "community";
-    const isEvent = qtypeSel.value === "event";
+    const qtype = qtypeSel.value;
+    const isCommunity = qtype === "community";
+    const isEvent = qtype === "event";
+    typeHint.textContent = TYPE_HINTS[qtype] || "";
     communityField.style.display = isCommunity ? "" : "none";
-    // Community quests settle guild-wide — no per-member trigger claims.
-    // Event quests are paid by their own trigger kind, not phrase matching.
-    triggerFields.forEach((el) => { el.style.display = (isCommunity || isEvent) ? "none" : ""; });
-    triggerKindField.style.display = isEvent ? "" : "none";
+    rotateField.style.display = qtype === "daily" ? "" : "none";
+    // Community settles guild-wide (no per-member completion); an event
+    // quest IS its game trigger — so the choice only exists for daily/weekly.
+    completionBlock.style.display = isCommunity ? "none" : "";
+    if (isCommunity) setCompletion("manual");
+    if (isEvent) setCompletion("game");
+    form.querySelectorAll("[name=completion]").forEach((r) => {
+      r.disabled = isCommunity || (isEvent && r.value !== "game");
+    });
+    const mode = completion();
+    completionHint.textContent = COMPLETION_HINTS[mode] || "";
+    wordsField.style.display = mode === "phrase" && !isCommunity ? "" : "none";
+    channelField.style.display = mode === "phrase" && !isCommunity ? "" : "none";
+    kindField.style.display = mode === "game" && !isCommunity ? "" : "none";
+    updateKindHint();
   };
   rewardInput.addEventListener("input", updateHint);
   qtypeSel.addEventListener("change", () => { updateHint(); updateCommunity(); });
+  form.querySelectorAll("[name=completion]").forEach((r) =>
+    r.addEventListener("change", updateCommunity));
   updateHint();
   updateCommunity();
 
   wireQuestAi(container, form, { updateHint, updateCommunity });
 
+  const exitEditMode = () => {
+    editingId = null;
+    form.reset();
+    triggerPicker.setValue("0");
+    authorLabel.textContent = "New quest";
+    submitBtn.textContent = "Create quest";
+    cancelBtn.style.display = "none";
+    updateHint();
+    updateCommunity();
+  };
+  cancelBtn.addEventListener("click", exitEditMode);
+
+  container.addEventListener("dk-edit-quest", (e) => {
+    const q = e.detail;
+    editingId = q.id;
+    form.querySelector("[name=title]").value = q.title || "";
+    form.querySelector("[name=description]").value = q.description || "";
+    form.querySelector("[name=criteria]").value = q.criteria || "";
+    qtypeSel.value = q.qtype;
+    rewardInput.value = q.reward ?? 0;
+    form.querySelector("[name=signoff]").checked = !!q.signoff;
+    form.querySelector("[name=rotate_tag]").value = q.rotate_tag || "";
+    form.querySelector("[name=starts_at]").value = fromEpoch(q.starts_at);
+    form.querySelector("[name=ends_at]").value = fromEpoch(q.ends_at);
+    form.querySelector("[name=community_target]").value = q.community_target ?? "";
+    form.querySelector("[name=trigger_words]").value = q.trigger_words || "";
+    triggerPicker.setValue(q.trigger_channel_id || "0");
+    if (q.trigger_kind) kindSel.value = q.trigger_kind;
+    setCompletion(q.trigger_kind ? "game" : (q.trigger_words ? "phrase" : "manual"));
+    authorLabel.textContent = `Editing: ${q.title}`;
+    submitBtn.textContent = "Save changes";
+    cancelBtn.style.display = "";
+    updateHint();
+    updateCommunity();
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const qtype = qtypeSel.value;
+    const mode = completion();
     const body = {
       title: form.querySelector("[name=title]").value.trim(),
       description: form.querySelector("[name=description]").value,
       criteria: form.querySelector("[name=criteria]").value,
-      qtype: qtypeSel.value,
+      qtype,
       reward: parseInt(rewardInput.value, 10) || 0,
       signoff: form.querySelector("[name=signoff]").checked,
       rotate_tag: form.querySelector("[name=rotate_tag]").value.trim(),
       starts_at: toEpoch(form.querySelector("[name=starts_at]").value),
       ends_at: toEpoch(form.querySelector("[name=ends_at]").value),
+      // Always sent so an edit that switches completion mode clears the
+      // other mode's fields instead of leaving them behind.
+      trigger_words: "",
+      trigger_channel_id: null,
+      trigger_kind: "",
     };
-    if (qtypeSel.value === "community") {
+    if (qtype === "community") {
       const t = form.querySelector("[name=community_target]").value;
       body.community_target = t === "" ? null : parseInt(t, 10);
-    } else if (qtypeSel.value === "event") {
-      body.trigger_kind = form.querySelector("[name=trigger_kind]").value;
-    } else {
+    } else if (mode === "game") {
+      body.trigger_kind = kindSel.value;
+    } else if (mode === "phrase") {
       body.trigger_words = form.querySelector("[name=trigger_words]").value.trim();
       const trigCh = triggerPicker.getValue();
       body.trigger_channel_id = !trigCh || trigCh === "0" ? null : trigCh;
     }
     try {
-      await apiPost("/api/economy/quests", body);
-      showStatus(status, true, "Created");
-      form.reset();
-      triggerPicker.setValue("0");
-      updateHint();
-      updateCommunity();
+      if (editingId != null) {
+        await apiPut(`/api/economy/quests/${editingId}`, body);
+        showStatus(status, true, "Saved");
+      } else {
+        await apiPost("/api/economy/quests", body);
+        showStatus(status, true, "Created");
+      }
+      exitEditMode();
       const members = await loadMembers().catch(() => []);
       refreshQuests(container, members);
     } catch (err) {
@@ -559,6 +746,7 @@ async function refreshClaims(container, members) {
     <tr data-claim-row="${c.id}">
       <td>${esc(memberName(members, c.user_id))}</td>
       <td>${esc(c.quest_title || "#" + c.quest_id)}</td>
+      <td>${esc(c.period || "")}</td>
       <td>${fmtAge(nowSec() - (c.created_at || 0))}</td>
       <td>${c.deny_count || 0}</td>
       <td>
@@ -570,7 +758,7 @@ async function refreshClaims(container, members) {
   host.innerHTML = `
     <div style="overflow-x:auto;">
       <table class="data-table">
-        <thead><tr><th>Claimant</th><th>Quest</th><th>Age</th><th>Denies</th><th></th></tr></thead>
+        <thead><tr><th>Claimant</th><th>Quest</th><th>Period</th><th>Age</th><th>Denies</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>`;
@@ -611,21 +799,28 @@ async function refreshClaims(container, members) {
 function wireGrant(container, members) {
   const form = container.querySelector("[data-form-grant]");
   const status = form.querySelector("[data-status-grant]");
+  const memberPicker = mountPicker(
+    form.querySelector('[data-picker="grant-member"]'),
+    toMemberOptions(members), "0",
+    { emptyValue: "0", emptyLabel: "(pick a member)" },
+  );
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const picked = memberPicker.getValue();
     const body = {
-      member_id: parseInt(form.querySelector("[name=member_id]").value.trim(), 10),
+      member_id: parseInt(picked || "0", 10),
       amount: parseInt(form.querySelector("[name=amount]").value, 10) || 0,
       reason: form.querySelector("[name=reason]").value,
     };
-    if (!Number.isFinite(body.member_id)) {
-      showStatus(status, false, "Enter a numeric member id");
+    if (!Number.isFinite(body.member_id) || body.member_id <= 0) {
+      showStatus(status, false, "Pick a member first");
       return;
     }
     try {
       const res = await apiPost("/api/economy/grant", body);
       showStatus(status, true, `Credited ${res.credited}`);
       form.reset();
+      memberPicker.setValue("0");
       refreshLedger(container, members);
     } catch (err) {
       showStatus(status, false, err.message);
@@ -635,7 +830,14 @@ function wireGrant(container, members) {
 
 // ── ledger audit ─────────────────────────────────────────────────────
 
+let _ledgerMemberPicker = null;
+
 function wireLedger(container, members) {
+  _ledgerMemberPicker = mountPicker(
+    container.querySelector('[data-picker="ledger-member"]'),
+    toMemberOptions(members), "0",
+    { emptyValue: "0", emptyLabel: "(all members)" },
+  );
   container.querySelector("[data-ledger-refresh]").addEventListener("click", () => {
     refreshLedger(container, members);
   });
@@ -643,7 +845,8 @@ function wireLedger(container, members) {
 
 async function refreshLedger(container, members) {
   const host = container.querySelector("[data-ledger]");
-  const userId = container.querySelector("[data-ledger-user]").value.trim();
+  const picked = _ledgerMemberPicker ? _ledgerMemberPicker.getValue() : "0";
+  const userId = picked && picked !== "0" ? picked : "";
   const kind = container.querySelector("[data-ledger-kind]").value.trim();
   let entries;
   try {

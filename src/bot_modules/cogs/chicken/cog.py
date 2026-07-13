@@ -130,7 +130,8 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             if loser is not None and winner is not None:
                 await self._post_group_result(game, winner, loser)
                 await pay_game_rewards(
-                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY
+                    self.bot, game.guild_id, list(game.roster), [winner], self.GAME_KEY,
+                    occurrence=str(game.id),
                 )
             else:
                 # total wipeout (nobody bailed) → cosmetic, no nick
@@ -178,6 +179,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         await pay_game_rewards(
             self.bot, game.guild_id, list(game.roster),
             [winner_id] if winner_id is not None else [], self.GAME_KEY,
+            occurrence=str(game.id),
         )
 
     # ── Button handler ────────────────────────────────────────────────────────

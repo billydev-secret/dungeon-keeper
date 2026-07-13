@@ -123,12 +123,16 @@ XP earned that local day converts to currency.
 ### 4.1 Authoring (Bank Manager panel, gated on `economy_manager_role` or admin —
 mirrors the `games_editor_role` / `require_game_host` dashboard pattern)
 Fields: title, description, type (daily/weekly/community/event), reward, sign-off
-tickbox, criteria (freeform v1), date range, repeat/auto-rotate tag, trigger words +
-optional trigger channel (§4.4, daily/weekly only — hidden for community), event
-trigger kind (§4.5, event only). Rewards free-entry with an amber out-of-band
-warning; out-of-band saves fine, audit-tagged. Library model: **1 active daily + up
-to 5 weeklies + 1 active event quest** per guild; dailies can auto-rotate from a
-tagged pool (rotation happens on the guild-local day roll in the economy loop).
+tickbox, criteria (freeform v1), date range, repeat/auto-rotate tag, and a
+**completion mode** — member claims it / trigger phrase (§4.4) / game trigger
+(§4.5) — phrase and game trigger being mutually exclusive. Rewards free-entry with
+an amber out-of-band warning; out-of-band saves fine, audit-tagged. Library model:
+**1 active daily + up to 5 weeklies + 1 active event quest per trigger kind** per
+guild; dailies can auto-rotate from a tagged pool (rotation happens on the
+guild-local day roll in the economy loop). The Bank Manager panel orders cards by
+workflow (pending claims → library w/ slot summary + inline edit → community
+goals → quest editor → grant → rentals → ledger) and supports editing quests in
+place (PUT), member pickers for grant/ledger, and a ledger kind datalist.
 
 **AI idea generator.** The New-quest form has a "Generate ideas" button
 (`POST /api/economy/quests/generate`, manager-gated) that batches suggestions for
@@ -198,28 +202,48 @@ a restart; the cache also stores empty lists, keeping the per-message cost of
 guilds without trigger quests to a dict lookup. Community quests never trigger
 (not member-claimable).
 
-### 4.5 Event Quests (trigger-paid, no calendar period)
-An **event quest** (`qtype='event'`, `trigger_kind` names the trigger) is never
-member-claimed: a bot listener pays it through the same `claim_quest` state machine
-when its trigger fires, passing a **per-occurrence period key** instead of a
-calendar one — so payouts dedupe per member per occurrence with **no time gate**.
-`quest_period('event', …)` deliberately raises; only listeners build event periods.
-Slot rule: **1 active event quest** per guild (two active would double-pay one
-trigger); it occupies no daily/weekly/community slot. Not offered by the AI idea
-generator. On the wallet page the quest shows a standing how-to (state =
-`trigger_kind`), never a claim button.
+### 4.5 Game-Trigger Quests (`trigger_kind`)
+A quest may carry a **trigger kind** — a custom-coded module hook that completes
+it automatically (`quests.TRIGGER_KINDS`; mutually exclusive with trigger words).
+The kind decides *what* completes the quest; the qtype decides *how often it can
+pay*:
 
-**`photo_reply`** (the only v1 kind): when a Photo Challenge card posts (manual
-`/games play photo` or the games scheduler — both go through `PhotoCog.launch`),
-the cog records it in `econ_photo_cards` (message → game mapping; recorded even
-with no quest active, so a quest activated later still pays for old cards). A
-member's **Discord reply to a card carrying an image attachment** (content-type,
-filename-extension fallback) claims with period `photo:<game_id>` — once per member
-per card, forever; each new card is a fresh payout. Instant quests pay on the spot
-(✅ + embed); sign-off files the pending claim and posts the bank-channel card, which
-doubles as photo review. The Photo Challenge Games-Studio panel gained a
-**ping-role option** (`ping_role_id` in `games_game_config.options`) mentioned with
-every posted card — distinct from the per-schedule announce ping; don't set both.
+- **daily/weekly + kind:** "do it once today / this week" — the trigger
+  auto-claims the ordinary calendar period. Never in the manual claim select
+  (wallet state = the kind's how-to line).
+- **event + kind** (`qtype='event'`, kind required): pays **every occurrence**,
+  period `"<kind>:<occurrence>"` — once per member per game/card/round, forever,
+  no time gate. `quest_period('event', …)` deliberately raises; only listeners
+  build occurrence keys. Slot rule: **1 active event quest per trigger kind**
+  (`can_activate_event`); different kinds coexist, and event quests occupy no
+  daily/weekly/community slot. Not offered by the AI idea generator.
+
+All firing funnels through `fire_trigger_quests` (service) — one member, one
+kind, every matching active quest — riding the normal `claim_quest` machine, so
+sign-off, booster multiplier, ledger kind `quest`, and per-period dedup come for
+free. Repeats fall out silently on the claim collision. Kinds:
+
+| kind | fires when | fired from | occurrence key |
+|---|---|---|---|
+| `photo_reply` | member replies to a Photo Challenge card with an image | `EconomyCog._on_photo_reply` (announces ✅/📝 in-channel) | `photo_reply:<game_id>` |
+| `party_game` | party game completes with the member in the roster | `pay_game_rewards` via `game_manager.end_game` | `party_game:<game_type>:<game_id>` |
+| `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
+| `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
+| `guess` | member submits a scored guess in a Guess Who round | `GuessSelectView._on_select` → `fire_member_trigger` | `guess:<round_id>` |
+
+Game-fired claims are **silent in-channel** (matching the participation faucet —
+a game recap followed by a dozen quest embeds would be noise); the wallet ledger
+and `/quests` carry the news, and sign-off claims still post the bank-channel
+card. Only the photo-reply listener announces, since the reply is a 1:1 exchange.
+
+**Photo plumbing:** every posted card (manual `/games play photo` or the games
+scheduler — both go through `PhotoCog.launch`) is recorded in `econ_photo_cards`
+(message → game mapping; recorded even with no quest active, so a quest activated
+later still pays for old cards). The image check is content-type with a
+filename-extension fallback. The Photo Challenge Games-Studio panel has a
+**ping-role option** (`ping_role_id` in `games_game_config.options`) mentioned
+with every posted card — distinct from the per-schedule announce ping; don't set
+both.
 
 `/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
 100** (an ephemeral confirm button before the debit lands). Both sides ledgered

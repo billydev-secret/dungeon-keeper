@@ -16,7 +16,7 @@ import time
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.economy.quests import photo_card_period
+from bot_modules.economy.quests import occurrence_period
 from bot_modules.services.economy_quests_service import (
     ClaimOutcome,
     SlotLimitError,
@@ -29,9 +29,10 @@ from bot_modules.services.economy_quests_service import (
     list_settleable_community_quests,
     list_trigger_quests,
     expire_stale_claims,
-    get_active_event_quest,
+    fire_trigger_quests,
     get_photo_card,
     get_quest,
+    list_kind_triggered_quests,
     list_quests,
     record_photo_card,
     resolve_claim,
@@ -844,36 +845,42 @@ def test_list_trigger_quests_scoped_to_guild(db):
         assert list_trigger_quests(conn, GUILD) == []
 
 
-# ── event quests (photo-reply trigger) ────────────────────────────────
+# ── trigger-kind quests (event + daily/weekly auto-claims) ────────────
 
 
-def test_event_quest_requires_known_trigger_kind(db):
+def test_trigger_kind_validation_matrix(db):
     with open_db(db) as conn:
         with pytest.raises(ValueError):
-            _make(conn, qtype="event")  # no kind
+            _make(conn, qtype="event")  # event needs a kind
         with pytest.raises(ValueError):
-            _make(conn, qtype="event", trigger_kind="nope")
+            _make(conn, qtype="event", trigger_kind="nope")  # unknown kind
         with pytest.raises(ValueError):
-            _make(conn, qtype="daily", trigger_kind="photo_reply")  # wrong type
+            _make(conn, qtype="community", trigger_kind="duel", community_target=5)
+        with pytest.raises(ValueError):  # words and kind are exclusive
+            _make(conn, qtype="daily", trigger_kind="duel", trigger_words="gm")
+        # Daily/weekly may carry a kind ("do it once this period")…
+        daily = _make(conn, qtype="daily", trigger_kind="party_game")
+        assert _get(conn, GUILD, daily)["trigger_kind"] == "party_game"
+        # …and event quests always need one.
         qid = _make(conn, qtype="event", trigger_kind="photo_reply")
         assert _get(conn, GUILD, qid)["trigger_kind"] == "photo_reply"
 
 
-def test_update_validates_qtype_trigger_kind_pairing(db):
+def test_update_validates_trigger_config_pairing(db):
     with open_db(db) as conn:
         qid = _make(conn, qtype="event", trigger_kind="photo_reply", active=False)
-        # Retyping to daily while the kind is still set must fail…
-        with pytest.raises(ValueError):
-            update_quest(conn, GUILD, qid, {"qtype": "daily"})
-        # …and succeeds when the kind is cleared in the same patch.
-        update_quest(conn, GUILD, qid, {"qtype": "daily", "trigger_kind": ""})
+        # Retyping to daily keeps the kind (legal: daily auto-claim).
+        update_quest(conn, GUILD, qid, {"qtype": "daily"})
         assert _get(conn, GUILD, qid)["qtype"] == "daily"
-        # A daily can't gain a trigger kind on its own.
+        # Adding words while a kind is set is rejected…
         with pytest.raises(ValueError):
-            update_quest(conn, GUILD, qid, {"trigger_kind": "photo_reply"})
+            update_quest(conn, GUILD, qid, {"trigger_words": "gm"})
+        # …and going back to event with the kind cleared is rejected too.
+        with pytest.raises(ValueError):
+            update_quest(conn, GUILD, qid, {"qtype": "event", "trigger_kind": ""})
 
 
-def test_event_slot_limit_one_active(db):
+def test_event_slot_limit_is_per_trigger_kind(db):
     with open_db(db) as conn:
         _make(conn, qtype="event", trigger_kind="photo_reply")
         second = _make(
@@ -881,48 +888,90 @@ def test_event_slot_limit_one_active(db):
         )
         with pytest.raises(SlotLimitError):
             set_quest_active(conn, GUILD, second, True)
-        # An event quest occupies no daily/weekly/community slot.
+        # A different kind coexists, and event quests eat no daily/weekly slot.
+        _make(conn, qtype="event", trigger_kind="duel")
         _make(conn, qtype="daily")
         _make(conn, qtype="weekly")
 
 
-def test_get_active_event_quest_filters(db):
+def test_list_kind_triggered_quests_filters(db):
     with open_db(db) as conn:
-        assert get_active_event_quest(conn, GUILD, "photo_reply") is None
+        assert list_kind_triggered_quests(conn, GUILD, "photo_reply") == []
         _make(conn, qtype="event", trigger_kind="photo_reply", active=False)
-        assert get_active_event_quest(conn, GUILD, "photo_reply") is None
-        qid = _make(conn, qtype="event", trigger_kind="photo_reply")
-        row = get_active_event_quest(conn, GUILD, "photo_reply")
-        assert row is not None and int(row["id"]) == qid
+        assert list_kind_triggered_quests(conn, GUILD, "photo_reply") == []
+        event = _make(conn, qtype="event", trigger_kind="photo_reply")
+        daily = _make(conn, qtype="daily", trigger_kind="photo_reply")
+        _make(conn, qtype="event", trigger_kind="duel")  # other kind
+        rows = list_kind_triggered_quests(conn, GUILD, "photo_reply")
+        assert sorted(int(r["id"]) for r in rows) == sorted([event, daily])
         # Other guilds don't leak.
-        assert get_active_event_quest(conn, GUILD + 1, "photo_reply") is None
+        assert list_kind_triggered_quests(conn, GUILD + 1, "photo_reply") == []
 
 
-def test_event_claim_dedupes_per_card_not_per_day(db):
+def test_event_claim_dedupes_per_occurrence_not_per_day(db):
     with open_db(db) as conn:
         qid = _make(conn, qtype="event", trigger_kind="photo_reply", reward=10)
-        out = claim_quest(
-            conn, SETTINGS, GUILD, qid, USER,
-            period=photo_card_period("card-1"), booster=False,
-        )
+        period = occurrence_period("photo_reply", "card-1")
+        out = claim_quest(conn, SETTINGS, GUILD, qid, USER, period=period, booster=False)
         assert out.state == "paid" and out.paid == 10
-        # Same card again → collision, no double pay.
+        # Same occurrence again → collision, no double pay.
         with pytest.raises(ValueError):
-            claim_quest(
-                conn, SETTINGS, GUILD, qid, USER,
-                period=photo_card_period("card-1"), booster=False,
-            )
-        # A different card pays again; another member pays independently.
+            claim_quest(conn, SETTINGS, GUILD, qid, USER, period=period, booster=False)
+        # A different occurrence pays again; another member independently.
         claim_quest(
             conn, SETTINGS, GUILD, qid, USER,
-            period=photo_card_period("card-2"), booster=False,
+            period=occurrence_period("photo_reply", "card-2"), booster=False,
         )
-        claim_quest(
-            conn, SETTINGS, GUILD, qid, OTHER,
-            period=photo_card_period("card-1"), booster=False,
-        )
+        claim_quest(conn, SETTINGS, GUILD, qid, OTHER, period=period, booster=False)
         assert get_balance(conn, GUILD, USER) == 20
         assert get_balance(conn, GUILD, OTHER) == 10
+
+
+def test_fire_trigger_quests_daily_vs_event_cadence(db):
+    with open_db(db) as conn:
+        daily = _make(conn, qtype="daily", trigger_kind="duel", reward=10)
+        event = _make(conn, qtype="event", trigger_kind="duel", reward=5)
+
+        first = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "duel", USER,
+            local_day="2026-07-12", occurrence="quickdraw:1", booster=False,
+        )
+        assert sorted(int(q["id"]) for q, _ in first) == sorted([daily, event])
+        assert get_balance(conn, GUILD, USER) == 15
+
+        # Second duel the same day: the daily is already claimed, the event
+        # quest pays for the new occurrence.
+        second = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "duel", USER,
+            local_day="2026-07-12", occurrence="chicken:1", booster=False,
+        )
+        assert [int(q["id"]) for q, _ in second] == [event]
+        assert get_balance(conn, GUILD, USER) == 20
+
+        # Replaying the same occurrence pays nothing at all.
+        assert fire_trigger_quests(
+            conn, SETTINGS, GUILD, "duel", USER,
+            local_day="2026-07-12", occurrence="chicken:1", booster=False,
+        ) == []
+
+        # Next local day: the daily fires again.
+        third = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "duel", USER,
+            local_day="2026-07-13", occurrence="quickdraw:2", booster=False,
+        )
+        assert sorted(int(q["id"]) for q, _ in third) == sorted([daily, event])
+
+
+def test_fire_trigger_quests_without_occurrence_skips_event(db):
+    with open_db(db) as conn:
+        daily = _make(conn, qtype="daily", trigger_kind="party_game", reward=10)
+        _make(conn, qtype="event", trigger_kind="party_game", reward=5)
+        fired = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "party_game", USER,
+            local_day="2026-07-12", occurrence=None, booster=False,
+        )
+        assert [int(q["id"]) for q, _ in fired] == [daily]
+        assert get_balance(conn, GUILD, USER) == 10
 
 
 def test_photo_card_registry_roundtrip(db):

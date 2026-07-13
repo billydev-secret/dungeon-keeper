@@ -195,6 +195,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
                 [game.challenger_id, game.target_id],
                 [game.winner_id] if game.winner_id is not None else [],
                 self.GAME_KEY,
+                occurrence=str(game.id),
             )
             return ("done", game.loser_id)
 

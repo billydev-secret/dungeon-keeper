@@ -15,11 +15,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
-from bot_modules.core.db_utils import open_db
+import discord
+
+from bot_modules.core.branding import resolve_accent_color
+from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.economy.logic import local_day_for
+from bot_modules.economy.quest_views import post_signoff_card
+from bot_modules.services.economy_quests_service import fire_trigger_quests
 from bot_modules.services.economy_service import (
+    EconSettings,
     award_game_reward,
     load_econ_settings,
     member_is_booster,
@@ -30,6 +38,13 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# Game types that count as the "duel" quest trigger; every other game_type
+# reaching pay_game_rewards is a party game. Mirrors the six PvP cogs that
+# call the faucet at their own resolution points.
+_DUEL_GAME_TYPES = frozenset(
+    {"chicken", "hot_potato", "hot_potato_group", "musical_chairs", "pressure", "quickdraw"}
+)
+
 
 async def pay_game_rewards(
     bot: "Bot",
@@ -37,6 +52,8 @@ async def pay_game_rewards(
     participant_ids: Sequence[int | str],
     winner_ids: Sequence[int | str],
     game_type: str,
+    *,
+    occurrence: str | None = None,
 ) -> None:
     """Credit participation to every participant and a win bonus to winners.
 
@@ -44,6 +61,11 @@ async def pay_game_rewards(
     non-positive/unresolvable ids are dropped; winners also receive
     participation and are restricted to resolved participants. Per-member
     failures are logged and never propagate.
+
+    Also fires the matching quest trigger ("duel" for the PvP cogs,
+    "party_game" otherwise) for every participant. ``occurrence`` is the
+    stable per-game id event quests dedupe on; without one, only
+    daily/weekly trigger quests fire.
     """
     try:
         guild = bot.get_guild(guild_id)
@@ -101,8 +123,114 @@ async def pay_game_rewards(
                         )
 
         await asyncio.to_thread(_credit)
+
+        kind = "duel" if game_type in _DUEL_GAME_TYPES else "party_game"
+        # Namespace with the game type: duel ids are per-type table PKs, so
+        # chicken #5 and quickdraw #5 must not share one occurrence key.
+        scoped = f"{game_type}:{occurrence}" if occurrence is not None else None
+        await _fire_triggers(
+            bot, guild, settings, kind, participants, boosters, scoped
+        )
     except Exception:
         log.exception("pay_game_rewards failed for guild %s (%s)", guild_id, game_type)
+
+
+async def fire_member_trigger(
+    bot: "Bot",
+    guild_id: int,
+    user_id: int | None,
+    trigger_kind: str,
+    *,
+    occurrence: str | None = None,
+) -> None:
+    """Fire a quest trigger for one member outside the game-faucet path.
+
+    For modules with per-member actions but no participation payout (Risky
+    Roll dares, Guess Who rounds). Same guarantees as ``pay_game_rewards``:
+    no-op when the economy is off or the member is a bot/unresolvable, and
+    a failure is logged, never raised into the calling game flow.
+    """
+    try:
+        guild = bot.get_guild(guild_id)
+        if guild is None or user_id is None:
+            return
+        member = guild.get_member(int(user_id))
+        if member is None or member.bot:
+            return
+
+        db_path = bot.ctx.db_path
+
+        def _load():
+            with open_db(db_path) as conn:
+                return load_econ_settings(conn, guild_id)
+
+        settings = await asyncio.to_thread(_load)
+        if not settings.enabled:
+            return
+        boosters = {member.id: member.premium_since is not None}
+        await _fire_triggers(
+            bot, guild, settings, trigger_kind, [member.id], boosters, occurrence
+        )
+    except Exception:
+        log.exception(
+            "fire_member_trigger failed for guild %s (%s)", guild_id, trigger_kind
+        )
+
+
+async def _fire_triggers(
+    bot: "Bot",
+    guild: discord.Guild,
+    settings: EconSettings,
+    trigger_kind: str,
+    user_ids: Sequence[int],
+    boosters: dict[int, bool],
+    occurrence: str | None,
+) -> None:
+    """Auto-claim active trigger-kind quests for members; silent by design.
+
+    Like the participation faucet, paid claims make no channel noise (a game
+    ending with a dozen "quest complete" embeds would drown the recap) — the
+    wallet ledger and /quests state carry the news. Sign-off claims do post
+    the bank-channel card, since a manager has to be able to act on them.
+    """
+    db_path = bot.ctx.db_path
+
+    def _fire() -> list[tuple[int, Any]]:
+        results: list[tuple[int, Any]] = []
+        with open_db(db_path) as conn:
+            offset = get_tz_offset_hours(conn, guild.id)
+            day = local_day_for(time.time(), offset)
+            for uid in user_ids:
+                fired = fire_trigger_quests(
+                    conn,
+                    settings,
+                    guild.id,
+                    trigger_kind,
+                    uid,
+                    local_day=day,
+                    occurrence=occurrence,
+                    booster=boosters.get(uid, False),
+                )
+                results.extend((uid, outcome) for _quest, outcome in fired)
+        return results
+
+    results = await asyncio.to_thread(_fire)
+
+    for uid, outcome in results:
+        if outcome.state != "pending":
+            continue
+        member = guild.get_member(uid)
+        if member is None:
+            continue
+        try:
+            accent = await resolve_accent_color(db_path, guild)
+            await post_signoff_card(
+                bot, bot.ctx, guild, settings, accent, int(outcome.claim_id), member
+            )
+        except Exception:
+            log.exception(
+                "sign-off card failed for claim %s (%s)", outcome.claim_id, trigger_kind
+            )
 
 
 # ── Winner extraction ─────────────────────────────────────────────────────────

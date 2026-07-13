@@ -1464,7 +1464,7 @@ async def test_photo_reply_signoff_files_pending_claim(ctx, db):
             (qid,),
         ).fetchone()
     assert claim is not None and claim["state"] == "pending"
-    assert claim["period"] == "photo:game-1"
+    assert claim["period"] == "photo_reply:game-1"
 
 
 def test_event_quest_shown_as_auto_not_claimable(ctx, db):

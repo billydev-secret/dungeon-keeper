@@ -183,6 +183,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                     [game.challenger_id, game.target_id],
                     [game.winner_id] if game.winner_id is not None else [],
                     self.GAME_KEY,
+                    occurrence=str(game.id),
                 )
                 if guild:
                     dview = self.build_game_view(game_id)
@@ -429,6 +430,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             await pay_game_rewards(
                 self.bot, game.guild_id,
                 [game.challenger_id, game.target_id], [winner_id], self.GAME_KEY,
+                occurrence=str(game.id),
             )
             return ("done", loser_id)
 
@@ -493,6 +495,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                 [game.challenger_id, game.target_id],
                 [game.winner_id] if game.winner_id is not None else [],
                 self.GAME_KEY,
+                occurrence=str(game.id),
             )
             return ("done", game.loser_id)
 
