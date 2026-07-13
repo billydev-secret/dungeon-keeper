@@ -11,7 +11,10 @@ import pytest
 
 from bot_modules.economy.quests import (
     can_activate,
+    compile_trigger_pattern,
     iso_week_for,
+    message_matches_trigger,
+    parse_trigger_words,
     pick_rotation,
     quest_period,
     reward_band,
@@ -141,3 +144,61 @@ def test_pick_rotation_full_cycle():
 )
 def test_reward_band(qtype, expected):
     assert reward_band(qtype) == expected
+
+
+# ── trigger phrases: parse ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("gm, good morning", ["gm", "good morning"]),
+        ("one\ntwo", ["one", "two"]),
+        ("", []),
+        (" ,  , \n ", []),
+        ("GM, gm", ["GM"]),  # case-insensitive dedupe keeps first spelling
+        ("good   morning", ["good morning"]),  # internal whitespace collapses
+        ("a,\nb, a", ["a", "b"]),
+    ],
+)
+def test_parse_trigger_words(raw, expected):
+    assert parse_trigger_words(raw) == expected
+
+
+# ── trigger phrases: match ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "content,matches",
+    [
+        ("gm everyone", True),
+        ("GM!", True),  # case-insensitive, punctuation boundary
+        ("well, gm", True),
+        ("Good  Morning y'all", True),  # phrase spans a whitespace run
+        ("dogma", False),  # no match inside a word
+        ("gmail is down", False),
+        ("goodmorning", False),  # phrase needs its internal gap
+        ("", False),
+    ],
+)
+def test_message_matches_trigger(content, matches):
+    pattern = compile_trigger_pattern(["gm", "good morning"])
+    assert message_matches_trigger(content, pattern) is matches
+
+
+def test_trigger_pattern_nonword_phrase_anchors():
+    # Phrases wrapped in non-word chars still bound on their neighbors.
+    pattern = compile_trigger_pattern([":wave:"])
+    assert message_matches_trigger("hello :wave: there", pattern)
+    assert not message_matches_trigger("a:wave:b", pattern)
+
+
+def test_trigger_pattern_escapes_regex_metachars():
+    pattern = compile_trigger_pattern(["what?!"])
+    assert message_matches_trigger("ok what?! wild", pattern)
+    assert not message_matches_trigger("ok what wild", pattern)
+
+
+def test_trigger_pattern_empty_is_none():
+    assert compile_trigger_pattern([]) is None
+    assert message_matches_trigger("anything", None) is False

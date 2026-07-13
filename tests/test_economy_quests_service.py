@@ -26,6 +26,7 @@ from bot_modules.services.economy_quests_service import (
     deny_history,
     list_claims,
     list_settleable_community_quests,
+    list_trigger_quests,
     expire_stale_claims,
     get_quest,
     list_quests,
@@ -67,6 +68,8 @@ def _make(
     starts_at=None,
     ends_at=None,
     guild_id=GUILD,
+    trigger_words="",
+    trigger_channel_id=None,
 ):
     qid = create_quest(
         conn,
@@ -82,6 +85,8 @@ def _make(
         rotate_tag=rotate_tag,
         community_target=community_target,
         created_by=MANAGER,
+        trigger_words=trigger_words,
+        trigger_channel_id=trigger_channel_id,
     )
     if active:
         set_quest_active(conn, guild_id, qid, True)
@@ -779,3 +784,55 @@ def test_rotate_respects_slot_rule(db):
 def test_rotate_empty_type_is_none(db):
     with open_db(db) as conn:
         assert rotate_pool(conn, GUILD, "weekly") is None
+
+
+# ── trigger-word quests (spec §4.4) ───────────────────────────────────
+
+
+def test_create_quest_persists_trigger_fields(db):
+    with open_db(db) as conn:
+        qid = _make(conn, trigger_words="gm, good morning", trigger_channel_id=777)
+        row = _get(conn, GUILD, qid)
+        assert row["trigger_words"] == "gm, good morning"
+        assert row["trigger_channel_id"] == 777
+
+
+def test_create_quest_trigger_fields_default_empty(db):
+    with open_db(db) as conn:
+        row = _get(conn, GUILD, _make(conn))
+        assert row["trigger_words"] == ""
+        assert row["trigger_channel_id"] is None
+
+
+def test_update_quest_patches_trigger_fields(db):
+    with open_db(db) as conn:
+        qid = _make(conn)
+        update_quest(
+            conn, GUILD, qid,
+            {"trigger_words": "hello", "trigger_channel_id": 42},
+        )
+        row = _get(conn, GUILD, qid)
+        assert row["trigger_words"] == "hello"
+        assert row["trigger_channel_id"] == 42
+        update_quest(conn, GUILD, qid, {"trigger_words": "", "trigger_channel_id": None})
+        row = _get(conn, GUILD, qid)
+        assert row["trigger_words"] == ""
+        assert row["trigger_channel_id"] is None
+
+
+def test_list_trigger_quests_filters(db):
+    with open_db(db) as conn:
+        watched = _make(conn, trigger_words="gm")
+        _make(conn, qtype="weekly", trigger_words="")  # no phrases
+        _make(conn, qtype="weekly", trigger_words="hi", active=False)  # inactive
+        _make(  # community quests are never member-claimable
+            conn, qtype="community", trigger_words="hi", community_target=5
+        )
+        rows = list_trigger_quests(conn, GUILD)
+        assert [int(r["id"]) for r in rows] == [watched]
+
+
+def test_list_trigger_quests_scoped_to_guild(db):
+    with open_db(db) as conn:
+        _make(conn, trigger_words="gm", guild_id=GUILD + 1)
+        assert list_trigger_quests(conn, GUILD) == []

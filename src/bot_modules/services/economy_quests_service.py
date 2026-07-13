@@ -51,6 +51,8 @@ _UPDATABLE_FIELDS = frozenset(
         "ends_at",
         "rotate_tag",
         "community_target",
+        "trigger_words",
+        "trigger_channel_id",
     }
 )
 
@@ -92,6 +94,8 @@ def create_quest(
     rotate_tag: str,
     community_target: int | None,
     created_by: int | None,
+    trigger_words: str = "",
+    trigger_channel_id: int | None = None,
 ) -> int:
     """Insert a quest into the guild's library (inactive). Returns its id."""
     if qtype not in ("daily", "weekly", "community"):
@@ -101,8 +105,8 @@ def create_quest(
         INSERT INTO econ_quests
             (guild_id, title, description, qtype, reward, signoff, criteria,
              starts_at, ends_at, active, rotate_tag, community_target,
-             created_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+             created_by, created_at, trigger_words, trigger_channel_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -118,6 +122,8 @@ def create_quest(
             community_target,
             created_by,
             time.time(),
+            trigger_words,
+            trigger_channel_id,
         ),
     )
     return int(cur.lastrowid or 0)
@@ -192,6 +198,26 @@ def list_quests(
         ).fetchall()
     return conn.execute(
         "SELECT * FROM econ_quests WHERE guild_id = ? ORDER BY qtype, id",
+        (guild_id,),
+    ).fetchall()
+
+
+def list_trigger_quests(
+    conn: sqlite3.Connection, guild_id: int
+) -> list[sqlite3.Row]:
+    """Active daily/weekly quests with trigger phrases set (spec §4.4).
+
+    These are the quests the on-message listener watches for. Community
+    quests never appear — they are not member-claimable, so a trigger phrase
+    on one has nothing to claim.
+    """
+    return conn.execute(
+        """
+        SELECT * FROM econ_quests
+        WHERE guild_id = ? AND active = 1
+          AND qtype IN ('daily', 'weekly') AND trigger_words != ''
+        ORDER BY id
+        """,
         (guild_id,),
     ).fetchall()
 

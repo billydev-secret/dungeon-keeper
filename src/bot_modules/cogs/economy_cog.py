@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import re
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import discord
@@ -34,8 +36,18 @@ from bot_modules.economy.quest_views import (
     QuestClaimView,
     QuestDenyButton,
     can_manage_economy,
+    post_signoff_card,
 )
-from bot_modules.economy.quests import quest_period
+from bot_modules.economy.quests import (
+    compile_trigger_pattern,
+    message_matches_trigger,
+    parse_trigger_words,
+    quest_period,
+)
+from bot_modules.services.economy_quests_service import (
+    claim_quest,
+    list_trigger_quests,
+)
 from bot_modules.services.economy_rentals_service import (
     cancel_all_for_member,
     entitlements,
@@ -150,7 +162,24 @@ _QUEST_STATE_LABEL = {
     "claimable": "✅ Ready to claim",
     "pending": "⏳ Awaiting sign-off",
     "done": "☑️ Completed this period",
+    "trigger": "🗣️ Completes automatically when you say its trigger phrase",
 }
+
+# Trigger-quest cache staleness bound: a dashboard edit takes effect on the
+# next message after at most this many seconds.
+_TRIGGER_CACHE_TTL = 60.0
+
+
+@dataclass(frozen=True)
+class _TriggerQuest:
+    """One active trigger-word quest, pre-compiled for the message listener."""
+
+    quest_id: int
+    qtype: str
+    title: str
+    signoff: bool
+    channel_id: int | None  # None = any channel counts
+    pattern: re.Pattern[str]
 
 
 def _progress_bar(current: int, target: int, width: int = 10) -> str:
@@ -275,6 +304,10 @@ class EconomyCog(commands.Cog):
     def __init__(self, bot: Bot, ctx: AppContext) -> None:
         self.bot = bot
         self.ctx = ctx
+        # guild_id → (monotonic expiry, trigger quests). TTL-refreshed in the
+        # message listener; empty lists are cached too so guilds without
+        # trigger quests cost one dict lookup per message.
+        self._trigger_cache: dict[int, tuple[float, list[_TriggerQuest]]] = {}
         super().__init__()
 
     @bank.command(name="wallet", description="Check your balance and recent activity.")
@@ -1059,14 +1092,171 @@ class EconomyCog(commands.Cog):
                         """,
                         (quest_id, user_id, period),
                     ).fetchone()
+                    has_trigger = bool(str(row["trigger_words"] or "").strip())
                     if claim is None:
-                        entry["state"] = "claimable"
+                        # Trigger quests never enter the claim select — saying
+                        # the phrase IS the verification, so a manual claim
+                        # would bypass it.
+                        entry["state"] = "trigger" if has_trigger else "claimable"
                     elif claim["state"] == "paid":
                         entry["state"] = "done"
                     else:
                         entry["state"] = "pending"
                 out.append(entry)
         return settings, out
+
+    # ── trigger-word quest verification (spec §4.4) ───────────────────────
+
+    @commands.Cog.listener("on_message")
+    async def _on_trigger_message(self, message: discord.Message) -> None:
+        """Auto-claim trigger-word quests when a member says the phrase.
+
+        The message is the verification: an instant quest pays on the spot
+        (reply + ✅), a sign-off quest files the pending claim and posts the
+        bank-channel card. Repeats inside the period fall out silently via
+        ``claim_quest``'s per-period collision ValueError.
+        """
+        if message.guild is None or message.author.bot:
+            return
+        member = message.author
+        if not isinstance(member, discord.Member):
+            return
+        content = message.content or ""
+        if not content:
+            return
+
+        guild_id = message.guild.id
+        now = time.monotonic()
+        cached = self._trigger_cache.get(guild_id)
+        if cached is None or cached[0] <= now:
+            try:
+                triggers = await asyncio.to_thread(
+                    self._load_trigger_quests, guild_id
+                )
+            except Exception:
+                log.exception("econ trigger: failed to load quests for %s", guild_id)
+                return
+            self._trigger_cache[guild_id] = (now + _TRIGGER_CACHE_TTL, triggers)
+        else:
+            triggers = cached[1]
+        if not triggers:
+            return
+
+        channel = message.channel
+        parent_id = getattr(channel, "parent_id", None)  # threads count as parent
+        for trig in triggers:
+            if trig.channel_id is not None and trig.channel_id not in (
+                channel.id,
+                parent_id,
+            ):
+                continue
+            if message_matches_trigger(content, trig.pattern):
+                await self._complete_trigger_quest(message, member, trig)
+
+    def _load_trigger_quests(self, guild_id: int) -> list[_TriggerQuest]:
+        """Active trigger quests with compiled patterns ([] when econ is off)."""
+        with self.ctx.open_db() as conn:
+            settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled:
+                return []
+            rows = list_trigger_quests(conn, guild_id)
+        out: list[_TriggerQuest] = []
+        for row in rows:
+            pattern = compile_trigger_pattern(
+                parse_trigger_words(str(row["trigger_words"]))
+            )
+            if pattern is None:
+                continue
+            channel_id = row["trigger_channel_id"]
+            out.append(
+                _TriggerQuest(
+                    quest_id=int(row["id"]),
+                    qtype=str(row["qtype"]),
+                    title=str(row["title"]),
+                    signoff=bool(row["signoff"]),
+                    channel_id=int(channel_id) if channel_id is not None else None,
+                    pattern=pattern,
+                )
+            )
+        return out
+
+    async def _complete_trigger_quest(
+        self, message: discord.Message, member: discord.Member, trig: _TriggerQuest
+    ) -> None:
+        """Claim a matched trigger quest for the message author, best-effort."""
+        guild = message.guild
+        assert guild is not None
+        booster = member.premium_since is not None
+
+        def _claim():
+            with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild.id)
+                offset = get_tz_offset_hours(conn, guild.id)
+                day = local_day_for(time.time(), offset)
+                period = quest_period(trig.qtype, day)
+                outcome = claim_quest(
+                    conn,
+                    settings,
+                    guild.id,
+                    trig.quest_id,
+                    member.id,
+                    period=period,
+                    booster=booster,
+                )
+            return settings, outcome
+
+        try:
+            settings, outcome = await asyncio.to_thread(_claim)
+        except ValueError:
+            # Already claimed this period, quest window closed, or deactivated
+            # since the cache load — every repeat message would hit this, so
+            # stay quiet rather than spam the channel.
+            return
+        except Exception:
+            log.exception(
+                "econ trigger: claim failed for quest %s", trig.quest_id
+            )
+            return
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+
+        if outcome.state == "paid":
+            paid = int(outcome.paid)
+            embed = discord.Embed(
+                title="Quest complete!",
+                description=(
+                    f"{member.mention} completed **{trig.title}** — "
+                    f"{settings.currency_emoji} {paid:,} {_unit(settings, paid)} "
+                    "added to their wallet."
+                ),
+                colour=accent,
+            )
+            reaction, note = "✅", embed
+        else:
+            # Sign-off trigger quest: the phrase files the claim; a manager
+            # still approves the payout from the bank-channel card.
+            await post_signoff_card(
+                self.bot, self.ctx, guild, settings, accent,
+                int(outcome.claim_id), member,
+            )
+            embed = discord.Embed(
+                title="Quest submitted",
+                description=(
+                    f"{member.mention} triggered **{trig.title}** — "
+                    "sent for manager sign-off."
+                ),
+                colour=accent,
+            )
+            reaction, note = "📝", embed
+
+        try:
+            await message.add_reaction(reaction)
+        except discord.HTTPException:
+            log.debug("econ trigger: failed to react", exc_info=True)
+        try:
+            await message.reply(embed=note, mention_author=False)
+        except discord.HTTPException:
+            log.debug("econ trigger: failed to reply", exc_info=True)
 
     qotd = app_commands.Group(
         name="qotd",
