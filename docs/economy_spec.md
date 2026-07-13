@@ -132,10 +132,11 @@ trigger quests take a **target count** ("how many times", §4.5). Library model:
 per trigger kind** per guild; dailies can auto-rotate from a tagged pool
 (rotation happens on the guild-local day roll in the economy loop). Authoring
 lives on the **Quests** page (library w/ slot summary + inline edit → quest
-editor → AI ideas) with in-place editing (PUT); the operational cards —
-pending claims → community goals → grant → rentals → ledger, with member
-pickers for grant/ledger and a ledger kind datalist — live on the
-**Operations** page.
+editor → AI ideas) with in-place editing (PUT); the sign-off inbox is the
+**Claims** page (pending queue with Approve/Deny plus a state filter over the
+paid/denied/expired history); the remaining operational cards — community
+goals → grant → rentals → ledger, with member pickers for grant/ledger and a
+ledger kind datalist — live on the **Operations** page.
 
 **AI idea generator.** The New-quest form has a "Generate ideas" button
 (`POST /api/economy/quests/generate`, manager-gated) that batches suggestions for
@@ -165,7 +166,7 @@ parity with the Games Studio is a parking-lot item).
   re-claimable. One pending claim per quest per member; a claim left pending **>7 days**
   expires via the hourly loop (`expire_stale_claims`), DMs the claimant, and frees a
   re-claim. **Approve/Deny works from both surfaces** — the bank-channel card and the
-  Operations page's pending queue resolve the same claim; a dashboard resolution also
+  Claims page's pending queue resolve the same claim; a dashboard resolution also
   best-effort edits the card and DMs the claimant over the shared event loop.
 
 ### 4.3 Community Quests
@@ -394,13 +395,17 @@ the member owns and gift rentals where they are the beneficiary.
   dashboard-editable.
 - **Manager surface (dashboard):** the **Economy** nav section, gated on
   `economy_manager_role_id` or admin (mirrors `games_editor_role` /
-  `require_game_host`). Its pages: **Operations** (pending sign-off queue
-  Approve/Deny, community progress + manual Settle, grant, rentals, ledger
-  audit), **Quests** (library + authoring + AI ideas), **Income Sources**
+  `require_game_host`). Its pages: **Operations** (community progress +
+  manual Settle, grant, rentals, ledger audit), **Claims** (the pending
+  sign-off queue with Approve/Deny + a state filter over paid/denied/expired
+  history), **Quests** (library + authoring + AI ideas), **Income Sources**
   (trigger switches + faucet rates), **Statistics**, and admin-only
   **Settings** (wiring, branding, perk prices — hidden from non-admin
   managers since its endpoints require admin). It is the dashboard
-  counterpart to the `[mod]` `/bank grant` and `/qotd post` commands.
+  counterpart to the `[mod]` `/bank grant` and `/qotd post` commands. The
+  home dashboard's **Moderation tile** also surfaces the pending-claims
+  count (+ latest claimant/quest) via the `/api/home` moderation group, so
+  waiting sign-offs are visible without opening the Economy section.
 - **Role customization in v1** happens via `/bank role` subcommands + modals
   (name / color hex / gradient / icon emoji-or-upload), proxied through the bot.
 - **v2 member dashboard:** wallet page (`require_perms(set())` like the home page —

@@ -45,6 +45,27 @@ offline; the live surface needs a look:
       another body font still renders a Helvetica header in banner mode.
 - [ ] No `lora` option in the picker; a guild that previously stored `lora`
       falls back to Times without a crash.
+### Economy — Claims page + waiting-claims on the Moderation tile  (this commit)
+
+Claim sign-off moved off Operations onto its own **Claims** page (second item
+in the Economy section): the pending queue with Approve/Deny, plus a filter
+strip over the history — Pending / Paid / Denied / Expired / All (an approved
+claim is stored as `paid`; the Paid view also includes instant non-sign-off
+completions). The home dashboard's **Moderation tile** now shows a fourth
+row: pending econ claims count + latest claimant · quest (moderator-visible,
+like the rest of the tile). Live checks (service restart for the JS):
+
+- [ ] Economy → Claims: pending claims render with Approve/Deny; approving
+      pays and the row leaves the Pending view; Deny prompts for a reason.
+- [ ] Filter strip: Paid shows resolved claims with "paid by <manager> ·
+      age"; Denied shows the deny reason; All mixes states with buttons only
+      on pending rows.
+- [ ] Operations no longer has a claims card; its header links to Claims.
+- [ ] Home Moderation tile shows "N claims" with the latest claimant and
+      quest title; 0 claims shows "0 claims · none"; a moderator (non-admin,
+      non-manager) sees the row too.
+- [ ] Bank-channel card Approve still works and the Claims page reflects it
+      on refresh (same claim, both surfaces).
 
 ### Economy — dashboard reorg: one Economy nav section  (this commit)
 
@@ -69,9 +90,10 @@ for the JS):
 - [ ] On **Quests**: create + edit a quest end-to-end (the form moved panels —
       check the game-trigger/phrase conditional fields and the AI ideas
       button still work).
-- [ ] On **Operations**: approve or deny a pending claim, set community
-      progress, and check the community card refreshes without the quest
-      library (it fetches quests itself now).
+- [ ] On **Operations**: set community progress and check the community card
+      refreshes without the quest library (it fetches quests itself now).
+      (Claim sign-off has since moved to the Claims page — see the entry
+      above.)
 - [ ] Cross-links navigate: Operations header → Quests; Quests library hint →
       Income Sources + Operations; Income Sources → Quests + Settings;
       Settings subtitle → Income Sources.
