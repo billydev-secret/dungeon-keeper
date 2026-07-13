@@ -12,16 +12,27 @@ import re
 from datetime import date
 
 # Library slot limits per guild: 1 active daily, up to 5 active weeklies,
-# community goals are uncapped. Event quests are capped at 1 active — the
-# listener pays whichever event quest matches its trigger, so two active at
-# once would double-pay; the cap becomes per-trigger-kind if more kinds land.
+# community goals are uncapped. Event quests are capped at 1 active PER
+# TRIGGER KIND — the listener pays every active quest matching its trigger,
+# so two same-kind actives would double-pay one occurrence.
 MAX_ACTIVE_DAILY = 1
 MAX_ACTIVE_WEEKLY = 5
-MAX_ACTIVE_EVENT = 1
+MAX_ACTIVE_EVENT_PER_KIND = 1
 
-# Trigger kinds an event quest can be paid by (v1: replying to a Photo
-# Challenge card with an image attached).
-EVENT_TRIGGER_KINDS = ("photo_reply",)
+# Game/module triggers a quest can be auto-completed by (label = how the
+# dashboard describes it). On an *event* quest the trigger pays per
+# occurrence (period "<kind>:<occurrence>", no time gate); on a daily/weekly
+# quest it auto-claims the ordinary calendar period — "do it once today/this
+# week". The firing side lives with each module: the photo-reply listener in
+# EconomyCog, the game-completion hooks in economy/game_rewards.py.
+TRIGGER_KINDS: dict[str, str] = {
+    "photo_reply": "Reply to a Photo Challenge card with a photo",
+    "party_game": "Finish a party game",
+    "duel": "Finish a duel / PvP challenge",
+    "risky_roll": "Take a Risky Roll dare",
+    "guess": "Play a Guess Who round",
+}
+
 
 # Suggested reward bands per quest type (community is judged by the author).
 _REWARD_BANDS: dict[str, tuple[int, int]] = {
@@ -55,17 +66,17 @@ def quest_period(qtype: str, local_day: str) -> str:
     if qtype == "community":
         return "once"
     # Event quests have no calendar period — the trigger listener supplies a
-    # per-occurrence key (see photo_card_period), so a calendar lookup is a bug.
+    # per-occurrence key (see occurrence_period), so a calendar lookup is a bug.
     raise ValueError(f"unknown quest type: {qtype!r}")
 
 
-def photo_card_period(game_id: str) -> str:
-    """The claim period key for one Photo Challenge card.
+def occurrence_period(kind: str, occurrence: str) -> str:
+    """The claim period key for one trigger occurrence on an *event* quest.
 
-    Keyed to the card (not the calendar): each posted card pays each member
-    at most once, forever — replies to old cards still count.
+    Keyed to the occurrence (a photo card, one game, one duel …), not the
+    calendar: each occurrence pays each member at most once, forever.
     """
-    return f"photo:{game_id}"
+    return f"{kind}:{occurrence}"
 
 
 def can_activate(existing_active: list[str], qtype: str) -> bool:
@@ -81,8 +92,21 @@ def can_activate(existing_active: list[str], qtype: str) -> bool:
     if qtype == "community":
         return True
     if qtype == "event":
-        return existing_active.count("event") < MAX_ACTIVE_EVENT
+        # Callers gate event quests per trigger kind via can_activate_event;
+        # type-level there is no cap (one photo + one duel event is fine).
+        return True
     raise ValueError(f"unknown quest type: {qtype!r}")
+
+
+def can_activate_event(existing_event_kinds: list[str], trigger_kind: str) -> bool:
+    """True if activating one more event quest of this kind respects the cap.
+
+    ``existing_event_kinds`` is the trigger kinds of the guild's currently
+    active event quests (excluding the one under consideration). One active
+    per kind — the listener pays every matching quest, so two same-kind
+    actives would double-pay one occurrence.
+    """
+    return existing_event_kinds.count(trigger_kind) < MAX_ACTIVE_EVENT_PER_KIND
 
 
 def pick_rotation(pool_ids: list[int], current_id: int | None) -> int | None:

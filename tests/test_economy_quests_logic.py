@@ -11,11 +11,12 @@ import pytest
 
 from bot_modules.economy.quests import (
     can_activate,
+    can_activate_event,
     compile_trigger_pattern,
     iso_week_for,
     message_matches_trigger,
+    occurrence_period,
     parse_trigger_words,
-    photo_card_period,
     pick_rotation,
     quest_period,
     reward_band,
@@ -75,8 +76,9 @@ def test_quest_period_event_raises():
         quest_period("event", "2026-07-10")
 
 
-def test_photo_card_period_is_keyed_to_the_card():
-    assert photo_card_period("abc-123") == "photo:abc-123"
+def test_occurrence_period_is_keyed_to_the_occurrence():
+    assert occurrence_period("photo_reply", "abc-123") == "photo_reply:abc-123"
+    assert occurrence_period("duel", "quickdraw:5") == "duel:quickdraw:5"
 
 
 # ── can_activate: slot matrix ─────────────────────────────────────────
@@ -99,14 +101,25 @@ def test_photo_card_period_is_keyed_to_the_card():
         # community: uncapped
         (["community"] * 20, "community", True),
         ([], "community", True),
-        # event: at most one active (the listener would double-pay on two)
+        # event: uncapped at the type level (per-kind cap is separate)
         ([], "event", True),
-        (["daily", "weekly"], "event", True),
-        (["event"], "event", False),
+        (["event", "event"], "event", True),
     ],
 )
 def test_can_activate(existing, qtype, expected):
     assert can_activate(existing, qtype) is expected
+
+
+@pytest.mark.parametrize(
+    "existing_kinds,kind,expected",
+    [
+        ([], "photo_reply", True),
+        (["duel", "party_game"], "photo_reply", True),  # other kinds don't block
+        (["photo_reply"], "photo_reply", False),  # one active per kind
+    ],
+)
+def test_can_activate_event(existing_kinds, kind, expected):
+    assert can_activate_event(existing_kinds, kind) is expected
 
 
 def test_can_activate_unknown_raises():

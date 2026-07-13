@@ -42,12 +42,11 @@ from bot_modules.economy.quests import (
     compile_trigger_pattern,
     message_matches_trigger,
     parse_trigger_words,
-    photo_card_period,
     quest_period,
 )
 from bot_modules.services.economy_quests_service import (
     claim_quest,
-    get_active_event_quest,
+    fire_trigger_quests,
     get_photo_card,
     list_trigger_quests,
 )
@@ -167,6 +166,10 @@ _QUEST_STATE_LABEL = {
     "done": "☑️ Completed this period",
     "trigger": "🗣️ Completes automatically when you say its trigger phrase",
     "photo_reply": "📸 Completes automatically when you reply to a Photo Challenge with your photo",
+    "party_game": "🎲 Completes automatically when you finish a party game",
+    "duel": "⚔️ Completes automatically when you finish a 1v1 duel",
+    "risky_roll": "🎰 Completes automatically when you take a Risky Roll dare",
+    "guess": "🕵️ Completes automatically when you play a Guess Who round",
 }
 
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
@@ -1119,12 +1122,15 @@ class EconomyCog(commands.Cog):
                         """,
                         (quest_id, user_id, period),
                     ).fetchone()
+                    kind = str(row["trigger_kind"] or "")
                     has_trigger = bool(str(row["trigger_words"] or "").strip())
                     if claim is None:
-                        # Trigger quests never enter the claim select — saying
-                        # the phrase IS the verification, so a manual claim
-                        # would bypass it.
-                        entry["state"] = "trigger" if has_trigger else "claimable"
+                        # Trigger quests never enter the claim select — the
+                        # phrase/game event IS the verification, so a manual
+                        # claim would bypass it.
+                        entry["state"] = kind or (
+                            "trigger" if has_trigger else "claimable"
+                        )
                     elif claim["state"] == "paid":
                         entry["state"] = "done"
                     else:
@@ -1332,32 +1338,32 @@ class EconomyCog(commands.Cog):
                 card = get_photo_card(conn, guild_id, int(ref_id))
                 if card is None:
                     return None
-                quest = get_active_event_quest(conn, guild_id, "photo_reply")
-                if quest is None:
-                    return None
-                outcome = claim_quest(
+                offset = get_tz_offset_hours(conn, guild_id)
+                day = local_day_for(time.time(), offset)
+                fired = fire_trigger_quests(
                     conn,
                     settings,
                     guild_id,
-                    int(quest["id"]),
+                    "photo_reply",
                     member.id,
-                    period=photo_card_period(str(card["game_id"])),
+                    local_day=day,
+                    occurrence=str(card["game_id"]),
                     booster=booster,
                 )
-                return settings, str(quest["title"]), outcome
+                return settings, fired
 
         try:
             result = await asyncio.to_thread(_claim)
-        except ValueError:
-            # Already paid for this card, or the quest's date window closed.
-            return
         except Exception:
             log.exception("econ photo: claim failed in guild %s", guild_id)
             return
         if result is None:
             return
-        settings, title, outcome = result
-        await self._announce_quest_claim(message, member, title, settings, outcome)
+        settings, fired = result
+        for quest, outcome in fired:
+            await self._announce_quest_claim(
+                message, member, str(quest["title"]), settings, outcome
+            )
 
     qotd = app_commands.Group(
         name="qotd",

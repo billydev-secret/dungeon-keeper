@@ -324,6 +324,19 @@ class RiskyRollView(BaseRiskyRollView):
                 app_state.auto_close_tasks[self.game_id] = asyncio.create_task(
                     schedule_auto_close(interaction.client, self.game_id, delay)
                 )
+            guild_id = state.guild_id
+
+        # Quest trigger, outside the game lock — the roll itself is the
+        # qualifying act, so it fires here rather than at round close.
+        from typing import cast
+
+        from bot_modules.core.app_context import Bot
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        await fire_member_trigger(
+            cast(Bot, interaction.client), guild_id, interaction.user.id,
+            "risky_roll", occurrence=str(self.game_id),
+        )
 
     @discord.ui.button(
         label="Help",

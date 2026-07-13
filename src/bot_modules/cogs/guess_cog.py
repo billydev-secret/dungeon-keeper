@@ -565,6 +565,15 @@ class GuessSelectView(discord.ui.View):
             correct=correct,
         )
 
+        # A scored guess is "playing the round" for the economy's quest
+        # trigger (right or wrong — the guess is the participation).
+        from bot_modules.economy.game_rewards import fire_member_trigger
+
+        await fire_member_trigger(
+            self.bot, round_row.guild_id, interaction.user.id,
+            "guess", occurrence=str(self.round_id),
+        )
+
         if correct and round_row.solved_at is None:
             self._disable_all()
             rowcount, guess_count, unique_count = await asyncio.to_thread(
