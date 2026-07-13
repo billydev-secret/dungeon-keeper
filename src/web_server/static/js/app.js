@@ -127,7 +127,6 @@ const SECTIONS = [
       { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true },
       { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
       { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
-      { id: "economy-config",    label: "Economy",           module: "./panels/economy-config.js", adminOnly: true },
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
       { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
@@ -141,13 +140,16 @@ const SECTIONS = [
   },
   {
     // Shown to admins OR holders of the economy manager role (econManagerRole,
-    // mirroring gameHostRole). The item carries NO adminOnly/perms so a
-    // manager-role holder who isn't an admin keeps it after item-filtering.
-    id: "bank-manager", label: "Bank Manager", perms: ["admin"], econManagerRole: true,
+    // mirroring gameHostRole). Manager-visible items carry NO adminOnly/perms
+    // so a manager-role holder who isn't an admin keeps them after
+    // item-filtering; Settings is adminOnly (its endpoints require admin).
+    id: "economy", label: "Economy", perms: ["admin"], econManagerRole: true,
     items: [
-      { id: "economy-bank-manager", label: "Bank Manager", module: "./panels/economy-bank-manager.js" },
+      { id: "economy-bank-manager", label: "Operations", module: "./panels/economy-bank-manager.js" },
+      { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js" },
       { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js" },
       { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js" },
+      { id: "economy-config", label: "Settings", module: "./panels/economy-config.js", adminOnly: true },
     ],
   },
   {
@@ -268,7 +270,7 @@ function rebuildIndex() {
       return !!(hostRoleId && userRoleIds.has(hostRoleId));
     }
 
-    // Economy manager role: show Bank Manager to admins OR the configured
+    // Economy manager role: show the Economy section to admins OR the configured
     // manager-role holders (every endpoint is gated by require_economy_manager,
     // which excludes plain moderators — same reasoning as gameHostRole).
     if (sec.econManagerRole) {

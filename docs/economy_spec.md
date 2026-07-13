@@ -115,12 +115,12 @@ XP earned that local day converts to currency.
   `end_game` payload — the "best moment" extraction in `games_session/logic.py:85-118`
   (NHIE guiltiest, TTL best-liar, hottakes hottest, …) is the template. Game types
   with no meaningful winner pay participation only.
-- **Event host 30 (mod grant):** `/bank grant @member amount reason` + Bank Manager
-  panel button; manager-role or admin gated; audit-tagged in the ledger.
+- **Event host 30 (mod grant):** `/bank grant @member amount reason` + Operations
+  page button; manager-role or admin gated; audit-tagged in the ledger.
 
 ## 4. Quest System
 
-### 4.1 Authoring (Bank Manager panel, gated on `economy_manager_role` or admin —
+### 4.1 Authoring (Quests page, gated on `economy_manager_role` or admin —
 mirrors the `games_editor_role` / `require_game_host` dashboard pattern)
 Fields: title, description, type (daily/weekly/community/event), reward, sign-off
 tickbox, criteria (freeform v1), date range, repeat/auto-rotate tag, and a
@@ -130,10 +130,12 @@ an amber out-of-band warning; out-of-band saves fine, audit-tagged. Counted
 trigger quests take a **target count** ("how many times", §4.5). Library model:
 **1 active daily + up to 5 weeklies + up to 5 monthlies + 1 active event quest
 per trigger kind** per guild; dailies can auto-rotate from a tagged pool
-(rotation happens on the guild-local day roll in the economy loop). The Bank Manager panel orders cards by
-workflow (pending claims → library w/ slot summary + inline edit → community
-goals → quest editor → grant → rentals → ledger) and supports editing quests in
-place (PUT), member pickers for grant/ledger, and a ledger kind datalist.
+(rotation happens on the guild-local day roll in the economy loop). Authoring
+lives on the **Quests** page (library w/ slot summary + inline edit → quest
+editor → AI ideas) with in-place editing (PUT); the operational cards —
+pending claims → community goals → grant → rentals → ledger, with member
+pickers for grant/ledger and a ledger kind datalist — live on the
+**Operations** page.
 
 **AI idea generator.** The New-quest form has a "Generate ideas" button
 (`POST /api/economy/quests/generate`, manager-gated) that batches suggestions for
@@ -163,12 +165,12 @@ parity with the Games Studio is a parking-lot item).
   re-claimable. One pending claim per quest per member; a claim left pending **>7 days**
   expires via the hourly loop (`expire_stale_claims`), DMs the claimant, and frees a
   re-claim. **Approve/Deny works from both surfaces** — the bank-channel card and the
-  Bank Manager panel's pending queue resolve the same claim; a dashboard resolution also
+  Operations page's pending queue resolve the same claim; a dashboard resolution also
   best-effort edits the card and DMs the claimant over the shared event loop.
 
 ### 4.3 Community Quests
 Guild-wide objective with a progress bar. Community quests are **not member-claimable** —
-a manager drives `current` toward the target from the Bank Manager panel and `completed_at`
+a manager drives `current` toward the target from the Operations page and `completed_at`
 stamps once on the crossing. **Payout: flat, to every member active in the last 30 days**
 (`member_activity` via `active_member_ids`). Settlement is exactly-once: a per-(quest, user)
 row in `econ_community_payouts` is reserved before crediting (wellness-scheduler pattern),
@@ -285,12 +287,14 @@ own message — a 1:1 exchange). Hooks that fire inside another module's open
 transaction use `fire_trigger_inline` (savepoint-wrapped, never raises, no
 bank-card posting — pending sign-off claims still appear on the claims panel).
 
-**Income Sources page** (Bank Manager section of the dashboard): a per-guild
+**Income Sources page** (Economy section of the dashboard): a per-guild
 enable switch for every trigger kind, stored in `econ_income_sources`
 (absent = enabled; the gate is checked once inside `fire_trigger_quests`, so a
 disabled source stops firing everywhere immediately while its quests wait in
-the library). The page also shows which quests use each source, a read-only
-summary of the built-in faucets (knobs live on Economy Config), and the
+the library). The page also shows which quests use each source, the built-in
+faucet rates (read-only for manager-role holders; admins edit them in place —
+saves go through the admin-gated partial `PUT /api/economy/config`, and the
+panel detects admin-ness by probing the admin-gated config GET), and the
 suggested-sources roadmap (bump attribution, survey — no survey feature exists
 in code yet —, invite retention, counted quests, monthly cadence; confessions
 rejected for anonymity). JS labels shared with the quest form via
@@ -388,12 +392,15 @@ the member owns and gift rentals where they are the beneficiary.
   re-pricing/re-branding); pointing at another channel deletes the old panel and
   reposts. Builder in `economy/guide.py`; the two ids are bot-managed and not
   dashboard-editable.
-- **Manager surface (dashboard):** the **Bank Manager** panel — a top-level nav section
-  gated on `economy_manager_role_id` or admin (mirrors `games_editor_role` /
-  `require_game_host`) — is where managers author quests, work the pending sign-off queue
-  (Approve/Deny), set community progress + run manual Settle, grant, and read the ledger
-  audit. It is the dashboard counterpart to the `[mod]` `/bank grant` and `/qotd post`
-  commands.
+- **Manager surface (dashboard):** the **Economy** nav section, gated on
+  `economy_manager_role_id` or admin (mirrors `games_editor_role` /
+  `require_game_host`). Its pages: **Operations** (pending sign-off queue
+  Approve/Deny, community progress + manual Settle, grant, rentals, ledger
+  audit), **Quests** (library + authoring + AI ideas), **Income Sources**
+  (trigger switches + faucet rates), **Statistics**, and admin-only
+  **Settings** (wiring, branding, perk prices — hidden from non-admin
+  managers since its endpoints require admin). It is the dashboard
+  counterpart to the `[mod]` `/bank grant` and `/qotd post` commands.
 - **Role customization in v1** happens via `/bank role` subcommands + modals
   (name / color hex / gradient / icon emoji-or-upload), proxied through the bot.
 - **v2 member dashboard:** wallet page (`require_perms(set())` like the home page —
@@ -447,8 +454,8 @@ fixed per-perk factor)` served from `GET /api/economy/metrics` and rendered unde
 price field in the config panel; advisory only (no enforcement), and `{}` until the
 first rollup lands.
 
-**Statistics page (Bank Manager).** A live, on-demand tuning surface under Bank
-Manager (`GET /api/economy/stats`, gated on `require_economy_manager` — manager
+**Statistics page (Economy section).** A live, on-demand tuning surface
+(`GET /api/economy/stats`, gated on `require_economy_manager` — manager
 role or admin; member table capped at 500), complementing the weekly rollup with a
 same-instant read of the ledger. It shows: **supply concentration** — total supply,
 holder count, median balance, top-10% share, and Gini, all computed over **positive

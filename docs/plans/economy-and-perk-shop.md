@@ -91,7 +91,9 @@ ceil on faucet credits; balance can never go negative — debit fails atomically
 - Bank Manager dashboard section (new `SECTIONS` entry gated like `games_editor_role`
   → `economy_manager_role`): quest authoring CRUD, active-slot enforcement
   (1 daily + 5 weeklies), rotation tags, out-of-band amber warning, pending sign-off
-  queue, grant form, audit stream view (ledger filter).
+  queue, grant form, audit stream view (ledger filter). *(2026-07-13: section renamed
+  **Economy** and reorganized — Operations / Quests / Income Sources / Statistics /
+  Settings; see economy_spec.md "Manager surface".)*
 - `/bank quests` + claim flow; sign-off cards in bank channel as persistent views
   (Approve/Deny; deny reason modal → DM), re-registered on restart; 7-day pending
   expiry in the hourly loop; deny history shown on the card.

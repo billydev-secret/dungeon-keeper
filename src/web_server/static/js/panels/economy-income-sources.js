@@ -1,18 +1,27 @@
-// Income Sources — per-guild enable switches for the custom-coded quest
-// trigger hooks, a read-only view of the built-in faucets, and the roadmap
-// of suggested sources. Gated by the economy manager role (or admin).
+// Income Sources — everything that pays coins, on one page: per-guild enable
+// switches for the custom-coded quest trigger hooks, the built-in faucet
+// rates (editable in place for admins, read-only for manager-role holders —
+// the save endpoint is admin-gated), and the roadmap of suggested sources.
+// Gated by the economy manager role (or admin).
 import { api, apiPut, esc } from "../api.js";
 import { showStatus } from "../config-helpers.js";
 import { KIND_LABELS } from "./economy-sources-shared.js";
 
-const FAUCET_LABELS = {
-  login_text_base: "Daily login (first message)",
-  login_voice_base: "Daily voice login",
-  reward_qotd: "QOTD reply (flat award)",
-  reward_game_participation: "Game participation",
-  reward_game_win: "Game win bonus",
-  xp_per_coin: "XP → coin conversion (XP per coin)",
-};
+// Order matters — rendered top to bottom. xp_per_coin is the one float knob.
+const FAUCET_FIELDS = [
+  ["login_text_base", "Daily login (first message)"],
+  ["login_voice_base", "Daily voice login"],
+  ["streak_bonus_cap", "Streak bonus cap"],
+  ["milestone_day7", "Day 7 milestone"],
+  ["milestone_day30", "Day 30 milestone"],
+  ["milestone_day100", "Day 100 milestone"],
+  ["milestone_per_100", "Per-100-days bonus"],
+  ["reward_qotd", "QOTD reply (flat award)"],
+  ["reward_game_participation", "Game participation"],
+  ["reward_game_win", "Game win bonus"],
+  ["xp_per_coin", "XP → coin conversion (XP per coin)"],
+];
+const FLOAT_FAUCETS = new Set(["xp_per_coin"]);
 
 // Not built yet — shown so managers can see what's on the table. Keep in
 // sync with the parking lot in docs/economy_spec.md.
@@ -38,7 +47,11 @@ async function refresh(container) {
     container.innerHTML = `<div class="panel"><div class="error">${esc(err.message)}</div></div>`;
     return;
   }
-  render(container, data);
+  // Admin probe: the config GET is admin-gated, so a success means this user
+  // may edit faucet rates in place (saves go to the same admin-gated PUT).
+  // Manager-role holders get a 403 and the read-only view.
+  const isAdmin = await api("/api/economy/config").then(() => true, () => false);
+  render(container, data, isAdmin);
 }
 
 function questBadges(quests) {
@@ -48,7 +61,52 @@ function questBadges(quests) {
   ).join(" ");
 }
 
-function render(container, data) {
+function faucetSection(data, isAdmin) {
+  if (isAdmin) {
+    const rows = FAUCET_FIELDS.map(([key, label]) => `
+      <tr>
+        <td>${esc(label)}</td>
+        <td style="text-align:right;">
+          <input type="number" name="${key}" value="${data.faucets[key] ?? 0}"
+                 min="0" step="${FLOAT_FAUCETS.has(key) ? "0.5" : "1"}"
+                 style="max-width:110px; text-align:right;" />
+        </td>
+      </tr>`).join("");
+    return `
+      <div class="field-hint" style="margin-bottom:8px;">
+        These pay on their own, outside the quest system. A value of 0 disables
+        one. Everything else about the economy is on
+        <a href="#/economy-config">Settings</a>.
+      </div>
+      <form data-form-faucets>
+        <div style="overflow-x:auto;">
+          <table class="data-table" style="max-width:520px;">
+            <thead><tr><th>Faucet</th><th style="text-align:right;">Value</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+          <button type="submit" class="btn btn-primary">Save rates</button>
+          <span data-status-faucets></span>
+        </div>
+      </form>`;
+  }
+  const rows = FAUCET_FIELDS.map(([key, label]) => `
+    <tr><td>${esc(label)}</td><td style="text-align:right;">${data.faucets[key] ?? "—"}</td></tr>`).join("");
+  return `
+    <div class="field-hint" style="margin-bottom:8px;">
+      These pay on their own, outside the quest system. A value of 0 disables
+      one; the rates are admin-editable.
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="data-table" style="max-width:520px;">
+        <thead><tr><th>Faucet</th><th style="text-align:right;">Value</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function render(container, data, isAdmin) {
   const rows = data.sources.map((s) => `
     <tr data-source-row="${esc(s.source)}">
       <td style="white-space:nowrap;">${esc(KIND_LABELS[s.source] || s.label)}</td>
@@ -61,9 +119,6 @@ function render(container, data) {
       </td>
     </tr>`).join("");
 
-  const faucets = Object.entries(FAUCET_LABELS).map(([key, label]) => `
-    <tr><td>${esc(label)}</td><td style="text-align:right;">${data.faucets[key] ?? "—"}</td></tr>`).join("");
-
   const suggestions = SUGGESTIONS.map(([label, note]) => `
     <div style="margin:8px 0;">
       <strong>${esc(label)}</strong>
@@ -74,17 +129,17 @@ function render(container, data) {
     <div class="panel">
       <header>
         <h2>Income Sources</h2>
-        <div class="subtitle">The custom-coded hooks that can complete quests automatically</div>
+        <div class="subtitle">Everything that pays coins — trigger hooks and built-in faucet rates</div>
       </header>
 
       <section class="card">
         <div class="section-label">Quest trigger sources</div>
         <div class="field-hint" style="margin-bottom:8px;">
           Turning a source off stops it firing immediately (quests that use it
-          stay in the library, they just wait). Attach a source to a quest from
-          the <strong>Bank Manager</strong> — completion mode “Playing a game”.
-          Daily/weekly quests complete once per period; event quests pay every
-          occurrence.
+          stay in the library, they just wait). Attach a source to a quest on
+          the <a href="#/economy-quests">Quests</a> page — completion mode
+          “Playing a game”. Daily/weekly quests complete once per period;
+          event quests pay every occurrence.
         </div>
         <div style="overflow-x:auto;">
           <table class="data-table">
@@ -95,17 +150,8 @@ function render(container, data) {
       </section>
 
       <section class="card">
-        <div class="section-label">Built-in faucets (for context)</div>
-        <div class="field-hint" style="margin-bottom:8px;">
-          These pay on their own, outside the quest system. The knobs live on
-          the <strong>Economy</strong> config page; a value of 0 disables one.
-        </div>
-        <div style="overflow-x:auto;">
-          <table class="data-table" style="max-width:520px;">
-            <thead><tr><th>Faucet</th><th>Value</th></tr></thead>
-            <tbody>${faucets}</tbody>
-          </table>
-        </div>
+        <div class="section-label">Built-in faucet rates</div>
+        ${faucetSection(data, isAdmin)}
       </section>
 
       <section class="card">
@@ -129,4 +175,23 @@ function render(container, data) {
       }
     });
   });
+
+  const faucetForm = container.querySelector("[data-form-faucets]");
+  if (faucetForm) {
+    const status = faucetForm.querySelector("[data-status-faucets]");
+    faucetForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const payload = {};
+      for (const [key] of FAUCET_FIELDS) {
+        const raw = faucetForm.querySelector(`[name=${key}]`).value;
+        payload[key] = FLOAT_FAUCETS.has(key) ? parseFloat(raw) : parseInt(raw, 10);
+      }
+      try {
+        await apiPut("/api/economy/config", payload);
+        showStatus(status, true);
+      } catch (err) {
+        showStatus(status, false, err.message);
+      }
+    });
+  }
 }
