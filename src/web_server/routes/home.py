@@ -312,6 +312,26 @@ async def home_data(
                     if lw else None
                 )
 
+                # Economy quest claims waiting on manager sign-off.
+                result["pending_claims"] = conn.execute(
+                    "SELECT COUNT(*) FROM econ_quest_claims WHERE guild_id = ? AND state = 'pending'",
+                    (guild_id,),
+                ).fetchone()[0]
+                lc = conn.execute(
+                    """
+                    SELECT c.user_id, q.title, c.created_at
+                    FROM econ_quest_claims c
+                    JOIN econ_quests q ON q.id = c.quest_id
+                    WHERE c.guild_id = ? AND c.state = 'pending'
+                    ORDER BY c.created_at DESC LIMIT 1
+                    """,
+                    (guild_id,),
+                ).fetchone()
+                result["latest_claim"] = (
+                    {"user_id": str(lc["user_id"]), "quest_title": lc["title"] or "", "created_at": lc["created_at"]}
+                    if lc else None
+                )
+
             # Recent mod actions
             actions_list: list[dict] = []
             if _need("mod_actions"):
@@ -536,7 +556,7 @@ async def home_data(
                 all_user_ids.add(int(sb["user_id"]))
             for cl in channel_loyalists:
                 all_user_ids.add(int(cl["user_id"]))
-            for lentry in (result.get("latest_jail"), result.get("latest_ticket"), result.get("latest_warning")):
+            for lentry in (result.get("latest_jail"), result.get("latest_ticket"), result.get("latest_warning"), result.get("latest_claim")):
                 if lentry:
                     all_user_ids.add(int(lentry["user_id"]))
             for a in actions_list:
@@ -607,7 +627,7 @@ async def home_data(
         item["user_name"] = _resolve_user(item["user_id"])
     for cl in db_data.get("channel_loyalists", []):
         cl["channel_name"] = _resolve_channel(cl["channel_id"])
-    for key in ("latest_jail", "latest_ticket", "latest_warning"):
+    for key in ("latest_jail", "latest_ticket", "latest_warning", "latest_claim"):
         entry = db_data.get(key)
         if entry:
             entry["user_name"] = _resolve_user(entry["user_id"])

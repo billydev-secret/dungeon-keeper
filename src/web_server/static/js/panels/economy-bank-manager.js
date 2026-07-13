@@ -1,13 +1,13 @@
-// Economy — Operations. The day-to-day manager work: claim sign-off,
-// community-goal progress & settlement, grants, perk rentals, and the ledger
-// audit stream. Quest authoring lives on the Quests page. Gated by the
-// economy manager role (or admin).
+// Economy — Operations. The day-to-day manager work: community-goal progress
+// & settlement, grants, perk rentals, and the ledger audit stream. Claim
+// sign-off lives on the Claims page, quest authoring on the Quests page.
+// Gated by the economy manager role (or admin).
 import { api, apiPost, esc, fmtAge, fmtTs } from "../api.js";
 import {
   showStatus, loadMembers,
   mountPicker, toMemberOptions,
 } from "../config-helpers.js";
-import { toast, confirmDialog, promptDialog } from "../ui.js";
+import { toast, confirmDialog } from "../ui.js";
 
 // Common ledger kinds for the audit filter (free text still allowed).
 const LEDGER_KINDS = [
@@ -36,14 +36,10 @@ function render(container, members) {
     <div class="panel">
       <header>
         <h2>Operations</h2>
-        <div class="subtitle">Claim sign-off, community goals, grants, rentals, and the ledger —
-          quests are authored on the <a href="#/economy-quests">Quests</a> page</div>
+        <div class="subtitle">Community goals, grants, rentals, and the ledger —
+          sign-off lives on <a href="#/economy-claims">Claims</a>, authoring on
+          <a href="#/economy-quests">Quests</a></div>
       </header>
-
-      <section class="card" data-sec="claims">
-        <div class="section-label">Pending claims — needs you</div>
-        <div data-claims><div class="empty">Loading…</div></div>
-      </section>
 
       <section class="card" data-sec="community" style="display:none;">
         <div class="section-label">Community goals</div>
@@ -90,7 +86,6 @@ function render(container, members) {
 
   wireGrant(container, members);
   wireLedger(container, members);
-  refreshClaims(container, members);
   refreshCommunity(container, members);
   refreshRentals(container, members);
   refreshLedger(container, members);
@@ -235,73 +230,6 @@ async function refreshCommunity(container, members) {
         toast(`Paid ${res.paid_count} member(s)`, "success");
         refreshCommunity(container, members);
         refreshLedger(container, members);
-      } catch (err) {
-        showStatus(status, false, err.message);
-      }
-    });
-  });
-}
-
-// ── claims ───────────────────────────────────────────────────────────
-
-async function refreshClaims(container, members) {
-  const host = container.querySelector("[data-claims]");
-  let claims;
-  try {
-    claims = (await api("/api/economy/claims", { state: "pending" })).claims;
-  } catch (err) {
-    host.innerHTML = `<div class="error">${esc(err.message)}</div>`;
-    return;
-  }
-  if (!claims.length) {
-    host.innerHTML = `<div class="empty">No pending claims.</div>`;
-    return;
-  }
-  const rows = claims.map((c) => `
-    <tr data-claim-row="${c.id}">
-      <td>${esc(memberName(members, c.user_id))}</td>
-      <td>${esc(c.quest_title || "#" + c.quest_id)}</td>
-      <td>${esc(c.period || "")}</td>
-      <td>${fmtAge(nowSec() - (c.created_at || 0))}</td>
-      <td>${c.deny_count || 0}</td>
-      <td>
-        <button class="btn btn-primary btn-sm" data-approve="${c.id}">Approve</button>
-        <button class="btn btn-ghost btn-sm" data-deny="${c.id}">Deny</button>
-        <span class="save-status" data-claim-status="${c.id}"></span>
-      </td>
-    </tr>`).join("");
-  host.innerHTML = `
-    <div style="overflow-x:auto;">
-      <table class="data-table">
-        <thead><tr><th>Claimant</th><th>Quest</th><th>Period</th><th>Age</th><th>Denies</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
-
-  host.querySelectorAll("[data-approve]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.approve;
-      const status = host.querySelector(`[data-claim-status="${id}"]`);
-      try {
-        const res = await apiPost(`/api/economy/claims/${id}/approve`, {});
-        showStatus(status, true, `Paid ${res.paid}`);
-        refreshClaims(container, members);
-        refreshLedger(container, members);
-      } catch (err) {
-        showStatus(status, false, err.message);
-      }
-    });
-  });
-  host.querySelectorAll("[data-deny]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.deny;
-      const status = host.querySelector(`[data-claim-status="${id}"]`);
-      const reason = await promptDialog("Reason for denial (shown to the claimant):", { confirmLabel: "Deny", required: true, danger: true });
-      if (reason == null) return;
-      try {
-        await apiPost(`/api/economy/claims/${id}/deny`, { reason });
-        showStatus(status, true, "Denied");
-        refreshClaims(container, members);
       } catch (err) {
         showStatus(status, false, err.message);
       }

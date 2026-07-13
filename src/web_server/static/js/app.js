@@ -146,6 +146,7 @@ const SECTIONS = [
     id: "economy", label: "Economy", perms: ["admin"], econManagerRole: true,
     items: [
       { id: "economy-bank-manager", label: "Operations", module: "./panels/economy-bank-manager.js" },
+      { id: "economy-claims", label: "Claims", module: "./panels/economy-claims.js" },
       { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js" },
       { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js" },
       { id: "economy-stats", label: "Statistics", module: "./panels/economy-stats.js" },
