@@ -14,6 +14,7 @@ from bot_modules.economy.quests import quest_period
 from bot_modules.services.economy_quests_service import (
     claim_quest,
     create_quest,
+    record_photo_card,
     set_quest_active,
 )
 from bot_modules.services.economy_service import (
@@ -386,6 +387,7 @@ def _mk_quest(
     title="Quest",
     trigger_words="",
     trigger_channel_id=None,
+    trigger_kind="",
 ) -> int:
     with open_db(db) as conn:
         qid = create_quest(
@@ -404,6 +406,7 @@ def _mk_quest(
             created_by=1,
             trigger_words=trigger_words,
             trigger_channel_id=trigger_channel_id,
+            trigger_kind=trigger_kind,
         )
         if active:
             set_quest_active(conn, GUILD_ID, qid, True)
@@ -1331,3 +1334,142 @@ def test_trigger_quest_excluded_from_manual_claims(ctx, db):
     cog = _make_cog(ctx)
     _settings, state = cog._load_quests_state(GUILD_ID, 501)
     assert [q["state"] for q in state] == ["trigger"]
+
+
+# ── photo-reply event quest ─────────────────────────────────────────────────
+
+
+def _mk_photo_card(db, *, message_id=9100, game_id="game-1", channel_id=111) -> None:
+    with open_db(db) as conn:
+        record_photo_card(conn, GUILD_ID, channel_id, message_id, game_id, "prompt")
+
+
+def _photo_reply(
+    *,
+    author,
+    ref_message_id: int | None = 9100,
+    content_type: str | None = "image/png",
+    filename: str = "pic.png",
+    with_attachment: bool = True,
+) -> MagicMock:
+    msg = _trigger_message(author=author, content="")
+    msg.reference = (
+        SimpleNamespace(message_id=ref_message_id)
+        if ref_message_id is not None
+        else None
+    )
+    att = SimpleNamespace(content_type=content_type, filename=filename)
+    msg.attachments = [att] if with_attachment else []
+    return msg
+
+
+@pytest.mark.asyncio
+async def test_photo_reply_pays_once_per_card_across_cards(ctx, db):
+    _enable(db)
+    _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10, title="Snap it")
+    _mk_photo_card(db, message_id=9100, game_id="game-1")
+    _mk_photo_card(db, message_id=9200, game_id="game-2")
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    msg = _photo_reply(author=member, ref_message_id=9100)
+    await cog._on_photo_reply(msg)
+    assert _balance(db, 501) == 10
+    msg.add_reaction.assert_awaited_once_with("✅")
+
+    # Same card again: silent, nothing more (no time gate — the card is the key).
+    repeat = _photo_reply(author=member, ref_message_id=9100)
+    await cog._on_photo_reply(repeat)
+    assert _balance(db, 501) == 10
+    repeat.reply.assert_not_awaited()
+
+    # A different card pays again.
+    other = _photo_reply(author=member, ref_message_id=9200)
+    await cog._on_photo_reply(other)
+    assert _balance(db, 501) == 20
+
+
+@pytest.mark.asyncio
+async def test_photo_reply_requires_reply_and_image(ctx, db):
+    _enable(db)
+    _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10)
+    _mk_photo_card(db)
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    # Not a reply at all.
+    await cog._on_photo_reply(_photo_reply(author=member, ref_message_id=None))
+    # A reply without any attachment.
+    await cog._on_photo_reply(_photo_reply(author=member, with_attachment=False))
+    # A reply with a non-image attachment.
+    await cog._on_photo_reply(
+        _photo_reply(author=member, content_type="video/mp4", filename="clip.mp4")
+    )
+    assert _balance(db, 501) == 0
+
+    # No content type but an image filename counts (some mobile uploads).
+    await cog._on_photo_reply(
+        _photo_reply(author=member, content_type=None, filename="IMG_1234.JPG")
+    )
+    assert _balance(db, 501) == 10
+
+
+@pytest.mark.asyncio
+async def test_photo_reply_ignores_non_cards_and_needs_active_quest(ctx, db):
+    _enable(db)
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)
+
+    # Card exists but no event quest is active.
+    _mk_photo_card(db, message_id=9100)
+    await cog._on_photo_reply(_photo_reply(author=member, ref_message_id=9100))
+    assert _balance(db, 501) == 0
+
+    # Quest active but the reply targets a message that isn't a card.
+    _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10)
+    await cog._on_photo_reply(_photo_reply(author=member, ref_message_id=4242))
+    assert _balance(db, 501) == 0
+
+
+@pytest.mark.asyncio
+async def test_photo_reply_noop_when_economy_disabled(ctx, db):
+    _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10)
+    _mk_photo_card(db)
+    cog = _make_cog(ctx)
+    msg = _photo_reply(author=_member(member_id=501))
+    await cog._on_photo_reply(msg)
+    assert _balance(db, 501) == 0
+    msg.reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_photo_reply_signoff_files_pending_claim(ctx, db):
+    _enable(db)
+    qid = _mk_quest(db, qtype="event", trigger_kind="photo_reply", reward=10, signoff=1)
+    _mk_photo_card(db)
+    cog = _make_cog(ctx)
+    msg = _photo_reply(author=_member(member_id=501))
+    with patch(
+        "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
+    ) as card:
+        await cog._on_photo_reply(msg)
+
+    assert _balance(db, 501) == 0  # sign-off gates the payout
+    card.assert_awaited_once()
+    msg.add_reaction.assert_awaited_once_with("📝")
+    with open_db(db) as conn:
+        claim = conn.execute(
+            "SELECT state, period FROM econ_quest_claims "
+            "WHERE quest_id = ? AND user_id = 501",
+            (qid,),
+        ).fetchone()
+    assert claim is not None and claim["state"] == "pending"
+    assert claim["period"] == "photo:game-1"
+
+
+def test_event_quest_shown_as_auto_not_claimable(ctx, db):
+    _enable(db)
+    _mk_quest(db, qtype="event", trigger_kind="photo_reply", title="Snap it")
+    cog = _make_cog(ctx)
+    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    assert [q["state"] for q in state] == ["photo_reply"]

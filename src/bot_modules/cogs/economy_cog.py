@@ -42,10 +42,13 @@ from bot_modules.economy.quests import (
     compile_trigger_pattern,
     message_matches_trigger,
     parse_trigger_words,
+    photo_card_period,
     quest_period,
 )
 from bot_modules.services.economy_quests_service import (
     claim_quest,
+    get_active_event_quest,
+    get_photo_card,
     list_trigger_quests,
 )
 from bot_modules.services.economy_rentals_service import (
@@ -163,6 +166,7 @@ _QUEST_STATE_LABEL = {
     "pending": "⏳ Awaiting sign-off",
     "done": "☑️ Completed this period",
     "trigger": "🗣️ Completes automatically when you say its trigger phrase",
+    "photo_reply": "📸 Completes automatically when you reply to a Photo Challenge with your photo",
 }
 
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
@@ -180,6 +184,24 @@ class _TriggerQuest:
     signoff: bool
     channel_id: int | None  # None = any channel counts
     pattern: re.Pattern[str]
+
+
+_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".avif")
+
+
+def _has_image_attachment(message: discord.Message) -> bool:
+    """True when any attachment is an image.
+
+    Content-type first; filename extension as the fallback for the uploads
+    Discord serves without one (some mobile clients).
+    """
+    for att in message.attachments:
+        ctype = att.content_type or ""
+        if ctype.startswith("image/"):
+            return True
+        if not ctype and att.filename.lower().endswith(_IMAGE_EXTENSIONS):
+            return True
+    return False
 
 
 def _progress_bar(current: int, target: int, width: int = 10) -> str:
@@ -1080,6 +1102,11 @@ class EconomyCog(commands.Cog):
                     entry["state"] = "community"
                     entry["current"] = int(prog["current"]) if prog else 0
                     entry["target"] = int(target) if target is not None else 0
+                elif qtype == "event":
+                    # No calendar period — the trigger listener pays per
+                    # occurrence (e.g. per photo card), so the list shows the
+                    # standing how-to instead of a per-period claim state.
+                    entry["state"] = str(row["trigger_kind"]) or "trigger"
                 else:
                     period = quest_period(qtype, day)
                     claim = conn.execute(
@@ -1218,6 +1245,21 @@ class EconomyCog(commands.Cog):
             )
             return
 
+        await self._announce_quest_claim(
+            message, member, trig.title, settings, outcome
+        )
+
+    async def _announce_quest_claim(
+        self,
+        message: discord.Message,
+        member: discord.Member,
+        title: str,
+        settings: EconSettings,
+        outcome,
+    ) -> None:
+        """React + reply for an auto-claimed quest (trigger phrase or photo)."""
+        guild = message.guild
+        assert guild is not None
         accent = await resolve_accent_color(self.ctx.db_path, guild)
 
         if outcome.state == "paid":
@@ -1225,7 +1267,7 @@ class EconomyCog(commands.Cog):
             embed = discord.Embed(
                 title="Quest complete!",
                 description=(
-                    f"{member.mention} completed **{trig.title}** — "
+                    f"{member.mention} completed **{title}** — "
                     f"{settings.currency_emoji} {paid:,} {_unit(settings, paid)} "
                     "added to their wallet."
                 ),
@@ -1242,7 +1284,7 @@ class EconomyCog(commands.Cog):
             embed = discord.Embed(
                 title="Quest submitted",
                 description=(
-                    f"{member.mention} triggered **{trig.title}** — "
+                    f"{member.mention} triggered **{title}** — "
                     "sent for manager sign-off."
                 ),
                 colour=accent,
@@ -1257,6 +1299,65 @@ class EconomyCog(commands.Cog):
             await message.reply(embed=note, mention_author=False)
         except discord.HTTPException:
             log.debug("econ trigger: failed to reply", exc_info=True)
+
+    # ── photo-reply event quest (reply to a Photo Challenge card) ─────────
+
+    @commands.Cog.listener("on_message")
+    async def _on_photo_reply(self, message: discord.Message) -> None:
+        """Pay the photo-reply event quest when a member replies to a card.
+
+        The reply with an image IS the verification. The claim period is the
+        card itself (``photo:<game_id>``), so each card pays each member at
+        most once with no time gate — replies to old cards still count.
+        Repeats fall out silently via the paid-index collision ValueError.
+        """
+        if message.guild is None or message.author.bot:
+            return
+        member = message.author
+        if not isinstance(member, discord.Member):
+            return
+        ref = message.reference
+        ref_id = ref.message_id if ref is not None else None
+        if ref_id is None or not _has_image_attachment(message):
+            return
+
+        guild_id = message.guild.id
+        booster = member.premium_since is not None
+
+        def _claim():
+            with self.ctx.open_db() as conn:
+                settings = load_econ_settings(conn, guild_id)
+                if not settings.enabled:
+                    return None
+                card = get_photo_card(conn, guild_id, int(ref_id))
+                if card is None:
+                    return None
+                quest = get_active_event_quest(conn, guild_id, "photo_reply")
+                if quest is None:
+                    return None
+                outcome = claim_quest(
+                    conn,
+                    settings,
+                    guild_id,
+                    int(quest["id"]),
+                    member.id,
+                    period=photo_card_period(str(card["game_id"])),
+                    booster=booster,
+                )
+                return settings, str(quest["title"]), outcome
+
+        try:
+            result = await asyncio.to_thread(_claim)
+        except ValueError:
+            # Already paid for this card, or the quest's date window closed.
+            return
+        except Exception:
+            log.exception("econ photo: claim failed in guild %s", guild_id)
+            return
+        if result is None:
+            return
+        settings, title, outcome = result
+        await self._announce_quest_claim(message, member, title, settings, outcome)
 
     qotd = app_commands.Group(
         name="qotd",

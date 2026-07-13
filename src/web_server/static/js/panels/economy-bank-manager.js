@@ -71,6 +71,7 @@ function render(container, members, channels) {
                 <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
                 <option value="community">Community</option>
+                <option value="event">Event (auto-trigger)</option>
               </select></div>
           </div>
           <div class="field"><label>Description</label>
@@ -98,6 +99,11 @@ function render(container, members, channels) {
           <div class="field" data-trigger-channel><label>Trigger channel</label>
             <span data-picker="trigger-channel"></span>
             <div class="field-hint">If set, only messages in this channel (or its threads) count.</div></div>
+          <div class="field" data-trigger-kind style="display:none;"><label>Event trigger</label>
+            <select name="trigger_kind">
+              <option value="photo_reply">📸 Reply to a Photo Challenge card with a photo</option>
+            </select>
+            <div class="field-hint">Pays automatically — each member once per challenge card, with no time limit (replies to old cards still count). One event quest can be active at a time.</div></div>
           <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
             <input type="checkbox" name="signoff" /> Requires manager sign-off
           </label>
@@ -262,7 +268,7 @@ async function refreshQuests(container, members) {
         <td>${esc(q.qtype)}</td>
         <td>${q.reward}</td>
         <td>${q.rotate_tag ? esc(q.rotate_tag) : "—"}</td>
-        <td>${q.signoff ? "sign-off" : "instant"}${q.trigger_words ? ` · <span title="${esc(q.trigger_words)}">🗣️ trigger</span>` : ""}</td>
+        <td>${q.signoff ? "sign-off" : "instant"}${q.trigger_words ? ` · <span title="${esc(q.trigger_words)}">🗣️ trigger</span>` : ""}${q.trigger_kind === "photo_reply" ? ` · <span title="Pays on a photo reply to a Photo Challenge card">📸 photo reply</span>` : ""}</td>
         <td>
           <label style="display:inline-flex; gap:4px; align-items:center;">
             <input type="checkbox" data-active-toggle="${q.id}"${q.active ? " checked" : ""} /> active
@@ -397,11 +403,15 @@ function wireAuthoring(container, channels) {
   );
 
   const updateHint = () => { hint.textContent = bandHint(qtypeSel.value, rewardInput.value); };
+  const triggerKindField = form.querySelector("[data-trigger-kind]");
   const updateCommunity = () => {
     const isCommunity = qtypeSel.value === "community";
+    const isEvent = qtypeSel.value === "event";
     communityField.style.display = isCommunity ? "" : "none";
     // Community quests settle guild-wide — no per-member trigger claims.
-    triggerFields.forEach((el) => { el.style.display = isCommunity ? "none" : ""; });
+    // Event quests are paid by their own trigger kind, not phrase matching.
+    triggerFields.forEach((el) => { el.style.display = (isCommunity || isEvent) ? "none" : ""; });
+    triggerKindField.style.display = isEvent ? "" : "none";
   };
   rewardInput.addEventListener("input", updateHint);
   qtypeSel.addEventListener("change", () => { updateHint(); updateCommunity(); });
@@ -426,6 +436,8 @@ function wireAuthoring(container, channels) {
     if (qtypeSel.value === "community") {
       const t = form.querySelector("[name=community_target]").value;
       body.community_target = t === "" ? null : parseInt(t, 10);
+    } else if (qtypeSel.value === "event") {
+      body.trigger_kind = form.querySelector("[name=trigger_kind]").value;
     } else {
       body.trigger_words = form.querySelector("[name=trigger_words]").value.trim();
       const trigCh = triggerPicker.getValue();
@@ -508,6 +520,10 @@ function wireQuestAi(container, form, { updateHint, updateCommunity }) {
     const theme = root.querySelector("[data-ai-theme]").value.trim();
     const count = Math.max(1, Math.min(10, parseInt(root.querySelector("[data-ai-count]").value, 10) || 5));
     const qtype = qtypeSel.value;
+    if (qtype === "event") {
+      results.innerHTML = `<div class="empty">Event quests have a fixed trigger — no ideas to generate. Pick another type.</div>`;
+      return;
+    }
     btn.disabled = true;
     const label = btn.textContent;
     btn.textContent = "Generating…";

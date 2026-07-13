@@ -106,8 +106,9 @@ XP earned that local day converts to currency.
   resolution point. Participation now covers **20 of 23 games**: the six duel games,
   ttl/traditional/legitlibs, and — enriched in Stage 2 — 11 party cogs that now pass
   their real player rosters into `end_game` (ama, clapback, compliment, hottakes, mfk,
-  mlt, nhie, price, rushmore, story, wyr). The remaining three — photo, ffa, fantasies —
-  are excluded by design (anonymous submissions or no per-player completion hook).
+  mlt, nhie, price, rushmore, story, wyr). ffa and fantasies are excluded by design
+  (anonymous submissions); photo has no per-player completion hook either, but pays
+  through the **photo-reply event quest** (§4.5) instead of `end_game`.
 - **Game win +20:** paid for **both** game architectures in v1 (decided). Duel games
   read their explicit `winner_id` (chicken, hot potato, musical chairs, pressure
   cooker, quickdraw, …). Party games get a per-game-type winner resolver over the
@@ -121,12 +122,13 @@ XP earned that local day converts to currency.
 
 ### 4.1 Authoring (Bank Manager panel, gated on `economy_manager_role` or admin —
 mirrors the `games_editor_role` / `require_game_host` dashboard pattern)
-Fields: title, description, type (daily/weekly/community), reward, sign-off tickbox,
-criteria (freeform v1), date range, repeat/auto-rotate tag, trigger words + optional
-trigger channel (§4.4, daily/weekly only — hidden for community). Rewards free-entry with an
-amber out-of-band warning; out-of-band saves fine, audit-tagged. Library model:
-**1 active daily + up to 5 weeklies** per guild; dailies can auto-rotate from a tagged
-pool (rotation happens on the guild-local day roll in the economy loop).
+Fields: title, description, type (daily/weekly/community/event), reward, sign-off
+tickbox, criteria (freeform v1), date range, repeat/auto-rotate tag, trigger words +
+optional trigger channel (§4.4, daily/weekly only — hidden for community), event
+trigger kind (§4.5, event only). Rewards free-entry with an amber out-of-band
+warning; out-of-band saves fine, audit-tagged. Library model: **1 active daily + up
+to 5 weeklies + 1 active event quest** per guild; dailies can auto-rotate from a
+tagged pool (rotation happens on the guild-local day roll in the economy loop).
 
 **AI idea generator.** The New-quest form has a "Generate ideas" button
 (`POST /api/economy/quests/generate`, manager-gated) that batches suggestions for
@@ -195,6 +197,29 @@ spam. Per-guild trigger quests are cached in the cog for **60 s**
 a restart; the cache also stores empty lists, keeping the per-message cost of
 guilds without trigger quests to a dict lookup. Community quests never trigger
 (not member-claimable).
+
+### 4.5 Event Quests (trigger-paid, no calendar period)
+An **event quest** (`qtype='event'`, `trigger_kind` names the trigger) is never
+member-claimed: a bot listener pays it through the same `claim_quest` state machine
+when its trigger fires, passing a **per-occurrence period key** instead of a
+calendar one — so payouts dedupe per member per occurrence with **no time gate**.
+`quest_period('event', …)` deliberately raises; only listeners build event periods.
+Slot rule: **1 active event quest** per guild (two active would double-pay one
+trigger); it occupies no daily/weekly/community slot. Not offered by the AI idea
+generator. On the wallet page the quest shows a standing how-to (state =
+`trigger_kind`), never a claim button.
+
+**`photo_reply`** (the only v1 kind): when a Photo Challenge card posts (manual
+`/games play photo` or the games scheduler — both go through `PhotoCog.launch`),
+the cog records it in `econ_photo_cards` (message → game mapping; recorded even
+with no quest active, so a quest activated later still pays for old cards). A
+member's **Discord reply to a card carrying an image attachment** (content-type,
+filename-extension fallback) claims with period `photo:<game_id>` — once per member
+per card, forever; each new card is a fresh payout. Instant quests pay on the spot
+(✅ + embed); sign-off files the pending claim and posts the bank-channel card, which
+doubles as photo review. The Photo Challenge Games-Studio panel gained a
+**ping-role option** (`ping_role_id` in `games_game_config.options`) mentioned with
+every posted card — distinct from the per-schedule announce ping; don't set both.
 
 `/bank pay @member amount` — min 1, whole numbers, no fee. **Confirmation step over
 100** (an ephemeral confirm button before the debit lands). Both sides ledgered
@@ -409,8 +434,8 @@ nothing and misses nothing (catch-up on next tick).
   makes).
 - Game participation payouts cover 20 of 23 games — the six duel games,
   ttl/traditional/legitlibs, and the 11 party cogs whose rosters were enriched in
-  Stage 2. photo, ffa, and fantasies stay excluded by design (anonymous submissions or
-  no per-player completion hook).
+  Stage 2. ffa and fantasies stay excluded by design (anonymous submissions);
+  photo pays via the photo-reply event quest (§4.5), not `end_game`.
 - Guild loses Level 2 / Enhanced Role Styles mid-rental: perk enters grace as if unpaid?
   No — billing pauses the affected perk (icon/gradient) and DMs the owner; auto-resumes
   when the feature returns (no charge while suspended).
@@ -432,7 +457,9 @@ nothing and misses nothing (catch-up on next tick).
 **V2 — committed, not parked (decided):** member wallet dashboard page · role studio
 panel with live preview · spotlight slots.
 
-**Parking lot** (unchanged from V3 unless noted): auto-tracked quest criteria ·
+**Parking lot** (unchanged from V3 unless noted): auto-tracked quest criteria
+(partially delivered: trigger words §4.4 + the photo-reply event trigger §4.5;
+further trigger kinds — game wins, streaks — remain parked) ·
 fines/tickets (Jail exists — integration stays parked by design call) · giveaway
 entries · emoji sponsorship · room upgrades · streak-rental discount ·
 auctions/seasonal drops · per-quest contributors-only payout · scheduled/auto QOTD.

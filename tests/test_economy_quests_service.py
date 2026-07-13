@@ -16,6 +16,7 @@ import time
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.economy.quests import photo_card_period
 from bot_modules.services.economy_quests_service import (
     ClaimOutcome,
     SlotLimitError,
@@ -28,8 +29,11 @@ from bot_modules.services.economy_quests_service import (
     list_settleable_community_quests,
     list_trigger_quests,
     expire_stale_claims,
+    get_active_event_quest,
+    get_photo_card,
     get_quest,
     list_quests,
+    record_photo_card,
     resolve_claim,
     rotate_pool,
     set_claim_card,
@@ -70,6 +74,7 @@ def _make(
     guild_id=GUILD,
     trigger_words="",
     trigger_channel_id=None,
+    trigger_kind="",
 ):
     qid = create_quest(
         conn,
@@ -87,6 +92,7 @@ def _make(
         created_by=MANAGER,
         trigger_words=trigger_words,
         trigger_channel_id=trigger_channel_id,
+        trigger_kind=trigger_kind,
     )
     if active:
         set_quest_active(conn, guild_id, qid, True)
@@ -836,3 +842,96 @@ def test_list_trigger_quests_scoped_to_guild(db):
     with open_db(db) as conn:
         _make(conn, trigger_words="gm", guild_id=GUILD + 1)
         assert list_trigger_quests(conn, GUILD) == []
+
+
+# ── event quests (photo-reply trigger) ────────────────────────────────
+
+
+def test_event_quest_requires_known_trigger_kind(db):
+    with open_db(db) as conn:
+        with pytest.raises(ValueError):
+            _make(conn, qtype="event")  # no kind
+        with pytest.raises(ValueError):
+            _make(conn, qtype="event", trigger_kind="nope")
+        with pytest.raises(ValueError):
+            _make(conn, qtype="daily", trigger_kind="photo_reply")  # wrong type
+        qid = _make(conn, qtype="event", trigger_kind="photo_reply")
+        assert _get(conn, GUILD, qid)["trigger_kind"] == "photo_reply"
+
+
+def test_update_validates_qtype_trigger_kind_pairing(db):
+    with open_db(db) as conn:
+        qid = _make(conn, qtype="event", trigger_kind="photo_reply", active=False)
+        # Retyping to daily while the kind is still set must fail…
+        with pytest.raises(ValueError):
+            update_quest(conn, GUILD, qid, {"qtype": "daily"})
+        # …and succeeds when the kind is cleared in the same patch.
+        update_quest(conn, GUILD, qid, {"qtype": "daily", "trigger_kind": ""})
+        assert _get(conn, GUILD, qid)["qtype"] == "daily"
+        # A daily can't gain a trigger kind on its own.
+        with pytest.raises(ValueError):
+            update_quest(conn, GUILD, qid, {"trigger_kind": "photo_reply"})
+
+
+def test_event_slot_limit_one_active(db):
+    with open_db(db) as conn:
+        _make(conn, qtype="event", trigger_kind="photo_reply")
+        second = _make(
+            conn, qtype="event", trigger_kind="photo_reply", active=False
+        )
+        with pytest.raises(SlotLimitError):
+            set_quest_active(conn, GUILD, second, True)
+        # An event quest occupies no daily/weekly/community slot.
+        _make(conn, qtype="daily")
+        _make(conn, qtype="weekly")
+
+
+def test_get_active_event_quest_filters(db):
+    with open_db(db) as conn:
+        assert get_active_event_quest(conn, GUILD, "photo_reply") is None
+        _make(conn, qtype="event", trigger_kind="photo_reply", active=False)
+        assert get_active_event_quest(conn, GUILD, "photo_reply") is None
+        qid = _make(conn, qtype="event", trigger_kind="photo_reply")
+        row = get_active_event_quest(conn, GUILD, "photo_reply")
+        assert row is not None and int(row["id"]) == qid
+        # Other guilds don't leak.
+        assert get_active_event_quest(conn, GUILD + 1, "photo_reply") is None
+
+
+def test_event_claim_dedupes_per_card_not_per_day(db):
+    with open_db(db) as conn:
+        qid = _make(conn, qtype="event", trigger_kind="photo_reply", reward=10)
+        out = claim_quest(
+            conn, SETTINGS, GUILD, qid, USER,
+            period=photo_card_period("card-1"), booster=False,
+        )
+        assert out.state == "paid" and out.paid == 10
+        # Same card again → collision, no double pay.
+        with pytest.raises(ValueError):
+            claim_quest(
+                conn, SETTINGS, GUILD, qid, USER,
+                period=photo_card_period("card-1"), booster=False,
+            )
+        # A different card pays again; another member pays independently.
+        claim_quest(
+            conn, SETTINGS, GUILD, qid, USER,
+            period=photo_card_period("card-2"), booster=False,
+        )
+        claim_quest(
+            conn, SETTINGS, GUILD, qid, OTHER,
+            period=photo_card_period("card-1"), booster=False,
+        )
+        assert get_balance(conn, GUILD, USER) == 20
+        assert get_balance(conn, GUILD, OTHER) == 10
+
+
+def test_photo_card_registry_roundtrip(db):
+    with open_db(db) as conn:
+        record_photo_card(conn, GUILD, 111, 9100, "game-1", "prompt")
+        # Duplicate posts are ignored, not an error (INSERT OR IGNORE).
+        record_photo_card(conn, GUILD, 111, 9100, "game-other", "prompt")
+        row = get_photo_card(conn, GUILD, 9100)
+        assert row is not None and row["game_id"] == "game-1"
+        assert get_photo_card(conn, GUILD, 4242) is None
+        # Guild-scoped: another guild can't claim against our card.
+        assert get_photo_card(conn, GUILD + 1, 9100) is None

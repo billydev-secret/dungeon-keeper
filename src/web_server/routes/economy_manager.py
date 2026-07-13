@@ -43,7 +43,9 @@ from web_server.deps import (
 router = APIRouter()
 _log = logging.getLogger("dungeonkeeper.web.economy_manager")
 
-_QTYPES = ("daily", "weekly", "community")
+_QTYPES = ("daily", "weekly", "community", "event")
+# The AI idea generator has no prompt shape for trigger-paid event quests.
+_AI_QTYPES = ("daily", "weekly", "community")
 
 
 # ── request bodies ────────────────────────────────────────────────────
@@ -64,6 +66,7 @@ class QuestCreate(BaseModel):
     community_target: int | None = Field(default=None, ge=0)
     trigger_words: str = Field(default="", max_length=1000)
     trigger_channel_id: int | None = None
+    trigger_kind: str = Field(default="", max_length=32)
 
 
 class QuestUpdate(BaseModel):
@@ -85,6 +88,7 @@ class QuestUpdate(BaseModel):
     community_target: int | None = Field(default=None, ge=0)
     trigger_words: str | None = Field(default=None, max_length=1000)
     trigger_channel_id: int | None = None
+    trigger_kind: str | None = Field(default=None, max_length=32)
 
 
 class QuestGenerateBody(BaseModel):
@@ -141,6 +145,7 @@ def _quest_dict(row: sqlite3.Row | None) -> dict:
         "created_by": row["created_by"],
         "created_at": row["created_at"],
         "trigger_words": row["trigger_words"],
+        "trigger_kind": row["trigger_kind"],
         # Stringified: channel snowflakes overflow JS number precision.
         "trigger_channel_id": (
             str(row["trigger_channel_id"])
@@ -228,23 +233,28 @@ async def create_quest(
 
     def _q():
         with ctx.open_db() as conn:
-            quest_id = quests_svc.create_quest(
-                conn,
-                guild_id,
-                title=body.title,
-                description=body.description,
-                qtype=body.qtype,
-                reward=body.reward,
-                signoff=1 if body.signoff else 0,
-                criteria=body.criteria,
-                starts_at=body.starts_at,
-                ends_at=body.ends_at,
-                rotate_tag=body.rotate_tag,
-                community_target=body.community_target,
-                created_by=user.user_id,
-                trigger_words=body.trigger_words,
-                trigger_channel_id=body.trigger_channel_id,
-            )
+            try:
+                quest_id = quests_svc.create_quest(
+                    conn,
+                    guild_id,
+                    title=body.title,
+                    description=body.description,
+                    qtype=body.qtype,
+                    reward=body.reward,
+                    signoff=1 if body.signoff else 0,
+                    criteria=body.criteria,
+                    starts_at=body.starts_at,
+                    ends_at=body.ends_at,
+                    rotate_tag=body.rotate_tag,
+                    community_target=body.community_target,
+                    created_by=user.user_id,
+                    trigger_words=body.trigger_words,
+                    trigger_channel_id=body.trigger_channel_id,
+                    trigger_kind=body.trigger_kind,
+                )
+            except ValueError as exc:
+                # Bad qtype/trigger_kind pairing from the service validator.
+                raise HTTPException(422, str(exc)) from exc
             return _quest_dict(quests_svc.get_quest(conn, guild_id, quest_id))
 
     return await run_query(_q)
@@ -266,7 +276,7 @@ async def generate_quest_ideas(
     from bot_modules.economy import quest_ai
     from bot_modules.games.utils.ai_client import generate_text
 
-    if body.qtype not in _QTYPES:
+    if body.qtype not in _AI_QTYPES:
         raise HTTPException(422, f"unknown quest type: {body.qtype!r}")
 
     count = body.count or quest_ai.DEFAULT_COUNT
@@ -317,6 +327,9 @@ async def update_quest(
                 quests_svc.update_quest(conn, guild_id, quest_id, values)
             except KeyError as exc:
                 # extra="forbid" already blocks unknown keys; this is defence.
+                raise HTTPException(422, str(exc)) from exc
+            except ValueError as exc:
+                # Bad qtype/trigger_kind pairing from the service validator.
                 raise HTTPException(422, str(exc)) from exc
             return _quest_dict(quests_svc.get_quest(conn, guild_id, quest_id))
 

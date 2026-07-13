@@ -12,10 +12,12 @@ from discord import app_commands
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     create_game,
+    get_game_options,
     update_session,
     end_game,
     channel_name,
 )
+from bot_modules.services.economy_quests_service import record_photo_card
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
@@ -183,9 +185,24 @@ class PhotoCog(commands.Cog):
             log.exception("photo launch failed to render card in channel %s", channel.id)
             return None
 
-        # Post the card (bare image — members post their photos in the channel).
+        # Post the card (bare image — members reply with their photos). A
+        # configured ping role (Games Studio → Photo Challenge) rides along.
+        content = None
+        allowed = discord.utils.MISSING
+        options = await get_game_options(self.db, "photo", guild_id)
         try:
-            msg = await channel.send(file=discord.File(io.BytesIO(card_bytes), filename=CARD_FILENAME))
+            ping_role_id = int(str(options.get("ping_role_id", "")).strip() or 0)
+        except ValueError:
+            ping_role_id = 0
+        if ping_role_id > 0:
+            content = f"<@&{ping_role_id}>"
+            allowed = discord.AllowedMentions(roles=True)
+        try:
+            msg = await channel.send(
+                content=content,
+                file=discord.File(io.BytesIO(card_bytes), filename=CARD_FILENAME),
+                allowed_mentions=allowed,
+            )
         except discord.Forbidden:
             log.warning("photo launch lacked send perms in channel %s", channel.id)
             return None
@@ -205,9 +222,29 @@ class PhotoCog(commands.Cog):
             },
         )
         log.info("Game %s (photo) posted by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
+
+        # Register the card so the economy's photo-reply event quest can pay
+        # members who reply to it with a photo. Best-effort: the card is
+        # already posted, so a registry failure must not unwind the game.
+        if guild_id:
+            try:
+                await asyncio.to_thread(
+                    self._record_card, guild_id, channel.id, msg.id, game_id, text
+                )
+            except Exception:
+                log.exception(
+                    "photo launch: failed to record card %s for the economy", msg.id
+                )
+
         await update_session(self.db, channel.id, game_id, [host_id])
         await end_game(self.db, game_id)
         return game_id
+
+    def _record_card(
+        self, guild_id: int, channel_id: int, message_id: int, game_id: str, prompt: str
+    ) -> None:
+        with self.bot.ctx.open_db() as conn:
+            record_photo_card(conn, guild_id, channel_id, message_id, game_id, prompt)
 
 
 async def setup(bot: "Bot"):

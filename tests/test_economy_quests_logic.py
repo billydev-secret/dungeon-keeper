@@ -15,6 +15,7 @@ from bot_modules.economy.quests import (
     iso_week_for,
     message_matches_trigger,
     parse_trigger_words,
+    photo_card_period,
     pick_rotation,
     quest_period,
     reward_band,
@@ -67,6 +68,17 @@ def test_quest_period_unknown_raises():
         quest_period("monthly", "2026-07-10")
 
 
+def test_quest_period_event_raises():
+    # Event quests have no calendar period — the listener supplies a
+    # per-occurrence key, so a calendar lookup is a bug.
+    with pytest.raises(ValueError):
+        quest_period("event", "2026-07-10")
+
+
+def test_photo_card_period_is_keyed_to_the_card():
+    assert photo_card_period("abc-123") == "photo:abc-123"
+
+
 # ── can_activate: slot matrix ─────────────────────────────────────────
 
 
@@ -87,6 +99,10 @@ def test_quest_period_unknown_raises():
         # community: uncapped
         (["community"] * 20, "community", True),
         ([], "community", True),
+        # event: at most one active (the listener would double-pay on two)
+        ([], "event", True),
+        (["daily", "weekly"], "event", True),
+        (["event"], "event", False),
     ],
 )
 def test_can_activate(existing, qtype, expected):
