@@ -29,6 +29,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [pen_pals_spec.md](pen_pals_spec.md) | Pen Pals pooling + private channels |
 | [pressure_cooker_spec.md](pressure_cooker_spec.md) | Pressure Cooker duel |
 | [privacy_spec.md](privacy_spec.md) | Data deletion (`/delete_me`, `/delete_user`) |
+| [quote_renderer_spec.md](quote_renderer_spec.md) | Quote/banner card renderer (shared service: themes, fonts, slim/custom borders) |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
 | [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch cog design |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
