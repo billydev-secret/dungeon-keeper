@@ -1,0 +1,95 @@
+"""Economy guide panel — the "how it works" embed that sits in a channel.
+
+One branded embed summarising how members earn and spend the guild's currency,
+posted (and refreshed in place) by ``/bank post-guide``. The panel's channel and
+message ids live in the ``econ_`` config (``guide_channel_id`` /
+``guide_message_id``, same pattern as Voice Master's persistent panel) so a
+repost replaces the old panel instead of stacking duplicates. Pure builder —
+all Discord I/O stays in the cog.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import discord
+
+if TYPE_CHECKING:
+    from bot_modules.services.economy_service import EconSettings
+
+
+def build_guide_embed(
+    settings: EconSettings, *, colour: discord.Colour | None = None
+) -> discord.Embed:
+    """The member-facing how-to embed, templated on the guild's branding."""
+    emoji = settings.currency_emoji
+    plural = settings.currency_plural
+
+    embed = discord.Embed(
+        title=f"{emoji} {plural} — how it works",
+        description=(
+            f"Being active here earns you **{plural}**, which you can spend on "
+            "role perks and gifts. Check your balance and recent activity any "
+            "time with `/bank wallet` (only you see it)."
+        ),
+        colour=colour,
+    )
+    if settings.currency_icon_url:
+        embed.set_thumbnail(url=settings.currency_icon_url)
+
+    earn_lines = [
+        (
+            f"**Show up daily** — your first message of the day pays "
+            f"{emoji} {settings.login_text_base}, or {emoji} "
+            f"{settings.login_voice_base} if you hang out in voice for 5 "
+            f"minutes first. Streaks add +1 per day (up to "
+            f"+{settings.streak_bonus_cap}), with bonuses at day 7, 30 and 100."
+        ),
+        (
+            f"**Chat & hang out** — everyday activity earns XP, and each "
+            f"night your day's XP converts into {plural} automatically."
+        ),
+        (
+            "**Quests** — `/bank quests` shows the current daily, weekly and "
+            "community goals and lets you claim your rewards."
+        ),
+        (
+            f"**Games & QOTD** — playing server games pays "
+            f"{emoji} {settings.reward_game_participation}, winning "
+            f"{emoji} {settings.reward_game_win}, and answering the question "
+            f"of the day {emoji} {settings.reward_qotd}."
+        ),
+    ]
+    if settings.booster_multiplier > 1:
+        earn_lines.append(
+            f"**Boosters** earn ×{settings.booster_multiplier:g} on everything."
+        )
+    embed.add_field(name="Earning", value="\n".join(earn_lines), inline=False)
+
+    spend_lines = [
+        (
+            f"`/bank shop` — rent perks for your own personal role, billed "
+            f"weekly: colour {emoji} {settings.price_role_color:,} · name "
+            f"{emoji} {settings.price_role_name:,} · gradient "
+            f"{emoji} {settings.price_role_gradient:,} · icon "
+            f"{emoji} {settings.price_role_icon:,}. Then style it with the "
+            "`/bank role` commands."
+        ),
+        (
+            f"`/bank gift` — treat a friend to a custom role colour "
+            f"({emoji} {settings.price_gift_color:,}/week, on your tab)."
+        ),
+    ]
+    if settings.transfers_enabled:
+        spend_lines.append(
+            f"`/bank pay` — send your {plural} straight to another member."
+        )
+    embed.add_field(name="Spending", value="\n".join(spend_lines), inline=False)
+
+    embed.set_footer(
+        text=(
+            "Rentals renew weekly — if your balance can't cover a renewal you "
+            "get a short grace period before the perk lapses."
+        )
+    )
+    return embed

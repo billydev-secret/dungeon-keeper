@@ -235,7 +235,8 @@ the member owns and gift rentals where they are the beneficiary.
 
 - **Discord is the entire v1 member surface** (decided — the member-facing dashboard
   wallet page and role studio are v2). One top-level group **`/bank`** (`wallet`,
-  `pay`, `quests`, `shop`, `gift`, `role`, `mute`, `grant` [mod]) plus `/qotd post` [mod]
+  `pay`, `quests`, `shop`, `gift`, `role`, `mute`, `grant` [mod], `post-guide` [mod])
+  plus `/qotd post` [mod]
   and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
   names are global; all *strings* inside are currency-branded.
   - **`/bank pay @member amount`** — transfer (§5); **`/bank shop`** — browse the perk
@@ -246,6 +247,14 @@ the member owns and gift rentals where they are the beneficiary.
     **`name`**, **`color`**, **`gradient`**, **`icon`** — each applies the matching
     rented component to the member's personal role (§6), subject to the blocklist / ΔE
     / feature gates.
+- **Channel guide panel (shipped):** **`/bank post-guide [channel]`** [mod] posts a
+  single branded "how it works" embed (earning streams with live rates, shop prices,
+  command crib sheet — all templated from `EconSettings`) into a channel. Panel ids
+  persist as `econ_guide_channel_id` / `econ_guide_message_id` (Voice Master
+  panel pattern): re-running in the same channel edits the panel in place (use after
+  re-pricing/re-branding); pointing at another channel deletes the old panel and
+  reposts. Builder in `economy/guide.py`; the two ids are bot-managed and not
+  dashboard-editable.
 - **Manager surface (dashboard):** the **Bank Manager** panel — a top-level nav section
   gated on `economy_manager_role_id` or admin (mirrors `games_editor_role` /
   `require_game_host`) — is where managers author quests, work the pending sign-off queue

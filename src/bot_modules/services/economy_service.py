@@ -55,6 +55,11 @@ class EconSettings:
     price_text_room: int = 200
     price_voice_room: int = 200
     price_gift_color: int = 50
+    # Bot-managed bookkeeping for the channel how-to panel (/bank post-guide);
+    # readable via GET /economy/config but deliberately absent from the
+    # dashboard's editable-field whitelist.
+    guide_channel_id: int = 0
+    guide_message_id: int = 0
 
 
 DEFAULT_ECON_SETTINGS = EconSettings()

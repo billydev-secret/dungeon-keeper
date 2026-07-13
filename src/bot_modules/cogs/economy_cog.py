@@ -20,6 +20,7 @@ from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
+from bot_modules.economy.guide import build_guide_embed
 from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
@@ -51,6 +52,7 @@ from bot_modules.services.economy_service import (
     get_notify_muted,
     load_econ_settings,
     notify_member,
+    save_econ_settings,
     set_notify_muted,
     transfer_currency,
 )
@@ -1153,6 +1155,92 @@ class EconomyCog(commands.Cog):
         await asyncio.to_thread(_record)
         await interaction.followup.send(
             "Posted the question of the day.", ephemeral=True
+        )
+
+    # ── how-to guide panel ───────────────────────────────────────────────
+
+    @bank.command(
+        name="post-guide",
+        description="Post (or refresh) the economy how-to panel (staff only).",
+    )
+    @app_commands.describe(channel="Where the panel lives — defaults to this channel")
+    async def bank_post_guide(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        actor = interaction.user
+        assert isinstance(actor, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not _can_grant(actor, settings):
+            await interaction.response.send_message(
+                "You don't have permission to post the guide panel.",
+                ephemeral=True,
+            )
+            return
+
+        target = channel or interaction.channel
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message(
+                "Pick a regular text channel for the guide panel.", ephemeral=True
+            )
+            return
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = build_guide_embed(settings, colour=accent)
+
+        # Same channel and the old panel is still there → edit in place, so a
+        # refresh after re-branding/re-pricing doesn't hop the panel to the
+        # bottom of the channel.
+        if settings.guide_message_id and settings.guide_channel_id == target.id:
+            try:
+                old = await target.fetch_message(settings.guide_message_id)
+                await old.edit(embed=embed)
+            except discord.HTTPException:
+                pass  # gone or unreachable — fall through to a fresh post
+            else:
+                await interaction.response.send_message(
+                    f"Refreshed the guide panel in {target.mention}.",
+                    ephemeral=True,
+                )
+                return
+
+        # Moving or reposting: drop the stale panel if we can still find it.
+        if settings.guide_message_id and settings.guide_channel_id:
+            old_channel = guild.get_channel(settings.guide_channel_id)
+            if isinstance(old_channel, discord.TextChannel):
+                try:
+                    old = await old_channel.fetch_message(settings.guide_message_id)
+                    await old.delete()
+                except discord.HTTPException:
+                    pass
+
+        try:
+            message = await target.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"I don't have permission to post in {target.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        def _save() -> None:
+            with self.ctx.open_db() as conn:
+                save_econ_settings(
+                    conn,
+                    guild.id,
+                    {"guide_channel_id": target.id, "guide_message_id": message.id},
+                )
+
+        await asyncio.to_thread(_save)
+        await interaction.response.send_message(
+            f"Posted the guide panel in {target.mention}.", ephemeral=True
         )
 
     async def cog_load(self) -> None:

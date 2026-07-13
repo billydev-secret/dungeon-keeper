@@ -9,6 +9,26 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — `/bank post-guide` channel how-to panel  (uncommitted)
+
+New staff command posts a branded "how the economy works" embed that sits in a
+channel (earning streams, shop prices, command crib sheet — templated from the
+guild's econ settings). Message/channel ids persist in config so re-running
+refreshes in place instead of stacking panels. Offline tests cover the builder
+and the post/refresh/move/permission matrix; live checks:
+
+- [ ] `/bank post-guide` (no arg, as admin or manager-role holder) posts the
+      panel in the current channel; text shows the guild's currency
+      name/emoji and real shop prices.
+- [ ] Re-running it in the same channel **edits the existing panel** (no
+      duplicate message, panel keeps its position in history).
+- [ ] Changing a price or the currency emoji on the dashboard, then re-running,
+      shows the new values on the refreshed panel.
+- [ ] Running it with a different `channel:` option deletes the old panel and
+      posts in the new channel.
+- [ ] Plain member gets "you don't have permission" ephemerally; with the
+      economy disabled the command answers with the disabled notice.
+
 ### Economy — AI quest-idea generator on the Bank Manager  (uncommitted)
 
 The New-quest form gained a "✨ Generate ideas" button that batches AI quest
