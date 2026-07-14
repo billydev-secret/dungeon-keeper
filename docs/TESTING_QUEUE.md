@@ -9,6 +9,26 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Traditional TOD — Bank Round tracks asked history  (this commit)
+
+Bank Round questions are now recorded in the same per-(player, category)
+`asked` history as host-written ones: each player gets at most one bank
+question per opted-in category, and re-pressing **Bank Round** after new
+players join serves only the newcomers. Covered by fakes offline; live pass:
+
+- [ ] `/games play traditional`, two players opt into SFW Truth, press
+      **Bank Round** → both get a card. Press it again immediately → no cards,
+      ephemeral says everyone has already been asked.
+- [ ] A third player then opts in; **Bank Round** again → only the newcomer
+      gets a card, ephemeral says "Served **1**" + "Skipped 2 players".
+- [ ] A player opted into two categories gets their *other* category on the
+      second press (not a repeat of the first).
+- [ ] **Ask Question** after a bank round skips (player, category) pairs the
+      bank already covered, and the lobby's "Questions Asked X / Y" counter
+      includes bank questions.
+- [ ] Game-over recap: per-category counts include bank questions; the
+      separate "Bank Round Questions" field still shows.
+
 ### Quote cards — border-colored header + centered announcement body  (this commit)
 
 Follow-up to the restyle: the no-pfp **header now takes the border's dominant

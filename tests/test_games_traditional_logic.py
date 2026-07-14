@@ -477,7 +477,7 @@ def test_each_category_has_a_human_label(cat):
 
 def test_bank_categories_picks_one_per_participant():
     prefs = {"1": ["sfw_truth", "sfw_dare"], "2": ["nsfw_dare"]}
-    chosen = select_bank_categories_for_all(prefs, rng=random.Random(0))
+    chosen = select_bank_categories_for_all(prefs, {}, rng=random.Random(0))
     assert set(chosen.keys()) == {"1", "2"}
     assert chosen["1"] in prefs["1"]
     assert chosen["2"] == "nsfw_dare"
@@ -485,12 +485,27 @@ def test_bank_categories_picks_one_per_participant():
 
 def test_bank_categories_omits_players_with_no_prefs():
     prefs = {"1": ["sfw_truth"], "2": []}
-    chosen = select_bank_categories_for_all(prefs)
+    chosen = select_bank_categories_for_all(prefs, {})
     assert set(chosen.keys()) == {"1"}
 
 
 def test_bank_categories_empty_prefs_gives_empty():
-    assert select_bank_categories_for_all({}) == {}
+    assert select_bank_categories_for_all({}, {}) == {}
+
+
+def test_bank_categories_skips_already_asked_pairs():
+    # Player 1 was already asked sfw_truth (bank or written — same history),
+    # so only sfw_dare remains for them; player 2 is fully asked and omitted.
+    prefs = {"1": ["sfw_truth", "sfw_dare"], "2": ["nsfw_dare"]}
+    asked = {"1:sfw_truth": "q1", "2:nsfw_dare": "q2"}
+    chosen = select_bank_categories_for_all(prefs, asked, rng=random.Random(0))
+    assert chosen == {"1": "sfw_dare"}
+
+
+def test_bank_categories_empty_when_everyone_fully_asked():
+    prefs = {"1": ["sfw_truth"]}
+    asked = {"1:sfw_truth": "q1"}
+    assert select_bank_categories_for_all(prefs, asked) == {}
 
 
 # ── get_traditional_question (bank getter) ───────────────────────────
