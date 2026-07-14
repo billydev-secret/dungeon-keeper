@@ -30,6 +30,36 @@ channel via an `on_message` delete-and-repost (debounced ~6s).
 - [ ] `/bank post-guide` in the **same** channel still edits in place (panel
       does **not** jump to the bottom) — only new activity re-sticks it.
 
+### Chat Revive (stages 0–4) — rhythm-aware lull questions  (this commit)
+
+New feature ("Ember"): a monitor loop learns each enabled channel's per-band
+message rhythm from `processed_messages` and posts a bank question into a
+genuinely unusual lull — never over an active room, never twice in a row,
+never overnight. Migration 074 adds five `revive_*` tables **and a new
+channel-leading index on `processed_messages`** (builds once over the full
+~516 MB table). `/revive` command group is mods-only.
+
+- [ ] Restart the bot → boots clean; expect the restart to take noticeably
+      longer than usual **once** while `idx_pm_channel_ts` builds.
+- [ ] `/revive setup` (let it create the role) → confirms settings; the echoed
+      **server-local time is correct** (tz sanity — main guild inherits the
+      global −7 offset).
+- [ ] `/revive channel #test-channel` → enabled; `/revive check` there explains
+      the rhythm (or fallback mode for a young channel) in plain language.
+- [ ] `/revive fire` in the test channel → plain-text question posts (🔥 +
+      flourish), no embed; a second `/revive question list` shows its
+      use-count bumped.
+- [ ] `/revive optin-post` → button posts; tapping toggles the role on/off
+      (works again **after a restart** — dynamic item persistence).
+- [ ] With ping enabled (`/revive channel #test ping:True`), `/revive fire`
+      pings the role once; firing again the same day posts **un-pinged**.
+- [ ] Auto-fire soak (needs patience): enable a quiet-ish real channel, watch
+      logs for `revived #…`; verify it never posts while a game is running in
+      that channel, never inside quiet hours, and never chains after its own
+      message with no human in between.
+- [ ] ~35 min after any revive, `/revive stats` shows it measured
+      (sparked or not) and the scoreboard renders.
+
 ### Economy — quest completion pings via DM under a game role  (this commit)
 
 New `game_role_id` setting (Dashboard → Economy → Settings → **Game role**).

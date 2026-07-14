@@ -4,6 +4,27 @@ Discord bot (`src/bot_modules/`: thin cogs, logic in per-feature modules) +
 FastAPI dashboard (`src/web_server/`: routes + vanilla-JS panels in `static/js/`),
 SQLite-backed. Tests in `tests/`.
 
+## Design philosophy
+
+- **Configuration lives on the web dashboard, not Discord.** Every feature's
+  admin/server settings get an admin-gated panel in `src/web_server/`, filed
+  under the right nav heading. Don't build slash commands, modals, or button
+  flows for admin config; if a feature shipped command-managed, moving its
+  knobs to the web and **deleting** the commands is the expected follow-up —
+  keep the command surface clean.
+- **Discord is for member self-service and mod actions** (playing games,
+  opting in, customizing your own perks, a mod running QOTD). Prefer one
+  ephemeral panel with buttons/modals over a sprawl of subcommands.
+- **Collapse controls.** One dial with a few states beats several overlapping
+  toggles (see Voice Master's access dial). Consistent button shapes/sizes;
+  if a config page feels jumbled, reorganize it rather than appending.
+- **Safety & privacy defaults:** NSFW gates on `channel.is_nsfw()` (Discord's
+  own age-gate), never a bot-side toggle. Store minimal data — message
+  content is off by default, so derive metadata at ingest time. Sensitive
+  access is opt-in. Never ship a preference or toggle that isn't enforced.
+- If a feature genuinely seems to need in-Discord admin config, raise it and
+  ask instead of building it.
+
 ## Docs
 
 - Specs live in `docs/`. Read `docs/INDEX.md` **first** — it classifies every
@@ -33,9 +54,13 @@ SQLite-backed. Tests in `tests/`.
   matching test prints "unmapped (CI/nightly covers it)". `git commit
   --no-verify` bypasses the hook.
 - `python scripts/gate.py` — full pytest (xdist-parallel; `-n 0` to debug a
-  single test), all green. Run this before merging to main; the scoped hook is
-  for tight local loops. `--quick` runs ruff + pyright only (no pytest).
-  Coverage floor in pyproject.toml must not be lowered.
+  single test). Full-suite green is required before a **push to origin**, but
+  CI on that push satisfies it — a local full run is optional. If
+  you do run it locally, run it **solo**: a parallel full run alongside other
+  work can exhaust the tmpfs quota and spray hundreds of bogus sqlite errors
+  (see memory: rm -rf /tmp/pytest-of-ben and re-run). `--quick` runs
+  ruff + pyright only (no pytest). Coverage floor in pyproject.toml must not
+  be lowered.
 - Backstop: CI (`.github/workflows/test.yml`) runs the full suite + coverage on
   every push/PR to main, and `nightly.yml` runs it on a schedule — so a miss in
   the scoped tier is caught at push, not in prod.
