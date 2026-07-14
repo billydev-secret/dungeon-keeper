@@ -17,6 +17,7 @@ lavalink/Lavalink.jar
 lavalink/plugins/
 lavalink/logs/
 *.db
+econ_role_icons/
 log.txt
 log_beta_tools.txt
 node_modules/
