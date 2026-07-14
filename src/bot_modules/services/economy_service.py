@@ -64,6 +64,10 @@ class EconSettings:
     # (/bank post-leaderboard, refreshed hourly by the economy loop).
     leaderboard_channel_id: int = 0
     leaderboard_message_id: int = 0
+    # Same pattern for the persistent perk-shop panel (/bank post-shop;
+    # buttons are DynamicItems so they survive restarts).
+    shop_channel_id: int = 0
+    shop_message_id: int = 0
 
 
 DEFAULT_ECON_SETTINGS = EconSettings()

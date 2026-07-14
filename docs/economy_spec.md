@@ -402,6 +402,22 @@ the member owns and gift rentals where they are the beneficiary.
   re-pricing/re-branding); pointing at another channel deletes the old panel and
   reposts. Builder in `economy/guide.py`; the two ids are bot-managed and not
   dashboard-editable.
+- **Shop panel (shipped):** **`/bank post-shop [channel]`** [mod] posts the
+  perk-shop listing as a persistent panel: the same embed `/bank shop` shows
+  minus the per-member bits (no ✅ rented marks — the panel is member-agnostic;
+  prices templated from `EconSettings`, feature-gated rows annotated and
+  their buttons disabled) with one **`ShopRentButton` per self-perk — a
+  `DynamicItem` (`econ_shop_panel:<perk>`) re-registered in `cog_load`, so
+  the buttons survive restarts with no per-message view store.** Any member
+  can click; settings and the feature gate are re-read on every click (the
+  panel can outlive a re-pricing), and every reply is ephemeral to the
+  clicker. The rent flow itself (`_rent_perk_flow`) is shared with the
+  ephemeral `/bank shop` view. Panel ids persist as `econ_shop_channel_id` /
+  `econ_shop_message_id` (guide-panel pattern: same-channel repost edits in
+  place — embed **and** view, so re-priced button labels refresh — another
+  channel deletes + reposts). Button labels bake prices at post time; re-run
+  the command after re-pricing. Gifting stays command-only (`/bank gift`
+  needs a target member, which a button can't carry).
 - **Leaderboard panel (shipped):** **`/bank post-leaderboard [channel]`** [mod]
   posts a single auto-updating embed: top 5 earners over a rolling 7 days
   (income = positive ledger sums excluding `transfer_in`, matching the

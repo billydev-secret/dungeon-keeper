@@ -37,6 +37,8 @@ image); `/bank role icon` survives image-upload-only. Live pass:
       points at /bank shop.
 - [ ] `/bank post-guide` panel's Spending section reads "style it right from
       the shop's customise buttons".
+- [ ] Renting from the **persistent shop panel** (`/bank post-shop`) also ends
+      with the customise button on its ephemeral confirmation.
 
 ### Traditional TOD — Bank Round tracks asked history  (this commit)
 
@@ -94,6 +96,32 @@ offline; the live surface needs a look:
       another body font still renders a Helvetica header in banner mode.
 - [ ] No `lora` option in the picker; a guild that previously stored `lora`
       falls back to Times without a crash.
+### Economy — persistent shop panel  (this commit)
+
+**`/bank post-shop [channel]`** [manager/admin] posts the perk shop as a
+channel panel with always-working rent buttons (DynamicItems — they survive
+restarts; settings + feature gates are re-read on every click, replies are
+ephemeral to the clicker). Same lifecycle as the guide panel: same-channel
+re-run edits in place (embed + button labels), another channel moves it.
+Button labels bake prices at post time — re-run after re-pricing. Live
+checks:
+
+- [ ] `/bank post-shop` in a test channel → embed lists the four perks +
+      gift line; four "Rent … · price" buttons.
+- [ ] Click a rent button with enough balance → ephemeral "Rented …", role
+      perk applies, rental visible in `/bank wallet` and the dashboard
+      Operations → Perk rentals.
+- [ ] Click with too little balance → ephemeral "need X but only have Y";
+      click again while rented → "already renting".
+- [ ] A second member clicks the same panel → their own rental (panel is
+      shared, unlike the ephemeral /bank shop).
+- [ ] **Restart the bot**, then click a panel button → still works (no
+      "interaction failed").
+- [ ] If gradient/icon features are missing, those buttons are disabled and
+      the row says so; with the feature present they rent fine.
+- [ ] Change a price on Economy → Settings, re-run `/bank post-shop` in the
+      same channel → panel edits in place with new prices on the buttons.
+
 ### Economy — auto-updating leaderboard panel  (this commit)
 
 **`/bank post-leaderboard [channel]`** [manager/admin] posts a branded embed

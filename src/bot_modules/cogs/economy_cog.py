@@ -14,7 +14,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import discord
 from discord import app_commands
@@ -484,6 +484,190 @@ class _PostRentView(discord.ui.View):
         self.add_item(button)
 
 
+async def _rent_perk_flow(
+    interaction: discord.Interaction,
+    cog: EconomyCog,
+    settings: EconSettings,
+    guild: discord.Guild,
+    perk: str,
+) -> None:
+    """Rent a self-perk from a shop button, then project the role.
+
+    Shared by the ephemeral /bank shop view and the persistent channel panel —
+    every reply is ephemeral to the clicker, and a successful rent carries the
+    perk's customise button so styling happens without leaving the message.
+    """
+    ctx = cog.ctx
+    user_id = interaction.user.id
+
+    def _rent() -> None:
+        with ctx.open_db() as conn:
+            rent_perk(conn, settings, guild.id, user_id, perk, now=time.time())
+
+    try:
+        await asyncio.to_thread(_rent)
+    except ValueError as exc:
+        msg = str(exc)
+        if "insufficient" in msg:
+
+            def _bal() -> int:
+                with ctx.open_db() as conn:
+                    return get_balance(conn, guild.id, user_id)
+
+            bal = await asyncio.to_thread(_bal)
+            text = (
+                f"You need {settings.currency_emoji} "
+                f"{_perk_price(settings, perk):,} but only have {bal:,}."
+            )
+        elif "already rented" in msg:
+            text = "You're already renting that perk."
+        else:
+            text = "That perk isn't available."
+        await interaction.response.send_message(text, ephemeral=True)
+        return
+
+    await apply_role_perks(cog.bot, ctx.db_path, guild.id, user_id)
+    note = (
+        " (For an image icon, upload one with `/bank role icon`.)"
+        if perk == "role_icon"
+        else ""
+    )
+    await interaction.response.send_message(
+        f"Rented **{_PERK_LABELS[perk]}**! Set it up right here:{note}",
+        view=_PostRentView(cog, perk),
+        ephemeral=True,
+    )
+
+
+class ShopRentButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=re.compile(r"econ_shop_panel:(?P<perk>[a-z_]+)"),
+):
+    """Persistent shop-panel rent button; ``custom_id`` carries the perk.
+
+    Unlike the ephemeral /bank shop view, settings and the feature gate are
+    re-read on every click — the panel can sit in a channel for months, so
+    nothing rendered at post time is trusted at click time (except the label,
+    which a `/bank post-shop` re-run refreshes after re-pricing).
+    """
+
+    def __init__(
+        self, perk: str, *, label: str | None = None, disabled: bool = False
+    ) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label=label or f"Rent {_PERK_LABELS.get(perk, perk)}",
+                style=discord.ButtonStyle.primary,
+                disabled=disabled,
+                custom_id=f"econ_shop_panel:{perk}",
+            )
+        )
+        self.perk = perk
+
+    @classmethod
+    async def from_custom_id(  # type: ignore[override]
+        cls,
+        interaction: discord.Interaction,
+        item: discord.ui.Button,
+        match: re.Match[str],
+    ) -> ShopRentButton:
+        return cls(str(match["perk"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None or self.perk not in _SELF_PERKS:
+            await interaction.response.send_message(
+                "That perk isn't available.", ephemeral=True
+            )
+            return
+        bot = cast("Bot", interaction.client)
+        ctx = bot.ctx
+
+        def _load() -> EconSettings:
+            with ctx.open_db() as conn:
+                return load_econ_settings(conn, guild.id)
+
+        settings = await asyncio.to_thread(_load)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if self.perk in _FEATURE_GATED and not await feature_gate_ok(
+            bot, guild.id, self.perk
+        ):
+            await interaction.response.send_message(
+                "That perk needs a server feature that isn't enabled here.",
+                ephemeral=True,
+            )
+            return
+        cog = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
+        if cog is None:  # cog unloaded mid-flight; the panel button outlives it
+            await interaction.response.send_message(
+                "That perk isn't available right now.", ephemeral=True
+            )
+            return
+        await _rent_perk_flow(interaction, cog, settings, guild, self.perk)
+
+
+def _build_shop_embed(
+    settings: EconSettings,
+    gated: set[str],
+    accent: discord.Colour | None,
+    *,
+    panel: bool = False,
+    owned: set[str] | frozenset[str] = frozenset(),
+) -> discord.Embed:
+    """The shop listing, shared by /bank shop and the channel panel.
+
+    ``owned`` marks the viewer's rented rows — only meaningful for the
+    ephemeral per-member view; the channel panel is member-agnostic.
+    """
+    description = "Weekly rentals — billed every 7 days, cancel any time."
+    if panel:
+        description += " Tap a button to rent — the reply is private to you."
+    else:
+        description += " Green buttons customise what you've already rented."
+    embed = discord.Embed(
+        title="🛍️ Perk shop", description=description, colour=accent
+    )
+    for perk in _SELF_PERKS:
+        price = _perk_price(settings, perk)
+        note = ""
+        if perk in gated:
+            note = " · _requires a server feature not enabled here_"
+        elif perk in owned:
+            note = " · ✅ rented"
+        embed.add_field(
+            name=_PERK_LABELS[perk],
+            value=f"{settings.currency_emoji} **{price:,}** / week{note}",
+            inline=False,
+        )
+    gift_price = _perk_price(settings, "gift_color")
+    embed.add_field(
+        name=_PERK_LABELS["gift_color"],
+        value=(
+            f"{settings.currency_emoji} **{gift_price:,}** / week · "
+            "gift a friend a colour with /bank gift"
+        ),
+        inline=False,
+    )
+    return embed
+
+
+def _shop_panel_view(settings: EconSettings, gated: set[str]) -> discord.ui.View:
+    """A never-expiring view of ShopRentButtons, priced at post time."""
+    view = discord.ui.View(timeout=None)
+    for perk in _SELF_PERKS:
+        price = _perk_price(settings, perk)
+        view.add_item(
+            ShopRentButton(
+                perk,
+                label=f"Rent {_PERK_LABELS[perk]} · {price}",
+                disabled=perk in gated,
+            )
+        )
+    return view
+
+
 class EconomyCog(commands.Cog):
     bank = app_commands.Group(
         name="bank",
@@ -807,35 +991,7 @@ class EconomyCog(commands.Cog):
                 gated.add(perk)
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = discord.Embed(
-            title="🛍️ Perk shop",
-            description=(
-                "Weekly rentals — billed every 7 days, cancel any time. "
-                "Green buttons customise what you've already rented."
-            ),
-            colour=accent,
-        )
-        for perk in _SELF_PERKS:
-            price = _perk_price(settings, perk)
-            note = ""
-            if perk in gated:
-                note = " · _requires a server feature not enabled here_"
-            elif perk in owned:
-                note = " · ✅ rented"
-            embed.add_field(
-                name=_PERK_LABELS[perk],
-                value=f"{settings.currency_emoji} **{price:,}** / week{note}",
-                inline=False,
-            )
-        gift_price = _perk_price(settings, "gift_color")
-        embed.add_field(
-            name=_PERK_LABELS["gift_color"],
-            value=(
-                f"{settings.currency_emoji} **{gift_price:,}** / week · "
-                "gift a friend a colour with /bank gift"
-            ),
-            inline=False,
-        )
+        embed = _build_shop_embed(settings, gated, accent, owned=owned)
         view = _ShopView(self, settings, guild, user_id, gated, owned)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -846,41 +1002,8 @@ class EconomyCog(commands.Cog):
         guild: discord.Guild,
         perk: str,
     ) -> None:
-        """Rent a self-perk from a shop button, then project the role."""
-        user_id = interaction.user.id
-
-        def _rent() -> None:
-            with self.ctx.open_db() as conn:
-                rent_perk(conn, settings, guild.id, user_id, perk, now=time.time())
-
-        try:
-            await asyncio.to_thread(_rent)
-        except ValueError as exc:
-            msg = str(exc)
-            if "insufficient" in msg:
-                bal = await asyncio.to_thread(self._balance, guild.id, user_id)
-                text = (
-                    f"You need {settings.currency_emoji} "
-                    f"{_perk_price(settings, perk):,} but only have {bal:,}."
-                )
-            elif "already rented" in msg:
-                text = "You're already renting that perk."
-            else:
-                text = "That perk isn't available."
-            await interaction.response.send_message(text, ephemeral=True)
-            return
-
-        await apply_role_perks(self.bot, self.ctx.db_path, guild.id, user_id)
-        note = (
-            " (For an image icon, upload one with `/bank role icon`.)"
-            if perk == "role_icon"
-            else ""
-        )
-        await interaction.response.send_message(
-            f"Rented **{_PERK_LABELS[perk]}**! Set it up right here:{note}",
-            view=_PostRentView(self, perk),
-            ephemeral=True,
-        )
+        """Rent a self-perk from the ephemeral shop view."""
+        await _rent_perk_flow(interaction, self, settings, guild, perk)
 
     # ── gift ─────────────────────────────────────────────────────────────
 
@@ -2062,11 +2185,106 @@ class EconomyCog(commands.Cog):
             ephemeral=True,
         )
 
+    # ── persistent shop panel ────────────────────────────────────────────
+
+    @bank.command(
+        name="post-shop",
+        description="Post (or refresh) the perk-shop panel (staff only).",
+    )
+    @app_commands.describe(channel="Where the panel lives — defaults to this channel")
+    async def bank_post_shop(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        actor = interaction.user
+        assert isinstance(actor, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not _can_grant(actor, settings):
+            await interaction.response.send_message(
+                "You don't have permission to post the shop panel.",
+                ephemeral=True,
+            )
+            return
+
+        target = channel or interaction.channel
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message(
+                "Pick a regular text channel for the shop panel.", ephemeral=True
+            )
+            return
+
+        gated: set[str] = set()
+        for perk in _FEATURE_GATED:
+            if not await feature_gate_ok(self.bot, guild.id, perk):
+                gated.add(perk)
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = _build_shop_embed(settings, gated, accent, panel=True)
+        view = _shop_panel_view(settings, gated)
+
+        # Same channel and the old panel is still there → edit in place (the
+        # view is re-sent too, so re-pricing refreshes the button labels).
+        if settings.shop_message_id and settings.shop_channel_id == target.id:
+            try:
+                old = await target.fetch_message(settings.shop_message_id)
+                await old.edit(embed=embed, view=view)
+            except discord.HTTPException:
+                pass  # gone or unreachable — fall through to a fresh post
+            else:
+                await interaction.response.send_message(
+                    f"Refreshed the shop panel in {target.mention}.",
+                    ephemeral=True,
+                )
+                return
+
+        # Moving or reposting: drop the stale panel if we can still find it.
+        if settings.shop_message_id and settings.shop_channel_id:
+            old_channel = guild.get_channel(settings.shop_channel_id)
+            if isinstance(old_channel, discord.TextChannel):
+                try:
+                    old = await old_channel.fetch_message(settings.shop_message_id)
+                    await old.delete()
+                except discord.HTTPException:
+                    pass
+
+        try:
+            message = await target.send(embed=embed, view=view)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"I don't have permission to post in {target.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        def _save() -> None:
+            with self.ctx.open_db() as conn:
+                save_econ_settings(
+                    conn,
+                    guild.id,
+                    {"shop_channel_id": target.id, "shop_message_id": message.id},
+                )
+
+        await asyncio.to_thread(_save)
+        await interaction.response.send_message(
+            f"Posted the shop panel in {target.mention}. Re-run this after "
+            "re-pricing to refresh it.",
+            ephemeral=True,
+        )
+
     async def cog_load(self) -> None:
-        # Re-register the persistent sign-off buttons so Approve/Deny clicks on
-        # existing bank-channel cards still route after a restart — the
-        # custom_ids embed the claim id (econ_claim:{approve,deny}:<id>).
-        self.bot.add_dynamic_items(QuestApproveButton, QuestDenyButton)
+        # Re-register the persistent buttons so clicks on existing messages
+        # still route after a restart — the custom_ids carry the state
+        # (econ_claim:{approve,deny}:<id>, econ_shop_panel:<perk>).
+        self.bot.add_dynamic_items(
+            QuestApproveButton, QuestDenyButton, ShopRentButton
+        )
 
     def _load_settings(self, guild_id: int) -> EconSettings:
         with self.ctx.open_db() as conn:
