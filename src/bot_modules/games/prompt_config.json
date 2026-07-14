@@ -1,7 +1,7 @@
 {
-  "audience": "Adults (21+) in an established, invite-only Discord community. Mixed experience levels with adult humor — some shy, some bold. They value wit and chemistry over shock value, and respond best to clever, absurdly specific setups rather than pure raunch. Comfortable with explicit content when it's funny.\n",
-  "sfw_tone": "Playful, warm, slightly suggestive. Awkward-adjacent humor, innuendo that works on two levels, mood-killer scenarios, dating disasters. Safe to read aloud, but with a knowing wink.\n",
-  "nsfw_tone": "Unhinged but elegant. Explicitly adult, chemistry-forward, mischievous. Kinks, hookup chaos, and bedroom disasters are fair game — but the comedy always carries the raunch, never the reverse. Clever specificity over crude shock. No demeaning humor, no real people, nothing non-consensual.\n\nThe room is particularly fond of Bdsm, kink, discord, DMs, sexting, voice and video calls. Body writing. ",
+  "audience": "Adults (30+) in an established, invite-only Discord community. Mixed experience levels with adult humor — some shy, some bold. They value wit and chemistry over shock value, and respond best to clever, absurdly specific setups rather than pure raunch. Comfortable with explicit content when it's funny and hot",
+  "sfw_tone": "Playful, warm, suggestive. Awkward-adjacent humor, innuendo that works on two levels, mood-killer scenarios, dating disasters, but also hot stuff. Definitely not safe to read aloud, but with a knowing wink and a rough touch\n",
+  "nsfw_tone": "Unhinged but elegant. Explicitly adult, chemistry-forward, mischievous. Kinks, hookup chaos, and bedroom disasters are fair game — but the comedy always carries the raunch, never the reverse. Clever specificity over crude shock. No demeaning humor, no real people, nothing non-consensual.\n\nThe room is particularly fond of Bdsm, kink, discord, DMs, sexting, voice and video calls. Body writing. just being sluts",
   "games": {
     "wyr": {
       "name": "Would You Rather",
@@ -17,8 +17,8 @@
     },
     "mlt": {
       "name": "Most Likely To",
-      "descriptor": "Most Likely To prompts",
-      "user_prompt": "Generate ONE Most Likely To prompt that makes the group immediately look at one specific friend. Vivid, specific, a little spicy. Return only the action, without the 'Most likely to' prefix. No quotes, no numbering.",
+      "descriptor": "Kinky dares for teasing selfies",
+      "user_prompt": "Generate ONE Photo Challenge prompt: a short, kinky dare that anyone can answer by posting a single photo from their phone right now (e.g. 'the last photo in your camera roll', 'your most unhinged selfie', 'closest sex toy'). Achievable in seconds, no special setup. Return only the prompt as a single sentence. No quotes, no numbering, no preamble.",
       "max_tokens": 120
     },
     "rushmore": {
@@ -47,8 +47,8 @@
     },
     "photo": {
       "name": "Photo Challenge",
-      "descriptor": "Photo Challenge prompts — playful dares to post a single photo",
-      "user_prompt": "Generate ONE Photo Challenge prompt: a short, playful dare that anyone can answer by posting a single photo from their phone right now (e.g. 'the last photo in your camera roll', 'your most chaotic selfie', 'whatever's closest to you'). Achievable in seconds, no special setup. Return only the prompt as a single sentence. No quotes, no numbering, no preamble.",
+      "descriptor": "Kinky dares for teasing selfies",
+      "user_prompt": "Generate ONE Photo Challenge prompt: a short, kinky dare that anyone can answer by posting a single photo from their phone right now (e.g. 'the last photo in your camera roll', 'your most unhinged selfie', 'closest sex toy'). Achievable in seconds, no special setup. Return only the prompt as a single sentence. No quotes, no numbering, no preamble.",
       "max_tokens": 120
     },
     "pen_pals": {
