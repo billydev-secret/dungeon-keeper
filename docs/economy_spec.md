@@ -448,7 +448,13 @@ the member owns and gift rentals where they are the beneficiary.
   panel pattern): re-running in the same channel edits the panel in place (use after
   re-pricing/re-branding); pointing at another channel deletes the old panel and
   reposts. Builder in `economy/guide.py`; the two ids are bot-managed and not
-  dashboard-editable.
+  dashboard-editable. **Sticky:** an `on_message` listener keeps the panel as the
+  last message in its channel — any message there (member chatter *or* the bot's own
+  economy notices) arms a debounced delete-and-repost (`_GUIDE_STICKY_DELAY`s of
+  quiet), so a busy channel re-sticks once activity pauses. The panel skips its own
+  repost by id (`should_restick_guide`), and the repost shares `_place_guide_panel`
+  with the command under a per-guild lock. Only the guide panel is sticky — the shop
+  and leaderboard panels are not.
 - **Shop panel (shipped):** **`/bank post-shop [channel]`** [mod] posts the
   perk-shop listing as a persistent panel: the same embed `/bank shop` shows
   minus the per-member bits (no ✅ rented marks — the panel is member-agnostic;

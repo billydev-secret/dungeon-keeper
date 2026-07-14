@@ -103,3 +103,25 @@ def build_guide_embed(
         )
     )
     return embed
+
+
+def should_restick_guide(
+    *,
+    message_channel_id: int,
+    message_id: int,
+    panel_channel_id: int,
+    panel_message_id: int,
+) -> bool:
+    """Whether a new message should push the guide panel back to the bottom.
+
+    The panel is kept as the channel's last message by delete-and-repost
+    (Discord has no reorder API), so any message landing in its channel
+    means it's no longer last. We re-stick for **every** such message,
+    including the bot's own economy notices — the only message we must
+    ignore is the panel itself, or the repost would loop forever.
+    """
+    if not panel_channel_id or not panel_message_id:
+        return False  # no panel posted yet
+    if message_channel_id != panel_channel_id:
+        return False  # activity in some other channel
+    return message_id != panel_message_id  # skip our own panel

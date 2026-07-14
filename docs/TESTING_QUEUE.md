@@ -9,16 +9,26 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Economy — bank guide panel "Joining" opt-in note  (this commit)
+### Economy — bank guide panel "Joining" note + sticky-to-bottom  (this commit)
 
-The `/bank post-guide` panel now carries a **Joining** field:
-"Opt in any time from Channels & Roles to join the game economy", where
-"Channels & Roles" is the `<id:customize>` onboarding mention.
+The `/bank post-guide` panel now carries a **Joining** field ("Opt in any time
+from Channels & Roles to join the game economy", where "Channels & Roles" is the
+`<id:customize>` onboarding mention), and it now sticks to the bottom of its
+channel via an `on_message` delete-and-repost (debounced ~6s).
 
 - [ ] Re-run `/bank post-guide` in the bank channel and confirm the new
       **Joining** field renders with a **clickable** "Channels & Roles" link
       (blue, opens the onboarding customise screen) — not the literal text
       `<id:customize>`. Requires server onboarding to be enabled.
+- [ ] Post a message in the bank channel; within ~6s of the channel falling
+      quiet the guide panel re-appears at the **bottom** (old copy removed, not
+      stacked). Confirm no duplicate panels accumulate.
+- [ ] Trigger an economy notice into the bank channel (e.g. a quest sign-off
+      card) and confirm the panel re-sticks **below** it.
+- [ ] Chat several messages in quick succession → the panel reposts **once**
+      after the burst, not per message.
+- [ ] `/bank post-guide` in the **same** channel still edits in place (panel
+      does **not** jump to the bottom) — only new activity re-sticks it.
 
 ### Economy — quest completion pings via DM under a game role  (this commit)
 

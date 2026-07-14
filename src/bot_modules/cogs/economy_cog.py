@@ -22,7 +22,7 @@ from discord.ext import commands
 
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
-from bot_modules.economy.guide import build_guide_embed
+from bot_modules.economy.guide import build_guide_embed, should_restick_guide
 from bot_modules.economy.leaderboard import (
     build_leaderboard_embed,
     collect_leaderboard_data,
@@ -223,6 +223,14 @@ _QUEST_STATE_LABEL = {
 # Trigger-quest cache staleness bound: a dashboard edit takes effect on the
 # next message after at most this many seconds.
 _TRIGGER_CACHE_TTL = 60.0
+
+# Guide-panel sticky: how long the cached (channel_id, message_id) of the guide
+# panel is trusted before re-reading it from config on the next message, and how
+# long to wait for the channel to fall quiet before reposting the panel at the
+# bottom. The delay coalesces bursts into a single repost — a busy channel keeps
+# resetting the timer, so the panel only re-sticks once activity pauses.
+_GUIDE_STICKY_CACHE_TTL = 300.0
+_GUIDE_STICKY_DELAY = 6.0
 
 
 @dataclass(frozen=True)
@@ -690,7 +698,21 @@ class EconomyCog(commands.Cog):
         # message listener; empty lists are cached too so guilds without
         # trigger quests cost one dict lookup per message.
         self._trigger_cache: dict[int, tuple[float, list[_TriggerQuest]]] = {}
+        # Guide-panel sticky. `_guide_ref` caches guild_id → (monotonic expiry,
+        # channel_id, message_id) of the posted panel (0/0 when none), so the
+        # message listener costs a dict lookup, not a DB read, per message.
+        # `_restick_tasks` holds the pending debounced repost per guild;
+        # `_guide_locks` serialises a repost against a concurrent /bank
+        # post-guide so the panel can't double-post.
+        self._guide_ref: dict[int, tuple[float, int, int]] = {}
+        self._restick_tasks: dict[int, asyncio.Task[None]] = {}
+        self._guide_locks: dict[int, asyncio.Lock] = {}
         super().__init__()
+
+    async def cog_unload(self) -> None:
+        for task in self._restick_tasks.values():
+            task.cancel()
+        self._restick_tasks.clear()
 
     @bank.command(name="wallet", description="Check your balance and recent activity.")
     async def bank_wallet(self, interaction: discord.Interaction) -> None:
@@ -2082,36 +2104,182 @@ class EconomyCog(commands.Cog):
                 )
                 return
 
-        # Moving or reposting: drop the stale panel if we can still find it.
-        if settings.guide_message_id and settings.guide_channel_id:
-            old_channel = guild.get_channel(settings.guide_channel_id)
-            if isinstance(old_channel, discord.TextChannel):
-                try:
-                    old = await old_channel.fetch_message(settings.guide_message_id)
-                    await old.delete()
-                except discord.HTTPException:
-                    pass
-
-        try:
-            message = await target.send(embed=embed)
-        except discord.Forbidden:
+        # Moving or reposting → drop the stale panel and post a fresh one at
+        # the bottom (shared with the sticky repost path).
+        message = await self._place_guide_panel(
+            guild,
+            target,
+            settings,
+            accent,
+            old_channel_id=settings.guide_channel_id,
+            old_message_id=settings.guide_message_id,
+        )
+        if message is None:
             await interaction.response.send_message(
                 f"I don't have permission to post in {target.mention}.",
                 ephemeral=True,
             )
             return
-
-        def _save() -> None:
-            with self.ctx.open_db() as conn:
-                save_econ_settings(
-                    conn,
-                    guild.id,
-                    {"guide_channel_id": target.id, "guide_message_id": message.id},
-                )
-
-        await asyncio.to_thread(_save)
         await interaction.response.send_message(
             f"Posted the guide panel in {target.mention}.", ephemeral=True
+        )
+
+    # ── guide-panel placement + sticky repost ────────────────────────────
+
+    async def _place_guide_panel(
+        self,
+        guild: discord.Guild,
+        target: discord.TextChannel,
+        settings: EconSettings,
+        accent: discord.Colour | None,
+        *,
+        old_channel_id: int,
+        old_message_id: int,
+    ) -> discord.Message | None:
+        """Delete the old guide panel (if any) and post a fresh one at the
+        bottom of ``target``, persisting the new ids. Returns the new message,
+        or ``None`` when posting is forbidden. Serialised per guild so a manual
+        ``/bank post-guide`` and a sticky repost can't race into two panels.
+        """
+        lock = self._guide_locks.setdefault(guild.id, asyncio.Lock())
+        async with lock:
+            if old_message_id and old_channel_id:
+                old_channel = guild.get_channel(old_channel_id)
+                if isinstance(old_channel, discord.TextChannel):
+                    try:
+                        old = await old_channel.fetch_message(old_message_id)
+                        await old.delete()
+                    except discord.HTTPException:
+                        pass
+
+            try:
+                message = await target.send(
+                    embed=build_guide_embed(settings, colour=accent)
+                )
+            except discord.Forbidden:
+                return None
+
+            # Record the new id *before* the DB-save await so the gateway event
+            # for our own repost is recognised (and skipped) by the sticky
+            # listener rather than triggering yet another repost.
+            self._guide_ref[guild.id] = (
+                time.monotonic() + _GUIDE_STICKY_CACHE_TTL,
+                target.id,
+                message.id,
+            )
+
+            def _save() -> None:
+                with self.ctx.open_db() as conn:
+                    save_econ_settings(
+                        conn,
+                        guild.id,
+                        {
+                            "guide_channel_id": target.id,
+                            "guide_message_id": message.id,
+                        },
+                    )
+
+            await asyncio.to_thread(_save)
+            return message
+
+    @commands.Cog.listener("on_message")
+    async def _restick_guide_panel(self, message: discord.Message) -> None:
+        """Keep the guide panel as the last message in its channel.
+
+        Any message in the panel's channel (member chatter *or* the bot's own
+        economy notices) means the panel is no longer at the bottom, so we
+        arm a debounced repost. The panel itself is skipped by id.
+        """
+        if message.guild is None:
+            return
+        guild_id = message.guild.id
+        panel_channel_id, panel_message_id = await self._guide_panel_ref(guild_id)
+        if not should_restick_guide(
+            message_channel_id=message.channel.id,
+            message_id=message.id,
+            panel_channel_id=panel_channel_id,
+            panel_message_id=panel_message_id,
+        ):
+            return
+        self._schedule_guide_restick(guild_id)
+
+    async def _guide_panel_ref(self, guild_id: int) -> tuple[int, int]:
+        """Cached ``(channel_id, message_id)`` of the guild's guide panel, or
+        ``(0, 0)`` when the economy is off or no panel is posted. Re-read from
+        config at most once per ``_GUIDE_STICKY_CACHE_TTL`` so the listener is a
+        dict lookup per message, not a DB read.
+        """
+        entry = self._guide_ref.get(guild_id)
+        now = time.monotonic()
+        if entry is not None and entry[0] > now:
+            return entry[1], entry[2]
+
+        def _load() -> tuple[int, int]:
+            with self.ctx.open_db() as conn:
+                s = load_econ_settings(conn, guild_id)
+            if not s.enabled:
+                return 0, 0
+            return s.guide_channel_id, s.guide_message_id
+
+        channel_id, message_id = await asyncio.to_thread(_load)
+        self._guide_ref[guild_id] = (
+            now + _GUIDE_STICKY_CACHE_TTL,
+            channel_id,
+            message_id,
+        )
+        return channel_id, message_id
+
+    def _schedule_guide_restick(self, guild_id: int) -> None:
+        """(Re)arm the debounced repost — a burst of messages collapses to a
+        single repost once the channel falls quiet."""
+        existing = self._restick_tasks.get(guild_id)
+        if existing is not None and not existing.done():
+            existing.cancel()
+        self._restick_tasks[guild_id] = asyncio.create_task(
+            self._delayed_restick(guild_id)
+        )
+
+    async def _delayed_restick(self, guild_id: int) -> None:
+        try:
+            await asyncio.sleep(_GUIDE_STICKY_DELAY)
+        except asyncio.CancelledError:
+            return
+        try:
+            await self._restick_now(guild_id)
+        except Exception:
+            log.exception(
+                "econ guide sticky: repost failed in guild %s", guild_id
+            )
+
+    async def _restick_now(self, guild_id: int) -> None:
+        """Repost the existing guide panel at the bottom of its channel."""
+
+        def _load() -> EconSettings:
+            with self.ctx.open_db() as conn:
+                return load_econ_settings(conn, guild_id)
+
+        settings = await asyncio.to_thread(_load)
+        # Only maintain an already-posted panel; never create one here.
+        if (
+            not settings.enabled
+            or not settings.guide_channel_id
+            or not settings.guide_message_id
+        ):
+            return
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        channel = guild.get_channel(settings.guide_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        await self._place_guide_panel(
+            guild,
+            channel,
+            settings,
+            accent,
+            old_channel_id=settings.guide_channel_id,
+            old_message_id=settings.guide_message_id,
         )
 
     # ── auto-updating leaderboard panel ──────────────────────────────────

@@ -1,6 +1,7 @@
 """Economy guide panel — embed builder + /bank post-guide command."""
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,7 +9,7 @@ import discord
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.economy.guide import build_guide_embed
+from bot_modules.economy.guide import build_guide_embed, should_restick_guide
 from bot_modules.services.economy_service import (
     EconSettings,
     load_econ_settings,
@@ -78,6 +79,59 @@ def test_guide_embed_hides_booster_line_without_bonus():
     embed = build_guide_embed(EconSettings(booster_multiplier=1.0))
     earning = {f.name: f.value or "" for f in embed.fields}["Earning"]
     assert "Boosters" not in earning
+
+
+# ── sticky re-stick predicate ────────────────────────────────────────────────
+
+PANEL_CH = 4242
+PANEL_MSG = 9999
+
+
+def test_restick_true_for_member_message_in_panel_channel():
+    assert should_restick_guide(
+        message_channel_id=PANEL_CH,
+        message_id=123,
+        panel_channel_id=PANEL_CH,
+        panel_message_id=PANEL_MSG,
+    )
+
+
+def test_restick_true_for_bot_notice_in_panel_channel():
+    # Economy notices are bot-authored but still bury the panel — re-stick.
+    assert should_restick_guide(
+        message_channel_id=PANEL_CH,
+        message_id=555,
+        panel_channel_id=PANEL_CH,
+        panel_message_id=PANEL_MSG,
+    )
+
+
+def test_restick_false_for_the_panel_itself():
+    # Our own repost must not trigger another repost (infinite loop).
+    assert not should_restick_guide(
+        message_channel_id=PANEL_CH,
+        message_id=PANEL_MSG,
+        panel_channel_id=PANEL_CH,
+        panel_message_id=PANEL_MSG,
+    )
+
+
+def test_restick_false_for_other_channel():
+    assert not should_restick_guide(
+        message_channel_id=PANEL_CH + 1,
+        message_id=123,
+        panel_channel_id=PANEL_CH,
+        panel_message_id=PANEL_MSG,
+    )
+
+
+def test_restick_false_when_no_panel_posted():
+    assert not should_restick_guide(
+        message_channel_id=PANEL_CH,
+        message_id=123,
+        panel_channel_id=0,
+        panel_message_id=0,
+    )
 
 
 # ── settings round-trip ─────────────────────────────────────────────────────
@@ -164,6 +218,58 @@ def _stored(db) -> tuple[int, int]:
     with open_db(db) as conn:
         s = load_econ_settings(conn, GUILD_ID)
     return s.guide_channel_id, s.guide_message_id
+
+
+# ── sticky repost ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_restick_now_reposts_panel_and_updates_ids(ctx, db):
+    _enable(db, guide_channel_id=CHANNEL_ID, guide_message_id=4444)
+    cog = _make_cog(ctx)
+    channel = _channel(CHANNEL_ID)
+    old = MagicMock()
+    old.delete = AsyncMock()
+    channel.fetch_message = AsyncMock(return_value=old)
+    guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
+    cog.bot.get_guild = MagicMock(return_value=guild)
+
+    await cog._restick_now(GUILD_ID)
+
+    old.delete.assert_awaited_once()  # stale panel dropped
+    channel.send.assert_awaited_once()  # fresh panel at the bottom
+    assert _stored(db) == (CHANNEL_ID, 8888)  # new id persisted
+    # In-memory cache updated so the listener skips our own repost.
+    assert cog._guide_ref[GUILD_ID][1:] == (CHANNEL_ID, 8888)
+
+
+@pytest.mark.asyncio
+async def test_restick_now_noop_without_existing_panel(ctx, db):
+    _enable(db, guide_channel_id=CHANNEL_ID)  # no guide_message_id → nothing posted
+    cog = _make_cog(ctx)
+    channel = _channel(CHANNEL_ID)
+    guild = FakeGuild(id=GUILD_ID, channels={CHANNEL_ID: channel})
+    cog.bot.get_guild = MagicMock(return_value=guild)
+
+    await cog._restick_now(GUILD_ID)
+
+    channel.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_schedule_restick_cancels_pending_repost(ctx, db):
+    cog = _make_cog(ctx)
+    cog._schedule_guide_restick(GUILD_ID)
+    first = cog._restick_tasks[GUILD_ID]
+    cog._schedule_guide_restick(GUILD_ID)
+    second = cog._restick_tasks[GUILD_ID]
+
+    assert first is not second  # re-armed, not stacked
+    assert cog._restick_tasks[GUILD_ID] is second
+    # Let the cancellation of `first` settle, then clean both up.
+    second.cancel()
+    await asyncio.gather(first, second, return_exceptions=True)
+    assert first.cancelled()
 
 
 @pytest.mark.asyncio
