@@ -26,11 +26,6 @@ function emojiHtml(raw) {
   return esc(raw || "");
 }
 
-function modeBadge(mode) {
-  const meta = MODES.find(([k]) => k === mode);
-  return `<span class="rm-badge rm-badge-${esc(mode)}">${esc(meta ? meta[1] : mode)}</span>`;
-}
-
 function renderList(menus, activeId) {
   if (!menus.length) return renderEmpty("No role menus yet. Create one to get started.");
   return menus.map((m) => {

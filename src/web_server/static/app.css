@@ -3617,9 +3617,3 @@ select option { background: var(--bg-input); color: var(--ink); }
 }
 .rm-publish { border-top: 1px solid var(--rule); padding-top: 10px; margin-top: 4px; }
 
-/* badges (list view) */
-.rm-badge {
-  font-size: 10px; font-weight: 700; text-transform: uppercase;
-  border: 1px solid var(--rule); border-radius: 3px; padding: 1px 5px;
-  color: var(--ink-dim);
-}

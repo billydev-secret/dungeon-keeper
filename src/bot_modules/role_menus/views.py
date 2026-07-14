@@ -245,6 +245,30 @@ async def handle_menu_interaction(
     if menu is None or menu["guild_id"] != guild.id or not options:
         await _reply(interaction, "This menu no longer exists.")
         return
+    try:
+        await _handle_loaded(
+            interaction, ctx, guild, member, menu, options, binding_role_id,
+            clicked_role_id, selected,
+        )
+    finally:
+        # A used select keeps displaying the member's picks until the message
+        # is edited; re-attach a fresh view so it reads as a prompt again.
+        if selected is not None:
+            await _reset_select(interaction, menu, options)
+
+
+async def _handle_loaded(
+    interaction: discord.Interaction,
+    ctx: "AppContext",
+    guild: discord.Guild,
+    member: discord.Member,
+    menu: dict,
+    options: list[dict],
+    binding_role_id: int | None,
+    clicked_role_id: int | None,
+    selected: list[int] | None,
+) -> None:
+    menu_id = menu["id"]
     if not menu["enabled"]:
         await _reply(interaction, "This menu is currently turned off.")
         return
@@ -293,6 +317,19 @@ async def handle_menu_interaction(
         return
 
     await _apply_outcome(interaction, ctx, guild, member, menu, options, outcome)
+
+
+async def _reset_select(
+    interaction: discord.Interaction, menu: dict, options: list[dict]
+) -> None:
+    msg = interaction.message
+    if msg is None or not options:
+        return
+    try:
+        view = build_view(menu, options) if menu["enabled"] else build_disabled_view(menu, options)
+        await msg.edit(view=view)
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 
 
 def _error_text(code: str, menu: dict) -> str:
