@@ -137,6 +137,14 @@ async def pay_game_rewards(
             await _fire_triggers(
                 bot, guild, settings, win_kind, sorted(winners), boosters, scoped
             )
+        if is_duel:
+            # Everyone in a resolved duel who wasn't the winner "lost" — fire
+            # duel_lose for them (same per-match occurrence key namespace).
+            losers = sorted(set(participants) - winners)
+            if losers:
+                await _fire_triggers(
+                    bot, guild, settings, "duel_lose", losers, boosters, scoped
+                )
     except Exception:
         log.exception("pay_game_rewards failed for guild %s (%s)", guild_id, game_type)
 

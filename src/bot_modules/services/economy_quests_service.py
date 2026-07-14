@@ -69,6 +69,8 @@ _UPDATABLE_FIELDS = frozenset(
         "trigger_channel_id",
         "trigger_kind",
         "target_count",
+        "target_min",
+        "target_max",
         "reward_xp",
         "onboarding",
     }
@@ -116,6 +118,8 @@ def create_quest(
     trigger_channel_id: int | None = None,
     trigger_kind: str = "",
     target_count: int = 1,
+    target_min: int = 0,
+    target_max: int = 0,
     reward_xp: int = 0,
     onboarding: int = 0,
 ) -> int:
@@ -125,15 +129,16 @@ def create_quest(
     if reward_xp < 0:
         raise ValueError("XP reward cannot be negative")
     _check_trigger_config(qtype, trigger_kind, trigger_words)
-    _check_target_count(qtype, trigger_kind, target_count)
+    _check_target_count(qtype, trigger_kind, target_count, target_min, target_max)
     cur = conn.execute(
         """
         INSERT INTO econ_quests
             (guild_id, title, description, qtype, reward, signoff, criteria,
              starts_at, ends_at, active, rotate_tag, community_target,
              created_by, created_at, trigger_words, trigger_channel_id,
-             trigger_kind, target_count, reward_xp, onboarding)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             trigger_kind, target_count, target_min, target_max, reward_xp,
+             onboarding)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             guild_id,
@@ -153,6 +158,8 @@ def create_quest(
             trigger_channel_id,
             trigger_kind,
             int(target_count),
+            int(target_min),
+            int(target_max),
             int(reward_xp),
             1 if onboarding else 0,
         ),
@@ -181,15 +188,27 @@ def _check_trigger_config(qtype: str, trigger_kind: str, trigger_words: str) -> 
         raise ValueError("a quest takes trigger words or a trigger kind, not both")
 
 
-def _check_target_count(qtype: str, trigger_kind: str, target_count: int) -> None:
-    """A target above 1 is only meaningful on counted trigger quests.
+def _check_target_count(
+    qtype: str,
+    trigger_kind: str,
+    target_count: int,
+    target_min: int = 0,
+    target_max: int = 0,
+) -> None:
+    """A target above 1 (or a target band) only fits counted trigger quests.
 
     Manual claims are one-shot per period (nothing increments a count), and
-    an event quest pays *every* occurrence, so neither can carry a target.
+    an event quest pays *every* occurrence, so neither can carry a target. A
+    band (``0 < target_min < target_max``) draws the per-member target from a
+    Gaussian instead of a fixed count; it lives under the same rules and, like
+    a fixed count > 1, must sit on a counted daily/weekly/monthly quest.
     """
     if target_count < 1:
         raise ValueError("target count must be at least 1")
-    if target_count == 1:
+    has_band = target_min != 0 or target_max != 0
+    if has_band and not (0 < target_min < target_max):
+        raise ValueError("target band needs 0 < target_min < target_max")
+    if target_count == 1 and not has_band:
         return
     if not trigger_kind:
         raise ValueError("a target count needs a game trigger to count")
@@ -206,7 +225,14 @@ def update_quest(
         raise KeyError(f"unknown quest field(s): {sorted(unknown)}")
     if not values:
         return
-    if {"qtype", "trigger_kind", "trigger_words", "target_count"} & set(values):
+    if {
+        "qtype",
+        "trigger_kind",
+        "trigger_words",
+        "target_count",
+        "target_min",
+        "target_max",
+    } & set(values):
         quest = get_quest(conn, guild_id, quest_id)
         if quest is not None:
             merged_qtype = str(values.get("qtype", quest["qtype"]))
@@ -220,6 +246,8 @@ def update_quest(
                 merged_qtype,
                 merged_kind,
                 int(values.get("target_count", quest["target_count"])),
+                int(values.get("target_min", quest["target_min"])),
+                int(values.get("target_max", quest["target_max"])),
             )
     assignments = ", ".join(f"{k} = ?" for k in values)
     params = [
@@ -325,6 +353,37 @@ def list_kind_triggered_quests(
         """,
         (guild_id, trigger_kind),
     ).fetchall()
+
+
+def list_active_pool_ids(
+    conn: sqlite3.Connection, guild_id: int, qtype: str
+) -> list[int]:
+    """Active quest ids of a cadence — the pool the per-user board draws from."""
+    return [
+        int(r["id"])
+        for r in conn.execute(
+            "SELECT id FROM econ_quests "
+            "WHERE guild_id = ? AND active = 1 AND qtype = ? ORDER BY id",
+            (guild_id, qtype),
+        ).fetchall()
+    ]
+
+
+def assigned_board_ids(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, qtype: str, local_day: str
+) -> set[int]:
+    """The quest ids on ``user_id``'s personal board for ``qtype`` this period.
+
+    A per-member subset of the cadence pool (``quests.board_size`` of them),
+    stable within the period and spaced so repeats stay ~a week apart. Only
+    daily/weekly/monthly have a board; other cadences return an empty set.
+    """
+    n = quests.board_size(qtype)
+    if n <= 0:
+        return set()
+    pool = list_active_pool_ids(conn, guild_id, qtype)
+    idx = quests.period_index(qtype, local_day)
+    return set(quests.assigned_quest_ids(pool, user_id, idx, n))
 
 
 def source_enabled(conn: sqlite3.Connection, guild_id: int, source: str) -> bool:
@@ -451,6 +510,9 @@ def fire_trigger_quests(
     if not source_enabled(conn, guild_id, trigger_kind):
         return []
     out: list[tuple[sqlite3.Row, ClaimOutcome]] = []
+    # A member only earns a daily/weekly/monthly quest when it's on *their*
+    # personal board this period — compute each cadence's board once.
+    boards: dict[str, set[int]] = {}
     for quest in list_kind_triggered_quests(conn, guild_id, trigger_kind):
         scope = quest["trigger_channel_id"]
         if scope is not None and (
@@ -463,8 +525,21 @@ def fire_trigger_quests(
                 continue
             period = quests.occurrence_period(trigger_kind, occurrence)
         else:
+            if qtype not in boards:
+                boards[qtype] = assigned_board_ids(
+                    conn, guild_id, user_id, qtype, local_day
+                )
+            if int(quest["id"]) not in boards[qtype]:
+                continue  # not on this member's board this period
             period = quests.quest_period(qtype, local_day)
-            target = int(quest["target_count"])
+            target = quests.effective_target(
+                int(quest["target_count"]),
+                int(quest["target_min"]),
+                int(quest["target_max"]),
+                user_id=user_id,
+                quest_id=int(quest["id"]),
+                period=period,
+            )
             if target > 1:
                 # Counted quest: each distinct occurrence bumps the period's
                 # progress; the claim only fires when the target is reached.

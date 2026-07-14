@@ -44,12 +44,15 @@ from bot_modules.economy.quest_views import (
     post_signoff_card,
 )
 from bot_modules.economy.quests import (
+    board_size,
     compile_trigger_pattern,
+    effective_target,
     message_matches_trigger,
     parse_trigger_words,
     quest_period,
 )
 from bot_modules.services.economy_quests_service import (
+    assigned_board_ids,
     claim_quest,
     fire_trigger_inline,
     fire_trigger_quests,
@@ -1113,10 +1116,20 @@ class EconomyCog(commands.Cog):
                 """,
                 (guild_id,),
             ).fetchall()
+            # daily/weekly/monthly quests are shown per member — only the ones
+            # on this member's board for the period. Compute each cadence once.
+            boards: dict[str, set[int]] = {}
             out: list[dict] = []
             for row in rows:
                 qtype = str(row["qtype"])
                 quest_id = int(row["id"])
+                if board_size(qtype) > 0:
+                    if qtype not in boards:
+                        boards[qtype] = assigned_board_ids(
+                            conn, guild_id, user_id, qtype, day
+                        )
+                    if quest_id not in boards[qtype]:
+                        continue  # not on this member's board this period
                 entry: dict = {
                     "id": quest_id,
                     "title": row["title"],
@@ -1155,7 +1168,14 @@ class EconomyCog(commands.Cog):
                     ).fetchone()
                     kind = str(row["trigger_kind"] or "")
                     has_trigger = bool(str(row["trigger_words"] or "").strip())
-                    target = int(row["target_count"])
+                    target = effective_target(
+                        int(row["target_count"]),
+                        int(row["target_min"]),
+                        int(row["target_max"]),
+                        user_id=user_id,
+                        quest_id=quest_id,
+                        period=period,
+                    )
                     if kind and target > 1:
                         entry["progress_current"] = get_progress(
                             conn, quest_id, user_id, period
@@ -1265,6 +1285,13 @@ class EconomyCog(commands.Cog):
                 offset = get_tz_offset_hours(conn, guild.id)
                 day = local_day_for(time.time(), offset)
                 period = quest_period(trig.qtype, day)
+                # A trigger-word quest still only pays when it's on the
+                # member's personal board this period (parity with kind
+                # triggers). Off-board → treat like an unclaimable repeat.
+                if board_size(trig.qtype) > 0 and trig.quest_id not in (
+                    assigned_board_ids(conn, guild.id, member.id, trig.qtype, day)
+                ):
+                    raise ValueError("quest not on member's board this period")
                 outcome = claim_quest(
                     conn,
                     settings,

@@ -128,9 +128,12 @@ tickbox, criteria (freeform v1), date range, repeat/auto-rotate tag, and a
 (§4.5) — phrase and game trigger being mutually exclusive. Rewards free-entry with
 an amber out-of-band warning; out-of-band saves fine, audit-tagged. Counted
 trigger quests take a **target count** ("how many times", §4.5). Library model:
-**1 active daily + up to 5 weeklies + up to 5 monthlies + 1 active event quest
-per trigger kind** per guild; dailies can auto-rotate from a tagged pool
-(rotation happens on the guild-local day roll in the economy loop). Authoring
+each of daily/weekly/monthly is a **pool** of active quests (capped at
+`POOL_CAP = 25` each) that the **per-user board** (§4.6) draws from, **plus 1
+active event quest per trigger kind** per guild. (The former "1 active daily +
+rotate-tag pool" rule is retired — `rotate_tag`/`rotate_pool` still exist but
+are inert once every pool quest is active; the per-user board supplies the
+variety rotation used to.) Authoring
 lives on the **Quests** page (library w/ slot summary + inline edit → quest
 editor → AI ideas) with in-place editing (PUT); the sign-off inbox is the
 **Claims** page (pending queue with Approve/Deny plus a state filter over the
@@ -247,6 +250,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `reaction_given` | reaction-given XP newly awarded (inherits the farm guard: one per message+reactor ever, no self-reacts) | `events_cog.on_raw_reaction_add` | `reaction_given:<message_id>` |
 | `game_win` | winning a party game (only NHIE/TTL/Hot Takes resolve a winner) | `pay_game_rewards` winners pass | `game_win:<game_type>:<game_id>` |
 | `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
+| `duel_lose` | resolving a duel/PvP match without winning it (every participant minus the winner set) | `pay_game_rewards` losers pass | `duel_lose:<game_type>:<id>` |
 
 **Monthly cadence:** `qtype='monthly'` claims once per guild-local calendar
 month (period `"YYYY-MM"`, so the window opens on the 1st); up to 5 active, own
@@ -275,10 +279,41 @@ game, intro photo) — new members can finish them at their own pace.
 set `target_count` > 1 ("send 20 messages this week"). Each distinct occurrence
 inserts an `econ_quest_progress_marks` row (the dedup — replays never
 double-count) and bumps `econ_quest_progress`; the ordinary claim fires when
-the count reaches the target, and `/quests` shows a progress meter. Targets are
+the count reaches the target (see §4.6 for the per-member Gaussian target
+band), and `/quests` shows a progress meter. Targets are
 invalid on manual quests (nothing counts) and event quests (every occurrence
 already pays). Progress is per (quest, member, period) — a new period starts a
 fresh count with no reset sweep.
+
+### 4.6 Per-user quest board (`quests.assigned_quest_ids`)
+Daily/weekly/monthly quests are **personal**: each cadence's active quests form
+a **pool**, and every member is shown/paid their own subset of
+`PERSONAL_BOARD_SIZE` (**2** per cadence) drawn from it per period. The draw is
+a pure function of `(pool_ids, user_id, period_index, board_size)` — a per-member
+`sha256` shuffle of the pool walked N-at-a-time by `period_index(qtype, day)`
+(day ordinal / ISO-week / month) — so it needs **no assignment table**: it is
+stable within a period, differs between members, and a quest can't recur for a
+member until they've cycled the whole pool (**repeat gap ≈ ⌊poolsize/N⌋
+periods**; small pools where `N ≥ poolsize` degrade to "everyone sees
+everything"). Community and event quests are **not** personalized (community is a
+guild-wide objective; event pays per occurrence).
+
+Both surfaces filter to the member's board: `fire_trigger_quests` and the
+trigger-word `on_message` path skip any daily/weekly/monthly quest not on the
+board this period (so a member only *earns* a kind when its quest is on their
+board), and `_load_quests_state` shows only the board on `/quests` + the wallet.
+Because assignment cadence equals the claim period, counted progress never
+fragments mid-period.
+
+**Gaussian target band:** a counted quest may carry a target *band*
+(`0 < target_min < target_max`) instead of a fixed `target_count`. Then each
+member's target for a period is drawn from a Gaussian over `[min, max]`
+(`quests.effective_target`), deterministic on `(user, quest, period)` — so it is
+stable all period and varies member to member (the band is set from the p35–p85
+historical percentile of that action, keeping targets in a "reasonable" range).
+`0/0` (the default) means no band — the fixed `target_count` applies, so existing
+quests are unchanged. Both the counted-claim path and the `/quests` progress
+meter read the same `effective_target`.
 
 Game-fired claims are **silent in-channel** (matching the participation faucet —
 a game recap followed by a dozen quest embeds would be noise); the wallet ledger

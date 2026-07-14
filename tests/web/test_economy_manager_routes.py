@@ -135,21 +135,25 @@ def test_create_reward_band_not_enforced(authed_client):
 # ── active toggle + slot rule ──────────────────────────────────────────
 
 
-def test_active_toggle_and_slot_limit(authed_client):
+def test_active_toggle(authed_client):
+    # Dailies form a pool the per-user board draws from, so several can be
+    # active at once (the pool cap → 409 is covered at the service layer).
     first = _make_quest(authed_client, title="Daily A")["id"]
     second = _make_quest(authed_client, title="Daily B")["id"]
 
+    for qid in (first, second):
+        resp = authed_client.post(
+            f"/api/economy/quests/{qid}/active", json={"active": True}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["active"] is True
+
+    # Toggling one back off still works.
     resp = authed_client.post(
-        f"/api/economy/quests/{first}/active", json={"active": True}
+        f"/api/economy/quests/{first}/active", json={"active": False}
     )
     assert resp.status_code == 200
-    assert resp.json()["active"] is True
-
-    # Second daily activation exceeds the ≤1 daily slot rule → 409.
-    resp = authed_client.post(
-        f"/api/economy/quests/{second}/active", json={"active": True}
-    )
-    assert resp.status_code == 409
+    assert resp.json()["active"] is False
 
 
 # ── delete with paid claims ────────────────────────────────────────────

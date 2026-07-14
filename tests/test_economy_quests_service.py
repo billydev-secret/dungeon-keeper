@@ -16,7 +16,12 @@ import time
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.economy.quests import occurrence_period
+from bot_modules.economy.quests import (
+    POOL_CAP,
+    effective_target,
+    occurrence_period,
+    quest_period,
+)
 from bot_modules.services.economy_quests_service import (
     ClaimOutcome,
     SlotLimitError,
@@ -28,6 +33,7 @@ from bot_modules.services.economy_quests_service import (
     list_claims,
     list_settleable_community_quests,
     list_trigger_quests,
+    assigned_board_ids,
     expire_stale_claims,
     fire_trigger_inline,
     fire_trigger_quests,
@@ -88,13 +94,16 @@ def _make(
     trigger_channel_id=None,
     trigger_kind="",
     target_count=1,
+    target_min=0,
+    target_max=0,
     reward_xp=0,
     onboarding=0,
+    title="Quest",
 ):
     qid = create_quest(
         conn,
         guild_id,
-        title="Quest",
+        title=title,
         description="desc",
         qtype=qtype,
         reward=reward,
@@ -109,6 +118,8 @@ def _make(
         trigger_channel_id=trigger_channel_id,
         trigger_kind=trigger_kind,
         target_count=target_count,
+        target_min=target_min,
+        target_max=target_max,
         reward_xp=reward_xp,
         onboarding=onboarding,
     )
@@ -199,21 +210,24 @@ def test_update_quest_cannot_bypass_slot_rule_via_active(db):
 # ── slot rule ─────────────────────────────────────────────────────────
 
 
-def test_second_active_daily_raises_slot_limit(db):
+def test_many_dailies_active_under_pool_cap(db):
+    # The per-user board draws from the pool, so a cadence holds many active
+    # quests — the old "one active daily" rule is gone.
     with open_db(db) as conn:
-        _make(conn, qtype="daily")
-        q2 = _make(conn, qtype="daily", active=False)
-        with pytest.raises(SlotLimitError):
-            set_quest_active(conn, GUILD, q2, True)
+        for _ in range(3):
+            _make(conn, qtype="daily")
+        extra = _make(conn, qtype="daily", active=False)
+        set_quest_active(conn, GUILD, extra, True)  # no raise
+        assert _get(conn, GUILD, extra)["active"] == 1
 
 
-def test_sixth_active_weekly_raises_slot_limit(db):
+def test_pool_cap_still_bounds_a_cadence(db):
     with open_db(db) as conn:
-        for _ in range(5):
+        for _ in range(POOL_CAP):
             _make(conn, qtype="weekly")
-        q6 = _make(conn, qtype="weekly", active=False)
+        over = _make(conn, qtype="weekly", active=False)
         with pytest.raises(SlotLimitError):
-            set_quest_active(conn, GUILD, q6, True)
+            set_quest_active(conn, GUILD, over, True)
 
 
 def test_slot_limit_is_per_guild(db):
@@ -1198,3 +1212,63 @@ def test_photo_card_registry_roundtrip(db):
         assert get_photo_card(conn, GUILD, 4242) is None
         # Guild-scoped: another guild can't claim against our card.
         assert get_photo_card(conn, GUILD + 1, 9100) is None
+
+
+# ── per-user board + gaussian target (spec §4.6) ──────────────────────
+
+
+def test_fire_only_pays_quests_on_members_board(db):
+    # A pool of 6 same-kind dailies; a member earns only the 2 on their board.
+    with open_db(db) as conn:
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        board = assigned_board_ids(conn, GUILD, USER, "daily", day)
+        assert len(board) == 2  # PERSONAL_BOARD_SIZE["daily"]
+        results = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER,
+            local_day=day, occurrence="m1", booster=False,
+        )
+        claimed = {int(q["id"]) for q, _ in results}
+        assert claimed == board
+
+
+def test_board_differs_between_members(db):
+    with open_db(db) as conn:
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        a = assigned_board_ids(conn, GUILD, USER, "daily", day)
+        b = assigned_board_ids(conn, GUILD, OTHER, "daily", day)
+        assert a != b  # different members draw different pairs
+
+
+def test_gaussian_band_drives_counted_claim(db):
+    # A banded counted quest fires only once its per-member target is reached.
+    with open_db(db) as conn:
+        qid = _make(
+            conn, qtype="weekly", trigger_kind="message_sent",
+            target_min=3, target_max=9,
+        )
+        day = "2026-07-13"
+        period = quest_period("weekly", day)
+        target = effective_target(1, 3, 9, user_id=USER, quest_id=qid, period=period)
+        assert 3 <= target <= 9
+        for i in range(target - 1):
+            res = fire_trigger_quests(
+                conn, SETTINGS, GUILD, "message_sent", USER,
+                local_day=day, occurrence=f"m{i}", booster=False,
+            )
+            assert res == []  # target not reached yet — no claim
+        res = fire_trigger_quests(
+            conn, SETTINGS, GUILD, "message_sent", USER,
+            local_day=day, occurrence=f"m{target - 1}", booster=False,
+        )
+        assert len(res) == 1  # crossing the drawn target pays
+
+
+def test_create_quest_rejects_bad_band(db):
+    with open_db(db) as conn:
+        with pytest.raises(ValueError):
+            _make(conn, qtype="weekly", trigger_kind="message_sent",
+                  target_min=9, target_max=3)  # min !< max

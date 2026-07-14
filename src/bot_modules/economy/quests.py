@@ -8,17 +8,28 @@ phrase-boundary rules stay table-testable.
 
 from __future__ import annotations
 
+import hashlib
+import random
 import re
 from datetime import date
 
-# Library slot limits per guild: 1 active daily, up to 5 active weeklies,
-# community goals are uncapped. Event quests are capped at 1 active PER
-# TRIGGER KIND — the listener pays every active quest matching its trigger,
-# so two same-kind actives would double-pay one occurrence.
-MAX_ACTIVE_DAILY = 1
-MAX_ACTIVE_WEEKLY = 5
-MAX_ACTIVE_MONTHLY = 5
+# Library slot limits per guild. Daily/weekly/monthly active quests form a
+# per-cadence *pool*: each member is shown/paid a personal subset of N drawn
+# from that pool per period (see assigned_quest_ids), so the caps are a
+# sanity ceiling on pool size, not a hard "one active" rule. Community goals
+# are uncapped. Event quests are capped at 1 active PER TRIGGER KIND — the
+# listener pays every active quest matching its trigger, so two same-kind
+# actives would double-pay one occurrence.
+POOL_CAP = 25
+MAX_ACTIVE_DAILY = POOL_CAP
+MAX_ACTIVE_WEEKLY = POOL_CAP
+MAX_ACTIVE_MONTHLY = POOL_CAP
 MAX_ACTIVE_EVENT_PER_KIND = 1
+
+# How many quests each member draws from each cadence's pool per period. The
+# repeat gap for a member is ~floor(poolsize / N) periods, so a bigger pool
+# (or a smaller N) spaces repeats further apart.
+PERSONAL_BOARD_SIZE: dict[str, int] = {"daily": 2, "weekly": 2, "monthly": 2}
 
 # Game/module triggers a quest can be auto-completed by (label = how the
 # dashboard describes it). On an *event* quest the trigger pays per
@@ -45,6 +56,7 @@ TRIGGER_KINDS: dict[str, str] = {
     "reaction_given": "React to someone's message",
     "game_win": "Win a party game",
     "duel_win": "Win a duel / PvP challenge",
+    "duel_lose": "Lose a duel / PvP challenge",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -68,6 +80,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "reaction_given": "Reacting to someone else's message — inherits the XP farm guard (one per message per reactor, ever; no self-reacts, no bots). Best with a target count.",
     "game_win": "Winning a party game (only types with a real winner resolve one: NHIE guiltiest, TTL best liar, Hot Takes hottest). Event cadence: once per game.",
     "duel_win": "Winning a duel/PvP match. Event cadence: once per match.",
+    "duel_lose": "Not winning a duel/PvP match (every participant who wasn't the winner). Event cadence: once per match.",
 }
 
 
@@ -183,6 +196,94 @@ def reward_band(qtype: str) -> tuple[int, int] | None:
     Community has no band (author's call).
     """
     return _REWARD_BANDS.get(qtype)
+
+
+# ── per-user quest board (spec §4.6) ──────────────────────────────────
+
+
+def _seed(*parts: object) -> int:
+    """A stable 64-bit seed from the parts — same across processes/versions.
+
+    ``hash()`` is salted per-process and ``random.seed(str)`` isn't guaranteed
+    stable, so we hash explicitly. Determinism is what makes the board a pure
+    function of ``(user, period)`` with no stored assignment table.
+    """
+    digest = hashlib.sha256(":".join(str(p) for p in parts).encode()).hexdigest()
+    return int(digest[:16], 16)
+
+
+def period_index(qtype: str, local_day: str) -> int:
+    """A monotonic integer index for the period ``local_day`` falls in.
+
+    One integer per daily/weekly/monthly period, increasing over time — the
+    board walks the per-user pool by this index, so a member's set advances
+    exactly once per period and never mid-period (counted progress can't
+    fragment). Community/event have no calendar period and raise.
+    """
+    d = date.fromisoformat(local_day)
+    if qtype == "daily":
+        return d.toordinal()
+    if qtype == "weekly":
+        iso = d.isocalendar()
+        return iso.year * 53 + iso.week
+    if qtype == "monthly":
+        return d.year * 12 + (d.month - 1)
+    raise ValueError(f"quest type has no board period: {qtype!r}")
+
+
+def assigned_quest_ids(
+    pool_ids: list[int], user_id: int, index: int, n: int
+) -> list[int]:
+    """The ``n`` quest ids a member draws from a cadence pool for a period.
+
+    The pool is shuffled deterministically per member (so two members get
+    different sets), then walked ``n``-at-a-time by ``index`` — a member can't
+    see the same quest again until they've cycled the whole pool, so repeats
+    are spaced ~``floor(len/n)`` periods apart. ``n >= len`` (or a tiny pool)
+    degrades gracefully to "the whole pool". Returns sorted ids.
+    """
+    ordered = sorted(set(pool_ids))
+    m = len(ordered)
+    if m == 0 or n <= 0:
+        return []
+    if n >= m:
+        return ordered
+    # Per-member shuffle: order the pool by a per-(user, quest) hash.
+    shuffled = sorted(ordered, key=lambda q: _seed(user_id, q))
+    start = (index * n) % m
+    picked = [shuffled[(start + i) % m] for i in range(n)]
+    return sorted(picked)
+
+
+def board_size(qtype: str) -> int:
+    """How many quests a member draws from this cadence's pool per period."""
+    return PERSONAL_BOARD_SIZE.get(qtype, 0)
+
+
+def effective_target(
+    target_count: int,
+    target_min: int,
+    target_max: int,
+    *,
+    user_id: int,
+    quest_id: int,
+    period: str,
+) -> int:
+    """A counted quest's target for one member+period.
+
+    With a band (``0 < target_min < target_max``) the target is drawn from a
+    Gaussian centred on the band, clamped to ``[min, max]`` — deterministic on
+    ``(user, quest, period)`` so it's stable all period and varies run to run.
+    Without a band it's the fixed ``target_count``. Never below 1.
+    """
+    if not (0 < target_min < target_max):
+        return max(1, int(target_count))
+    rng = random.Random(_seed(user_id, quest_id, period))
+    mu = (target_min + target_max) / 2
+    # ~95% of the mass lands inside the band before clamping; the tails clamp.
+    sigma = (target_max - target_min) / 4 or 1
+    draw = round(rng.gauss(mu, sigma))
+    return max(target_min, min(target_max, draw))
 
 
 # ── trigger-phrase verification (spec §4.4) ───────────────────────────

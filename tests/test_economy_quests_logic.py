@@ -10,13 +10,17 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.economy.quests import (
+    POOL_CAP,
+    assigned_quest_ids,
     can_activate,
     can_activate_event,
     compile_trigger_pattern,
+    effective_target,
     iso_week_for,
     message_matches_trigger,
     occurrence_period,
     parse_trigger_words,
+    period_index,
     pick_rotation,
     quest_period,
     reward_band,
@@ -97,22 +101,24 @@ def test_occurrence_period_is_keyed_to_the_occurrence():
 @pytest.mark.parametrize(
     "existing,qtype,expected",
     [
-        # daily: at most one active
+        # daily/weekly/monthly each form a pool capped at POOL_CAP; the
+        # per-user board draws N of them, so many can be active at once.
         ([], "daily", True),
         (["weekly", "weekly"], "daily", True),
-        (["daily"], "daily", False),
-        # weekly: up to five active
+        (["daily"] * 2, "daily", True),
+        (["daily"] * POOL_CAP, "daily", False),
+        # weekly: own pool, capped at POOL_CAP
         ([], "weekly", True),
-        (["weekly"] * 4, "weekly", True),
-        (["weekly"] * 5, "weekly", False),
-        (["weekly"] * 5 + ["daily"], "weekly", False),
+        (["weekly"] * (POOL_CAP - 1), "weekly", True),
+        (["weekly"] * POOL_CAP, "weekly", False),
+        (["weekly"] * POOL_CAP + ["daily"], "weekly", False),
         # a daily active does not eat a weekly slot
         (["daily"], "weekly", True),
-        # monthly: up to five active, own slot pool
+        # monthly: own pool, capped at POOL_CAP
         ([], "monthly", True),
-        (["monthly"] * 4, "monthly", True),
-        (["monthly"] * 5, "monthly", False),
-        (["weekly"] * 5, "monthly", True),
+        (["monthly"] * (POOL_CAP - 1), "monthly", True),
+        (["monthly"] * POOL_CAP, "monthly", False),
+        (["weekly"] * POOL_CAP, "monthly", True),
         # community: uncapped
         (["community"] * 20, "community", True),
         ([], "community", True),
@@ -247,3 +253,96 @@ def test_trigger_pattern_escapes_regex_metachars():
 def test_trigger_pattern_empty_is_none():
     assert compile_trigger_pattern([]) is None
     assert message_matches_trigger("anything", None) is False
+
+
+# ── period_index: monotonic per cadence ───────────────────────────────
+
+
+def test_period_index_daily_advances_by_one_per_day():
+    assert period_index("daily", "2026-07-14") - period_index("daily", "2026-07-13") == 1
+
+
+def test_period_index_weekly_stable_within_week_steps_between():
+    # Mon..Sun of one ISO week share an index; the next week is higher.
+    mon = period_index("weekly", "2026-07-13")
+    sun = period_index("weekly", "2026-07-19")
+    nxt = period_index("weekly", "2026-07-20")
+    assert mon == sun
+    assert nxt > mon
+
+
+def test_period_index_monthly_stable_within_month():
+    assert period_index("monthly", "2026-07-01") == period_index("monthly", "2026-07-31")
+    assert period_index("monthly", "2026-08-01") - period_index("monthly", "2026-07-01") == 1
+
+
+@pytest.mark.parametrize("qtype", ["community", "event", "yearly"])
+def test_period_index_no_calendar_raises(qtype):
+    with pytest.raises(ValueError):
+        period_index(qtype, "2026-07-13")
+
+
+# ── assigned_quest_ids: per-user board draw ───────────────────────────
+
+
+def test_assigned_size_and_membership():
+    pool = [10, 20, 30, 40, 50]
+    got = assigned_quest_ids(pool, user_id=1, index=0, n=2)
+    assert len(got) == 2
+    assert set(got) <= set(pool)
+
+
+def test_assigned_is_deterministic():
+    pool = [1, 2, 3, 4, 5, 6]
+    a = assigned_quest_ids(pool, user_id=7, index=3, n=2)
+    b = assigned_quest_ids(pool, user_id=7, index=3, n=2)
+    assert a == b
+
+
+def test_assigned_differs_across_users():
+    pool = list(range(1, 13))
+    sets = {tuple(assigned_quest_ids(pool, u, index=0, n=2)) for u in range(30)}
+    # Not everyone gets the identical pair.
+    assert len(sets) > 1
+
+
+def test_assigned_no_repeat_until_pool_cycled():
+    # Walking consecutive periods covers the whole pool before any id recurs.
+    pool = list(range(1, 11))  # 10 quests, n=2 -> 5 periods to cover all
+    seen: list[int] = []
+    for idx in range(5):
+        seen.extend(assigned_quest_ids(pool, user_id=99, index=idx, n=2))
+    assert sorted(seen) == pool  # each id exactly once across the 5-period cycle
+
+
+def test_assigned_n_ge_pool_returns_all():
+    pool = [3, 1, 2]
+    assert assigned_quest_ids(pool, user_id=5, index=0, n=5) == [1, 2, 3]
+
+
+def test_assigned_empty_pool():
+    assert assigned_quest_ids([], user_id=1, index=0, n=2) == []
+
+
+# ── effective_target: gaussian band, deterministic ────────────────────
+
+
+def test_effective_target_no_band_is_fixed():
+    assert effective_target(7, 0, 0, user_id=1, quest_id=1, period="2026-07-13") == 7
+
+
+def test_effective_target_within_band_and_deterministic():
+    vals = {
+        effective_target(0, 5, 20, user_id=u, quest_id=1, period="2026-W28")
+        for u in range(200)
+    }
+    assert all(5 <= v <= 20 for v in vals)
+    assert len(vals) > 3  # the draw actually varies across members
+    # stable for a given (user, quest, period)
+    a = effective_target(0, 5, 20, user_id=42, quest_id=1, period="2026-W28")
+    b = effective_target(0, 5, 20, user_id=42, quest_id=1, period="2026-W28")
+    assert a == b
+
+
+def test_effective_target_never_below_one():
+    assert effective_target(0, 0, 0, user_id=1, quest_id=1, period="p") == 1

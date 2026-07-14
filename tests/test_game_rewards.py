@@ -13,6 +13,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     get_active_game_by_id,
 )
+from bot_modules.services.economy_quests_service import create_quest, set_quest_active
 from bot_modules.services.economy_service import get_balance, save_econ_settings
 from bot_modules.services.games_db import GamesDb
 from migrations import apply_migrations_sync
@@ -103,6 +104,38 @@ async def test_pay_splits_participation_and_win(db_path):
     assert _bal(db_path, 1) == 25  # 5 participation + 20 win
     assert _bal(db_path, 2) == 5
     assert _bal(db_path, 3) == 5
+
+
+def _add_active_quest(db_path, *, trigger_kind: str, reward: int) -> None:
+    with open_db(db_path) as conn:
+        qid = create_quest(
+            conn, GUILD, title=trigger_kind, description="", qtype="weekly",
+            reward=reward, signoff=0, criteria="", starts_at=None, ends_at=None,
+            rotate_tag="", community_target=None, created_by=None,
+            trigger_kind=trigger_kind,
+        )
+        set_quest_active(conn, GUILD, qid, True)
+
+
+async def test_duel_lose_pays_only_non_winners(db_path):
+    # A duel resolving fires duel_lose for every participant who didn't win.
+    _enable(db_path)
+    _add_active_quest(db_path, trigger_kind="duel_lose", reward=30)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    await pay_game_rewards(bot, GUILD, [1, 2], [1], "chicken", occurrence="7")
+    # winner 1: 5 participation + 20 win, no duel_lose
+    assert _bal(db_path, 1) == 25
+    # loser 2: 5 participation + 30 duel_lose quest
+    assert _bal(db_path, 2) == 35
+
+
+async def test_duel_lose_not_fired_for_party_games(db_path):
+    _enable(db_path)
+    _add_active_quest(db_path, trigger_kind="duel_lose", reward=30)
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    # 'ttl' is a party game, not a duel — nobody "loses" a duel here.
+    await pay_game_rewards(bot, GUILD, [1, 2], [1], "ttl", occurrence="7")
+    assert _bal(db_path, 2) == 5  # participation only, no duel_lose
 
 
 async def test_pay_noop_when_disabled(db_path):

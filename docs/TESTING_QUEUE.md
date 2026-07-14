@@ -9,6 +9,26 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — per-user quest board + Gaussian bands + duel_lose  (e62f697)
+
+- [ ] Restart the bot → boots clean (migration 072 adds `target_min`/`target_max`;
+      no error on a second boot).
+- [ ] With several active dailies, two different members run `/quests` (or open
+      the wallet) → each sees **2 dailies**, and the two members' boards are
+      **not identical**. Same for weeklies/monthlies once >2 are active.
+- [ ] A member only earns a kind when its quest is on their board: pick a member
+      whose board today does **not** include the message quest, have them send
+      messages → **no** quest payout for it (ledger has no `quest` row); a member
+      whose board **does** include it earns it.
+- [ ] Board is stable within a period: re-running `/quests` the same day shows the
+      **same** 2 dailies; after the guild-local day rolls, the daily set changes.
+- [ ] Counted quest with a band shows a **per-member** target on the progress
+      meter (two members can see different "/N" targets for the same quest), and
+      the claim fires when that member hits *their* N.
+- [ ] Lose a duel (chicken/hot potato/musical chairs/pressure/quickdraw) with a
+      `duel_lose` quest active → the loser earns it; the winner does **not**.
+- [ ] Quest editor trigger-kind dropdown lists **🥈 Lose a duel / PvP challenge**.
+
 ### Traditional TOD — Bank Round tracks asked history  (this commit)
 
 Bank Round questions are now recorded in the same per-(player, category)

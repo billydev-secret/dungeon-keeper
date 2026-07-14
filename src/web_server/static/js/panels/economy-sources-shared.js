@@ -20,6 +20,7 @@ export const KIND_LABELS = {
   reaction_given: "👍 React to someone's message (channel-scopable)",
   game_win: "🏆 Win a party game",
   duel_win: "🥇 Win a duel / PvP challenge",
+  duel_lose: "🥈 Lose a duel / PvP challenge",
 };
 
 // Kinds whose quests can carry a trigger-channel scope.
