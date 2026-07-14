@@ -9,6 +9,35 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Perk shop — customise via ephemeral buttons + modals  (this commit)
+
+Role-perk customisation moved out of slash commands into `/bank shop`'s
+ephemeral panel: rented rows show a green customise button that opens a modal
+(name / colour / gradient / icon), a fresh rental's confirmation carries the
+same button, and `/bank role name|color|gradient` are **removed**. Icon emojis
+are now **this server's custom emojis only** (the bot stores the emoji's
+image); `/bank role icon` survives image-upload-only. Live pass:
+
+- [ ] After restart the command picker shows `/bank role icon` (image param
+      required) and **no** `/bank role name|color|gradient` — global command
+      sync may take a few minutes.
+- [ ] `/bank shop` with nothing rented → all Rent buttons; rent a colour →
+      confirmation shows a **Set colour** button that opens the hex modal and
+      the colour applies; reopening `/bank shop` shows that row as ✅ rented
+      with a green **Set colour** button.
+- [ ] Bad hex / blocklisted name / clashing colour typed into a modal → the
+      usual friendly ephemeral errors.
+- [ ] Rent the icon perk → confirmation notes `/bank role icon` for images.
+      Icon modal: a typed `:server_emoji:` works and the role shows the emoji
+      image; a pasted emoji (`<:name:id>`) works; a unicode emoji ✨ and a
+      foreign server's emoji are refused; an animated emoji is refused.
+- [ ] `/bank role icon` with an uploaded PNG still sets the icon.
+- [ ] `/bank gift` a colour to someone with no rentals → their `/bank shop`
+      shows **Set gifted colour** (plus a Rent colour button), and their DM
+      points at /bank shop.
+- [ ] `/bank post-guide` panel's Spending section reads "style it right from
+      the shop's customise buttons".
+
 ### Traditional TOD — Bank Round tracks asked history  (this commit)
 
 Bank Round questions are now recorded in the same per-(player, category)
@@ -550,22 +579,27 @@ DMs); dashboard Rentals table + force-cancel; and `on_member_remove` rental clea
 Offline logic is covered by service/loop/logic/projector/route tests; the Discord +
 dashboard + scheduler surfaces need a live pass:
 
-- [ ] Bot restarts clean — `/bank pay`, `/bank shop`, `/bank gift`, and the
-      `/bank role` subgroup all appear with no boot error.
+> **Superseded in part:** `/bank role name|color|gradient` were later replaced
+> by `/bank shop`'s customise modals (see the "customise via ephemeral buttons
+> + modals" entry above) — test the starred items through the shop's buttons
+> instead of the old subcommands.
+
+- [ ] Bot restarts clean — `/bank pay`, `/bank shop`, `/bank gift`, and
+      `/bank role icon` all appear with no boot error.
 - [ ] `/bank pay` a small amount → lands in **both** ledgers (payer `transfer_out`,
       recipient `transfer_in`) and DMs the recipient.
 - [ ] `/bank pay` **>100** → shows the confirmation step before debiting.
 - [ ] Disable transfers in config → `/bank pay` is refused with a branded notice.
 - [ ] `/bank shop` shows branded prices; icon/gradient rows reflect the server's
       role features (gated when the guild lacks them).
-- [ ] Rent a **colour**, then `/bank role color` → the personal role appears
-      **above** the booster swatch band and shows the colour.
+- [ ] Rent a **colour**, then set it via the shop's colour modal → the personal
+      role appears **above** the booster swatch band and shows the colour.
 - [ ] Try a **staff-adjacent** colour → the ΔE refusal **names** the staff role it
       clashes with.
 - [ ] Rent a **gradient** → the gradient renders and **supersedes** the solid colour.
 - [ ] `/bank gift @friend` a colour → the friend gets the DM + role and the payer
       sees the gift rental in `/bank wallet`.
-- [ ] A **blocklisted** role name is refused by `/bank role name`.
+- [ ] A **blocklisted** role name is refused by the shop's name modal.
 - [ ] Let a rental hit its anniversary with an **empty wallet** → grace DM, then
       after 36h the role reverts + a lapsed DM. *(Force it fast by editing the row:
       `UPDATE econ_rentals SET next_bill_at = strftime('%s','now') - 60 WHERE id = <rid>;`

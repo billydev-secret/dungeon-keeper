@@ -321,9 +321,9 @@ bonus); a transfer only moves existing currency between wallets.
 ## 6. Sinks (The Perk Shop)
 
 **Shipped (Stage 3):** the role-customization perks (solid colour, name, icon,
-gradient) and **gift-a-color** are live, browsable and rentable via `/bank shop`
-and `/bank role` (§7). Private rooms stay **Stage 6** and the spotlight slot stays
-**v2** — both still design-only below.
+gradient) and **gift-a-color** are live — browsed, rented **and customised** in
+`/bank shop`'s ephemeral panel (§7). Private rooms stay **Stage 6** and the
+spotlight slot stays **v2** — both still design-only below.
 
 Weekly rentals bill on personal anniversary tick. Defaults below; every price per-guild
 tunable (§9). **Renewal bills the CURRENT guild price at each anniversary** — the
@@ -377,14 +377,23 @@ the member owns and gift rentals where they are the beneficiary.
   plus `/qotd post` [mod]
   and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
   names are global; all *strings* inside are currency-branded.
-  - **`/bank pay @member amount`** — transfer (§5); **`/bank shop`** — browse the perk
-    catalogue with branded prices, icon/gradient rows reflecting the server's role
-    features; **`/bank gift @member <perk>`** — pay to rent a friend a solid colour
-    (eager role creation on the recipient).
-  - **`/bank role`** subgroup drives the shipped personal-role perks (Stage 3):
-    **`name`**, **`color`**, **`gradient`**, **`icon`** — each applies the matching
-    rented component to the member's personal role (§6), subject to the blocklist / ΔE
-    / feature gates.
+  - **`/bank pay @member amount`** — transfer (§5); **`/bank shop`** — one ephemeral
+    panel that both browses and configures: unrented rows carry a **Rent** button,
+    rented rows a green **customise** button opening the matching modal (name /
+    colour hex / gradient hexes / server-emoji icon), with icon/gradient rows
+    reflecting the server's role features and rented rows marked ✅. A fresh rental's
+    confirmation carries the same customise button, and a member holding only a
+    *gifted* colour gets a "Set gifted colour" button. **`/bank gift @member
+    <perk>`** — pay to rent a friend a solid colour (eager role creation on the
+    recipient).
+  - Each modal setter applies the matching rented component to the member's personal
+    role (§6), re-checking entitlements on submit, subject to the blocklist / ΔE /
+    feature gates. Emoji icons accept **this server's custom emojis only** (typed
+    `:name:` or pasted; the bot stores the emoji's image; animated refused).
+  - **`/bank role icon image:`** is the one surviving subcommand — modals can't take
+    file uploads, so image icons (256KB max) still arrive via slash command. The
+    former `name`/`color`/`gradient` subcommands are removed in favour of the shop's
+    modals.
 - **Channel guide panel (shipped):** **`/bank post-guide [channel]`** [mod] posts a
   single branded "how it works" embed (earning streams with live rates, shop prices,
   command crib sheet — all templated from `EconSettings`) into a channel. Panel ids
@@ -420,8 +429,9 @@ the member owns and gift rentals where they are the beneficiary.
   home dashboard's **Moderation tile** also surfaces the pending-claims
   count (+ latest claimant/quest) via the `/api/home` moderation group, so
   waiting sign-offs are visible without opening the Economy section.
-- **Role customization in v1** happens via `/bank role` subcommands + modals
-  (name / color hex / gradient / icon emoji-or-upload), proxied through the bot.
+- **Role customization in v1** happens inside `/bank shop`'s ephemeral panel —
+  customise buttons opening modals (name / color hex / gradient / server-emoji
+  icon), plus `/bank role icon` for image uploads — proxied through the bot.
 - **v2 member dashboard:** wallet page (`require_perms(set())` like the home page —
   balance, XP-today, streak + grace, quests, rentals with next-bill countdown, 30-day
   history, mute toggle) and a role studio panel with live preview.

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -596,16 +597,17 @@ def _live_rentals(db) -> list:
         ).fetchall()
 
 
-def _guild_roles(roles=()) -> MagicMock:
+def _guild_roles(roles=(), emojis=()) -> MagicMock:
     g = MagicMock()
     g.id = GUILD_ID
     g.roles = list(roles)
+    g.emojis = list(emojis)
     return g
 
 
-def _role_interaction(actor, roles=()) -> MagicMock:
+def _role_interaction(actor, roles=(), emojis=()) -> MagicMock:
     inter = _interaction(actor)
-    inter.guild = _guild_roles(roles)
+    inter.guild = _guild_roles(roles, emojis)
     return inter
 
 
@@ -848,6 +850,109 @@ async def test_shop_rent_success_each_perk(ctx, db, perk):
 
 
 @pytest.mark.asyncio
+async def test_shop_shows_customise_for_rented_perks(ctx, db):
+    """Rented rows swap their Rent button for a customise (modal) button."""
+    _enable(db)
+    _add_rental(db, "role_color")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
+        await _shop(cog, interaction)
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
+    ids = {str(b.custom_id) for b in buttons}
+    assert "econ_shop_cfg:role_color" in ids
+    assert "econ_shop_rent:role_color" not in ids
+    # The other perks still offer Rent.
+    assert "econ_shop_rent:role_name" in ids
+    blob = " ".join(f.value for f in kwargs["embed"].fields)
+    assert "rented" in blob
+
+
+@pytest.mark.asyncio
+async def test_shop_customise_button_opens_modal(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_color")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
+        await _shop(cog, interaction)
+
+    view = interaction.response.send_message.await_args.kwargs["view"]
+    button = next(
+        b for b in view.children
+        if isinstance(b, discord.ui.Button) and b.custom_id == "econ_shop_cfg:role_color"
+    )
+    press = _interaction(_member(member_id=500))
+    await button.callback(press)
+
+    from bot_modules.cogs.economy_cog import _RoleColorModal
+
+    modal = press.response.send_modal.await_args.args[0]
+    assert isinstance(modal, _RoleColorModal)
+
+
+@pytest.mark.asyncio
+async def test_shop_gift_recipient_gets_colour_customise(ctx, db):
+    """A gifted colour (no own rental) adds a Set gifted colour button."""
+    _enable(db)
+    _add_rental(db, "gift_color", user_id=800, beneficiary_id=500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)):
+        await _shop(cog, interaction)
+
+    view = interaction.response.send_message.await_args.kwargs["view"]
+    ids = {str(b.custom_id) for b in view.children if isinstance(b, discord.ui.Button)}
+    # Colour customise via the gift, while the role_color row still offers Rent.
+    assert "econ_shop_cfg:gift_color" in ids
+    assert "econ_shop_rent:role_color" in ids
+
+
+@pytest.mark.asyncio
+async def test_rent_confirmation_offers_customise_button(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with _patch_projection():
+        await cog.do_rent(interaction, _settings(db), _guild_roles(), "role_name")
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    buttons = [
+        b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)
+    ]
+    assert [str(b.custom_id) for b in buttons] == ["econ_rent_cfg:role_name"]
+
+
+@pytest.mark.asyncio
+async def test_name_modal_submit_sets_role_name(ctx, db):
+    """The modal path lands on the same setter/validators as everything else."""
+    _enable(db)
+    _add_rental(db, "role_name")
+    cog = _make_cog(ctx)
+
+    from bot_modules.cogs.economy_cog import _RoleNameModal
+
+    modal = _RoleNameModal(cog)
+    modal.text._value = "Stardust"
+    interaction = _role_interaction(_member(member_id=500))
+    with _patch_projection() as (apply_mock, _r, _n):
+        await modal.on_submit(interaction)
+    apply_mock.assert_awaited_once()
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT name FROM econ_personal_roles WHERE user_id = 500"
+        ).fetchone()
+    assert row["name"] == "Stardust"
+
+
+@pytest.mark.asyncio
 async def test_shop_rent_duplicate(ctx, db):
     _enable(db)
     _credit(db, 500, 200)
@@ -876,23 +981,36 @@ async def test_shop_rent_insufficient(ctx, db):
     assert _live_rentals(db) == []
 
 
-# ── /bank role validators ────────────────────────────────────────────────────
+# ── role studio setters (shared by the shop's customise modals) ──────────────
 
 
 async def _role_name(cog, interaction, text) -> None:
-    await cog.role_name.callback(cog, interaction, text)
+    await cog.set_role_name(interaction, text)
 
 
 async def _role_color(cog, interaction, hex_) -> None:
-    await cog.role_color.callback(cog, interaction, hex_)
+    await cog.set_role_color(interaction, hex_)
 
 
 async def _role_gradient(cog, interaction, h1, h2) -> None:
-    await cog.role_gradient.callback(cog, interaction, h1, h2)
+    await cog.set_role_gradient(interaction, h1, h2)
 
 
-async def _role_icon(cog, interaction, emoji=None, image=None) -> None:
-    await cog.role_icon.callback(cog, interaction, emoji, image)
+async def _role_icon_emoji(cog, interaction, raw) -> None:
+    await cog.set_role_icon_emoji(interaction, raw)
+
+
+async def _role_icon_image(cog, interaction, image) -> None:
+    await cog.role_icon.callback(cog, interaction, image)
+
+
+def _fake_emoji(name="party", eid=999, animated=False, data=b"emoji-bytes"):
+    e = MagicMock()
+    e.name = name
+    e.id = eid
+    e.animated = animated
+    e.read = AsyncMock(return_value=data)
+    return e
 
 
 @pytest.mark.asyncio
@@ -1042,33 +1160,108 @@ async def test_role_icon_without_feature(ctx, db):
     _enable(db)
     _add_rental(db, "role_icon")
     cog = _make_cog(ctx)
-    interaction = _role_interaction(_member(member_id=500))
+    interaction = _role_interaction(_member(member_id=500), emojis=[_fake_emoji()])
     with (
         _patch_projection() as (apply_mock, _r, _n),
         patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=False)),
     ):
-        await _role_icon(cog, interaction, emoji="✨")
+        await _role_icon_emoji(cog, interaction, ":party:")
     assert "support" in interaction.response.send_message.await_args.args[0].lower()
     apply_mock.assert_not_awaited()
 
 
+@pytest.mark.parametrize("raw", [":party:", "party", "<:party:999>"])
 @pytest.mark.asyncio
-async def test_role_icon_emoji_success(ctx, db):
+async def test_role_icon_custom_emoji_success(ctx, db, raw):
     _enable(db)
     _add_rental(db, "role_icon")
     cog = _make_cog(ctx)
-    interaction = _role_interaction(_member(member_id=500))
+    interaction = _role_interaction(_member(member_id=500), emojis=[_fake_emoji()])
     with (
         _patch_projection() as (apply_mock, _r, _n),
         patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)),
     ):
-        await _role_icon(cog, interaction, emoji="✨")
+        await _role_icon_emoji(cog, interaction, raw)
     apply_mock.assert_awaited_once()
     with open_db(db) as conn:
         row = conn.execute(
             "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
         ).fetchone()
-    assert row["icon_path"] == "✨"
+    # The emoji's image is downloaded into the managed icon store.
+    assert Path(row["icon_path"]).read_bytes() == b"emoji-bytes"
+
+
+@pytest.mark.parametrize("raw", ["✨", "<:evil:123>", ":nosuch:"])
+@pytest.mark.asyncio
+async def test_role_icon_rejects_non_server_emoji(ctx, db, raw):
+    """Unicode emojis and emojis from other servers are refused."""
+    _enable(db)
+    _add_rental(db, "role_icon")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500), emojis=[_fake_emoji()])
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)),
+    ):
+        await _role_icon_emoji(cog, interaction, raw)
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "custom emoji" in msg
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_role_icon_rejects_animated_emoji(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_icon")
+    cog = _make_cog(ctx)
+    emoji = _fake_emoji(animated=True)
+    interaction = _role_interaction(_member(member_id=500), emojis=[emoji])
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)),
+    ):
+        await _role_icon_emoji(cog, interaction, ":party:")
+    assert "animated" in interaction.response.send_message.await_args.args[0].lower()
+    apply_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_role_icon_image_upload_success(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_icon")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    image = MagicMock()
+    image.size = 100
+    image.read = AsyncMock(return_value=b"png-bytes")
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)),
+    ):
+        await _role_icon_image(cog, interaction, image)
+    apply_mock.assert_awaited_once()
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT icon_path FROM econ_personal_roles WHERE user_id = 500"
+        ).fetchone()
+    assert Path(row["icon_path"]).read_bytes() == b"png-bytes"
+
+
+@pytest.mark.asyncio
+async def test_role_icon_image_too_big(ctx, db):
+    _enable(db)
+    _add_rental(db, "role_icon")
+    cog = _make_cog(ctx)
+    interaction = _role_interaction(_member(member_id=500))
+    image = MagicMock()
+    image.size = 300 * 1024
+    with (
+        _patch_projection() as (apply_mock, _r, _n),
+        patch("bot_modules.cogs.economy_cog.feature_gate_ok", new=AsyncMock(return_value=True)),
+    ):
+        await _role_icon_image(cog, interaction, image)
+    assert "256KB" in interaction.response.send_message.await_args.args[0]
+    apply_mock.assert_not_awaited()
 
 
 # ── /bank gift ───────────────────────────────────────────────────────────────
