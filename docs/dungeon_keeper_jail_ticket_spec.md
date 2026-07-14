@@ -51,7 +51,23 @@ The dashboard mirrors the moderator surface. Jail endpoints are read-only — re
 | `GET` | `/api/moderation/transcript` | Fetch a transcript |
 | `GET` | `/api/moderation/audit` | List audit log entries |
 
-Discord and dashboard actions produce identical side-effects (role changes, channel ops, DMs, transcripts, audit entries).
+Discord and dashboard actions are *intended* to produce identical side-effects
+(role changes, channel ops, DMs, transcripts, audit entries), and some do:
+`POST .../jail` routes through the same `apply_jail` flow as the slash command
+(real role + jail channel + DM), and `.../warn` and `.../claim` match their
+Discord counterparts (record-only).
+
+**Known gap (as of 2026-07-14):** the ticket-lifecycle routes
+`POST .../close`, `.../reopen`, `.../dismiss`, and `.../escalate` are currently
+**DB-only** — they flip the ticket row and write an audit entry but do **not**
+reach Discord. Closing (or dismissing/reopening/escalating) a ticket from the
+dashboard leaves the Discord channel untouched: the embed still shows its old
+status, the Close↔Reopen/Delete buttons don't swap, the channel isn't
+locked/unlocked, no note is posted, the creator isn't DM'd, and escalate
+neither adds admin roles nor pings them. The bridge to fix this exists
+(`ctx.bot` on the web server's event loop, as `.../jail` uses); wiring it up is
+deferred. Until then, drive close/reopen/escalate from **Discord** if you need
+the channel-side effects.
 
 ## Behaviour
 
