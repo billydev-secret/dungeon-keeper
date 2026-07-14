@@ -60,6 +60,10 @@ class EconSettings:
     # dashboard's editable-field whitelist.
     guide_channel_id: int = 0
     guide_message_id: int = 0
+    # Same pattern for the auto-updating leaderboard panel
+    # (/bank post-leaderboard, refreshed hourly by the economy loop).
+    leaderboard_channel_id: int = 0
+    leaderboard_message_id: int = 0
 
 
 DEFAULT_ECON_SETTINGS = EconSettings()

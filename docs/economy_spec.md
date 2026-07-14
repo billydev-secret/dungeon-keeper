@@ -393,6 +393,20 @@ the member owns and gift rentals where they are the beneficiary.
   re-pricing/re-branding); pointing at another channel deletes the old panel and
   reposts. Builder in `economy/guide.py`; the two ids are bot-managed and not
   dashboard-editable.
+- **Leaderboard panel (shipped):** **`/bank post-leaderboard [channel]`** [mod]
+  posts a single auto-updating embed: top 5 earners over a rolling 7 days
+  (income = positive ledger sums excluding `transfer_in`, matching the
+  Statistics page), community-goal progress bars with completed/paid states,
+  the active quest board (daily/weekly/monthly/event, capped at 12 lines),
+  and a blurb pointing members at `/quests` + `/bank wallet` for their own
+  numbers. Panel ids persist as `econ_leaderboard_channel_id` /
+  `econ_leaderboard_message_id` (guide-panel pattern: same-channel repost
+  edits in place, another channel deletes + reposts). The **economy loop
+  refreshes it in place every hourly tick** (`run_guild_leaderboard`); a 404
+  on the stored message clears the ids, so deleting the panel message is how
+  staff retire it. Collector + builder in `economy/leaderboard.py` (pure —
+  Discord I/O stays in the cog/loop); ids are bot-managed and not
+  dashboard-editable.
 - **Manager surface (dashboard):** the **Economy** nav section, gated on
   `economy_manager_role_id` or admin (mirrors `games_editor_role` /
   `require_game_host`). Its pages: **Operations** (community progress +
