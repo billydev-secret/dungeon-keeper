@@ -237,9 +237,10 @@ def assigned_quest_ids(
     """The ``n`` quest ids a member draws from a cadence pool for a period.
 
     The pool is shuffled deterministically per member (so two members get
-    different sets), then walked ``n``-at-a-time by ``index`` — a member can't
-    see the same quest again until they've cycled the whole pool, so repeats
-    are spaced ~``floor(len/n)`` periods apart. ``n >= len`` (or a tiny pool)
+    different sets), then walked ``n``-at-a-time by ``index``, spacing a
+    member's repeats roughly ``floor(len/n)`` periods apart — exactly a full
+    cycle when ``n`` divides the pool size, approximate otherwise (e.g. len 5,
+    n 2 recurs some ids every 2 periods). ``n >= len`` (or a tiny pool)
     degrades gracefully to "the whole pool". Returns sorted ids.
     """
     ordered = sorted(set(pool_ids))

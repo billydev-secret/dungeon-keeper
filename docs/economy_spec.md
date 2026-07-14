@@ -292,10 +292,10 @@ a **pool**, and every member is shown/paid their own subset of
 a pure function of `(pool_ids, user_id, period_index, board_size)` — a per-member
 `sha256` shuffle of the pool walked N-at-a-time by `period_index(qtype, day)`
 (day ordinal / ISO-week / month) — so it needs **no assignment table**: it is
-stable within a period, differs between members, and a quest can't recur for a
-member until they've cycled the whole pool (**repeat gap ≈ ⌊poolsize/N⌋
-periods**; small pools where `N ≥ poolsize` degrade to "everyone sees
-everything"). Community and event quests are **not** personalized (community is a
+stable within a period, differs between members, and spaces a member's repeats
+roughly **⌊poolsize/N⌋ periods** apart (a full cycle when N divides the pool,
+approximate otherwise — e.g. a 5-daily pool at N=2 recurs some dailies every 2
+days; small pools where `N ≥ poolsize` degrade to "everyone sees everything"). Community and event quests are **not** personalized (community is a
 guild-wide objective; event pays per occurrence).
 
 Both surfaces filter to the member's board: `fire_trigger_quests` and the
