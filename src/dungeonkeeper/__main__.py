@@ -21,6 +21,8 @@ from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.booster_roles import BoosterRoleDynamicButton
 from bot_modules.services.inactivity_prune_service import inactivity_prune_loop
+from bot_modules.chat_revive.actions import ReviveOptInButton
+from bot_modules.services.chat_revive_loop import chat_revive_loop
 from bot_modules.services.economy_loop import economy_loop
 from bot_modules.services.voice_xp_service import voice_xp_loop
 from bot_modules.services.wellness_partners import (
@@ -208,6 +210,7 @@ def main() -> None:
         "bot_modules.cogs.musical_chairs",
         "bot_modules.cogs.chicken",
         "bot_modules.cogs.bios_cog",
+        "bot_modules.cogs.chat_revive_cog",
         "bot_modules.cogs.economy_cog",
         # ── Party Games (PoppyBot) ────────────────────────────────
         "bot_modules.cogs.games_session_cog",
@@ -257,6 +260,9 @@ def main() -> None:
     # Register persistent booster-role buttons so they survive restarts.
     bot.add_dynamic_items(BoosterRoleDynamicButton)
 
+    # Register persistent Chat Revive opt-in buttons so they survive restarts.
+    bot.add_dynamic_items(ReviveOptInButton)
+
     # Register persistent wellness-partner request buttons so DM Accept/Decline survive restarts
     bot.add_dynamic_items(WellnessPartnerAcceptButton, WellnessPartnerDeclineButton)
 
@@ -297,6 +303,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: economy_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: chat_revive_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: db_backup_loop(bot, db_path))
 
