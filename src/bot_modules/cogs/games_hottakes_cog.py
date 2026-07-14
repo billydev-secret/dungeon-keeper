@@ -14,6 +14,7 @@ from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     update_game_message,
@@ -308,15 +309,7 @@ class HotTakesCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,

@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, get_active_game
+from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, get_active_game, finish_launch_response
 from bot_modules.games.command_groups import play
 from .data import seed_templates_from_file
 from .modes.quiplash import run_quiplash
@@ -79,15 +79,11 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
             guild_id=interaction.guild_id or 0,
             options={"mode": mode, "tier": tier, "template_id": template_id, "tag": tag},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "Couldn't start LegitLibs — no published templates for that tier/tag, "
-                    "or I'm missing permission to post here.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
+        await finish_launch_response(
+            interaction, game_id,
+            perms_hint="Couldn't start LegitLibs — no published templates for that tier/tag, "
+            "or I'm missing permission to post here.",
+        )
 
     async def launch(self, *, channel, host_id, host_name, guild_id, options) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""

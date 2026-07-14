@@ -18,6 +18,7 @@ from bot_modules.games.constants import (
     HOW_TO_PLAY,
 )
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
     get_game_options,
@@ -125,14 +126,23 @@ class ClapbackAnswerModal(discord.ui.Modal, title="Your Answer"):
 
 
 class ClapbackJoinView(discord.ui.View):
+    # Inactivity window; every button press resets it. A scheduled start
+    # (start_in) extends the first window past the advertised start time.
+    LOBBY_TIMEOUT = 600
+
     def __init__(self, game_id: str, host_id: int, db, bot, cog, config: dict):
-        super().__init__(timeout=300)
+        timeout = float(self.LOBBY_TIMEOUT)
+        start_epoch = config.get("start_epoch")
+        if start_epoch:
+            timeout = max(timeout, start_epoch - time.time() + 120)
+        super().__init__(timeout=timeout)
         self.game_id = game_id
         self.host_id = host_id
         self.db = db
         self.bot = bot
         self.cog = cog
         self.config = config
+        self.message: discord.Message | None = None
 
     def _is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
@@ -144,6 +154,17 @@ class ClapbackJoinView(discord.ui.View):
 
     async def on_timeout(self):
         await self.cog._cancel_game(self.game_id, reason="Lobby timed out")
+        # Retire the lobby message — a live-looking Join/Start row on a dead
+        # view swallows clicks as "This interaction failed".
+        if self.message is not None:
+            disable_all_items(self)
+            try:
+                await self.message.edit(
+                    content="⌛ **Lobby timed out** — the game wasn't started in time. Run `/games play clapback` to open a new one.",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
 
     @discord.ui.button(label="Join", style=discord.ButtonStyle.success, custom_id="ql_join")
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -538,15 +559,7 @@ class ClapbackCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={"start_in": start_in},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I don't have access to send messages in that channel. "
-                    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
+        await finish_launch_response(interaction, game_id)
 
     async def launch(
         self,
@@ -634,6 +647,7 @@ class ClapbackCog(commands.Cog):
             log.warning("clapback launch lacked send perms in channel %s", channel.id)
             return None
 
+        view.message = msg
         await update_game_message(self.db, game_id, msg.id)
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
