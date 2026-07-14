@@ -50,7 +50,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | Doc | What it covers | Notes |
 |---|---|---|
 | [auto_delete_spec.md](auto_delete_spec.md) | Auto-delete message rules | |
-| [chat_revive_spec.md](chat_revive_spec.md) | Chat Revive ("Ember"): rhythm-aware lull questions | v1 built (stages 0–4); web panel deferred; plan in [plans/chat-revive.md](plans/chat-revive.md) |
+| [chat_revive_spec.md](chat_revive_spec.md) | Chat Revive ("Ember"): rhythm-aware lull questions | v1 built; dashboard-managed (no slash commands); plan in [plans/chat-revive.md](plans/chat-revive.md) |
 | [beta_tools_spec.md](beta_tools_spec.md) | Beta tools: synthetic activity for testers | Built |
 | [DUNGEON_KEEPER_TEST_ENV_SPEC.md](DUNGEON_KEEPER_TEST_ENV_SPEC.md) | Test env with beta puppets | Built |
 | [economy_spec.md](economy_spec.md) | Economy & perk shop (currency, quests, rentals) | Stages 0–4 built (rooms/v2 still design) |

@@ -31,6 +31,26 @@ channel via an `on_message` delete-and-repost (debounced ~6s).
       does **not** jump to the bottom) — only new activity re-sticks it.
 
 ### Chat Revive (stages 0–4) — rhythm-aware lull questions  (this commit)
+### Chat Revive — dashboard management, /revive commands removed  (this commit)
+
+Same-day revision: the whole `/revive` command group is stripped; the
+dashboard (Moderation → Chat Revive) is now the only management surface.
+The monitor loop and the persistent opt-in button are unchanged.
+
+- [ ] Restart the bot → `/revive` no longer appears in Discord's command
+      picker after the command tree re-syncs (stale entries may linger
+      briefly in the client until it refreshes).
+- [ ] Dashboard → Moderation → Chat Revive: settings save (enable seeds the
+      starter pack once), a channel can be enabled with categories/ping
+      dials, and "Check" explains the current verdict in plain language.
+- [ ] "Fire" from the dashboard posts the plain-text question in the channel
+      and the Scoreboard reflects it after a refresh.
+- [ ] "Post opt-in button" publishes the button and tapping it toggles the
+      role (including after another restart).
+- [ ] Question bank: add, bulk add (tagged lines), retire — all from the
+      panel; a duplicate add shows the conflict message inline.
+
+### Chat Revive (stages 0–4) — rhythm-aware lull questions  (superseded above; migration + loop checks still apply)
 
 New feature ("Ember"): a monitor loop learns each enabled channel's per-band
 message rhythm from `processed_messages` and posts a bank question into a

@@ -185,6 +185,17 @@ def list_enabled_channels(
     return [_channel_from_row(r) for r in rows]
 
 
+def delete_channel_config(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int
+) -> bool:
+    """Un-invite a channel entirely (vs. enabled=0 which keeps its dials)."""
+    cur = conn.execute(
+        "DELETE FROM revive_channel_config WHERE guild_id = ? AND channel_id = ?",
+        (guild_id, channel_id),
+    )
+    return (cur.rowcount or 0) > 0
+
+
 def list_channel_configs(
     conn: sqlite3.Connection, guild_id: int
 ) -> list[ChannelConfig]:

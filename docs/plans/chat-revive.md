@@ -2,9 +2,16 @@
 
 **Status:** v1 built (stages 0–4, 2026-07-14). Stages 2–4 landed together in
 one commit at Billy's request ("let the whole thing rip") instead of the
-per-stage live-testing cadence below; the shared sync helpers live in
-`chat_revive_loop.py` and the cog imports them, so the loop commit precedes
-the cog in spirit. Live verification is queued in `docs/TESTING_QUEUE.md`.
+per-stage live-testing cadence below. Live verification is queued in
+`docs/TESTING_QUEUE.md`.
+
+**Same-day revision:** the `/revive` slash-command group (Stage 2) was built
+and then **removed** to keep the command surface clean; management moved to
+the dashboard (Moderation → Chat Revive, `/api/chat-revive/*` +
+`static/js/panels/chat-revive.js`) — reversing this plan's "web panel comes
+later" deferral. The monitor loop, `chat_revive/actions.py`, and the opt-in
+button are unchanged; the loop's sync helpers now serve the web routes
+instead of a cog.
 
 **Spec:** `docs/chat_revive_spec.md` (added at Stage 0; source: product spec 2026-07-14).
 Commits are tagged `Chat Revive (stage N): …`. Each stage is built in a worktree,
