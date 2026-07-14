@@ -3528,3 +3528,92 @@ select option { background: var(--bg-input); color: var(--ink); }
 .doc-x:hover { color: var(--red); }
 .doc-add-row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
 .dp-image { display: block; max-width: 100%; max-height: 300px; border-radius: 4px; margin-top: 8px; }
+
+/* ── Role Menus editor (panels/role-menus.js) ─────────────────────── */
+.rm-wide-input {
+  padding: 8px 10px; font-size: 13px; border: 1px solid var(--rule);
+  border-radius: 4px; background: var(--bg-input); color: var(--ink);
+}
+.rm-desc { min-height: 120px; }
+.rm-settings {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; margin-top: 8px;
+}
+.rm-settings label {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12px; font-weight: 600; color: var(--ink-dim);
+}
+.rm-settings select, .rm-settings input {
+  padding: 7px 8px; font-size: 13px; border: 1px solid var(--rule);
+  border-radius: 4px; background: var(--bg-input); color: var(--ink);
+}
+.rm-settings label[hidden] { display: none; }
+
+/* option rows */
+.rm-opt-row {
+  display: grid; grid-template-columns: auto 52px 1fr 1fr 1fr auto auto;
+  gap: 6px; align-items: center; padding: 4px 0;
+}
+.rm-opt-row input, .rm-opt-row select {
+  padding: 6px 8px; font-size: 13px; border: 1px solid var(--rule);
+  border-radius: 4px; background: var(--bg-input); color: var(--ink); min-width: 0;
+}
+.rm-opt-emoji { text-align: center; }
+.rm-opt-move { display: flex; flex-direction: column; gap: 1px; }
+.rm-mv {
+  background: transparent; border: none; color: var(--ink-mute);
+  cursor: pointer; font-size: 9px; line-height: 1; padding: 2px 3px;
+}
+.rm-mv:hover:not(:disabled) { color: var(--ink-bright); }
+.rm-mv:disabled { opacity: .25; cursor: default; }
+.rm-elevated {
+  display: flex; align-items: center; gap: 3px; font-size: 13px;
+  color: var(--ink-mute); cursor: pointer;
+}
+.rm-opt-foot { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+
+/* health warnings */
+.rm-health {
+  border: 1px solid var(--red-soft); border-radius: 4px;
+  background: color-mix(in srgb, var(--red) 8%, transparent);
+  padding: 8px 12px; display: flex; flex-direction: column; gap: 4px;
+}
+.rm-health-row { font-size: 13px; color: var(--ink); }
+
+/* component preview — approximate Discord buttons + select */
+.rm-btnrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.rm-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 7px 14px; border-radius: 8px; font-size: 13.5px; font-weight: 500;
+  color: #fff; cursor: default; user-select: none;
+}
+.rm-btn-secondary { background: #4e5058; }
+.rm-btn-primary { background: #5865f2; }
+.rm-btn-success { background: #248046; }
+.rm-btn-danger { background: #da373c; }
+.rm-emoji { width: 18px; height: 18px; vertical-align: -3px; }
+.rm-select {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: 8px; padding: 9px 12px; border-radius: 4px;
+  background: #1e1f22; border: 1px solid #111214; color: #b5bac1; font-size: 14px;
+}
+.rm-select-chev { font-size: 11px; }
+.rm-select-opts {
+  border: 1px solid #111214; border-top: none; border-radius: 0 0 4px 4px;
+  background: #2b2d31; max-height: 220px; overflow-y: auto;
+}
+.rm-sel-opt {
+  display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+  border-bottom: 1px solid rgba(0,0,0,.15);
+}
+.rm-sel-opt:last-child { border-bottom: none; }
+.rm-sel-emoji { width: 20px; text-align: center; }
+.rm-sel-main { display: flex; flex-direction: column; gap: 1px; }
+.rm-sel-label { font-size: 14px; color: #dbdee1; }
+.rm-sel-desc { font-size: 12px; color: #949ba4; }
+.rm-thumb {
+  float: right; width: 64px; height: 64px; object-fit: cover;
+  border-radius: 4px; margin: 0 0 8px 12px;
+}
+.rm-publish { border-top: 1px solid var(--rule); padding-top: 10px; margin-top: 4px; }
+

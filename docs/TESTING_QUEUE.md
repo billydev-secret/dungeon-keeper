@@ -842,6 +842,45 @@ pass:
       AND amount > 0 AND kind != 'transfer_in'
       AND created_at >= <week_start_epoch> AND created_at < <week_end_epoch>;`
 
+### Role Menus — v1 (self-service roles from the Oracle panel)  (this branch)
+
+New feature end-to-end: `docs/role_menus_spec.md`, plan `docs/plans/role-menus.md`.
+Members self-assign roles via buttons/dropdown on a DK-posted embed; everything
+is built and published from the new **Role Menus** page (Moderation section).
+Mode engine, db, routes, and the interaction path are unit-covered; the live
+Discord surface needs a pass:
+
+- [ ] Restart the bot → boots clean (migration 073 applies; `role_menus_cog`
+      loads — watch for the context-menu/extension drift warning).
+- [ ] Oracle → Role Menus: create a menu, add 2–3 choices (role picker should
+      only offer roles below DK's top role; a mod-permission role only appears
+      after checking the per-row ⚠ override), watch the live preview track the
+      form, and **Publish** to a test channel.
+- [ ] Click a button as a normal member → role appears, reply is ephemeral
+      ("✅ You now have @X"), and the mod channel gets the compact
+      `🎭 @user +X (Menu)` line.
+- [ ] Click again (toggle mode) → role removed. Switch the menu to **Unique**
+      and hold two menu roles → picking one drops the other.
+- [ ] Dropdown style: submitted selection **becomes** your set — holding A and
+      submitting only B removes A and adds B, and the ephemeral reply spells
+      out `+B, −A`. (Note: Discord can't pre-check your current roles in the
+      dropdown; this is the spec'd behavior, verify it feels OK live.)
+- [ ] **Binding** mode: first pick locks ("permanent" on the second try, even
+      after a restart).
+- [ ] Guardrails: set a required role you don't have → gated message; set
+      max roles = 1 and try a second → cap message; set a 30s cooldown and
+      double-click → "slow down".
+- [ ] Edit the published menu and Save → the live message updates in place
+      (no delete/repost). **Unpublish** → post stays but greys out; clicking
+      while off (stale client) → "turned off" reply. Turn back on.
+- [ ] Delete a menu role from the server, then click its button → member gets
+      the polite failure, mod channel gets **one** alert (second click stays
+      quiet), and the panel list/editor shows the ⚠️ health warning.
+- [ ] Restart the bot and click an already-published menu → still works
+      (DynamicItems rebuilt from custom_ids).
+- [ ] `/api/role-menus` mutations show up in the Audit Log panel
+      (`role_menu.*` actions; elevated override logs its own action).
+
 ---
 
 ## Done

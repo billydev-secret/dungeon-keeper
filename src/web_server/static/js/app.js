@@ -84,6 +84,7 @@ const SECTIONS = [
     items: [
       { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js" },
       { id: "docs",           label: "Docs",           module: "./panels/docs.js" },
+      { id: "role-menus",     label: "Role Menus",     module: "./panels/role-menus.js" },
       { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js" },
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js" },
