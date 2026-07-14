@@ -440,7 +440,9 @@ the member owns and gift rentals where they are the beneficiary.
     former `name`/`color`/`gradient` subcommands are removed in favour of the shop's
     modals.
 - **Channel guide panel (shipped):** **`/bank post-guide [channel]`** [mod] posts a
-  single branded "how it works" embed (earning streams with live rates, shop prices,
+  single branded "how it works" embed (a **Joining** field pointing members at the
+  onboarding Channels & Roles screen via the `<id:customize>` mention to grab the
+  economy-game role, then earning streams with live rates, shop prices, and a
   command crib sheet — all templated from `EconSettings`) into a channel. Panel ids
   persist as `econ_guide_channel_id` / `econ_guide_message_id` (Voice Master
   panel pattern): re-running in the same channel edits the panel in place (use after

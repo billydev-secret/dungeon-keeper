@@ -44,6 +44,16 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert embed.footer.text and "grace" in embed.footer.text
 
 
+def test_guide_embed_points_at_channels_and_roles_optin():
+    fields = {
+        f.name: f.value or ""
+        for f in build_guide_embed(EconSettings()).fields
+    }
+    joining = fields["Joining"]
+    assert "<id:customize>" in joining  # clickable "Channels & Roles" link
+    assert "opt in" in joining.lower()
+
+
 def test_guide_embed_uses_guild_branding():
     settings = EconSettings(
         currency_plural="Gems",

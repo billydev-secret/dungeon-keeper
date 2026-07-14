@@ -37,6 +37,16 @@ def build_guide_embed(
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
 
+    # `<id:customize>` renders as a clickable "Channels & Roles" link — the
+    # server's onboarding screen where members grab the economy-game role that
+    # unlocks these channels. Not a real text channel, so there is no id to
+    # mention; this token is the only way to point at it.
+    embed.add_field(
+        name="Joining",
+        value="Opt in any time from <id:customize> to join the game economy.",
+        inline=False,
+    )
+
     earn_lines = [
         (
             f"**Show up daily** — your first message of the day pays "

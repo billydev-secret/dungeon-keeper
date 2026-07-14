@@ -9,6 +9,17 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — bank guide panel "Joining" opt-in note  (this commit)
+
+The `/bank post-guide` panel now carries a **Joining** field:
+"Opt in any time from Channels & Roles to join the game economy", where
+"Channels & Roles" is the `<id:customize>` onboarding mention.
+
+- [ ] Re-run `/bank post-guide` in the bank channel and confirm the new
+      **Joining** field renders with a **clickable** "Channels & Roles" link
+      (blue, opens the onboarding customise screen) — not the literal text
+      `<id:customize>`. Requires server onboarding to be enabled.
+
 ### Economy — quest completion pings via DM under a game role  (this commit)
 
 New `game_role_id` setting (Dashboard → Economy → Settings → **Game role**).
