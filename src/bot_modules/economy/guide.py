@@ -72,8 +72,8 @@ def build_guide_embed(
             f"weekly: colour {emoji} {settings.price_role_color:,} · name "
             f"{emoji} {settings.price_role_name:,} · gradient "
             f"{emoji} {settings.price_role_gradient:,} · icon "
-            f"{emoji} {settings.price_role_icon:,}. Then style it with the "
-            "`/bank role` commands."
+            f"{emoji} {settings.price_role_icon:,}. Then style it right from "
+            "the shop's customise buttons."
         ),
         (
             f"`/bank gift` — treat a friend to a custom role colour "
