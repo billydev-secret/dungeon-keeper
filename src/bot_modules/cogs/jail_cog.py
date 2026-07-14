@@ -34,16 +34,21 @@ from bot_modules.commands.jail_commands import (
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
     PolicyVoteYesButton,
+    TICKET_STATUS_CLOSED,
+    TICKET_STATUS_ESCALATED,
+    TICKET_STATUS_OPEN,
     TicketCloseButton,
     TicketDeleteButton,
     TicketPanelButton,
     TicketReopenButton,
     _JailModal,
     _TicketFromMessageModal,
+    _apply_ticket_status,
     _collect_and_post_transcript,
     _dm_user,
     _do_jail,
     _do_unjail,
+    _finalize_ticket_delete,
     _get_admin_role_ids,
     _add_ticket_panel,
     _get_config,
@@ -54,6 +59,7 @@ from bot_modules.commands.jail_commands import (
     _ts_str,
     jail_expiry_loop,
     policy_vote_timeout_loop,
+    ticket_autodelete_loop,
 )
 from bot_modules.services.moderation import (
     add_ticket_participant,
@@ -63,7 +69,6 @@ from bot_modules.services.moderation import (
     create_policy_ticket,
     create_ticket,
     create_warning,
-    delete_ticket,
     escalate_ticket,
     get_active_jail,
     get_active_warning_count,
@@ -358,6 +363,10 @@ class JailCog(commands.Cog):
         bot.startup_task_factories.append(
             lambda: policy_vote_timeout_loop(bot, ctx)
         )
+        # Permanently delete tickets left closed for 24h (archives first).
+        bot.startup_task_factories.append(
+            lambda: ticket_autodelete_loop(bot, ctx)
+        )
 
     async def cog_unload(self) -> None:
         if hasattr(self, "_jail_context_menu"):
@@ -638,7 +647,12 @@ class JailCog(commands.Cog):
 
             async for msg in channel.history(limit=5, oldest_first=True):
                 if msg.author == guild.me and msg.embeds:
-                    await msg.edit(view=view)
+                    await msg.edit(
+                        embed=_apply_ticket_status(
+                            msg.embeds[0], TICKET_STATUS_CLOSED
+                        ),
+                        view=view,
+                    )
                     break
 
             if creator:
@@ -706,9 +720,19 @@ class JailCog(commands.Cog):
                 )
             view = discord.ui.View(timeout=None)
             view.add_item(TicketCloseButton(tid))
+            # Restore the Status field — keep the ⚠️ marker if the ticket was
+            # escalated (that flag survives reopen), else back to 🟢 Open.
+            reopen_status = (
+                TICKET_STATUS_ESCALATED
+                if ticket.get("escalated")
+                else TICKET_STATUS_OPEN
+            )
             async for msg in channel.history(limit=5, oldest_first=True):
                 if msg.author == guild.me and msg.embeds:
-                    await msg.edit(view=view)
+                    await msg.edit(
+                        embed=_apply_ticket_status(msg.embeds[0], reopen_status),
+                        view=view,
+                    )
                     break
             await interaction.response.send_message(
                 f"🔓 Ticket reopened by {member.mention}.",
@@ -750,43 +774,9 @@ class JailCog(commands.Cog):
         channel = interaction.channel
         if not guild or not isinstance(channel, discord.TextChannel):
             return
-        tid = ticket["id"]
 
         await interaction.response.defer(ephemeral=True)
-        accent = await resolve_accent_color(ctx.db_path, guild)
-        creator = guild.get_member(ticket["user_id"]) or interaction.user
-        await _collect_and_post_transcript(
-            ctx,
-            channel,
-            record_type="ticket",
-            record_id=tid,
-            user=creator,
-            extra_meta={"close_reason": ticket.get("close_reason", "")},
-        )
-        td_guild_id = guild.id
-        td_ticket_user_id = ticket["user_id"]
-
-        def _delete_ticket():
-            with ctx.open_db() as conn:
-                delete_ticket(conn, tid)
-                write_audit(
-                    conn,
-                    guild_id=td_guild_id,
-                    action="ticket_delete",
-                    actor_id=member.id,
-                    target_id=td_ticket_user_id,
-                    extra={"ticket_id": tid},
-                )
-
-        await asyncio.to_thread(_delete_ticket)
-
-        audit_embed = discord.Embed(
-            title="🗑️ Ticket Deleted",
-            description=f"**Ticket #{tid}** deleted by {member.mention}",
-            color=accent,
-        )
-        await _post_audit(ctx, guild, audit_embed)
-        await channel.delete(reason=f"Ticket #{tid} deleted")
+        await _finalize_ticket_delete(ctx, channel, ticket, actor_id=member.id)
 
     @ticket.command(
         name="claim",
@@ -896,6 +886,19 @@ class JailCog(commands.Cog):
         if pings:
             msg += f"\n{' '.join(pings)}"
         await interaction.response.send_message(msg)
+
+        # Flip the ticket embed's Status field to Escalated. Done after the
+        # interaction reply so the extra REST calls don't risk the 3 s response
+        # window; the embed carries no view change, so edit only the embed and
+        # leave the existing buttons intact.
+        async for hist_msg in channel.history(limit=5, oldest_first=True):
+            if hist_msg.author == guild.me and hist_msg.embeds:
+                await hist_msg.edit(
+                    embed=_apply_ticket_status(
+                        hist_msg.embeds[0], TICKET_STATUS_ESCALATED
+                    )
+                )
+                break
 
     # ── /policy ───────────────────────────────────────────────────────────
 

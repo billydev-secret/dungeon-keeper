@@ -83,6 +83,8 @@ Tickets pass through three states: **Open → Closed → Deleted**. Close locks 
 
 The intermediate Closed state exists so that a "wait, one more thing" message after close doesn't require opening a new ticket — the mod just clicks Reopen.
 
+A ticket left **closed for 24 hours** is deleted automatically. An hourly background sweep finds tickets whose close time is more than 24 h in the past and runs the same delete path as the button: it generates the transcript, posts it to the transcript channel, DMs it to the creator, then deletes the channel. Reopening resets the clock — reopen clears the close timestamp, so a reopened ticket drops out of the sweep until it's closed again (and a re-close starts a fresh 24 h). If the transcript can't be generated, the channel is left intact and the sweep retries on its next pass, so a ticket is never destroyed without an archive. Manual `/ticket delete` (or the Delete button) still works at any time for an immediate, mod-triggered delete.
+
 ### Claim & escalate
 
 `/ticket claim` subscribes the claiming mod to DM alerts whenever someone other than them posts in the ticket; alerts are coalesced with a 5-minute cooldown so a flurry of messages produces one DM. Claiming is advisory — it doesn't lock other mods out, it just signals ownership and routes alerts. Another mod can reassign with a confirmation prompt. The claimer's name lands on the ticket embed and the final transcript summary.

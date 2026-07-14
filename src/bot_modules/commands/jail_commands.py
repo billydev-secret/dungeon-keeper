@@ -40,6 +40,7 @@ from bot_modules.services.moderation import (
     get_policy_ticket,
     get_policy_votes,
     get_ticket_by_channel,
+    get_tickets_to_autodelete,
     parse_duration,
     release_jail,
     reopen_ticket,
@@ -47,6 +48,7 @@ from bot_modules.services.moderation import (
     store_transcript,
     write_audit,
     PolicyTicketRow,
+    TicketRow,
 )
 from bot_modules.jail.embeds import (
     build_policy_vote_update_embed,
@@ -229,6 +231,103 @@ async def _collect_and_post_transcript(
 
     # DM to user
     await _dm_user(user, file=discord.File(io.BytesIO(md_bytes), filename))
+
+
+# ---------------------------------------------------------------------------
+# Ticket status embed helper
+# ---------------------------------------------------------------------------
+
+# The ticket embed carries a "Status" field that must track the ticket's
+# lifecycle. Every open-embed builder seeds it with ``TICKET_STATUS_OPEN``;
+# close/reopen/escalate rewrite it. Both the button flows here and the slash
+# ``/ticket`` flows in ``jail_cog`` share these so the wording stays in sync.
+TICKET_STATUS_OPEN = "🟢 Open"
+TICKET_STATUS_CLOSED = "🔒 Closed"
+TICKET_STATUS_ESCALATED = "⚠️ Escalated"
+
+
+def _apply_ticket_status(embed: discord.Embed, status_value: str) -> discord.Embed:
+    """Rewrite the ticket embed's ``Status`` field in place, returning it.
+
+    Matches on the field *name* rather than a fixed index so it survives extra
+    fields (e.g. the "Source message" field on message-context tickets); adds
+    the field if a legacy embed somehow lacks it.
+    """
+    for i, field in enumerate(embed.fields):
+        if field.name == "Status":
+            embed.set_field_at(
+                i, name="Status", value=status_value, inline=field.inline
+            )
+            return embed
+    embed.add_field(name="Status", value=status_value, inline=True)
+    return embed
+
+
+async def _finalize_ticket_delete(
+    ctx: AppContext,
+    channel: discord.TextChannel,
+    ticket: TicketRow,
+    *,
+    actor_id: int,
+    auto: bool = False,
+) -> None:
+    """Archive and permanently delete a ticket channel.
+
+    Shared by the Delete button, ``/ticket delete`` and the 24 h auto-delete
+    sweep. The transcript is generated and posted *first*: if that raises, the
+    exception propagates before the row is marked deleted or the channel is
+    removed, so we never destroy a conversation we failed to archive. ``auto``
+    only changes the audit wording and the channel-delete audit reason.
+    """
+    guild = channel.guild
+    ticket_id = ticket["id"]
+    user_id = ticket["user_id"]
+    # Fall back to the bot itself so the transcript DM step always has a target
+    # (the send simply fails-soft if the creator has left or DMs are closed).
+    transcript_user = guild.get_member(user_id) or guild.me
+
+    await _collect_and_post_transcript(
+        ctx,
+        channel,
+        record_type="ticket",
+        record_id=ticket_id,
+        user=transcript_user,
+        extra_meta={
+            "closed_by": ticket.get("closed_by"),
+            "close_reason": ticket.get("close_reason", ""),
+            "auto_deleted": auto,
+        },
+    )
+
+    guild_id = guild.id
+
+    def _mark_deleted() -> None:
+        with ctx.open_db() as conn:
+            delete_ticket(conn, ticket_id)
+            write_audit(
+                conn,
+                guild_id=guild_id,
+                action="ticket_delete",
+                actor_id=actor_id,
+                target_id=user_id,
+                extra={"ticket_id": ticket_id, "auto": auto},
+            )
+
+    await asyncio.to_thread(_mark_deleted)
+
+    accent = await resolve_accent_color(ctx.db_path, guild)
+    if auto:
+        desc = f"**Ticket #{ticket_id}** by <@{user_id}> auto-deleted 24h after close."
+        reason = f"Ticket #{ticket_id} auto-deleted 24h after close"
+    else:
+        desc = f"**Ticket #{ticket_id}** by <@{user_id}> deleted by <@{actor_id}>."
+        reason = f"Ticket #{ticket_id} deleted"
+    await _post_audit(
+        ctx,
+        guild,
+        discord.Embed(title="🗑️ Ticket Deleted", description=desc, color=accent),
+    )
+    await channel.delete(reason=reason)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -609,7 +708,13 @@ class TicketCloseButton(
         return cls(tid)
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(_TicketCloseModal(self.ticket_id))
+        # Capture the ticket embed message here (a component interaction, where
+        # ``interaction.message`` is reliably set) and hand it to the modal — a
+        # modal's own ``on_submit`` interaction has ``message = None``, so the
+        # close handler couldn't otherwise find the embed to update.
+        await interaction.response.send_modal(
+            _TicketCloseModal(self.ticket_id, interaction.message)
+        )
 
 
 class TicketReopenButton(
@@ -691,10 +796,24 @@ class TicketReopenButton(
                     ),
                 )
 
-            # Swap to close button
+            # Swap to close button and restore the embed's Status field. An
+            # escalated ticket keeps its ⚠️ marker (the flag survives reopen);
+            # otherwise it goes back to 🟢 Open.
             view = discord.ui.View(timeout=None)
             view.add_item(TicketCloseButton(self.ticket_id))
-            await interaction.response.edit_message(view=view)
+            reopen_status = (
+                TICKET_STATUS_ESCALATED
+                if ticket and ticket.get("escalated")
+                else TICKET_STATUS_OPEN
+            )
+            msg = interaction.message
+            if msg is not None and msg.embeds:
+                await interaction.response.edit_message(
+                    embed=_apply_ticket_status(msg.embeds[0], reopen_status),
+                    view=view,
+                )
+            else:
+                await interaction.response.edit_message(view=view)
             await channel.send(
                 f"🔓 Ticket reopened by {member.mention}.",
                 allowed_mentions=discord.AllowedMentions.none(),
@@ -769,11 +888,7 @@ class TicketDeleteButton(
         channel = interaction.channel
         if not isinstance(channel, discord.TextChannel):
             return
-        accent = await resolve_accent_color(ctx.db_path, channel.guild)
         del_ch_id = channel.id
-        del_guild_id = interaction.guild_id or 0
-        del_member_id = member.id
-        del_ticket_id = self.ticket_id
 
         def _fetch_del_ticket():
             with ctx.open_db() as conn:
@@ -784,44 +899,7 @@ class TicketDeleteButton(
         if not ticket:
             return
 
-        # Transcript
-        creator = interaction.guild.get_member(ticket["user_id"]) or interaction.user  # type: ignore[union-attr]
-        await _collect_and_post_transcript(
-            ctx,
-            channel,
-            record_type="ticket",
-            record_id=self.ticket_id,
-            user=creator,
-            extra_meta={
-                "closed_by": member.id,
-                "close_reason": ticket.get("close_reason", ""),
-                "transcript_stage": "delete",
-            },
-        )
-
-        del_ticket_user_id = ticket["user_id"]
-
-        def _delete_ticket():
-            with ctx.open_db() as conn:
-                delete_ticket(conn, del_ticket_id)
-                write_audit(
-                    conn,
-                    guild_id=del_guild_id,
-                    action="ticket_delete",
-                    actor_id=del_member_id,
-                    target_id=del_ticket_user_id,
-                    extra={"ticket_id": del_ticket_id, "message_count": 0},
-                )
-
-        await asyncio.to_thread(_delete_ticket)
-
-        audit_embed = discord.Embed(
-            title="🗑️ Ticket Deleted",
-            description=f"**Ticket #{self.ticket_id}** by <@{ticket['user_id']}> deleted by {member.mention}",
-            color=accent,
-        )
-        await _post_audit(ctx, interaction.guild, audit_embed)  # type: ignore[arg-type]
-        await channel.delete(reason=f"Ticket #{self.ticket_id} deleted by {member}")
+        await _finalize_ticket_delete(ctx, channel, ticket, actor_id=member.id)
 
 
 # ---------------------------------------------------------------------------
@@ -1357,9 +1435,10 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
         label="Reason (optional)", required=False, max_length=500
     )  # type: ignore[assignment]
 
-    def __init__(self, ticket_id: int):
+    def __init__(self, ticket_id: int, ticket_message: discord.Message | None = None):
         super().__init__()
         self.ticket_id = ticket_id
+        self.ticket_message = ticket_message
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
@@ -1416,11 +1495,22 @@ class _TicketCloseModal(discord.ui.Modal, title="Close Ticket"):
                     read_message_history=True,
                 )
 
-            # Swap buttons to Reopen + Delete
+            # Swap buttons to Reopen + Delete and flip the embed's Status
+            # field to Closed in the same edit. ``edit_message`` on a modal
+            # submit targets the message the Close button lived on; we read the
+            # embed off the captured ``ticket_message`` because the modal's own
+            # ``interaction.message`` is None.
             view = discord.ui.View(timeout=None)
             view.add_item(TicketReopenButton(self.ticket_id))
             view.add_item(TicketDeleteButton(self.ticket_id))
-            await interaction.response.edit_message(view=view)
+            tmsg = self.ticket_message
+            if tmsg is not None and tmsg.embeds:
+                await interaction.response.edit_message(
+                    embed=_apply_ticket_status(tmsg.embeds[0], TICKET_STATUS_CLOSED),
+                    view=view,
+                )
+            else:
+                await interaction.response.edit_message(view=view)
 
             close_msg = f"🔒 Ticket closed by {member.mention}."
             if reason:
@@ -1721,6 +1811,68 @@ async def jail_expiry_loop(bot: discord.Client, ctx: AppContext) -> None:
         except Exception:
             log.exception("Error in jail expiry loop")
         await asyncio.sleep(60)
+
+
+# How long a closed ticket lingers before the sweep archives + deletes it, and
+# how often the sweep runs. The lingering window lets a mod hit Reopen for a
+# "one more thing" without spawning a fresh ticket; after 24 h untouched we
+# transcript and remove the channel.
+_TICKET_AUTODELETE_SECONDS = 24 * 3600
+_TICKET_AUTODELETE_POLL_SECONDS = 3600
+
+
+async def ticket_autodelete_loop(bot: discord.Client, ctx: AppContext) -> None:
+    """Permanently delete tickets 24 h after they were closed.
+
+    Reopening a ticket clears ``closed_at`` and flips its status back to
+    ``open``, so it silently drops out of the sweep — the countdown only runs
+    while a ticket sits closed. Each deletion goes through
+    :func:`_finalize_ticket_delete`, so the transcript is archived and DM'd
+    before the channel is removed. Per-ticket errors are logged and retried on
+    the next pass rather than aborting the whole sweep.
+    """
+    await bot.wait_until_ready()
+    me = bot.user
+    actor_id = me.id if me else 0
+    while not bot.is_closed():
+        try:
+            cutoff = time.time() - _TICKET_AUTODELETE_SECONDS
+
+            def _fetch(cutoff: float = cutoff):
+                with ctx.open_db() as conn:
+                    return get_tickets_to_autodelete(conn, closed_before=cutoff)
+
+            due = await asyncio.to_thread(_fetch)
+            for ticket in due:
+                try:
+                    guild = bot.get_guild(ticket["guild_id"])
+                    if guild is None:
+                        continue
+                    raw = guild.get_channel(ticket["channel_id"])
+                    if not isinstance(raw, discord.TextChannel):
+                        # Channel was already removed by hand — mark the row
+                        # deleted so it stops matching the sweep every hour.
+                        gone_id = ticket["id"]
+
+                        def _mark_gone(tid: int = gone_id) -> None:
+                            with ctx.open_db() as conn:
+                                delete_ticket(conn, tid)
+
+                        await asyncio.to_thread(_mark_gone)
+                        continue
+                    await _finalize_ticket_delete(
+                        ctx, raw, ticket, actor_id=actor_id, auto=True
+                    )
+                    log.info(
+                        "Auto-deleted ticket %s (24h after close)", ticket["id"]
+                    )
+                except Exception:
+                    log.exception(
+                        "Auto-delete failed for ticket %s", ticket.get("id")
+                    )
+        except Exception:
+            log.exception("Error in ticket auto-delete loop")
+        await asyncio.sleep(_TICKET_AUTODELETE_POLL_SECONDS)
 
 
 # Default if no per-guild override is set. Kept in sync with the

@@ -9,6 +9,33 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Tickets — closed-embed status fix + 24h auto-delete  (this commit)
+
+The ticket embed's **Status** field was never re-rendered on close/reopen
+(both the button flow and the `/ticket` slash flow only swapped the buttons),
+so a closed ticket kept showing "🟢 Open". Escalate never touched the embed at
+all. All four paths (button close/reopen, slash close/reopen) now rewrite the
+Status field, and `/ticket escalate` now flips it to "⚠️ Escalated". Separately,
+a new hourly sweep (`ticket_autodelete_loop`) permanently deletes any ticket
+left closed for 24 h, routing through the shared `_finalize_ticket_delete`
+(transcript archived + DM'd before the channel is removed). Reopening resets
+the countdown. Live checks:
+
+- [ ] Open a ticket → **🟢 Open** in the embed. Close it (Close **button**) →
+      embed field flips to **🔒 Closed**, buttons become Reopen/Delete.
+- [ ] Reopen it → embed goes back to **🟢 Open**, button back to Close.
+- [ ] Repeat close/reopen via the **slash** commands `/ticket close` and
+      `/ticket reopen` → same Status-field updates (not just the buttons).
+- [ ] `/ticket escalate` on an open ticket → embed Status shows **⚠️ Escalated**
+      and admin roles are pinged/added; reopen after a close keeps ⚠️ if it was
+      escalated.
+- [ ] Delete a closed ticket manually (button and `/ticket delete`) → transcript
+      still posts to the transcript channel + DMs the creator, channel deleted.
+- [ ] Close a ticket, then confirm ~24 h later (or temporarily shorten the
+      window to test) it is auto-deleted: transcript posted + DM'd, channel
+      gone, audit embed reads "auto-deleted 24h after close". A ticket reopened
+      inside the window is **not** deleted.
+
 ### Games — launch "did not respond" fix + Clapback lobby timeout  (this commit)
 
 Every `/games play …` command deferred publicly and never resolved the
