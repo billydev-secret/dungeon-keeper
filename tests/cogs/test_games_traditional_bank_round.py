@@ -3,8 +3,10 @@
 The pure pieces (category selection, bank getter) are unit-tested in
 test_games_traditional_logic.py; this exercises the interactive glue that
 nothing else covers: pressing Bank Round serves every opted-in player one
-bank question (no repeats), records the served set + counter on the payload,
-posts one pinged card per player, and reports players it couldn't serve.
+bank question (no repeats), records each serve in the shared ``asked``
+history plus the served set + counter on the payload, posts one pinged
+card per player, reports players it couldn't serve, and on a re-press
+only serves players (e.g. late joiners) not already asked.
 """
 
 import json
@@ -176,9 +178,83 @@ async def test_bank_round_serves_every_player_without_repeats(sync_db_path):
     payload = await get_game_payload(db, game_id)
     assert payload["bank_asked"] == 2
     assert sorted(payload["bank_used"]) == ["Truth one", "Truth two"]
+    # Bank questions land in the same asked history as written ones.
+    assert set(payload["asked"]) == {"1:sfw_truth", "2:sfw_truth"}
 
     assert inter.followup.messages, "no host summary was sent"
     assert "Served **2**" in inter.followup.messages[-1][0]
+
+
+async def test_bank_round_rerun_serves_only_new_players(sync_db_path):
+    db = GamesDb(sync_db_path)
+    bot = FakeBot(db, str(sync_db_path))
+    cog = TraditionalCog(bot)  # type: ignore[arg-type]
+
+    host = FakeMember(1, "Host")
+    bee = FakeMember(2, "Bee")
+    newbie = FakeMember(3, "Newbie")
+    guild = FakeGuild([host, bee, newbie])
+    channel = FakeChannel(guild)
+
+    _seed_bank(sync_db_path, [
+        ("Truth one", "sfw_truth"),
+        ("Truth two", "sfw_truth"),
+        ("Truth three", "sfw_truth"),
+    ])
+    game_id = await _launch_with_prefs(
+        cog, bot, channel, guild, host,
+        prefs={"1": ["sfw_truth"], "2": ["sfw_truth"]},
+    )
+    view = bot.active_views[game_id]
+
+    await view.bank_round.callback(FakeInteraction(host, channel, guild, bot))
+    assert len(channel.sends) == 3  # lobby + one card each for Host and Bee
+
+    # A new player joins after the first round.
+    payload = await get_game_payload(db, game_id)
+    payload["participants"].append(3)
+    payload["prefs"]["3"] = ["sfw_truth"]
+    await update_game_payload(db, game_id, payload)
+
+    inter2 = FakeInteraction(host, channel, guild, bot)
+    await view.bank_round.callback(inter2)
+
+    # Only the newcomer got a card; the first group wasn't double-asked.
+    cards = channel.sends[3:]
+    assert [c.content for c in cards] == ["<@3>"]
+    payload = await get_game_payload(db, game_id)
+    assert payload["bank_asked"] == 3
+    assert set(payload["asked"]) == {"1:sfw_truth", "2:sfw_truth", "3:sfw_truth"}
+    msg = inter2.followup.messages[-1][0]
+    assert "Served **1**" in msg
+    assert "Skipped 2 players" in msg
+
+
+async def test_bank_round_reports_everyone_already_asked(sync_db_path):
+    db = GamesDb(sync_db_path)
+    bot = FakeBot(db, str(sync_db_path))
+    cog = TraditionalCog(bot)  # type: ignore[arg-type]
+
+    host = FakeMember(1, "Host")
+    guild = FakeGuild([host])
+    channel = FakeChannel(guild)
+
+    _seed_bank(sync_db_path, [("Truth one", "sfw_truth"), ("Truth two", "sfw_truth")])
+    game_id = await _launch_with_prefs(
+        cog, bot, channel, guild, host, prefs={"1": ["sfw_truth"]},
+    )
+    view = bot.active_views[game_id]
+
+    await view.bank_round.callback(FakeInteraction(host, channel, guild, bot))
+    inter2 = FakeInteraction(host, channel, guild, bot)
+    await view.bank_round.callback(inter2)
+
+    # No second card; the host is told everyone is already covered.
+    assert len(channel.sends) == 2  # lobby + the single first-round card
+    payload = await get_game_payload(db, game_id)
+    assert payload["bank_asked"] == 1
+    msg = inter2.followup.messages[-1][0]
+    assert "already been asked" in msg
 
 
 async def test_bank_round_reports_players_with_no_matching_question(sync_db_path):

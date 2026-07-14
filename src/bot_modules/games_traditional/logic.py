@@ -152,21 +152,26 @@ def select_next_question_target(
 
 def select_bank_categories_for_all(
     prefs: dict[str, list[str]],
+    asked: dict[str, str],
     rng: random.Random | None = None,
 ) -> dict[str, str]:
     """Pick one opted-in category per participant for a bank round.
 
-    Returns ``{user_id: category}`` — for each participant with at least one
-    declared preference, a single category chosen uniformly at random from
-    that player's preferences. Players with no preferences are omitted.
-
-    Unlike :func:`select_next_question_target`, this deliberately ignores the
-    ``asked`` history: a bank round is repeatable (the host can press the
-    button every round), so the same category may recur across presses. The
-    cog dedupes the *question text* it pulls from the bank, not the category.
+    Returns ``{user_id: category}`` — for each participant, a single category
+    chosen uniformly at random from the preferences they have *not yet been
+    asked in* (bank questions are recorded in the same ``asked`` history as
+    written ones). Players with no preferences, or whose every preference has
+    already been asked, are omitted — so re-running the bank round after new
+    people join only serves the newcomers instead of double-asking the
+    original group.
     """
     chooser = rng if rng is not None else random
-    return {uid: chooser.choice(cats) for uid, cats in prefs.items() if cats}
+    out: dict[str, str] = {}
+    for uid, cats in prefs.items():
+        open_cats = [cat for cat in cats if f"{uid}:{cat}" not in asked]
+        if open_cats:
+            out[uid] = chooser.choice(open_cats)
+    return out
 
 
 def summarize_asked_by_category(asked: dict[str, str]) -> dict[str, int]:

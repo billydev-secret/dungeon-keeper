@@ -223,6 +223,9 @@ HOW_TO_PLAY = {
         "and the host writes a custom question for them\n"
         "3. Each player gets one question per category they opted into\n\n"
         "💡 Players who haven't been asked yet are picked first to keep things fair.\n"
+        "💡 **Bank Round** deals everyone a question from the web question bank. It "
+        "counts toward the one-per-category limit, so pressing it again only serves "
+        "players who haven't been asked yet — perfect for late joiners.\n"
         "💡 Host tip: pass **single_choice** when starting the game to make each "
         "player pick just one category (the buttons act like radio buttons)."
     ),

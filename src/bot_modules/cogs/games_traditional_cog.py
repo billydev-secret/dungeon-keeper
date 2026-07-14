@@ -212,8 +212,11 @@ class TraditionalHostView(discord.ui.View):
 
         Each participant gets one question in a category they opted into,
         drawn from the web-managed question bank (no repeats within a game).
-        Repeatable — the host can press it every round. Players with no
-        available bank question for their picked category are reported back.
+        Bank questions land in the same ``asked`` history as written ones,
+        so each player is served at most once per opted-in category —
+        pressing the button again after new people join only serves the
+        newcomers. Players with no available bank question for their picked
+        category are reported back.
         """
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not self.is_host_or_mod(interaction):
@@ -232,7 +235,9 @@ class TraditionalHostView(discord.ui.View):
         channel = interaction.channel
         assert isinstance(channel, discord.abc.Messageable)  # games run in text channels
         used: list[str] = list(payload.get("bank_used", []))
-        choices = select_bank_categories_for_all(prefs)  # {uid: category}
+        asked = payload.get("asked", {})
+        choices = select_bank_categories_for_all(prefs, asked)  # {uid: category}
+        already_asked = sum(1 for cats in prefs.values() if cats) - len(choices)
 
         served = 0
         unserved: list[str] = []
@@ -244,6 +249,7 @@ class TraditionalHostView(discord.ui.View):
                 unserved.append(f"{name} ({CAT_LABELS.get(cat, cat)})")
                 continue
             used.append(question)
+            record_asked(payload, uid, cat, question)
             mention = member.mention if member else f"**{name}**"
             await channel.send(content=mention, embed=build_question_embed(cat, question, name))
             served += 1
@@ -253,7 +259,12 @@ class TraditionalHostView(discord.ui.View):
         await self._save_payload(payload)
         await self.refresh_embed(guild, payload)
 
-        if served == 0 and unserved:
+        if not choices and already_asked:
+            msg = (
+                "Everyone has already been asked in all their chosen categories — "
+                "run this again when new players join."
+            )
+        elif served == 0 and unserved:
             msg = (
                 "No bank questions were available. Add some in the web dashboard "
                 "under **Games → Traditional Truth or Dare → Questions**."
@@ -262,6 +273,8 @@ class TraditionalHostView(discord.ui.View):
             msg = f"Served **{served}** question{'s' if served != 1 else ''} from the bank."
             if unserved:
                 msg += "\nNo bank question available for: " + ", ".join(unserved) + "."
+            if already_asked:
+                msg += f"\nSkipped {already_asked} player{'s' if already_asked != 1 else ''} already asked in all their categories."
         await interaction.followup.send(msg, ephemeral=True)
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="tod_htp", row=1)
