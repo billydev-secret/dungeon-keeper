@@ -33,9 +33,13 @@ SQLite-backed. Tests in `tests/`.
   matching test prints "unmapped (CI/nightly covers it)". `git commit
   --no-verify` bypasses the hook.
 - `python scripts/gate.py` — full pytest (xdist-parallel; `-n 0` to debug a
-  single test), all green. Run this before merging to main; the scoped hook is
-  for tight local loops. `--quick` runs ruff + pyright only (no pytest).
-  Coverage floor in pyproject.toml must not be lowered.
+  single test). Full-suite green is required before a merge to main *lands for
+  good*, but CI on the push satisfies that — a local full run is optional. If
+  you do run it locally, run it **solo**: a parallel full run alongside other
+  work can exhaust the tmpfs quota and spray hundreds of bogus sqlite errors
+  (see memory: rm -rf /tmp/pytest-of-ben and re-run). `--quick` runs
+  ruff + pyright only (no pytest). Coverage floor in pyproject.toml must not
+  be lowered.
 - Backstop: CI (`.github/workflows/test.yml`) runs the full suite + coverage on
   every push/PR to main, and `nightly.yml` runs it on a schedule — so a miss in
   the scoped tier is caught at push, not in prod.
