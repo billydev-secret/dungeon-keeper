@@ -211,7 +211,6 @@ def main() -> None:
         "bot_modules.cogs.musical_chairs",
         "bot_modules.cogs.chicken",
         "bot_modules.cogs.bios_cog",
-        "bot_modules.cogs.chat_revive_cog",
         "bot_modules.cogs.economy_cog",
         # ── Party Games (PoppyBot) ────────────────────────────────
         "bot_modules.cogs.games_session_cog",

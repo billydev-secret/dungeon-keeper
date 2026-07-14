@@ -105,9 +105,15 @@ Details of the moment:
   button for the configured role. The Role Menus feature (landed the same
   day) is the richer alternative — a toggle-mode menu pointing at the same
   role works identically; use whichever fits the guild.
-- **Manual `/revive fire`** skips every lull/frequency gate but keeps ping
-  scarcity; manual revives still count toward the daily budget ledger.
+- **Manual fire** skips every lull/frequency gate but keeps ping scarcity;
+  manual revives still count toward the daily budget ledger.
 - **Adult-only questions** are gated on Discord's channel age-restriction
   flag (`channel.is_nsfw()`), never on a bot-side toggle.
-- Commands: `/revive setup · channel · check · fire · stats · flourish ·
-  optin-post · question add|bulk|list|retire` (all `manage_guild` + mod-role).
+- **Dashboard-managed, no slash commands** (revised same-day: the `/revive`
+  group was built and then stripped to keep the command surface clean).
+  Everything lives in the dashboard's Moderation → Chat Revive panel, backed
+  by `/api/chat-revive/*` (moderator-gated): guild settings, per-channel
+  dials, the question bank (add/bulk/retire), the scoreboard, the
+  would-it-fire "Check" explainer, manual "Fire", and posting the opt-in
+  button. The only in-Discord surfaces are the monitor loop's posts and the
+  persistent opt-in button.
