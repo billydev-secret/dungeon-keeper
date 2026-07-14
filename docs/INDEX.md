@@ -57,6 +57,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [events_spec.md](events_spec.md) | Events cog | |
 | [MUSIC_COG_CLAUDE_CODE_SPEC.md](MUSIC_COG_CLAUDE_CODE_SPEC.md) | Music cog (Lavalink) | Built |
 | [post_monitoring_spec.md](post_monitoring_spec.md) | Post monitoring | |
+| [role_menus_spec.md](role_menus_spec.md) | Role Menus (self-assign roles via buttons/dropdown, Oracle builder) | Plan: `plans/role-menus.md` |
 | [TGM-Dashboard-Concept-Spec.md](TGM-Dashboard-Concept-Spec.md) | Web dashboard concept | |
 | [tools_spec.md](tools_spec.md) | Bot tools | |
 

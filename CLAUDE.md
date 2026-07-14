@@ -25,10 +25,20 @@ SQLite-backed. Tests in `tests/`.
 
 ## Gates (before every commit)
 
-- `python scripts/gate.py` — ruff + pyright + full pytest (xdist-parallel;
-  `-n 0` to debug a single test), all green. `--quick` skips pytest (the
-  pre-commit hook runs that). Coverage floor in pyproject.toml must not be
-  lowered.
+- The **pre-commit hook** runs `python scripts/gate.py --scoped` automatically
+  on every commit: ruff + pyright, then only the tests mapped to the staged
+  diff (git diff vs HEAD + untracked). Touching a broadly-shared file (`core/`,
+  `models/`, `migrations/`, deps, any `conftest.py`, `gate.py`) falls back to
+  the full suite, so those commits pause longer; changed source with no
+  matching test prints "unmapped (CI/nightly covers it)". `git commit
+  --no-verify` bypasses the hook.
+- `python scripts/gate.py` — full pytest (xdist-parallel; `-n 0` to debug a
+  single test), all green. Run this before merging to main; the scoped hook is
+  for tight local loops. `--quick` runs ruff + pyright only (no pytest).
+  Coverage floor in pyproject.toml must not be lowered.
+- Backstop: CI (`.github/workflows/test.yml`) runs the full suite + coverage on
+  every push/PR to main, and `nightly.yml` runs it on a schedule — so a miss in
+  the scoped tier is caught at push, not in prod.
 
 ## Dependencies
 

@@ -1,0 +1,45 @@
+name: Nightly Regression
+
+# Decoupled full-suite run for flake surfacing and dependency drift. The
+# per-push Test Suite workflow already runs the full suite on every push/PR
+# to main; this adds a scheduled run that isn't tied to a commit, so tests
+# that only rot over time (time-of-day logic, transitive dep bumps, xdist
+# ordering flakes) get caught even on quiet days.
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # 09:00 UTC ≈ 02:00 Pacific, nightly
+  workflow_dispatch: {} # allow manual "run nightly now" from the Actions tab
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.lock
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (pyright)
+        run: pyright
+
+      - name: Run full suite
+        env:
+          BOT_ENV: dev
+          DISCORD_TOKEN_DEV: fake-token
+          GUILD_ID_DEV: "9001"
+          DB_PATH_DEV: dk_dev.db
+          AUDIT_CHANNEL_DEV: "0"
+        run: |
+          python -m pytest --tb=short -q --cov=src --cov-report=term-missing

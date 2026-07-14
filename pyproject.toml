@@ -20,6 +20,13 @@ pythonpath = ["src"]
 # Run tests in parallel via pytest-xdist. Pass ``-n 0`` to disable for
 # debugging a single test (the last -n on the command line wins).
 addopts = "-n auto"
+# Each test gets a fresh SQLite db under the tmp dir; the full suite writes
+# ~1-2 GB per run. Default retention keeps 3 whole sessions, so /tmp/pytest-of-ben
+# accumulates until a run hits a transient "disk I/O error" at fixture setup.
+# Keep only the most recent session (pruned at startup by the main process —
+# this works under xdist; the per-test `retention_policy` does not, so we don't
+# rely on it). If mass sqlite setup errors ever recur: rm -rf /tmp/pytest-of-ben.
+tmp_path_retention_count = 1
 
 [tool.coverage.run]
 # Required for --cov to work under pytest-xdist: each worker writes its own
