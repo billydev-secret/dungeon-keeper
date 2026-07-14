@@ -30,12 +30,15 @@ same commit, then merged to main for live testing before the next stage starts.
   `legitlibs_templates` (`use_count`, `last_used_at`); JSON `tags` with reserved `nsfw`
   + `channel_allows_nsfw()` gating (`games/utils/question_source.py`).
 - **No self-role system exists** despite the spec's assumption — see Stage 4.
+  *(Post-merge note: Role Menus landed on main the same day. `/revive optin-post`
+  is kept as the zero-config path; a Role Menus toggle menu pointing at the same
+  role works identically for guilds that prefer dashboard-managed menus.)*
 - **Cog registration is manual:** add to `extension_names` in `__main__.py` (S3-extdrift).
 
 ## Layout
 
 ```
-src/migrations/073_chat_revive.sql        # tables + processed_messages channel index
+src/migrations/074_chat_revive.sql        # tables + processed_messages channel index
 src/bot_modules/chat_revive/
     __init__.py
     logic.py            # pure: gap stats, band math, fire decision, question weighting
@@ -50,7 +53,7 @@ tests/test_chat_revive_loop.py
 tests/test_chat_revive_cog.py
 ```
 
-## Data model (migration 073)
+## Data model (migration 074)
 
 - `revive_guild_config` — `guild_id PK, enabled, role_id, quiet_start (0), quiet_end (8),
   daily_budget (3), guild_gap_minutes (90), flourish_enabled (1)`.
@@ -102,7 +105,7 @@ proven sparkers surface and duds fade without hard deletion.
 
 - Add `docs/chat_revive_spec.md` (the product spec) and register it in `docs/INDEX.md`
   as a Design spec (`Notes: Stage 0 built`).
-- Migration `073_chat_revive.sql` (tables + index above). Re-check the next free number
+- Migration `074_chat_revive.sql` (tables + index above). Re-check the next free number
   at commit time.
 - `chat_revive/logic.py`: gap-stat computation from raw timestamp lists, band bucketing
   with tz offset, fallback-mode rule, full `decide()` gate chain, selection weighting.

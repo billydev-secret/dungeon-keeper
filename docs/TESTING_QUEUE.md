@@ -14,7 +14,7 @@ it's been verified in the dev guild, with a date.
 New feature ("Ember"): a monitor loop learns each enabled channel's per-band
 message rhythm from `processed_messages` and posts a bank question into a
 genuinely unusual lull — never over an active room, never twice in a row,
-never overnight. Migration 073 adds five `revive_*` tables **and a new
+never overnight. Migration 074 adds five `revive_*` tables **and a new
 channel-leading index on `processed_messages`** (builds once over the full
 ~516 MB table). `/revive` command group is mods-only.
 

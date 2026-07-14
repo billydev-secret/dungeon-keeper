@@ -101,9 +101,10 @@ Details of the moment:
 - **Success metric:** ≥ 3 human messages from ≥ 2 distinct people within
   30 minutes of the revive.
 - **Ping scarcity** is a rolling 24 h per channel, not a calendar day.
-- **Opt-in role:** the bot has no general self-role system, so
-  `/revive optin-post` publishes a persistent join/leave button for the
-  configured role (admins using another bot's role menu can skip it).
+- **Opt-in role:** `/revive optin-post` publishes a persistent join/leave
+  button for the configured role. The Role Menus feature (landed the same
+  day) is the richer alternative — a toggle-mode menu pointing at the same
+  role works identically; use whichever fits the guild.
 - **Manual `/revive fire`** skips every lull/frequency gate but keeps ping
   scarcity; manual revives still count toward the daily budget ledger.
 - **Adult-only questions** are gated on Discord's channel age-restriction
