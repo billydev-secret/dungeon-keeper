@@ -23,6 +23,11 @@ from discord.ext import commands
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.economy.guide import build_guide_embed
+from bot_modules.economy.leaderboard import (
+    build_leaderboard_embed,
+    collect_leaderboard_data,
+    progress_bar,
+)
 from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
@@ -74,6 +79,7 @@ from bot_modules.services.economy_service import (
     set_notify_muted,
     transfer_currency,
 )
+from bot_modules.services.message_store import get_known_users_bulk
 from bot_modules.services.quote_renderer import THEMES, render_quote_card
 from bot_modules.services.voice_master_service import (
     list_name_blocklist,
@@ -225,12 +231,9 @@ def _has_image_attachment(message: discord.Message) -> bool:
     return False
 
 
-def _progress_bar(current: int, target: int, width: int = 10) -> str:
-    """A text meter for a community quest's running total."""
-    if target <= 0:
-        return f"{current:,}"
-    filled = max(0, min(width, round(width * current / target)))
-    return f"{'▰' * filled}{'▱' * (width - filled)} {current:,}/{target:,}"
+# A text meter for a community quest's running total — shared with the
+# leaderboard panel so the two surfaces render one way.
+_progress_bar = progress_bar
 
 
 def _can_grant(user: discord.Member, settings: EconSettings) -> bool:
@@ -1734,6 +1737,121 @@ class EconomyCog(commands.Cog):
         await asyncio.to_thread(_save)
         await interaction.response.send_message(
             f"Posted the guide panel in {target.mention}.", ephemeral=True
+        )
+
+    # ── auto-updating leaderboard panel ──────────────────────────────────
+
+    @bank.command(
+        name="post-leaderboard",
+        description="Post (or refresh) the auto-updating leaderboard panel (staff only).",
+    )
+    @app_commands.describe(channel="Where the panel lives — defaults to this channel")
+    async def bank_post_leaderboard(
+        self,
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | None = None,
+    ) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        actor = interaction.user
+        assert isinstance(actor, discord.Member)
+
+        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if not _can_grant(actor, settings):
+            await interaction.response.send_message(
+                "You don't have permission to post the leaderboard panel.",
+                ephemeral=True,
+            )
+            return
+
+        target = channel or interaction.channel
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message(
+                "Pick a regular text channel for the leaderboard panel.",
+                ephemeral=True,
+            )
+            return
+
+        now_ts = time.time()
+
+        def _collect():
+            with self.ctx.open_db() as conn:
+                data = collect_leaderboard_data(conn, guild.id, now_ts)
+                known = get_known_users_bulk(
+                    conn, guild.id, [uid for uid, _ in data.top_earners]
+                )
+            return data, known
+
+        data, known = await asyncio.to_thread(_collect)
+
+        def _name(uid: int) -> str:
+            member = guild.get_member(uid)
+            if member:
+                return member.display_name
+            return known.get(uid) or f"User {uid}"
+
+        accent = await resolve_accent_color(self.ctx.db_path, guild)
+        embed = build_leaderboard_embed(
+            settings, data, _name, now_ts=now_ts, colour=accent
+        )
+
+        # Same channel and the old panel is still there → edit in place.
+        if (
+            settings.leaderboard_message_id
+            and settings.leaderboard_channel_id == target.id
+        ):
+            try:
+                old = await target.fetch_message(settings.leaderboard_message_id)
+                await old.edit(embed=embed)
+            except discord.HTTPException:
+                pass  # gone or unreachable — fall through to a fresh post
+            else:
+                await interaction.response.send_message(
+                    f"Refreshed the leaderboard panel in {target.mention}.",
+                    ephemeral=True,
+                )
+                return
+
+        # Moving or reposting: drop the stale panel if we can still find it.
+        if settings.leaderboard_message_id and settings.leaderboard_channel_id:
+            old_channel = guild.get_channel(settings.leaderboard_channel_id)
+            if isinstance(old_channel, discord.TextChannel):
+                try:
+                    old = await old_channel.fetch_message(
+                        settings.leaderboard_message_id
+                    )
+                    await old.delete()
+                except discord.HTTPException:
+                    pass
+
+        try:
+            message = await target.send(embed=embed)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                f"I don't have permission to post in {target.mention}.",
+                ephemeral=True,
+            )
+            return
+
+        def _save() -> None:
+            with self.ctx.open_db() as conn:
+                save_econ_settings(
+                    conn,
+                    guild.id,
+                    {
+                        "leaderboard_channel_id": target.id,
+                        "leaderboard_message_id": message.id,
+                    },
+                )
+
+        await asyncio.to_thread(_save)
+        await interaction.response.send_message(
+            f"Posted the leaderboard panel in {target.mention} — it refreshes "
+            "hourly on its own.",
+            ephemeral=True,
         )
 
     async def cog_load(self) -> None:

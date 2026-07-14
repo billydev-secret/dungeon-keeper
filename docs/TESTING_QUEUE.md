@@ -65,6 +65,31 @@ offline; the live surface needs a look:
       another body font still renders a Helvetica header in banner mode.
 - [ ] No `lora` option in the picker; a guild that previously stored `lora`
       falls back to Times without a crash.
+### Economy — auto-updating leaderboard panel  (this commit)
+
+**`/bank post-leaderboard [channel]`** [manager/admin] posts a branded embed
+that the economy loop then refreshes in place every hour: 🥇 top 5 earners
+over a rolling 7 days (transfers excluded), community-goal progress bars,
+the active quest board, and a "check your own progress with `/quests` /
+`/bank wallet`" blurb. Repost in the same channel edits in place; another
+channel moves it; **deleting the message retires the panel** (the loop
+clears the stored ids on 404). Live checks:
+
+- [ ] `/bank post-leaderboard` in a test channel → embed shows earners with
+      display names + currency emoji, community goal ▰▱ bar, quest lines
+      with `Daily`/`Weekly` tags (+⭐xp where set), and the /quests blurb.
+- [ ] Re-run in the same channel → "Refreshed", panel edits in place (no
+      duplicate). Run pointing at another channel → old panel deleted, new
+      one posted there.
+- [ ] Wait for the top of the hour (or restart-adjacent tick) → the embed
+      timestamp advances on its own.
+- [ ] Earn some coins (claim a quest / QOTD) → next hourly refresh moves the
+      earner totals.
+- [ ] Delete the panel message → after the next tick the loop stops trying
+      (no error spam in the journal; `/bank post-leaderboard` posts fresh).
+- [ ] Non-manager member gets the permission refusal; economy-disabled guild
+      gets the disabled message.
+
 ### Economy — Claims page + waiting-claims on the Moderation tile  (this commit)
 
 Claim sign-off moved off Operations onto its own **Claims** page (second item

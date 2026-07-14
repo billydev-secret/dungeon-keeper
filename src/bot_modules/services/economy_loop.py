@@ -27,6 +27,10 @@ The same hourly tick also drives the quest surface (spec §4):
   per-guild loop; a disabled guild's stale claims still expire + DM, which is
   harmless (at worst a late DM, never a double payout).
 
+The tick also refreshes each guild's **leaderboard panel** in place
+(:func:`run_guild_leaderboard` — the ``/bank post-leaderboard`` embed; a 404
+on the stored message clears its ids so a deleted panel stops the refresh).
+
 The same tick also drives the **rental billing pass** (spec §6) per enabled
 guild, after the day roll. Each pass has three phases, mirroring the loop's
 "sync body, async effects" shape:
@@ -59,8 +63,13 @@ from pathlib import Path
 
 import discord
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.economy import logic, quests
+from bot_modules.economy.leaderboard import (
+    build_leaderboard_embed,
+    collect_leaderboard_data,
+)
 from bot_modules.economy.perk_actions import (
     apply_role_perks,
     feature_gate_ok,
@@ -88,7 +97,9 @@ from bot_modules.services.economy_service import (
     member_is_booster,
     notify_member,
     process_conversion,
+    save_econ_settings,
 )
+from bot_modules.services.message_store import get_known_users_bulk
 
 # The two perks whose billing is gated on a guild feature (role icon / gradient
 # role colours). Only these are swept each tick — the sweep asks Discord whether
@@ -454,6 +465,73 @@ async def _dispatch_rental_effects(
         # charge / retry / none → silent (no DM, no re-projection).
 
 
+async def run_guild_leaderboard(
+    bot: discord.Client, db_path: Path, guild_id: int, now_ts: float
+) -> None:
+    """Hourly in-place refresh of the ``/bank post-leaderboard`` panel.
+
+    Skips guilds without a posted panel (or with the economy off). A deleted
+    panel message (404) clears the stored ids so the loop stops retrying —
+    deleting the message is how staff retire the panel; any other Discord
+    error leaves the ids for the next tick.
+    """
+
+    def _load():
+        with open_db(db_path) as conn:
+            settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled or not settings.leaderboard_message_id:
+                return settings, None, {}
+            data = collect_leaderboard_data(conn, guild_id, now_ts)
+            known = get_known_users_bulk(
+                conn, guild_id, [uid for uid, _ in data.top_earners]
+            )
+            return settings, data, known
+
+    settings, data, known = await asyncio.to_thread(_load)
+    if data is None:
+        return
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return
+    channel = guild.get_channel(settings.leaderboard_channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    def _name(uid: int) -> str:
+        member = guild.get_member(uid)
+        if member:
+            return member.display_name
+        return known.get(uid) or f"User {uid}"
+
+    accent = await resolve_accent_color(db_path, guild)
+    embed = build_leaderboard_embed(
+        settings, data, _name, now_ts=now_ts, colour=accent
+    )
+    try:
+        message = await channel.fetch_message(settings.leaderboard_message_id)
+        await message.edit(embed=embed)
+    except discord.NotFound:
+
+        def _clear() -> None:
+            with open_db(db_path) as conn:
+                save_econ_settings(
+                    conn,
+                    guild_id,
+                    {"leaderboard_channel_id": 0, "leaderboard_message_id": 0},
+                )
+
+        await asyncio.to_thread(_clear)
+        log.info(
+            "Economy loop: leaderboard panel for guild %s is gone — "
+            "cleared its ids.",
+            guild_id,
+        )
+    except discord.HTTPException:
+        log.warning(
+            "Economy loop: leaderboard refresh failed for guild %s.", guild_id
+        )
+
+
 async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
     """One hourly tick: global claim expiry (+ DMs), then per-guild rolls.
 
@@ -505,6 +583,15 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         except Exception:
             log.exception(
                 "Economy loop: rental pass failed for guild %s.", guild.id
+            )
+
+        try:
+            await run_guild_leaderboard(bot, db_path, guild.id, now_ts)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy loop: leaderboard refresh failed for guild %s.", guild.id
             )
 
 
