@@ -124,6 +124,28 @@ def _icon_store_path(db_path, guild_id: int, user_id: int):
     return directory / f"{user_id}.png"
 
 
+# The pasted form of a custom emoji: <:name:id> (or <a:name:id> when animated).
+_CUSTOM_EMOJI_RE = re.compile(r"<(a?):([A-Za-z0-9_~]+):(\d+)>$")
+
+
+def _resolve_guild_emoji(guild: discord.Guild, raw: str) -> discord.Emoji | None:
+    """Resolve member input to one of *this guild's* custom emojis.
+
+    Accepts the pasted form ``<:name:id>`` (matched by id) or a typed
+    ``:name:`` / bare name (matched by name). Unicode emojis and custom
+    emojis from other servers resolve to ``None`` — role icons only take
+    images this server has already approved as emojis.
+    """
+    raw = raw.strip()
+    m = _CUSTOM_EMOJI_RE.match(raw)
+    if m:
+        return discord.utils.get(guild.emojis, id=int(m.group(3)))
+    name = raw.strip(":").strip()
+    if not name:
+        return None
+    return discord.utils.get(guild.emojis, name=name)
+
+
 def _rental_lines(settings: EconSettings, rentals: list, user_id: int) -> list[str]:
     """One line per live rental for the wallet's 'Active rentals' field."""
     emoji = settings.currency_emoji
@@ -293,8 +315,93 @@ class _PayConfirmView(discord.ui.View):
         )
 
 
+class _RoleNameModal(discord.ui.Modal, title="Custom role name"):
+    text = discord.ui.TextInput(
+        label="Role name",
+        min_length=1,
+        max_length=_MAX_ROLE_NAME_LEN,
+        placeholder="Shown in your profile and the member list",
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.set_role_name(interaction, str(self.text.value))
+
+
+class _RoleColorModal(discord.ui.Modal, title="Custom role colour"):
+    hex_value = discord.ui.TextInput(
+        label="Hex colour", min_length=3, max_length=9, placeholder="#7B2FF7"
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.set_role_color(interaction, str(self.hex_value.value))
+
+
+class _RoleGradientModal(discord.ui.Modal, title="Gradient role"):
+    hex1 = discord.ui.TextInput(
+        label="First hex colour", min_length=3, max_length=9, placeholder="#7B2FF7"
+    )
+    hex2 = discord.ui.TextInput(
+        label="Second hex colour", min_length=3, max_length=9, placeholder="#2FF7B2"
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.set_role_gradient(
+            interaction, str(self.hex1.value), str(self.hex2.value)
+        )
+
+
+class _RoleIconModal(discord.ui.Modal, title="Role icon"):
+    emoji = discord.ui.TextInput(
+        label="Server emoji",
+        min_length=1,
+        max_length=100,
+        placeholder=":emoji_name: — a custom emoji from this server",
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.set_role_icon_emoji(interaction, str(self.emoji.value))
+
+
+# Which modal customises which perk; gift_color shares the colour modal.
+_CFG_MODALS = {
+    "role_name": _RoleNameModal,
+    "role_color": _RoleColorModal,
+    "role_gradient": _RoleGradientModal,
+    "role_icon": _RoleIconModal,
+}
+
+# Short button labels for the customise flows (the perk label is on the row).
+_CUSTOMISE_LABELS = {
+    "role_color": "Set colour",
+    "role_name": "Set name",
+    "role_gradient": "Set gradient",
+    "role_icon": "Set icon",
+}
+
+
 class _ShopView(discord.ui.View):
-    """Rent buttons for the self-service role perks (feature-gated rows disabled)."""
+    """One button per self-perk: Rent when unowned, a customise modal when owned.
+
+    Feature-gated rows are disabled either way. A member holding only a
+    *gifted* colour gets an extra "Set gifted colour" button, since the
+    role_color row still shows Rent for them.
+    """
 
     def __init__(
         self,
@@ -303,6 +410,7 @@ class _ShopView(discord.ui.View):
         guild: discord.Guild,
         user_id: int,
         gated: set[str],
+        owned: set[str],
     ) -> None:
         super().__init__(timeout=120)
         self.cog = cog
@@ -310,14 +418,31 @@ class _ShopView(discord.ui.View):
         self.guild = guild
         self.user_id = user_id
         for perk in _SELF_PERKS:
-            price = _perk_price(settings, perk)
+            if perk in owned:
+                button = discord.ui.Button(
+                    label=_CUSTOMISE_LABELS[perk],
+                    style=discord.ButtonStyle.success,
+                    disabled=perk in gated,
+                    custom_id=f"econ_shop_cfg:{perk}",
+                )
+                button.callback = self._make_cfg_callback(perk)
+            else:
+                price = _perk_price(settings, perk)
+                button = discord.ui.Button(
+                    label=f"Rent {_PERK_LABELS[perk]} · {price}",
+                    style=discord.ButtonStyle.primary,
+                    disabled=perk in gated,
+                    custom_id=f"econ_shop_rent:{perk}",
+                )
+                button.callback = self._make_rent_callback(perk)
+            self.add_item(button)
+        if "gift_color" in owned and "role_color" not in owned:
             button = discord.ui.Button(
-                label=f"Rent {_PERK_LABELS[perk]} · {price}",
-                style=discord.ButtonStyle.primary,
-                disabled=perk in gated,
-                custom_id=f"econ_shop_rent:{perk}",
+                label="Set gifted colour",
+                style=discord.ButtonStyle.success,
+                custom_id="econ_shop_cfg:gift_color",
             )
-            button.callback = self._make_callback(perk)
+            button.callback = self._make_cfg_callback("role_color")
             self.add_item(button)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -328,17 +453,40 @@ class _ShopView(discord.ui.View):
             return False
         return True
 
-    def _make_callback(self, perk: str):
+    def _make_rent_callback(self, perk: str):
         async def _cb(interaction: discord.Interaction) -> None:
             await self.cog.do_rent(interaction, self.settings, self.guild, perk)
 
         return _cb
 
+    def _make_cfg_callback(self, perk: str):
+        async def _cb(interaction: discord.Interaction) -> None:
+            await self.cog.open_customise_modal(interaction, perk)
+
+        return _cb
+
+
+class _PostRentView(discord.ui.View):
+    """Single customise button attached to a fresh rental's confirmation."""
+
+    def __init__(self, cog: EconomyCog, perk: str) -> None:
+        super().__init__(timeout=300)
+        button = discord.ui.Button(
+            label=_CUSTOMISE_LABELS[perk],
+            style=discord.ButtonStyle.success,
+            custom_id=f"econ_rent_cfg:{perk}",
+        )
+
+        async def _cb(interaction: discord.Interaction) -> None:
+            await cog.open_customise_modal(interaction, perk)
+
+        button.callback = _cb
+        self.add_item(button)
+
 
 async def _rent_perk_flow(
     interaction: discord.Interaction,
-    ctx: AppContext,
-    bot: Bot,
+    cog: EconomyCog,
     settings: EconSettings,
     guild: discord.Guild,
     perk: str,
@@ -346,8 +494,10 @@ async def _rent_perk_flow(
     """Rent a self-perk from a shop button, then project the role.
 
     Shared by the ephemeral /bank shop view and the persistent channel panel —
-    every reply is ephemeral to the clicker.
+    every reply is ephemeral to the clicker, and a successful rent carries the
+    perk's customise button so styling happens without leaving the message.
     """
+    ctx = cog.ctx
     user_id = interaction.user.id
 
     def _rent() -> None:
@@ -376,9 +526,15 @@ async def _rent_perk_flow(
         await interaction.response.send_message(text, ephemeral=True)
         return
 
-    await apply_role_perks(bot, ctx.db_path, guild.id, user_id)
+    await apply_role_perks(cog.bot, ctx.db_path, guild.id, user_id)
+    note = (
+        " (For an image icon, upload one with `/bank role icon`.)"
+        if perk == "role_icon"
+        else ""
+    )
     await interaction.response.send_message(
-        f"Rented **{_PERK_LABELS[perk]}**! Customise it with `/bank role`.",
+        f"Rented **{_PERK_LABELS[perk]}**! Set it up right here:{note}",
+        view=_PostRentView(cog, perk),
         ephemeral=True,
     )
 
@@ -443,7 +599,13 @@ class ShopRentButton(
                 ephemeral=True,
             )
             return
-        await _rent_perk_flow(interaction, ctx, bot, settings, guild, self.perk)
+        cog = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
+        if cog is None:  # cog unloaded mid-flight; the panel button outlives it
+            await interaction.response.send_message(
+                "That perk isn't available right now.", ephemeral=True
+            )
+            return
+        await _rent_perk_flow(interaction, cog, settings, guild, self.perk)
 
 
 def _build_shop_embed(
@@ -452,21 +614,28 @@ def _build_shop_embed(
     accent: discord.Colour | None,
     *,
     panel: bool = False,
+    owned: set[str] | frozenset[str] = frozenset(),
 ) -> discord.Embed:
-    """The shop listing, shared by /bank shop and the channel panel."""
+    """The shop listing, shared by /bank shop and the channel panel.
+
+    ``owned`` marks the viewer's rented rows — only meaningful for the
+    ephemeral per-member view; the channel panel is member-agnostic.
+    """
     description = "Weekly rentals — billed every 7 days, cancel any time."
     if panel:
         description += " Tap a button to rent — the reply is private to you."
+    else:
+        description += " Green buttons customise what you've already rented."
     embed = discord.Embed(
         title="🛍️ Perk shop", description=description, colour=accent
     )
     for perk in _SELF_PERKS:
         price = _perk_price(settings, perk)
-        note = (
-            " · _requires a server feature not enabled here_"
-            if perk in gated
-            else ""
-        )
+        note = ""
+        if perk in gated:
+            note = " · _requires a server feature not enabled here_"
+        elif perk in owned:
+            note = " · ✅ rented"
         embed.add_field(
             name=_PERK_LABELS[perk],
             value=f"{settings.currency_emoji} **{price:,}** / week{note}",
@@ -507,7 +676,7 @@ class EconomyCog(commands.Cog):
     )
     role = app_commands.Group(
         name="role",
-        description="Customise your personal role (rent perks with /bank shop).",
+        description="Personal role extras (customise your perks in /bank shop).",
         parent=bank,
     )
 
@@ -809,7 +978,9 @@ class EconomyCog(commands.Cog):
         guild = interaction.guild
         user_id = interaction.user.id
 
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
+        settings, owned = await asyncio.to_thread(
+            self._load_role_ctx, guild.id, user_id
+        )
         if not settings.enabled:
             await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
             return
@@ -820,8 +991,8 @@ class EconomyCog(commands.Cog):
                 gated.add(perk)
 
         accent = await resolve_accent_color(self.ctx.db_path, guild)
-        embed = _build_shop_embed(settings, gated, accent)
-        view = _ShopView(self, settings, guild, user_id, gated)
+        embed = _build_shop_embed(settings, gated, accent, owned=owned)
+        view = _ShopView(self, settings, guild, user_id, gated, owned)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     async def do_rent(
@@ -832,7 +1003,7 @@ class EconomyCog(commands.Cog):
         perk: str,
     ) -> None:
         """Rent a self-perk from the ephemeral shop view."""
-        await _rent_perk_flow(interaction, self.ctx, self.bot, settings, guild, perk)
+        await _rent_perk_flow(interaction, self, settings, guild, perk)
 
     # ── gift ─────────────────────────────────────────────────────────────
 
@@ -890,20 +1061,26 @@ class EconomyCog(commands.Cog):
             self.bot, self.ctx.db_path, guild.id, member.id,
             content=(
                 f"{gifter.display_name} gifted you a custom colour! "
-                "Pick one with /bank role color."
+                "Pick one from /bank shop."
             ),
         )
         await interaction.response.send_message(
-            f"Gifted a custom colour to {member.mention}. They can set it with "
-            "`/bank role color`.",
+            f"Gifted a custom colour to {member.mention}. They can set it from "
+            "`/bank shop`.",
             ephemeral=True,
         )
 
     # ── role studio ──────────────────────────────────────────────────────
+    # Customisation is button + modal driven from /bank shop; the setters
+    # below are shared by the modals (and re-check entitlements on submit,
+    # since a rental can lapse between opening the shop and submitting).
 
-    @role.command(name="name", description="Set your personal role's name.")
-    @app_commands.describe(text="The name (up to 32 characters)")
-    async def role_name(self, interaction: discord.Interaction, text: str) -> None:
+    async def open_customise_modal(
+        self, interaction: discord.Interaction, perk: str
+    ) -> None:
+        await interaction.response.send_modal(_CFG_MODALS[perk](self))
+
+    async def set_role_name(self, interaction: discord.Interaction, text: str) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
@@ -935,9 +1112,7 @@ class EconomyCog(commands.Cog):
             interaction, guild.id, user_id, f"Your role name is now **{text}**."
         )
 
-    @role.command(name="color", description="Set your personal role's colour.")
-    @app_commands.describe(hex="A hex colour like #7B2FF7")
-    async def role_color(self, interaction: discord.Interaction, hex: str) -> None:
+    async def set_role_color(self, interaction: discord.Interaction, hex: str) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
@@ -971,9 +1146,7 @@ class EconomyCog(commands.Cog):
             interaction, guild.id, user_id, f"Your role colour is now `#{value:06X}`."
         )
 
-    @role.command(name="gradient", description="Set a two-colour gradient role.")
-    @app_commands.describe(hex1="First hex colour", hex2="Second hex colour")
-    async def role_gradient(
+    async def set_role_gradient(
         self, interaction: discord.Interaction, hex1: str, hex2: str
     ) -> None:
         assert interaction.guild is not None
@@ -1014,16 +1187,74 @@ class EconomyCog(commands.Cog):
             f"Your gradient is now `#{v1:06X}` → `#{v2:06X}`.",
         )
 
-    @role.command(name="icon", description="Set your personal role's icon.")
+    async def set_role_icon_emoji(
+        self, interaction: discord.Interaction, raw: str
+    ) -> None:
+        """Set the role icon from one of the server's custom emojis (modal path)."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        user_id = interaction.user.id
+        settings, ent = await asyncio.to_thread(self._load_role_ctx, guild.id, user_id)
+        if not settings.enabled:
+            await interaction.response.send_message(_DISABLED_MSG, ephemeral=True)
+            return
+        if "role_icon" not in ent:
+            await interaction.response.send_message(
+                "Rent the **Role icon** perk first (/bank shop).", ephemeral=True
+            )
+            return
+        if not await feature_gate_ok(self.bot, guild.id, "role_icon"):
+            await interaction.response.send_message(
+                "This server doesn't support role icons right now.", ephemeral=True
+            )
+            return
+        emoji = _resolve_guild_emoji(guild, raw)
+        if emoji is None:
+            await interaction.response.send_message(
+                "That doesn't match a custom emoji on this server — type its "
+                "name like `:party_parrot:`. For an image icon, upload one "
+                "with `/bank role icon`.",
+                ephemeral=True,
+            )
+            return
+        if emoji.animated:
+            await interaction.response.send_message(
+                "Animated emojis can't be role icons — pick a static one.",
+                ephemeral=True,
+            )
+            return
+        try:
+            data = await emoji.read()
+        except discord.HTTPException:
+            await interaction.response.send_message(
+                "I couldn't fetch that emoji's image — try again shortly.",
+                ephemeral=True,
+            )
+            return
+        if len(data) > _MAX_ICON_BYTES:
+            await interaction.response.send_message(
+                "That emoji's image is too big — 256KB max.", ephemeral=True
+            )
+            return
+        path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
+
+        def _write() -> None:
+            path.write_bytes(data)
+            self._upsert_role(guild.id, user_id, {"icon_path": str(path)})
+
+        await asyncio.to_thread(_write)
+        await self._apply_and_confirm(
+            interaction, guild.id, user_id, "Your role icon is set."
+        )
+
+    @role.command(
+        name="icon", description="Upload an image for your personal role's icon."
+    )
     @app_commands.describe(
-        emoji="A unicode emoji to use as the icon",
-        image="Or upload an image (256KB max)",
+        image="An image up to 256KB (emoji icons: use /bank shop)"
     )
     async def role_icon(
-        self,
-        interaction: discord.Interaction,
-        emoji: str | None = None,
-        image: discord.Attachment | None = None,
+        self, interaction: discord.Interaction, image: discord.Attachment
     ) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
@@ -1042,31 +1273,19 @@ class EconomyCog(commands.Cog):
                 "This server doesn't support role icons right now.", ephemeral=True
             )
             return
-        if not emoji and image is None:
+        if image.size > _MAX_ICON_BYTES:
             await interaction.response.send_message(
-                "Give an emoji or upload an image.", ephemeral=True
+                "That image is too big — 256KB max.", ephemeral=True
             )
             return
+        data = await image.read()
+        path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
 
-        if image is not None:
-            if image.size > _MAX_ICON_BYTES:
-                await interaction.response.send_message(
-                    "That image is too big — 256KB max.", ephemeral=True
-                )
-                return
-            data = await image.read()
-            path = _icon_store_path(self.ctx.db_path, guild.id, user_id)
+        def _write() -> None:
+            path.write_bytes(data)
+            self._upsert_role(guild.id, user_id, {"icon_path": str(path)})
 
-            def _write() -> None:
-                path.write_bytes(data)
-                self._upsert_role(guild.id, user_id, {"icon_path": str(path)})
-
-            await asyncio.to_thread(_write)
-        else:
-            assert emoji is not None
-            await asyncio.to_thread(
-                self._upsert_role, guild.id, user_id, {"icon_path": emoji.strip()}
-            )
+        await asyncio.to_thread(_write)
         await self._apply_and_confirm(
             interaction, guild.id, user_id, "Your role icon is set."
         )
