@@ -3,11 +3,14 @@ default_stages: [pre-commit]
 repos:
   - repo: local
     hooks:
-      - id: gate-quick
-        name: gate (ruff + pyright)
+      - id: gate-scoped
+        name: gate (ruff + pyright + scoped tests)
         # gate.py locates the repo venv itself, so this works on Linux and
-        # Windows with whatever `python` is on PATH.
-        entry: python scripts/gate.py --quick
+        # Windows with whatever `python` is on PATH. --scoped runs only the
+        # tests mapped to the staged diff; a shared-file change (core, deps,
+        # conftest) falls back to the full suite, so a commit can occasionally
+        # take longer. Use `git commit --no-verify` to bypass in a pinch.
+        entry: python scripts/gate.py --scoped
         language: system
         pass_filenames: false
         always_run: true
