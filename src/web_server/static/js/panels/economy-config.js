@@ -81,6 +81,13 @@ function render(container, cfg, channels, roles, pricing) {
           <label>Manager role</label>
           <span data-picker="manager_role_id"></span>
         </div>
+        <div class="field">
+          <label>Game role</label>
+          <span data-picker="game_role_id"></span>
+          <div class="field-hint">When set, auto-claimed quest completions DM the
+            player their card instead of replying in the channel; members without
+            the role are paid silently. Leave unset to reply in-channel for everyone.</div>
+        </div>
         <label style="display:flex; gap:6px; align-items:center; margin:8px 0;">
           <input type="checkbox" name="transfers_enabled"${cfg.transfers_enabled ? " checked" : ""} />
           Member-to-member transfers enabled
@@ -142,6 +149,11 @@ function render(container, cfg, channels, roles, pricing) {
     roles,
     String(cfg.manager_role_id),
   );
+  const gameRolePicker = mountRolePicker(
+    form.querySelector('[data-picker="game_role_id"]'),
+    roles,
+    String(cfg.game_role_id),
+  );
 
   const numKeys = [
     "booster_multiplier",
@@ -163,6 +175,7 @@ function render(container, cfg, channels, roles, pricing) {
       transfers_enabled: form.querySelector("[name=transfers_enabled]").checked,
       bank_channel_id: parseInt(channelPicker.getValue() || "0", 10),
       manager_role_id: parseInt(rolePicker.getValue() || "0", 10),
+      game_role_id: parseInt(gameRolePicker.getValue() || "0", 10),
     };
     for (const key of numKeys) {
       const raw = form.querySelector(`[name=${key}]`).value;

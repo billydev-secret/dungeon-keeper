@@ -9,6 +9,28 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — quest completion pings via DM under a game role  (this commit)
+
+New `game_role_id` setting (Dashboard → Economy → Settings → **Game role**).
+When set, auto-claimed quest completions (trigger-word, photo-reply, media-post)
+DM the claimant their ✅/📝 card instead of replying in the trigger channel;
+members without the role are paid silently. Unset (default) keeps the legacy
+in-channel reply for everyone.
+
+- [ ] With **no** Game role configured, a trigger-word quest still posts the
+      ✅ reaction + in-channel reply embed (unchanged legacy behavior).
+- [ ] Set a Game role in the dashboard. A **role-holder** who fires a
+      trigger-word / photo-reply / media-post quest gets the ✅ reaction on
+      their message **and a DM** with the completion card — **no** channel reply.
+- [ ] A member **without** the role who fires the same quest is **paid** (wallet
+      goes up) but gets **no reaction, no reply, no DM**.
+- [ ] A role-holder with econ notifications **muted** (`/bank mute`) gets the
+      payout but no DM. If their DMs are closed, the card falls back to the
+      bank channel.
+- [ ] A **sign-off** trigger quest still posts the bank-channel approval card
+      regardless of the claimant's role; a role-holder additionally gets the
+      📝 card by DM.
+
 ### Tickets — closed-embed status fix + 24h auto-delete  (this commit)
 
 The ticket embed's **Status** field was never re-rendered on close/reopen

@@ -35,6 +35,7 @@ class EconomyConfigUpdate(BaseModel):
     enabled: bool | None = None
     bank_channel_id: int | None = Field(default=None, ge=0)
     manager_role_id: int | None = Field(default=None, ge=0)
+    game_role_id: int | None = Field(default=None, ge=0)
     currency_name: str | None = Field(default=None, max_length=32)
     currency_plural: str | None = Field(default=None, max_length=32)
     currency_emoji: str | None = Field(default=None, max_length=64)

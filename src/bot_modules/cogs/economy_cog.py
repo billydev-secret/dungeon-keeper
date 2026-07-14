@@ -1696,6 +1696,23 @@ class EconomyCog(commands.Cog):
             )
             reaction, note = "📝", embed
 
+        # When a "game role" is configured, the completion card is a DM to
+        # opted-in players (keeps the trigger channel clean); members without
+        # the role are paid silently. With no role set the feature is off and
+        # everyone gets the legacy in-channel reaction + reply.
+        role_id = settings.game_role_id
+        if role_id:
+            if not any(r.id == role_id for r in member.roles):
+                return
+            try:
+                await message.add_reaction(reaction)
+            except discord.HTTPException:
+                log.debug("econ trigger: failed to react", exc_info=True)
+            await notify_member(
+                self.bot, self.ctx.db_path, guild.id, member.id, embed=note
+            )
+            return
+
         try:
             await message.add_reaction(reaction)
         except discord.HTTPException:

@@ -30,6 +30,12 @@ class EconSettings:
     enabled: bool = False
     bank_channel_id: int = 0
     manager_role_id: int = 0
+    # Opt-in "economy game" role. When set, auto-claimed quest completions
+    # (trigger-word / photo-reply / media-post) DM the claimant their card
+    # instead of replying in-channel; members without the role are paid
+    # silently. 0 (default) = feature off: everyone gets the legacy
+    # in-channel reaction + reply.
+    game_role_id: int = 0
     currency_name: str = "Coin"
     currency_plural: str = "Coins"
     currency_emoji: str = "🪙"

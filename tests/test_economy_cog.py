@@ -1609,6 +1609,78 @@ async def test_trigger_message_pays_instant_quest_once_per_period(ctx, db):
 
 
 @pytest.mark.asyncio
+async def test_game_role_holder_gets_dm_not_channel_reply(ctx, db):
+    """With game_role_id set, a role-holder is DMed the card (reaction stays,
+    no in-channel reply); notify_member carries the embed."""
+    _enable(db, game_role_id=777)
+    _mk_quest(db, reward=10, title="Say GM", trigger_words="gm")
+    cog = _make_cog(ctx)
+    member = _member(member_id=501, role_ids=(777,))
+
+    msg = _trigger_message(author=member, content="gm")
+    with patch(
+        "bot_modules.cogs.economy_cog.notify_member",
+        new=AsyncMock(return_value=True),
+    ) as notify:
+        await cog._on_trigger_message(msg)
+
+    assert _balance(db, 501) == 10
+    msg.add_reaction.assert_awaited_once_with("✅")
+    msg.reply.assert_not_awaited()
+    notify.assert_awaited_once()
+    assert notify.await_args.kwargs["embed"].title == "Quest complete!"
+
+
+@pytest.mark.asyncio
+async def test_game_role_non_member_paid_silently(ctx, db):
+    """With game_role_id set, a member WITHOUT the role is paid silently —
+    no reaction, no reply, no DM."""
+    _enable(db, game_role_id=777)
+    _mk_quest(db, reward=10, trigger_words="gm")
+    cog = _make_cog(ctx)
+    member = _member(member_id=501)  # no role_ids
+
+    msg = _trigger_message(author=member, content="gm")
+    with patch(
+        "bot_modules.cogs.economy_cog.notify_member",
+        new=AsyncMock(return_value=True),
+    ) as notify:
+        await cog._on_trigger_message(msg)
+
+    assert _balance(db, 501) == 10  # still paid
+    msg.add_reaction.assert_not_awaited()
+    msg.reply.assert_not_awaited()
+    notify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_game_role_signoff_dms_role_holder_and_posts_card(ctx, db):
+    """A sign-off quest under game_role_id: the bank-channel card posts
+    regardless, and a role-holder is DMed the 📝 card instead of a reply."""
+    _enable(db, game_role_id=777)
+    _mk_quest(db, reward=10, signoff=1, trigger_words="did it")
+    cog = _make_cog(ctx)
+    member = _member(member_id=501, role_ids=(777,))
+
+    msg = _trigger_message(author=member, content="did it")
+    with (
+        patch(
+            "bot_modules.cogs.economy_cog.post_signoff_card", new=AsyncMock()
+        ) as card,
+        patch(
+            "bot_modules.cogs.economy_cog.notify_member",
+            new=AsyncMock(return_value=True),
+        ) as notify,
+    ):
+        await cog._on_trigger_message(msg)
+
+    card.assert_awaited_once()  # manager approval flow survives the role gate
+    msg.add_reaction.assert_awaited_once_with("📝")
+    msg.reply.assert_not_awaited()
+    notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_trigger_message_ignores_non_matches_and_bots(ctx, db):
     _enable(db)
     _mk_quest(db, reward=10, trigger_words="gm")

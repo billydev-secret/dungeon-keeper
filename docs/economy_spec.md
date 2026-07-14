@@ -39,7 +39,7 @@ weekly-renewing perks (role customization, private rooms) and social sinks
 
 Dashboard → Economy → Settings: `currency_name`/plural, `currency_emoji`,
 `currency_icon_url`, `wallet_name`, `bank_channel_id`, `spotlight_channel_id`,
-`manager_role_id`, `transfers_enabled`, `enabled`.
+`manager_role_id`, `game_role_id`, `transfers_enabled`, `enabled`.
 
 - Stored as `econ_*` keys in the shared per-guild `config` table, loaded into a frozen
   `EconSettings` dataclass (same pattern as `XpSettings` / `load_xp_settings`,
@@ -199,6 +199,16 @@ on their behalf through the ordinary `claim_quest` state machine:
 - **Sign-off quest:** files the `pending` claim, posts the bank-channel card, and
   reacts 📝 — a manager still approves the payout.
 
+**Game-role delivery.** When `game_role_id` is set, the completion card
+(both the instant ✅ card and the sign-off 📝 card) is **DMed** to the
+claimant instead of replied in-channel — the reaction still lands on their
+message, but the embed goes via `notify_member` (DM, bank-channel fallback,
+honors the notify mute). Members **without** the role are paid/filed
+**silently** (no reaction, no reply, no DM). With `game_role_id` unset (0,
+the default) the feature is off and every claimant gets the legacy in-channel
+reaction + reply. The bank-channel sign-off card (manager approval) is posted
+regardless of the claimant's role.
+
 Trigger quests are **excluded from the `/bank quests` claim select** (state
 `trigger` on the wallet page) — self-claiming without saying the phrase would
 bypass the verification. Repeats inside a period fall out silently via the
@@ -232,7 +242,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
-| `photo_reply` | member replies to a Photo Challenge card with an image | `EconomyCog._on_photo_reply` (announces ✅/📝 in-channel) | `photo_reply:<game_id>` |
+| `photo_reply` | member replies to a Photo Challenge card with an image | `EconomyCog._on_photo_reply` (announces ✅/📝 — in-channel, or DM under `game_role_id`) | `photo_reply:<game_id>` |
 | `party_game` | party game completes with the member in the roster | `pay_game_rewards` via `game_manager.end_game` | `party_game:<game_type>:<game_id>` |
 | `duel` | duel/PvP game resolves (chicken, hot potato ×2, musical chairs, pressure, quickdraw) | `pay_game_rewards` at each duel cog's resolution | `duel:<game_type>:<id>` |
 | `risky_roll` | member presses Roll in a Risky Rolls round | `RiskyRollView.roll_button` → `fire_member_trigger` | `risky_roll:<game_id>` |
@@ -243,7 +253,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `invite` | a member the inviter recruited joins | `events_cog.on_member_join` beside `record_invite` | `invite:<invitee_id>` (rejoin never re-pays) |
 | `boost` | member starts a server boost (`premium_since` None→set) | `EconomyCog._on_boost_started` (new listener) | `boost:<boost_start_ts>` |
 | `bio_set` | member saves/updates their bio via the wizard | `bios/wizard._persist_sync` | `bio_set:set` (event = once ever) |
-| `media_post` | member posts a message with an image; per-quest `trigger_channel_id` scopes it (threads count via parent) | `EconomyCog._on_media_post` (announces like photo) | `media_post:<message_id>` — use daily/weekly cadence |
+| `media_post` | member posts a message with an image; per-quest `trigger_channel_id` scopes it (threads count via parent) | `EconomyCog._on_media_post` (announces like photo; DM under `game_role_id`) | `media_post:<message_id>` — use daily/weekly cadence |
 | `pen_pal` | two members are paired into a Pen Pals session (both fire) | `pen_pals_cog._do_pair` save | `pen_pal:<session_id>` |
 | `message_sent` | any member message (channel-scopable) | `events_cog._econ_work` (same txn as login/QOTD) | `message_sent:<message_id>` |
 | `reply_sent` | a Discord reply to someone ELSE's message (self-replies skipped; unresolvable references count) | `events_cog._econ_work` | `reply_sent:<message_id>` |
