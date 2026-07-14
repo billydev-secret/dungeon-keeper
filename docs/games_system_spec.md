@@ -117,7 +117,7 @@ Every game's Close button opens a 30-second confirm popup ("Close this game?" �
 - **No cross-guild leaderboards.** History is queryable per guild but no leaderboard surface exists.
 - **No per-user game settings.** Configuration is per-guild or per-channel only.
 - **No pre-game RSVP.** Players join by clicking a button on the live embed.
-- **No inactivity timeouts** (except AMA's per-question lifecycle and the 24-hour orphan sweep). The host is trusted to close the game; the sweep is the safety net.
+- **No mid-game inactivity timeouts** (except AMA's per-question lifecycle and the 24-hour orphan sweep). The host is trusted to close the game; the sweep is the safety net. Exception: the Clapback *lobby* expires after 10 quiet minutes (extended to cover a scheduled `start_in` plus grace) — the lobby message is edited to a disabled "Lobby timed out" state so it can't collect dead clicks.
 - **No spectator-only mode.** Anyone in the channel can vote and submit.
 - **No matchmaking.** Pairings are random — no skill or history awareness.
 - **No persistent leaderboards or seasons.** History is raw rows only.

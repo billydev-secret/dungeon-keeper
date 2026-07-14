@@ -76,6 +76,36 @@ class ConfirmCloseView(discord.ui.View):
         await interaction.response.edit_message(content="Close cancelled.", view=None)
 
 
+DEFAULT_LAUNCH_PERMS_HINT = (
+    "I don't have access to send messages in that channel. "
+    "Please grant me **View Channel**, **Send Messages**, and **Embed Links**."
+)
+
+
+async def finish_launch_response(
+    interaction: discord.Interaction,
+    game_id: str | None,
+    *,
+    perms_hint: str = DEFAULT_LAUNCH_PERMS_HINT,
+) -> None:
+    """Resolve a deferred /games play interaction after launch().
+
+    The game posts its own lobby/prompt message, so the deferred placeholder
+    is deleted rather than filled in — left dangling, Discord renders it as
+    "The application did not respond" once the interaction token expires.
+    On a failed launch (no send permissions) *perms_hint* is sent ephemerally.
+    """
+    try:
+        await interaction.delete_original_response()
+    except discord.HTTPException:
+        pass
+    if game_id is None:
+        try:
+            await interaction.followup.send(perms_hint, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+
 async def check_allowed_channel(db, channel_id: int | None) -> bool:
     if channel_id is None:
         return False

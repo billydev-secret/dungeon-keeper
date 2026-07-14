@@ -9,6 +9,34 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Games — launch "did not respond" fix + Clapback lobby timeout  (this commit)
+
+Every `/games play …` command deferred publicly and never resolved the
+deferred response (the lobby/prompt posts via `channel.send`), so Discord
+converted the dangling placeholder into a red "The application did not
+respond" ~15 min after every launch. All 17 launch commands now call a shared
+`finish_launch_response()` that deletes the placeholder (and, on a failed
+launch, sends the permissions hint ephemerally). Separately, the Clapback
+lobby view silently expired 5 quiet minutes after the last button press,
+cancelling the game but leaving live-looking buttons that swallowed the
+host's Start click ("This interaction failed"). Lobby inactivity window is
+now 10 min, extended past a scheduled `start_in`, and on expiry the lobby
+message is edited to a disabled "Lobby timed out" state. Live checks:
+
+- [ ] `/games play clapback` → lobby posts; the invoking user's "Poppy is
+      thinking…" placeholder disappears (no red "did not respond" 15 min
+      later).
+- [ ] Spot-check two other games (e.g. `/games play wyr`, `/games play ttl`)
+      → same: prompt posts, no dangling placeholder.
+- [ ] `/games play` in a non-games channel still gets the ephemeral "isn't
+      set up for games" reply (pre-flight path untouched).
+- [ ] Open a clapback lobby, leave it idle 10 min → message edits to
+      "⌛ Lobby timed out" with disabled buttons; clicking them does nothing
+      (no "interaction failed" spinner).
+- [ ] `/games play clapback start_in:15` → lobby survives past 10 idle
+      minutes (window extends to start time + 2 min).
+- [ ] Start a clapback game normally → plays through; recap unaffected.
+
 ### Economy — per-user quest board + Gaussian bands + duel_lose  (e62f697)
 
 - [ ] Restart the bot → boots clean (migration 072 adds `target_min`/`target_max`;

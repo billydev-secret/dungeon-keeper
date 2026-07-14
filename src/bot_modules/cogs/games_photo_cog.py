@@ -10,6 +10,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     get_game_options,
@@ -129,15 +130,11 @@ class PhotoCog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={"tags": tag_list, "prompt": text},
         )
-        if game_id is None:
-            try:
-                await interaction.followup.send(
-                    "I couldn't start the game here. Please grant me **View Channel**, "
-                    "**Send Messages**, and **Attach Files**.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
+        await finish_launch_response(
+            interaction, game_id,
+            perms_hint="I couldn't start the game here. Please grant me **View Channel**, "
+            "**Send Messages**, and **Attach Files**.",
+        )
 
     async def launch(
         self,

@@ -12,6 +12,7 @@ from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS
 from bot_modules.games.utils.audit import send_audit_log
 from bot_modules.games.utils.game_manager import (
+    finish_launch_response,
     check_allowed_channel,
     create_game,
     get_active_game_by_id,
@@ -513,19 +514,15 @@ class FFACog(commands.Cog):
             guild_id=interaction.guild_id or 0,
             options={"kind": kind, "tags": tag_list, "prompt": prompt or ""},
         )
-        if game_id is None:
-            perms = (
-                "**View Channel**, **Send Messages**, and **Attach Files**."
-                if banner
-                else "**View Channel**, **Send Messages**, and **Embed Links**."
-            )
-            try:
-                await interaction.followup.send(
-                    f"I couldn't start the game here. Please grant me {perms}",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
+        perms = (
+            "**View Channel**, **Send Messages**, and **Attach Files**."
+            if banner
+            else "**View Channel**, **Send Messages**, and **Embed Links**."
+        )
+        await finish_launch_response(
+            interaction, game_id,
+            perms_hint=f"I couldn't start the game here. Please grant me {perms}",
+        )
 
     async def _resolve_prompt(self, channel, options: dict):
         """Resolve (kind, tags, (label, text)) for a launch. (label, text) is None on miss."""
