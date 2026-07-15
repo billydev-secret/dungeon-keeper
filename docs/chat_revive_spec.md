@@ -111,7 +111,7 @@ Details of the moment:
   flag (`channel.is_nsfw()`), never on a bot-side toggle.
 - **Dashboard-managed, no slash commands** (revised same-day: the `/revive`
   group was built and then stripped to keep the command surface clean).
-  Everything lives in the dashboard's Moderation → Chat Revive panel, backed
+  Everything lives in the dashboard's Config → Chat Revive panel, backed
   by `/api/chat-revive/*` (moderator-gated): guild settings, per-channel
   dials, the question bank (add/bulk/retire), the scoreboard, the
   would-it-fire "Check" explainer, manual "Fire", and posting the opt-in

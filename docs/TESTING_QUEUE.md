@@ -27,6 +27,20 @@ running it through `Number()`. Affected: the channel row's **Fire** button,
 - [ ] Set a channel's **Role override** and save → persists after a refresh.
 - [ ] **Post opt-in button** in a channel → button appears there (no 404).
 
+### Dashboard — Docs, Role Menus, Chat Revive moved from Moderation to Config  (this commit)
+
+Nav-only move: the three panels now live in the Config section (Role Menus
+after Auto-Role, Chat Revive and Docs after Starboard). They stay
+moderator-visible (no adminOnly), matching their moderator-gated APIs.
+Deep links are unchanged — the hash router keys on panel id only.
+
+- [ ] Config section shows Docs, Role Menus, Chat Revive; Moderation no
+      longer lists them.
+- [ ] As a **moderator** (non-admin), the three panels still appear under
+      Config and load.
+- [ ] Old deep links (`#/docs`, `#/role-menus`, `#/chat-revive`) still open
+      the right panel, highlighted under Config.
+
 ### Economy — bank guide panel stops re-sticking on bot messages  (this commit)
 
 The sticky `on_message` listener now ignores **bot** messages (`message.author.bot`):

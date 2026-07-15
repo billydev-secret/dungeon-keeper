@@ -83,9 +83,6 @@ const SECTIONS = [
     id: "moderation", label: "Moderation", perms: ["moderator"],
     items: [
       { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js" },
-      { id: "docs",           label: "Docs",           module: "./panels/docs.js" },
-      { id: "role-menus",     label: "Role Menus",     module: "./panels/role-menus.js" },
-      { id: "chat-revive",    label: "Chat Revive",    module: "./panels/chat-revive.js" },
       { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js" },
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js" },
@@ -109,7 +106,8 @@ const SECTIONS = [
     // Most Config pages load at moderator level but every save requires admin,
     // so they're marked adminOnly to hide them from moderators who can't use
     // them. Exceptions: Birthday Calendar is genuinely moderator-level (read
-    // only), and Wellness config is gated on manage_server, not admin.
+    // only), Wellness config is gated on manage_server, not admin, and
+    // Docs / Role Menus / Chat Revive are fully moderator-level features.
     items: [
       { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true },
       { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
@@ -124,10 +122,13 @@ const SECTIONS = [
       { id: "config-prune",      label: "Inactivity Prune", module: "./panels/config-prune.js", adminOnly: true },
       { id: "config-spoiler",      label: "Spoiler Guard",     module: "./panels/config-spoiler.js", adminOnly: true },
       { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
+      { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js" },
       { id: "config-auto-delete", label: "Auto-Delete",      module: "./panels/config-auto-delete.js", adminOnly: true },
       { id: "config-bulk-cleanup", label: "Bulk Cleanup",     module: "./panels/config-bulk-cleanup.js", adminOnly: true },
       { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true },
       { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
+      { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js" },
+      { id: "docs",              label: "Docs",              module: "./panels/docs.js" },
       { id: "config-voice-master", label: "Voice Master",      module: "./panels/config-voice-master.js", adminOnly: true },
       { id: "config-birthday",   label: "Birthdays",         module: "./panels/config-birthday.js", adminOnly: true },
       { id: "birthday-calendar", label: "Birthday Calendar",  module: "./panels/birthday-calendar.js" },
