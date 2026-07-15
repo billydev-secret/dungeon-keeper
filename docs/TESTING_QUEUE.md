@@ -9,6 +9,18 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — bank guide Spending points at the shop  (this commit)
+
+The `/bank post-guide` panel's **Spending** field no longer lists per-perk
+prices inline; it names the perks (colour/name/gradient/icon) and defers the
+numbers to the shop ("Prices and renewal terms are shown in the shop").
+
+- [ ] Re-run `/bank post-guide` and read the **Spending** field: the `/bank
+      shop` line names the four perks with **no** prices and points to the shop
+      for pricing; `/bank gift` and (if transfers on) `/bank pay` still listed.
+- [ ] Open `/bank shop` and confirm the actual prices + renewal terms show
+      there, so nothing is lost by dropping them from the guide.
+
 ### Economy — bank guide panel "Joining" note + sticky-to-bottom  (this commit)
 
 The `/bank post-guide` panel now carries a **Joining** field ("Opt in any time

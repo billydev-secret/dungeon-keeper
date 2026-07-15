@@ -39,8 +39,9 @@ def test_guide_embed_defaults_cover_earning_and_spending():
     assert "×1.5" in earning  # booster line
     assert "/bank quests" in earning
     spending = fields["Spending"]
-    assert "50" in spending and "35" in spending  # colour / name prices
-    assert "120" in spending and "75" in spending  # gradient / icon prices
+    assert "/bank shop" in spending
+    assert "colour, name, gradient, icon" in spending  # perks named, not priced
+    assert "shown in the shop" in spending  # specifics deferred to the shop page
     assert "/bank pay" in spending
     assert embed.footer.text and "grace" in embed.footer.text
 
@@ -60,12 +61,13 @@ def test_guide_embed_uses_guild_branding():
         currency_plural="Gems",
         currency_emoji="💎",
         currency_icon_url="https://cdn.example/gem.png",
-        price_role_color=99,
     )
     embed = build_guide_embed(settings)
 
+    fields = {f.name: f.value or "" for f in embed.fields}
     assert "Gems" in (embed.title or "")
-    assert "💎 99" in {f.name: f.value for f in embed.fields}["Spending"]
+    assert "💎" in fields["Earning"]  # emoji flows into the earn lines
+    assert "Gems" in fields["Spending"]  # plural flows into the /bank pay line
     assert embed.thumbnail.url == "https://cdn.example/gem.png"
 
 
