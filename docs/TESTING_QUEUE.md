@@ -30,6 +30,20 @@ channel via an `on_message` delete-and-repost (debounced ~6s).
 - [ ] `/bank post-guide` in the **same** channel still edits in place (panel
       does **not** jump to the bottom) — only new activity re-sticks it.
 
+### Health dashboard — heatmap timezone + day-of-week fix  (this commit)
+
+The Community Health heatmap (`#/health-heatmap`) bucketed hour-of-day
+straight from UTC timestamps with no guild timezone shift, and a shared
+day-of-week SQL formula was off by one weekday (also used by the DAU/MAU
+tile's day-of-week breakdown). Both now shift by the guild's configured
+`tz_offset_hours` (heatmap) / are correctly aligned to Mon=0 (both tiles).
+
+- [ ] Dashboard → Community Health → Heatmap deep-dive: peak/quiet slot
+      labels and the grid's hour columns match your wall-clock time, not UTC.
+- [ ] Post a message and confirm it lands in the correct weekday row (not
+      one day ahead) in both the heatmap grid and the DAU/MAU day-of-week
+      chart.
+
 ### Chat Revive (stages 0–4) — rhythm-aware lull questions  (this commit)
 ### Chat Revive — dashboard management, /revive commands removed  (this commit)
 

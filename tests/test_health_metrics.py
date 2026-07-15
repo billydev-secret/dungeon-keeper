@@ -270,6 +270,20 @@ def test_compute_heatmap_records_slot_values(db_conn):
     assert len(out["per_channel"]) >= 1
 
 
+def test_compute_heatmap_shifts_by_utc_offset(db_conn):
+    now = 1_700_000_000.0  # 2023-11-14 22:13:20 UTC -> UTC hour-of-day bucket 22
+    _seed_message(db_conn, mid=1, cid=100, aid=1, ts=int(now - 60))
+    db_conn.commit()
+
+    out_utc = hm.compute_heatmap(db_conn, GUILD, now=now)
+    assert out_utc["grid"][1][22] > 0  # Tue (dow=1), 22:00 UTC
+
+    # Eastern (-5h): the same message should land 5 hours earlier, at 17:00.
+    out_local = hm.compute_heatmap(db_conn, GUILD, now=now, utc_offset_hours=-5.0)
+    assert out_local["grid"][1][17] > 0
+    assert out_local["grid"][1][22] == 0
+
+
 # ── compute_channel_health ───────────────────────────────────────────
 
 
