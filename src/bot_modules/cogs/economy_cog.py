@@ -2186,11 +2186,14 @@ class EconomyCog(commands.Cog):
     async def _restick_guide_panel(self, message: discord.Message) -> None:
         """Keep the guide panel as the last message in its channel.
 
-        Any message in the panel's channel (member chatter *or* the bot's own
-        economy notices) means the panel is no longer at the bottom, so we
-        arm a debounced repost. The panel itself is skipped by id.
+        A **member** message in the panel's channel means the panel is no
+        longer at the bottom, so we arm a debounced repost. Bot messages are
+        ignored outright: re-sticking under our own repost is a self-loop
+        (the repost's ``on_message`` can arrive before the new id is cached,
+        so the id skip alone can't be relied on), and chasing our own economy
+        notices adds churn for no member-visible benefit.
         """
-        if message.guild is None:
+        if message.guild is None or message.author.bot:
             return
         guild_id = message.guild.id
         panel_channel_id, panel_message_id = await self._guide_panel_ref(guild_id)

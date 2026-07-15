@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -98,8 +99,10 @@ def test_restick_true_for_member_message_in_panel_channel():
     )
 
 
-def test_restick_true_for_bot_notice_in_panel_channel():
-    # Economy notices are bot-authored but still bury the panel — re-stick.
+def test_restick_predicate_is_author_agnostic():
+    # The predicate only knows channel/message ids — bot-vs-member filtering
+    # lives in the listener (see test_restick_listener_ignores_bot_messages),
+    # so for a distinct id in the panel channel it always returns True.
     assert should_restick_guide(
         message_channel_id=PANEL_CH,
         message_id=555,
@@ -272,6 +275,36 @@ async def test_schedule_restick_cancels_pending_repost(ctx, db):
     second.cancel()
     await asyncio.gather(first, second, return_exceptions=True)
     assert first.cancelled()
+
+
+def _listener_msg(*, author_bot: bool, channel_id: int, message_id: int) -> MagicMock:
+    m = MagicMock(spec=discord.Message)
+    m.guild = FakeGuild(id=GUILD_ID)
+    m.author = MagicMock(bot=author_bot)
+    m.channel = SimpleNamespace(id=channel_id)
+    m.id = message_id
+    return m
+
+
+@pytest.mark.asyncio
+async def test_restick_listener_ignores_bot_messages(ctx, db):
+    # Panel posted and cached, so _guide_panel_ref is a pure cache hit.
+    cog = _make_cog(ctx)
+    cog._guide_ref[GUILD_ID] = (time.monotonic() + 300, CHANNEL_ID, PANEL_MSG)
+    cog._schedule_guide_restick = MagicMock()
+
+    # Our own repost / economy notices must not arm another repost — this is
+    # the self-loop the id-cache alone can't be relied on to catch.
+    await cog._restick_guide_panel(
+        _listener_msg(author_bot=True, channel_id=CHANNEL_ID, message_id=777)
+    )
+    cog._schedule_guide_restick.assert_not_called()
+
+    # A member message in the panel channel still re-sticks.
+    await cog._restick_guide_panel(
+        _listener_msg(author_bot=False, channel_id=CHANNEL_ID, message_id=777)
+    )
+    cog._schedule_guide_restick.assert_called_once_with(GUILD_ID)
 
 
 @pytest.mark.asyncio

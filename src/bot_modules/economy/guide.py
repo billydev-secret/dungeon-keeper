@@ -109,10 +109,11 @@ def should_restick_guide(
     """Whether a new message should push the guide panel back to the bottom.
 
     The panel is kept as the channel's last message by delete-and-repost
-    (Discord has no reorder API), so any message landing in its channel
-    means it's no longer last. We re-stick for **every** such message,
-    including the bot's own economy notices — the only message we must
-    ignore is the panel itself, or the repost would loop forever.
+    (Discord has no reorder API), so a member message landing in its channel
+    means it's no longer last. Bot messages are filtered out by the caller
+    before we get here (re-sticking under our own repost self-loops), so this
+    predicate only ever sees member activity; the message-id guard below stays
+    as a belt-and-braces skip of the panel itself.
     """
     if not panel_channel_id or not panel_message_id:
         return False  # no panel posted yet
