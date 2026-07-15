@@ -28,6 +28,7 @@ from bot_modules.services.chat_revive_loop import ReviveInFlight, send_guard
 from bot_modules.services.chat_revive_service import (
     KNOWN_CATEGORIES,
     ChannelConfig,
+    GuildConfig,
     add_question,
     bulk_add_questions,
     delete_channel_config,
@@ -89,6 +90,24 @@ class ChannelActionBody(BaseModel):
     channel_id: int
 
 
+def _guild_cfg_json(cfg: GuildConfig) -> dict:
+    """Stringify snowflakes — JS `Number` can't hold a full Discord ID."""
+    d = asdict(cfg)
+    d["guild_id"] = str(d["guild_id"])
+    if d.get("role_id") is not None:
+        d["role_id"] = str(d["role_id"])
+    return d
+
+
+def _channel_cfg_json(cfg: ChannelConfig) -> dict:
+    d = asdict(cfg)
+    d["guild_id"] = str(d["guild_id"])
+    d["channel_id"] = str(d["channel_id"])
+    if d.get("role_id_override") is not None:
+        d["role_id_override"] = str(d["role_id_override"])
+    return d
+
+
 def _require_channel(ctx, guild_id: int, channel_id: int) -> discord.TextChannel:
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
@@ -130,8 +149,8 @@ async def overview(request: Request, _: AuthenticatedUser = _MOD):
 
     cfg, channels, bank_size = await run_query(_q)
     return {
-        "config": asdict(cfg),
-        "channels": [asdict(c) for c in channels],
+        "config": _guild_cfg_json(cfg),
+        "channels": [_channel_cfg_json(c) for c in channels],
         "bank_size": bank_size,
         "categories": list(KNOWN_CATEGORIES),
     }
@@ -162,7 +181,7 @@ async def put_config(
         return cfg, seeded
 
     cfg, seeded = await run_query(_q)
-    return {"config": asdict(cfg), "seeded": seeded}
+    return {"config": _guild_cfg_json(cfg), "seeded": seeded}
 
 
 @router.put("/chat-revive/channels/{channel_id}")
@@ -191,7 +210,7 @@ async def put_channel(
             save_channel_config(conn, cfg)
         return cfg
 
-    return {"channel": asdict(await run_query(_q))}
+    return {"channel": _channel_cfg_json(await run_query(_q))}
 
 
 @router.delete("/chat-revive/channels/{channel_id}")
@@ -311,7 +330,10 @@ async def stats(request: Request, _: AuthenticatedUser = _MOD):
         with ctx.open_db() as conn:
             return revive_stats(conn, guild_id, now_ts=now)
 
-    return asdict(await run_query(_q))
+    d = asdict(await run_query(_q))
+    for c in d["channels"]:
+        c["channel_id"] = str(c["channel_id"])
+    return d
 
 
 @router.get("/chat-revive/check/{channel_id}")

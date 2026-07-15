@@ -9,6 +9,24 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Chat Revive — fix 404 on Fire/opt-in-post/role saves from ID precision loss  (this commit)
+
+The dashboard was converting Discord snowflake IDs (channel/role) to a JS
+`Number` before sending them to the API. Snowflakes exceed
+`Number.MAX_SAFE_INTEGER`, so the conversion silently rounded them to a
+different, nonexistent ID — the backend then couldn't find that channel and
+returned `404: No such text channel.`. Fixed by sending the ID as a string
+(FastAPI/Pydantic coerces numeric strings to full-precision ints) instead of
+running it through `Number()`. Affected: the channel row's **Fire** button,
+**Post opt-in button**, the guild `role_id` setting, and a channel's
+`role_id_override`.
+
+- [ ] Chat Revive → invite a channel, click **Fire** on its row → posts a
+      revive message in that channel (no 404).
+- [ ] Set the guild **Role** (ping role) and save → persists after a refresh.
+- [ ] Set a channel's **Role override** and save → persists after a refresh.
+- [ ] **Post opt-in button** in a channel → button appears there (no 404).
+
 ### Economy — bank guide panel stops re-sticking on bot messages  (this commit)
 
 The sticky `on_message` listener now ignores **bot** messages (`message.author.bot`):

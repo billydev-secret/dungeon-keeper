@@ -144,7 +144,7 @@ function renderSettings(container, overview) {
     const get = (k) => host.querySelector(`[data-f="${k}"]`).value;
     const body = {
       enabled: get("enabled") === "1",
-      role_id: get("role_id") ? Number(get("role_id")) : null,
+      role_id: get("role_id") || null,
       quiet_start: Number(get("quiet_start")),
       quiet_end: Number(get("quiet_end")),
       daily_budget: Number(get("daily_budget")),
@@ -163,7 +163,7 @@ function renderSettings(container, overview) {
 
   host.querySelector("[data-optin-post]").addEventListener("click", async () => {
     const status = container.querySelector("[data-settings-status]");
-    const channelId = Number(host.querySelector("[data-optin-channel]").value);
+    const channelId = host.querySelector("[data-optin-channel]").value;
     try {
       await apiPost("/api/chat-revive/optin-post", { channel_id: channelId });
       flash(status, `Opt-in button posted in ${chanName(channelId)}.`);
@@ -240,7 +240,7 @@ function renderChannels(container, rows) {
             enabled: val("enabled").checked,
             categories: val("categories").value.split(",").map((s) => s.trim()).filter((s) => s && s !== "all" && s !== "*"),
             ping_enabled: val("ping_enabled").checked,
-            role_id_override: val("role_id_override").value ? Number(val("role_id_override").value) : null,
+            role_id_override: val("role_id_override").value || null,
             rest_hours: Number(val("rest_hours").value),
             fire_multiplier: Number(val("fire_multiplier").value),
           };
@@ -251,7 +251,7 @@ function renderChannels(container, rows) {
           const r = await api(`/api/chat-revive/check/${cid}`);
           out.innerHTML = renderCheck(cid, r);
         } else if (act === "fire") {
-          const r = await apiPost("/api/chat-revive/fire", { channel_id: Number(cid) });
+          const r = await apiPost("/api/chat-revive/fire", { channel_id: cid });
           flash(status(), `Revived ${chanName(cid)}${r.pinged ? " with a ping" : ""}: ${r.question}`);
           renderStats(container);
         } else if (act === "remove") {

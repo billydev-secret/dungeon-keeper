@@ -88,10 +88,22 @@ def test_channel_roundtrip_and_removal(open_client):
     assert r.status_code == 200
     assert r.json()["channel"]["categories"] == ["deep", "music"]
     overview = open_client.get("/api/chat-revive/overview").json()
-    assert [c["channel_id"] for c in overview["channels"]] == [555]
+    assert [c["channel_id"] for c in overview["channels"]] == ["555"]
 
     assert open_client.delete("/api/chat-revive/channels/555").status_code == 200
     assert open_client.delete("/api/chat-revive/channels/555").status_code == 404
+
+
+def test_channel_id_survives_as_full_precision_string(open_client):
+    # Real Discord snowflakes exceed JS's Number.MAX_SAFE_INTEGER (2**53); the
+    # API must emit them as strings so a JSON `Number` round-trip can't round
+    # them to a different, nonexistent channel (regression: #chat-revive-404).
+    big_cid = 1469123456789012345
+    r = open_client.put(f"/api/chat-revive/channels/{big_cid}", json={})
+    assert r.status_code == 200
+    assert r.json()["channel"]["channel_id"] == str(big_cid)
+    overview = open_client.get("/api/chat-revive/overview").json()
+    assert [c["channel_id"] for c in overview["channels"]] == [str(big_cid)]
 
 
 def test_channel_rejects_bad_categories(open_client):
@@ -155,11 +167,15 @@ def test_stats_empty_then_seeded(open_client, fake_ctx):
         )
     s = open_client.get("/api/chat-revive/stats").json()
     assert s["total"] == 1 and s["successes"] == 1
-    assert s["channels"][0]["channel_id"] == 555
+    assert s["channels"][0]["channel_id"] == "555"
 
 
 def test_check_explains_without_bot(open_client):
-    _enable(open_client)
+    # quiet_start == quiet_end disables the quiet-hours gate — otherwise this
+    # test is flaky, since /check uses the real wall clock and would report
+    # "Quiet hours" instead of "No message history" whenever it happens to
+    # run during the default 00:00-08:00 local window.
+    _enable(open_client, quiet_start=0, quiet_end=0)
     open_client.put("/api/chat-revive/channels/555", json={})
     r = open_client.get("/api/chat-revive/check/555")
     assert r.status_code == 200
