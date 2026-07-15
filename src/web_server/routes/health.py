@@ -11,6 +11,7 @@ from typing import Any, Callable, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services.health_metrics import (
     compute_channel_health,
     compute_churn_risk,
@@ -641,7 +642,8 @@ async def health_heatmap(
 
     def _q():
         with ctx.open_db() as conn:
-            data = compute_heatmap(conn, guild_id)
+            tz = get_tz_offset_hours(conn, guild_id)
+            data = compute_heatmap(conn, guild_id, utc_offset_hours=tz)
             # Resolve channel names
             ch_ids = {int(ch["channel_id"]) for ch in data["per_channel"]}
             bot = getattr(ctx, "bot", None)
