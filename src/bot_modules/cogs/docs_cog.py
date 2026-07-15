@@ -1,6 +1,6 @@
 """Docs cog — post and sync single-source markdown documents as embeds.
 
-Authoring lives on the dashboard (Moderation → Docs); this cog is the Discord
+Authoring lives on the dashboard (Config → Docs); this cog is the Discord
 surface for *placing* a doc into channels and re-syncing it. Editing a doc's
 markdown anywhere re-renders every channel it's posted in.
 """
@@ -250,7 +250,7 @@ class DocsCog(commands.Cog):
         rows = await asyncio.to_thread(_q)
         if not rows:
             await interaction.response.send_message(
-                "No docs yet — create one on the dashboard (Moderation → Docs).",
+                "No docs yet — create one on the dashboard (Config → Docs).",
                 ephemeral=True,
             )
             return
