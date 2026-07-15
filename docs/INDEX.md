@@ -19,23 +19,37 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [README.md](README.md) | Feature overview + slash-command reference (recently corrected) |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Production deploy: permissions, env vars, DB, Cloudflare tunnel |
 | [ai_moderation_spec.md](ai_moderation_spec.md) | AI moderation cog (review/scan/query, label feedback) |
+| [auto_react_spec.md](auto_react_spec.md) | Auto React (listener-only image auto-reactions; dashboard/API-configured) |
 | [bios_cog_spec.md](bios_cog_spec.md) | Bios cog (profiles, wizard) |
 | [birthday-announcement.md](birthday-announcement.md) | Birthday announcement message format |
 | [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration |
+| [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders) |
 | [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, mod log |
+| [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
+| [docs_cog_spec.md](docs_cog_spec.md) | `/docs` cog: posts dashboard-authored docs into channels (not this docs/ folder) |
 | [dungeon_keeper_jail_ticket_spec.md](dungeon_keeper_jail_ticket_spec.md) | Jail/ticket/policy/warn system |
 | [emoji_stealer_spec.md](emoji_stealer_spec.md) | Emoji stealer (URL command + context menu) |
+| [games_system_spec.md](games_system_spec.md) | Party games suite (`/games play <slug>`, 18 games) |
+| [guess_spec.md](guess_spec.md) | Guess image game (`/guess submit\|round\|delete\|optin\|confess\|leaderboard\|prompt`) |
+| [hidden_channels_spec.md](hidden_channels_spec.md) | Hidden Channels (`/hidden hide\|restore\|list`) |
+| [inactive_spec.md](inactive_spec.md) | Inactive member management (`/inactive mark\|release\|panel\|sweep\|config`) |
+| [mod_spec.md](mod_spec.md) | Mod cog (`/help`, `/purge`) — distinct from tools_spec.md |
+| [needle_spec.md](needle_spec.md) | Needle auto-threading (`/close`, `/title`) |
 | [pen_pals_spec.md](pen_pals_spec.md) | Pen Pals pooling + private channels |
 | [pressure_cooker_spec.md](pressure_cooker_spec.md) | Pressure Cooker duel |
 | [privacy_spec.md](privacy_spec.md) | Data deletion (`/delete_me`, `/delete_user`) |
 | [quote_renderer_spec.md](quote_renderer_spec.md) | Quote/banner card renderer (shared service: themes, fonts, slim/custom borders) |
+| [rename_spec.md](rename_spec.md) | `/rename` (moderator nickname change/reset) |
 | [reporting_spec.md](reporting_spec.md) | Reporting / dashboard reports |
+| [role_grant_spec.md](role_grant_spec.md) | Role Grant (`/grant`, fixed allowlist grants) — distinct from role_menus_spec.md |
 | [rules_watch_cog.md](rules_watch_cog.md) | Rules Watch cog design |
 | [risky_roll_spec.md](risky_roll_spec.md) | Risky Rolls (`/risky start`, roll mechanics) |
+| [setup_spec.md](setup_spec.md) | `/setup` onboarding wizard — distinct from DUNGEON_KEEPER_TEST_ENV_SPEC.md |
 | [starboard_spec.md](starboard_spec.md) | Starboard (threshold, self-star block, NSFW guard) |
 | [todo_spec.md](todo_spec.md) | Server todo (`/todo` + context menu) |
 | [voice_master_spec.md](voice_master_spec.md) | Voice Master (hubs, profiles, trust/block) |
+| [voice_transcription_spec.md](voice_transcription_spec.md) | Voice-clip transcription listener (faster_whisper) — distinct from whisper_spec.md |
 | [whisper_spec.md](whisper_spec.md) | Whisper (anon send, 3-guess reveal) |
 | [xp_spec.md](xp_spec.md) | XP system (sources, leveling, leaderboard) |
 
@@ -43,7 +57,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 
 | Doc | What it covers | Caveat |
 |---|---|---|
-| [guess_spec.md](guess_spec.md) | Guess image game | Mostly Reference, but contains **phantom** commands: `/guess optout` and `/guess stats` don't exist, and the real `/guess prompt` is undocumented |
+| [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Current-behavior body now matches code (only `/wellness setup`/`away on\|off` are slash commands; caps/blackouts/partners/streaks are real but dashboard- and engine-only). **Activation gap:** no code path provisions a guild's `role_id`/`channel_id`, so the whole feature is dormant unless that row is seeded manually — see the callout at the top of the doc. Unbuilt member-facing commands moved to its Roadmap section. |
 
 ## Design specs (written to implement; may lag the code)
 
@@ -58,6 +72,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [MUSIC_COG_CLAUDE_CODE_SPEC.md](MUSIC_COG_CLAUDE_CODE_SPEC.md) | Music cog (Lavalink) | Built |
 | [post_monitoring_spec.md](post_monitoring_spec.md) | Post monitoring | |
 | [role_menus_spec.md](role_menus_spec.md) | Role Menus (self-assign roles via buttons/dropdown, Oracle builder) | Plan: `plans/role-menus.md` |
+| [survey_spec.md](survey_spec.md) | Anonymous Survey (launcher button, DM walkthrough, de-identified responses) | **Zero code** — no cog, no launcher, no DM session logic anywhere in `src/`. Pure design doc; not started. |
 | [TGM-Dashboard-Concept-Spec.md](TGM-Dashboard-Concept-Spec.md) | Web dashboard concept | |
 | [tools_spec.md](tools_spec.md) | Bot tools | |
 
@@ -67,10 +82,9 @@ These describe features or shapes of the system that don't match reality. They'r
 
 | Doc | What it covers | Why it's aspirational |
 |---|---|---|
-| [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games | Stale module path (`dk/cogs/games/` doesn't exist); §9.3 Minesweeper Duel and §9.6 Liar's Dice are fully specced with **zero code**; contains a BaseGame/BaseGame copy-paste bug |
-| [games_system_spec.md](games_system_spec.md) | Party games suite | Says "19-game" (17 exist); uses old standalone `/ffa` format instead of `/games play ffa`; documents phantom admin commands; omits Photo Challenge; the consent system it references has been removed |
-| [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Documents ~22 `/wellness` commands; only 3 exist (`/wellness setup`, `/wellness away on\|off`); caps, blackouts, partners, etc. are unbuilt |
 | [duel_minigame_flows_v2.md](duel_minigame_flows_v2.md) | Duel minigame UX flows | **Partially aspirational** — Liar's Dice and Minesweeper flows are specced but unbuilt |
+
+**2026-07-15 correction pass:** `dk_pvp_games_suite_spec.md`, `games_system_spec.md`, `guess_spec.md`, and `voice_master_spec.md` were rewritten to match current code and moved to the Reference table above; each now ends with (or, for `voice_master_spec.md`/`guess_spec.md`, never needed) a "Not Yet Built / Roadmap" section that preserves the design/unbuilt material they used to present as current (Minesweeper Duel, Liar's Dice, consent-gating, channel-allowlist admin commands, phantom `/guess` commands, etc.) instead of deleting it. `wellness_guardian_spec.md` got the same treatment but stays flagged above — its drift ran the opposite direction from expected (most of the doc's content turned out to be built, just dormant).
 
 ## Audits
 
@@ -81,4 +95,4 @@ These describe features or shapes of the system that don't match reality. They'r
 
 ---
 
-*One last reminder: the three aspirational specs — `games_system_spec.md`, `dk_pvp_games_suite_spec.md`, and `wellness_guardian_spec.md` — should be read as **intent, not current state**.*
+*One last reminder: `games_system_spec.md` and `dk_pvp_games_suite_spec.md` were corrected on 2026-07-15 and now describe current state (their remaining unbuilt ideas live in each doc's own Roadmap section). `wellness_guardian_spec.md` is still the one to read carefully — most of what it describes is real but dormant behind an unfilled activation gap; see its caveat above.*
