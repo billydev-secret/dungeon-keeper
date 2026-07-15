@@ -299,8 +299,8 @@ def test_render_revive_caption_carries_ping_and_flourish():
     )
 
 
-def test_render_revive_caption_ping_only():
-    assert render_revive_caption(role_id=7, flourish=None) == "<@&7>"
+def test_render_revive_caption_ping_only_keeps_the_fire():
+    assert render_revive_caption(role_id=7, flourish=None) == "\U0001f525 <@&7>"
 
 
 def test_render_revive_caption_empty_when_neither():

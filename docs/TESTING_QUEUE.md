@@ -21,7 +21,7 @@ has no icon, the icon won't read, the question exceeds the card's 280-char
 limit, or the renderer raises; the ping fires on every path.
 
 - [ ] Dashboard **Fire** on an enabled channel → card posts with the question
-      on it, "Chat Revive" heading, server icon graded behind it.
+      on it, "Ember" heading, server icon graded behind it.
 - [ ] With pinging enabled and the role due → `🔥 *flourish* @chat-revive`
       appears as text **above** the card and actually pings the role's members.
 - [ ] With flourish off and pinging off/not due → the card posts **bare**

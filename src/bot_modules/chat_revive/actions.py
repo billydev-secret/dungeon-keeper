@@ -24,7 +24,9 @@ if TYPE_CHECKING:
 log = logging.getLogger("dungeonkeeper.chat_revive")
 
 CARD_FILENAME = "revive.png"
-CARD_HEADING = "Chat Revive"
+# The persona, not the feature name: a revive should read as an organic nudge,
+# not as a bot announcing its own machinery.
+CARD_HEADING = "Ember"
 
 
 async def channel_is_busy(bot: Bot, channel_id: int) -> bool:

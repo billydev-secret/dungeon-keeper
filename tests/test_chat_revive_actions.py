@@ -63,6 +63,8 @@ async def test_card_carries_question_and_content_carries_ping(rendered):
     )
 
     assert rendered[0]["text"] == "What's new?"
+    # The persona, not the feature name — a revive shouldn't announce itself.
+    assert rendered[0]["author_name"] == "Ember"
     content = channel.send.await_args.args[0]
     assert content == "\U0001f525 *stirring…* <@&555>"
     file = channel.send.await_args.kwargs["file"]

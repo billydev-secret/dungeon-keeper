@@ -357,11 +357,14 @@ def render_revive_caption(*, role_id: int | None, flourish: str | None) -> str:
 
     A role mention can't live inside an image, so the ping (and the flourish,
     which the dashboard toggle still governs) ride along as message content.
-    Empty when there's neither: the card then posts bare.
+    Empty when there's neither: the card then posts bare. The 🔥 leads whenever
+    there's a caption at all — it's the signature every revive post shares.
     """
     parts: list[str] = []
     if flourish:
-        parts.append(f"\U0001f525 {flourish}")
+        parts.append(flourish)
     if role_id is not None:
         parts.append(f"<@&{role_id}>")
-    return " ".join(parts)
+    if not parts:
+        return ""
+    return " ".join(["\U0001f525", *parts])
