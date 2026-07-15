@@ -57,6 +57,30 @@ channel via an `on_message` delete-and-repost (debounced ~6s).
 - [ ] `/bank post-guide` in the **same** channel still edits in place (panel
       does **not** jump to the bottom) — only new activity re-sticks it.
 
+### Games — /games dev fill fixed for non-Clapback games + honest embed status  (this commit)
+
+`/games dev fill` used to report "Added N fake players" unconditionally even
+when the visible lobby embed never updated (a swallowed exception, or the
+lobby message not posted yet), and it silently wrote to the wrong payload key
+for compliment/mfk (`participants`, not `players`) and missed traditional's
+`prefs` entry — so fake joins never showed up for those games despite a
+"success" reply. `ttl`/`hottakes` now explicitly refuse (they're
+submission-based, no player-list concept).
+
+- [ ] Start a Clapback lobby, run `/games dev fill` immediately (before anyone
+      can see the lobby message settle) — should say "lobby message isn't
+      posted yet", not silently claim success.
+- [ ] Start a Clapback lobby, wait for it to post, run `/games dev fill` —
+      the lobby embed's player list visibly updates and the reply has no
+      warning.
+- [ ] Start a Compliment or MFK lobby, run `/games dev fill` — the fake
+      players actually show up in the pool (host can close and it pairs
+      them), not just an empty-looking "Added N" reply.
+- [ ] Start a Traditional lobby, run `/games dev fill` — the fake players
+      show real preferences when a question is asked, not silently absent.
+- [ ] Start a TTL or Hot Takes lobby, run `/games dev fill` — get a clear
+      "doesn't support" message instead of a fake success.
+
 ### Health dashboard — heatmap timezone + day-of-week fix  (this commit)
 
 The Community Health heatmap (`#/health-heatmap`) bucketed hour-of-day
