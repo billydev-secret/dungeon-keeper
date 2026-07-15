@@ -17,6 +17,7 @@ from bot_modules.chat_revive.logic import (
     pick_weighted,
     question_weight,
     render_revive,
+    render_revive_caption,
     revive_succeeded,
     should_ping,
 )
@@ -289,3 +290,18 @@ def test_render_revive_full_footprint():
 
 def test_render_revive_bare():
     assert render_revive("Q?", role_id=None, flourish=None) == "\U0001f525 Q?"
+
+
+def test_render_revive_caption_carries_ping_and_flourish():
+    assert (
+        render_revive_caption(role_id=123, flourish="*stirring…*")
+        == "\U0001f525 *stirring…* <@&123>"
+    )
+
+
+def test_render_revive_caption_ping_only_keeps_the_fire():
+    assert render_revive_caption(role_id=7, flourish=None) == "\U0001f525 <@&7>"
+
+
+def test_render_revive_caption_empty_when_neither():
+    assert render_revive_caption(role_id=None, flourish=None) == ""
