@@ -674,6 +674,18 @@ class QuoteCog(commands.Cog):
             log.warning("quote: reply-trigger failed to post card in %s", channel.id)
             return
 
+        # Credit the quote creator (the member who invoked the role) — one
+        # payout per quoted message via the occurrence key. Skip self-quotes:
+        # the invoker has no rate limit here, so crediting them for quoting
+        # their own message would be a trivial farm. Guarded/non-raising.
+        if target.author.id != message.author.id:
+            from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+            await fire_member_trigger(
+                self.bot, message.guild.id, message.author.id, "quote",
+                occurrence=str(target.id),
+            )
+
         # Seed the starboard reaction, matching the context-menu Post button.
         guild = message.guild
         if guild is not None:

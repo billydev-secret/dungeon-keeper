@@ -30,7 +30,6 @@ const SUGGESTIONS = [
   ["📊 Survey completion", "The survey spec is aspirational — there is no survey feature in the code yet to hook."],
   ["🤝 Invite retention", "Pay the invite source only after the invitee survives the prune window (the current invite source pays on join)."],
   ["🔥 Streak milestones", "A trigger kind firing on login-streak milestone days, so streaks can be quest-ified beyond the flat milestone payouts."],
-  ["🤫 Confessions", "Considered and rejected — a payout in the ledger would deanonymize the confessor."],
 ];
 
 export function mount(container) {

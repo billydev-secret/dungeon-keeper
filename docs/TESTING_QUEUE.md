@@ -9,6 +9,30 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — confession/AMA/whisper/quote quest faucets  (this commit)
+
+Four new trigger kinds (`confession`, `ama_ask`, `whisper`, `quote`) wired at
+existing engagement hooks. All pay through the normal silent trigger-claim path;
+create an active daily/weekly quest for each kind first (quest editor).
+
+- [ ] Quest editor trigger-kind dropdown lists the four new options
+      (🙊 confession, 🎤 ask in an AMA, ✉️ send a whisper, 🖋️ quote a message),
+      and the Income Sources page shows their descriptions.
+- [ ] With a **confession** quest active, submit a confession → the confession
+      posts **anonymously with no "quest complete" message in the feed**, but the
+      confessor's `/quests` log shows the claim and a `quest` ledger row appears
+      for them. Verify **both** the forum-channel and text-channel dest configs.
+- [ ] With an **ama_ask** quest active: in an **unfiltered** AMA, asking a
+      question pays immediately; in a **screened** AMA, asking does **not** pay
+      until the host **approves** (a **rejected** question never pays). AI-seeded
+      idle questions pay no one.
+- [ ] With a **whisper** quest active, send an anonymous whisper that delivers →
+      the sender earns it once; a whisper that fails to deliver (target DMs off,
+      rolled back) pays nothing.
+- [ ] With a **quote** quest active, reply+ping the make-it-a-quote role on a
+      message → the **invoker** (not the quoted author) earns it; quoting the
+      **same** message again pays nothing (once per quoted message).
+
 ### Economy — per-user quest board + Gaussian bands + duel_lose  (e62f697)
 
 - [ ] Restart the bot → boots clean (migration 072 adds `target_min`/`target_max`;

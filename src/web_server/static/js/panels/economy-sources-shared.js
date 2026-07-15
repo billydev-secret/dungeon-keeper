@@ -21,6 +21,10 @@ export const KIND_LABELS = {
   game_win: "🏆 Win a party game",
   duel_win: "🥇 Win a duel / PvP challenge",
   duel_lose: "🥈 Lose a duel / PvP challenge",
+  confession: "🙊 Post an anonymous confession",
+  ama_ask: "🎤 Ask a question in an AMA",
+  whisper: "✉️ Send an anonymous whisper",
+  quote: "🖋️ Turn a message into a quote card",
 };
 
 // Kinds whose quests can carry a trigger-channel scope.

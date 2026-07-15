@@ -59,6 +59,28 @@ from bot_modules.games_ama.logic import (
 log = logging.getLogger(__name__)
 
 
+async def _fire_ama_ask_trigger(client, channel, asker_id: int, game_id: str, q_idx: int) -> None:
+    """Credit an AMA question-asker's ``ama_ask`` economy quest trigger.
+
+    Fired only when the question actually becomes visible: on submit in
+    unfiltered mode, on host approval in screened mode (rejected questions
+    never pay). ``channel`` is the guild text channel — screened approval
+    happens in the host's DMs, so we take the guild from it rather than the
+    interaction. ``asker_id`` of 0 (AI-seeded idle questions) is skipped by
+    the guarded ``fire_member_trigger``. Occurrence keys per question so
+    "ask N questions" quests count each one once.
+    """
+    from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+    guild = getattr(channel, "guild", None)
+    if guild is None:
+        return
+    await fire_member_trigger(
+        cast("Bot", client), guild.id, asker_id, "ama_ask",
+        occurrence=f"{game_id}:{q_idx}",
+    )
+
+
 # ── Modals ───────────────────────────────────────────────────────────────────
 
 
@@ -137,6 +159,10 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             await interaction.response.send_message("Your question has been posted anonymously!", ephemeral=True)
             # Increment turn counter only after the question is actually posted
             await self.ama_view.register_question_asked(self.channel)
+            # Unfiltered questions post immediately → credit the asker now.
+            await _fire_ama_ask_trigger(
+                interaction.client, self.channel, interaction.user.id, self.game_id, q_idx
+            )
         else:
             # Screened — DM the host so the question stays hidden from the channel
             approve_view = ScreenedQuestionView(
@@ -280,6 +306,12 @@ class ScreenedQuestionView(discord.ui.View):
 
         # Advance turn counter now that the question is actually posted
         await self.ama_view.register_question_asked(self.channel)
+        # Screened questions credit the asker only on approval (rejected ones
+        # never reach here). The host approves from their DMs, so the guild
+        # comes from the game channel, not this interaction.
+        await _fire_ama_ask_trigger(
+            interaction.client, self.channel, self.asker_id, self.game_id, self.question_idx
+        )
 
     @discord.ui.button(label="❌ Reject", style=discord.ButtonStyle.danger)
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):

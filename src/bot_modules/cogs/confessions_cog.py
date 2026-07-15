@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import discord
 from discord import app_commands
@@ -56,6 +56,31 @@ if TYPE_CHECKING:
     from bot_modules.services.confessions_service import GuildConfig
 
 log = logging.getLogger(__name__)
+
+
+async def _fire_confession_trigger(
+    interaction: discord.Interaction, *, occurrence: str
+) -> None:
+    """Credit the confessor's ``confession`` economy quest trigger — privately.
+
+    Trigger-kind claims make no channel noise, so the confession stays
+    anonymous in the feed; the payout surfaces only in the member's own
+    /quests log (the sole remaining trace is the staff-side ledger). Guarded
+    and non-raising by ``fire_member_trigger`` — a no-op when the economy is
+    off. ``occurrence`` is the posted message/thread id so each confession
+    pays at most once.
+    """
+    from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+    if interaction.guild is None:
+        return
+    await fire_member_trigger(
+        cast("Bot", interaction.client),
+        interaction.guild.id,
+        interaction.user.id,
+        "confession",
+        occurrence=occurrence,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +197,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             except discord.HTTPException:
                 pass
             await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
+            await _fire_confession_trigger(interaction, occurrence=str(root_message_id))
             await self.cog._safe_complete(interaction)
             return
 
@@ -205,6 +231,7 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
         except discord.HTTPException:
             pass
         await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
+        await _fire_confession_trigger(interaction, occurrence=str(sent.id))
         await self.cog._safe_complete(interaction)
 
 

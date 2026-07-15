@@ -57,6 +57,10 @@ TRIGGER_KINDS: dict[str, str] = {
     "game_win": "Win a party game",
     "duel_win": "Win a duel / PvP challenge",
     "duel_lose": "Lose a duel / PvP challenge",
+    "confession": "Post an anonymous confession",
+    "ama_ask": "Ask a question in an AMA",
+    "whisper": "Send an anonymous whisper",
+    "quote": "Turn a message into a quote card",
 }
 
 # Longer per-kind copy for the Income Sources page: what fires it and what
@@ -81,6 +85,10 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "game_win": "Winning a party game (only types with a real winner resolve one: NHIE guiltiest, TTL best liar, Hot Takes hottest). Event cadence: once per game.",
     "duel_win": "Winning a duel/PvP match. Event cadence: once per match.",
     "duel_lose": "Not winning a duel/PvP match (every participant who wasn't the winner). Event cadence: once per match.",
+    "confession": "Submitting an anonymous confession. The confessor is credited privately — there is no public 'quest complete' message, only their own quest log (the only trace is the staff-side ledger row). Event cadence: once per confession — use daily/weekly with a target count.",
+    "ama_ask": "Asking a question in an AMA. Unfiltered questions fire on submit; screened questions fire only once the host approves (rejected ones never pay). Event cadence: once per question — use daily/weekly with a target count.",
+    "whisper": "Sending an anonymous whisper to another member. Event cadence: once per whisper — use daily/weekly with a target count.",
+    "quote": "Turning someone's message into a quote card with the make-it-a-quote role (the quoter who invokes it is credited). Event cadence: once per quoted message — mildly farmable, so use daily/weekly with a target count.",
 }
 
 

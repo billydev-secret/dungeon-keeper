@@ -251,6 +251,15 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `game_win` | winning a party game (only NHIE/TTL/Hot Takes resolve a winner) | `pay_game_rewards` winners pass | `game_win:<game_type>:<game_id>` |
 | `duel_win` | winning a duel/PvP match | `pay_game_rewards` winners pass | `duel_win:<game_type>:<id>` |
 | `duel_lose` | resolving a duel/PvP match without winning it (every participant minus the winner set) | `pay_game_rewards` losers pass | `duel_lose:<game_type>:<id>` |
+| `confession` | member submits an anonymous confession (posts to the feed) | `confessions_cog.ConfessModal.on_submit` → `_fire_confession_trigger` (both forum + text paths) | `confession:<message_id>` — silent claim keeps the feed anonymous; only trace is the ledger |
+| `ama_ask` | member's AMA question becomes visible: on submit (unfiltered) or on host approval (screened; rejected never pays) | `games_ama_cog` `AskQuestionModal.on_submit` + `ScreenedQuestionView.approve` → `_fire_ama_ask_trigger` | `ama_ask:<game_id>:<q_idx>` |
+| `whisper` | member sends an anonymous whisper that is delivered | `whisper_cog.WhisperCog._send_impl` after the DM+feed post succeed | `whisper:<whisper_id>` |
+| `quote` | member turns a message into a quote card via the make-it-a-quote role (the invoker is credited, not the quoted author; self-quotes never fire) | `quote_cog._on_quote_trigger` after the card posts | `quote:<quoted_message_id>` — mildly farmable, pair with daily/weekly + target count |
+
+`confession` quests reject `signoff=1` at creation/update: a sign-off claim
+posts a bank-channel card naming the claimant, timing-correlatable against the
+anonymous feed. (Community quests already forbid any trigger kind, so the only
+paths left for confession are the silent daily/weekly/monthly/event auto-claims.)
 
 **Monthly cadence:** `qtype='monthly'` claims once per guild-local calendar
 month (period `"YYYY-MM"`, so the window opens on the 1st); up to 5 active, own
