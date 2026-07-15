@@ -20,12 +20,16 @@ It is not a timer bot. It never posts on a schedule, never spams, and never talk
 
 A quiet Tuesday evening in #general, normally lively at this hour. After a long unusual lull, this appears:
 
-> 🔥 *stirring the coals…* @chat-revive What's a skill you learned entirely by accident?
+> 🔥 *stirring the coals…* @chat-revive
+> *[a banner card: the question set over the server icon, "Chat Revive" as its heading]*
 
-That's the whole footprint. Plain text — no embed, no buttons, no follow-up nudge. If it lands, people answer each other, not the bot. If it doesn't land, the bot doesn't try again for hours.
+That's the whole footprint. A quote-renderer card plus its one-line caption — no embed, no buttons, no follow-up nudge. If it lands, people answer each other, not the bot. If it doesn't land, the bot doesn't try again for hours.
 
 Details of the moment:
 
+- The question rides on the card; the ping and flourish ride in the message text beside it, because a role mention can't live inside an image. With neither, the card posts bare.
+- The card is the same renderer behind `/quote banner` and the QOTD card (midnight theme, server icon as the graded background), so a revive reads as the same object as the rest of the server's cards.
+- **Plain text is the fallback, not a mode:** a guild with no icon, an unreadable icon, a question longer than the card's 280-character limit, or any renderer failure posts the original one-line text form (`🔥 *flourish* @role question`) instead. The ping fires either way; the question is never silently trimmed.
 - The little flourish line ("stirring the coals…") rotates and can be turned off per guild for a bone-dry delivery.
 - The role tag appears only if that channel has pinging enabled *and* the role hasn't been tagged there in the last 24 hours. Otherwise the question posts un-pinged.
 - Members join or leave the chat-revive role themselves through the existing self-role flow. Taking the role means "I like being summoned to restart conversation" — it should be pitched that way wherever roles are advertised.

@@ -9,6 +9,31 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Chat Revive — question posts as a banner card (this commit)
+
+`send_revive` (the choke point for both the monitor loop and the dashboard
+**Fire** button) now renders the question through the quote renderer — the same
+card behind `/quote banner` and the QOTD post, midnight theme, server icon as
+the graded background — instead of posting the question as plain text. A role
+mention can't live inside an image, so the ping and flourish stay in the message
+content beside the card. Plain text is now a **fallback**, taken when the guild
+has no icon, the icon won't read, the question exceeds the card's 280-char
+limit, or the renderer raises; the ping fires on every path.
+
+- [ ] Dashboard **Fire** on an enabled channel → card posts with the question
+      on it, "Chat Revive" heading, server icon graded behind it.
+- [ ] With pinging enabled and the role due → `🔥 *flourish* @chat-revive`
+      appears as text **above** the card and actually pings the role's members.
+- [ ] With flourish off and pinging off/not due → the card posts **bare**
+      (no empty content line above it).
+- [ ] A question containing `@everyone` or a user mention → still pings nobody
+      (allowed-mentions whitelist unchanged), card renders the text as-is.
+- [ ] Add a bank question longer than 280 characters and fire it → posts as the
+      old plain-text line with the **full** question, not a trimmed card.
+- [ ] Auto-fire from the monitor loop looks identical to the Fire button's post.
+- [ ] Follow-up measurement still records success/fail against the card message
+      (check the panel's history/stats after conversation follows).
+
 ### AMA — switchable Open Panel format (this commit)
 
 `/games play ama` gained a `format` option: **Hot Seat** (the classic

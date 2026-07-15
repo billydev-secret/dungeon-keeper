@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 import re
 from typing import TYPE_CHECKING
 
 import discord
 
-from bot_modules.chat_revive.logic import render_revive
+from bot_modules.chat_revive.logic import render_revive, render_revive_caption
 from bot_modules.games.utils.game_manager import get_active_game
+from bot_modules.services.quote_renderer import (
+    QUOTE_MAX_CHARS,
+    THEMES,
+    render_quote_card,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.chat_revive")
+
+CARD_FILENAME = "revive.png"
+CARD_HEADING = "Chat Revive"
 
 
 async def channel_is_busy(bot: Bot, channel_id: int) -> bool:
@@ -101,6 +111,37 @@ class ReviveOptInButton(
             )
 
 
+async def _render_card(guild: discord.Guild | None, question_text: str) -> bytes | None:
+    """The question as a banner card, or None if we can't make one.
+
+    Background is the server icon — the revive has no host to borrow an avatar
+    from, so a guild without an icon simply falls back to plain text. A question
+    too long for the card is left to plain text as well, rather than posting a
+    card that silently trims the tail off the question.
+    """
+    if guild is None or guild.icon is None:
+        return None
+    if len(question_text) > QUOTE_MAX_CHARS:
+        return None
+    try:
+        icon_bytes = await guild.icon.replace(size=512).read()
+    except discord.HTTPException:
+        log.warning("revive: failed to read guild icon for %s", guild.id)
+        return None
+    try:
+        return await asyncio.to_thread(
+            render_quote_card,
+            question_text,
+            author_name=CARD_HEADING,
+            avatar_bytes=icon_bytes,
+            theme=THEMES["midnight"],
+            pfp_shape="none",
+        )
+    except Exception:
+        log.exception("revive: card render failed for guild %s", guild.id)
+        return None
+
+
 async def send_revive(
     channel: discord.abc.Messageable,
     *,
@@ -108,9 +149,15 @@ async def send_revive(
     role_id: int | None,
     flourish: str | None,
 ) -> discord.Message:
-    """Post the revive. Plain text; the allowed-mentions whitelist is exactly
-    the revive role (or nothing), so a question containing @everyone or a
-    user mention can never actually ping anyone else."""
+    """Post the revive as a banner card, falling back to plain text.
+
+    The question rides on the card, but a role mention can't live inside an
+    image — so the ping and flourish go in the message content beside it. The
+    allowed-mentions whitelist is exactly the revive role (or nothing), so a
+    question containing @everyone or a user mention can never actually ping
+    anyone else. If there's no icon to build a card from, or the renderer
+    raises, the old plain-text footprint carries the same question and ping.
+    """
     if role_id is not None:
         allowed = discord.AllowedMentions(
             everyone=False, users=False, replied_user=False,
@@ -118,5 +165,12 @@ async def send_revive(
         )
     else:
         allowed = discord.AllowedMentions.none()
-    text = render_revive(question_text, role_id=role_id, flourish=flourish)
-    return await channel.send(text, allowed_mentions=allowed)
+    card_bytes = await _render_card(getattr(channel, "guild", None), question_text)
+    if card_bytes is None:
+        text = render_revive(question_text, role_id=role_id, flourish=flourish)
+        return await channel.send(text, allowed_mentions=allowed)
+    return await channel.send(
+        render_revive_caption(role_id=role_id, flourish=flourish) or None,
+        file=discord.File(io.BytesIO(card_bytes), filename=CARD_FILENAME),
+        allowed_mentions=allowed,
+    )

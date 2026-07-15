@@ -350,3 +350,18 @@ def render_revive(
         parts.append(f"<@&{role_id}>")
     parts.append(question)
     return " ".join(parts)
+
+
+def render_revive_caption(*, role_id: int | None, flourish: str | None) -> str:
+    """Message text accompanying a rendered card — everything but the question.
+
+    A role mention can't live inside an image, so the ping (and the flourish,
+    which the dashboard toggle still governs) ride along as message content.
+    Empty when there's neither: the card then posts bare.
+    """
+    parts: list[str] = []
+    if flourish:
+        parts.append(f"\U0001f525 {flourish}")
+    if role_id is not None:
+        parts.append(f"<@&{role_id}>")
+    return " ".join(parts)
