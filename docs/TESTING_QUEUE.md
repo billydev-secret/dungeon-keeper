@@ -9,6 +9,33 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — bank guide panel stops re-sticking on bot messages  (this commit)
+
+The sticky `on_message` listener now ignores **bot** messages (`message.author.bot`):
+previously it re-stuck the panel under the bot's own repost and economy notices,
+and the id-cache guard couldn't reliably catch the repost's own gateway event
+(it can arrive before the new id is cached), so the panel could repost itself
+over and over. It still re-sticks under member activity.
+
+- [ ] With a guide panel posted, leave the channel quiet (no member messages)
+      and watch for ~1 min: the panel should **not** repost on its own.
+- [ ] Trigger a bot-authored message in that channel (e.g. an economy notice /
+      another bot post): the panel should **not** hop to the bottom for it.
+- [ ] Send a **member** message: after ~6s of quiet the panel re-sticks to the
+      bottom exactly once (old panel deleted, one fresh panel).
+
+### Economy — bank guide Spending points at the shop  (this commit)
+
+The `/bank post-guide` panel's **Spending** field no longer lists per-perk
+prices inline; it names the perks (colour/name/gradient/icon) and defers the
+numbers to the shop ("Prices and renewal terms are shown in the shop").
+
+- [ ] Re-run `/bank post-guide` and read the **Spending** field: the `/bank
+      shop` line names the four perks with **no** prices and points to the shop
+      for pricing; `/bank gift` and (if transfers on) `/bank pay` still listed.
+- [ ] Open `/bank shop` and confirm the actual prices + renewal terms show
+      there, so nothing is lost by dropping them from the guide.
+
 ### Economy — bank guide panel "Joining" note + sticky-to-bottom  (this commit)
 
 The `/bank post-guide` panel now carries a **Joining** field ("Opt in any time

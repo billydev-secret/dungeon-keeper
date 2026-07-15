@@ -78,17 +78,11 @@ def build_guide_embed(
 
     spend_lines = [
         (
-            f"`/bank shop` — rent perks for your own personal role, billed "
-            f"weekly: colour {emoji} {settings.price_role_color:,} · name "
-            f"{emoji} {settings.price_role_name:,} · gradient "
-            f"{emoji} {settings.price_role_gradient:,} · icon "
-            f"{emoji} {settings.price_role_icon:,}. Then style it right from "
-            "the shop's customise buttons."
+            "`/bank shop` — rent perks for your own personal role (colour, "
+            "name, gradient, icon), then style it from the shop's customise "
+            "buttons. Prices and renewal terms are shown in the shop."
         ),
-        (
-            f"`/bank gift` — treat a friend to a custom role colour "
-            f"({emoji} {settings.price_gift_color:,}/week, on your tab)."
-        ),
+        "`/bank gift` — treat a friend to a custom role colour, on your tab.",
     ]
     if settings.transfers_enabled:
         spend_lines.append(
@@ -115,10 +109,11 @@ def should_restick_guide(
     """Whether a new message should push the guide panel back to the bottom.
 
     The panel is kept as the channel's last message by delete-and-repost
-    (Discord has no reorder API), so any message landing in its channel
-    means it's no longer last. We re-stick for **every** such message,
-    including the bot's own economy notices — the only message we must
-    ignore is the panel itself, or the repost would loop forever.
+    (Discord has no reorder API), so a member message landing in its channel
+    means it's no longer last. Bot messages are filtered out by the caller
+    before we get here (re-sticking under our own repost self-loops), so this
+    predicate only ever sees member activity; the message-id guard below stays
+    as a belt-and-braces skip of the panel itself.
     """
     if not panel_channel_id or not panel_message_id:
         return False  # no panel posted yet
