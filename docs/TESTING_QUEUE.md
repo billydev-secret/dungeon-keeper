@@ -9,6 +9,37 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### AMA — switchable Open Panel format (this commit)
+
+`/games play ama` gained a `format` option: **Hot Seat** (the classic
+one-at-a-time rotation, unchanged default) or **Open Panel**, where everyone
+who taps Volunteer joins a live roster and anyone can Ask a Question, pick a
+panelist from a dropdown, and get an anonymous question aimed at them —
+no single seat, no rotation, no 4-question turn limit. Reuses the existing
+per-question target field so reply/pass, screened approval, and view recovery
+work unchanged in both formats. This merge also reconciles the Open Panel
+rewrite with the newer `ama_ask` economy quest trigger (added afterward) —
+both `AskQuestionModal.on_submit` and `ScreenedQuestionView.approve` now call
+`_fire_ama_ask_trigger` after the renamed `after_question_posted` status hook.
+
+- [ ] `/games play ama format:Hot Seat` → unchanged classic flow (one hot
+      seat, rotation, 4-question turn limit, Skip/New Hot Seat controls).
+- [ ] `/games play ama format:Open Panel` → embed prompts to Volunteer, no
+      single seat; tapping Volunteer joins the roster (shown in the embed).
+- [ ] In Open Panel, tap **Ask a Question** → a dropdown of current panelists
+      appears; pick one, submit → anonymous question posts aimed at them,
+      they can Reply/Pass exactly like hot-seat.
+- [ ] A panelist leaves (drops off the roster) while someone has the Ask
+      modal open, then submits → "That person left the panel while you were
+      typing — please try again" (not a crash).
+- [ ] With an **ama_ask** economy quest active (see the quest-faucets entry
+      below): asking in an **unfiltered** panel/hot-seat AMA pays immediately;
+      in a **screened** one, only on host approval (rejection never pays).
+- [ ] Panel roster with many members renders without exceeding Discord's
+      1024-char field limit (embed shows a truncated "…and N more" tail).
+- [ ] Scheduler: schedule an AMA with format "Open Panel" from the dashboard
+      → the launched game runs in panel mode (survives a bot restart mid-game).
+
 ### Chat Revive — fix 404 on Fire/opt-in-post/role saves from ID precision loss  (this commit)
 
 The dashboard was converting Discord snowflake IDs (channel/role) to a JS

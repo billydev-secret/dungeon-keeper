@@ -28,32 +28,35 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.core.branding import resolve_accent_color
 from bot_modules.games.utils.audit import send_audit_log
-from bot_modules.games.utils.ai_client import generate_text
 from bot_modules.games_ama.embeds import (
     build_answered_embed,
     build_asker_dm_embed,
-    build_idle_ai_question_embed,
     build_lobby_embed,
     build_main_embed,
+    build_panel_embed,
     build_question_embed,
     build_recap_embed,
 )
 from bot_modules.games_ama.logic import (
+    AMA_FORMAT_HOT_SEAT,
+    AMA_FORMAT_PANEL,
     add_question,
     bottom_bar_label,
     build_question_entry,
     compute_recap_stats,
-    first_content_line,
+    is_panel_target,
     is_resolved_status,
     mark_question_answered,
     mark_question_approved,
     mark_question_expired,
-    mark_question_message,
     mark_question_passed,
     mark_question_rejected,
+    normalize_format,
+    panel_bottom_bar_label,
     parse_iso_ts,
     recompute_totals,
     should_expire,
+    toggle_panel_member,
     utcnow_iso,
 )
 
@@ -93,14 +96,17 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         placeholder="Ask anything...",
     )
 
-    def __init__(self, game_id: str, db, channel, mode: str, host_id: int, hot_seat_id: int, ama_view):
+    def __init__(self, game_id: str, db, channel, mode: str, host_id: int, target_id: int, ama_view):
         super().__init__()
         self.game_id = game_id
         self.db = db
         self.channel = channel
         self.mode = mode
         self.host_id = host_id
-        self.hot_seat_id = hot_seat_id  # captured at button-press time
+        # Who the question is directed at, captured at button-press time. In
+        # hot-seat format this is the current hot seat; in panel format it's
+        # the panelist the asker picked from the dropdown.
+        self.target_id = target_id
         self.ama_view = ama_view
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -114,8 +120,17 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
             )
             return
 
-        # Guard: if hot seat changed between modal open and submit, reject
-        if self.ama_view.hot_seat_id != self.hot_seat_id:
+        # Guard: the target moved on while the modal was open. In hot-seat
+        # format the seat may have rotated; in panel format the person may
+        # have left the panel. Either way the captured target is stale.
+        if self.ama_view.game_format == AMA_FORMAT_PANEL:
+            if not is_panel_target(self.ama_view.panel, self.target_id):
+                await interaction.response.send_message(
+                    "⚠️ That person left the panel while you were typing — please try again.",
+                    ephemeral=True,
+                )
+                return
+        elif self.ama_view.hot_seat_id != self.target_id:
             await interaction.response.send_message(
                 "⚠️ The hot seat changed while you were typing — please try again.",
                 ephemeral=True,
@@ -125,7 +140,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         q_entry = build_question_entry(
             asker_id=interaction.user.id,
             text=self.question.value,
-            hot_seat_id=self.hot_seat_id,
+            hot_seat_id=self.target_id,
         )
 
         def _add_question(payload):
@@ -145,10 +160,10 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
         if self.mode == "unfiltered":
             colour = await resolve_accent_color(cast("Bot", interaction.client).ctx.db_path, interaction.guild) if interaction.guild else None
             embed = build_question_embed(self.question.value, colour=colour)
-            hot_seat_member = interaction.guild.get_member(self.hot_seat_id) if interaction.guild else None
-            question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, q_idx, interaction.user.id, self.ama_view, self.question.value)
+            target_member = interaction.guild.get_member(self.target_id) if interaction.guild else None
+            question_view = QuestionView(self.game_id, self.target_id, self.db, q_idx, interaction.user.id, self.ama_view, self.question.value)
             question_msg = await self.channel.send(
-                content=hot_seat_member.mention if hot_seat_member else None,
+                content=target_member.mention if target_member else None,
                 embed=embed,
                 view=question_view,
             )
@@ -158,8 +173,8 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
 
             await modify_payload(self.db, self.game_id, _mark_posted)
             await interaction.response.send_message("Your question has been posted anonymously!", ephemeral=True)
-            # Increment turn counter only after the question is actually posted
-            await self.ama_view.register_question_asked(self.channel)
+            # Advance turn/status only after the question is actually posted
+            await self.ama_view.after_question_posted(self.channel)
             # Unfiltered questions post immediately → credit the asker now.
             await _fire_ama_ask_trigger(
                 interaction.client, self.channel, interaction.user.id, self.game_id, q_idx
@@ -172,7 +187,7 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 question_idx=q_idx,
                 db=self.db,
                 channel=self.channel,
-                hot_seat_id=self.hot_seat_id,
+                hot_seat_id=self.target_id,
                 asker_id=interaction.user.id,
                 ama_view=self.ama_view,
             )
@@ -181,10 +196,10 @@ class AskQuestionModal(discord.ui.Modal, title="Your Question"):
                 guild = interaction.guild
                 host_member = guild.get_member(self.host_id) if guild else None
                 if host_member and guild:
-                    hot_seat_member = guild.get_member(self.hot_seat_id)
-                    hot_seat_name = hot_seat_member.display_name if hot_seat_member else "the hot seat"
+                    target_member = guild.get_member(self.target_id)
+                    target_name = target_member.display_name if target_member else "the hot seat"
                     await host_member.send(
-                        f"📨 New screened question for **{hot_seat_name}** (in {self.channel.mention}):",
+                        f"📨 New screened question for **{target_name}** (in {self.channel.mention}):",
                         view=approve_view,
                     )
                     dm_sent = True
@@ -305,8 +320,8 @@ class ScreenedQuestionView(discord.ui.View):
         )
         await update_game_payload(self.db, self.game_id, payload)
 
-        # Advance turn counter now that the question is actually posted
-        await self.ama_view.register_question_asked(self.channel)
+        # Advance turn/status now that the question is actually posted
+        await self.ama_view.after_question_posted(self.channel)
         # Screened questions credit the asker only on approval (rejected ones
         # never reach here). The host approves from their DMs, so the guild
         # comes from the game channel, not this interaction.
@@ -376,24 +391,32 @@ class QuestionView(discord.ui.View):
 
 
 class AMAView(discord.ui.View):
-    def __init__(self, game_id: str, host_id: int, mode: str, db, bot):
+    def __init__(self, game_id: str, host_id: int, mode: str, db, bot, game_format: str = AMA_FORMAT_HOT_SEAT):
         super().__init__(timeout=None)
         self.game_id = game_id
         self.host_id = host_id
         self.mode = mode
+        self.game_format = normalize_format(game_format)
         self.db = db
         self.bot = bot
         self.hot_seat_id: int | None = None
         self._game_msg: discord.Message | None = None
         self._bottom_msg: discord.Message | None = None
         self._hot_seat_name: str | None = None
-        self.queue: list[int] = []          # user IDs waiting for hot seat
+        self.queue: list[int] = []          # user IDs waiting for hot seat (hot-seat format)
+        self.panel: list[int] = []          # user IDs answering questions (panel format)
         self.questions_this_turn: int = 0   # answered questions for current hot seat
         self._suppress_resend: bool = False # suppress bottom-bar resend during system messages
         self._closed: bool = False          # True once close has been confirmed; blocks new questions
         self._ping_subscribers: set[int] = set()  # users who want pings on new hot seat
         self._hot_seat_timer_task: asyncio.Task | None = None  # 1-hour auto-rotate timer
-        self._idle_ai_question_task: asyncio.Task | None = None  # 15-min AI fallback timer
+
+        # Panel format has no single seat to rotate, so the host controls that
+        # only make sense for hot-seat games are dropped from the panel.
+        if self.game_format == AMA_FORMAT_PANEL:
+            for item in list(self.children):
+                if getattr(item, "custom_id", None) in {"ama_skip", "ama_new_hs"}:
+                    self.remove_item(item)
 
     def is_host_or_mod(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id == self.host_id:
@@ -410,6 +433,16 @@ class AMAView(discord.ui.View):
         def _name_resolver(uid: int) -> str:
             m = guild.get_member(uid) if guild else None
             return m.display_name if m else str(uid)
+
+        if self.game_format == AMA_FORMAT_PANEL:
+            return build_panel_embed(
+                host_name=host_name,
+                mode=self.mode,
+                panel=list(self.panel),
+                name_resolver=_name_resolver,
+                payload=payload,
+                colour=colour,
+            )
 
         return build_main_embed(
             host_name=host_name,
@@ -455,92 +488,6 @@ class AMAView(discord.ui.View):
 
         self._hot_seat_timer_task = asyncio.create_task(_timeout())
 
-    def _start_idle_question_timer(self, channel):
-        """Start (or restart) the 15-minute idle timer for AI fallback questions."""
-        current_task = asyncio.current_task()
-        if (
-            self._idle_ai_question_task
-            and not self._idle_ai_question_task.done()
-            and self._idle_ai_question_task is not current_task
-        ):
-            self._idle_ai_question_task.cancel()
-
-        hot_seat_snapshot = self.hot_seat_id
-        question_count_snapshot = self.questions_this_turn
-
-        async def _timeout():
-            await asyncio.sleep(900)
-            if self._closed or self.hot_seat_id is None:
-                return
-            if self.hot_seat_id != hot_seat_snapshot:
-                return
-            if self.questions_this_turn != question_count_snapshot:
-                return
-            try:
-                await self._post_idle_ai_question(channel)
-            except Exception as e:
-                log.debug("AMA idle AI question error: %s", e)
-                self._start_idle_question_timer(channel)
-
-        self._idle_ai_question_task = asyncio.create_task(_timeout())
-
-    async def _generate_idle_ai_question(self) -> str | None:
-        hot_seat_name = self._hot_seat_name or "the hot seat player"
-        system_prompt = (
-            "You create one anonymous AMA question for a Discord party game. "
-            "Keep it short, engaging, and answerable in chat. "
-            "Return only one question and nothing else."
-        )
-        user_prompt = (
-            f"Target player: {hot_seat_name}\n"
-            "Generate exactly one question under 180 characters."
-        )
-        text = await generate_text(system_prompt, user_prompt, max_tokens=80)
-        if not text:
-            return None
-        return first_content_line(text)
-
-    async def _post_idle_ai_question(self, channel):
-        if self._closed or self.hot_seat_id is None:
-            return
-
-        question_text = await self._generate_idle_ai_question()
-        if not question_text:
-            self._start_idle_question_timer(channel)
-            return
-
-        q_entry = build_question_entry(
-            asker_id=0,
-            text=question_text,
-            hot_seat_id=self.hot_seat_id,
-            status="approved",
-            source="ai_idle",
-        )
-
-        def _add_question(payload):
-            add_question(payload, q_entry)
-
-        payload = await modify_payload(self.db, self.game_id, _add_question)
-        q_idx = len(payload.get("questions", [])) - 1
-
-        hot_seat_member = channel.guild.get_member(self.hot_seat_id) if channel.guild else None
-        question_view = QuestionView(self.game_id, self.hot_seat_id, self.db, q_idx, 0, self, question_text)
-        colour = await resolve_accent_color(self.bot.ctx.db_path, channel.guild) if channel.guild else None
-        embed = build_idle_ai_question_embed(question_text, colour=colour)
-        await channel.send("No player question arrived in 15 minutes, so here's an anonymous AI question.")
-        question_msg = await channel.send(
-            content=hot_seat_member.mention if hot_seat_member else None,
-            embed=embed,
-            view=question_view,
-        )
-
-        def _mark_posted(payload):
-            mark_question_message(payload, q_idx, question_msg.id)
-
-        await modify_payload(self.db, self.game_id, _mark_posted)
-
-        await self.register_question_asked(channel)
-
     @staticmethod
     def _ama_role_mention(guild: discord.Guild | None) -> str | None:
         if guild is None:
@@ -553,8 +500,117 @@ class AMAView(discord.ui.View):
         self.questions_this_turn += 1
         await self.refresh_status(channel)
         await self.check_turn_rotation(channel)
-        if not self._closed and self.hot_seat_id is not None and self.questions_this_turn < 4:
-            self._start_idle_question_timer(channel)
+
+    async def after_question_posted(self, channel):
+        """Advance game state after a question is posted, per format.
+
+        Hot-seat games count the question toward the 4-per-turn rotation.
+        Panel games have no single seat or turn limit, so we only refresh
+        the status bar to pick up the new question/answer totals.
+        """
+        if self.game_format == AMA_FORMAT_PANEL:
+            await self.refresh_status(channel)
+        else:
+            await self.register_question_asked(channel)
+
+    async def _handle_volunteer(self, interaction: discord.Interaction):
+        """Shared Volunteer handler for the main view and the bottom bar."""
+        if self._closed:
+            await interaction.response.send_message("This game is closing — no new volunteers.", ephemeral=True)
+            return
+        if self.game_format == AMA_FORMAT_PANEL:
+            await self._toggle_panel(interaction)
+            return
+
+        user_id = interaction.user.id
+        # Already in the hot seat
+        if user_id == self.hot_seat_id:
+            await interaction.response.send_message("You're already in the hot seat!", ephemeral=True)
+            return
+        # Already queued — treat a second tap as "leave the queue"
+        if user_id in self.queue:
+            self.queue.remove(user_id)
+            await interaction.response.send_message("You've left the queue.", ephemeral=True)
+            await self.refresh_status(interaction.channel)
+            await self._update_bottom_bar()
+            return
+        # No one in the hot seat — go straight in
+        if self.hot_seat_id is None:
+            assert isinstance(interaction.user, discord.Member)
+            await interaction.response.defer()
+            await self._set_hot_seat(interaction.user, interaction.channel, announce=True)
+            return
+        # Seat is taken — add to queue
+        self.queue.append(user_id)
+        pos = len(self.queue)
+        await interaction.response.send_message(
+            f"You're #{pos} in the queue. You'll be notified when it's your turn!",
+            ephemeral=True,
+        )
+        await self.refresh_status(interaction.channel)
+        await self._update_bottom_bar()
+
+    async def _toggle_panel(self, interaction: discord.Interaction):
+        """Join or leave the panel of people taking questions (panel format)."""
+        assert isinstance(interaction.user, discord.Member)
+        member = interaction.user
+        joined = toggle_panel_member(self.panel, member.id)
+        if joined:
+            await interaction.response.send_message(
+                "🙋 You're on the panel — anyone can now ask you anonymous questions. "
+                "Tap **Volunteer** again to leave.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "👋 You've left the panel — no new questions will be directed to you.",
+                ephemeral=True,
+            )
+        self._suppress_resend = True
+        try:
+            await self.refresh_status(interaction.channel)
+            await self._update_bottom_bar()
+        finally:
+            self._suppress_resend = False
+        if joined and isinstance(interaction.channel, discord.abc.Messageable):
+            await interaction.channel.send(
+                f"🙋 {member.mention} joined the AMA panel — ask them anything!"
+            )
+
+    async def _begin_ask(self, interaction: discord.Interaction):
+        """Shared 'Ask a Question' handler for the main view and the bottom bar."""
+        if self._closed:
+            await interaction.response.send_message("This game is closing — no new questions.", ephemeral=True)
+            return
+
+        if self.game_format == AMA_FORMAT_PANEL:
+            guild = interaction.guild
+            candidates = [
+                m for m in (guild.get_member(uid) if guild else None for uid in self.panel) if m
+            ]
+            if not candidates:
+                await interaction.response.send_message(
+                    "No one has joined the panel yet — tap 🙋 Volunteer to be the first!",
+                    ephemeral=True,
+                )
+                return
+            select = AskTargetSelect(self, candidates)
+            view = discord.ui.View(timeout=120)
+            view.add_item(select)
+            note = f"\n(Showing the first 25 of {len(candidates)} panelists.)" if len(candidates) > 25 else ""
+            await interaction.response.send_message(
+                f"Who do you want to ask?{note}", view=view, ephemeral=True
+            )
+            return
+
+        # Hot-seat format
+        if self.hot_seat_id is None:
+            await interaction.response.send_message("No one is in the hot seat yet!", ephemeral=True)
+            return
+        modal = AskQuestionModal(
+            self.game_id, self.db, interaction.channel, self.mode, self.host_id, self.hot_seat_id, self
+        )
+        await interaction.response.send_modal(modal)
 
     async def _set_hot_seat(self, member: discord.Member, channel, announce: bool = True):
         """Put a member in the hot seat and reset the turn counter."""
@@ -568,7 +624,6 @@ class AMAView(discord.ui.View):
         await update_game_payload(self.db, self.game_id, payload)
 
         self._start_hot_seat_timer(channel)
-        self._start_idle_question_timer(channel)
 
         self._suppress_resend = True
         try:
@@ -590,10 +645,13 @@ class AMAView(discord.ui.View):
             await channel.send(f"{mention_prefix}A new host: {member.mention} is in the hot seat!")
 
     async def _update_bottom_bar(self):
-        """Update bottom bar text with current hot seat and queue info."""
+        """Update bottom bar text with current hot seat / panel info."""
         if not self._bottom_msg:
             return
-        label = bottom_bar_label(self._hot_seat_name, len(self.queue))
+        if self.game_format == AMA_FORMAT_PANEL:
+            label = panel_bottom_bar_label(len(self.panel))
+        else:
+            label = bottom_bar_label(self._hot_seat_name, len(self.queue))
         try:
             await self._bottom_msg.edit(content=label)
         except discord.HTTPException:
@@ -603,14 +661,6 @@ class AMAView(discord.ui.View):
         """Check if the current hot seat has hit 4 answered questions — rotate if so."""
         if self.questions_this_turn < 4:
             return
-
-        current_task = asyncio.current_task()
-        if (
-            self._idle_ai_question_task
-            and not self._idle_ai_question_task.done()
-            and self._idle_ai_question_task is not current_task
-        ):
-            self._idle_ai_question_task.cancel()
 
         self._suppress_resend = True
         try:
@@ -652,54 +702,12 @@ class AMAView(discord.ui.View):
     @discord.ui.button(label="🙋 Volunteer", style=discord.ButtonStyle.success, custom_id="ama_volunteer")
     async def volunteer(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if self._closed:
-            await interaction.response.send_message("This game is closing — no new volunteers.", ephemeral=True)
-            return
-        user_id = interaction.user.id
-
-        # Already in the hot seat
-        if user_id == self.hot_seat_id:
-            await interaction.response.send_message("You're already in the hot seat!", ephemeral=True)
-            return
-
-        # Already in queue
-        if user_id in self.queue:
-            self.queue.remove(user_id)
-            await interaction.response.send_message("You've left the queue.", ephemeral=True)
-            await self.refresh_status(interaction.channel)
-            await self._update_bottom_bar()
-            return
-
-        # No one in hot seat — go straight in
-        if self.hot_seat_id is None:
-            assert isinstance(interaction.user, discord.Member)
-            await interaction.response.defer()
-            await self._set_hot_seat(interaction.user, interaction.channel, announce=True)
-            return
-
-        # Seat is taken — add to queue
-        self.queue.append(user_id)
-        pos = len(self.queue)
-        await interaction.response.send_message(
-            f"You're #{pos} in the queue. You'll be notified when it's your turn!",
-            ephemeral=True,
-        )
-        await self.refresh_status(interaction.channel)
-        await self._update_bottom_bar()
+        await self._handle_volunteer(interaction)
 
     @discord.ui.button(label="Ask a Question", style=discord.ButtonStyle.primary, custom_id="ama_ask")
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if self._closed:
-            await interaction.response.send_message("This game is closing — no new questions.", ephemeral=True)
-            return
-        if self.hot_seat_id is None:
-            await interaction.response.send_message("No one is in the hot seat yet!", ephemeral=True)
-            return
-        modal = AskQuestionModal(
-            self.game_id, self.db, interaction.channel, self.mode, self.host_id, self.hot_seat_id, self
-        )
-        await interaction.response.send_modal(modal)
+        await self._begin_ask(interaction)
 
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="ama_skip", row=1)
     async def skip_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -750,13 +758,6 @@ class AMAView(discord.ui.View):
         self._closed = True
         if self._hot_seat_timer_task and not self._hot_seat_timer_task.done():
             self._hot_seat_timer_task.cancel()
-        current_task = asyncio.current_task()
-        if (
-            self._idle_ai_question_task
-            and not self._idle_ai_question_task.done()
-            and self._idle_ai_question_task is not current_task
-        ):
-            self._idle_ai_question_task.cancel()
 
         # Remove the bottom bar immediately when the game closes.
         cog = self.bot.get_cog("AMACog")
@@ -830,6 +831,36 @@ class HotSeatSelect(discord.ui.Select):
         await self.ama_view._set_hot_seat(new_member, interaction.channel, announce=True)
 
 
+class AskTargetSelect(discord.ui.Select):
+    """Panel-format picker: choose which panelist to send an anonymous question to."""
+
+    def __init__(self, ama_view: AMAView, candidates: list[discord.Member]):
+        options = [
+            discord.SelectOption(label=m.display_name[:100], value=str(m.id))
+            for m in candidates[:25]
+        ]
+        super().__init__(
+            placeholder="Choose who to ask", min_values=1, max_values=1, options=options
+        )
+        self.ama_view = ama_view
+
+    async def callback(self, interaction: discord.Interaction):
+        target_id = int(self.values[0])
+        if self.ama_view._closed:
+            await interaction.response.send_message("This game is closing — no new questions.", ephemeral=True)
+            return
+        if not is_panel_target(self.ama_view.panel, target_id):
+            await interaction.response.send_message(
+                "That person left the panel — please pick someone else.", ephemeral=True
+            )
+            return
+        modal = AskQuestionModal(
+            self.ama_view.game_id, self.ama_view.db, interaction.channel,
+            self.ama_view.mode, self.ama_view.host_id, target_id, self.ama_view,
+        )
+        await interaction.response.send_modal(modal)
+
+
 class AMABottomView(discord.ui.View):
     """Persistent one-line bar at the bottom of chat for AMA."""
 
@@ -844,21 +875,17 @@ class AMABottomView(discord.ui.View):
             style=discord.ButtonStyle.link,
             url=game_msg_url,
         ))
+        # "Notify Me" pings on hot-seat changes, which never happen in panel
+        # format — drop it so the bottom bar has no dead button there.
+        if ama_view.game_format == AMA_FORMAT_PANEL:
+            for item in list(self.children):
+                if getattr(item, "custom_id", None) == "ama_notify_toggle":
+                    self.remove_item(item)
 
     @discord.ui.button(label="Ask a Question", style=discord.ButtonStyle.primary, custom_id="ama_bottom_ask")
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if self.ama_view._closed:
-            await interaction.response.send_message("This game is closing — no new questions.", ephemeral=True)
-            return
-        if self.ama_view.hot_seat_id is None:
-            await interaction.response.send_message("No one is in the hot seat yet!", ephemeral=True)
-            return
-        modal = AskQuestionModal(
-            self.game_id, self.db, interaction.channel, self.ama_view.mode,
-            self.ama_view.host_id, self.ama_view.hot_seat_id, self.ama_view,
-        )
-        await interaction.response.send_modal(modal)
+        await self.ama_view._begin_ask(interaction)
 
     @discord.ui.button(label="🔔 Notify Me", style=discord.ButtonStyle.secondary, custom_id="ama_notify_toggle")
     async def toggle_notify(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -874,36 +901,7 @@ class AMABottomView(discord.ui.View):
     @discord.ui.button(label="🙋 Volunteer", style=discord.ButtonStyle.success, custom_id="ama_bottom_volunteer")
     async def volunteer(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' (bottom bar) in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if self.ama_view._closed:
-            await interaction.response.send_message("This game is closing — no new volunteers.", ephemeral=True)
-            return
-        user_id = interaction.user.id
-
-        if user_id == self.ama_view.hot_seat_id:
-            await interaction.response.send_message("You're already in the hot seat!", ephemeral=True)
-            return
-
-        if user_id in self.ama_view.queue:
-            self.ama_view.queue.remove(user_id)
-            await interaction.response.send_message("You've left the queue.", ephemeral=True)
-            await self.ama_view.refresh_status(interaction.channel)
-            await self.ama_view._update_bottom_bar()
-            return
-
-        if self.ama_view.hot_seat_id is None:
-            assert isinstance(interaction.user, discord.Member)
-            await interaction.response.defer()
-            await self.ama_view._set_hot_seat(interaction.user, interaction.channel, announce=True)
-            return
-
-        self.ama_view.queue.append(user_id)
-        pos = len(self.ama_view.queue)
-        await interaction.response.send_message(
-            f"You're #{pos} in the queue. You'll be notified when it's your turn!",
-            ephemeral=True,
-        )
-        await self.ama_view.refresh_status(interaction.channel)
-        await self.ama_view._update_bottom_bar()
+        await self.ama_view._handle_volunteer(interaction)
 
 
 async def _resend_ama_bottom(bot, game_id: str, channel):
@@ -920,8 +918,11 @@ async def _resend_ama_bottom(bot, game_id: str, channel):
         except discord.HTTPException:
             pass
 
-        hot_seat_name = getattr(ama_view, '_hot_seat_name', None)
-        label = bottom_bar_label(hot_seat_name, len(ama_view.queue))
+        if getattr(ama_view, 'game_format', AMA_FORMAT_HOT_SEAT) == AMA_FORMAT_PANEL:
+            label = panel_bottom_bar_label(len(ama_view.panel))
+        else:
+            hot_seat_name = getattr(ama_view, '_hot_seat_name', None)
+            label = bottom_bar_label(hot_seat_name, len(ama_view.queue))
         new_msg = await channel.send(content=label, view=bottom_view)
         ama_view._bottom_msg = new_msg
         if hasattr(bottom_view, "message_id"):
@@ -1210,14 +1211,21 @@ class AMACog(commands.Cog):
         self._resend_tasks[channel_id] = asyncio.create_task(_debounced())
 
     @app_commands.command(name="ama", description="Start an Anonymous Ask Me Anything!")
-    @app_commands.describe(mode="screened = host approves questions first, unfiltered = posts immediately")
+    @app_commands.describe(
+        mode="screened = host approves questions first, unfiltered = posts immediately",
+        format="hot seat = one person at a time, open panel = ask anyone who's opted in",
+    )
     @app_commands.choices(
         mode=[
             app_commands.Choice(name="Unfiltered", value="unfiltered"),
             app_commands.Choice(name="Screened", value="screened"),
-        ]
+        ],
+        format=[
+            app_commands.Choice(name="Hot Seat (one at a time)", value=AMA_FORMAT_HOT_SEAT),
+            app_commands.Choice(name="Open Panel (ask anyone opted in)", value=AMA_FORMAT_PANEL),
+        ],
     )
-    async def ama(self, interaction: discord.Interaction, mode: str = "unfiltered"):
+    async def ama(self, interaction: discord.Interaction, mode: str = "unfiltered", format: str = AMA_FORMAT_HOT_SEAT):
         log.info("%s used /games play ama in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
@@ -1235,7 +1243,7 @@ class AMACog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"mode": mode},
+            options={"mode": mode, "format": format},
         )
         await finish_launch_response(interaction, game_id)
 
@@ -1250,6 +1258,7 @@ class AMACog(commands.Cog):
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         mode = options.get("mode", "unfiltered")
+        game_format = normalize_format(options.get("format"))
         game_id = await create_game(
             self.db,
             channel.id,
@@ -1258,6 +1267,7 @@ class AMACog(commands.Cog):
             state="open",
             payload={
                 "mode": mode,
+                "format": game_format,
                 "questions": [],
                 "hot_seat_id": None,
                 "hot_seat_rotations": 0,
@@ -1268,10 +1278,13 @@ class AMACog(commands.Cog):
 
         launch_guild = getattr(channel, "guild", None)
         colour = await resolve_accent_color(self.bot.ctx.db_path, launch_guild) if launch_guild else None
-        embed = build_lobby_embed(host_name, mode, colour=colour)
+        if game_format == AMA_FORMAT_PANEL:
+            embed = build_panel_embed(host_name, mode, [], str, colour=colour)
+        else:
+            embed = build_lobby_embed(host_name, mode, colour=colour)
 
         log.info("Game %s (ama) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
-        view = AMAView(game_id, host_id, mode, self.db, self.bot)
+        view = AMAView(game_id, host_id, mode, self.db, self.bot, game_format=game_format)
         self.bot.active_views[game_id] = view
 
         try:
@@ -1288,7 +1301,8 @@ class AMACog(commands.Cog):
         # Send the persistent bottom bar (best-effort — the game is already live).
         try:
             bottom_view = AMABottomView(game_id, self.db, view, msg.jump_url)
-            bottom_msg = await channel.send(content="🎙️ AMA", view=bottom_view)
+            initial_label = panel_bottom_bar_label(0) if game_format == AMA_FORMAT_PANEL else "🎙️ AMA"
+            bottom_msg = await channel.send(content=initial_label, view=bottom_view)
             view._bottom_msg = bottom_msg
             bottom_view.message_id = bottom_msg.id
             self.bot.active_views[f"{game_id}_bottom"] = bottom_view

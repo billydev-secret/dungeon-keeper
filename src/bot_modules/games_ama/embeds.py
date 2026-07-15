@@ -115,6 +115,89 @@ def build_main_embed(
     return embed
 
 
+# Discord caps an embed field's value at 1024 chars; leave headroom for the
+# "…and N more" tail so a large panel never trips a 400 on message edit.
+_ROSTER_VALUE_BUDGET = 950
+
+
+def _format_roster(names: list[str]) -> str:
+    """Render a bulleted panel roster that fits Discord's field limit.
+
+    Adds names until the next line would exceed the char budget, then
+    appends an "…and N more" tail. Capping by rendered length (not a
+    fixed count) keeps long display names from blowing the 1024 limit.
+    """
+    lines: list[str] = []
+    used = 0
+    for i, name in enumerate(names):
+        line = f"• {name}"
+        # +1 for the joining newline between lines.
+        if used + len(line) + 1 > _ROSTER_VALUE_BUDGET:
+            remaining = len(names) - i
+            lines.append(f"…and {remaining} more")
+            break
+        lines.append(line)
+        used += len(line) + 1
+    return "\n".join(lines)
+
+
+def build_panel_embed(
+    host_name: str,
+    mode: str,
+    panel: list[int],
+    name_resolver: NameResolver,
+    payload: dict[str, Any] | None = None,
+    colour: "discord.Colour | None" = None,
+) -> discord.Embed:
+    """Build the live embed for an open-panel AMA.
+
+    Unlike the hot-seat embed there's no single seat or waiting queue —
+    everyone who volunteered is listed and any of them can be asked. When
+    the panel is empty the description prompts people to volunteer. Used
+    for both the initial lobby (empty panel) and the live game. The
+    roster is capped so a large panel can't blow past Discord's 1024-char
+    field limit.
+    """
+    if colour is None:
+        colour = discord.Colour(BRAND_COLOR)
+    if panel:
+        desc = "Ask **anyone on the panel** anything — questions are anonymous."
+    else:
+        desc = "Tap 🙋 **Volunteer** to join the panel and take anonymous questions."
+
+    embed = discord.Embed(
+        title=f"{GAME_ICONS['ama']} ANONYMOUS AMA",
+        description=desc,
+        color=colour,
+    )
+    embed.add_field(name="Host", value=host_name, inline=True)
+    embed.add_field(name="Mode", value=mode, inline=True)
+
+    if panel:
+        names = [name_resolver(uid) for uid in panel]
+        roster = _format_roster(names)
+        embed.add_field(name=f"🙋 Panel ({len(names)})", value=roster, inline=False)
+    else:
+        embed.add_field(name="🙋 Panel", value="—", inline=False)
+
+    if payload:
+        total_q = len(payload.get("questions", []))
+        answered = payload.get("total_answered", 0)
+        passed = payload.get("total_passed", 0)
+        bar, pct = build_bar(answered, total_q) if total_q else ("░" * 14, "0%")
+        embed.add_field(
+            name="📊 Progress",
+            value=(
+                f"Questions: **{total_q}**  •  Answered: **{answered}**  •  Passed: **{passed}**\n"
+                f"`{bar}` {pct} answered"
+            ),
+            inline=False,
+        )
+
+    embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
+    return embed
+
+
 def build_question_embed(
     question_text: str,
     colour: "discord.Colour | None" = None,
@@ -132,21 +215,6 @@ def build_question_embed(
         description=f'"{discord.utils.escape_markdown(question_text)}"',
         color=colour,
     )
-
-
-def build_idle_ai_question_embed(
-    question_text: str,
-    colour: "discord.Colour | None" = None,
-) -> discord.Embed:
-    """Build the embed for an idle-AI fallback question.
-
-    Same shape as :func:`build_question_embed` but with a footer
-    distinguishing the source so players know nobody wrote this in
-    chat.
-    """
-    embed = build_question_embed(question_text, colour=colour)
-    embed.set_footer(text="Auto-generated after 15 minutes with no player questions")
-    return embed
 
 
 def build_answered_embed(

@@ -147,6 +147,9 @@ SCHEDULE_OPTION_SCHEMA = {
         {'name': 'mode', 'label': 'Mode', 'type': 'choice', 'default': 'unfiltered',
          'choices': [{'value': 'unfiltered', 'label': 'Unfiltered (post immediately)'},
                      {'value': 'screened', 'label': 'Screened (host approves)'}]},
+        {'name': 'format', 'label': 'Format', 'type': 'choice', 'default': 'hot_seat',
+         'choices': [{'value': 'hot_seat', 'label': 'Hot Seat (one at a time)'},
+                     {'value': 'panel', 'label': 'Open Panel (ask anyone opted in)'}]},
     ],
     'fantasies': [],
     'price': [
@@ -308,11 +311,15 @@ HOW_TO_PLAY = {
 
     'ama': (
         "🎙️ **Anonymous AMA**\n"
-        "One player takes the hot seat and answers anonymous questions from the room.\n\n"
-        "1. A player volunteers for (or is assigned) the **hot seat**\n"
-        "2. Anyone else clicks **Ask Anonymously** to send a question via popup\n"
-        "3. The hot-seat player replies — replies are signed, questions are not\n"
-        "4. The hot seat rotates after a number of questions, or when handed off\n\n"
+        "Players answer anonymous questions from the room.\n\n"
+        "1. Players **Volunteer** to take questions\n"
+        "2. Anyone clicks **Ask a Question** to send one via popup\n"
+        "3. The person asked replies — replies are signed, questions are not\n\n"
+        "🎭 **Formats:**\n"
+        "• **Hot Seat** — one player at a time; the seat rotates after a few "
+        "questions or when handed off (default)\n"
+        "• **Open Panel** — everyone who volunteers is listed at once; pick who "
+        "to ask from a dropdown\n\n"
         "🛡️ **Modes:**\n"
         "• **Unfiltered** — questions post immediately (default)\n"
         "• **Screened** — the host approves each question before it's shown\n\n"
