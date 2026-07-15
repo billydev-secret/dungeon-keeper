@@ -2432,6 +2432,15 @@ class WhisperCog(commands.Cog):
             ephemeral=True,
         )
 
+        # Credit the sender's ``whisper`` economy quest trigger — one payout
+        # per delivered whisper. Guarded/non-raising when the economy is off.
+        from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
+
+        await fire_member_trigger(
+            self.bot, interaction.guild.id, interaction.user.id, "whisper",
+            occurrence=str(whisper_id),
+        )
+
     async def _open_send_picker(self, interaction: discord.Interaction) -> None:
         """Open the paginated opt-in member picker for the send flow. Used by
         both the feed-launcher button and the /whisper send slash command."""

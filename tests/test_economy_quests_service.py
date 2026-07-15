@@ -18,6 +18,8 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.economy.quests import (
     POOL_CAP,
+    TRIGGER_KIND_INFO,
+    TRIGGER_KINDS,
     effective_target,
     occurrence_period,
     quest_period,
@@ -1003,6 +1005,62 @@ def test_fire_trigger_quests_without_occurrence_skips_event(db):
         )
         assert [int(q["id"]) for q, _ in fired] == [daily]
         assert get_balance(conn, GUILD, USER) == 10
+
+
+def test_confession_quest_rejects_signoff(db):
+    # A sign-off confession quest would post a bank-channel card naming the
+    # confessor — the deanonymization the silent auto-claim exists to avoid.
+    with open_db(db) as conn:
+        with pytest.raises(ValueError, match="deanonymize"):
+            _make(conn, qtype="daily", trigger_kind="confession", signoff=1)
+        # Non-sign-off confession quests are fine, and other kinds still allow
+        # sign-off.
+        _make(conn, qtype="daily", trigger_kind="confession", signoff=0)
+        _make(conn, qtype="daily", trigger_kind="whisper", signoff=1)
+
+
+def test_new_engagement_kinds_registered(db):
+    # The confession/AMA/whisper/quote faucets must be full trigger kinds:
+    # in TRIGGER_KINDS (dropdown + validation) with matching Income-Sources
+    # copy, or their fire sites are dead code.
+    for kind in ("confession", "ama_ask", "whisper", "quote"):
+        assert kind in TRIGGER_KINDS, kind
+        assert kind in TRIGGER_KIND_INFO, kind
+        assert list_income_sources_has(db, kind)
+
+
+def list_income_sources_has(db, kind):
+    with open_db(db) as conn:
+        return kind in list_income_sources(conn, GUILD)
+
+
+@pytest.mark.parametrize("kind", ["confession", "ama_ask", "whisper", "quote"])
+def test_new_engagement_kinds_fire_and_pay(db, kind):
+    # A quest on each new kind pays once per occurrence, like any other event
+    # quest — this is what the cog fire sites drive.
+    with open_db(db) as conn:
+        daily = _make(conn, qtype="daily", trigger_kind=kind, reward=7)
+        event = _make(conn, qtype="event", trigger_kind=kind, reward=3)
+
+        first = fire_trigger_quests(
+            conn, SETTINGS, GUILD, kind, USER,
+            local_day="2026-07-14", occurrence="a", booster=False,
+        )
+        assert sorted(int(q["id"]) for q, _ in first) == sorted([daily, event])
+        assert get_balance(conn, GUILD, USER) == 10
+
+        # Same occurrence replayed pays nothing; a new occurrence re-pays the
+        # event quest (daily already claimed today).
+        assert fire_trigger_quests(
+            conn, SETTINGS, GUILD, kind, USER,
+            local_day="2026-07-14", occurrence="a", booster=False,
+        ) == []
+        second = fire_trigger_quests(
+            conn, SETTINGS, GUILD, kind, USER,
+            local_day="2026-07-14", occurrence="b", booster=False,
+        )
+        assert [int(q["id"]) for q, _ in second] == [event]
+        assert get_balance(conn, GUILD, USER) == 13
 
 
 # ── income sources (enable switches) ──────────────────────────────────

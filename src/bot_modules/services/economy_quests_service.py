@@ -128,7 +128,7 @@ def create_quest(
         raise ValueError(f"unknown quest type: {qtype!r}")
     if reward_xp < 0:
         raise ValueError("XP reward cannot be negative")
-    _check_trigger_config(qtype, trigger_kind, trigger_words)
+    _check_trigger_config(qtype, trigger_kind, trigger_words, signoff)
     _check_target_count(qtype, trigger_kind, target_count, target_min, target_max)
     cur = conn.execute(
         """
@@ -167,7 +167,9 @@ def create_quest(
     return int(cur.lastrowid or 0)
 
 
-def _check_trigger_config(qtype: str, trigger_kind: str, trigger_words: str) -> None:
+def _check_trigger_config(
+    qtype: str, trigger_kind: str, trigger_words: str, signoff: int = 0
+) -> None:
     """Validate the trigger configuration for a quest type.
 
     Event quests require a known trigger kind (they have no other way to be
@@ -175,6 +177,11 @@ def _check_trigger_config(qtype: str, trigger_kind: str, trigger_words: str) -> 
     period" — or trigger words, but not both (two auto-claim paths racing for
     one period would be ambiguous to explain, so it's rejected outright).
     Community quests settle guild-wide and take neither.
+
+    The ``confession`` kind additionally forbids sign-off: a sign-off claim
+    posts a bank-channel card naming the claimant, which is timing-correlatable
+    against the anonymous confessions feed — exactly the deanonymization we
+    keep the auto-claim silent to avoid.
     """
     if trigger_kind and trigger_kind not in quests.TRIGGER_KINDS:
         raise ValueError(f"unknown trigger kind: {trigger_kind!r}")
@@ -186,6 +193,8 @@ def _check_trigger_config(qtype: str, trigger_kind: str, trigger_words: str) -> 
             raise ValueError("community quests cannot have a trigger kind")
     if trigger_kind and trigger_words.strip():
         raise ValueError("a quest takes trigger words or a trigger kind, not both")
+    if trigger_kind == "confession" and signoff:
+        raise ValueError("confession quests cannot require sign-off (it would deanonymize the confessor)")
 
 
 def _check_target_count(
@@ -241,6 +250,7 @@ def update_quest(
                 merged_qtype,
                 merged_kind,
                 str(values.get("trigger_words", quest["trigger_words"])),
+                int(values.get("signoff", quest["signoff"])),
             )
             _check_target_count(
                 merged_qtype,
