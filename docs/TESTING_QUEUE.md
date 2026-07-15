@@ -9,6 +9,36 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — QOTD dashboard page + selectable ping role  (this commit)
+
+New **Economy → QOTD** page (admin-only) owning `qotd_ping_role_id`. `/qotd post`
+previously sent the card with no `content` at all, so it could never ping
+anything. It now mentions the configured role in the message content beside the
+card (same reason as Chat Revive — a mention can't live inside an image), on both
+the card path and the plain-embed fallback. Unset (default) posts silently, as
+before. The reward stays on Income Sources; this page only owns the ping.
+
+**Discord gotcha worth checking first:** `allowed_mentions(roles=True)` only
+whitelists the mention — Discord still won't notify anyone unless the role is
+**mentionable** in its role settings, or the bot has "Mention @everyone, @here,
+and All Roles". If the ping renders as grey inert text, that's the cause, not the
+code.
+
+- [ ] Economy → QOTD page loads for an admin; the ping-role picker shows
+      `(none)` on a fresh guild and the "How it works" card shows the real
+      reward + currency name.
+- [ ] Leave the role unset → `/qotd post` posts the card **bare**, no empty
+      content line above it, and pings nobody (today's behavior, unchanged).
+- [ ] Set a **mentionable** role → `/qotd post` posts the mention above the card
+      and role-holders **actually get a notification** (not just blue text).
+- [ ] Set a **non-mentionable** role → mention renders as inert text and nobody
+      is pinged. Confirms the hint on the page is the right advice.
+- [ ] Save takes effect with **no bot restart** (settings are read fresh per
+      post) — change the role and post again without restarting.
+- [ ] Clear the picker back to `(none)` → posts go silent again.
+- [ ] The question card itself still renders (server icon background, midnight
+      theme) and replies still earn the QOTD award once per member.
+
 ### Chat Revive — question posts as a banner card (this commit)
 
 `send_revive` (the choke point for both the monitor loop and the dashboard

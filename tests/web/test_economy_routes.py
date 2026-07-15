@@ -69,6 +69,9 @@ def test_get_economy_config_returns_defaults(authed_client):
     assert data["xp_per_coin"] == 15.0
     assert data["bank_channel_id"] == 0
     assert data["price_role_color"] == 50
+    # The QOTD panel reads this straight off the GET — absent means the picker
+    # silently renders undefined.
+    assert data["qotd_ping_role_id"] == 0
 
 
 def test_get_economy_config_requires_admin(fake_ctx):
@@ -124,6 +127,19 @@ def test_put_partial_leaves_other_fields_unset(authed_client, fake_ctx):
         assert get_config_value(
             conn, "econ_currency_name", "SENTINEL", fake_ctx.guild_id
         ) == "SENTINEL"
+
+
+def test_put_qotd_ping_role_roundtrips(authed_client, fake_ctx):
+    """The QOTD page's only knob — settable, and clearable back to no ping."""
+    resp = authed_client.put("/api/economy/config", json={"qotd_ping_role_id": 4242})
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert load_econ_settings(conn, fake_ctx.guild_id).qotd_ping_role_id == 4242
+
+    resp = authed_client.put("/api/economy/config", json={"qotd_ping_role_id": 0})
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert load_econ_settings(conn, fake_ctx.guild_id).qotd_ping_role_id == 0
 
 
 def test_put_rejects_negative_number(authed_client):

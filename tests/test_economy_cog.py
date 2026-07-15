@@ -322,6 +322,53 @@ async def test_qotd_admin_posts_and_records(ctx, db):
 
 
 @pytest.mark.asyncio
+async def test_qotd_no_ping_role_posts_silently(ctx, db):
+    """Default (unset) ping role keeps the original silent post."""
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(_member(admin=True))
+    await _qotd(cog, interaction, "Quiet question?")
+
+    kwargs = channel.send.await_args.kwargs
+    assert kwargs["content"] is None
+    assert kwargs["allowed_mentions"].roles is False
+
+
+@pytest.mark.asyncio
+async def test_qotd_pings_configured_role(ctx, db):
+    _enable(db, qotd_ping_role_id=4242)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(_member(admin=True))
+    await _qotd(cog, interaction, "Loud question?")
+
+    kwargs = channel.send.await_args.kwargs
+    assert kwargs["content"] == "<@&4242>"
+    # Without this the mention posts as inert text.
+    assert kwargs["allowed_mentions"].roles is True
+
+
+@pytest.mark.asyncio
+async def test_qotd_pings_on_card_path_too(ctx, db):
+    """The ping rides on content, so it must survive the card branch."""
+    _enable(db, qotd_ping_role_id=4242)
+    cog = _make_cog(ctx)
+    interaction, channel = _qotd_interaction(_member(admin=True))
+    with (
+        patch(
+            "bot_modules.cogs.economy_cog._resolve_qotd_image",
+            new=AsyncMock(return_value=b"img-bytes"),
+        ),
+        patch("bot_modules.cogs.economy_cog.render_quote_card", return_value=b"PNG"),
+    ):
+        await _qotd(cog, interaction, "Card question?")
+
+    kwargs = channel.send.await_args.kwargs
+    assert "file" in kwargs
+    assert kwargs["content"] == "<@&4242>"
+    assert kwargs["allowed_mentions"].roles is True
+
+
+@pytest.mark.asyncio
 async def test_qotd_renders_card_when_image_available(ctx, db):
     _enable(db)
     cog = _make_cog(ctx)

@@ -36,6 +36,11 @@ class EconSettings:
     # silently. 0 (default) = feature off: everyone gets the legacy
     # in-channel reaction + reply.
     game_role_id: int = 0
+    # Role pinged when a mod posts a question of the day. 0 (default) = no
+    # ping, preserving the original silent post. The role must be mentionable
+    # (or the bot must hold "Mention @everyone, @here, and All Roles"), else
+    # Discord renders the mention as inert text.
+    qotd_ping_role_id: int = 0
     currency_name: str = "Coin"
     currency_plural: str = "Coins"
     currency_emoji: str = "🪙"

@@ -40,6 +40,7 @@ weekly-renewing perks (role customization, private rooms) and social sinks
 Dashboard → Economy → Settings: `currency_name`/plural, `currency_emoji`,
 `currency_icon_url`, `wallet_name`, `bank_channel_id`, `spotlight_channel_id`,
 `manager_role_id`, `game_role_id`, `transfers_enabled`, `enabled`.
+Dashboard → Economy → QOTD: `qotd_ping_role_id` (§3.4).
 
 - Stored as `econ_*` keys in the shared per-guild `config` table, loaded into a frozen
   `EconSettings` dataclass (same pattern as `XpSettings` / `load_xp_settings`,
@@ -101,6 +102,10 @@ XP earned that local day converts to currency.
   renderer `ffa_banner` uses) and posts it. Every member who posts a non-bot message in
   that channel from post time until end of the guild-local day earns **10**, once per
   QOTD (dedup row per member). No scheduler — mods run it when they want.
+  When `qotd_ping_role_id` is set (dashboard → Economy → QOTD), the post mentions that
+  role; unset (the default) posts silently. The mention only notifies if the role is
+  mentionable or the bot holds "Mention @everyone, @here, and All Roles" — Discord
+  renders it as inert text otherwise.
 - **Game participation 5:** paid at the party-games `end_game` choke point
   (`games/utils/game_manager.py`) from the session's player set, and at each duel cog's
   resolution point. Participation now covers **20 of 23 games**: the six duel games,

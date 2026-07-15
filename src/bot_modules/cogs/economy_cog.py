@@ -2021,16 +2021,26 @@ class EconomyCog(commands.Cog):
             except Exception:
                 log.exception("qotd: failed to render card in guild %s", guild_id)
 
+        content: str | None = None
+        mentions = discord.AllowedMentions.none()
+        if settings.qotd_ping_role_id:
+            content = f"<@&{settings.qotd_ping_role_id}>"
+            mentions = discord.AllowedMentions(roles=True)
+
         try:
             if card_file is not None:
-                message = await channel.send(file=card_file)
+                message = await channel.send(
+                    content=content, file=card_file, allowed_mentions=mentions
+                )
             else:
                 embed = discord.Embed(
                     title="📣 Question of the Day",
                     description=question,
                     colour=accent,
                 )
-                message = await channel.send(embed=embed)
+                message = await channel.send(
+                    content=content, embed=embed, allowed_mentions=mentions
+                )
         except discord.Forbidden:
             await interaction.followup.send(
                 "I don't have permission to post in this channel.", ephemeral=True
