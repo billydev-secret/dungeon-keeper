@@ -9,6 +9,33 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — per-guild quest board size  (37c2090)
+
+The per-member board (how many daily/weekly/monthly quests a member sees at
+once) was hardcoded at 2 per cadence; it's now `quest_board_daily/_weekly/
+_monthly` on the dashboard **Quests → Board size** section. Default stays 2,
+so an untouched guild behaves exactly as before. **0 turns a cadence off.**
+
+**Worth knowing while testing:** the board is a deterministic draw from the
+cadence pool keyed on `(user_id, period_index)` — so a size change only shows
+up for a member when the *period* rolls (next guild-local midnight for
+dailies), not instantly on save. Two accounts should see different subsets.
+
+- [ ] Quests page loads for an admin; **Board size** shows daily/weekly/monthly
+      inputs at 2 and the library summary reads `pool: daily N active → 2 shown`
+      (not the old `daily N/1` slot text).
+- [ ] Set daily to 1 → save → summary flips to `→ 1 shown`; `/quests` for a
+      member shows exactly one daily (may need the next local-midnight roll).
+- [ ] Set daily to **0** → `/quests` shows **no** dailies at all, and a
+      daily trigger-word/game quest pays **nothing**. The regression to watch
+      for is the inverse: 0 showing/paying the *whole* pool.
+- [ ] Weekly/monthly still behave normally while daily is 0 (per-cadence).
+- [ ] A **community** goal and an **event** quest still appear/pay while every
+      board cadence is 0 — they're not board cadences and must be unaffected.
+- [ ] Open Quests as a **manager-role (non-admin)** holder: the Board size card
+      shows read-only prose, no inputs, and no console 403 noise breaks the page.
+- [ ] Values above 25 are rejected by the API (the dial is capped at `POOL_CAP`).
+
 ### Economy — QOTD dashboard page + selectable ping role  (this commit)
 
 New **Economy → QOTD** page (admin-only) owning `qotd_ping_role_id`. `/qotd post`
