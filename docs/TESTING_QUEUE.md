@@ -9,6 +9,20 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Testing-queue posts get a clickable ✅ reaction  (this commit)
+
+Each entry the mirror posts into `#testing-queue` now arrives with a ✅ reaction
+pre-added by the bot, so a tester can one-click it to mark the entry verified
+(Discord markdown has no clickable checkbox). The reaction sits on the entry's
+last message when a long entry spans several. This very entry should demonstrate
+it — if you're reading it in the channel, it should already carry a ✅ you can add
+your own click to.
+
+- [ ] This entry appeared in `#testing-queue` with a ✅ already on it (added by the bot).
+- [ ] Clicking the ✅ registers your reaction alongside the bot's (count goes to 2).
+- [ ] The reaction is on the entry's **last** message, not a mid-entry chunk (post a long entry to confirm, or trust the short case).
+- [ ] The role checklists (`#admin-tests` etc.) did **not** get reactions — only `#testing-queue`.
+
 ### Testing docs mirrored into the dev channels + post-commit hook  (this commit)
 
 `scripts/post_testing_docs.py` posts this queue and the three role checklists into

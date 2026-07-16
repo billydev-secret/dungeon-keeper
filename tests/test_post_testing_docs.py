@@ -100,6 +100,46 @@ _(nothing pending)_
     assert at_commit(mod, after) == []
 
 
+def test_post_commit_pre_adds_the_check_reaction(mod, monkeypatch) -> None:
+    """Each posted entry gets a ✅ on its last message so a tester can click it."""
+    after = BEFORE.replace(
+        "## Pending\n",
+        "## Pending\n\n### Gadget — brand new  (this commit)\n\n- [ ] check it\n",
+        1,
+    )
+
+    def fake_git(*args: str) -> str:
+        return {
+            ("show", "x:docs/TESTING_QUEUE.md"): after,
+            ("show", "x^:docs/TESTING_QUEUE.md"): BEFORE,
+            ("rev-parse", "--verify", "x^"): "parentsha",
+            ("rev-parse", "--short", "x"): "abc1234",
+            ("log", "-1", "--format=%s", "x"): "Gadget: add it",
+        }.get(args, "ok")
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_request(method, url, tok, payload=None):
+        calls.append((method, url))
+        return {"id": "msg1"}
+
+    monkeypatch.setattr(mod, "git", fake_git)
+    monkeypatch.setattr(mod, "token", lambda: "t")
+    monkeypatch.setattr(mod, "request", fake_request)
+    monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(mod, "save_state", lambda keys: None)
+
+    mod.post_commit("x", dry_run=False)
+
+    posts = [u for m, u in calls if m == "POST"]
+    reacts = [u for m, u in calls if m == "PUT"]
+    assert len(posts) == 1
+    assert reacts == [
+        f"{mod.API}/channels/{mod.DOCS['testing-queue'][1]}"
+        f"/messages/msg1/reactions/{mod.CHECK}/@me"
+    ]
+
+
 def test_every_chunk_fits_discords_limit(mod) -> None:
     """The real docs, chunked -- a message over 2000 chars is rejected outright."""
     for name in mod.DOCS:

@@ -3,7 +3,9 @@
 
 Chunks at ``###`` entry boundaries so a test entry is never split mid-checklist;
 entries over the message limit are split again at line boundaries and the
-heading is repeated with a ``(cont.)`` marker.
+heading is repeated with a ``(cont.)`` marker. Each queue entry lands as its own
+message with a ✅ reaction pre-added, so a tester can one-click it to mark the
+entry verified (Discord has no clickable markdown checkbox).
 
     python scripts/post_testing_docs.py --dry-run          # show the plan
     python scripts/post_testing_docs.py --only testing-queue
@@ -27,6 +29,11 @@ UA = "DiscordBot (https://github.com/local/dungeon-keeper, 1.0)"
 
 # Discord's hard cap is 2000; leave room for the "(cont.)" heading we re-add.
 LIMIT = 1900
+
+# ✅ (U+2705), url-encoded for the reactions endpoint. The bot pre-adds this to
+# each posted test so a tester can one-click it to mark the entry verified --
+# Discord has no clickable markdown checkbox, so the reaction is the affordance.
+CHECK = "%E2%9C%85"
 
 DOCS = {
     "testing-queue": ("docs/TESTING_QUEUE.md", "1527184897775763549"),
@@ -72,6 +79,28 @@ def request(method: str, url: str, tok: str, payload: dict | None = None) -> dic
                 continue
             raise SystemExit(f"{method} {url} -> {exc.code}: {exc.read()[:300]!r}")
     raise SystemExit(f"{method} {url}: gave up after repeated rate limits")
+
+
+def post_message(channel: str, content: str, tok: str) -> str:
+    """Post one message, returning its id."""
+    resp = request(
+        "POST",
+        f"{API}/channels/{channel}/messages",
+        tok,
+        {"content": content, "allowed_mentions": {"parse": []}},
+    )
+    return resp.get("id", "")
+
+
+def react_check(channel: str, message_id: str, tok: str) -> None:
+    """Pre-add the ✅ a tester clicks to mark this entry verified."""
+    if not message_id:
+        return
+    request(
+        "PUT",
+        f"{API}/channels/{channel}/messages/{message_id}/reactions/{CHECK}/@me",
+        tok,
+    )
 
 
 def heading_level(block: str) -> int:
@@ -290,30 +319,25 @@ def post_commit(sha: str, *, dry_run: bool) -> None:
 
     channel = DOCS["testing-queue"][1]
     footer = stamp(sha)
-    chunks: list[str] = []
-    for entry in entries:
-        parts = pack(entry)
-        parts[-1] = f"{parts[-1]}\n{footer}"
-        chunks.extend(parts)
 
     if dry_run:
-        print(f"{sha[:8]}: {len(entries)} new entry(s) -> {len(chunks)} message(s)")
+        chunks = sum(len(pack(e)) for e in entries)
+        print(f"{sha[:8]}: {len(entries)} new entry(s) -> {chunks} message(s)")
         for entry in entries:
             print(f"  - {heading_of(entry)[4:]}")
         return
 
     tok = token()
-    for chunk in chunks:
-        request(
-            "POST",
-            f"{API}/channels/{channel}/messages",
-            tok,
-            {
-                "content": chunk,
-                "allowed_mentions": {"parse": []},
-            },
-        )
-        time.sleep(1.1)
+    for entry in entries:
+        parts = pack(entry)
+        parts[-1] = f"{parts[-1]}\n{footer}"
+        last_id = ""
+        for part in parts:
+            last_id = post_message(channel, part, tok)
+            time.sleep(1.1)
+        # One ✅ per entry, on its final message so it sits under the whole test.
+        react_check(channel, last_id, tok)
+        time.sleep(0.35)
 
     save_state(load_state() | {entry_key(e) for e in entries})
     for entry in entries:
@@ -378,24 +402,36 @@ def main() -> None:
 
     for name in targets:
         path, channel = DOCS[name]
-        chunks = plan(name)
+        text = (REPO / path).read_text()
+        # Only the queue's own test entries get a clickable ✅; the role
+        # checklists post one message per multi-item section, where a single
+        # reaction would be ambiguous.
+        pending = (
+            {entry_key(b) for b in pending_entries(text)}
+            if name == "testing-queue"
+            else set()
+        )
+        messages: list[tuple[str, bool]] = []
+        for block in split_entries(text):
+            react_last = heading_of(block).startswith("### ") and (
+                entry_key(block) in pending
+            )
+            parts = pack(block)
+            for i, part in enumerate(parts):
+                messages.append((part, react_last and i == len(parts) - 1))
+
         if args.purge:
             gone = purge(channel, tok, me)
             print(f"#{name}: purged {gone} old message(s)")
-        print(f"#{name}: posting {len(chunks)} message(s) from {path}")
-        for i, chunk in enumerate(chunks, 1):
-            request(
-                "POST",
-                f"{API}/channels/{channel}/messages",
-                tok,
-                {
-                    "content": chunk,
-                    "allowed_mentions": {"parse": []},
-                },
-            )
-            print(f"  [{i}/{len(chunks)}]", end="\r", flush=True)
+        print(f"#{name}: posting {len(messages)} message(s) from {path}")
+        for i, (chunk, react_last) in enumerate(messages, 1):
+            mid = post_message(channel, chunk, tok)
             time.sleep(1.1)
-        print(f"  done: {len(chunks)} posted        ")
+            if react_last:
+                react_check(channel, mid, tok)
+                time.sleep(0.35)
+            print(f"  [{i}/{len(messages)}]", end="\r", flush=True)
+        print(f"  done: {len(messages)} posted        ")
 
 
 if __name__ == "__main__":
