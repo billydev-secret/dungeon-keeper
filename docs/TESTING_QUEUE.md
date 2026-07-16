@@ -9,6 +9,43 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Testing docs mirrored into the dev channels + post-commit hook  (this commit)
+
+`scripts/post_testing_docs.py` posts this queue and the three role checklists into
+their `dev` channels (`#testing-queue`, `#admin-tests`, `#moderator-tests`,
+`#user-tests`), chunked at heading boundaries so no entry is split mid-checklist.
+A `post-commit` hook then mirrors **only the entries a commit newly adds** into
+`#testing-queue`, stamped with the real short sha + subject (the doc's own
+"(this commit)" is ambiguous once an entry is read on its own in a channel).
+
+**Worth knowing while testing:** the hook is installed into `.git/hooks/` on
+purpose, **not** via `core.hooksPath` — that would silently disable the
+pre-commit framework's hook living in the same directory. The common git dir is
+shared, so the hook is live in **every worktree**, and the configured scope is
+all branches, so a commit on a feature branch posts to the live channel too.
+Entries already sent are remembered in `.git/testing_queue_posted.json` (seeded
+with the 48 entries of the first dump); that ledger — not the git diff — is what
+stops `--amend`/rebase from re-posting the same entry against the same parent.
+Escape hatch: `DK_NO_QUEUE_POST=1 git commit`.
+
+- [ ] Commit a change that adds a new `###` entry here → exactly that entry
+      appears in **#testing-queue** with a `sha · subject` footer, and no other
+      entry is re-posted.
+- [ ] `git commit --amend` that same commit → **nothing** posts a second time
+      (the ledger, not the diff, is what catches this).
+- [ ] Commit something that doesn't touch this file → hook posts nothing and the
+      commit isn't visibly slowed.
+- [ ] Edit an existing entry's body, or let a later commit rewrite its
+      `(this commit)` marker to a real sha → **no** re-post (entry identity
+      ignores the trailing parenthetical).
+- [ ] Commit from a **worktree** under `.claude/worktrees/` → the entry still
+      posts, and it's that worktree's copy of the file that gets read.
+- [ ] `DK_NO_QUEUE_POST=1 git commit` with a new entry → posts nothing.
+- [ ] Break the network or the token → the commit still **succeeds** (hook exits
+      0, capped at 90 s) and only prints an error.
+- [ ] `python3 scripts/post_testing_docs.py --dry-run` reports every chunk under
+      Discord's 2000-char cap for all four docs.
+
 ### Quote cards — stylised display names + emoji in the attribution  (a88a3dd)
 
 Names written in Mathematical Alphanumeric Symbols (`𝓟𝓻𝓲𝓷𝓬𝓮𝓼𝓼 𝓡𝓪𝓬𝓱𝓮𝓵`) drew as a
