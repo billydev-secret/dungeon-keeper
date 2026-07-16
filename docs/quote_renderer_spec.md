@@ -154,6 +154,22 @@ are measured and composited inline at their token positions. `pilmoji` is an
 optional dependency; without it, text still renders (custom emoji still
 composite; Unicode emoji fall back to the font).
 
+The quote body, the attribution line, and the no-pfp header all draw through
+pilmoji, so a Unicode emoji renders in colour wherever it appears — including
+inside a member's display name. Twemoji is fetched over HTTP, so the
+attribution/header draw is wrapped: any source failure degrades that line to
+plain PIL text (emoji become tofu) rather than failing the whole card.
+
+## Display names
+
+`author_name` is NFKC-normalized once on entry to `render_quote_card`, before
+either the attribution or the header uses it. Discord names commonly use
+Mathematical Alphanumeric Symbols (`𝓟𝓻𝓲𝓷𝓬𝓮𝓼𝓼 𝓡𝓪𝓬𝓱𝓮𝓵` → `Princess Rachel`) or
+fullwidth forms; **no bundled TTF carries those codepoints**, so without folding
+they draw as a row of tofu boxes. NFKC maps them to their compatibility
+equivalents, is a no-op for ordinary names, and leaves emoji intact (they have
+no decomposition) for pilmoji to draw.
+
 ## Key constraints
 
 - **`QUOTE_MAX_CHARS = 280`** — longer text is ellipsized.

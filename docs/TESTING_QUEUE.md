@@ -9,6 +9,31 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Quote cards — stylised display names + emoji in the attribution  (55e6225)
+
+Names written in Mathematical Alphanumeric Symbols (`𝓟𝓻𝓲𝓷𝓬𝓮𝓼𝓼 𝓡𝓪𝓬𝓱𝓮𝓵`) drew as a
+row of **tofu boxes** — not just the emoji, the *whole name*: no bundled TTF
+carries U+1D4xx. `author_name` is now NFKC-folded on entry, and the attribution
+line + no-pfp header draw through pilmoji like the body already did, so a
+Unicode emoji in a name renders in colour.
+
+**Worth knowing while testing:** a plain ASCII name is byte-for-byte the same
+card as before (verified by pixel-diff), so nothing should *look* different for
+most members. NFKC folds case-sensitively — `𝓟` → `P`, not `p`. Twemoji is
+fetched over HTTP per render; if that fetch fails the line degrades to tofu and
+logs `quote_renderer: emoji text fell back to plain PIL` rather than killing the
+card, so an all-tofu name in the wild now means *network*, not fonts.
+
+- [ ] Quote a message from **@princessrachel** (`rachel_132`, display name
+      `𝓟𝓻𝓲𝓷𝓬𝓮𝓼𝓼 𝓡𝓪𝓬𝓱𝓮𝓵 💋`) → attribution reads `— Princess Rachel 💋` with a
+      **red** kiss mark, not boxes.
+- [ ] Quote someone with an ordinary name → card looks exactly as it did.
+- [ ] A name that's *only* emoji still renders (attribution isn't blank).
+- [ ] QOTD banner (no-pfp header path, `author_name="Question of the Day"`) is
+      unchanged and still centred — this path was touched too.
+- [ ] A long stylised name still doesn't slide behind the left gold frame —
+      width is now measured through pilmoji, so re-check the clamp.
+
 ### Economy — per-guild quest board size  (37c2090)
 
 The per-member board (how many daily/weekly/monthly quests a member sees at
