@@ -1837,6 +1837,32 @@ def test_board_size_zero_shows_no_quests(ctx, db):
     assert state == []
 
 
+@pytest.mark.asyncio
+async def test_board_size_zero_blocks_trigger_word_claim(ctx, db):
+    # The third board gate (the trigger-word on_message path). With the
+    # cadence off, saying the phrase must pay nothing rather than fall
+    # through to an unfiltered claim.
+    _enable(db, quest_board_daily=0)
+    _mk_quest(db, reward=10, trigger_words="gm")
+    cog = _make_cog(ctx)
+    msg = _trigger_message(author=_member(member_id=501), content="gm")
+    await cog._on_trigger_message(msg)
+    assert _balance(db, 501) == 0
+    msg.reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_trigger_word_still_pays_with_board_size_one(ctx, db):
+    # Control for the test above: the phrase pays when the cadence is on, so
+    # the 0 case is proving the gate and not a broken fixture.
+    _enable(db, quest_board_daily=1)
+    _mk_quest(db, reward=10, trigger_words="gm")
+    cog = _make_cog(ctx)
+    msg = _trigger_message(author=_member(member_id=501), content="gm")
+    await cog._on_trigger_message(msg)
+    assert _balance(db, 501) == 10
+
+
 def test_board_size_zero_round_trips_through_settings(db):
     # The dial is only usable if a stored "0" loads back as 0 rather than
     # falling through to the default board size.

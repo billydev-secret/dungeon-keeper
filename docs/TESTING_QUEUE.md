@@ -16,16 +16,19 @@ once) was hardcoded at 2 per cadence; it's now `quest_board_daily/_weekly/
 _monthly` on the dashboard **Quests → Board size** section. Default stays 2,
 so an untouched guild behaves exactly as before. **0 turns a cadence off.**
 
-**Worth knowing while testing:** the board is a deterministic draw from the
-cadence pool keyed on `(user_id, period_index)` — so a size change only shows
-up for a member when the *period* rolls (next guild-local midnight for
-dailies), not instantly on save. Two accounts should see different subsets.
+**Worth knowing while testing:** the board is recomputed from
+`(pool, user_id, period_index, size)` on every read, so a size change lands on
+the **next `/quests` open — no midnight wait.** What it is *not* is a stable
+subset: the draw starts at `(period_index * size) % poolsize`, so lowering
+daily 2→1 doesn't leave one of the two quests you already saw, it re-draws
+(e.g. pool of 6: n=2 → quests 3,6 but n=1 → quest 5). Expected, not a bug.
+Two accounts should see different subsets.
 
 - [ ] Quests page loads for an admin; **Board size** shows daily/weekly/monthly
       inputs at 2 and the library summary reads `pool: daily N active → 2 shown`
       (not the old `daily N/1` slot text).
 - [ ] Set daily to 1 → save → summary flips to `→ 1 shown`; `/quests` for a
-      member shows exactly one daily (may need the next local-midnight roll).
+      member shows exactly one daily, right away.
 - [ ] Set daily to **0** → `/quests` shows **no** dailies at all, and a
       daily trigger-word/game quest pays **nothing**. The regression to watch
       for is the inverse: 0 showing/paying the *whole* pool.
