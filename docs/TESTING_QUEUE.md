@@ -9,6 +9,54 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Economy — register channel (public transaction feed)  (0f3a584)
+
+New feed: every currency movement posted to a configurable channel, each entry
+saying what it was for. Needs a live pass because the drain loop, the channel
+permissions, and the embed rendering can't be exercised offline. Requires a
+restart (new `register_loop` startup task + JS panel change).
+
+Setup:
+
+- [ ] Dashboard → Economy → Config: the new **Register channel** picker appears
+      under Core, above Manager role. Pick a channel, save, **reload the page** —
+      the picker still shows the channel (confirms the GET round-trip).
+- [ ] Switching it on posts **nothing** retroactively: the guild has a long
+      ledger history, and the first drain must seed the cursor silently rather
+      than replay thousands of entries. Watch the channel for ~1 min after save.
+
+Feed content (entries appear within ~30s of the action):
+
+- [ ] Complete a quest → `💰 +N 🪙 · Quest: **<title>**`. This is the main ask:
+      the entry names the quest that paid. A counted quest shows a tally
+      (`(5/5)`); on a **banded** quest confirm the tally matches *that member's*
+      target, not the library number.
+- [ ] Rent a perk → `🛒 −N 🪙 · Perk rental: **Custom role colour**` in red.
+- [ ] `/bank grant` with a reason → `🎁 +N 🪙 · Staff grant by <mod> — <reason>`.
+      Also try a grant from the dashboard — it must appear too (this is the case
+      a call-site hook would have missed).
+- [ ] Transfer between two members → **one** entry, `Billy → Sam`, unsigned, in
+      the neutral blurple, footer showing the *sender's* wallet. Confirm it does
+      NOT post twice.
+- [ ] Footer balance is right on each entry, and still right when several land
+      close together (they're reconstructed per row, not read live).
+
+The quiet parts (as important as the loud ones):
+
+- [ ] At guild-local midnight the day roll pays daily-login + XP-conversion to
+      the whole active roster. The register must show **none** of it — no
+      nightly burst. If routine login entries appear, the skip list is wrong.
+- [ ] A quest completing right after midnight still appears promptly (it must
+      not be stuck behind a faucet backlog).
+- [ ] Remove the bot's Send Messages permission on the register channel, trigger
+      a payout, restore the permission → the entry should arrive on a later tick
+      (the cursor is left for retry, not burned). Nothing should be lost.
+- [ ] Clearing the picker (unset) stops the feed entirely.
+
+Known edge (accepted, not a bug): unset the channel and re-set it weeks later
+and the cursor grinds through the gap at 8 stale-skipped rows/tick before the
+feed resumes. Only bite if channels get reconfigured.
+
 ### Quote cards — stylised display names + emoji in the attribution  (a88a3dd)
 
 Names written in Mathematical Alphanumeric Symbols (`𝓟𝓻𝓲𝓷𝓬𝓮𝓼𝓼 𝓡𝓪𝓬𝓱𝓮𝓵`) drew as a
