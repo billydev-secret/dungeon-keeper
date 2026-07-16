@@ -23,7 +23,7 @@ from bot_modules.services.booster_roles import BoosterRoleDynamicButton
 from bot_modules.services.inactivity_prune_service import inactivity_prune_loop
 from bot_modules.chat_revive.actions import ReviveOptInButton
 from bot_modules.services.chat_revive_loop import chat_revive_loop
-from bot_modules.services.economy_loop import economy_loop
+from bot_modules.services.economy_loop import economy_loop, register_loop
 from bot_modules.services.voice_xp_service import voice_xp_loop
 from bot_modules.services.wellness_partners import (
     WellnessPartnerAcceptButton,
@@ -303,6 +303,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: inactivity_prune_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: economy_loop(bot, db_path))
+
+    bot.startup_task_factories.append(lambda: register_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: chat_revive_loop(bot, db_path))
 

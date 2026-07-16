@@ -87,6 +87,20 @@ class EconSettings:
     # buttons are DynamicItems so they survive restarts).
     shop_channel_id: int = 0
     shop_message_id: int = 0
+    # Public transaction feed (see economy/register.py). Unset (0) = off; the
+    # channel picker IS the toggle. Every econ_ledger row for the guild is
+    # posted here as it lands, saying what it was for.
+    register_channel_id: int = 0
+    # Bot-managed drain cursor: the highest econ_ledger.id already posted to
+    # the register. Bookkeeping like the *_message_id fields, so it is
+    # deliberately absent from the dashboard's editable whitelist. Seeded to
+    # the ledger's current MAX(id) on first drain so enabling the feed never
+    # backfills the guild's entire history.
+    #
+    # -1 (not 0) is the "never seeded" sentinel: 0 is a legitimate seeded
+    # cursor for a guild whose ledger is still empty, and conflating the two
+    # would re-seed past that guild's first-ever transaction and swallow it.
+    register_cursor_id: int = -1
 
 
 DEFAULT_ECON_SETTINGS = EconSettings()

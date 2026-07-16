@@ -27,6 +27,13 @@ The same hourly tick also drives the quest surface (spec §4):
   per-guild loop; a disabled guild's stale claims still expire + DM, which is
   harmless (at worst a late DM, never a double payout).
 
+This module also hosts a **second, faster loop** — :func:`register_loop` — for
+the register channel's transaction feed (see ``economy/register.py``). It drains
+new ``econ_ledger`` rows every :data:`REGISTER_INTERVAL_SECONDS` rather than
+hourly, because a "you just got paid" entry is only useful while it is news.
+Draining the ledger (rather than hooking payout call sites) means it catches
+every currency movement, dashboard grants included, with nothing to forget.
+
 The tick also refreshes each guild's **leaderboard panel** in place
 (:func:`run_guild_leaderboard` — the ``/bank post-leaderboard`` embed; a 404
 on the stored message clears its ids so a deleted panel stops the refresh).
@@ -75,6 +82,11 @@ from bot_modules.economy.perk_actions import (
     feature_gate_ok,
     revoke_role_perks,
 )
+from bot_modules.economy.register import (
+    RegisterEntry,
+    build_register_embed,
+    collect_register_entries,
+)
 from bot_modules.economy.rentals import GRACE_SECONDS, BillingAction
 from bot_modules.services.economy_quests_service import (
     active_member_ids,
@@ -108,6 +120,19 @@ _FEATURE_GATED_PERKS = ("role_icon", "role_gradient")
 
 # Grace-window length in whole hours, for the "payment failed" DM copy.
 _GRACE_HOURS = int(GRACE_SECONDS // 3600)
+
+# ── register feed cadence ──────────────────────────────────────────────
+# How often the ledger is drained to the register channel. A feed wants to
+# read as live, but each entry is its own message, so this also paces sends
+# well inside Discord's per-channel rate limit.
+REGISTER_INTERVAL_SECONDS = 30
+# Ceiling on entries posted per guild per drain. A burst (a community-quest
+# settlement paying dozens of members at once) spills into the next ticks
+# instead of hammering the channel.
+REGISTER_MAX_PER_TICK = 8
+# Entries older than this are skipped rather than posted. A register is a
+# live feed — replaying a day-old backlog after downtime is noise, not news.
+REGISTER_STALE_SECONDS = 3600.0
 
 log = logging.getLogger("dungeonkeeper.economy_loop")
 
@@ -530,6 +555,161 @@ async def run_guild_leaderboard(
         log.warning(
             "Economy loop: leaderboard refresh failed for guild %s.", guild_id
         )
+
+
+async def run_guild_register(
+    bot: discord.Client, db_path: Path, guild_id: int, now_ts: float
+) -> int:
+    """Drain new ledger rows to the guild's register channel. Returns rows posted.
+
+    Skips guilds with the economy off or no register channel (the picker is the
+    toggle). A cursor of -1 is a first enable: it seeds to the ledger's current
+    MAX(id) and posts nothing, so switching the feed on never replays history.
+    Rows older than ``REGISTER_STALE_SECONDS`` are skipped (cursor still
+    advances) — after long downtime, or a channel re-enabled weeks later, a
+    stale backlog is noise, and draining it would burn the channel's rate limit.
+
+    The cursor advances only over rows we actually posted, and only after the
+    sends land, so a crash mid-drain replays the un-posted tail rather than
+    losing it (at worst a duplicate entry, never a silent gap).
+    """
+
+    def _load():
+        with open_db(db_path) as conn:
+            settings = load_econ_settings(conn, guild_id)
+            if not settings.enabled or not settings.register_channel_id:
+                return settings, None
+            if settings.register_cursor_id < 0:
+                row = conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) AS max_id FROM econ_ledger "
+                    "WHERE guild_id = ?",
+                    (guild_id,),
+                ).fetchone()
+                save_econ_settings(
+                    conn, guild_id, {"register_cursor_id": int(row["max_id"])}
+                )
+                return settings, None
+            entries = collect_register_entries(
+                conn,
+                guild_id,
+                settings.register_cursor_id,
+                REGISTER_MAX_PER_TICK,
+            )
+            known = get_known_users_bulk(
+                conn, guild_id, _register_name_ids(entries)
+            )
+            return settings, (entries, known)
+
+    settings, loaded = await asyncio.to_thread(_load)
+    if not loaded:
+        return 0
+    entries, known = loaded
+    if not entries:
+        return 0
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return 0
+    channel = guild.get_channel(settings.register_channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        return 0
+
+    def _name(uid: int) -> str:
+        member = guild.get_member(uid)
+        if member:
+            return member.display_name
+        return known.get(uid) or f"User {uid}"
+
+    cutoff = now_ts - REGISTER_STALE_SECONDS
+    posted = 0
+    highest = settings.register_cursor_id
+    for entry in entries:
+        if entry.created_at < cutoff:
+            highest = entry.ledger_id  # skipped, but never re-examined
+            continue
+        member = guild.get_member(entry.user_id)
+        embed = build_register_embed(
+            entry,
+            settings,
+            _name,
+            avatar_url=member.display_avatar.url if member else None,
+        )
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            log.warning(
+                "Economy register: no permission to post in guild %s — "
+                "leaving the cursor for a retry.",
+                guild_id,
+            )
+            break
+        except discord.HTTPException:
+            log.warning(
+                "Economy register: send failed for guild %s ledger row %s.",
+                guild_id,
+                entry.ledger_id,
+            )
+            break
+        highest = entry.ledger_id
+        posted += 1
+
+    if highest > settings.register_cursor_id:
+
+        def _advance() -> None:
+            with open_db(db_path) as conn:
+                save_econ_settings(conn, guild_id, {"register_cursor_id": highest})
+
+        await asyncio.to_thread(_advance)
+    return posted
+
+
+def _register_name_ids(entries: list[RegisterEntry]) -> list[int]:
+    """Every user id a register batch's embeds might need a display name for."""
+    ids: set[int] = set()
+    for entry in entries:
+        ids.add(entry.user_id)
+        if entry.actor_id:
+            ids.add(entry.actor_id)
+        for key in ("to", "from"):
+            try:
+                counterparty = int(entry.meta.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+            if counterparty:
+                ids.add(counterparty)
+    return list(ids)
+
+
+async def register_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
+    """One register drain across every guild, isolating per-guild failures."""
+    for guild in list(bot.guilds):
+        try:
+            await run_guild_register(bot, db_path, guild.id, now_ts)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy register: drain failed for guild %s.", guild.id
+            )
+
+
+async def register_loop(bot: discord.Client, db_path: Path) -> None:
+    """The transaction feed's own cadence — the hourly tick is far too slow.
+
+    Separate from :func:`economy_loop` because a register entry is only useful
+    while it is still news; the hourly tick would batch a day's activity into
+    lumps an hour apart.
+    """
+    await bot.wait_until_ready()
+
+    while not bot.is_closed():
+        await asyncio.sleep(REGISTER_INTERVAL_SECONDS)
+        try:
+            await register_tick(bot, db_path, time.time())
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Economy register: tick failed.")
 
 
 async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:

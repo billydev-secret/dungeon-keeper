@@ -78,6 +78,14 @@ function render(container, cfg, channels, roles, pricing) {
           <span data-picker="bank_channel_id"></span>
         </div>
         <div class="field">
+          <label>Register channel</label>
+          <span data-picker="register_channel_id"></span>
+          <div class="field-hint">A running feed of every currency movement —
+            quest payouts, perk purchases, transfers and grants — each entry
+            saying what it was for. Leave unset to turn the feed off. Switching
+            it on starts from now; past transactions are not replayed.</div>
+        </div>
+        <div class="field">
           <label>Manager role</label>
           <span data-picker="manager_role_id"></span>
         </div>
@@ -144,6 +152,11 @@ function render(container, cfg, channels, roles, pricing) {
     channels,
     String(cfg.bank_channel_id),
   );
+  const registerChannelPicker = mountChannelPicker(
+    form.querySelector('[data-picker="register_channel_id"]'),
+    channels,
+    String(cfg.register_channel_id),
+  );
   const rolePicker = mountRolePicker(
     form.querySelector('[data-picker="manager_role_id"]'),
     roles,
@@ -174,6 +187,7 @@ function render(container, cfg, channels, roles, pricing) {
       enabled: form.querySelector("[name=enabled]").checked,
       transfers_enabled: form.querySelector("[name=transfers_enabled]").checked,
       bank_channel_id: parseInt(channelPicker.getValue() || "0", 10),
+      register_channel_id: parseInt(registerChannelPicker.getValue() || "0", 10),
       manager_role_id: parseInt(rolePicker.getValue() || "0", 10),
       game_role_id: parseInt(gameRolePicker.getValue() || "0", 10),
     };
