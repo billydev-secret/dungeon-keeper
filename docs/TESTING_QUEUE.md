@@ -38,6 +38,13 @@ Escape hatch: `DK_NO_QUEUE_POST=1 git commit`.
 - [ ] Edit an existing entry's body, or let a later commit rewrite its
       `(this commit)` marker to a real sha → **no** re-post (entry identity
       ignores the trailing parenthetical).
+- [ ] **Move a verified entry down to `## Done` with a date** → **no** re-post.
+      Worth doing by hand: a date written *outside* the trailing parentheses
+      changes the heading the entry is keyed on, so this only stays quiet
+      because everything below `## Done` is skipped outright.
+- [ ] Reword a **pending** entry's title (not just its body) → this *does*
+      re-post. Known sharp edge of keying on the heading; rename deliberately,
+      or drop the stale key from `.git/testing_queue_posted.json`.
 - [ ] Commit from a **worktree** under `.claude/worktrees/` → the entry still
       posts, and it's that worktree's copy of the file that gets read.
 - [ ] `DK_NO_QUEUE_POST=1 git commit` with a new entry → posts nothing.

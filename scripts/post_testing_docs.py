@@ -182,6 +182,24 @@ def entry_key(block: str) -> str:
     return re.sub(r"\s*\([^()]*\)\s*$", "", head).strip().casefold()
 
 
+def pending_entries(text: str) -> list[str]:
+    """The ``###`` entries above the "## Done" heading.
+
+    Verified work is moved down to Done, and the doc asks for a date on it when
+    that happens. A date outside the trailing parenthetical changes the heading,
+    which would otherwise read as a brand-new entry and re-post a test that was
+    just signed off -- so Done is never scanned at all.
+    """
+    out: list[str] = []
+    for block in split_entries(text):
+        head = heading_of(block)
+        if head.startswith("## ") and head[3:].strip().casefold().startswith("done"):
+            break
+        if head.startswith("### "):
+            out.append(block)
+    return out
+
+
 def state_path() -> Path:
     """Ledger of entry keys already sent, shared by every worktree.
 
@@ -228,9 +246,7 @@ def new_entries(sha: str) -> list[str]:
     seen = Counter(entry_key(b) for b in split_entries(before))
     already = load_state()
     fresh: list[str] = []
-    for block in split_entries(after):
-        if not heading_of(block).startswith("### "):
-            continue  # skip the preamble / "## Pending" wrapper
+    for block in pending_entries(after):
         key = entry_key(block)
         if seen[key] > 0:
             seen[key] -= 1
