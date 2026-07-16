@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Privacy — clear images / text / all modes  (PENDING-HASH)
+### Privacy — clear images / text / all modes  (f8ea556)
 
 `/delete_me` and `/delete_user` take an optional **mode**: `all` (default,
 unchanged), **Images & files only**, **Text messages only**. The partial modes
