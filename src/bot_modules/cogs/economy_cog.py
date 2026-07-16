@@ -44,9 +44,9 @@ from bot_modules.economy.quest_views import (
     post_signoff_card,
 )
 from bot_modules.economy.quests import (
-    board_size,
     compile_trigger_pattern,
     effective_target,
+    has_board,
     message_matches_trigger,
     parse_trigger_words,
     quest_period,
@@ -1476,10 +1476,10 @@ class EconomyCog(commands.Cog):
             for row in rows:
                 qtype = str(row["qtype"])
                 quest_id = int(row["id"])
-                if board_size(qtype) > 0:
+                if has_board(qtype):
                     if qtype not in boards:
                         boards[qtype] = assigned_board_ids(
-                            conn, guild_id, user_id, qtype, day
+                            conn, guild_id, user_id, qtype, day, settings
                         )
                     if quest_id not in boards[qtype]:
                         continue  # not on this member's board this period
@@ -1641,8 +1641,10 @@ class EconomyCog(commands.Cog):
                 # A trigger-word quest still only pays when it's on the
                 # member's personal board this period (parity with kind
                 # triggers). Off-board → treat like an unclaimable repeat.
-                if board_size(trig.qtype) > 0 and trig.quest_id not in (
-                    assigned_board_ids(conn, guild.id, member.id, trig.qtype, day)
+                if has_board(trig.qtype) and trig.quest_id not in (
+                    assigned_board_ids(
+                        conn, guild.id, member.id, trig.qtype, day, settings
+                    )
                 ):
                     raise ValueError("quest not on member's board this period")
                 outcome = claim_quest(

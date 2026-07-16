@@ -379,17 +379,33 @@ def list_active_pool_ids(
     ]
 
 
+def board_sizes(settings: EconSettings) -> dict[str, int]:
+    """The guild's configured personal-board size per cadence."""
+    return {
+        "daily": settings.quest_board_daily,
+        "weekly": settings.quest_board_weekly,
+        "monthly": settings.quest_board_monthly,
+    }
+
+
 def assigned_board_ids(
-    conn: sqlite3.Connection, guild_id: int, user_id: int, qtype: str, local_day: str
+    conn: sqlite3.Connection,
+    guild_id: int,
+    user_id: int,
+    qtype: str,
+    local_day: str,
+    settings: EconSettings | None = None,
 ) -> set[int]:
     """The quest ids on ``user_id``'s personal board for ``qtype`` this period.
 
-    A per-member subset of the cadence pool (``quests.board_size`` of them),
-    stable within the period and spaced so repeats stay ~a week apart. Only
-    daily/weekly/monthly have a board; other cadences return an empty set.
+    A per-member subset of the cadence pool (the guild's configured
+    ``board_size`` of them), stable within the period and spaced so repeats
+    stay ~a week apart. Only daily/weekly/monthly have a board; other
+    cadences return an empty set, as does a cadence sized to 0.
     """
-    n = quests.board_size(qtype)
-    if n <= 0:
+    sizes = board_sizes(settings) if settings is not None else None
+    n = quests.board_size(qtype, sizes)
+    if n <= 0 or not quests.has_board(qtype):
         return set()
     pool = list_active_pool_ids(conn, guild_id, qtype)
     idx = quests.period_index(qtype, local_day)
@@ -537,7 +553,7 @@ def fire_trigger_quests(
         else:
             if qtype not in boards:
                 boards[qtype] = assigned_board_ids(
-                    conn, guild_id, user_id, qtype, local_day
+                    conn, guild_id, user_id, qtype, local_day, settings
                 )
             if int(quest["id"]) not in boards[qtype]:
                 continue  # not on this member's board this period

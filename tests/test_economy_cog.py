@@ -1813,6 +1813,67 @@ def test_trigger_quest_excluded_from_manual_claims(ctx, db):
     assert [q["state"] for q in state] == ["trigger"]
 
 
+# ── per-member board size (configurable) ────────────────────────────────────
+
+
+def test_board_size_limits_quests_shown(ctx, db):
+    # Six active dailies, board sized to 1 → the member sees exactly one.
+    _enable(db, quest_board_daily=1)
+    for i in range(6):
+        _mk_quest(db, title=f"Daily {i}")
+    cog = _make_cog(ctx)
+    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    assert len(state) == 1
+
+
+def test_board_size_zero_shows_no_quests(ctx, db):
+    # 0 = cadence off. Guards the inverse regression: gating the board filter
+    # on "size > 0" would skip filtering entirely and show the whole pool.
+    _enable(db, quest_board_daily=0)
+    for i in range(6):
+        _mk_quest(db, title=f"Daily {i}")
+    cog = _make_cog(ctx)
+    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    assert state == []
+
+
+@pytest.mark.asyncio
+async def test_board_size_zero_blocks_trigger_word_claim(ctx, db):
+    # The third board gate (the trigger-word on_message path). With the
+    # cadence off, saying the phrase must pay nothing rather than fall
+    # through to an unfiltered claim.
+    _enable(db, quest_board_daily=0)
+    _mk_quest(db, reward=10, trigger_words="gm")
+    cog = _make_cog(ctx)
+    msg = _trigger_message(author=_member(member_id=501), content="gm")
+    await cog._on_trigger_message(msg)
+    assert _balance(db, 501) == 0
+    msg.reply.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_trigger_word_still_pays_with_board_size_one(ctx, db):
+    # Control for the test above: the phrase pays when the cadence is on, so
+    # the 0 case is proving the gate and not a broken fixture.
+    _enable(db, quest_board_daily=1)
+    _mk_quest(db, reward=10, trigger_words="gm")
+    cog = _make_cog(ctx)
+    msg = _trigger_message(author=_member(member_id=501), content="gm")
+    await cog._on_trigger_message(msg)
+    assert _balance(db, 501) == 10
+
+
+def test_board_size_zero_round_trips_through_settings(db):
+    # The dial is only usable if a stored "0" loads back as 0 rather than
+    # falling through to the default board size.
+    _enable(db, quest_board_daily=0, quest_board_weekly=3)
+    with open_db(db) as conn:
+        loaded = load_econ_settings(conn, GUILD_ID)
+    assert loaded.quest_board_daily == 0
+    assert loaded.quest_board_weekly == 3
+    assert loaded.quest_board_monthly == 2  # untouched → default
+
+
 # ── photo-reply event quest ─────────────────────────────────────────────────
 
 

@@ -26,9 +26,17 @@ MAX_ACTIVE_WEEKLY = POOL_CAP
 MAX_ACTIVE_MONTHLY = POOL_CAP
 MAX_ACTIVE_EVENT_PER_KIND = 1
 
-# How many quests each member draws from each cadence's pool per period. The
-# repeat gap for a member is ~floor(poolsize / N) periods, so a bigger pool
-# (or a smaller N) spaces repeats further apart.
+# Cadences that draw a *personal board* — a per-member subset of the pool.
+# Membership here is the has-a-board predicate, kept separate from the board
+# size: a size of 0 means "this guild shows none of this cadence", which is
+# the opposite of community/event's "no board concept, every active quest
+# counts". Conflating the two would make a disabled cadence pay everything.
+BOARD_CADENCES = frozenset({"daily", "weekly", "monthly"})
+
+# Default quests each member draws from each cadence's pool per period, when
+# a guild hasn't tuned its own (EconSettings.quest_board_*). The repeat gap
+# for a member is ~floor(poolsize / N) periods, so a bigger pool (or a
+# smaller N) spaces repeats further apart.
 PERSONAL_BOARD_SIZE: dict[str, int] = {"daily": 2, "weekly": 2, "monthly": 2}
 
 # Game/module triggers a quest can be auto-completed by (label = how the
@@ -264,8 +272,25 @@ def assigned_quest_ids(
     return sorted(picked)
 
 
-def board_size(qtype: str) -> int:
-    """How many quests a member draws from this cadence's pool per period."""
+def has_board(qtype: str) -> bool:
+    """Whether this cadence draws a personal board at all.
+
+    True for daily/weekly/monthly regardless of the configured size — a
+    guild that set the size to 0 still *has* a board, it's just empty. Gate
+    board filtering on this, never on ``board_size(...) > 0``.
+    """
+    return qtype in BOARD_CADENCES
+
+
+def board_size(qtype: str, sizes: dict[str, int] | None = None) -> int:
+    """How many quests a member draws from this cadence's pool per period.
+
+    ``sizes`` overrides the defaults per cadence (the guild's configured
+    board sizes); a cadence absent from it falls back to the default. 0 is a
+    meaningful value — the cadence is off for this guild.
+    """
+    if sizes is not None and qtype in sizes:
+        return sizes[qtype]
     return PERSONAL_BOARD_SIZE.get(qtype, 0)
 
 
