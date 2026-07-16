@@ -125,6 +125,7 @@ async def find_user_messages(
     user_id: int,
     *,
     on_progress: ScanProgress | None = None,
+    predicate: Callable[[discord.Message], bool] | None = None,
 ) -> list[tuple[int, int]]:
     """Walk every readable channel and return (message_id, channel_id) tuples
     for every message authored by *user_id*.
@@ -134,6 +135,13 @@ async def find_user_messages(
     ``manage_threads``. Slow on large servers (Discord history reads are
     ~100 msg/sec); use only when completeness matters more than latency
     (e.g. ``/delete_me``).
+
+    *predicate*: when given, only messages it accepts are collected. The full
+    ``discord.Message`` is only in scope here, so callers that need to select
+    on its content (``/delete_me mode:``, which filters on attachments and
+    embeds) must decide during the scan — the returned ids carry no such
+    detail. A message the predicate rejects is never collected and so is never
+    deleted.
     """
     me = guild.me
     channels = await collect_messageable_channels(
@@ -145,7 +153,7 @@ async def find_user_messages(
     for idx, channel in enumerate(channels, start=1):
         try:
             async for msg in channel.history(limit=None):
-                if msg.author.id == user_id:
+                if msg.author.id == user_id and (predicate is None or predicate(msg)):
                     rows.append((msg.id, channel.id))
         except (discord.Forbidden, discord.HTTPException) as exc:
             log.warning(

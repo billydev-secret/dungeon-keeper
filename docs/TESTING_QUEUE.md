@@ -9,6 +9,42 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Privacy — clear images / text / all modes  (PENDING-HASH)
+
+`/delete_me` and `/delete_user` take an optional **mode**: `all` (default,
+unchanged), **Images & files only**, **Text messages only**. The partial modes
+are *scrubs* — they delete only that slice of the member's Discord messages and
+**never** purge XP/activity/profile. Omitting the option behaves exactly as
+before.
+
+The `/delete_me` prompt now also discloses that the server keeps its own copy of
+the messages for moderation. That retention isn't new — it's what
+`keep_messages=True` has always done — but it was previously only mentioned in
+the summary *after* the member had already confirmed. Behaviour is unchanged;
+only the copy is.
+
+**Worth knowing while testing:** media is classified **during the scan**, from
+the live message — attachments, stickers, and `image`/`video`/`gifv` embeds.
+Link previews (`link`/`article`/`rich`) deliberately do *not* count, so a chatty
+message with a URL survives a media scrub; that's the edge case most worth
+poking. A posted image *URL* has no attachment but does embed as `image`, so it
+**should** be caught. The scan still walks every channel either way, so a mode
+doesn't make the run faster — only the delete list is shorter.
+
+- [ ] `/delete_me` with **no mode** → prompt still reads as a full erasure, and
+      now says the server keeps its own copy. Button: "Yes, delete everything".
+- [ ] `/delete_me mode: Images & files only` on a test account with a photo, a
+      gif, and some chat → only the photo/gif go, the chat stays, and **XP and
+      profile are untouched** (check the member's level / `/bank wallet`).
+      Button reads "Yes, delete my images & files".
+- [ ] Post a message that's *just a link* (so Discord renders a preview) → it
+      **survives** the media scrub, and a text scrub removes it.
+- [ ] Post a bare image **URL** (no upload) → the media scrub **does** remove it.
+- [ ] `/delete_user member:<x> mode: Text messages only` → their text goes,
+      their images stay, their XP survives, and the button says "their".
+- [ ] A full `/delete_user` still hard-purges the archive as before.
+- [ ] A sticker-only message counts as media.
+
 ### Quote cards — stylised display names + emoji in the attribution  (a88a3dd)
 
 Names written in Mathematical Alphanumeric Symbols (`𝓟𝓻𝓲𝓷𝓬𝓮𝓼𝓼 𝓡𝓪𝓬𝓱𝓮𝓵`) drew as a

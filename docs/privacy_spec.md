@@ -1,6 +1,8 @@
 # Privacy — Feature Spec
 
-Two slash commands that erase a user's data: `/delete_me` for self-erasure and `/delete_user` for mod erasure of another member. Erasure runs in two phases — an authoritative Discord-side scan + delete that walks every readable channel and thread looking for messages by the target, then a DB purge that removes XP, activity, profile, wellness, and interaction-graph rows. The local `messages` archive is opt-in per command: `/delete_me` defaults to **keeping** the archive (the user can still see what they wrote even after Discord-side records are gone); `/delete_user` defaults to a **hard purge**.
+Two slash commands that erase a user's data: `/delete_me` for self-erasure and `/delete_user` for mod erasure of another member. Erasure runs in two phases — an authoritative Discord-side scan + delete that walks every readable channel and thread looking for messages by the target, then a DB purge that removes XP, activity, profile, wellness, and interaction-graph rows. The local `messages` archive is opt-in per command: `/delete_me` **keeps** the archive — staff need it for moderation, and the confirmation prompt says so before the member confirms; `/delete_user` defaults to a **hard purge**.
+
+Both commands take an optional `mode` that narrows the scope to just images/files or just text — see [Modes](#modes). A partial mode is a scrub: messages only, account untouched, no DB purge.
 
 The channel-walking scanner is shared with [[events-spec]]'s backfill so both features cover the same channel set.
 
@@ -8,15 +10,35 @@ The channel-walking scanner is shared with [[events-spec]]'s backfill so both fe
 
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
-| `/delete_me` | Slash | Everyone (guild only) | Erase your own data; the local archive is preserved by default |
-| `/delete_user member:<user>` | Slash | Manage Server + mod | Erase any user's data (including users who have left); hard purge by default |
+| `/delete_me [mode]` | Slash | Everyone (guild only) | Erase your own data, or scrub just your images/text; the local archive is preserved |
+| `/delete_user member:<user> [mode]` | Slash | Manage Server + mod | Erase any user's data (including users who have left), or scrub just their images/text; hard purge by default |
 
 There is no web dashboard surface — erasure is destructive and intentionally gated behind a slash-only ephemeral confirmation.
+
+## Modes
+
+`mode` is optional on both commands; omitting it gives the original all-or-nothing erasure, so an existing `/delete_me` behaves exactly as it always has.
+
+| Mode | Value | Deletes from Discord | Account data (XP, activity, profile) | Local archive |
+|---|---|---|---|---|
+| Everything | `all` (default) | every message | **cleared** | per command (see below) |
+| Images & files only | `media` | messages carrying media | untouched | untouched |
+| Text messages only | `text` | messages carrying no media | untouched | untouched |
+
+`media` and `text` are **scrubs, not erasures**: they remove one slice of the member's Discord messages and leave the account intact, so clearing your photos doesn't cost you your level. Only `all` purges. That decision is keyed off the *mode* rather than the command (`clears_account_data`), so a scrub cannot fall through to a purge whichever command asked for it — and because a scrub keeps the account, `/delete_user` in a partial mode also keeps the archive.
+
+The two partial modes partition a member's messages exactly: every message is in `media` or `text`, never both.
+
+**What counts as media** (`message_has_media`): attachments, stickers, and embeds of type `image`/`video`/`gifv`. Discord auto-generates an embed for any posted link, so `link`/`article`/`rich` previews deliberately do **not** count — otherwise ordinary chatter with a URL would be swept into "clear my images". A posted image *URL* has no attachment but does produce an `image` embed, so it counts.
+
+Selection happens **during the scan** (`find_user_messages(predicate=...)`): the scan returns only `(message_id, channel_id)`, so a mode that selects on message content has to decide while the `discord.Message` is still in hand. A message the predicate rejects is never collected and therefore never deleted.
 
 ## Behaviour
 
 ### Confirmation
-Both commands open an ephemeral confirm view with **Yes, delete everything** and **Cancel**. The view checks that the clicker is the original invoker, times out silently after **60 seconds**, and disables itself on click. Until the user confirms, nothing is touched.
+Both commands open an ephemeral confirm view with a danger button and **Cancel**. The view checks that the clicker is the original invoker, times out silently after **60 seconds**, and disables itself on click. Until the user confirms, nothing is touched.
+
+The prompt and button name the *real* scope — a scrub's button reads "Yes, delete my images & files", not "delete everything". The prompt is also where `/delete_me`'s retained archive is disclosed: the server keeps its own copy of the messages for moderation, and the member is told that **before** the irreversible click rather than discovering it in the summary afterwards.
 
 A per-target lock prevents racing: while a deletion for user X is running, neither `/delete_me` (by X) nor `/delete_user @X` (by a mod) will start a second one — the second invocation sees a "deletion already running" ephemeral and bails.
 
@@ -36,7 +58,7 @@ For each channel with hits:
 Per-message failures (permissions denied, transient HTTP errors) are counted as "failed" and logged; the run continues. Progress is rendered as a 20-character bar like `[████████░░░░░░░░░░░░] 42/100`, throttled to one edit every 1.5 seconds.
 
 ### Phase 3 — DB purge
-The purge runs unconditionally, even if the Discord-side delete is fully blocked by missing permissions. It removes the user's rows from XP, voice sessions, member activity, quality-score history, gender, member events, the interaction graph (both directions), wellness state and counters, and audit-event tables. When `keep_messages=False`, it also drops the `messages` archive and its children (attachments, mentions, embeds, reactions, sentiment, and the per-user dedup table).
+**Skipped entirely in a partial mode** — a scrub touches no DB rows at all. In `all`, the purge runs unconditionally, even if the Discord-side delete is fully blocked by missing permissions. It removes the user's rows from XP, voice sessions, member activity, quality-score history, gender, member events, the interaction graph (both directions), wellness state and counters, and audit-event tables. When `keep_messages=False`, it also drops the `messages` archive and its children (attachments, mentions, embeds, reactions, sentiment, and the per-user dedup table).
 
 Wellness tables vary by guild deployment age; missing tables are tolerated — a missing-table error logs a warning and the rest of the purge proceeds.
 
