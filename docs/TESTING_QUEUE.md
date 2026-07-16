@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Quote cards — stylised display names + emoji in the attribution  (55e6225)
+### Quote cards — stylised display names + emoji in the attribution  (a88a3dd)
 
 Names written in Mathematical Alphanumeric Symbols (`𝓟𝓻𝓲𝓷𝓬𝓮𝓼𝓼 𝓡𝓪𝓬𝓱𝓮𝓵`) drew as a
 row of **tofu boxes** — not just the emoji, the *whole name*: no bundled TTF
