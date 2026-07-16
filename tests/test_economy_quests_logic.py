@@ -11,11 +11,14 @@ import pytest
 
 from bot_modules.economy.quests import (
     POOL_CAP,
+    PERSONAL_BOARD_SIZE,
     assigned_quest_ids,
+    board_size,
     can_activate,
     can_activate_event,
     compile_trigger_pattern,
     effective_target,
+    has_board,
     iso_week_for,
     message_matches_trigger,
     occurrence_period,
@@ -322,6 +325,34 @@ def test_assigned_n_ge_pool_returns_all():
 
 def test_assigned_empty_pool():
     assert assigned_quest_ids([], user_id=1, index=0, n=2) == []
+
+
+# ── board_size / has_board: the configurable dial ─────────────────────
+
+
+def test_board_size_defaults():
+    assert board_size("daily") == PERSONAL_BOARD_SIZE["daily"]
+    assert board_size("community") == 0
+
+
+def test_board_size_override_wins():
+    sizes = {"daily": 5, "weekly": 0}
+    assert board_size("daily", sizes) == 5
+    # 0 is a real value, not "unset" — it must not fall back to the default.
+    assert board_size("weekly", sizes) == 0
+    # A cadence absent from the override keeps its default.
+    assert board_size("monthly", sizes) == PERSONAL_BOARD_SIZE["monthly"]
+
+
+def test_has_board_is_independent_of_size():
+    # The predicate that keeps "sized to 0" from being read as "no board, so
+    # every active quest counts" — the three board cadences always have one.
+    for qtype in ("daily", "weekly", "monthly"):
+        # Still has a board when the guild sized it to 0 — it's just empty.
+        assert has_board(qtype)
+        assert board_size(qtype, {qtype: 0}) == 0
+    assert not has_board("community")
+    assert not has_board("event")
 
 
 # ── effective_target: gaussian band, deterministic ────────────────────

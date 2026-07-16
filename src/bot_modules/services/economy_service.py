@@ -59,6 +59,14 @@ class EconSettings:
     reward_qotd: int = 10
     reward_game_participation: int = 5
     reward_game_win: int = 20
+    # How many quests of each cadence a member is shown (and can be paid for)
+    # per period — their "personal board", drawn from that cadence's active
+    # pool. Tuning these down is how a guild makes the board feel smaller
+    # without deactivating library quests; 0 turns the cadence off entirely
+    # (nothing shows, nothing pays). Capped at POOL_CAP by the dashboard.
+    quest_board_daily: int = 2
+    quest_board_weekly: int = 2
+    quest_board_monthly: int = 2
     price_role_color: int = 50
     price_role_name: int = 35
     price_role_icon: int = 75

@@ -139,7 +139,9 @@ active event quest per trigger kind** per guild. (The former "1 active daily +
 rotate-tag pool" rule is retired — `rotate_tag`/`rotate_pool` still exist but
 are inert once every pool quest is active; the per-user board supplies the
 variety rotation used to.) Authoring
-lives on the **Quests** page (library w/ slot summary + inline edit → quest
+lives on the **Quests** page (library w/ pool summary + inline edit → **Board
+size** dials (§4.6, admin-only — the section is read-only prose for
+manager-role holders, since `GET/PUT /economy/config` is admin-gated) → quest
 editor → AI ideas) with in-place editing (PUT); the sign-off inbox is the
 **Claims** page (pending queue with Approve/Deny plus a state filter over the
 paid/denied/expired history); the remaining operational cards — community
@@ -311,9 +313,22 @@ fresh count with no reset sweep.
 
 ### 4.6 Per-user quest board (`quests.assigned_quest_ids`)
 Daily/weekly/monthly quests are **personal**: each cadence's active quests form
-a **pool**, and every member is shown/paid their own subset of
-`PERSONAL_BOARD_SIZE` (**2** per cadence) drawn from it per period. The draw is
-a pure function of `(pool_ids, user_id, period_index, board_size)` — a per-member
+a **pool**, and every member is shown/paid their own subset drawn from it per
+period. How many is **per-guild configurable** — `EconSettings.quest_board_daily`
+/ `_weekly` / `_monthly` (default **2** each, matching `PERSONAL_BOARD_SIZE`),
+edited on the dashboard Quests page under *Board size* and capped at `POOL_CAP`.
+Lowering a dial is how a guild makes the board feel less busy without
+deactivating library quests; **0 turns that cadence off entirely** — nothing
+shows and nothing pays.
+
+Because 0 is a real setting, "has a board" and "board size" are deliberately
+separate: `quests.has_board(qtype)` (true for daily/weekly/monthly, always) is
+what gates the board filter, never `board_size(...) > 0`. Gating on the size
+would make a cadence sized to 0 read as *unfiltered* — community/event's
+"no board concept, every active quest counts" — and pay out the whole pool,
+the exact inverse of the intent.
+
+The draw is a pure function of `(pool_ids, user_id, period_index, board_size)` — a per-member
 `sha256` shuffle of the pool walked N-at-a-time by `period_index(qtype, day)`
 (day ordinal / ISO-week / month) — so it needs **no assignment table**: it is
 stable within a period, differs between members, and spaces a member's repeats

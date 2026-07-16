@@ -1291,6 +1291,58 @@ def test_fire_only_pays_quests_on_members_board(db):
         assert claimed == board
 
 
+def test_board_size_is_per_guild_configurable(db):
+    # The guild's quest_board_* settings size the board, not the default 2.
+    with open_db(db) as conn:
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        wide = EconSettings(enabled=True, quest_board_daily=4)
+        narrow = EconSettings(enabled=True, quest_board_daily=1)
+        assert len(assigned_board_ids(conn, GUILD, USER, "daily", day, wide)) == 4
+        assert len(assigned_board_ids(conn, GUILD, USER, "daily", day, narrow)) == 1
+
+
+def test_board_size_zero_pays_nothing(db):
+    # 0 = cadence off: an empty board, and the trigger pays nothing. The
+    # regression guarded here is the inverse — treating 0 as "no board" would
+    # skip the filter and pay the whole pool.
+    with open_db(db) as conn:
+        for _ in range(6):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        day = "2026-07-13"
+        off = EconSettings(enabled=True, booster_multiplier=1.5, quest_board_daily=0)
+        assert assigned_board_ids(conn, GUILD, USER, "daily", day, off) == set()
+        results = fire_trigger_quests(
+            conn, off, GUILD, "message_sent", USER,
+            local_day=day, occurrence="m1", booster=False,
+        )
+        assert results == []
+
+
+def test_board_size_zero_is_per_cadence(db):
+    # Turning dailies off leaves the other cadences alone.
+    with open_db(db) as conn:
+        for _ in range(4):
+            _make(conn, qtype="daily", trigger_kind="message_sent")
+        for _ in range(4):
+            _make(conn, qtype="weekly", trigger_kind="message_sent")
+        day = "2026-07-13"
+        cfg = EconSettings(
+            enabled=True, booster_multiplier=1.5,
+            quest_board_daily=0, quest_board_weekly=2,
+        )
+        assert assigned_board_ids(conn, GUILD, USER, "daily", day, cfg) == set()
+        weekly = assigned_board_ids(conn, GUILD, USER, "weekly", day, cfg)
+        assert len(weekly) == 2
+        results = fire_trigger_quests(
+            conn, cfg, GUILD, "message_sent", USER,
+            local_day=day, occurrence="m1", booster=False,
+        )
+        # Only the weekly board paid — no daily leaked through.
+        assert {int(q["id"]) for q, _ in results} == weekly
+
+
 def test_board_differs_between_members(db):
     with open_db(db) as conn:
         for _ in range(6):

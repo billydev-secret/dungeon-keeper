@@ -1813,6 +1813,41 @@ def test_trigger_quest_excluded_from_manual_claims(ctx, db):
     assert [q["state"] for q in state] == ["trigger"]
 
 
+# ── per-member board size (configurable) ────────────────────────────────────
+
+
+def test_board_size_limits_quests_shown(ctx, db):
+    # Six active dailies, board sized to 1 → the member sees exactly one.
+    _enable(db, quest_board_daily=1)
+    for i in range(6):
+        _mk_quest(db, title=f"Daily {i}")
+    cog = _make_cog(ctx)
+    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    assert len(state) == 1
+
+
+def test_board_size_zero_shows_no_quests(ctx, db):
+    # 0 = cadence off. Guards the inverse regression: gating the board filter
+    # on "size > 0" would skip filtering entirely and show the whole pool.
+    _enable(db, quest_board_daily=0)
+    for i in range(6):
+        _mk_quest(db, title=f"Daily {i}")
+    cog = _make_cog(ctx)
+    _settings, state = cog._load_quests_state(GUILD_ID, 501)
+    assert state == []
+
+
+def test_board_size_zero_round_trips_through_settings(db):
+    # The dial is only usable if a stored "0" loads back as 0 rather than
+    # falling through to the default board size.
+    _enable(db, quest_board_daily=0, quest_board_weekly=3)
+    with open_db(db) as conn:
+        loaded = load_econ_settings(conn, GUILD_ID)
+    assert loaded.quest_board_daily == 0
+    assert loaded.quest_board_weekly == 3
+    assert loaded.quest_board_monthly == 2  # untouched → default
+
+
 # ── photo-reply event quest ─────────────────────────────────────────────────
 
 

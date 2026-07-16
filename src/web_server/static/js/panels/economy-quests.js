@@ -12,12 +12,25 @@ const REWARD_BANDS = { daily: [10, 20], weekly: [25, 75], monthly: [75, 200] };
 
 // Plain-language cadence per quest type (shown under the Type select).
 const TYPE_HINTS = {
-  daily: "Members can complete it once per day (guild-local midnight). One daily can be active at a time; use a rotate tag to cycle a pool.",
-  weekly: "Members can complete it once per ISO week. Up to five can be active.",
-  monthly: "Members can complete it once per calendar month (starts on the 1st, guild-local). Up to five can be active.",
+  daily: "Members can complete it once per day (guild-local midnight). Active dailies form a pool; each member is shown a few of them per day — set how many under Board size.",
+  weekly: "Members can complete it once per ISO week. Active weeklies form a pool drawn from per member — see Board size.",
+  monthly: "Members can complete it once per calendar month (starts on the 1st, guild-local). Active monthlies form a pool drawn from per member — see Board size.",
   community: "One shared goal for the whole server. You track progress and settle the payout from the Operations page.",
   event: "Pays by itself every time the trigger happens — no claims, no daily/weekly cap. One active event quest per trigger.",
 };
+
+// The per-member board dials. Each entry: [settings key, cadence, label].
+const BOARD_FIELDS = [
+  ["quest_board_daily", "daily", "Daily"],
+  ["quest_board_weekly", "weekly", "Weekly"],
+  ["quest_board_monthly", "monthly", "Monthly"],
+];
+
+// Econ config for the board dials, or null for manager-role holders (the
+// config GET is admin-gated). Module-scoped because the library summary
+// renders "pool → shown" on every refreshQuests(), and a board save has to
+// move those numbers without a reload.
+let boardCfg = null;
 
 function bandHint(qtype, reward) {
   const band = REWARD_BANDS[qtype];
@@ -31,12 +44,49 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading Quests…</div></div>`;
   (async () => {
     const channels = await loadChannels().catch(() => []);
-    render(container, channels);
+    // Admin probe, same as Income Sources: the config GET is admin-gated, so
+    // a success means this user may edit the board sizes. Manager-role
+    // holders get a 403 and the read-only view.
+    boardCfg = await api("/api/economy/config").catch(() => null);
+    render(container, channels, boardCfg);
   })();
   return null;
 }
 
-function render(container, channels) {
+function boardSection(cfg) {
+  if (!cfg) {
+    // Manager-role view: the config GET is admin-gated, so we have no values
+    // to show — describe the dial rather than printing a row of em-dashes.
+    return `
+      <div class="field-hint">
+        Members don't see every active quest — each is shown a few of each
+        cadence, drawn from that cadence's pool. How many is admin-editable.
+      </div>`;
+  }
+  const fields = BOARD_FIELDS.map(([key, , label]) => `
+    <div class="field">
+      <label>${label}</label>
+      <input type="number" name="${key}" value="${cfg[key]}" min="0" max="25"
+             step="1" style="max-width:90px;" />
+    </div>`).join("");
+  return `
+    <div class="field-hint" style="margin-bottom:8px;">
+      How many quests of each cadence a member sees at once, drawn from that
+      cadence's active pool. Lower this to make the board less busy without
+      deactivating quests — a bigger pool with a small board also spaces
+      repeats further apart. <strong>0 turns the cadence off entirely</strong>
+      (nothing shows, nothing pays).
+    </div>
+    <form data-form-board class="form">
+      <div class="field-row">${fields}</div>
+      <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+        <button type="submit" class="btn btn-primary">Save board size</button>
+        <span data-status-board></span>
+      </div>
+    </form>`;
+}
+
+function render(container, channels, cfg) {
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -55,6 +105,11 @@ function render(container, channels) {
         </div>
         <div data-quest-slots class="field-hint" style="margin-bottom:6px;"></div>
         <div data-quests><div class="empty">Loading…</div></div>
+      </section>
+
+      <section class="card" data-sec="board">
+        <div class="section-label">Board size</div>
+        ${boardSection(cfg)}
       </section>
 
       <section class="card" data-sec="author">
@@ -155,7 +210,34 @@ function render(container, channels) {
     </div>`;
 
   wireAuthoring(container, channels);
+  wireBoard(container);
   refreshQuests(container);
+}
+
+// ── board size ───────────────────────────────────────────────────────
+
+function wireBoard(container) {
+  const form = container.querySelector("[data-form-board]");
+  if (!form) return; // manager-role view: read-only, nothing to wire
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const status = form.querySelector("[data-status-board]");
+    const payload = {};
+    for (const [key] of BOARD_FIELDS) {
+      payload[key] = Number(form.querySelector(`[name="${key}"]`).value);
+    }
+    try {
+      await apiPut("/api/economy/config", payload);
+    } catch (err) {
+      showStatus(status, err.message, false);
+      return;
+    }
+    // Keep the cached config in step so the library summary's "→ N shown"
+    // reflects the save without a reload.
+    boardCfg = { ...boardCfg, ...payload };
+    showStatus(status, "Saved", true);
+    refreshQuests(container);
+  });
 }
 
 // ── quest library ────────────────────────────────────────────────────
@@ -173,23 +255,26 @@ function questVerification(q) {
   return `member claims · ${pay}`;
 }
 
+// "pool → what one member actually sees" per cadence. The old version quoted
+// slot caps of 1/5/5 that no longer exist (the cap is POOL_CAP for every
+// cadence); pool-vs-board is the number that actually shapes the experience.
 function renderSlotSummary(container, quests) {
   const host = container.querySelector("[data-quest-slots]");
   if (!host) return;
   const active = quests.filter((q) => q.active);
-  const daily = active.filter((q) => q.qtype === "daily").length;
-  const weekly = active.filter((q) => q.qtype === "weekly").length;
-  const monthly = active.filter((q) => q.qtype === "monthly").length;
+  const parts = BOARD_FIELDS.map(([key, qtype, label]) => {
+    const pool = active.filter((q) => q.qtype === qtype).length;
+    if (!boardCfg) return `${label.toLowerCase()} ${pool} active`;
+    if (boardCfg[key] === 0) return `${label.toLowerCase()} ${pool} active (off)`;
+    // A board bigger than the pool just means "the whole pool" — show what a
+    // member actually sees, not the dial.
+    return `${label.toLowerCase()} ${pool} active → ${Math.min(boardCfg[key], pool)} shown`;
+  });
   const kinds = active
     .filter((q) => q.qtype === "event" && q.trigger_kind)
     .map((q) => (KIND_LABELS[q.trigger_kind] || q.trigger_kind).split(" ")[0]);
-  const parts = [
-    `Active slots: daily ${daily}/1`,
-    `weekly ${weekly}/5`,
-    `monthly ${monthly}/5`,
-    `event ${kinds.length ? kinds.join(" ") : "none"}`,
-  ];
-  host.textContent = parts.join(" · ");
+  parts.push(`event ${kinds.length ? kinds.join(" ") : "none"}`);
+  host.textContent = `Pool: ${parts.join(" · ")}`;
 }
 
 async function refreshQuests(container) {

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.economy.metrics import pricing_hints
+from bot_modules.economy.quests import POOL_CAP
 from bot_modules.services.economy_metrics_service import (
     get_weekly_metrics,
     latest_median_income,
@@ -55,6 +56,11 @@ class EconomyConfigUpdate(BaseModel):
     reward_qotd: int | None = Field(default=None, ge=0)
     reward_game_participation: int | None = Field(default=None, ge=0)
     reward_game_win: int | None = Field(default=None, ge=0)
+    # 0 = cadence off for this guild; above POOL_CAP is meaningless (the pool
+    # can't exceed it, and a board >= the pool is just "the whole pool").
+    quest_board_daily: int | None = Field(default=None, ge=0, le=POOL_CAP)
+    quest_board_weekly: int | None = Field(default=None, ge=0, le=POOL_CAP)
+    quest_board_monthly: int | None = Field(default=None, ge=0, le=POOL_CAP)
     price_role_color: int | None = Field(default=None, ge=0)
     price_role_name: int | None = Field(default=None, ge=0)
     price_role_icon: int | None = Field(default=None, ge=0)
