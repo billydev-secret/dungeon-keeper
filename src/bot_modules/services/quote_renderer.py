@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import logging
 import re as _re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +46,47 @@ QUOTE_MAX_CHARS = 280
 
 # Matches Discord custom emoji tokens: <:name:id> and <a:name:id>
 _DISCORD_EMOJI_RE = _re.compile(r'<a?:[^:]+:(\d+)>')
+
+
+def _draw_text_layers(
+    bg, draw, layers, text: str, *, font, stroke_width: int = 0
+) -> None:
+    """Draw ``text`` once per ``(xy, fill, stroke_fill)`` layer, emoji in colour.
+
+    Callers pass a shadow layer then a foreground layer. pilmoji fetches emoji
+    over HTTP, so a network blip would otherwise take out the whole card: on any
+    failure this degrades to PIL's own text, which draws emoji as tofu but still
+    renders the name. Re-drawing a layer pilmoji already got to is harmless —
+    same string, same coordinates, same fill.
+    """
+    if _HAS_PILMOJI:
+        try:
+            with _Pilmoji(bg, source=_EmojiSource) as pm:  # type: ignore[misc]
+                for xy, fill, stroke_fill in layers:
+                    pm.text(
+                        xy, text, font=font, fill=fill,
+                        stroke_width=stroke_width, stroke_fill=stroke_fill,
+                    )
+            return
+        except Exception:
+            log.exception("quote_renderer: emoji text fell back to plain PIL")
+    for xy, fill, stroke_fill in layers:
+        draw.text(
+            xy, text, font=font, fill=fill,
+            stroke_width=stroke_width, stroke_fill=stroke_fill,
+        )
+
+
+def normalize_display_name(name: str) -> str:
+    """Fold stylised Unicode letterforms in a display name back to plain letters.
+
+    Discord names lean on Mathematical Alphanumeric Symbols and fullwidth forms
+    (𝓟𝓻𝓲𝓷𝓬𝓮𝓼𝓼 𝓡𝓪𝓬𝓱𝓮𝓵 → Princess Rachel). None of the bundled TTFs carry those
+    codepoints, so without this the whole name draws as tofu boxes. NFKC maps
+    them to their compatibility equivalents; ordinary names are unchanged, and
+    emoji have no decomposition so they survive for pilmoji to draw.
+    """
+    return unicodedata.normalize("NFKC", name)
 
 
 # ── Theme definition ──────────────────────────────────────────────────────────
@@ -671,6 +713,10 @@ def render_quote_card(
     if len(text) > QUOTE_MAX_CHARS:
         text = text[:QUOTE_MAX_CHARS - 1] + "…"
 
+    # Fold stylised letterforms once, up front: author_name feeds both the
+    # attribution line and the no-pfp header.
+    author_name = normalize_display_name(author_name)
+
     # Blurred background — when there's a left-side pfp, push the face left so it
     # doesn't sit under the text column; with no pfp keep the image centred.
     _no_pfp = pfp_shape == "none"
@@ -974,16 +1020,24 @@ def render_quote_card(
         # tinted with the border's dominant colour so the title echoes the frame.
         if _header_text:
             _hdr_color = dominant_border_color(border_style or BORDERS["golden_poppy"])
-            _hb2 = draw.textbbox((0, 0), _header_text, font=header_font, stroke_width=_header_stroke)
-            _hx = (width - int(_hb2[2] - _hb2[0])) // 2
-            draw.text(
-                (_hx + 2, _content_top + 2), _header_text, font=header_font,
-                fill=(0, 0, 0), stroke_width=_header_stroke, stroke_fill=(0, 0, 0),
-            )
-            draw.text(
-                (_hx, _content_top), _header_text, font=header_font,
-                fill=_hdr_color, stroke_width=_header_stroke,
-                stroke_fill=_hdr_color,
+            if _HAS_PILMOJI:
+                # getsize takes no stroke_width; add it back so an emoji-bearing
+                # header centres on the same width pilmoji actually draws.
+                _hw = _emoji_getsize(_header_text, font=header_font)[0]  # type: ignore[misc]
+                _hw += _header_stroke * 2
+            else:
+                _hb2 = draw.textbbox(
+                    (0, 0), _header_text, font=header_font, stroke_width=_header_stroke
+                )
+                _hw = int(_hb2[2] - _hb2[0])
+            _hx = (width - _hw) // 2
+            _draw_text_layers(
+                bg, draw,
+                [
+                    ((_hx + 2, _content_top + 2), (0, 0, 0), (0, 0, 0)),
+                    ((_hx, _content_top), _hdr_color, _hdr_color),
+                ],
+                _header_text, font=header_font, stroke_width=_header_stroke,
             )
     else:
         _square = pfp_shape == "square"
@@ -1029,9 +1083,14 @@ def render_quote_card(
         # Author name centred below pfp
         if author_name:
             attr_text = f"— {author_name}"
-            attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
-            attr_w = attr_bbox[2] - attr_bbox[0]
-            attr_h = attr_bbox[3] - attr_bbox[1]
+            if _HAS_PILMOJI:
+                # Measure through pilmoji so an emoji in the name contributes its
+                # drawn width — textbbox would only count the tofu box it replaces.
+                attr_w, attr_h = _emoji_getsize(attr_text, font=attr_font)  # type: ignore[misc]
+            else:
+                attr_bbox = draw.textbbox((0, 0), attr_text, font=attr_font)
+                attr_w = attr_bbox[2] - attr_bbox[0]
+                attr_h = attr_bbox[3] - attr_bbox[1]
             # Centre under the (left-shifted) pfp, but never let a long name slide
             # behind the left gold frame.
             ax = max(left_margin, pfp_cx - attr_w // 2)
@@ -1041,8 +1100,14 @@ def render_quote_card(
                 ay = min(ay, _mask_opening.bot - attr_h - 4)
                 _ry = min(max(int(ay), _mask_opening.top), _mask_opening.bot)
                 ax = max(_mask_opening.left[_ry] + 4, pfp_cx - attr_w // 2)
-            draw.text((ax + 1, ay + 1), attr_text, font=attr_font, fill=(0, 0, 0))
-            draw.text((ax, ay), attr_text, font=attr_font, fill=theme.attribution_color)
+            _draw_text_layers(
+                bg, draw,
+                [
+                    ((ax + 1, ay + 1), (0, 0, 0), None),
+                    ((ax, ay), theme.attribution_color, None),
+                ],
+                attr_text, font=attr_font,
+            )
 
     # Apply rounded-rect transparency — pixels outside the card shape go fully transparent
     out = bg.convert("RGBA")
