@@ -140,6 +140,24 @@ def test_settings_roundtrip(authed_client, fake_ctx):
     assert settings.enabled is False
 
 
+def test_settings_accepts_string_snowflakes_exactly(authed_client, fake_ctx):
+    """The panel sends ids as JSON strings — a JS Number would round a
+    19-digit snowflake's tail off (this actually happened: …549 became …500).
+    Pydantic must coerce the string to the exact int."""
+    body = {
+        "enabled": True,
+        "role_id": "1527441929904717834",
+        "channel_id": "1527184897775763549",
+        "reward": 15,
+        "daily_cap": 50,
+    }
+    assert authed_client.put("/api/qa/settings", json=body).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        settings = qa_service.load_qa_settings(conn, GID)
+    assert settings.role_id == 1527441929904717834
+    assert settings.channel_id == 1527184897775763549
+
+
 def test_settings_rejects_bad_payloads(authed_client):
     good = {"enabled": True, "role_id": 0, "channel_id": 0, "reward": 15, "daily_cap": 4}
     assert authed_client.put(

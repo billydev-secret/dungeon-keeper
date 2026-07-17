@@ -341,6 +341,44 @@ def test_role_checklist_dump_stays_plain_text(mod, monkeypatch, tmp_path) -> Non
     assert not [u for m, u, _ in calls if m == "PUT"]  # reactions removed here too
 
 
+def set_configured_channel(db: Path, channel_id: str) -> None:
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, "
+        "key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (guild_id, key))"
+    )
+    conn.execute(
+        "INSERT INTO config (guild_id, key, value) VALUES (1, 'qa_channel_id', ?)",
+        (channel_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_post_commit_honours_configured_card_channel(mod, monkeypatch, qa_db) -> None:
+    """The dashboard's qa_channel_id must be enforced, not a dead setting."""
+    set_configured_channel(qa_db, "555000555000555549")
+    calls, _ = wire(mod, monkeypatch, qa_db)
+
+    mod.post_commit("x", dry_run=False)
+
+    posts = [
+        u for m, u, p in calls if m == "POST" and p is not None and "embeds" in p
+    ]
+    assert posts == [f"{mod.API}/channels/555000555000555549/messages"]
+    (row,) = rows(qa_db)
+    assert row["channel_id"] == 555000555000555549  # written back verbatim
+
+
+def test_unset_channel_setting_falls_back_to_hardcoded(mod, monkeypatch, qa_db) -> None:
+    """No config table at all (the tmp DB default) → the DOCS channel."""
+    calls, _ = wire(mod, monkeypatch, qa_db)
+
+    mod.post_commit("x", dry_run=False)
+
+    assert message_posts(mod, calls)  # posted to DOCS["testing-queue"]
+
+
 def test_every_chunk_fits_discords_limit(mod) -> None:
     """The real docs, chunked -- a message over 2000 chars is rejected outright."""
     for name in mod.DOCS:

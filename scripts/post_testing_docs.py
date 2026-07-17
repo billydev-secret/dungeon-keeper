@@ -153,6 +153,27 @@ def qa_connect() -> sqlite3.Connection | None:
     return conn
 
 
+def qa_card_channel(conn: sqlite3.Connection | None) -> str:
+    """The channel cards post to: the dashboard's qa_channel_id when set.
+
+    The knob lives in the config KV (written by the stage-3 panel) and must
+    be honoured here or it's a dead setting. Falls back to the hardcoded
+    #testing-queue id when unset, zero, unreadable, or pre-077 — the same
+    degraded installs that fall back to plain text.
+    """
+    default = DOCS["testing-queue"][1]
+    if conn is None:
+        return default
+    try:
+        row = conn.execute(
+            "SELECT value FROM config WHERE key = 'qa_channel_id' "
+            "AND CAST(value AS INTEGER) > 0 LIMIT 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return default
+    return str(row[0]) if row else default
+
+
 _GUILD_IDS: dict[str, int] = {}
 
 
@@ -515,6 +536,7 @@ def post_commit(sha: str, *, dry_run: bool) -> None:
     try:
         tok = token()
         conn = qa_connect()
+        channel = qa_card_channel(conn)
         guild_id = channel_guild_id(channel, tok) if conn is not None else 0
         if conn is not None and not guild_id:
             print(
@@ -611,7 +633,8 @@ def main() -> None:
             else set()
         )
         conn = qa_connect() if pending else None
-        guild_id = channel_guild_id(channel, tok) if conn is not None else 0
+        card_channel = qa_card_channel(conn)
+        guild_id = channel_guild_id(card_channel, tok) if conn is not None else 0
         if conn is not None and not guild_id:
             conn.close()
             conn = None
@@ -633,7 +656,9 @@ def main() -> None:
                 and entry_key(block) in pending
             )
             if as_card:
-                post_entry_card(conn, guild_id, channel, tok, block, head_sha, None)
+                post_entry_card(
+                    conn, guild_id, card_channel, tok, block, head_sha, None
+                )
                 sent += 1
             else:
                 for part in pack(block):

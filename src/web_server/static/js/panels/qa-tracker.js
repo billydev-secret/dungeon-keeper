@@ -301,8 +301,10 @@ export function mount(container) {
       try {
         await apiPut("/api/qa/settings", {
           enabled: fd.get("enabled") !== null,
-          role_id: parseInt(rolePicker.getValue(), 10) || 0,
-          channel_id: parseInt(channelPicker.getValue(), 10) || 0,
+          // Snowflakes exceed Number.MAX_SAFE_INTEGER — they must travel as
+          // strings or the low digits round off (Pydantic coerces server-side).
+          role_id: rolePicker.getValue() || "0",
+          channel_id: channelPicker.getValue() || "0",
           reward: parseInt(fd.get("reward"), 10) || 0,
           daily_cap: parseInt(fd.get("daily_cap"), 10) || 0,
         });
