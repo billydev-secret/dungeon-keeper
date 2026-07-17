@@ -241,6 +241,7 @@ const SECTIONS = [
       { id: "help-owner",    label: "Developer Tools", module: "./panels/help.js" },
       { id: "live-log",      label: "Live Log",        module: "./panels/live-log.js" },
       { id: "system-stats",  label: "System Stats",    module: "./panels/system-stats.js" },
+      { id: "qa-tracker",    label: "QA Tracker",      module: "./panels/qa-tracker.js" },
     ],
   },
 ];

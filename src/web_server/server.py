@@ -257,6 +257,10 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(chat_revive_routes.router, prefix="/api", tags=["chat-revive"])
 
+    from web_server.routes import qa as qa_routes
+
+    app.include_router(qa_routes.router, prefix="/api", tags=["qa"])
+
     # ── Health dashboard routes ────────────────────────────────────
     from web_server.routes import health as health_routes
 

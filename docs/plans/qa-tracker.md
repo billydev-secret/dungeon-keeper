@@ -26,7 +26,7 @@ button).
 ## Layout
 
 ```
-src/migrations/076_qa_tracker.sql            # qa_tests, qa_verdicts, settings defaults
+src/migrations/077_qa_tracker.sql            # qa_tests, qa_verdicts, settings defaults
 src/bot_modules/services/qa_service.py       # CRUD, settings loader, status math,
                                              #   payout (apply_credit) + void (apply_debit)
 src/bot_modules/cogs/qa_cog.py               # DynamicItem buttons, fail modal, thread notes
@@ -36,7 +36,7 @@ src/web_server/static/js/panels/qa-tracker.js  # status board + config (model: m
 tests/test_qa_service.py  tests/test_qa_cog.py  tests/web/test_qa_routes.py
 ```
 
-## Data model (migration `076_qa_tracker.sql`)
+## Data model (migration `077_qa_tracker.sql`)
 
 ```sql
 qa_tests(
@@ -148,9 +148,10 @@ before the hook starts emitting cards.
 
 ## Dashboard (`routes/qa.py` + `panels/qa-tracker.js`)
 
-New admin-only nav item under **Dev** (`SECTIONS` in `app.js`):
-`{ id: "qa-tracker", label: "QA Tracker", module: "./panels/qa-tracker.js",
-adminOnly: true }`. Backend `require_perms({"admin"})`; UI copied from
+New nav item under **Dev** (`SECTIONS` in `app.js`):
+`{ id: "qa-tracker", label: "QA Tracker", module: "./panels/qa-tracker.js" }`
+— the Dev section itself is `perms: ["admin"]`-gated, so the item needs no
+flag of its own. Backend `require_perms({"admin"})`; UI copied from
 `mod-tickets.js` (filter strip + status chips + `data-table`).
 
 - **Board**: tests filterable by status; each row expands to its verdicts
@@ -179,7 +180,7 @@ adminOnly: true }`. Backend `require_perms({"admin"})`; UI copied from
 
 ## Stages
 
-**Stage 0 — schema + service.** Migration 076; `qa_service.py` (settings
+**Stage 0 — schema + service.** Migration 077; `qa_service.py` (settings
 loader, CRUD, status math as pure functions, `record_verdict` with
 pay-on-insert + cap, `void_verdict` with clawback); `qa_reward` into
 `FAUCET_GROUPS`. Unit tests incl. the pay/no-pay race matrix.
@@ -193,8 +194,12 @@ dump doubles as the card backfill; reaction path retired entirely. Tests
 extend `test_post_testing_docs.py`. Live-test = this stage's own queue entry
 arriving as a working card.
 
-**Stage 3 — dashboard.** `routes/qa.py`, `qa-tracker.js`, nav entry; board,
-void, config, top-testers. Route tests.
+**Stage 3 — dashboard** — ✅ shipped. `routes/qa.py` (admin-gated board with
+folded verdicts + jump links, void with clawback, archive, settings PUT,
+top-testers), `qa-tracker.js` panel, nav entry under **Dev**. Void/archive
+re-render the Discord card best-effort through the in-process `ctx.bot`
+(archive strips the buttons); a card failure never rolls back the DB. Route
+tests in `tests/web/test_qa_routes.py`.
 
 **Stage 4 — polish (optional).** `qa_done_report.py`; archive sweep for
 long-verified cards; revisit bounty idea with real usage data.

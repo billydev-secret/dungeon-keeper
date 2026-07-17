@@ -1332,6 +1332,31 @@ get the ✅ reaction (the buttons replace it).
 - [ ] As a non-admin **without** the crew role, click any button → friendly
       ephemeral rejection ("join the QA crew"), nothing recorded.
 
+### QA Tracker (stage 3) — dashboard board, void, config  (this commit)
+
+The admin oversight surface lands on the dashboard: a **QA Tracker** page
+under **Dev** with the card board (expandable verdicts, void with clawback,
+archive, jump links), a top-testers scoreboard, and the config knobs the cog
+reads live (crew role, cards channel, reward, daily cap, enabled). Void and
+archive also re-render the Discord card immediately through the in-process
+bot; a Discord hiccup leaves the DB change intact and the card self-heals on
+the next button click.
+
+- [ ] The **QA Tracker** page appears under **Dev** for an admin and is
+      absent (nav and API both) for a mod-only account.
+- [ ] The board lists the live cards from `#testing-queue` with the correct
+      status chips (colours matching the embeds); clicking a row expands its
+      verdicts, and "Open in Discord" jumps to the card.
+- [ ] Config saves (change the crew role) and the cog honours the new role on
+      the next button click **without a restart**.
+- [ ] Void a paid verdict → toast reports the clawed amount, the tester's
+      `/bank` balance drops, and the Discord card re-renders (status/tally
+      update, buttons stay).
+- [ ] Archive a test → the card's verdict buttons disappear and the embed
+      dims to the archived grey.
+- [ ] Top testers shows the verdict counts and coins earned for everyone
+      who's clicked so far.
+
 ---
 
 ## Done
