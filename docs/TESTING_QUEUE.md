@@ -9,6 +9,27 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Emoji Stealer — steal custom emoji from reactions  (PENDING-HASH)
+
+The **Steal Emoji** right-click menu now also pulls custom emoji that were
+added to the message as **reactions**, not just ones written in its text. No new
+context menu (we're at Discord's 5-menu cap) and no reaction listener — the
+existing menu already receives the message, and its `.reactions` come with it.
+
+**Worth knowing while testing:** Unicode reactions (😀) are skipped — only
+custom emoji are stealable. An emoji that's both in the text and reacted is
+offered once. The picker/upload path is unchanged; only the set of emoji fed
+into it grew.
+
+- [ ] React to a message with a **custom emoji from another server**, then
+      right-click it → **Apps → Steal Emoji**. The reaction emoji is offered
+      and uploads.
+- [ ] A message with a custom emoji in its **text** and a *different* custom
+      emoji as a **reaction** → both appear in the picker.
+- [ ] React with a plain **Unicode** emoji (😀) on a text-only message →
+      "No custom emojis found in that message or its reactions."
+- [ ] Same custom emoji in text **and** as a reaction → offered only once.
+
 ### Testing-queue posts get a clickable ✅ reaction  (this commit)
 
 Each entry the mirror posts into `#testing-queue` now arrives with a ✅ reaction
