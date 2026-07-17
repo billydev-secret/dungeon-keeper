@@ -330,6 +330,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         guild: discord.Guild,
         *,
         imposed_nick: str | None = None,
+        original_name: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner = guild.get_member(game.winner_id)  # type: ignore[arg-type]
@@ -374,7 +375,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
         if imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
         elif game.stakes_text is None:

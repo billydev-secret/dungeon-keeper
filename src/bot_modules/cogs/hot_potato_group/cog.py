@@ -252,6 +252,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         guild: discord.Guild,
         *,
         imposed_nick: str | None = None,
+        original_name: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         def name(uid: int | None) -> str:
@@ -288,7 +289,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         if imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
         elif game.stakes_text is None:
