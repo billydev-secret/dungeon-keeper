@@ -73,6 +73,7 @@ log = logging.getLogger(__name__)
 DM_REQUEST_PANEL_CUSTOM_ID = "dm_request:open_modal"
 DM_CONSENT_ACCEPT_CUSTOM_ID = "dm_consent:accept"
 DM_CONSENT_DENY_CUSTOM_ID = "dm_consent:deny"
+DM_CONSENT_DENY_REPLY_CUSTOM_ID = "dm_consent:deny_reply"
 
 REQUEST_TIMEOUT_SECONDS = 24 * 60 * 60
 REQUEST_TIMEOUT_LABEL = "24 hours"
@@ -118,6 +119,50 @@ class AskConsentView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         await self._handle_click(interaction, accepted=False)
+
+    @discord.ui.button(
+        label="Deny with reply",
+        style=discord.ButtonStyle.secondary,
+        custom_id=DM_CONSENT_DENY_REPLY_CUSTOM_ID,
+    )
+    async def deny_with_reply(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await self._open_deny_reply_modal(interaction)
+
+    async def _open_deny_reply_modal(
+        self, interaction: discord.Interaction
+    ) -> None:
+        """Validate the click, then open a modal for the denier's note.
+
+        Resolution/validation here must not consume the interaction response
+        (``send_modal`` needs an un-responded interaction), so it only does DB
+        reads before either erroring out or sending the modal.
+        """
+        message = interaction.message
+        if message is None:
+            await interaction.response.send_message(
+                "Couldn't find the request for this button.", ephemeral=True
+            )
+            return
+
+        record = load_request_by_message_id(self.cog.ctx.db_path, message.id)
+        if record is None:
+            try:
+                await interaction.response.edit_message(
+                    embed=build_stale_request_embed(), view=None
+                )
+            except (discord.NotFound, discord.HTTPException):
+                pass
+            return
+
+        if interaction.user.id != record["target_id"]:
+            await interaction.response.send_message(
+                "This request isn't for you.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_modal(DmDenyReplyModal(self, message))
 
     async def _handle_click(
         self, interaction: discord.Interaction, *, accepted: bool
@@ -264,7 +309,39 @@ class AskConsentView(discord.ui.View):
         type_label = request_type_label(req_type)
         deny_embed = build_denial_embed_for_view(type_label=type_label, reason=reason)
 
+        # Edit first: if this raises we bail before touching the DB, leaving the
+        # request pending rather than half-resolved.
         await interaction.response.edit_message(embed=deny_embed, view=None)
+
+        await self._finalize_deny(
+            guild=guild,
+            requester=requester,
+            target=target,
+            requester_id=requester_id,
+            target_id=target_id,
+            req_type=req_type,
+            reason=reason,
+        )
+
+    async def _finalize_deny(
+        self,
+        *,
+        guild: discord.Guild,
+        requester: Optional[discord.Member],
+        target: Optional[discord.Member],
+        requester_id: int,
+        target_id: int,
+        req_type: str,
+        reason: str,
+        reply: str = "",
+    ) -> None:
+        """Drop the request, notify the requester, and audit the denial.
+
+        Shared by the plain Deny button and the "Deny with reply" modal; the
+        caller is responsible for having already updated the target's own DM
+        message. ``reply`` is the denier's optional note to the requester.
+        """
+        type_label = request_type_label(req_type)
 
         self.cog._drop_request_from_memory(guild.id, requester_id, target_id)
         remove_request(self.cog.ctx.db_path, guild.id, requester_id, target_id)
@@ -276,13 +353,14 @@ class AskConsentView(discord.ui.View):
                 guild_name=guild.name,
                 type_label=type_label,
                 reason=reason,
+                reply=reply,
             )
             await _safe_dm(requester, embed=req_embed)
 
         write_audit_log(
             self.cog.ctx.db_path, guild.id, "request_denied",
             actor_id=target_id, user_a_id=requester_id, user_b_id=target_id,
-            notes=f"type={req_type}",
+            notes=f"type={req_type}" + ("; replied" if reply else ""),
         )
         requester_name = display_name_for(requester, requester_id)
         target_name = display_name_for(target, target_id)
@@ -372,6 +450,85 @@ class DmRequestReasonModal(discord.ui.Modal, title="DM Request"):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self.cog._submit_dm_request(
             interaction, self.target, self.request_type, str(self.reason.value or "").strip()
+        )
+
+
+class DmDenyReplyModal(discord.ui.Modal, title="Decline with a reply"):
+    """Lets the target deny a request while sending a short note to the requester.
+
+    Opened from the "Deny with reply" button. Carries the source DM message so
+    the bot can edit it directly on submit (a version-independent alternative to
+    editing via the modal-submit interaction), and re-resolves the request by
+    that message id so a request answered in the meantime resolves as stale.
+    """
+
+    reply = discord.ui.TextInput(
+        label="Message to the requester",
+        style=discord.TextStyle.paragraph,
+        required=True,
+        max_length=MAX_REASON_LENGTH,
+        placeholder="Add a short note to send back with your decline…",
+    )
+
+    def __init__(self, view: AskConsentView, message: discord.Message) -> None:
+        super().__init__()
+        self._view = view
+        self._message = message
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        reply = str(self.reply.value or "").strip()
+        view = self._view
+
+        record = load_request_by_message_id(view.cog.ctx.db_path, self._message.id)
+        if record is None:
+            await interaction.response.send_message(
+                "That request is no longer pending.", ephemeral=True
+            )
+            return
+
+        guild = view.cog.bot.get_guild(record["guild_id"])
+        if guild is None:
+            await interaction.response.send_message(
+                "That server is no longer available.", ephemeral=True
+            )
+            return
+
+        requester_id = record["requester_id"]
+        target_id = record["target_id"]
+        req_type = record["request_type"]
+        reason = record["reason"]
+        requester = guild.get_member(requester_id)
+        target = guild.get_member(target_id)
+
+        deny_embed = build_denial_embed_for_view(
+            type_label=request_type_label(req_type), reason=reason, reply=reply
+        )
+        # Edit the bot's own DM first: on failure, bail before the DB delete so
+        # the request stays pending (mirrors the plain-Deny fail-safe ordering).
+        try:
+            await self._message.edit(embed=deny_embed, view=None)
+        except discord.HTTPException:
+            log.warning("dm_perms: failed to edit source DM on deny-with-reply")
+            await interaction.response.send_message(
+                "Something went wrong updating the request — nothing was changed, "
+                "please try again.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_message(
+            "Declined — your reply was sent to them.", ephemeral=True
+        )
+
+        await view._finalize_deny(
+            guild=guild,
+            requester=requester,
+            target=target,
+            requester_id=requester_id,
+            target_id=target_id,
+            req_type=req_type,
+            reason=reason,
+            reply=reply,
         )
 
 

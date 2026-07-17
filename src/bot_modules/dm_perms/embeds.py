@@ -86,8 +86,14 @@ def build_acceptance_embed(
     return embed
 
 
-def build_denial_embed_for_view(*, type_label: str, reason: str) -> discord.Embed:
-    """Embed that replaces the buttons on the target's DM when they deny."""
+def build_denial_embed_for_view(
+    *, type_label: str, reason: str, reply: str = ""
+) -> discord.Embed:
+    """Embed that replaces the buttons on the target's DM when they deny.
+
+    When the denier chose "Deny with reply", ``reply`` is echoed back so they
+    can see the note they sent to the requester.
+    """
     embed = discord.Embed(
         title="❌ Request declined",
         description="No worries — the request was turned down.",
@@ -95,6 +101,8 @@ def build_denial_embed_for_view(*, type_label: str, reason: str) -> discord.Embe
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
+    if reply:
+        embed.add_field(name="Your reply", value=safe_field_text(reply), inline=False)
     return embed
 
 
@@ -104,11 +112,13 @@ def build_denial_embed_for_requester(
     guild_name: str,
     type_label: str,
     reason: str,
+    reply: str = "",
 ) -> discord.Embed:
     """Embed DM'd back to the requester when their request is denied.
 
     ``type_label`` is the human-readable label (e.g. "Direct Message");
-    the description lowercases it for the natural-language sentence.
+    the description lowercases it for the natural-language sentence. When the
+    denier included a ``reply``, it is shown as a message from them.
     """
     embed = discord.Embed(
         title="❌ Request declined",
@@ -121,6 +131,12 @@ def build_denial_embed_for_requester(
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
+    if reply:
+        embed.add_field(
+            name=f"Reply from {target_display_name}",
+            value=safe_field_text(reply),
+            inline=False,
+        )
     return embed
 
 
