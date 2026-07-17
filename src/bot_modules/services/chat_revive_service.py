@@ -60,6 +60,8 @@ class GuildConfig:
     daily_budget: int = 3
     guild_gap_minutes: int = 90
     flourish_enabled: bool = True
+    ping_max_per_day: int = 3
+    ping_cooldown_minutes: int = 60
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,8 @@ def get_guild_config(conn: sqlite3.Connection, guild_id: int) -> GuildConfig:
         daily_budget=row["daily_budget"],
         guild_gap_minutes=row["guild_gap_minutes"],
         flourish_enabled=bool(row["flourish_enabled"]),
+        ping_max_per_day=row["ping_max_per_day"],
+        ping_cooldown_minutes=row["ping_cooldown_minutes"],
     )
 
 
@@ -97,14 +101,17 @@ def save_guild_config(conn: sqlite3.Connection, cfg: GuildConfig) -> None:
         """
         INSERT INTO revive_guild_config
             (guild_id, enabled, role_id, quiet_start, quiet_end,
-             daily_budget, guild_gap_minutes, flourish_enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             daily_budget, guild_gap_minutes, flourish_enabled,
+             ping_max_per_day, ping_cooldown_minutes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id) DO UPDATE SET
             enabled=excluded.enabled, role_id=excluded.role_id,
             quiet_start=excluded.quiet_start, quiet_end=excluded.quiet_end,
             daily_budget=excluded.daily_budget,
             guild_gap_minutes=excluded.guild_gap_minutes,
-            flourish_enabled=excluded.flourish_enabled
+            flourish_enabled=excluded.flourish_enabled,
+            ping_max_per_day=excluded.ping_max_per_day,
+            ping_cooldown_minutes=excluded.ping_cooldown_minutes
         """,
         (
             cfg.guild_id,
@@ -115,6 +122,8 @@ def save_guild_config(conn: sqlite3.Connection, cfg: GuildConfig) -> None:
             cfg.daily_budget,
             cfg.guild_gap_minutes,
             int(cfg.flourish_enabled),
+            cfg.ping_max_per_day,
+            cfg.ping_cooldown_minutes,
         ),
     )
 
@@ -432,6 +441,7 @@ class FrequencyState:
     last_guild_revive_ts: float | None
     last_channel_revive_ts: float | None
     last_ping_ts: float | None
+    pings_today: int
 
 
 def frequency_state(
@@ -461,11 +471,17 @@ def frequency_state(
         "WHERE guild_id = ? AND channel_id = ? AND pinged = 1",
         (guild_id, channel_id),
     ).fetchone()["ts"]
+    pings_today = conn.execute(
+        "SELECT COUNT(*) AS n FROM revive_events "
+        "WHERE guild_id = ? AND channel_id = ? AND local_day = ? AND pinged = 1",
+        (guild_id, channel_id, today),
+    ).fetchone()["n"]
     return FrequencyState(
         revives_today=revives_today,
         last_guild_revive_ts=last_guild,
         last_channel_revive_ts=last_channel,
         last_ping_ts=last_ping,
+        pings_today=pings_today,
     )
 
 

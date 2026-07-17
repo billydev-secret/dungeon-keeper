@@ -128,6 +128,12 @@ function renderSettings(container, overview) {
       <label>Breathing room (minutes)
         <input data-f="guild_gap_minutes" type="number" min="10" max="720" value="${cfg.guild_gap_minutes}">
       </label>
+      <label>Max pings / channel / day
+        <input data-f="ping_max_per_day" type="number" min="1" max="10" value="${cfg.ping_max_per_day}">
+      </label>
+      <label>Ping cooldown (minutes)
+        <input data-f="ping_cooldown_minutes" type="number" min="0" max="1440" value="${cfg.ping_cooldown_minutes}">
+      </label>
       <label>Flourish line
         <select data-f="flourish_enabled"><option value="1" ${cfg.flourish_enabled ? "selected" : ""}>on ("stirring the coals…")</option><option value="0" ${cfg.flourish_enabled ? "" : "selected"}>off (bone-dry)</option></select>
       </label>
@@ -149,6 +155,8 @@ function renderSettings(container, overview) {
       quiet_end: Number(get("quiet_end")),
       daily_budget: Number(get("daily_budget")),
       guild_gap_minutes: Number(get("guild_gap_minutes")),
+      ping_max_per_day: Number(get("ping_max_per_day")),
+      ping_cooldown_minutes: Number(get("ping_cooldown_minutes")),
       flourish_enabled: get("flourish_enabled") === "1",
     };
     const status = container.querySelector("[data-settings-status]");

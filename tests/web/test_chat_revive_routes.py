@@ -65,6 +65,8 @@ def test_overview_defaults(open_client):
     data = r.json()
     assert data["config"]["enabled"] is False
     assert data["config"]["daily_budget"] == 3
+    assert data["config"]["ping_max_per_day"] == 3
+    assert data["config"]["ping_cooldown_minutes"] == 60
     assert data["channels"] == []
     assert data["bank_size"] == 0
     assert "general" in data["categories"]
@@ -73,9 +75,13 @@ def test_overview_defaults(open_client):
 def test_enable_seeds_starter_pack_once(open_client):
     first = _enable(open_client)
     assert first["seeded"] == len(STARTER_QUESTIONS)
-    second = _enable(open_client, daily_budget=2)
+    second = _enable(
+        open_client, daily_budget=2, ping_max_per_day=5, ping_cooldown_minutes=30
+    )
     assert second["seeded"] == 0
     assert second["config"]["daily_budget"] == 2
+    assert second["config"]["ping_max_per_day"] == 5
+    assert second["config"]["ping_cooldown_minutes"] == 30
     overview = open_client.get("/api/chat-revive/overview").json()
     assert overview["bank_size"] == len(STARTER_QUESTIONS)
 

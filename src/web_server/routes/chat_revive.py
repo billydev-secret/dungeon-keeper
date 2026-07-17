@@ -65,6 +65,8 @@ class GuildConfigBody(BaseModel):
     daily_budget: int = Field(3, ge=1, le=10)
     guild_gap_minutes: int = Field(90, ge=10, le=720)
     flourish_enabled: bool = True
+    ping_max_per_day: int = Field(3, ge=1, le=10)
+    ping_cooldown_minutes: int = Field(60, ge=0, le=1440)
 
 
 class ChannelBody(BaseModel):
@@ -175,6 +177,8 @@ async def put_config(
                 daily_budget=body.daily_budget,
                 guild_gap_minutes=body.guild_gap_minutes,
                 flourish_enabled=body.flourish_enabled,
+                ping_max_per_day=body.ping_max_per_day,
+                ping_cooldown_minutes=body.ping_cooldown_minutes,
             )
             save_guild_config(conn, cfg)
             seeded = seed_starter_pack(conn, guild_id, now) if body.enabled else 0
@@ -376,7 +380,13 @@ async def check(request: Request, channel_id: int, _: AuthenticatedUser = _MOD):
         ev.channel_cfg
         and ev.channel_cfg.ping_enabled
         and role_id
-        and should_ping(ev.freq.last_ping_ts, now)
+        and should_ping(
+            ev.freq.last_ping_ts,
+            now,
+            ev.freq.pings_today,
+            max_per_day=ev.guild_cfg.ping_max_per_day,
+            cooldown_seconds=ev.guild_cfg.ping_cooldown_minutes * 60,
+        )
     )
     return {
         "would_fire": v.fire,
@@ -431,7 +441,13 @@ async def fire(request: Request, body: ChannelActionBody, _: AuthenticatedUser =
         ev.channel_cfg
         and ev.channel_cfg.ping_enabled
         and role_id
-        and should_ping(ev.freq.last_ping_ts, now)
+        and should_ping(
+            ev.freq.last_ping_ts,
+            now,
+            ev.freq.pings_today,
+            max_per_day=ev.guild_cfg.ping_max_per_day,
+            cooldown_seconds=ev.guild_cfg.ping_cooldown_minutes * 60,
+        )
     )
     flourish = random.choice(FLOURISHES) if ev.guild_cfg.flourish_enabled else None
     try:

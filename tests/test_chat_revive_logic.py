@@ -259,10 +259,30 @@ def test_no_profiles_at_all_refuses_in_rhythm_mode():
 # --- pings, weighting, rendering -----------------------------------------
 
 
-def test_should_ping_24h_scarcity():
-    assert should_ping(None, NOW)
-    assert not should_ping(NOW - 1000, NOW)
-    assert should_ping(NOW - 90000, NOW)
+def _ping(last, now, today, *, cap=3, cooldown_min=60):
+    return should_ping(
+        last, now, today, max_per_day=cap, cooldown_seconds=cooldown_min * 60
+    )
+
+
+def test_should_ping_cooldown():
+    # cooldown is supplied in seconds; a 60-minute dial blocks at 59 min, frees at 61.
+    assert _ping(None, NOW, 0)  # never pinged → allowed
+    assert not _ping(NOW - 59 * 60, NOW, 0)  # inside the 60-min cooldown
+    assert _ping(NOW - 61 * 60, NOW, 0)  # cooldown elapsed
+
+
+def test_should_ping_daily_cap():
+    # The per-day cap wins even when the cooldown has long elapsed.
+    assert _ping(None, NOW, 2, cap=3)
+    assert not _ping(None, NOW, 3, cap=3)
+    assert not _ping(NOW - 90000, NOW, 3, cap=3)
+
+
+def test_should_ping_cooldown_zero_means_cap_only():
+    # A 0-minute cooldown lets consecutive revives ping until the cap is hit.
+    assert _ping(NOW - 1, NOW, 2, cap=3, cooldown_min=0)
+    assert not _ping(NOW - 1, NOW, 3, cap=3, cooldown_min=0)
 
 
 def test_question_weight_smoothing():

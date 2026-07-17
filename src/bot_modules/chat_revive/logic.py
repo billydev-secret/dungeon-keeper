@@ -32,7 +32,10 @@ ANTI_REPEAT_DAYS = 30
 FOLLOW_WINDOW_SECONDS = 1800.0
 SUCCESS_MIN_MSGS = 3
 SUCCESS_MIN_AUTHORS = 2
-PING_COOLDOWN_SECONDS = 86400.0
+# Defaults for the per-guild ping dials (revive_guild_config). Kept in sync
+# with migration 076 and the dashboard/route defaults.
+DEFAULT_PING_MAX_PER_DAY = 3
+DEFAULT_PING_COOLDOWN_MINUTES = 60
 
 FLOURISHES = (
     "*stirring the coals…*",
@@ -319,9 +322,20 @@ def decide(g: GateInputs) -> Verdict:
     )
 
 
-def should_ping(last_ping_ts: float | None, now_ts: float) -> bool:
-    """Ping scarcity: the role is tagged at most once per channel per 24h."""
-    return last_ping_ts is None or now_ts - last_ping_ts >= PING_COOLDOWN_SECONDS
+def should_ping(
+    last_ping_ts: float | None,
+    now_ts: float,
+    pings_today: int,
+    *,
+    max_per_day: int,
+    cooldown_seconds: float,
+) -> bool:
+    """Ping scarcity: at most `max_per_day` role-tags per channel per day, and
+    no two pings within `cooldown_seconds` of each other. Both dials are
+    per-guild (revive_guild_config); a cooldown of 0 means "cap only"."""
+    if pings_today >= max_per_day:
+        return False
+    return last_ping_ts is None or now_ts - last_ping_ts >= cooldown_seconds
 
 
 def question_weight(use_count: int, successes: int) -> float:

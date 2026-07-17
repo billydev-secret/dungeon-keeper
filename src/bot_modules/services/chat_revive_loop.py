@@ -206,7 +206,15 @@ async def consider_channel(
         return False
     role_id = cfg.role_id_override or ev.guild_cfg.role_id
     ping = bool(
-        cfg.ping_enabled and role_id and should_ping(ev.freq.last_ping_ts, now_ts)
+        cfg.ping_enabled
+        and role_id
+        and should_ping(
+            ev.freq.last_ping_ts,
+            now_ts,
+            ev.freq.pings_today,
+            max_per_day=ev.guild_cfg.ping_max_per_day,
+            cooldown_seconds=ev.guild_cfg.ping_cooldown_minutes * 60,
+        )
     )
     flourish = random.choice(FLOURISHES) if ev.guild_cfg.flourish_enabled else None
     try:

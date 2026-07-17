@@ -72,6 +72,8 @@ def test_guild_config_defaults(db):
     assert cfg == GuildConfig(guild_id=GID)
     assert not cfg.enabled
     assert cfg.daily_budget == 3
+    assert cfg.ping_max_per_day == 3
+    assert cfg.ping_cooldown_minutes == 60
 
 
 def test_guild_config_roundtrip(db):
@@ -84,6 +86,8 @@ def test_guild_config_roundtrip(db):
         daily_budget=2,
         guild_gap_minutes=120,
         flourish_enabled=False,
+        ping_max_per_day=5,
+        ping_cooldown_minutes=30,
     )
     with open_db(db) as conn:
         save_guild_config(conn, cfg)
