@@ -1586,3 +1586,28 @@ def test_build_knock_request_embed_includes_requester_owner_channel():
     assert "<@2>" in embed.description
     assert "Game Night" in embed.description
     assert embed.color == discord.Color.gold()
+
+
+def test_build_knock_request_embed_names_the_guild_for_dm_context():
+    """In a DM the embed is out of its guild's context, so it must name the
+    server — an owner can have a same-named channel in several of them."""
+    embed = build_knock_request_embed(
+        requester_mention="<@1>",
+        owner_mention="<@2>",
+        channel_name="General",
+        guild_name="The Golden Meadow",
+    )
+    assert embed.description is not None
+    assert "General" in embed.description
+    assert "The Golden Meadow" in embed.description
+
+
+def test_build_knock_request_embed_omits_guild_when_not_given():
+    """Backwards-compatible: no guild_name → no dangling 'in' clause."""
+    embed = build_knock_request_embed(
+        requester_mention="<@1>",
+        owner_mention="<@2>",
+        channel_name="General",
+    )
+    assert embed.description is not None
+    assert " in **" not in embed.description
