@@ -197,6 +197,14 @@ def set_test_message(
     )
 
 
+def set_test_thread(conn: sqlite3.Connection, test_id: int, thread_id: int) -> None:
+    """Store the card's lazily-created notes thread on the test row."""
+    conn.execute(
+        "UPDATE qa_tests SET thread_id = ?, updated_at = ? WHERE id = ?",
+        (thread_id, _utcnow(), test_id),
+    )
+
+
 def list_tests(
     conn: sqlite3.Connection, guild_id: int, status: str | None = None
 ) -> list[sqlite3.Row]:
