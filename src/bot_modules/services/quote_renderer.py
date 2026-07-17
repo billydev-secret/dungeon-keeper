@@ -31,10 +31,44 @@ _BEBAS = _ASSETS / "BebasNeue-Regular.ttf"
 _HELVETICA = _ASSETS / "Arimo-Regular.ttf"
 _TIMES = _ASSETS / "LiberationSerif-Regular.ttf"
 
+# Each Twemoji glyph is fetched over HTTP the first time it's drawn. Bound that
+# fetch: pilmoji sets no timeout, so a slow or stalled CDN would block the render
+# worker thread indefinitely — and since display-name emoji put this on the hot
+# path for most cards, one stalled request could tie up the whole pool.
+_EMOJI_FETCH_TIMEOUT = 5.0
+
 try:
     from pilmoji import Pilmoji as _Pilmoji
     from pilmoji.helpers import getsize as _emoji_getsize
-    from pilmoji.source import TwemojiEmojiSource as _EmojiSource
+    from pilmoji.source import TwemojiEmojiSource as _BaseEmojiSource
+
+    class _EmojiSource(_BaseEmojiSource):  # type: ignore[misc,valid-type]
+        """Twemoji source whose HTTP fetch can't hang.
+
+        pilmoji's ``request`` passes ``REQUEST_KWARGS`` to both the requests and
+        urllib backends but never a timeout. ``timeout`` can't live in
+        ``REQUEST_KWARGS`` because ``urllib.request.Request`` rejects it (only
+        ``urlopen`` takes it), so override ``request`` to thread it into whichever
+        backend pilmoji picked. A timeout raises, which the render's callers catch
+        and degrade to tofu — far better than a hung thread.
+        """
+
+        def request(self, url: str) -> bytes:
+            from pilmoji import source as _src
+
+            if getattr(_src, "_has_requests", False):
+                with self._requests_session.get(
+                    url, timeout=_EMOJI_FETCH_TIMEOUT, **self.REQUEST_KWARGS
+                ) as response:
+                    if response.ok:
+                        return response.content
+                    response.raise_for_status()
+                    return b""
+            from urllib.request import Request, urlopen
+
+            req = Request(url, **self.REQUEST_KWARGS)
+            with urlopen(req, timeout=_EMOJI_FETCH_TIMEOUT) as response:
+                return response.read()
 
     _HAS_PILMOJI = True
 except ImportError:
@@ -1024,26 +1058,33 @@ def render_quote_card(
     draw = ImageDraw.Draw(bg)
 
     # Draw text — pilmoji handles Unicode emoji; _render_line_mixed composites Discord custom emojis
-    text_y = text_y_start
-    if _HAS_PILMOJI:
-        with _Pilmoji(bg, source=_EmojiSource) as _pm:  # type: ignore[misc]
-            for line in lines:
-                _render_line_mixed(
-                    line, _line_x(line, text_y), text_y,
-                    font=body_font, color=theme.text_color,
-                    emoji_size=line_h, custom_emojis=custom_emojis,
-                    bg=bg, draw=draw, pilmoji=_pm,
-                )
-                text_y += line_h + line_gap
-    else:
+    def _draw_body(pilmoji) -> None:
+        text_y = text_y_start
         for line in lines:
             _render_line_mixed(
                 line, _line_x(line, text_y), text_y,
                 font=body_font, color=theme.text_color,
                 emoji_size=line_h, custom_emojis=custom_emojis,
-                bg=bg, draw=draw,
+                bg=bg, draw=draw, pilmoji=pilmoji,
             )
             text_y += line_h + line_gap
+
+    _body_drawn = False
+    if _HAS_PILMOJI:
+        # pilmoji fetches emoji over HTTP mid-render; a stalled CDN raises here.
+        # Snapshot first so a partial draw can be rolled back cleanly, then
+        # re-render Unicode emoji as tofu — a degraded card beats a failed one.
+        _pre_body = bg.copy()
+        try:
+            with _Pilmoji(bg, source=_EmojiSource) as _pm:  # type: ignore[misc]
+                _draw_body(_pm)
+            _body_drawn = True
+        except Exception:
+            log.exception("quote_renderer: body emoji render fell back to plain text")
+            bg.paste(_pre_body)
+            draw = ImageDraw.Draw(bg)
+    if not _body_drawn:
+        _draw_body(None)
     draw = ImageDraw.Draw(bg)
 
     if _no_pfp:

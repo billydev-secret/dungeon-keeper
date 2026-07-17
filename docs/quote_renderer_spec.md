@@ -156,9 +156,22 @@ composite; Unicode emoji fall back to the font).
 
 The quote body, the attribution line, and the no-pfp header all draw through
 pilmoji, so a Unicode emoji renders in colour wherever it appears — including
-inside a member's display name. Twemoji is fetched over HTTP, so the
-attribution/header draw is wrapped: any source failure degrades that line to
-plain PIL text (emoji become tofu) rather than failing the whole card.
+inside a member's display name.
+
+Twemoji is fetched over HTTP the first time each glyph is drawn. Two safeguards
+keep that off the critical path:
+
+- **Bounded fetch.** pilmoji sets no timeout, so a stalled CDN would hang the
+  render worker thread indefinitely. A custom `TwemojiEmojiSource` subclass
+  threads a `_EMOJI_FETCH_TIMEOUT` (5 s) into whichever HTTP backend pilmoji
+  chose (`timeout` can't sit in pilmoji's `REQUEST_KWARGS` — `urllib.Request`
+  rejects it, only `urlopen` takes it).
+- **Fail-soft everywhere.** A fetch failure never fails the card. The
+  attribution/header draw is wrapped and degrades that line to plain PIL text
+  (emoji become tofu). The body render snapshots the canvas first, and on any
+  failure rolls back to that snapshot and re-renders the lines without pilmoji —
+  so a partial draw can't double up, and an outage yields a tofu-emoji card
+  rather than a failed one.
 
 ## Display names
 
