@@ -29,6 +29,7 @@ FAUCET_GROUPS: dict[str, str] = {
     "conversion": "activity",
     "quest": "quests",
     "quest_community": "quests",
+    "qa_reward": "quests",
     "game_participation": "games",
     "game_win": "games",
     "qotd": "games",
