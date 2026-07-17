@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### PvP games — "Nickname Applied" showed the new name twice  (PENDING-HASH)
+### PvP games — "Nickname Applied" showed the new name twice  (0fc2016)
 
 The result embed for a nickname-stake game read "**NewNick** is now known as
 **NewNick**" instead of "**OldName** is now known as **NewNick**". The render
