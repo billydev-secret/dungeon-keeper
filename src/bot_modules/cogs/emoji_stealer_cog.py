@@ -32,10 +32,12 @@ from bot_modules.emoji_stealer.dedupe import (
 from bot_modules.emoji_stealer.logic import (
     build_steal_prompt,
     emoji_cdn_url,
+    extract_emojis_from_reactions,
     extract_emojis_from_text,
     format_steal_all_summary,
     is_https_url,
     looks_like_image,
+    merge_emoji_hits,
     sanitize_emoji_name,
     validate_emoji_name,
 )
@@ -495,10 +497,16 @@ class EmojiStealerCog(commands.Cog):
             )
             return
 
-        emojis = extract_emojis_from_text(message.content or "")
+        # Custom emoji can be in the text *and* in the reactions — a right-click
+        # can't tell which the user meant, so gather both. Text first keeps a
+        # shared emoji at its in-message position.
+        emojis = merge_emoji_hits(
+            extract_emojis_from_text(message.content or ""),
+            extract_emojis_from_reactions([r.emoji for r in message.reactions]),
+        )
         if not emojis:
             await interaction.response.send_message(
-                "No custom emojis found in that message.", ephemeral=True
+                "No custom emojis found in that message or its reactions.", ephemeral=True
             )
             return
 

@@ -98,6 +98,58 @@ def extract_emojis_from_text(content: str) -> list[tuple[bool, str, int]]:
     return out
 
 
+def extract_emojis_from_reactions(
+    reaction_emojis: object,
+) -> list[tuple[bool, str, int]]:
+    """Pull the custom emoji out of a message's reactions.
+
+    Pass the ``.emoji`` of each ``discord.Reaction``: a ``str`` for a Unicode
+    reaction, or a ``discord.Emoji`` / ``discord.PartialEmoji`` for a custom
+    one. Only custom emoji are stealable, so Unicode reactions — and partial
+    emoji that carry no id — are skipped. Returns the same
+    ``(animated, name, emoji_id)`` shape as :func:`extract_emojis_from_text`,
+    deduplicated by emoji_id in first-seen order.
+
+    Duck-typed on ``id``/``name``/``animated`` rather than the discord.py
+    classes so it stays unit-testable without a Discord client.
+    """
+    seen: set[int] = set()
+    out: list[tuple[bool, str, int]] = []
+    for emoji in reaction_emojis or ():  # type: ignore[union-attr]
+        if isinstance(emoji, str):
+            continue  # Unicode reaction — nothing to steal.
+        emoji_id = getattr(emoji, "id", None)
+        if emoji_id is None:
+            continue  # PartialEmoji for a Unicode emoji has no id.
+        emoji_id = int(emoji_id)
+        if emoji_id in seen:
+            continue
+        seen.add(emoji_id)
+        name = getattr(emoji, "name", None) or "emoji"
+        out.append((bool(getattr(emoji, "animated", False)), name, emoji_id))
+    return out
+
+
+def merge_emoji_hits(
+    *hit_lists: list[tuple[bool, str, int]],
+) -> list[tuple[bool, str, int]]:
+    """Concatenate several emoji-hit lists, deduplicated by emoji_id.
+
+    Order follows the arguments, then first appearance within each — so
+    passing text hits before reaction hits keeps an emoji that appears in both
+    at its in-message position and drops the reaction duplicate.
+    """
+    seen: set[int] = set()
+    out: list[tuple[bool, str, int]] = []
+    for hits in hit_lists:
+        for animated, name, emoji_id in hits:
+            if emoji_id in seen:
+                continue
+            seen.add(emoji_id)
+            out.append((animated, name, emoji_id))
+    return out
+
+
 def build_steal_prompt(
     *, n_emoji: int, guild_count: int, first_emoji_name: str, first_guild_name: str
 ) -> str:

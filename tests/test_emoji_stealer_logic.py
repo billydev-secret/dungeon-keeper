@@ -19,9 +19,11 @@ from bot_modules.emoji_stealer.logic import (
     build_steal_prompt,
     emoji_cdn_url,
     extract_emojis_from_text,
+    extract_emojis_from_reactions,
     format_steal_all_summary,
     is_https_url,
     looks_like_image,
+    merge_emoji_hits,
     sanitize_emoji_name,
     validate_emoji_name,
 )
@@ -183,6 +185,85 @@ def test_extract_emojis_from_text_ignores_invalid_emoji_syntax():
     """Patterns that don't match the strict ``<a?:name:id>`` shape are ignored."""
     text = "<:no_id:> <something:not:emoji> <:bad>"
     assert extract_emojis_from_text(text) == []
+
+
+# ── extract_emojis_from_reactions ────────────────────────────────────
+#
+# Reaction emoji arrive as discord.py objects, not text. Fake them with a tiny
+# duck-typed stand-in — the helper reads only .id/.name/.animated, and a
+# Unicode reaction is a bare str.
+
+
+class _FakeReactionEmoji:
+    def __init__(self, *, id, name, animated=False):
+        self.id = id
+        self.name = name
+        self.animated = animated
+
+
+def test_extract_from_reactions_finds_custom_emoji():
+    emojis = [
+        _FakeReactionEmoji(id=123, name="foo"),
+        _FakeReactionEmoji(id=456, name="wave", animated=True),
+    ]
+    assert extract_emojis_from_reactions(emojis) == [
+        (False, "foo", 123),
+        (True, "wave", 456),
+    ]
+
+
+def test_extract_from_reactions_skips_unicode_str_reactions():
+    """A Unicode reaction is a plain str and isn't stealable."""
+    emojis = ["😀", _FakeReactionEmoji(id=123, name="foo"), "🔥"]
+    assert extract_emojis_from_reactions(emojis) == [(False, "foo", 123)]
+
+
+def test_extract_from_reactions_skips_partial_emoji_without_id():
+    """A PartialEmoji for a Unicode emoji has id=None — skip it."""
+    emojis = [_FakeReactionEmoji(id=None, name="😀"), _FakeReactionEmoji(id=9, name="ok")]
+    assert extract_emojis_from_reactions(emojis) == [(False, "ok", 9)]
+
+
+def test_extract_from_reactions_deduplicates_by_id():
+    emojis = [_FakeReactionEmoji(id=1, name="a"), _FakeReactionEmoji(id=1, name="a")]
+    assert extract_emojis_from_reactions(emojis) == [(False, "a", 1)]
+
+
+def test_extract_from_reactions_falls_back_when_name_missing():
+    """A nameless custom emoji still steals — sanitize_emoji_name pads it later."""
+    assert extract_emojis_from_reactions([_FakeReactionEmoji(id=7, name=None)]) == [
+        (False, "emoji", 7)
+    ]
+
+
+def test_extract_from_reactions_handles_empty_and_none():
+    assert extract_emojis_from_reactions([]) == []
+    assert extract_emojis_from_reactions(None) == []
+
+
+# ── merge_emoji_hits ─────────────────────────────────────────────────
+
+
+def test_merge_dedupes_across_lists_keeping_first():
+    text_hits = [(False, "foo", 123)]
+    reaction_hits = [(False, "foo", 123), (True, "bar", 456)]
+    # 123 seen in text first, so the reaction copy is dropped; 456 is kept.
+    assert merge_emoji_hits(text_hits, reaction_hits) == [
+        (False, "foo", 123),
+        (True, "bar", 456),
+    ]
+
+
+def test_merge_preserves_argument_order():
+    a = [(False, "a", 1)]
+    b = [(False, "b", 2)]
+    assert merge_emoji_hits(a, b) == [(False, "a", 1), (False, "b", 2)]
+    assert merge_emoji_hits(b, a) == [(False, "b", 2), (False, "a", 1)]
+
+
+def test_merge_handles_no_lists_and_empty_lists():
+    assert merge_emoji_hits() == []
+    assert merge_emoji_hits([], []) == []
 
 
 # ── build_steal_prompt ───────────────────────────────────────────────
