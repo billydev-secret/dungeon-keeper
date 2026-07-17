@@ -1,19 +1,30 @@
-"""Which queue edits the post-commit hook treats as new.
+"""Which queue edits the post-commit hook treats as new — and how they post.
 
 The hook posts into a live channel, so a false positive re-posts a test that was
 already signed off. Every case here is an edit the queue actually receives in
 normal use: entries land as "(this commit)", get their sha rewritten later, have
 their bodies corrected, and finally move to Done with a date.
+
+Since stage 2, queue entries post as QA cards (embed + verdict buttons backed
+by a qa_tests row); the card tests run against a tmp DB with migration 077
+applied directly, and the degraded pre-migration path falls back to text.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 from pathlib import Path
 
 import pytest
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "post_testing_docs.py"
+MIGRATION = (
+    Path(__file__).resolve().parent.parent
+    / "src"
+    / "migrations"
+    / "077_qa_tracker.sql"
+)
 
 BEFORE = """# Testing Queue
 
@@ -100,13 +111,31 @@ _(nothing pending)_
     assert at_commit(mod, after) == []
 
 
-def test_post_commit_pre_adds_the_check_reaction(mod, monkeypatch) -> None:
-    """Each posted entry gets a ✅ on its last message so a tester can click it."""
-    after = BEFORE.replace(
-        "## Pending\n",
-        "## Pending\n\n### Gadget — brand new  (this commit)\n\n- [ ] check it\n",
-        1,
-    )
+# ── stage 2: queue entries post as QA cards ───────────────────────────
+
+
+GUILD_ID = 424242
+
+AFTER_WITH_GADGET = BEFORE.replace(
+    "## Pending\n",
+    "## Pending\n\n### Gadget — brand new  (this commit)\n\n- [ ] check it\n",
+    1,
+)
+
+
+@pytest.fixture
+def qa_db(tmp_path) -> Path:
+    """A prod-shaped SQLite file with migration 077 applied directly."""
+    path = tmp_path / "prod.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(MIGRATION.read_text())
+    conn.commit()
+    conn.close()
+    return path
+
+
+def wire(mod, monkeypatch, db: Path | None, after: str = AFTER_WITH_GADGET):
+    """Point the module at fakes: git, REST, .env-derived paths, state."""
 
     def fake_git(*args: str) -> str:
         return {
@@ -115,29 +144,201 @@ def test_post_commit_pre_adds_the_check_reaction(mod, monkeypatch) -> None:
             ("rev-parse", "--verify", "x^"): "parentsha",
             ("rev-parse", "--short", "x"): "abc1234",
             ("log", "-1", "--format=%s", "x"): "Gadget: add it",
+            ("rev-parse", "--short", "HEAD"): "headsha",
         }.get(args, "ok")
 
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, dict | None]] = []
+    counter = iter(range(1000, 2000))
 
     def fake_request(method, url, tok, payload=None):
-        calls.append((method, url))
-        return {"id": "msg1"}
+        calls.append((method, url, payload))
+        if method == "GET" and "/channels/" in url and "messages" not in url:
+            return {"guild_id": str(GUILD_ID)}
+        return {"id": str(next(counter))}
 
+    saved: list[set[str]] = []
     monkeypatch.setattr(mod, "git", fake_git)
     monkeypatch.setattr(mod, "token", lambda: "t")
     monkeypatch.setattr(mod, "request", fake_request)
+    monkeypatch.setattr(mod, "db_path", lambda: db)
+    monkeypatch.setattr(mod, "save_state", lambda keys: saved.append(set(keys)))
     monkeypatch.setattr(mod.time, "sleep", lambda *_: None)
-    monkeypatch.setattr(mod, "save_state", lambda keys: None)
+    return calls, saved
+
+
+def rows(db: Path) -> list[sqlite3.Row]:
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM qa_tests ORDER BY id").fetchall()
+    finally:
+        conn.close()
+
+
+def message_posts(mod, calls) -> list[dict]:
+    channel = mod.DOCS["testing-queue"][1]
+    return [
+        p
+        for m, u, p in calls
+        if m == "POST" and u == f"{mod.API}/channels/{channel}/messages"
+    ]
+
+
+def test_post_commit_creates_row_and_posts_one_card(mod, monkeypatch, qa_db) -> None:
+    calls, saved = wire(mod, monkeypatch, qa_db)
 
     mod.post_commit("x", dry_run=False)
 
-    posts = [u for m, u in calls if m == "POST"]
-    reacts = [u for m, u in calls if m == "PUT"]
-    assert len(posts) == 1
-    assert reacts == [
-        f"{mod.API}/channels/{mod.DOCS['testing-queue'][1]}"
-        f"/messages/msg1/reactions/{mod.CHECK}/@me"
+    (row,) = rows(qa_db)
+    assert row["guild_id"] == GUILD_ID
+    assert row["entry_key"] == "gadget — brand new"
+    assert row["title"] == "Gadget — brand new  (this commit)"
+    assert row["body_md"] == "- [ ] check it"
+    assert row["commit_sha"] == "abc1234"
+    assert row["commit_subject"] == "Gadget: add it"
+    assert row["channel_id"] == int(mod.DOCS["testing-queue"][1])
+    assert row["message_id"] == 1000  # the posted card's id, written back
+
+    (payload,) = message_posts(mod, calls)
+    assert "content" not in payload  # a card, not a text chunk
+    buttons = payload["components"][0]["components"]
+    assert [b["custom_id"] for b in buttons] == [
+        f"qa:v:{row['id']}:pass",
+        f"qa:v:{row['id']}:fail",
+        f"qa:v:{row['id']}:blocked",
     ]
+    embed = payload["embeds"][0]
+    assert embed["footer"]["text"] == "abc1234 · Gadget: add it"
+    assert payload["allowed_mentions"] == {"parse": []}
+    # No reaction plumbing survives: cards superseded the ✅.
+    assert not [u for m, u, _ in calls if m == "PUT"]
+    assert saved and "gadget — brand new" in saved[-1]
+
+
+def test_rerun_of_the_same_commit_does_not_duplicate(mod, monkeypatch, qa_db) -> None:
+    """Two layers of idempotency: the state ledger, then the DB unique index."""
+    calls, saved = wire(mod, monkeypatch, qa_db)
+
+    mod.post_commit("x", dry_run=False)
+    assert len(message_posts(mod, calls)) == 1
+
+    # Layer 1 — the ledger (amend/rebase re-presents the same diff): nothing posts.
+    monkeypatch.setattr(mod, "load_state", lambda: saved[-1])
+    mod.post_commit("x", dry_run=False)
+    assert len(message_posts(mod, calls)) == 1
+
+    # Layer 2 — ledger lost: the card re-posts, but ON CONFLICT reuses the row.
+    monkeypatch.setattr(mod, "load_state", set)
+    mod.post_commit("x", dry_run=False)
+    posts = message_posts(mod, calls)
+    assert len(posts) == 2
+    (row,) = rows(qa_db)  # still exactly one row
+    first, second = (p["components"][0]["components"][0]["custom_id"] for p in posts)
+    assert first == second == f"qa:v:{row['id']}:pass"
+
+
+def test_missing_qa_tests_table_falls_back_to_text(
+    mod, monkeypatch, tmp_path, capsys
+) -> None:
+    """A pre-migration DB degrades to the old text posting and exits cleanly."""
+    bare = tmp_path / "old.db"
+    sqlite3.connect(bare).close()  # exists, but no qa_tests table
+    calls, saved = wire(mod, monkeypatch, bare)
+
+    mod.post_commit("x", dry_run=False)
+
+    (payload,) = message_posts(mod, calls)
+    assert "embeds" not in payload
+    assert payload["content"].endswith("-# `abc1234` · Gadget: add it")
+    assert "077" in capsys.readouterr().out  # printed the migration hint
+    assert saved and "gadget — brand new" in saved[-1]  # still marked posted
+
+
+def test_rest_failure_is_contained_and_retried_later(mod, monkeypatch, qa_db) -> None:
+    """A dead API prints a warning, exits 0, and leaves the ledger unsaved."""
+    calls, saved = wire(mod, monkeypatch, qa_db)
+
+    def dead_request(method, url, tok, payload=None):
+        raise SystemExit(f"POST {url} -> 502")
+
+    monkeypatch.setattr(mod, "request", dead_request)
+    mod.post_commit("x", dry_run=False)  # must not raise
+
+    assert saved == []  # next commit retries the entry
+
+
+def full_dump_doc() -> str:
+    return """# Testing Queue
+
+Intro prose.
+
+## Pending
+
+### Gadget — brand new  (abc1234)
+
+- [ ] check it
+
+## Done
+
+### Widget — retired — verified 2026-07-01
+
+- [x] checked long ago
+"""
+
+
+def run_main(mod, monkeypatch, only: str) -> None:
+    monkeypatch.setattr(
+        mod.sys, "argv", ["post_testing_docs.py", "--only", only, "--yes"]
+    )
+    mod.main()
+
+
+def test_full_dump_posts_cards_for_pending_and_text_for_done(
+    mod, monkeypatch, tmp_path, qa_db
+) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "TESTING_QUEUE.md").write_text(full_dump_doc())
+    calls, _ = wire(mod, monkeypatch, qa_db)
+    monkeypatch.setattr(mod, "REPO", tmp_path)
+
+    run_main(mod, monkeypatch, "testing-queue")
+
+    posts = message_posts(mod, calls)
+    cards = [p for p in posts if "embeds" in p]
+    texts = [p["content"] for p in posts if "content" in p]
+    assert len(cards) == 1
+    assert cards[0]["embeds"][0]["title"] == "Gadget — brand new  (abc1234)"
+    assert cards[0]["embeds"][0]["footer"]["text"] == "headsha"
+    assert any(t.startswith("### Widget — retired") for t in texts)  # Done = text
+    assert not [u for m, u, _ in calls if m == "PUT"]  # no reactions anywhere
+
+    (row,) = rows(qa_db)
+    assert row["commit_sha"] == "headsha"  # keyed on HEAD for re-run idempotency
+
+    # A second dump reuses the row instead of duplicating it.
+    run_main(mod, monkeypatch, "testing-queue")
+    assert len(rows(qa_db)) == 1
+
+
+def test_role_checklist_dump_stays_plain_text(mod, monkeypatch, tmp_path) -> None:
+    checklist_dir = tmp_path / "docs" / "testing"
+    checklist_dir.mkdir(parents=True)
+    (checklist_dir / "admin_testing_checklist.md").write_text(
+        "# Admin checklist\n\n## Section\n\n- [ ] poke the thing\n"
+    )
+    calls, _ = wire(mod, monkeypatch, None)
+    monkeypatch.setattr(mod, "REPO", tmp_path)
+
+    run_main(mod, monkeypatch, "admin-tests")
+
+    channel = mod.DOCS["admin-tests"][1]
+    posts = [
+        p
+        for m, u, p in calls
+        if m == "POST" and u == f"{mod.API}/channels/{channel}/messages"
+    ]
+    assert posts and all("content" in p and "embeds" not in p for p in posts)
+    assert not [u for m, u, _ in calls if m == "PUT"]  # reactions removed here too
 
 
 def test_every_chunk_fits_discords_limit(mod) -> None:

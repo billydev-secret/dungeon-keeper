@@ -30,7 +30,10 @@ VERDICTS = ("pass", "fail", "blocked")
 
 @dataclass(frozen=True)
 class QASettings:
-    enabled: bool = False
+    # On by default: cards start posting at the stage-2 merge, before the
+    # stage-3 dashboard exists to flip any switch — and the safe default is
+    # admins-only clicking (role_id 0) until a crew role is configured there.
+    enabled: bool = True
     # QA-crew role allowed to click verdict buttons; 0 = admins only.
     role_id: int = 0
     # Channel the cards live in (the existing #testing-queue). 0 = unset.

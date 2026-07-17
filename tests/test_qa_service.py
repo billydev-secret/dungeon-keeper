@@ -74,7 +74,9 @@ def test_defaults_when_unconfigured(db):
     with open_db(db) as conn:
         settings = load_qa_settings(conn, GUILD)
     assert settings == DEFAULT_QA_SETTINGS
-    assert settings.enabled is False
+    # Enabled out of the box (admins-only via role_id 0): the tracker must
+    # work between the stage-2 merge and the stage-3 dashboard.
+    assert settings.enabled is True
     assert settings.role_id == 0
     assert settings.channel_id == 0
     assert settings.reward == 15
@@ -107,16 +109,16 @@ def test_partial_save_keeps_defaults(db):
         settings = load_qa_settings(conn, GUILD)
     assert settings.reward == 30
     assert settings.daily_cap == DEFAULT_QA_SETTINGS.daily_cap
-    assert settings.enabled is False
+    assert settings.enabled is DEFAULT_QA_SETTINGS.enabled
 
 
 def test_no_legacy_guild0_fallback(db):
     with open_db(db) as conn:
-        set_config_value(conn, f"{QA_PREFIX}enabled", "1", 0)
+        set_config_value(conn, f"{QA_PREFIX}enabled", "0", 0)
         set_config_value(conn, f"{QA_PREFIX}reward", "99", 0)
     with open_db(db) as conn:
         settings = load_qa_settings(conn, GUILD)
-    assert settings.enabled is False
+    assert settings.enabled is True  # guild 0's "0" must not leak in
     assert settings.reward == 15
 
 

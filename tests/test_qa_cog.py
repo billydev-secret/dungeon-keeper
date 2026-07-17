@@ -130,7 +130,9 @@ async def test_admin_allowed_without_role(ctx, db):
 
 @pytest.mark.asyncio
 async def test_disabled_guild_friendly_ephemeral(ctx, db):
-    tid = _mk_test(db)  # settings never enabled
+    with open_db(db) as conn:  # enabled defaults on; disable explicitly
+        save_qa_settings(conn, GUILD_ID, {"enabled": False})
+    tid = _mk_test(db)
     inter = _interaction(ctx, _member())
 
     await _QAPassButton(tid).callback(inter)

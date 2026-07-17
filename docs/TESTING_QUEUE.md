@@ -1307,6 +1307,31 @@ Discord surface needs a pass:
 - [ ] `/api/role-menus` mutations show up in the Audit Log panel
       (`role_menu.*` actions; elevated override logs its own action).
 
+### QA Tracker (stages 0–2) — queue entries post as verdict cards  (this commit)
+
+The `#testing-queue` mirror now posts each new entry as a **QA card**: an
+embed with Pass / Failed / Blocked buttons, backed by a `qa_tests` row in the
+prod DB (plan `docs/plans/qa-tracker.md`). This entry is stage 2's own live
+test, and clicking it exercises stages 0 (service/schema) and 1 (cog) too.
+The QA-crew **role** and **channel** are dashboard knobs arriving in stage 3;
+until then the tracker runs enabled with admins-only clicking (role_id 0).
+Role-checklist channels are unchanged plain text, and queue entries no longer
+get the ✅ reaction (the buttons replace it).
+
+- [ ] This entry arrived in `#testing-queue` as a card — one embed with three
+      buttons (✅ Passed / ❌ Failed / 🚧 Blocked), `sha · subject` in the
+      footer, and **no** ✅ reaction.
+- [ ] Before a bot restart the buttons are dead (interaction fails); after a
+      restart they respond (DynamicItems dispatch on the custom_id).
+- [ ] As an **admin**, click **Passed** → ephemeral confirms and pays **+15 🪙**
+      (check `/bank`), the card turns **green** and gains a "Verified by" field.
+- [ ] Click **Failed** → a modal demands a required "what went wrong" note; on
+      submit the note lands in a **thread on the card** and the card turns red.
+- [ ] Re-click a different verdict → the card updates but you are **not** paid
+      again (one payment per tester per test).
+- [ ] As a non-admin **without** the crew role, click any button → friendly
+      ephemeral rejection ("join the QA crew"), nothing recorded.
+
 ---
 
 ## Done
