@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Emoji Stealer — steal custom emoji from reactions  (PENDING-HASH)
+### Emoji Stealer — steal custom emoji from reactions  (490bd9d)
 
 The **Steal Emoji** right-click menu now also pulls custom emoji that were
 added to the message as **reactions**, not just ones written in its text. No new
