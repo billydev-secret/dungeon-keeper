@@ -125,7 +125,7 @@ def _build_help_pages(
                     ("/todo task:...", "Add a task to the server's shared todo list."),
                     ("/support", "Get a link to the support Discord server."),
                     ("/invite", "Get a bot invite link to add DungeonKeeper to another server."),
-                    ("/delete_me", "Permanently delete your data from this server."),
+                    ("/delete_me", "Delete your messages from Discord — your XP and profile stay."),
                 ]
             ),
         )

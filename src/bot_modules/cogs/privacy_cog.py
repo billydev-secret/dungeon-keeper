@@ -1,4 +1,11 @@
-"""Privacy commands — let users purge their own data, and let admins do the same for any user."""
+"""Privacy commands — let users clear their own Discord messages, and let admins
+do the same for any user.
+
+These commands only remove messages from Discord. The bot's server-side records
+(XP, activity, profile, and its own copy of the messages) are always retained for
+moderation. The genuine hard-erasure path lives in ``privacy_service.purge_user_data``,
+which is deliberately not wired to any command.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +24,6 @@ from bot_modules.privacy.logic import (
     MODE_MEDIA,
     MODE_TEXT,
     chunk_for_bulk_delete,
-    clears_account_data,
     confirm_button_label,
     group_messages_by_channel,
     is_forum_thread,
@@ -31,7 +37,6 @@ from bot_modules.privacy.logic import (
     should_throttle,
 )
 from bot_modules.services.discord_scan import find_user_messages
-from bot_modules.services.privacy_service import purge_user_data
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -43,15 +48,15 @@ log = logging.getLogger("dungeonkeeper.privacy")
 # ---------------------------------------------------------------------------
 
 class _ConfirmDeleteView(discord.ui.View):
-    def __init__(self, actor_id: int, *, confirm_label: str = "Yes, delete everything") -> None:
+    def __init__(self, actor_id: int, *, confirm_label: str = "Yes, delete my messages") -> None:
         super().__init__(timeout=60)
         self.actor_id = actor_id
         self.confirmed: bool | None = None
         # The label is the last thing read before an irreversible click, so it
-        # names the actual scope — "delete everything" on a scrub would be a lie.
+        # names the actual scope — a broader claim than "messages" would be a lie.
         self.confirm.label = confirm_label
 
-    @discord.ui.button(label="Yes, delete everything", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Yes, delete my messages", style=discord.ButtonStyle.danger)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if interaction.user.id != self.actor_id:
             await interaction.response.send_message("This isn't your confirmation.", ephemeral=True)
@@ -242,14 +247,12 @@ async def _run_deletion(
     user_id: int,
     original_interaction: discord.Interaction,
     *,
-    keep_messages: bool = True,
     mode: str = MODE_ALL,
 ) -> None:
-    # A partial mode is a scrub, not an erasure: it removes one slice of the
-    # member's Discord messages and leaves the account alone. Deciding this
-    # from the mode (not the command) means a scrub can never fall through to
-    # a purge, whichever command asked for it.
-    purge_account = clears_account_data(mode)
+    # Every mode only clears the member's *Discord* messages; nothing on the
+    # server side is touched. XP, activity, profile, and the bot's own copy of
+    # the messages are retained for moderation — the modes differ only in which
+    # Discord messages (all / images / text) are removed.
 
     # Phase 1 — scan Discord directly. Authoritative: doesn't depend on what
     # the local index has captured, so messages from before the bot joined,
@@ -281,15 +284,9 @@ async def _run_deletion(
     total = len(msg_rows)
 
     if total == 0:
-        if purge_account:
-            def _do_purge_empty():
-                with ctx.open_db() as conn:
-                    purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
-
-            await asyncio.to_thread(_do_purge_empty)
         await _edit_or_send(
             original_interaction,
-            render_empty_summary(keep_messages=keep_messages, mode=mode),
+            render_empty_summary(mode=mode),
         )
         return
 
@@ -313,20 +310,12 @@ async def _run_deletion(
         guild, user_id, msg_rows, on_progress=_delete_progress
     )
 
-    if purge_account:
-        def _do_purge():
-            with ctx.open_db() as conn:
-                purge_user_data(conn, guild.id, user_id, keep_messages=keep_messages)
-
-        await asyncio.to_thread(_do_purge)
-
     await _edit_or_send(
         original_interaction,
         render_deletion_summary(
             deleted=discord_deleted,
             failed=discord_failed,
             replaced=discord_replaced,
-            keep_messages=keep_messages,
             mode=mode,
         ),
     )
@@ -345,14 +334,14 @@ class PrivacyCog(commands.Cog):
 
     @app_commands.command(
         name="delete_me",
-        description="Delete your messages from this server — everything, or just images or text.",
+        description="Delete your messages from this server — all of them, or just images or text.",
     )
     @app_commands.describe(
-        mode="What to clear. Images/text only remove those messages; your XP and profile stay.",
+        mode="What to clear from Discord. Your XP, profile, and the server's own records always stay.",
     )
     @app_commands.choices(
         mode=[
-            app_commands.Choice(name="Everything (messages + XP, activity, profile)", value=MODE_ALL),
+            app_commands.Choice(name="All my messages", value=MODE_ALL),
             app_commands.Choice(name="Images & files only", value=MODE_MEDIA),
             app_commands.Choice(name="Text messages only", value=MODE_TEXT),
         ]
@@ -375,8 +364,9 @@ class PrivacyCog(commands.Cog):
             )
             return
 
-        # Omitting the option keeps the original all-or-nothing erasure, so an
-        # existing muscle-memory /delete_me behaves exactly as it always has.
+        # Omitting the option clears all of the member's Discord messages (their
+        # server-side data is kept either way), so muscle-memory /delete_me still
+        # does the broadest message clear.
         mode_value = mode.value if mode else MODE_ALL
 
         view = _ConfirmDeleteView(
@@ -384,7 +374,7 @@ class PrivacyCog(commands.Cog):
             confirm_label=confirm_button_label(mode_value, self_service=True),
         )
         await interaction.response.send_message(
-            render_confirm_prompt(mode=mode_value, keep_messages=True),
+            render_confirm_prompt(mode=mode_value),
             view=view,
             ephemeral=True,
         )
@@ -406,16 +396,16 @@ class PrivacyCog(commands.Cog):
 
     @app_commands.command(
         name="delete_user",
-        description="Delete a user's messages from this server — everything, or just images or text.",
+        description="Delete a user's messages from this server — all of them, or just images or text.",
     )
     @app_commands.default_permissions(manage_guild=True)
     @app_commands.describe(
-        member="The user whose data should be erased (works for users who have left).",
-        mode="What to clear. Images/text only remove those messages; their XP and profile stay.",
+        member="The user whose Discord messages should be cleared (works for users who have left).",
+        mode="What to clear from Discord. Their XP, profile, and the server's own records always stay.",
     )
     @app_commands.choices(
         mode=[
-            app_commands.Choice(name="Everything (messages + XP, activity, profile)", value=MODE_ALL),
+            app_commands.Choice(name="All their messages", value=MODE_ALL),
             app_commands.Choice(name="Images & files only", value=MODE_MEDIA),
             app_commands.Choice(name="Text messages only", value=MODE_TEXT),
         ]
@@ -447,10 +437,6 @@ class PrivacyCog(commands.Cog):
 
         mode_value = mode.value if mode else MODE_ALL
 
-        # A scrub keeps the account, so it must keep the account's archive too —
-        # erasing the stored copy is only ever part of a full /delete_user.
-        keep_messages = not clears_account_data(mode_value)
-
         view = _ConfirmDeleteView(
             actor_id=interaction.user.id,
             confirm_label=confirm_button_label(mode_value, self_service=False),
@@ -458,7 +444,6 @@ class PrivacyCog(commands.Cog):
         await interaction.response.send_message(
             render_confirm_prompt(
                 mode=mode_value,
-                keep_messages=keep_messages,
                 subject=member.mention,
             ),
             view=view,
@@ -475,7 +460,6 @@ class PrivacyCog(commands.Cog):
                 interaction.guild,
                 member.id,
                 interaction,
-                keep_messages=keep_messages,
                 mode=mode_value,
             )
         finally:

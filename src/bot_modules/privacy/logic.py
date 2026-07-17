@@ -22,15 +22,13 @@ FOURTEEN_DAYS = timedelta(days=14)
 # Default width of the textual progress bar shown while deletion runs.
 _DEFAULT_BAR_WIDTH = 20
 
-# Deletion scope. "all" is the original erasure: every message goes and the
-# account's DB records are purged. "media"/"text" are *scrubs* — they remove
-# only that slice of the member's Discord messages and leave XP, activity and
-# profile intact, so clearing your photos doesn't cost you your level.
+# Deletion scope — every mode only clears the member's *Discord* messages and
+# leaves all server-side data (XP, activity, profile, and the bot's own copy of
+# the messages) intact for moderation. The modes differ solely in which messages
+# go: "all" removes every message, "media"/"text" remove just that slice.
 MODE_ALL = "all"
 MODE_MEDIA = "media"
 MODE_TEXT = "text"
-
-PARTIAL_MODES = frozenset({MODE_MEDIA, MODE_TEXT})
 
 # Discord auto-generates an embed for any link a member posts, so embed
 # presence alone doesn't mean media. Only these types are real media; a
@@ -54,15 +52,6 @@ def message_has_media(message: object) -> bool:
         if getattr(embed, "type", None) in _MEDIA_EMBED_TYPES:
             return True
     return False
-
-
-def clears_account_data(mode: str) -> bool:
-    """True when *mode* should purge XP/activity/profile alongside messages.
-
-    Only the full erasure does. Guarding on this (rather than on the command)
-    keeps a scrub from silently wiping an account that asked to keep it.
-    """
-    return mode not in PARTIAL_MODES
 
 
 def message_matches_mode(message: object, mode: str) -> bool:
@@ -193,7 +182,6 @@ def mode_noun(mode: str) -> str:
 def render_confirm_prompt(
     *,
     mode: str,
-    keep_messages: bool,
     subject: str | None = None,
 ) -> str:
     """Copy shown immediately before the irreversible click.
@@ -201,49 +189,32 @@ def render_confirm_prompt(
     *subject* is a mention when a mod is acting on someone else, and None when
     the member is acting on themselves (which switches the copy to "your").
 
-    This is the moment consent is given, so it states the real scope. In
-    particular ``keep_messages`` (``/delete_me``) leaves the server's own copy
-    of the messages in place: that is deliberate — staff need it — but the
-    member is told here rather than discovering it in the summary afterwards.
+    This is the moment consent is given, so it states the real scope: only the
+    member's Discord messages go. Their XP, activity, profile, and the server's
+    own copy of the messages are kept for moderation — the person is told that
+    here rather than discovering it in the summary afterwards.
     """
     who = "your" if subject is None else f"{subject}'s"
     whose = "Your" if subject is None else f"{subject}'s"
-    they = "you" if subject is None else subject
+    noun = mode_noun(mode)
 
-    if not clears_account_data(mode):
-        noun = mode_noun(mode)
-        kept = "text messages" if mode == MODE_MEDIA else "images & files"
-        detail = (
-            "every message with an attachment, sticker, or embedded image/video"
-            if mode == MODE_MEDIA
-            else "every message that carries no attachment or media"
-        )
-        return (
-            f"⚠️ **This will delete {who} {noun} from Discord** — {detail}.\n\n"
-            f"{whose} {kept}, XP, activity and profile stay exactly as they are.\n\n"
-            "This cannot be undone. Are you sure?"
-        )
+    detail = ""
+    if mode == MODE_MEDIA:
+        detail = " — every message with an attachment, sticker, or embedded image/video"
+    elif mode == MODE_TEXT:
+        detail = " — every message that carries no attachment or media"
 
-    lines = [
-        f"⚠️ **This will delete all {who} messages from Discord** and clear "
-        f"{who} XP, activity history, and profile data."
-    ]
-    if keep_messages:
-        lines.append(
-            f"The server keeps its own copy of {who} messages for moderation — "
-            f"this removes them from Discord, not from those records."
-        )
-    else:
-        lines.append(
-            f"The server's own stored copy of {who} messages is erased too — "
-            f"nothing about {they} is kept."
-        )
-    lines.append("This cannot be undone. Are you sure?")
-    return "\n\n".join(lines)
+    return (
+        f"⚠️ **This will delete {who} {noun} from Discord**{detail}.\n\n"
+        f"{whose} XP, activity, and profile stay exactly as they are, and the "
+        f"server keeps its own copy of {who} messages for moderation — this only "
+        "removes them from Discord, not from those records.\n\n"
+        "This cannot be undone. Are you sure?"
+    )
 
 
 def confirm_button_label(mode: str, *, self_service: bool = True) -> str:
-    """Label for the danger button — names the real scope, not "everything".
+    """Label for the danger button — names the real scope (messages only).
 
     *self_service* is False when a mod is acting on someone else, which swaps
     "my" for "their".
@@ -253,7 +224,7 @@ def confirm_button_label(mode: str, *, self_service: bool = True) -> str:
         return f"Yes, delete {owner} images & files"
     if mode == MODE_TEXT:
         return f"Yes, delete {owner} text messages"
-    return "Yes, delete everything"
+    return f"Yes, delete {owner} messages"
 
 
 def render_deletion_summary(
@@ -261,34 +232,21 @@ def render_deletion_summary(
     deleted: int,
     failed: int,
     replaced: int,
-    keep_messages: bool,
     mode: str = MODE_ALL,
 ) -> str:
     """Build the final "All done. Here's what was removed:" report.
 
-    The cog's user-facing copy distinguishes between "we kept your archive
-    locally" (``/delete_me``, ``keep_messages=True``) and "everything cleared"
-    (``/delete_user``). Returning the same string the cog would render makes
-    this trivially snapshot-testable.
-
-    A partial *mode* says plainly that the account was left alone — claiming
-    "server-side data cleared" there would be a lie, and this line is the only
-    report the member gets.
+    Only Discord messages are ever removed; server-side data is retained. The
+    copy is deliberately neutral (no "your") because ``/delete_user`` shows this
+    summary to the acting mod, not to the subject. Returning the same string the
+    cog would render makes this trivially snapshot-testable.
     """
-    if not clears_account_data(mode):
-        lines = [
-            "All done. Here's what was removed:",
-            f"{mode_noun(mode).capitalize()} deleted from Discord: **{deleted}**",
-            "Your XP, activity and profile: **left alone** — you cleared "
-            f"only your {mode_noun(mode)}.",
-        ]
-    else:
-        archive_note = " (your message archive is preserved)" if keep_messages else ""
-        lines = [
-            "All done. Here's what was removed:",
-            f"Discord messages deleted: **{deleted}**",
-            f"Server-side data (XP, activity, profile): **cleared**{archive_note}",
-        ]
+    lines = [
+        "All done. Here's what was removed:",
+        f"{mode_noun(mode).capitalize()} deleted from Discord: **{deleted}**",
+        "XP, activity, profile, and the server's own message records: "
+        "**kept for moderation**.",
+    ]
     if replaced:
         lines.append(f"Forum posts replaced with tombstone: **{replaced}**")
     if failed:
@@ -296,22 +254,15 @@ def render_deletion_summary(
     return "\n".join(lines)
 
 
-def render_empty_summary(*, keep_messages: bool, mode: str = MODE_ALL) -> str:
+def render_empty_summary(*, mode: str = MODE_ALL) -> str:
     """Return the "no messages found" summary string.
 
-    Used when the scan turns up nothing on Discord. For a full erasure the DB
-    purge still runs, so the copy reports it; a partial mode had nothing to do
-    at all and says so rather than implying data was cleared.
+    Used when the scan turns up nothing on Discord. Nothing server-side is ever
+    touched, so this just reports that no messages were found.
     """
-    if not clears_account_data(mode):
-        return (
-            f"All done. No {mode_noun(mode)} found in any channel I can read. "
-            "Nothing else was touched."
-        )
-    archive_note = " (your message archive is preserved)" if keep_messages else ""
     return (
-        "All done. No messages found in any channel I can read. "
-        f"Server-side data (XP, activity, profile): **cleared**{archive_note}."
+        f"All done. No {mode_noun(mode)} found in any channel I can read. "
+        "Nothing else was touched — XP, profile, and the server's records stay as they are."
     )
 
 
