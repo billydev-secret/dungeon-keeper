@@ -135,10 +135,12 @@ hook now (a) INSERTs a `qa_tests` row into the prod DB (stdlib `sqlite3` —
 the hook stays dependency-free; DB is WAL so writing beside the live bot is
 routine), (b) POSTs the card embed + component rows via REST with the
 `qa:v:<id>:<verdict>` custom_ids, (c) stores `message_id` back on the row.
-The entry-level ✅ reaction from `f3c345c` is superseded for queue entries
-(kept for the role-checklist channels, which stay plain text). A
-`--seed-cards` mode backfills cards for entries currently in `## Pending`.
-Failure containment unchanged: every hook path still exits 0.
+The entry-level ✅ reaction from `f3c345c` is retired (the buttons replace
+it; the role-checklist channels stay plain text and never had it). The full
+dump (`--only testing-queue --yes`) doubles as the backfill: pending entries
+post as cards keyed on the dump's HEAD sha, so a re-run reuses rows instead
+of duplicating. Failure containment unchanged: every hook path still exits
+0, and a pre-077 DB degrades to the old text messages with a printed hint.
 
 **Sequencing caveat:** cards the hook posts before the next bot restart have
 inert buttons (the cog isn't loaded yet). Stage order below puts the cog live
@@ -186,8 +188,8 @@ pay-on-insert + cap, `void_verdict` with clawback); `qa_reward` into
 embed renderer, role gate. Extension registered in `__main__.py`. Fake-driven
 tests. *Restart needed after merge; buttons must be live before stage 2.*
 
-**Stage 2 — poster emits cards.** Hook inserts rows + posts cards;
-`--seed-cards` backfill; reaction path retired for the queue channel. Tests
+**Stage 2 — poster emits cards.** Hook inserts rows + posts cards; the full
+dump doubles as the card backfill; reaction path retired entirely. Tests
 extend `test_post_testing_docs.py`. Live-test = this stage's own queue entry
 arriving as a working card.
 

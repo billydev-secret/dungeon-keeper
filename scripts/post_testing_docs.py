@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Post the testing checklists into their dev channels, chunked to fit Discord.
+"""Post the testing checklists into their dev channels.
 
-Chunks at ``###`` entry boundaries so a test entry is never split mid-checklist;
-entries over the message limit are split again at line boundaries and the
-heading is repeated with a ``(cont.)`` marker. Each queue entry lands as its own
-message with a ✅ reaction pre-added, so a tester can one-click it to mark the
-entry verified (Discord has no clickable markdown checkbox).
+Queue entries (``###`` blocks in docs/TESTING_QUEUE.md) become interactive
+**QA cards**: one embed per entry with Pass / Fail / Blocked buttons, backed
+by a ``qa_tests`` row in the production DB. The stage-1 cog dispatches those
+buttons purely on ``custom_id``, so cards posted here over raw REST come
+alive after the next bot restart. The role checklists still post as plain
+text, chunked at heading boundaries so a section is never split
+mid-checklist (oversized blocks are re-split at line boundaries with a
+``(cont.)`` heading).
+
+Runs under the bare system python3 (the post-commit hook has no venv): only
+the stdlib plus ``bot_modules.qa.cards``, which is stdlib-pure by design.
+If the prod DB is unreachable or predates migration 077, queue entries
+degrade to the old plain-text messages, and every hook path still exits 0.
 
     python scripts/post_testing_docs.py --dry-run          # show the plan
     python scripts/post_testing_docs.py --only testing-queue
@@ -17,23 +25,26 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sqlite3
 import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+
+# The card renderer is stdlib-pure on purpose (see its docstring), so this
+# import works without the project venv -- exactly what the git hook needs.
+sys.path.insert(0, str(REPO / "src"))
+from bot_modules.qa.cards import build_card_embed, build_card_components
+
 API = "https://discord.com/api/v10"
 UA = "DiscordBot (https://github.com/local/dungeon-keeper, 1.0)"
 
 # Discord's hard cap is 2000; leave room for the "(cont.)" heading we re-add.
 LIMIT = 1900
-
-# ✅ (U+2705), url-encoded for the reactions endpoint. The bot pre-adds this to
-# each posted test so a tester can one-click it to mark the entry verified --
-# Discord has no clickable markdown checkbox, so the reaction is the affordance.
-CHECK = "%E2%9C%85"
 
 DOCS = {
     "testing-queue": ("docs/TESTING_QUEUE.md", "1527184897775763549"),
@@ -43,11 +54,36 @@ DOCS = {
 }
 
 
-def token() -> str:
-    for line in (REPO / ".env").read_text().splitlines():
-        if line.startswith("DISCORD_TOKEN_PROD="):
+def env_value(key: str) -> str | None:
+    """Read one ``KEY=value`` line from the checkout's .env."""
+    env_file = REPO / ".env"
+    if not env_file.exists():
+        return None
+    for line in env_file.read_text().splitlines():
+        if line.startswith(f"{key}="):
             return line.split("=", 1)[1].strip().strip("\"'").split("#")[0].strip()
-    sys.exit("DISCORD_TOKEN_PROD not found in .env")
+    return None
+
+
+def token() -> str:
+    tok = env_value("DISCORD_TOKEN_PROD")
+    if not tok:
+        sys.exit("DISCORD_TOKEN_PROD not found in .env")
+    return tok
+
+
+def db_path() -> Path | None:
+    """The production SQLite file, resolved the way the bot's config does.
+
+    ``bot_modules.core.config.load_config`` reads ``DB_PATH_PROD`` from the
+    environment (populated from .env); the service runs with the repo root
+    as its working directory, so a relative value resolves against REPO.
+    """
+    raw = env_value("DB_PATH_PROD")
+    if not raw:
+        return None
+    p = Path(raw)
+    return p if p.is_absolute() else REPO / p
 
 
 def headers(tok: str) -> dict[str, str]:
@@ -92,15 +128,156 @@ def post_message(channel: str, content: str, tok: str) -> str:
     return resp.get("id", "")
 
 
-def react_check(channel: str, message_id: str, tok: str) -> None:
-    """Pre-add the ✅ a tester clicks to mark this entry verified."""
-    if not message_id:
-        return
-    request(
-        "PUT",
-        f"{API}/channels/{channel}/messages/{message_id}/reactions/{CHECK}/@me",
-        tok,
+# ── QA cards: qa_tests rows + embed-with-buttons posting ────────────────────
+
+
+def qa_connect() -> sqlite3.Connection | None:
+    """Open the prod DB for card rows; None means degrade to plain text."""
+    path = db_path()
+    if path is None or not path.exists():
+        print(
+            "post-commit: WARNING prod DB not found (DB_PATH_PROD in .env) "
+            "-- posting plain text"
+        )
+        return None
+    conn = sqlite3.connect(path, timeout=30)
+    try:
+        conn.execute("SELECT 1 FROM qa_tests LIMIT 1").fetchone()
+    except sqlite3.OperationalError:
+        print(
+            "post-commit: WARNING qa_tests table missing -- apply migration "
+            "077_qa_tracker.sql (restart the bot); posting plain text"
+        )
+        conn.close()
+        return None
+    return conn
+
+
+_GUILD_IDS: dict[str, int] = {}
+
+
+def channel_guild_id(channel: str, tok: str) -> int:
+    """The guild owning a channel — one REST lookup, cached per run."""
+    if channel not in _GUILD_IDS:
+        info = request("GET", f"{API}/channels/{channel}", tok)
+        _GUILD_IDS[channel] = int(info.get("guild_id") or 0)
+    return _GUILD_IDS[channel]
+
+
+def insert_qa_test(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    key: str,
+    title: str,
+    body_md: str,
+    commit_sha: str | None,
+    commit_subject: str | None,
+) -> int:
+    """Insert a qa_tests row, returning its id (existing or new).
+
+    Raw SQL mirroring ``qa_service.create_test`` — same ON CONFLICT
+    idempotency on (guild_id, entry_key, commit_sha), same UTC-ISO
+    timestamps. Importing the service itself would drag in the economy
+    module chain, too heavy for a bare-python3 git hook.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    cur = conn.execute(
+        """
+        INSERT INTO qa_tests
+            (guild_id, entry_key, title, body_md, commit_sha, commit_subject,
+             created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(guild_id, entry_key, commit_sha) DO NOTHING
+        """,
+        (guild_id, key, title, body_md, commit_sha, commit_subject, now, now),
     )
+    if (cur.rowcount or 0) > 0:
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    row = conn.execute(
+        """
+        SELECT id FROM qa_tests
+        WHERE guild_id = ? AND entry_key = ? AND commit_sha IS ?
+        """,
+        (guild_id, key, commit_sha),
+    ).fetchone()
+    return int(row[0])
+
+
+def set_qa_test_message(
+    conn: sqlite3.Connection, test_id: int, channel_id: int, message_id: int
+) -> None:
+    """Store the posted card's location back on its row (mirrors the service)."""
+    conn.execute(
+        "UPDATE qa_tests SET channel_id = ?, message_id = ?, updated_at = ? "
+        "WHERE id = ?",
+        (channel_id, message_id, datetime.now(timezone.utc).isoformat(), test_id),
+    )
+    conn.commit()
+
+
+def card_fields(block: str) -> tuple[str, str]:
+    """Card title (heading text, trailing parenthetical kept) + body."""
+    lines = block.splitlines()
+    title = lines[0].removeprefix("### ").strip()
+    body = "\n".join(lines[1:]).strip("\n")
+    return title, body
+
+
+def post_card(
+    channel: str,
+    tok: str,
+    test_id: int,
+    title: str,
+    body_md: str,
+    commit_sha: str | None,
+    commit_subject: str | None,
+) -> str:
+    """Post one verdict card (embed + buttons), returning the message id.
+
+    The sha/subject land in the embed footer via the shared renderer, so a
+    card carries no ``-#`` stamp line the way text entries did. Entries stay
+    far under the 4096-char embed cap (and the renderer truncates anyway),
+    so a card is always exactly one message — no pack() chunking.
+    """
+    test = {
+        "title": title,
+        "body_md": body_md,
+        "status": "pending",
+        "commit_sha": commit_sha,
+        "commit_subject": commit_subject,
+    }
+    resp = request(
+        "POST",
+        f"{API}/channels/{channel}/messages",
+        tok,
+        {
+            "embeds": [build_card_embed(test, [])],
+            "components": build_card_components(test_id),
+            "allowed_mentions": {"parse": []},
+        },
+    )
+    return resp.get("id", "")
+
+
+def post_entry_card(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    channel: str,
+    tok: str,
+    block: str,
+    commit_sha: str | None,
+    commit_subject: str | None,
+) -> None:
+    """Create/reuse the DB row for one entry and post its card."""
+    title, body = card_fields(block)
+    test_id = insert_qa_test(
+        conn, guild_id, entry_key(block), title, body, commit_sha, commit_subject
+    )
+    mid = post_card(channel, tok, test_id, title, body, commit_sha, commit_subject)
+    time.sleep(1.1)
+    if mid:
+        set_qa_test_message(conn, test_id, int(channel), int(mid))
 
 
 def heading_level(block: str) -> int:
@@ -310,7 +487,14 @@ def purge(channel: str, tok: str, me: str) -> int:
 
 
 def post_commit(sha: str, *, dry_run: bool) -> None:
-    """Post the entries a single commit adds. Used by the post-commit hook."""
+    """Post the entries a single commit adds. Used by the post-commit hook.
+
+    Each entry becomes one QA card: a qa_tests row in the prod DB, then the
+    embed + verdict buttons, then the message id written back. Any DB or
+    REST failure prints a warning and returns normally — the hook must
+    never break a commit — and the unsaved state ledger means the next
+    commit retries these entries.
+    """
     entries = new_entries(sha)
     if not entries:
         if dry_run:
@@ -318,26 +502,42 @@ def post_commit(sha: str, *, dry_run: bool) -> None:
         return
 
     channel = DOCS["testing-queue"][1]
-    footer = stamp(sha)
 
     if dry_run:
-        chunks = sum(len(pack(e)) for e in entries)
-        print(f"{sha[:8]}: {len(entries)} new entry(s) -> {chunks} message(s)")
+        print(f"{sha[:8]}: {len(entries)} new entry(s) -> {len(entries)} card(s)")
         for entry in entries:
             print(f"  - {heading_of(entry)[4:]}")
         return
 
-    tok = token()
-    for entry in entries:
-        parts = pack(entry)
-        parts[-1] = f"{parts[-1]}\n{footer}"
-        last_id = ""
-        for part in parts:
-            last_id = post_message(channel, part, tok)
-            time.sleep(1.1)
-        # One ✅ per entry, on its final message so it sits under the whole test.
-        react_check(channel, last_id, tok)
-        time.sleep(0.35)
+    short = (git("rev-parse", "--short", sha) or sha[:8]).strip()
+    subject = (git("log", "-1", "--format=%s", sha) or "").strip() or None
+
+    try:
+        tok = token()
+        conn = qa_connect()
+        guild_id = channel_guild_id(channel, tok) if conn is not None else 0
+        if conn is not None and not guild_id:
+            print(
+                "post-commit: WARNING channel has no guild -- posting plain text"
+            )
+            conn.close()
+            conn = None
+        for entry in entries:
+            if conn is not None:
+                post_entry_card(conn, guild_id, channel, tok, entry, short, subject)
+            else:
+                # Degraded path (no DB / pre-077 schema): the old plain-text
+                # message(s) with the sha stamp, minus the retired ✅ reaction.
+                parts = pack(entry)
+                parts[-1] = f"{parts[-1]}\n{stamp(sha)}"
+                for part in parts:
+                    post_message(channel, part, tok)
+                    time.sleep(1.1)
+        if conn is not None:
+            conn.close()
+    except (Exception, SystemExit) as exc:  # containment: the hook exits 0
+        print(f"post-commit: WARNING could not post, will retry next commit -- {exc}")
+        return
 
     save_state(load_state() | {entry_key(e) for e in entries})
     for entry in entries:
@@ -403,35 +603,47 @@ def main() -> None:
     for name in targets:
         path, channel = DOCS[name]
         text = (REPO / path).read_text()
-        # Only the queue's own test entries get a clickable ✅; the role
-        # checklists post one message per multi-item section, where a single
-        # reaction would be ambiguous.
+        # Only the queue's pending test entries become QA cards; the role
+        # checklists post plain messages, one per multi-item section.
         pending = (
             {entry_key(b) for b in pending_entries(text)}
             if name == "testing-queue"
             else set()
         )
-        messages: list[tuple[str, bool]] = []
-        for block in split_entries(text):
-            react_last = heading_of(block).startswith("### ") and (
-                entry_key(block) in pending
-            )
-            parts = pack(block)
-            for i, part in enumerate(parts):
-                messages.append((part, react_last and i == len(parts) - 1))
+        conn = qa_connect() if pending else None
+        guild_id = channel_guild_id(channel, tok) if conn is not None else 0
+        if conn is not None and not guild_id:
+            conn.close()
+            conn = None
+        # Rows are keyed on the dump's HEAD so a re-run reuses them instead
+        # of duplicating; the subject is per-entry history we no longer have,
+        # so full-dump cards carry a sha-only footer.
+        head_sha = (git("rev-parse", "--short", "HEAD") or "").strip() or None
 
         if args.purge:
             gone = purge(channel, tok, me)
             print(f"#{name}: purged {gone} old message(s)")
-        print(f"#{name}: posting {len(messages)} message(s) from {path}")
-        for i, (chunk, react_last) in enumerate(messages, 1):
-            mid = post_message(channel, chunk, tok)
-            time.sleep(1.1)
-            if react_last:
-                react_check(channel, mid, tok)
-                time.sleep(0.35)
-            print(f"  [{i}/{len(messages)}]", end="\r", flush=True)
-        print(f"  done: {len(messages)} posted        ")
+        blocks = split_entries(text)
+        print(f"#{name}: posting {len(blocks)} block(s) from {path}")
+        sent = 0
+        for block in blocks:
+            as_card = (
+                conn is not None
+                and heading_of(block).startswith("### ")
+                and entry_key(block) in pending
+            )
+            if as_card:
+                post_entry_card(conn, guild_id, channel, tok, block, head_sha, None)
+                sent += 1
+            else:
+                for part in pack(block):
+                    post_message(channel, part, tok)
+                    time.sleep(1.1)
+                    sent += 1
+            print(f"  [{sent} sent]", end="\r", flush=True)
+        if conn is not None:
+            conn.close()
+        print(f"  done: {sent} posted        ")
 
 
 if __name__ == "__main__":
