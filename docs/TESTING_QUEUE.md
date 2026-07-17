@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Voice Master — knock is now private (DM the owner)  (PENDING-HASH)
+### Voice Master — knock is now private (DM the owner)  (553aaf4)
 
 `/voice knock` used to post "X is asking to join Y's locked room" into the
 control channel, where everyone could read it. It now **DMs the owner** the
