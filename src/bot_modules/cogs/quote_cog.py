@@ -24,6 +24,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from bot_modules.core.branding import resolve_accent_color
 from bot_modules.services.quote_renderer import (
     BORDERS,
     CUSTOM_BORDER_KEY,
@@ -35,6 +36,7 @@ from bot_modules.services.quote_renderer import (
     QuoteTheme,
     custom_border_style,
     render_quote_card,
+    theme_from_accent,
 )
 from bot_modules.services.starboard_service import get_starboard_config
 
@@ -50,6 +52,28 @@ _PREVIEW_TIMEOUT = 120
 # Reply to a message and ping a role whose name normalizes to this, and the bot
 # renders a quote card of the replied-to message (MakeItAQuote-style trigger).
 _TRIGGER_ROLE_NAME = "makeitaquote"
+
+# Picker/audit sentinel for the accent-derived default theme. It isn't a member
+# of THEMES (that dict is the bundled presets); the cog resolves it per-guild via
+# ``_resolve_brand_theme``.
+_BRAND_THEME_KEY = "__brand__"
+_BRAND_THEME_LABEL = "Server Colour (auto)"
+
+
+async def _resolve_brand_theme(
+    bot: "Bot", guild: discord.Guild | None
+) -> QuoteTheme:
+    """Default quote theme: colour-graded to the guild's brand accent.
+
+    Routes through the shared ``resolve_accent_color`` so a quote card matches
+    whatever an embed's accent bar would be for the guild (custom hex, else a
+    colour drawn from the bot avatar). Falls back to the bundled golden_meadow
+    when there's no guild — quote paths are guild-only, so this is belt-and-suspenders.
+    """
+    if guild is None:
+        return THEMES["golden_meadow"]
+    colour = await resolve_accent_color(bot.ctx.db_path, guild)
+    return theme_from_accent((colour.r, colour.g, colour.b))
 
 
 def _normalize_role_name(name: str) -> str:
@@ -132,11 +156,13 @@ class QuoteStyleView(discord.ui.View):
         self,
         bot: "Bot",
         message: discord.Message,
+        brand_theme: QuoteTheme,
     ) -> None:
         super().__init__(timeout=_STYLE_TIMEOUT)
         self.bot = bot
         self.message = message
-        self._theme_key = "golden_meadow"
+        self.brand_theme = brand_theme
+        self._theme_key = _BRAND_THEME_KEY
         self._font_key = "times"
 
         # A guild that uploaded its own border gets it as the default choice —
@@ -166,11 +192,14 @@ class QuoteStyleView(discord.ui.View):
             placeholder="Theme",
             options=[
                 discord.SelectOption(
-                    label=t.name,
-                    value=k,
-                    default=(k == self._theme_key),
-                )
-                for k, t in THEMES.items()
+                    label=_BRAND_THEME_LABEL,
+                    value=_BRAND_THEME_KEY,
+                    default=True,
+                ),
+                *(
+                    discord.SelectOption(label=t.name, value=k, default=False)
+                    for k, t in THEMES.items()
+                ),
             ],
             min_values=1,
             max_values=1,
@@ -242,10 +271,15 @@ class QuoteStyleView(discord.ui.View):
 
         msg = self.message
 
+        theme = (
+            self.brand_theme
+            if self._theme_key == _BRAND_THEME_KEY
+            else THEMES[self._theme_key]
+        )
         try:
             card_bytes = await _build_card_for_message(
                 msg,
-                theme=THEMES[self._theme_key],
+                theme=theme,
                 font_style=self._font_key,
                 border_style=_resolve_border(
                     self.bot, msg.guild.id if msg.guild else None, self._border_key
@@ -426,9 +460,10 @@ class QuoteCog(commands.Cog):
             )
             return
 
+        brand_theme = await _resolve_brand_theme(self.bot, message.guild)
         await interaction.response.send_message(
             "Pick a style for your quote card:",
-            view=QuoteStyleView(self.bot, message),
+            view=QuoteStyleView(self.bot, message, brand_theme),
             ephemeral=True,
         )
 
@@ -482,10 +517,17 @@ class QuoteCog(commands.Cog):
             )
             return
 
-        theme_obj = THEMES.get(theme or "", THEMES["golden_meadow"])
         font_style = font if font in FONT_STYLES else "times"
 
         await interaction.response.defer(ephemeral=True)
+
+        # An explicit theme choice wins; otherwise default to the guild's brand
+        # accent (resolved after defer since it may read the bot avatar).
+        theme_obj = (
+            THEMES[theme]
+            if theme in THEMES
+            else await _resolve_brand_theme(self.bot, guild)
+        )
 
         # Background image: guild icon first, then the invoker's avatar. The card
         # colour-grades whatever it gets, so both look fine — the icon just keeps
@@ -654,7 +696,7 @@ class QuoteCog(commands.Cog):
         try:
             card_bytes = await _build_card_for_message(
                 target,
-                theme=THEMES["golden_meadow"],
+                theme=await _resolve_brand_theme(self.bot, message.guild),
                 font_style="inter",
                 border_style=_resolve_border(
                     self.bot, message.guild.id, CUSTOM_BORDER_KEY

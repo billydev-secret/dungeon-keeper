@@ -72,6 +72,11 @@ def _cog():
 def stub_render(monkeypatch):
     fake = AsyncMock(return_value=b"PNG")
     monkeypatch.setattr(qc, "_build_card_for_message", fake)
+    # The default theme now resolves from guild branding (a DB read); these
+    # detection tests use a stub bot/guild, so short-circuit it to a bundled theme.
+    monkeypatch.setattr(
+        qc, "_resolve_brand_theme", AsyncMock(return_value=qc.THEMES["golden_meadow"])
+    )
     return fake
 
 

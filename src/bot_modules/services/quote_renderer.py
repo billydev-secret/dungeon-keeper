@@ -9,6 +9,7 @@ so the problem is immediately visible rather than silently degrading.
 """
 from __future__ import annotations
 
+import colorsys
 import io
 import logging
 import re as _re
@@ -134,6 +135,36 @@ THEMES: dict[str, QuoteTheme] = {
         vignette_strength=0.68,
     ),
 }
+
+def theme_from_accent(
+    accent_rgb: tuple[int, int, int], *, name: str = "Server Colour"
+) -> QuoteTheme:
+    """Build a QuoteTheme whose colour grading follows a guild's brand accent.
+
+    ``accent_rgb`` is the guild accent (from ``resolve_accent_color``). The
+    overlay takes the accent directly; body text and the attribution line are
+    derived as a near-white and a lighter saturated tint of the *same hue*, so a
+    pink, teal, or red brand colour each yields a coherent, readable card — the
+    same cream-body / brighter-name split the hand-tuned ``golden_meadow`` theme
+    uses. The non-colour knobs (overlay alpha, desaturation, vignette) mirror
+    ``golden_meadow`` so accent-derived cards sit alongside it consistently.
+    """
+    r, g, b = (max(0, min(255, int(c))) for c in accent_rgb)
+    h, s, _v = colorsys.rgb_to_hsv(r / 255, g / 255, b / 255)
+    # Near-white body text carrying just a hint of the brand hue.
+    tr, tg, tb = colorsys.hsv_to_rgb(h, min(s, 0.10), 1.0)
+    # Lighter, more saturated attribution line, echoing golden_meadow's gold name.
+    ar, ag, ab = colorsys.hsv_to_rgb(h, min(max(s, 0.35), 0.55), 1.0)
+    return QuoteTheme(
+        name=name,
+        overlay_color=(r, g, b),
+        overlay_alpha=0.38,
+        desaturate=0.55,
+        text_color=(round(tr * 255), round(tg * 255), round(tb * 255)),
+        attribution_color=(round(ar * 255), round(ag * 255), round(ab * 255)),
+        vignette_strength=0.72,
+    )
+
 
 FONT_STYLES: dict[str, Path] = {
     "times": _TIMES,
