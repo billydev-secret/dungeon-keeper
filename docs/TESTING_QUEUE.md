@@ -9,7 +9,7 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
-### Quote renderer — bounded Twemoji fetch + fail-soft body  (PENDING-HASH)
+### Quote renderer — bounded Twemoji fetch + fail-soft body  (e86352d)
 
 Hardening only, no visible change in normal operation. pilmoji's emoji fetch
 now has a 5 s timeout (was unbounded — a stalled CDN could hang the render
