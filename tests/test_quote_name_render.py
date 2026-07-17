@@ -8,7 +8,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
-import pilmoji.source as _pilmoji_source
+import requests
 from PIL import Image, ImageDraw
 
 from bot_modules.services.quote_renderer import (
@@ -64,17 +64,28 @@ def test_normalized_name_is_covered_by_the_bundled_font() -> None:
     assert not any(ord(c) in covered for c in FANCY if c.isalpha())
 
 
-def test_render_survives_emoji_source_failure(monkeypatch) -> None:
-    """A Twemoji fetch failure degrades to tofu — it must not kill the card."""
+def _fail_emoji_fetch(monkeypatch) -> None:
+    """Make every Twemoji fetch fail.
 
-    def _boom(self, url):  # noqa: ANN001, ANN202
+    Patches ``requests.Session.get`` — the call the renderer's custom source
+    actually makes. (Patching ``pilmoji``'s base ``HTTPBasedSource.request``
+    would be a no-op, since the custom source overrides ``request`` to add the
+    timeout and never calls the base.)
+    """
+
+    def _boom(self, url, **kwargs):  # noqa: ANN001, ANN202
         raise OSError("simulated network failure")
 
-    monkeypatch.setattr(_pilmoji_source.HTTPBasedSource, "request", _boom)
+    monkeypatch.setattr(requests.Session, "get", _boom)
+
+
+def test_render_survives_emoji_source_failure(monkeypatch) -> None:
+    """A fetch failure in the *attribution* (fancy name + emoji) degrades to tofu."""
+    _fail_emoji_fetch(monkeypatch)
 
     png = render_quote_card(
-        "Network is down but the card still renders.",
-        author_name=FANCY,
+        "Network is down but the card still renders.",  # no body emoji
+        author_name=FANCY,  # the 💋 here is the only thing needing a fetch
         avatar_bytes=_avatar(),
         theme=next(iter(THEMES.values())),
     )
@@ -92,3 +103,49 @@ def test_render_accepts_fancy_name_in_both_layouts() -> None:
             pfp_shape=shape,
         )
         assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_emoji_fetch_passes_a_timeout(monkeypatch) -> None:
+    """pilmoji sets no timeout, so a stalled CDN would hang the render thread.
+
+    The custom source must thread ``_EMOJI_FETCH_TIMEOUT`` into the HTTP call.
+    """
+    import requests
+
+    from bot_modules.services.quote_renderer import _EMOJI_FETCH_TIMEOUT
+
+    seen: dict[str, object] = {}
+
+    def _spy_get(self, url, **kwargs):  # noqa: ANN001, ANN202
+        seen["timeout"] = kwargs.get("timeout")
+        raise OSError("simulated stall")  # then behave like an outage
+
+    monkeypatch.setattr(requests.Session, "get", _spy_get)
+
+    # A Unicode emoji in the body forces a Twemoji fetch.
+    png = render_quote_card(
+        "Body emoji \U0001f48b forces a fetch.",
+        author_name="Plain",
+        avatar_bytes=_avatar(),
+        theme=next(iter(THEMES.values())),
+    )
+    assert seen["timeout"] == _EMOJI_FETCH_TIMEOUT
+    # And the outage degraded rather than crashed.
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_body_emoji_failure_degrades_without_crashing(monkeypatch) -> None:
+    """A fetch failure during the *body* render falls back to plain text.
+
+    The body path is separate from the attribution path; it must not raise.
+    """
+
+    _fail_emoji_fetch(monkeypatch)
+
+    png = render_quote_card(
+        "A body with an emoji \U0001f48b during an outage.",
+        author_name="Plain",  # plain name → failure can only come from the body
+        avatar_bytes=_avatar(),
+        theme=next(iter(THEMES.values())),
+    )
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"

@@ -9,6 +9,20 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Quote renderer — bounded Twemoji fetch + fail-soft body  (e86352d)
+
+Hardening only, no visible change in normal operation. pilmoji's emoji fetch
+now has a 5 s timeout (was unbounded — a stalled CDN could hang the render
+thread), and a fetch failure during the body render degrades the card to
+tofu-emoji instead of failing it (the attribution/header already did this).
+
+**Fully unit-tested** — the timeout value reaching the HTTP call and both
+fail-soft paths are covered, and there's no way to manufacture a CDN outage on
+the live server. Nothing to verify by hand; listed for traceability only.
+
+- [ ] (Optional) Post a normal quote with an emoji → still renders in colour as
+      before. No regression is the only thing to confirm.
+
 ### PvP games — "Nickname Applied" showed the new name twice  (0fc2016)
 
 The result embed for a nickname-stake game read "**NewNick** is now known as
