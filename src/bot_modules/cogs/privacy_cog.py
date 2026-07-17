@@ -224,21 +224,87 @@ async def _delete_discord_messages(
     return deleted, failed, replaced
 
 
-async def _edit_or_send(
-    interaction: discord.Interaction, content: str
-) -> None:
-    """Update the deletion status. After ~15 minutes the interaction token
-    expires (long scans can hit this); fall back to a DM so the result
-    doesn't appear publicly in the channel."""
-    try:
-        await interaction.edit_original_response(content=content, view=None)
-        return
-    except (discord.HTTPException, discord.NotFound):
-        pass
-    try:
-        await interaction.user.send(content)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+# Progress card colours: in-flight vs. finished.
+_PROGRESS_COLOR = discord.Color.blurple()
+_DONE_COLOR = discord.Color.green()
+
+_PROGRESS_TITLE = "Deleting your messages"
+
+
+def _scan_embed(done: int, total: int, found: int) -> discord.Embed:
+    """The in-progress scan card — status line plus a channel progress bar."""
+    return discord.Embed(
+        title=_PROGRESS_TITLE,
+        description=f"{render_scan_status(done, total, found)}\n{render_progress_bar(done, total)}",
+        color=_PROGRESS_COLOR,
+    )
+
+
+def _delete_embed(done: int, total: int) -> discord.Embed:
+    """The in-progress delete card — a message progress bar."""
+    return discord.Embed(
+        title=_PROGRESS_TITLE,
+        description=f"Deleting…\n{render_progress_bar(done, total)}",
+        color=_PROGRESS_COLOR,
+    )
+
+
+def _summary_embed(description: str) -> discord.Embed:
+    """The final result card."""
+    return discord.Embed(
+        title="Deletion complete",
+        description=description,
+        color=_DONE_COLOR,
+    )
+
+
+class _ProgressReporter:
+    """Delivers deletion progress to a single, continuously-edited message.
+
+    While the slash-command interaction token is alive (~15 min) it edits the
+    original ephemeral response. A full-server scan can outlive that token; the
+    first edit that fails flips us to a DM, and every later update — scan,
+    delete, and the final summary — edits that *same* DM message. The member
+    sees one card that updates in place, not a fresh message (and a fresh push
+    notification) every couple of seconds.
+
+    One reporter must span the whole run: sharing the DM handle across all three
+    phases is what keeps it to a single notification.
+    """
+
+    def __init__(self, interaction: discord.Interaction) -> None:
+        self._interaction = interaction
+        # Sticky: once the token is gone the ephemeral message is unreachable,
+        # so we never try to edit it again.
+        self._fell_back = False
+        self._dm_message: discord.Message | None = None
+
+    async def update(self, embed: discord.Embed) -> None:
+        if not self._fell_back:
+            try:
+                # content=None clears the "Working on it…" text the confirm view
+                # left behind, so only the embed shows.
+                await self._interaction.edit_original_response(
+                    content=None, embed=embed, view=None
+                )
+                return
+            except (discord.HTTPException, discord.NotFound):
+                self._fell_back = True
+        await self._update_dm(embed)
+
+    async def _update_dm(self, embed: discord.Embed) -> None:
+        if self._dm_message is not None:
+            try:
+                await self._dm_message.edit(content=None, embed=embed)
+                return
+            except (discord.HTTPException, discord.NotFound):
+                # The DM was lost (deleted?) — fall through and send a new one.
+                self._dm_message = None
+        try:
+            self._dm_message = await self._interaction.user.send(embed=embed)
+        except (discord.Forbidden, discord.HTTPException):
+            # DMs closed — nowhere left to report. Deletion still completes.
+            pass
 
 
 async def _run_deletion(
@@ -254,6 +320,10 @@ async def _run_deletion(
     # the messages are retained for moderation — the modes differ only in which
     # Discord messages (all / images / text) are removed.
 
+    # One reporter for the whole run — it holds the single message everything
+    # edits, so scan, delete, and summary share one card and one notification.
+    reporter = _ProgressReporter(original_interaction)
+
     # Phase 1 — scan Discord directly. Authoritative: doesn't depend on what
     # the local index has captured, so messages from before the bot joined,
     # from downtime, or from channels that were never backfilled all show up.
@@ -261,14 +331,12 @@ async def _run_deletion(
 
     async def _scan_progress(done: int, total: int, found: int) -> None:
         nonlocal last_scan_update
-        # Throttle edits — Discord rate-limits edit_original_response.
+        # Throttle edits — Discord rate-limits message edits.
         now = asyncio.get_running_loop().time()
         if should_throttle(last_scan_update, now, done=done, total=total, interval=2.0):
             return
         last_scan_update = now
-        await _edit_or_send(
-            original_interaction, render_scan_status(done, total, found)
-        )
+        await reporter.update(_scan_embed(done, total, found))
 
     msg_rows = await find_user_messages(
         guild,
@@ -284,10 +352,7 @@ async def _run_deletion(
     total = len(msg_rows)
 
     if total == 0:
-        await _edit_or_send(
-            original_interaction,
-            render_empty_summary(mode=mode),
-        )
+        await reporter.update(_summary_embed(render_empty_summary(mode=mode)))
         return
 
     # Phase 2 — delete what we found on Discord. The local archive is safe:
@@ -302,22 +367,21 @@ async def _run_deletion(
         if should_throttle(last_delete_update, now, done=done, total=total, interval=1.5):
             return
         last_delete_update = now
-        await _edit_or_send(
-            original_interaction, f"Deleting… {render_progress_bar(done, total)}"
-        )
+        await reporter.update(_delete_embed(done, total))
 
     discord_deleted, discord_failed, discord_replaced = await _delete_discord_messages(
         guild, user_id, msg_rows, on_progress=_delete_progress
     )
 
-    await _edit_or_send(
-        original_interaction,
-        render_deletion_summary(
-            deleted=discord_deleted,
-            failed=discord_failed,
-            replaced=discord_replaced,
-            mode=mode,
-        ),
+    await reporter.update(
+        _summary_embed(
+            render_deletion_summary(
+                deleted=discord_deleted,
+                failed=discord_failed,
+                replaced=discord_replaced,
+                mode=mode,
+            )
+        )
     )
 
 

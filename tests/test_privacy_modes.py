@@ -253,12 +253,16 @@ def _wired(monkeypatch):
     async def _fake_delete(guild, user_id, msg_rows, *, on_progress=None):
         return (len(msg_rows), 0, 0)
 
-    async def _fake_edit(interaction, content):
-        return None
+    class _FakeReporter:
+        def __init__(self, interaction):
+            pass
+
+        async def update(self, embed):
+            return None
 
     monkeypatch.setattr(privacy_cog, "find_user_messages", _fake_find)
     monkeypatch.setattr(privacy_cog, "_delete_discord_messages", _fake_delete)
-    monkeypatch.setattr(privacy_cog, "_edit_or_send", _fake_edit)
+    monkeypatch.setattr(privacy_cog, "_ProgressReporter", _FakeReporter)
     assert not hasattr(privacy_cog, "purge_user_data"), (
         "the cog must not import the hard-erasure purge at all"
     )
