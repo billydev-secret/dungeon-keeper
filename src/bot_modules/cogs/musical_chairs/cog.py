@@ -342,6 +342,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         guild: discord.Guild,
         *,
         imposed_nick: str | None = None,
+        original_name: str | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner_name = self._name(guild, game.winner_id) if game.winner_id else "?"
@@ -362,7 +363,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         if imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
                 inline=False,
             )
         elif game.stakes_text is None:

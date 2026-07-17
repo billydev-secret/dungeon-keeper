@@ -423,6 +423,12 @@ class BaseGame(commands.Cog):
             return
 
         original_nick = loser.nick
+        # The displayed name *before* the rename, for the result embed's
+        # "is now known as" line. Captured here because the render runs after
+        # loser.edit() below, by which point loser.display_name is the new nick
+        # (rendering "NewNick is now known as NewNick"). Distinct from
+        # original_nick, which is None when the loser had no prior nickname.
+        original_display_name = loser.display_name
 
         if loser.id == guild.owner_id:
             await duels_db.apply_nick(
@@ -437,7 +443,9 @@ class BaseGame(commands.Cog):
                 sentence_hours=cfg["sentence_hours"],
             )
             await self._db_set_state(game_id, "NICKED")
-            embed = self.render_result_state(game, guild, imposed_nick=cleaned_nick)
+            embed = self.render_result_state(
+                game, guild, imposed_nick=cleaned_nick, original_name=original_display_name
+            )
             await interaction.response.edit_message(
                 embed=embed, view=self._disabled_result_view(game)
             )
@@ -476,7 +484,9 @@ class BaseGame(commands.Cog):
         )
         await self._db_set_state(game_id, "NICKED")
 
-        embed = self.render_result_state(game, guild, imposed_nick=cleaned_nick)
+        embed = self.render_result_state(
+                game, guild, imposed_nick=cleaned_nick, original_name=original_display_name
+            )
         await interaction.response.edit_message(
             embed=embed, view=self._disabled_result_view(game)
         )

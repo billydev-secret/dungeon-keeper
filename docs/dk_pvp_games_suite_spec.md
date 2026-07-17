@@ -166,6 +166,10 @@ loser's nickname for `sentence_hours` (default 24h).
   (`ResultView`), clickable **only by the winner**. Pressing it opens a `NicknameModal`
   (1–32 chars). The submitted name is validated (see §5) and applied to the loser.
 - DK snapshots the loser's **original nickname** (`duel_nicks.original_nick`) before renaming.
+- The result embed's **"🏷️ Nickname Applied"** line reads *"**{old display name}** is now
+  known as **{new nick}**"*. The old name is captured **before** `loser.edit()` and threaded
+  into `render_result_state(..., original_name=…)`; the render runs after the rename, so
+  reading the loser's live `display_name` there would print the new nick on both sides.
 - **If the winner never names the loser**, the result is swept to `NO_NICK_SET` after 5
   minutes and **nobody is renamed**. (There is no auto-applied default/template nickname.)
 - A background **auto-revert** (the per-cog `_expire_loop`) restores the original nickname

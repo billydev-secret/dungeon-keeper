@@ -9,6 +9,25 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### PvP games — "Nickname Applied" showed the new name twice  (0fc2016)
+
+The result embed for a nickname-stake game read "**NewNick** is now known as
+**NewNick**" instead of "**OldName** is now known as **NewNick**". The render
+runs after the loser is renamed, so it was reading the loser's live
+`display_name` (already the new nick) for the "from" side. Fixed by capturing
+the old name before the edit and threading it in. All six games shared the bug
+(quickdraw, pressure cooker, hot potato 1v1 + group, musical chairs, chicken).
+
+**Worth knowing while testing:** purely a display fix — the actual rename,
+24-hour sentence, and auto-revert are unchanged. Fully unit-tested (the render
+is a string), so this live check is just a spot-confirm.
+
+- [ ] Win a **quickdraw** (or any nickname game) against someone, click **Name
+      the loser**, submit a nick → the result embed reads "**{their old name}**
+      is now known as **{new nick}**", not the new name on both sides.
+- [ ] Repeat once with a **group** game (musical chairs / group hot potato) to
+      confirm the multiplayer path reads the same.
+
 ### Voice Master — knock is now private (DM the owner)  (553aaf4)
 
 `/voice knock` used to post "X is asking to join Y's locked room" into the
