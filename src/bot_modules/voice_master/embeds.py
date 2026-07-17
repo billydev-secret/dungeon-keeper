@@ -210,15 +210,25 @@ def build_knock_request_embed(
     requester_mention: str,
     owner_mention: str,
     channel_name: str,
+    guild_name: str | None = None,
     colour: "discord.Colour | None" = None,
 ) -> discord.Embed:
-    """Embed posted to the control channel when someone knocks on a channel."""
+    """Embed for a knock request.
+
+    Delivered as a DM to the owner (or, as a fallback, posted to the control
+    channel). In a DM the embed is out of its guild's context, so ``guild_name``
+    is named explicitly — an owner with a same-named channel in more than one
+    server otherwise can't tell which one is being knocked on.
+    """
     if colour is None:
         colour = discord.Color.gold()
+    where = f"**{channel_name}**"
+    if guild_name:
+        where += f" in **{guild_name}**"
     return discord.Embed(
         title="🔔 Voice channel knock",
         description=(
-            f"{requester_mention} is asking to join **{channel_name}**.\n"
+            f"{requester_mention} is asking to join {where}.\n"
             f"Owner: {owner_mention} — choose below."
         ),
         color=colour,

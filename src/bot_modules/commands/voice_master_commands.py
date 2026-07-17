@@ -1816,10 +1816,19 @@ def build_panel_view() -> discord.ui.View:
 
 
 class _KnockResponseView(discord.ui.View):
-    """Owner-only Accept / Deny buttons posted in the control channel."""
+    """Owner-only Accept / Deny buttons for a knock request.
 
-    def __init__(self, *, channel_id: int, requester_id: int, owner_id: int) -> None:
+    The buttons are answered wherever the knock was delivered — a DM to the
+    owner by default, or the control channel as a fallback. A DM interaction
+    carries no ``interaction.guild``, so the guild is resolved from the bot
+    cache by ``guild_id``, which works in both places.
+    """
+
+    def __init__(
+        self, *, guild_id: int, channel_id: int, requester_id: int, owner_id: int
+    ) -> None:
         super().__init__(timeout=3600)  # an hour to respond
+        self._guild_id = guild_id
         self._channel_id = channel_id
         self._requester_id = requester_id
         self._owner_id = owner_id
@@ -1833,13 +1842,17 @@ class _KnockResponseView(discord.ui.View):
     async def _resolve(
         self, interaction: discord.Interaction
     ) -> tuple[discord.VoiceChannel, discord.Member] | None:
-        if interaction.guild is None:
+        # From the bot cache, not interaction.guild — the knock may have been
+        # answered from a DM, where interaction.guild is None.
+        guild = interaction.client.get_guild(self._guild_id)
+        if guild is None:
+            await _ephemeral(interaction, "That server is no longer available.")
             return None
-        channel = interaction.guild.get_channel(self._channel_id)
+        channel = guild.get_channel(self._channel_id)
         if not isinstance(channel, discord.VoiceChannel):
             await _ephemeral(interaction, "That channel no longer exists.")
             return None
-        requester = interaction.guild.get_member(self._requester_id)
+        requester = guild.get_member(self._requester_id)
         if requester is None:
             await _ephemeral(interaction, "The requester is no longer in this server.")
             return None
@@ -1925,8 +1938,37 @@ async def post_knock_request(
     requester: discord.Member,
     owner: discord.Member,
 ) -> bool:
-    """Post a knock notification in the control channel; returns True on success."""
+    """Notify the owner of a knock; returns True once delivered somewhere.
+
+    Delivery is private by default: DM the owner. The control channel is the
+    fallback for an owner whose DMs are closed — so a knock stays out of public
+    view when it can, but is never silently dropped. A fresh view per send keeps
+    us from re-attaching one that's already bound to a delivered message.
+    """
     _knock_req_guild_id = channel.guild.id
+    accent = await resolve_accent_color(ctx.db_path, channel.guild)
+    embed = build_knock_request_embed(
+        requester_mention=requester.mention,
+        owner_mention=owner.mention,
+        channel_name=channel.name,
+        guild_name=channel.guild.name,
+        colour=accent,
+    )
+
+    def _make_view() -> _KnockResponseView:
+        return _KnockResponseView(
+            guild_id=channel.guild.id,
+            channel_id=channel.id,
+            requester_id=requester.id,
+            owner_id=owner.id,
+        )
+
+    # Private path — DM the owner.
+    try:
+        await owner.send(embed=embed, view=_make_view())
+        return True
+    except (discord.Forbidden, discord.HTTPException):
+        pass  # DMs closed — fall back to the control channel below.
 
     def _load_knock_cfg():
         with ctx.open_db() as conn:
@@ -1938,20 +1980,8 @@ async def post_knock_request(
     control = channel.guild.get_channel(cfg.control_channel_id)
     if not isinstance(control, discord.TextChannel):
         return False
-    accent = await resolve_accent_color(ctx.db_path, channel.guild)
-    embed = build_knock_request_embed(
-        requester_mention=requester.mention,
-        owner_mention=owner.mention,
-        channel_name=channel.name,
-        colour=accent,
-    )
-    view = _KnockResponseView(
-        channel_id=channel.id,
-        requester_id=requester.id,
-        owner_id=owner.id,
-    )
     try:
-        await control.send(content=owner.mention, embed=embed, view=view)
+        await control.send(content=owner.mention, embed=embed, view=_make_view())
         return True
     except (discord.Forbidden, discord.HTTPException):
         return False

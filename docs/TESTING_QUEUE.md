@@ -9,6 +9,36 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### Voice Master — knock is now private (DM the owner)  (553aaf4)
+
+`/voice knock` used to post "X is asking to join Y's locked room" into the
+control channel, where everyone could read it. It now **DMs the owner** the
+Accept/Deny buttons. If the owner's DMs are closed it **falls back** to the
+control channel (unchanged behaviour), so a knock is never silently dropped.
+
+**Worth knowing while testing:** the buttons had to be reworked to resolve the
+guild/channel/requester from the bot cache instead of `interaction.guild`,
+because a DM interaction has no guild — so **the accept path is the highest-risk
+thing to verify live**. The requester's confirmation no longer names the control
+channel ("you'll hear back if they let you in").
+
+- [ ] With the owner's **DMs open**: knock a locked channel → the owner gets a
+      **DM** with Accept/Deny; nothing appears in the control channel.
+- [ ] Owner clicks **Accept** *in the DM* → requester gains access and gets the
+      jump-link DM; audit row `vm_invite` / `via: knock` is written. (This is
+      the guild-from-cache path — the one to watch.)
+- [ ] Owner clicks **Deny** in the DM → buttons disable, requester gets nothing.
+- [ ] With the owner's **DMs closed**: knock → the embed falls back to the
+      **control channel** (owner mentioned), and Accept/Deny still work there.
+- [ ] DMs closed **and** no control channel configured → requester sees
+      "Couldn't deliver the knock — the owner's DMs are closed…".
+- [ ] A non-owner who somehow reaches the buttons still can't use them.
+- [ ] DM error path: **delete the voice channel**, then click **Accept** from
+      the DM → the owner sees "That channel no longer exists." and nothing
+      crashes (ephemeral-in-DM semantics, only exercisable live).
+- [ ] The DM embed **names the server** ("… to join **General** in **<your
+      server>**") — matters if you own a same-named channel in two servers.
+
 ### QA Tracker — per-feature cards for the role checklists  (this commit)
 
 The three role checklists (`docs/testing/*_testing_checklist.md`) are regrouped

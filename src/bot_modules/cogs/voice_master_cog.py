@@ -1383,12 +1383,13 @@ class VoiceMasterCog(commands.Cog):
         if ok:
             await _ephemeral(
                 interaction,
-                f"Knock sent to {owner.mention} — they'll respond in the control channel.",
+                f"Knock sent to {owner.mention} — you'll hear back if they let you in.",
             )
         else:
             await _ephemeral(
                 interaction,
-                "Couldn't deliver the knock — control channel is unconfigured or unavailable.",
+                "Couldn't deliver the knock — the owner's DMs are closed and "
+                "there's no control channel to fall back to.",
             )
 
     # ── Profile inspection / reset ────────────────────────────────────

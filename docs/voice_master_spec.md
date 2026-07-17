@@ -18,7 +18,7 @@ All member commands live under the `/voice` group. Owner commands act on **the c
 | `/voice reset [also_profile]` | Slash | Channel owner | Wipe all per-member overwrites (owner keeps access, `@everyone` back to neutral, status back to open); `also_profile` also deletes the saved profile. Does **not** clear Discord's channel-level NSFW flag — a channel reset out of `nsfw`/`locked`/`spectate` keeps its age-restricted badge even though permissions and the status line go back to open |
 | `/voice owner` | Slash | Everyone | See who owns the voice channel you're in |
 | `/voice sleepkick <hours>` | Slash | Everyone | Self-disconnect timer: 0–24 hours; `0` cancels a pending timer |
-| `/voice knock <channel>` | Slash | Everyone | Ask a managed channel's owner to let you in (Accept/Deny posted in the control channel) |
+| `/voice knock <channel>` | Slash | Everyone | Ask a managed channel's owner to let you in (Accept/Deny DM'd to the owner; control channel is the fallback) |
 | `/voice trusted list \| add \| remove` | Slash | Member (manages own list) | Manage your trust list |
 | `/voice blocked list \| add \| remove` | Slash | Member (manages own list) | Manage your blocklist |
 | `/voice profile show` | Slash | Member (own profile) | See saved settings (name, limit, access state, trusted/blocked counts) |
@@ -82,7 +82,7 @@ Both lists are capped (default 25 each); adding past the cap evicts the oldest e
 
 ### Knock (`/voice knock <channel>`)
 
-Anyone can knock on a managed channel to ask its owner in. The bot posts an embed with owner-only **Accept** / **Deny** buttons into the configured control channel (mentioning the owner; buttons live for one hour). Accept grants the requester View + Connect (plus speaker perms if the room is spectating), DMs them a jump link, and is audit-logged as `vm_invite` with `via: knock`. Rejections the knocker sees: channel not managed by Voice Master; "You already own that channel."; owner no longer in the server (pointed at `/voice claim`); control channel unconfigured or unavailable.
+Anyone can knock on a managed channel to ask its owner in. The knock is **delivered privately**: the bot DMs the owner an embed with owner-only **Accept** / **Deny** buttons (buttons live for one hour). This keeps the knock — who's asking to join whose locked room — out of public view. If the owner's DMs are closed, it **falls back** to posting the same embed (mentioning the owner) into the configured control channel, so a knock is never silently lost. Because a DM interaction has no guild, the buttons resolve the channel and requester from the bot cache by guild id, not from `interaction.guild`. Accept grants the requester View + Connect (plus speaker perms if the room is spectating), DMs them a jump link, and is audit-logged as `vm_invite` with `via: knock`. Rejections the knocker sees: channel not managed by Voice Master; "You already own that channel."; owner no longer in the server (pointed at `/voice claim`); knock undeliverable (owner's DMs closed and no control-channel fallback).
 
 ### Sleep-kick (`/voice sleepkick <hours>`)
 

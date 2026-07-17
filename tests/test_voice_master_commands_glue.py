@@ -118,6 +118,9 @@ def _wire_interaction(ctx, *, user_id: int = OWNER):
     inter.guild.name = "Guild"
     inter.client = MagicMock()
     setattr(inter.client, "ctx", ctx)
+    # Knock buttons resolve the guild from the bot cache (they may be answered
+    # from a DM); point that at the wired guild so channel/member lookups work.
+    inter.client.get_guild = MagicMock(return_value=inter.guild)
     return inter
 
 
@@ -1117,36 +1120,18 @@ async def test_post_panel_writes_message_id_to_config(ctx):
 # ── post_knock_request branches ───────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_post_knock_request_returns_false_without_control_channel(ctx, voice_channel, owner_member, other_member):
-    from bot_modules.commands.voice_master_commands import post_knock_request
-
-    out = await post_knock_request(
-        ctx, channel=voice_channel, requester=other_member, owner=owner_member
-    )
-    assert out is False
+def _dms_closed(member):
+    """Make ``member.send`` reject like a user with DMs off."""
+    member.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "dms closed"))
 
 
 @pytest.mark.asyncio
-async def test_post_knock_request_returns_false_when_control_missing(ctx, voice_channel, owner_member, other_member):
+async def test_post_knock_request_dms_the_owner_privately(ctx, voice_channel, owner_member, other_member):
+    """The happy path is a DM — nothing is posted to the control channel."""
     from bot_modules.commands.voice_master_commands import post_knock_request
 
-    with open_db(ctx.db_path) as conn:
-        set_voice_master_config_value(
-            conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
-        )
-    # Guild.get_channel returns None (channel is gone).
-    voice_channel.guild.get_channel = MagicMock(return_value=None)
-    out = await post_knock_request(
-        ctx, channel=voice_channel, requester=other_member, owner=owner_member
-    )
-    assert out is False
-
-
-@pytest.mark.asyncio
-async def test_post_knock_request_sends_when_control_configured(ctx, voice_channel, owner_member, other_member):
-    from bot_modules.commands.voice_master_commands import post_knock_request
-
+    owner_member.send = AsyncMock()
+    # A control channel exists, but an open DM should mean we never use it.
     with open_db(ctx.db_path) as conn:
         set_voice_master_config_value(
             conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
@@ -1154,6 +1139,28 @@ async def test_post_knock_request_sends_when_control_configured(ctx, voice_chann
     control = MagicMock(spec=discord.TextChannel)
     control.send = AsyncMock()
     voice_channel.guild.get_channel = MagicMock(return_value=control)
+
+    out = await post_knock_request(
+        ctx, channel=voice_channel, requester=other_member, owner=owner_member
+    )
+    assert out is True
+    owner_member.send.assert_awaited_once()
+    control.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_knock_request_falls_back_to_control_when_dms_closed(ctx, voice_channel, owner_member, other_member):
+    from bot_modules.commands.voice_master_commands import post_knock_request
+
+    _dms_closed(owner_member)
+    with open_db(ctx.db_path) as conn:
+        set_voice_master_config_value(
+            conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
+        )
+    control = MagicMock(spec=discord.TextChannel)
+    control.send = AsyncMock()
+    voice_channel.guild.get_channel = MagicMock(return_value=control)
+
     out = await post_knock_request(
         ctx, channel=voice_channel, requester=other_member, owner=owner_member
     )
@@ -1162,9 +1169,38 @@ async def test_post_knock_request_sends_when_control_configured(ctx, voice_chann
 
 
 @pytest.mark.asyncio
-async def test_post_knock_request_handles_send_failure(ctx, voice_channel, owner_member, other_member):
+async def test_post_knock_request_returns_false_when_dms_closed_and_no_control(ctx, voice_channel, owner_member, other_member):
     from bot_modules.commands.voice_master_commands import post_knock_request
 
+    _dms_closed(owner_member)
+    # No control channel configured → nowhere to fall back to.
+    out = await post_knock_request(
+        ctx, channel=voice_channel, requester=other_member, owner=owner_member
+    )
+    assert out is False
+
+
+@pytest.mark.asyncio
+async def test_post_knock_request_returns_false_when_dms_closed_and_control_missing(ctx, voice_channel, owner_member, other_member):
+    from bot_modules.commands.voice_master_commands import post_knock_request
+
+    _dms_closed(owner_member)
+    with open_db(ctx.db_path) as conn:
+        set_voice_master_config_value(
+            conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
+        )
+    voice_channel.guild.get_channel = MagicMock(return_value=None)  # channel gone
+    out = await post_knock_request(
+        ctx, channel=voice_channel, requester=other_member, owner=owner_member
+    )
+    assert out is False
+
+
+@pytest.mark.asyncio
+async def test_post_knock_request_returns_false_when_dm_and_control_both_fail(ctx, voice_channel, owner_member, other_member):
+    from bot_modules.commands.voice_master_commands import post_knock_request
+
+    _dms_closed(owner_member)
     with open_db(ctx.db_path) as conn:
         set_voice_master_config_value(
             conn, GUILD, "voice_master_control_channel_id", str(CONTROL_CH)
@@ -1362,7 +1398,7 @@ async def test_reset_confirm_view_run_not_owner_anymore(ctx, voice_channel):
 async def test_knock_response_view_blocks_non_owner(ctx):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx, user_id=99999)
     out = await view.interaction_check(inter)
     assert out is False
@@ -1372,7 +1408,7 @@ async def test_knock_response_view_blocks_non_owner(ctx):
 async def test_knock_response_view_resolve_missing_channel(ctx):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=None)
     out = await view._resolve(inter)
@@ -1384,7 +1420,7 @@ async def test_knock_response_view_resolve_missing_channel(ctx):
 async def test_knock_response_view_resolve_missing_requester(ctx, voice_channel):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=voice_channel)
     inter.guild.get_member = MagicMock(return_value=None)
@@ -1396,7 +1432,7 @@ async def test_knock_response_view_resolve_missing_requester(ctx, voice_channel)
 async def test_knock_response_view_accept_success(ctx, voice_channel, other_member):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=voice_channel)
     inter.guild.get_member = MagicMock(return_value=other_member)
@@ -1409,7 +1445,7 @@ async def test_knock_response_view_accept_success(ctx, voice_channel, other_memb
 async def test_knock_response_view_accept_perm_failure(ctx, voice_channel, other_member):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=voice_channel)
     inter.guild.get_member = MagicMock(return_value=other_member)
@@ -1430,7 +1466,7 @@ async def test_knock_response_view_accept_edit_message_failure_swallowed(
 ):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.guild.get_channel = MagicMock(return_value=voice_channel)
     inter.guild.get_member = MagicMock(return_value=other_member)
@@ -1445,7 +1481,7 @@ async def test_knock_response_view_accept_edit_message_failure_swallowed(
 async def test_knock_response_view_deny_disables_buttons(ctx):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     await view.deny.callback.callback(view, inter, MagicMock())
     inter.response.edit_message.assert_awaited_once()
@@ -1458,7 +1494,7 @@ async def test_knock_response_view_deny_disables_buttons(ctx):
 async def test_knock_response_view_deny_swallows_edit_failure(ctx):
     from bot_modules.commands.voice_master_commands import _KnockResponseView
 
-    view = _KnockResponseView(channel_id=CH, requester_id=OTHER, owner_id=OWNER)
+    view = _KnockResponseView(guild_id=GUILD, channel_id=CH, requester_id=OTHER, owner_id=OWNER)
     inter = _wire_interaction(ctx)
     inter.response.edit_message = AsyncMock(
         side_effect=discord.HTTPException(MagicMock(), "boom")
