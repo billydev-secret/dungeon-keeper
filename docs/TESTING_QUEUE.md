@@ -9,6 +9,22 @@ it's been verified in the dev guild, with a date.
 
 ## Pending
 
+### QA Tracker — per-feature cards for the role checklists  (this commit)
+
+The three role checklists (`docs/testing/*_testing_checklist.md`) are regrouped
+into `###` feature blocks (38 admin / 36 mod / 43 user, no items lost), and the
+poster now cards **any** doc's `###` blocks — each checklist's cards post into
+its own dev channel with a doc-prefixed entry key, never the queue's configured
+channel. Flat docs without `###` still post as plain text.
+
+- [ ] `#admin-tests`, `#moderator-tests`, `#user-tests` each repopulate as
+      feature cards (with plain-text section headers between groups).
+- [ ] A checklist card's Pass/Fail/Blocked buttons work exactly like queue
+      cards (verdict recorded, 🪙 paid, thread note on fail).
+- [ ] The dashboard board lists the checklist features alongside queue entries.
+- [ ] A same-named feature in two checklists gets two distinct cards/rows
+      (doc-prefixed keys — check `Confessions` in mod vs user).
+
 ### Testing-queue posts get a clickable ✅ reaction  (this commit)
 
 Each entry the mirror posts into `#testing-queue` now arrives with a ✅ reaction

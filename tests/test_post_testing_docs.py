@@ -320,7 +320,8 @@ def test_full_dump_posts_cards_for_pending_and_text_for_done(
     assert len(rows(qa_db)) == 1
 
 
-def test_role_checklist_dump_stays_plain_text(mod, monkeypatch, tmp_path) -> None:
+def test_flat_checklist_dump_stays_plain_text(mod, monkeypatch, tmp_path) -> None:
+    """A checklist with no ### feature blocks (the old format) posts as text."""
     checklist_dir = tmp_path / "docs" / "testing"
     checklist_dir.mkdir(parents=True)
     (checklist_dir / "admin_testing_checklist.md").write_text(
@@ -339,6 +340,40 @@ def test_role_checklist_dump_stays_plain_text(mod, monkeypatch, tmp_path) -> Non
     ]
     assert posts and all("content" in p and "embeds" not in p for p in posts)
     assert not [u for m, u, _ in calls if m == "PUT"]  # reactions removed here too
+
+
+def test_featured_checklist_posts_cards_to_its_own_channel(
+    mod, monkeypatch, tmp_path, qa_db
+) -> None:
+    """### feature blocks in a checklist post as cards, in that doc's channel,
+    with the doc-prefixed entry key — never the queue's configured channel."""
+    set_configured_channel(qa_db, "555000555000555549")  # queue override; not ours
+    checklist_dir = tmp_path / "docs" / "testing"
+    checklist_dir.mkdir(parents=True)
+    (checklist_dir / "admin_testing_checklist.md").write_text(
+        "# Admin checklist\n\nIntro prose.\n\n## Moderation Config\n\n"
+        "### Auto-delete\n\n- [ ] set a rule\n- [ ] remove a rule\n\n"
+        "### Hidden Channels\n\n- [ ] hide and restore\n"
+    )
+    calls, _ = wire(mod, monkeypatch, qa_db)
+    monkeypatch.setattr(mod, "REPO", tmp_path)
+
+    run_main(mod, monkeypatch, "admin-tests")
+
+    channel = mod.DOCS["admin-tests"][1]
+    posts = [
+        p
+        for m, u, p in calls
+        if m == "POST" and u == f"{mod.API}/channels/{channel}/messages"
+    ]
+    cards = [p for p in posts if "embeds" in p]
+    assert [c["embeds"][0]["title"] for c in cards] == ["Auto-delete", "Hidden Channels"]
+    # Nothing went to the queue's configured override channel.
+    assert not [
+        u for m, u, _ in calls if "555000555000555549" in u and m == "POST"
+    ]
+    keys = {r["entry_key"] for r in rows(qa_db)}
+    assert keys == {"admin-tests: auto-delete", "admin-tests: hidden channels"}
 
 
 def set_configured_channel(db: Path, channel_id: str) -> None:

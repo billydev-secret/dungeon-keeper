@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Post the testing checklists into their dev channels.
 
-Queue entries (``###`` blocks in docs/TESTING_QUEUE.md) become interactive
-**QA cards**: one embed per entry with Pass / Fail / Blocked buttons, backed
-by a ``qa_tests`` row in the production DB. The stage-1 cog dispatches those
-buttons purely on ``custom_id``, so cards posted here over raw REST come
-alive after the next bot restart. The role checklists still post as plain
-text, chunked at heading boundaries so a section is never split
-mid-checklist (oversized blocks are re-split at line boundaries with a
-``(cont.)`` heading).
+``###`` blocks above "## Done" become interactive **QA cards**: one embed
+per block with Pass / Fail / Blocked buttons, backed by a ``qa_tests`` row
+in the production DB. That covers the queue's pending entries AND the role
+checklists' per-feature blocks — each checklist's cards post into its own
+dev channel, keyed with a per-doc prefix ("admin-tests: …") so same-named
+features can't collide. The stage-1 cog dispatches buttons purely on
+``custom_id``, so cards posted here over raw REST come alive after the
+next bot restart. Blocks without a ``###`` heading (doc intros, section
+headers, Done) still post as plain text, chunked at heading boundaries
+(oversized blocks re-split at line boundaries with a ``(cont.)`` heading).
 
 Runs under the bare system python3 (the post-commit hook has no venv): only
 the stdlib plus ``bot_modules.qa.cards``, which is stdlib-pure by design.
@@ -289,11 +291,19 @@ def post_entry_card(
     block: str,
     commit_sha: str | None,
     commit_subject: str | None,
+    key_prefix: str = "",
 ) -> None:
-    """Create/reuse the DB row for one entry and post its card."""
+    """Create/reuse the DB row for one entry and post its card.
+
+    ``key_prefix`` namespaces checklist features per doc ("admin-tests: …")
+    so a feature named identically in two checklists can't collide on the
+    (guild_id, entry_key, commit_sha) unique index. Queue entries stay
+    unprefixed — their keys predate the prefix and must keep matching.
+    """
     title, body = card_fields(block)
     test_id = insert_qa_test(
-        conn, guild_id, entry_key(block), title, body, commit_sha, commit_subject
+        conn, guild_id, key_prefix + entry_key(block), title, body,
+        commit_sha, commit_subject,
     )
     mid = post_card(channel, tok, test_id, title, body, commit_sha, commit_subject)
     time.sleep(1.1)
@@ -625,15 +635,17 @@ def main() -> None:
     for name in targets:
         path, channel = DOCS[name]
         text = (REPO / path).read_text()
-        # Only the queue's pending test entries become QA cards; the role
-        # checklists post plain messages, one per multi-item section.
-        pending = (
-            {entry_key(b) for b in pending_entries(text)}
-            if name == "testing-queue"
-            else set()
-        )
+        # Every ``###`` block above "## Done" becomes a QA card: the queue's
+        # pending test entries, and — since the checklists were regrouped into
+        # per-feature ``###`` blocks — each checklist feature too. A doc with
+        # no ``###`` headings simply posts as plain text, one message per
+        # ``##`` section (which is also the pre-077 degraded behaviour).
+        pending = {entry_key(b) for b in pending_entries(text)}
         conn = qa_connect() if pending else None
-        card_channel = qa_card_channel(conn)
+        # The dashboard's channel knob applies to the queue only; a checklist's
+        # cards belong in that checklist's own dev channel.
+        card_channel = qa_card_channel(conn) if name == "testing-queue" else channel
+        key_prefix = "" if name == "testing-queue" else f"{name}: "
         guild_id = channel_guild_id(card_channel, tok) if conn is not None else 0
         if conn is not None and not guild_id:
             conn.close()
@@ -657,7 +669,8 @@ def main() -> None:
             )
             if as_card:
                 post_entry_card(
-                    conn, guild_id, card_channel, tok, block, head_sha, None
+                    conn, guild_id, card_channel, tok, block, head_sha, None,
+                    key_prefix=key_prefix,
                 )
                 sent += 1
             else:
