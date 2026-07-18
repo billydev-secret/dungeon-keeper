@@ -24,6 +24,26 @@ economy DM fires now; members find quests via `/quests`. The quest editor's
       path" checkbox, and the quest table shows no 🧭 badge. Create/edit a quest
       → still saves fine.
 
+### Bios — trigger button copy is dashboard-configurable  (pending)
+
+New: the persistent "Create / Update Bio" button's embed **title and body** are
+now editable at **Config → Bios → Config** (keys `bios_trigger_title` /
+`bios_trigger_body`) instead of being hardcoded; unset/blank falls back to the
+built-in defaults. The main guild's copy is seeded to the Golden Meadow welcome
+text. Applying edits to the **live** message needs a re-post; the code change
+itself needs a **bot restart**.
+
+- [ ] Restart the bot → boots clean.
+- [ ] Config → Bios → Config: the **Trigger title** / **Trigger message** fields
+      show the seeded Meadow copy; edit both, Save, reload the panel → the edits
+      persisted.
+- [ ] Click **Post trigger button** → the button embed in the bios channel now
+      shows the configured title + body (Discord markdown rendered), replacing
+      the old "📝 Share your bio" default.
+- [ ] Clear the Trigger message and Save → rejected (min length 1); the live copy
+      is unchanged.
+- [ ] Tap the button → the bio wizard still opens normally (unchanged flow).
+
 ### Economy — streak/milestone DMs respect the opt-in game role  (bb4fa1e)
 
 Bug fix: recurring streak/milestone/grace/reset DMs (§3.1) were reaching every

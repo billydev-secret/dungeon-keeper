@@ -128,6 +128,11 @@ Stored in the cog's config (reuse DK's existing per-guild config mechanism; thes
 ### 5.1 Trigger
 - `/bio` slash command, **or**
 - a persistent **"Create / Update Bio"** button posted in the bios channel. The button uses a fixed `custom_id` and its View is re-registered on cog load so it survives bot restarts.
+- The button's embed **title and body are admin-configurable** (config keys
+  `bios_trigger_title` / `bios_trigger_body`, edited on the dashboard Bios →
+  Config tab), falling back to the built-in defaults when unset or blank.
+  Editing the copy updates future posts; re-post the button to refresh the
+  live message.
 
 ### 5.2 Session setup
 - **One active session per user.** Re-triggering while a session is live prompts the user to resume or restart, and never spawns a second wizard channel.

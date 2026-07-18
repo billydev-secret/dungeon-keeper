@@ -36,6 +36,14 @@ log = logging.getLogger("dungeonkeeper.bios.trigger")
 
 _MSG_KEY = "bios_trigger_message_id"
 _CH_KEY = "bios_trigger_channel_id"
+_TITLE_KEY = "bios_trigger_title"
+_BODY_KEY = "bios_trigger_body"
+
+DEFAULT_TRIGGER_TITLE = "📝 Share your bio"
+DEFAULT_TRIGGER_BODY = (
+    "Tap the button below to create or update your member bio. "
+    "I'll spin up a private wizard channel and walk you through it."
+)
 
 
 # ── Config-table helpers ─────────────────────────────────────────────
@@ -73,15 +81,32 @@ def clear_trigger_ref(conn: sqlite3.Connection, guild_id: int) -> None:
 # ── Embed + posting ──────────────────────────────────────────────────
 
 
-def build_trigger_embed(color: int = BIOS_PRIMARY) -> discord.Embed:
-    return discord.Embed(
-        title="📝 Share your bio",
-        description=(
-            "Tap the button below to create or update your member bio. "
-            "I'll spin up a private wizard channel and walk you through it."
-        ),
-        color=color,
+def get_trigger_content(
+    conn: sqlite3.Connection, guild_id: int
+) -> tuple[str, str]:
+    """Return the ``(title, body)`` for the trigger embed.
+
+    Both are admin-configurable per guild via the ``bios_trigger_title`` /
+    ``bios_trigger_body`` config keys, falling back to the built-in
+    defaults when unset (or blank).
+    """
+    title = (
+        get_config_value(conn, _TITLE_KEY, DEFAULT_TRIGGER_TITLE, guild_id)
+        or DEFAULT_TRIGGER_TITLE
     )
+    body = (
+        get_config_value(conn, _BODY_KEY, DEFAULT_TRIGGER_BODY, guild_id)
+        or DEFAULT_TRIGGER_BODY
+    )
+    return title, body
+
+
+def build_trigger_embed(
+    title: str = DEFAULT_TRIGGER_TITLE,
+    description: str = DEFAULT_TRIGGER_BODY,
+    color: int = BIOS_PRIMARY,
+) -> discord.Embed:
+    return discord.Embed(title=title, description=description, color=color)
 
 
 async def post_trigger_button(
@@ -102,9 +127,15 @@ async def post_trigger_button(
     if replace_existing:
         await _delete_stored_trigger(ctx, bios_channel, guild_id)
 
+    def _read_content() -> tuple[str, str]:
+        with ctx.open_db() as conn:
+            return get_trigger_content(conn, guild_id)
+
+    title, body = await asyncio.to_thread(_read_content)
+
     try:
         new_msg = await bios_channel.send(
-            embed=build_trigger_embed(embed_color),
+            embed=build_trigger_embed(title, body, embed_color),
             view=PersistentTriggerView(),
         )
     except discord.HTTPException:
@@ -205,8 +236,11 @@ def resolve_bio_placeholders(
 
 
 __all__ = [
+    "DEFAULT_TRIGGER_BODY",
+    "DEFAULT_TRIGGER_TITLE",
     "build_trigger_embed",
     "clear_trigger_ref",
+    "get_trigger_content",
     "get_trigger_ref",
     "post_trigger_button",
     "reposition_trigger_button",

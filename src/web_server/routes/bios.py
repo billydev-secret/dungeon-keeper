@@ -16,7 +16,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from bot_modules.bios import db as bios_db
-from bot_modules.bios.trigger import post_trigger_button as _post_trigger_button
+from bot_modules.bios.trigger import (
+    DEFAULT_TRIGGER_BODY,
+    DEFAULT_TRIGGER_TITLE,
+    post_trigger_button as _post_trigger_button,
+)
 from bot_modules.core.db_utils import get_config_value, set_config_value
 from bot_modules.services.embeds import BIOS_PRIMARY
 from web_server.auth import AuthenticatedUser
@@ -45,6 +49,8 @@ class BiosConfigBody(BaseModel):
     embed_color: str | None = None  # hex, e.g. "#C8763E" or "C8763E"
     wizard_timeout: int | None = Field(default=None, ge=1, le=120)
     archive_grace: int | None = Field(default=None, ge=0, le=3600)
+    trigger_title: str | None = Field(default=None, min_length=1, max_length=256)
+    trigger_body: str | None = Field(default=None, min_length=1, max_length=2000)
 
 
 class FieldCreateBody(BaseModel):
@@ -125,6 +131,12 @@ async def get_bios_config(
                 "archive_grace": int(
                     get_config_value(conn, "bios_archive_grace", "60", guild_id) or "60"
                 ),
+                "trigger_title": get_config_value(
+                    conn, "bios_trigger_title", DEFAULT_TRIGGER_TITLE, guild_id
+                ),
+                "trigger_body": get_config_value(
+                    conn, "bios_trigger_body", DEFAULT_TRIGGER_BODY, guild_id
+                ),
             }
 
     return await run_query(_q)
@@ -163,6 +175,14 @@ async def update_bios_config(
             if body.archive_grace is not None:
                 set_config_value(
                     conn, "bios_archive_grace", str(body.archive_grace), guild_id
+                )
+            if body.trigger_title is not None:
+                set_config_value(
+                    conn, "bios_trigger_title", body.trigger_title, guild_id
+                )
+            if body.trigger_body is not None:
+                set_config_value(
+                    conn, "bios_trigger_body", body.trigger_body, guild_id
                 )
         return {"ok": True}
 
